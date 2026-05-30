@@ -28,6 +28,20 @@ const parseMoney = (s: string | number | null | undefined): number =>
 
 type Period = 'today' | 'week' | 'month' | 'all';
 type StatusFilter = 'all' | 'completed' | 'cancelled' | 'scheduled';
+type RideHistoryPage = { rides: RideHistoryItem[]; total: number };
+type RideHistoryResponse = RideHistoryItem[] | { rides?: RideHistoryItem[]; total?: number };
+
+const normalizeRideHistory = (data: RideHistoryResponse | null | undefined): RideHistoryPage => {
+  if (Array.isArray(data)) {
+    return { rides: data, total: data.length };
+  }
+
+  const rides = Array.isArray(data?.rides) ? data.rides : [];
+  return {
+    rides,
+    total: typeof data?.total === 'number' ? data.total : rides.length,
+  };
+};
 
 export default function ActivityView() {
   const router = useRouter();
@@ -44,26 +58,34 @@ export default function ActivityView() {
   const [totalRides, setTotalRides] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
 
   const fetchPage = useCallback(async (offset: number) => {
-    const res = await api.get<{ rides: RideHistoryItem[]; total: number }>(
+    const res = await api.get<RideHistoryResponse>(
       `/drivers/rides/history?limit=${PAGE_SIZE}&offset=${offset}`
     );
-    return { rides: res.data?.rides ?? [], total: res.data?.total ?? 0 };
+    return normalizeRideHistory(res.data);
   }, []);
 
   const loadData = useCallback(async () => {
     setLoading(true);
     setLoadMoreError(null);
-    try {
-      const [pageResult] = await Promise.all([
-        fetchPage(0),
-        fetchEarnings(period),
-        fetchDriverBalance(),
-      ]);
+    setHistoryError(null);
+
+    const [historyResult] = await Promise.allSettled([
+      fetchPage(0),
+      fetchEarnings(period),
+      fetchDriverBalance(),
+    ]);
+
+    if (historyResult.status === 'fulfilled') {
+      const pageResult = historyResult.value;
       setRides(pageResult.rides);
       setTotalRides(pageResult.total);
-    } catch {}
+    } else {
+      setHistoryError('Could not load rides. Pull down to retry.');
+    }
+
     setLoading(false);
   }, [period, fetchPage, fetchEarnings, fetchDriverBalance]);
 
@@ -82,15 +104,22 @@ export default function ActivityView() {
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     setLoadMoreError(null);
-    try {
-      const [pageResult] = await Promise.all([
-        fetchPage(0),
-        fetchEarnings(period),
-        fetchDriverBalance(),
-      ]);
+    setHistoryError(null);
+
+    const [historyResult] = await Promise.allSettled([
+      fetchPage(0),
+      fetchEarnings(period),
+      fetchDriverBalance(),
+    ]);
+
+    if (historyResult.status === 'fulfilled') {
+      const pageResult = historyResult.value;
       setRides(pageResult.rides);
       setTotalRides(pageResult.total);
-    } catch {}
+    } else {
+      setHistoryError('Could not refresh rides. Try again.');
+    }
+
     setRefreshing(false);
   }, [period, fetchPage, fetchEarnings, fetchDriverBalance]);
 
@@ -386,7 +415,7 @@ export default function ActivityView() {
     }
     if (!loading && filteredRides.length > 0 && rides.length >= totalRides) {
       return (
-        <Text style={styles.footerEnd}>You've reached the end</Text>
+        <Text style={styles.footerEnd}>You have reached the end</Text>
       );
     }
     return null;
@@ -394,6 +423,16 @@ export default function ActivityView() {
 
   const ListEmpty = useMemo(() => {
     if (loading) return null;
+    if (historyError) {
+      return (
+        <View style={styles.emptyState}>
+          <Ionicons name="alert-circle-outline" size={48} color={colors.danger} />
+          <Text style={styles.emptyTitle}>Activity Unavailable</Text>
+          <Text style={styles.emptyDesc}>{historyError}</Text>
+        </View>
+      );
+    }
+
     return (
       <View style={styles.emptyState}>
         <Ionicons name="car-sport-outline" size={48} color={colors.surfaceLight} />
@@ -401,7 +440,7 @@ export default function ActivityView() {
         <Text style={styles.emptyDesc}>No rides match this filter for the selected period.</Text>
       </View>
     );
-  }, [loading, colors, styles]);
+  }, [loading, historyError, colors, styles]);
 
   return (
     <FlatList

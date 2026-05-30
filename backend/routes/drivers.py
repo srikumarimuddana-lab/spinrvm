@@ -2654,45 +2654,40 @@ async def get_ride_history(
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    try:
-        if status and status in ("completed", "cancelled", "scheduled"):
-            status_filter = status
+    if status and status in ("completed", "cancelled", "scheduled"):
+        status_filter = status
+    else:
+        status_filter = {"$in": list(RideStatus.terminal_statuses())}
+
+    history_filter: Dict[str, Any] = {
+        "driver_id": driver["id"],
+        "status": status_filter,
+    }
+
+    if period and period != "all":
+        now = datetime.now(timezone.utc)
+        if period == "today":
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif period == "week":
+            start = now - timedelta(days=7)
+        elif period == "month":
+            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         else:
-            status_filter = {"$in": list(RideStatus.terminal_statuses())}
+            start = None
+        if start:
+            history_filter["created_at"] = {"$gte": start.isoformat()}
 
-        history_filter: Dict[str, Any] = {
-            "driver_id": driver["id"],
-            "status": status_filter,
-        }
-
-        if period and period != "all":
-            from datetime import datetime, timedelta, timezone
-
-            now = datetime.now(timezone.utc)
-            if period == "today":
-                start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            elif period == "week":
-                start = now - timedelta(days=7)
-            elif period == "month":
-                start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-            else:
-                start = None
-            if start:
-                history_filter["created_at"] = {"$gte": start.isoformat()}
-
-        total = await db_supabase.count_documents("rides", history_filter)
-        rides = await db_supabase.get_rows(
-            "rides",
-            history_filter,
-            order="created_at",
-            desc=True,
-            limit=min(limit, 500),
-            offset=offset,
-        )
-    except Exception as e:
-        logger.error(f"Error fetching ride history: {e}")
-        total = 0
-        rides = []
+    logger.info(f"[ride-history] driver={driver['id']} filter={history_filter}")
+    total = await db_supabase.count_documents("rides", history_filter)
+    rides = await db_supabase.get_rows(
+        "rides",
+        history_filter,
+        order="created_at",
+        desc=True,
+        limit=min(limit, 500),
+        offset=offset,
+    )
+    logger.info(f"[ride-history] total={total} returned={len(rides)}")
 
     try:
         from .rides import _redact_driver_location_fields

@@ -28,18 +28,21 @@ const parseMoney = (s: string | number | null | undefined): number =>
 
 type Period = 'today' | 'week' | 'month' | 'all';
 type StatusFilter = 'all' | 'completed' | 'cancelled' | 'scheduled';
-type RideHistoryPage = { rides: RideHistoryItem[]; total: number };
-type RideHistoryResponse = RideHistoryItem[] | { rides?: RideHistoryItem[]; total?: number };
+type RideHistoryPage = { rides: RideHistoryItem[]; total: number; nextCursor: string | null };
+type RideHistoryResponse =
+  | RideHistoryItem[]
+  | { rides?: RideHistoryItem[]; total?: number; next_cursor?: string | null; nextCursor?: string | null };
 
 const normalizeRideHistory = (data: RideHistoryResponse | null | undefined): RideHistoryPage => {
   if (Array.isArray(data)) {
-    return { rides: data, total: data.length };
+    return { rides: data, total: data.length, nextCursor: null };
   }
 
   const rides = Array.isArray(data?.rides) ? data.rides : [];
   return {
     rides,
     total: typeof data?.total === 'number' ? data.total : rides.length,
+    nextCursor: data?.next_cursor ?? data?.nextCursor ?? null,
   };
 };
 
@@ -56,24 +59,25 @@ export default function ActivityView() {
 
   const [rides, setRides] = useState<RideHistoryItem[]>([]);
   const [totalRides, setTotalRides] = useState(0);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
 
-  const fetchPage = useCallback(async (offset: number) => {
+  const fetchPage = useCallback(async (options?: { offset?: number; cursor?: string | null }) => {
     const params = new URLSearchParams({
       limit: String(PAGE_SIZE),
-      offset: String(offset),
-      period,
     });
+    if (options?.cursor) params.set('before', options.cursor);
+    else if ((options?.offset ?? 0) > 0) params.set('offset', String(options?.offset ?? 0));
     if (statusFilter !== 'all') params.set('status', statusFilter);
     const url = `/drivers/rides/history?${params.toString()}`;
-    if (__DEV__) console.log('[Activity] fetchPage →', url);
+    if (__DEV__) console.log('[Activity] fetchPage ->', url);
     const res = await api.get<RideHistoryResponse>(url);
     const page = normalizeRideHistory(res.data);
     if (__DEV__) console.log('[Activity] result:', page.total, 'total,', page.rides.length, 'rides');
     return page;
-  }, [period, statusFilter]);
+  }, [statusFilter]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -81,7 +85,7 @@ export default function ActivityView() {
     setHistoryError(null);
 
     const results = await Promise.allSettled([
-      fetchPage(0),
+      fetchPage(),
       fetchEarnings(period),
       fetchDriverBalance(),
     ]);
@@ -93,6 +97,7 @@ export default function ActivityView() {
       const pageResult = historyResult.value;
       setRides(pageResult.rides);
       setTotalRides(pageResult.total);
+      setNextCursor(pageResult.nextCursor);
     } else {
       setHistoryError('Could not load rides. Pull down to retry.');
     }
@@ -120,7 +125,7 @@ export default function ActivityView() {
     }
     lastFetchedAt.current = Date.now();
     loadData();
-  }, [period, statusFilter]);
+  }, [loadData]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -128,7 +133,7 @@ export default function ActivityView() {
     setHistoryError(null);
 
     const [historyResult] = await Promise.allSettled([
-      fetchPage(0),
+      fetchPage(),
       fetchEarnings(period),
       fetchDriverBalance(),
     ]);
@@ -137,6 +142,7 @@ export default function ActivityView() {
       const pageResult = historyResult.value;
       setRides(pageResult.rides);
       setTotalRides(pageResult.total);
+      setNextCursor(pageResult.nextCursor);
     } else {
       setHistoryError('Could not refresh rides. Try again.');
     }
@@ -145,19 +151,20 @@ export default function ActivityView() {
   }, [period, fetchPage, fetchEarnings, fetchDriverBalance]);
 
   const loadMore = useCallback(async () => {
-    if (loadingMore || rides.length >= totalRides || loadMoreError) return;
+    if (loadingMore || (!nextCursor && rides.length >= totalRides) || loadMoreError) return;
     setLoadingMore(true);
     setLoadMoreError(null);
     try {
-      const result = await fetchPage(rides.length);
+      const result = await fetchPage({ cursor: nextCursor, offset: rides.length });
       setRides(prev => [...prev, ...result.rides]);
       setTotalRides(result.total);
+      setNextCursor(result.nextCursor);
     } catch {
       setLoadMoreError('Could not load more rides.');
     } finally {
       setLoadingMore(false);
     }
-  }, [loadingMore, rides.length, totalRides, loadMoreError, fetchPage]);
+  }, [loadingMore, nextCursor, rides.length, totalRides, loadMoreError, fetchPage]);
 
   const totalEarnings = parseMoney(earnings?.total_earnings);
   const totalTips = parseMoney(earnings?.total_tips);
@@ -165,8 +172,8 @@ export default function ActivityView() {
   const totalTax = parseMoney(earnings?.total_tax);
   const fareEarnings = Math.max(totalEarnings - totalTips - totalIncentives - totalTax, 0);
 
-  // Filtering is now server-side — rides from fetchPage already match the
-  // selected period and status filter, so no client-side filtering needed.
+  // History mirrors the rider app: period changes update earnings/stats, while
+  // the ride list stays all-time. Status still narrows the history request.
   const filteredRides = rides;
 
   const renderRideCard = useCallback(({ item: ride }: { item: RideHistoryItem }) => {
@@ -414,13 +421,13 @@ export default function ActivityView() {
         </TouchableOpacity>
       );
     }
-    if (!loading && rides.length > 0 && rides.length >= totalRides) {
+    if (!loading && rides.length > 0 && !nextCursor && rides.length >= totalRides) {
       return (
         <Text style={styles.footerEnd}>You have reached the end</Text>
       );
     }
     return null;
-  }, [loadingMore, loadMoreError, loading, rides.length, totalRides, colors, styles, loadMore]);
+  }, [loadingMore, loadMoreError, loading, rides.length, totalRides, nextCursor, colors, styles, loadMore]);
 
   const ListEmpty = useMemo(() => {
     if (loading) return null;
@@ -438,28 +445,46 @@ export default function ActivityView() {
       <View style={styles.emptyState}>
         <Ionicons name="car-sport-outline" size={48} color={colors.surfaceLight} />
         <Text style={styles.emptyTitle}>No Rides Found</Text>
-        <Text style={styles.emptyDesc}>No rides match this filter for the selected period.</Text>
+        <Text style={styles.emptyDesc}>No rides match this filter yet.</Text>
       </View>
     );
   }, [loading, historyError, colors, styles]);
+
+  if (loading || historyError || filteredRides.length === 0) {
+    return (
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <SafeRefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+          />
+        }
+      >
+        {ListHeader}
+        {ListEmpty}
+      </ScrollView>
+    );
+  }
 
   return (
     <FlatList
       style={styles.container}
       contentContainerStyle={styles.content}
-      data={loading ? [] : filteredRides}
+      data={filteredRides}
       renderItem={renderRideCard}
       keyExtractor={(item) => item.id ?? ''}
       ListHeaderComponent={ListHeader}
       ListFooterComponent={ListFooter}
-      ListEmptyComponent={ListEmpty}
       onEndReached={loadMore}
       onEndReachedThreshold={0.3}
       showsVerticalScrollIndicator={false}
       initialNumToRender={10}
       maxToRenderPerBatch={10}
       windowSize={5}
-      removeClippedSubviews={true}
       refreshControl={
         <SafeRefreshControl
           refreshing={refreshing}

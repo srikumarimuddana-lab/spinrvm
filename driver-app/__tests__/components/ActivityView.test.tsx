@@ -90,6 +90,16 @@ describe('ActivityView', () => {
 
     await waitFor(() => expect(getByText('123 Main St')).toBeTruthy());
     expect(getByText('456 Elm Ave')).toBeTruthy();
+    expect(mockApiGet).toHaveBeenCalledWith('/drivers/rides/history?limit=20');
+  });
+
+  it('renders rider-style cursor history responses during backend/client skew', async () => {
+    mockApiGet.mockResolvedValueOnce({ data: { rides: [makeRide()], next_cursor: 'ride-001' } });
+
+    const { getByText } = render(<ActivityView />);
+
+    await waitFor(() => expect(getByText('123 Main St')).toBeTruthy());
+    expect(getByText('1 rides')).toBeTruthy();
   });
 
   it('renders legacy array history responses during backend/client skew', async () => {

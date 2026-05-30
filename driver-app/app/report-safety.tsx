@@ -108,8 +108,8 @@ export default function ReportSafetyScreen() {
         };
 
         try {
-            const res = await api.post<{ id?: string }>('/safety/report', reportData);
-            const reportId = res.data?.id;
+            const res = await api.post<{ incident_id?: string }>('/safety/report', reportData);
+            const reportId = res.data?.incident_id;
 
             if (reportId && photos.length > 0) {
                 const token = await getAuthHeader();

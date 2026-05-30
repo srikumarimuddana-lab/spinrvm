@@ -655,6 +655,12 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         }
         break;
 
+      case 'chat_typing':
+        if (data.sender === 'rider') {
+          useDriverStore.getState().setRiderTyping(true);
+        }
+        break;
+
       // Rider tipped a completed ride. Backend rides.py emits this right
       // after persisting the tip so the driver sees it immediately
       // instead of only after the next earnings refresh.

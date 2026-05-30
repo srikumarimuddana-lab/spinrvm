@@ -127,7 +127,8 @@ export default function ActivityView() {
     }
     lastFetchedAt.current = Date.now();
     loadData();
-  }, [loadData]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [period, statusFilter]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);

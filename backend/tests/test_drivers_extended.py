@@ -506,6 +506,44 @@ class TestGetRideHistory:
         assert result["total"] == 2
         assert len(result["rides"]) == 2
 
+    def test_period_filter_uses_activity_timestamps(self):
+        from backend.routes import drivers as drv
+
+        completed_ride = _ride(
+            "completed",
+            created_at=(datetime.now(timezone.utc) - timedelta(days=3)).isoformat(),
+            ride_completed_at=datetime.now(timezone.utc).isoformat(),
+        )
+        captured_filters = []
+
+        async def count_documents_side_effect(table, filters=None):
+            captured_filters.append(filters)
+            return 1 if filters and filters.get("status") == "completed" else 0
+
+        def get_rows_side_effect(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            captured_filters.append(filters)
+            if filters and filters.get("status") == "completed":
+                return [completed_ride]
+            return []
+
+        with (
+            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch(
+                "backend.routes.drivers.db_supabase.count_documents",
+                AsyncMock(side_effect=count_documents_side_effect),
+            ),
+        ):
+            result = asyncio.run(drv.get_ride_history(limit=20, offset=0, period="today", current_user={"id": USER_ID}))
+
+        ride_filters = [f for f in captured_filters if f and f.get("driver_id") == DRIVER_ID]
+        assert result["total"] == 1
+        assert len(result["rides"]) == 1
+        assert any("ride_completed_at" in f for f in ride_filters)
+        assert any("cancelled_at" in f for f in ride_filters)
+        assert all("created_at" not in f for f in ride_filters)
+
     def test_raises_404_when_driver_not_found(self):
         from fastapi import HTTPException
 

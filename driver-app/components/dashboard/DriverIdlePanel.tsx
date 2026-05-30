@@ -170,39 +170,43 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
       {/* HUD Info Area */}
       <View style={styles.hudArea} pointerEvents="box-none">
         
-        {/* Banner (if any) */}
+        {/* Onboarding banner */}
         {banner && (
-          <View style={styles.actionCardContainer}>
-            <View style={styles.actionCard}>
-              <View style={[styles.actionCardIcon, banner.tone === 'danger' && styles.actionCardIconDanger, banner.tone === 'warning' && styles.actionCardIconWarning]}>
-                <Ionicons 
-                  name={banner.icon as keyof typeof Ionicons.glyphMap} 
-                  size={24} 
-                  color={banner.tone === 'danger' ? colors.error : banner.tone === 'warning' ? colors.warning : colors.primary} 
-                />
-              </View>
-              <View style={styles.actionCardContent}>
-                <Text style={styles.actionCardTitle}>{banner.title}</Text>
-                <Text style={styles.actionCardSubtitle}>{banner.subtitle}</Text>
-              </View>
-            </View>
-            <TouchableOpacity
-              style={[styles.actionCardButton, banner.tone === 'danger' && styles.actionCardButtonDanger, banner.tone === 'warning' && styles.actionCardButtonWarning]}
-              onPress={() => {
-                if (banner.target.startsWith('mailto:') || banner.target.startsWith('http')) {
-                  require('react-native').Linking.openURL(banner.target);
-                } else {
-                  router.push(banner.target as any);
-                }
-              }}
-              activeOpacity={0.85}
-              accessibilityRole="button"
-              accessibilityLabel={banner.button}
+          <TouchableOpacity
+            style={[
+              styles.actionBar,
+              banner.tone === 'danger' && styles.actionBarDanger,
+              banner.tone === 'warning' && styles.actionBarWarning,
+            ]}
+            onPress={() => {
+              if (banner.target.startsWith('mailto:') || banner.target.startsWith('http')) {
+                require('react-native').Linking.openURL(banner.target);
+              } else {
+                router.push(banner.target as any);
+              }
+            }}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel={banner.button}
+          >
+            <Ionicons
+              name={banner.icon as keyof typeof Ionicons.glyphMap}
+              size={16}
+              color={banner.tone === 'danger' ? colors.error : banner.tone === 'warning' ? '#92400E' : colors.primary}
+            />
+            <Text
+              style={[
+                styles.actionBarText,
+                banner.tone === 'danger' && styles.actionBarTextDanger,
+                banner.tone === 'warning' && styles.actionBarTextWarning,
+              ]}
+              numberOfLines={1}
             >
-              <Text allowFontScaling={false} style={styles.actionCardButtonText}>{banner.button}</Text>
-              <Ionicons name="arrow-forward" size={16} color="#FFF" />
-            </TouchableOpacity>
-          </View>
+              {banner.title}
+            </Text>
+            <Text style={styles.actionBarCta}>{banner.button}</Text>
+            <Ionicons name="chevron-forward" size={14} color={colors.primary} />
+          </TouchableOpacity>
         )}
 
 
@@ -277,71 +281,48 @@ function createStyles(colors: ThemeColors) {
       paddingHorizontal: 20,
       marginBottom: 20,
     },
-    actionCardContainer: {
+    actionBar: {
+      flexDirection: 'row',
+      alignItems: 'center',
       width: '100%',
       backgroundColor: colors.surface,
-      borderRadius: 24,
-      padding: 20,
-      marginBottom: 20,
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 8 },
-      shadowOpacity: 0.12,
-      shadowRadius: 20,
-      elevation: 8,
-    },
-    actionCard: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      marginBottom: 16,
-    },
-    actionCardIcon: {
-      width: 48,
-      height: 48,
-      borderRadius: 24,
-      backgroundColor: colors.infoBg,
-      justifyContent: 'center',
-      alignItems: 'center',
-      marginRight: 16,
-    },
-    actionCardIconWarning: {
-      backgroundColor: colors.warningBg,
-    },
-    actionCardIconDanger: {
-      backgroundColor: colors.dangerBg,
-    },
-    actionCardContent: {
-      flex: 1,
-    },
-    actionCardTitle: {
-      fontSize: 18,
-      fontWeight: '800',
-      color: colors.text,
-      marginBottom: 4,
-    },
-    actionCardSubtitle: {
-      fontSize: 13,
-      color: colors.textDim,
-      lineHeight: 18,
-    },
-    actionCardButton: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      backgroundColor: colors.primary,
-      borderRadius: 14,
-      paddingVertical: 14,
+      borderRadius: 16,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      marginBottom: 12,
       gap: 8,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.1,
+      shadowRadius: 10,
+      elevation: 5,
+      borderWidth: 1,
+      borderColor: colors.border,
     },
-    actionCardButtonWarning: {
-      backgroundColor: colors.warning,
+    actionBarWarning: {
+      backgroundColor: colors.warningBg,
+      borderColor: colors.warning,
     },
-    actionCardButtonDanger: {
-      backgroundColor: colors.error,
+    actionBarDanger: {
+      backgroundColor: colors.dangerBg,
+      borderColor: colors.error,
     },
-    actionCardButtonText: {
-      color: '#FFF',
-      fontSize: 15,
+    actionBarText: {
+      flex: 1,
+      fontSize: 13,
       fontWeight: '700',
+      color: colors.text,
+    },
+    actionBarTextWarning: {
+      color: '#92400E',
+    },
+    actionBarTextDanger: {
+      color: '#991B1B',
+    },
+    actionBarCta: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: colors.primary,
     },
 
     statusPillWrapper: {

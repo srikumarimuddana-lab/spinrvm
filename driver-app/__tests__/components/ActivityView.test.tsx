@@ -1,7 +1,6 @@
 import React from 'react';
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import ActivityView from '../../components/activity/ActivityView';
-import api from '@shared/api/client';
 import { useDriverStore } from '../../store/driverStore';
 
 jest.mock('@shared/theme/ThemeContext', () => ({
@@ -45,9 +44,8 @@ jest.mock('../../store/driverStore', () => ({
 }));
 
 const mockUseDriverStore = useDriverStore as unknown as jest.Mock;
-const mockApiGet = api.get as jest.Mock;
 
-const makeRide = () => ({
+const makeRide = (overrides = {}) => ({
   id: 'ride-001',
   status: 'completed',
   ride_completed_at: new Date().toISOString(),
@@ -57,9 +55,10 @@ const makeRide = () => ({
   distance_km: 5.2,
   duration_minutes: 18,
   total_earned: 12,
+  ...overrides,
 });
 
-const mockStore = {
+const makeStore = (overrides = {}) => ({
   earnings: {
     total_earnings: 12,
     total_tips: 0,
@@ -70,59 +69,67 @@ const mockStore = {
     total_duration_minutes: 18,
     average_per_ride: 12,
   },
-  fetchEarnings: jest.fn(),
-  fetchDriverBalance: jest.fn(),
-};
+  rideHistory: [makeRide()],
+  historyTotal: 1,
+  fetchEarnings: jest.fn().mockResolvedValue(undefined),
+  fetchRideHistory: jest.fn().mockResolvedValue(undefined),
+  fetchDriverBalance: jest.fn().mockResolvedValue(undefined),
+  ...overrides,
+});
+
+let mockStore: ReturnType<typeof makeStore>;
 
 describe('ActivityView', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockStore = makeStore();
     mockUseDriverStore.mockReturnValue(mockStore);
-    mockStore.fetchEarnings.mockResolvedValue(undefined);
-    mockStore.fetchDriverBalance.mockResolvedValue(undefined);
   });
 
   it('keeps ride history visible when earnings loading fails', async () => {
     mockStore.fetchEarnings.mockRejectedValueOnce(new Error('earnings unavailable'));
-    mockApiGet.mockResolvedValueOnce({ data: { rides: [makeRide()], total: 1 } });
 
     const { getByText } = render(<ActivityView />);
 
     await waitFor(() => expect(getByText('123 Main St')).toBeTruthy());
     expect(getByText('456 Elm Ave')).toBeTruthy();
-    expect(mockApiGet).toHaveBeenCalledWith('/drivers/rides/history?limit=20');
+    expect(mockStore.fetchRideHistory).toHaveBeenCalledWith(50, 0, false);
   });
 
-  it('renders rider-style cursor history responses during backend/client skew', async () => {
-    mockApiGet.mockResolvedValueOnce({ data: { rides: [makeRide()], next_cursor: 'ride-001' } });
+  it('loads the next page without changing the working ScrollView flow', async () => {
+    mockStore = makeStore({ historyTotal: 2 });
+    mockUseDriverStore.mockReturnValue(mockStore);
 
     const { getByText } = render(<ActivityView />);
 
     await waitFor(() => expect(getByText('123 Main St')).toBeTruthy());
-    expect(getByText('1 rides')).toBeTruthy();
+    fireEvent.press(getByText('Load more rides'));
+
+    await waitFor(() => expect(mockStore.fetchRideHistory).toHaveBeenCalledWith(50, 1, true));
   });
 
-  it('renders legacy array history responses during backend/client skew', async () => {
-    mockApiGet.mockResolvedValueOnce({ data: [makeRide()] });
+  it('hides load more when the current period has no matching rides', async () => {
+    mockStore = makeStore({
+      historyTotal: 20,
+      rideHistory: [makeRide({ ride_completed_at: '2024-01-01T12:00:00.000Z' })],
+    });
+    mockUseDriverStore.mockReturnValue(mockStore);
 
+    const { getByText, queryByText } = render(<ActivityView />);
+
+    await waitFor(() => expect(getByText('No Rides Found')).toBeTruthy());
+    expect(queryByText('Load more rides')).toBeNull();
+  });
+
+  it('reloads the first history page when the period changes', async () => {
     const { getByText } = render(<ActivityView />);
 
     await waitFor(() => expect(getByText('123 Main St')).toBeTruthy());
-    expect(getByText('1 rides')).toBeTruthy();
-  });
+    mockStore.fetchRideHistory.mockClear();
 
-  it('keeps history unfiltered by period when the stats period changes', async () => {
-    mockApiGet.mockResolvedValue({ data: { rides: [makeRide()], total: 1 } });
+    fireEvent.press(getByText('This Week'));
 
-    const { getByText } = render(<ActivityView />);
-
-    await waitFor(() => expect(getByText('123 Main St')).toBeTruthy());
-    mockApiGet.mockClear();
-
-    fireEvent.press(getByText('Today'));
-
-    await waitFor(() => expect(mockStore.fetchEarnings).toHaveBeenLastCalledWith('today'));
-    expect(mockApiGet).toHaveBeenCalledWith('/drivers/rides/history?limit=20');
-    expect(mockApiGet).not.toHaveBeenCalledWith(expect.stringContaining('period=today'));
+    await waitFor(() => expect(mockStore.fetchEarnings).toHaveBeenLastCalledWith('week'));
+    expect(mockStore.fetchRideHistory).toHaveBeenCalledWith(50, 0, false);
   });
 });

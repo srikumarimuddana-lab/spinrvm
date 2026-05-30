@@ -347,7 +347,7 @@ interface DriverState {
 
     // Fetch
     fetchActiveRide: () => Promise<void>;
-    fetchRideHistory: (limit?: number, offset?: number) => Promise<void>;
+    fetchRideHistory: (limit?: number, offset?: number, append?: boolean) => Promise<void>;
     fetchEarnings: (period?: string) => Promise<void>;
     fetchDailyEarnings: (days?: number) => Promise<void>;
     fetchWeeklyEarnings: (weeks?: number) => Promise<void>;
@@ -763,10 +763,32 @@ export const useDriverStore = create<DriverState>((set, get) => ({
         }
     },
 
-    fetchRideHistory: async (limit = 20, offset = 0) => {
+    fetchRideHistory: async (limit = 20, offset = 0, append = false) => {
         try {
             const res = await api.get<{ rides: RideHistoryItem[]; total: number }>(`/drivers/rides/history?limit=${limit}&offset=${offset}`);
-            set({ rideHistory: res.data.rides || [], historyTotal: res.data.total || 0 });
+            const nextRides = res.data.rides || [];
+            set((state) => {
+                if (!append || offset === 0) {
+                    return {
+                        rideHistory: nextRides,
+                        historyTotal: res.data.total || 0,
+                    };
+                }
+
+                const seen = new Set(state.rideHistory.map((ride) => ride.id).filter(Boolean));
+                const merged = [...state.rideHistory];
+                nextRides.forEach((ride) => {
+                    if (!ride.id || !seen.has(ride.id)) {
+                        merged.push(ride);
+                        if (ride.id) seen.add(ride.id);
+                    }
+                });
+
+                return {
+                    rideHistory: merged,
+                    historyTotal: res.data.total || merged.length,
+                };
+            });
         } catch (err) {
             console.log('Fetch history error:', err);
         }

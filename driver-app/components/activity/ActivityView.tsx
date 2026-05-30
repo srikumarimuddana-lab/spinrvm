@@ -62,6 +62,7 @@ export default function ActivityView() {
   const totalIncentives = parseMoney(earnings?.total_incentives);
   const totalTax = parseMoney(earnings?.total_tax);
   const fareEarnings = Math.max(totalEarnings - totalTips - totalIncentives - totalTax, 0);
+  const periodRideTotal = period === 'all' ? historyTotal : Number(earnings?.total_rides ?? 0);
   const hasMoreHistory = rideHistory.length < historyTotal;
 
   const loadMoreHistory = useCallback(async () => {
@@ -99,9 +100,10 @@ export default function ActivityView() {
   }, [rideHistory, statusFilter, period]);
   const canLoadMoreHistory =
     hasMoreHistory &&
+    filteredRides.length > 0 &&
     (period === 'all' && statusFilter === 'all'
-      ? rideHistory.length > 0
-      : filteredRides.length >= PAGE_SIZE);
+      ? true
+      : (statusFilter === 'all' && periodRideTotal > filteredRides.length) || filteredRides.length >= PAGE_SIZE);
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>

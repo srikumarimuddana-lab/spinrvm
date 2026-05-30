@@ -878,7 +878,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
                 # enforces a 4 KB data-message limit and detailed polygons/
                 # polylines can easily blow it. Drivers receive these via the
                 # WebSocket message (dispatch_payload) which has no size cap.
-                _FCM_SPATIAL_EXCLUDE = {"service_area_polygon", "planned_route_polyline"}
+                _FCM_SPATIAL_EXCLUDE = {"service_area_polygon", "planned_route_polyline", "rider_profile_image"}
                 fcm_data = {
                     k: json.dumps(v) if isinstance(v, (dict, list)) else str(v) if v is not None else ""
                     for k, v in dispatch_payload.items()
@@ -4364,6 +4364,43 @@ async def send_ride_message(
         )
 
     return {"success": True, "message": msg_data}
+
+
+class TypingRequest(BaseModel):
+    sender: str
+
+
+@api_router.post("/{ride_id}/typing")
+async def send_typing_indicator(
+    ride_id: str,
+    body: TypingRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Broadcast a typing indicator to the other party via WebSocket."""
+    ride = await db_supabase.get_ride(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    uid = current_user["id"]
+    rider_id = ride.get("rider_id")
+    driver_id = ride.get("driver_id")
+
+    if uid == rider_id:
+        sender = "rider"
+        target = f"driver_{driver_id}" if driver_id else None
+    elif uid == driver_id or uid in ((await db_supabase.get_driver_by_id(driver_id) or {}).get("user_id", ""),):
+        sender = "driver"
+        target = f"rider_{rider_id}" if rider_id else None
+    else:
+        raise HTTPException(status_code=403, detail="Not a participant")
+
+    if target:
+        await manager.send_personal_message(
+            {"type": "chat_typing", "ride_id": ride_id, "sender": sender},
+            target,
+        )
+
+    return {"success": True}
 
 
 @api_router.delete("/scheduled/{ride_id}")

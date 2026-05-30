@@ -858,6 +858,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             "duration_minutes": ride.get("duration_minutes"),
             "rider_name": rider_display_name,
             "rider_rating": (rider_user or {}).get("rating"),
+            "rider_profile_image": (rider_user or {}).get("profile_image"),
             "requires_wav": bool(ride.get("requires_wav")),
             "countdown_seconds": offer_timeout,
             "offer_expires_at": _offer_expires_at,

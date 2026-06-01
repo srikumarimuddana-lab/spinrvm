@@ -71,15 +71,14 @@ def build_autocomplete_payload(
     if location:
         lat, lng = _parse_location(location)
         center = {"latitude": lat, "longitude": lng}
-        payload["locationBias"] = {
+        # Places API (New) caps circular locationRestriction radius at 50km.
+        new_api_radius = min(float(radius), 50000.0)
+        payload["locationRestriction"] = {
             "circle": {
                 "center": center,
-                "radius": float(radius),
+                "radius": new_api_radius,
             }
         }
-        # Keep origin separate so Places API (New) can populate distanceMeters;
-        # the proxy uses it to sort nearest-first without excluding farther
-        # destinations that fall outside the bias circle.
         payload["origin"] = center
 
     return payload

@@ -41,12 +41,7 @@ try:
         places_new_details_url,
         places_new_headers,
     )
-    from ..utils.maps_budget import (
-        check_budget,
-        close_autocomplete_session,
-        record_autocomplete_request,
-        record_call,
-    )
+    from ..utils.maps_budget import check_budget, record_call
     from ..utils.rate_limiter import default_limiter as limiter
     from ..utils.redis_client import redis_get, redis_set
 except ImportError:  # pragma: no cover - dual import path
@@ -62,12 +57,7 @@ except ImportError:  # pragma: no cover - dual import path
         places_new_details_url,
         places_new_headers,
     )
-    from utils.maps_budget import (  # type: ignore
-        check_budget,
-        close_autocomplete_session,
-        record_autocomplete_request,
-        record_call,
-    )
+    from utils.maps_budget import check_budget, record_call  # type: ignore
     from utils.rate_limiter import default_limiter as limiter  # type: ignore
     from utils.redis_client import redis_get, redis_set  # type: ignore
 
@@ -146,7 +136,9 @@ async def places_autocomplete(
         logger.error("[maps_proxy] autocomplete(new) request failed: %s", e)
         raise HTTPException(status_code=502, detail="Failed to call Places API") from e
 
-    await record_autocomplete_request(session_token)
+    # Places API (New) bills autocomplete requests individually for sessions
+    # ending in Place Details Essentials, so record each proxied request.
+    await record_call("autocomplete")
 
     predictions = legacy_predictions_from_new_response(data)
 
@@ -203,7 +195,6 @@ async def places_details(
         raise HTTPException(status_code=502, detail="Failed to call Places API") from e
 
     await record_call("details")
-    await close_autocomplete_session(session_token)
 
     return legacy_details_from_new_response(data)
 

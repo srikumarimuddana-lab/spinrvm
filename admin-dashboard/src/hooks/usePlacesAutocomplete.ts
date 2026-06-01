@@ -55,13 +55,7 @@ export function usePlacesAutocomplete(
 
     useEffect(() => {
         const searchInput = input.trim();
-        if (debounceRef.current) {
-            clearTimeout(debounceRef.current);
-            debounceRef.current = null;
-        }
-
         if (searchInput.length < MIN_QUERY_LEN) {
-            seqRef.current += 1;
             setPredictions([]);
             setLoading(false);
             return;

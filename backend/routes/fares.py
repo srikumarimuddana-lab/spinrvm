@@ -237,8 +237,20 @@ async def build_fares_for_area(matched_area, vehicle_types):
     for vt in vehicle_types:
         pricing = _pick(vt)
         if not pricing:
+            # Always return every active vehicle type. The rider booking sheet
+            # uses the estimate list as its vehicle-type list, then greys out
+            # types with no nearby drivers. If a service area has partial
+            # pricing (for example only Sedan is configured), skipping the
+            # unpriced types makes the rider app look empty or incomplete
+            # instead of showing those types as unavailable. Use platform
+            # defaults for the missing pricing rows so availability remains a
+            # driver-presence decision, not an admin-pricing-data decision.
             if has_area_pricing:
-                continue
+                logger.warning(
+                    "Fares: missing area pricing for vehicle type %s in service area %s; using defaults",
+                    vt.get("name", vt.get("id")),
+                    matched_area.get("name", matched_area.get("id")),
+                )
             pricing = {
                 "base_fare": DEFAULT_FARE["base_fare"],
                 "per_km_rate": DEFAULT_FARE["per_km_rate"],

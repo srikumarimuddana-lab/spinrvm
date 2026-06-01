@@ -26,10 +26,6 @@ import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
 import { useDriverStore } from '../store/driverStore';
 import { initCarSpike } from '../car/carSpike';
-// Side-effect: registers the separate "AndroidAuto" AppRegistry root the fork's
-// CarPlaySession launches (no-op on iOS). Must run at module load, before native
-// calls runApplication — same pattern as the backgroundLocation import above.
-import '../car/androidAutoEntry';
 import SpinrConfig from '@shared/config/spinr.config';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';

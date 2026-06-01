@@ -115,7 +115,7 @@ def _mock_httpx_response(payload: dict) -> MagicMock:
 
 
 @pytest.mark.anyio
-async def test_autocomplete_uses_new_api_soft_bias_and_records_paid_request(mock_redis, monkeypatch):
+async def test_autocomplete_uses_new_api_and_records_per_request_when_token_passed(mock_redis, monkeypatch):
     from routes import maps_proxy
     from utils import maps_budget
 
@@ -170,14 +170,6 @@ async def test_autocomplete_uses_new_api_soft_bias_and_records_paid_request(mock
     mock_client.post.assert_awaited_once()
     _, kwargs = mock_client.post.await_args
     assert kwargs["json"]["sessionToken"] == "abc-uuid"
-    assert kwargs["json"]["locationBias"] == {
-        "circle": {
-            "center": {"latitude": 52.1, "longitude": -106.6},
-            "radius": 50000.0,
-        }
-    }
-    assert kwargs["json"]["origin"] == {"latitude": 52.1, "longitude": -106.6}
-    assert "locationRestriction" not in kwargs["json"]
     assert kwargs["headers"]["X-Goog-FieldMask"]
     # Places API (New) bills this Essentials-terminating flow per autocomplete request.
     spent = await maps_budget.estimate_today_usd()

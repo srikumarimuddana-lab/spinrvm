@@ -324,9 +324,9 @@ class FareService:
         Resolution order:
           1. If no active vehicle types: return []
           2. If no matching service area: return defaults
-          3. If matching area but no fare_configs: return defaults with area surge
-          4. If matching area + fare_configs: return merged result
-          5. If merge yields nothing (vehicle types changed): return defaults with surge
+          3. If matching area but no fare_configs: return []
+          4. If matching area + fare_configs: return only configured vehicle types
+          5. If merge yields nothing (vehicle types changed): return []
         """
         vehicle_types = await self.list_active_vehicle_types()
         if not vehicle_types:
@@ -354,12 +354,8 @@ class FareService:
         )
 
         if not fare_configs:
-            return build_default_fares(vehicle_types, surge)
+            return []
 
-        merged = merge_fare_configs_with_vehicle_types(
+        return merge_fare_configs_with_vehicle_types(
             fare_configs, vehicle_types, surge
         )
-        if not merged:
-            return build_default_fares(vehicle_types, surge)
-
-        return merged

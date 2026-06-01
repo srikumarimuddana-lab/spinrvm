@@ -37,13 +37,14 @@ logger = logging.getLogger(__name__)
 
 Sku = Literal["autocomplete", "autocomplete_session", "details", "geocode"]
 
-# USD per call. Source: Google Maps Platform pricing 2025.
-# autocomplete_session is the per-session flat rate (covers N autocomplete
-# requests + 1 details call when the same session token is passed).
+# USD per call. Source: Google Maps Platform pricing 2026.
+# Places API (New) charges autocomplete requests separately for sessions that
+# terminate in Place Details Essentials; `autocomplete_session` remains for
+# historical counters that may still exist in today's Redis bucket.
 _PRICE_USD: dict[Sku, float] = {
     "autocomplete": 0.00283,
     "autocomplete_session": 0.017,
-    "details": 0.017,
+    "details": 0.005,
     "geocode": 0.005,
 }
 

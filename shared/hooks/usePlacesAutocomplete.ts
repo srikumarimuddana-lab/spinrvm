@@ -21,7 +21,7 @@ import { buildPlacesQuery, type PlaceBias, type PlacePrediction } from '@shared/
 import { newPlacesSessionToken } from '@shared/utils/placesSession';
 
 const DEBOUNCE_MS = 300;
-const MIN_QUERY_LEN = 2;
+const MIN_QUERY_LEN = 3;
 
 export interface UsePlacesAutocompleteResult {
   predictions: PlacePrediction[];
@@ -46,7 +46,8 @@ export function usePlacesAutocomplete(
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (!input || input.length < MIN_QUERY_LEN) {
+    const searchInput = input.trim();
+    if (searchInput.length < MIN_QUERY_LEN) {
       setPredictions([]);
       setLoading(false);
       return;
@@ -58,7 +59,7 @@ export function usePlacesAutocomplete(
     debounceRef.current = setTimeout(async () => {
       setLoading(true);
       try {
-        const query = buildPlacesQuery(input, sessionTokenRef.current, bias ?? null);
+        const query = buildPlacesQuery(searchInput, sessionTokenRef.current, bias ?? null);
         const params = new URLSearchParams();
         params.set('input', query.input);
         params.set('session_token', query.session_token);

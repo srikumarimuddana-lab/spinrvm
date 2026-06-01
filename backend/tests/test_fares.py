@@ -88,9 +88,10 @@ async def test_build_fares_for_area_returns_only_configured_vehicle_types():
     ]
 
     with patch("backend.routes.fares.db_supabase.get_rows", new_callable=AsyncMock) as mock_get_rows:
-        mock_get_rows.return_value = []
+        mock_get_rows.return_value = stale_legacy_fares
         fares = await build_fares_for_area(matched_area, vehicle_types)
 
+    mock_get_rows.assert_not_awaited()
     assert [fare["vehicle_type"]["id"] for fare in fares] == ["vt_sedan", "vt_xl"]
     fares_by_id = {fare["vehicle_type"]["id"]: fare for fare in fares}
     assert fares_by_id["vt_sedan"]["base_fare"] == "4.25"

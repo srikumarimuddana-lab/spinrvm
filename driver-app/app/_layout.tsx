@@ -25,6 +25,7 @@ import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
 import { useDriverStore } from '../store/driverStore';
+import { initCarSpike } from '../car/carSpike';
 import SpinrConfig from '@shared/config/spinr.config';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
@@ -153,6 +154,7 @@ setBackgroundMessageHandler(async (remoteMessage: any) => {
         PENDING_OFFER_KEY,
         JSON.stringify({
           ride_id: data.ride_id,
+          booking_id: data.booking_id || data.ride_id,
           pickup_address: data.pickup_address || '',
           dropoff_address: data.dropoff_address || '',
           pickup_lat: toNum(data.pickup_lat) ?? 0,
@@ -185,6 +187,7 @@ setBackgroundMessageHandler(async (remoteMessage: any) => {
       try {
         await displayRideOfferNotification({
           ride_id: data.ride_id,
+          booking_id: data.booking_id || data.ride_id,
           pickup_address: data.pickup_address,
           dropoff_address: data.dropoff_address,
           fare,
@@ -351,6 +354,18 @@ export default function RootLayout() {
     } catch (e) {
       console.log('[LogRocket] init failed:', e);
     }
+  }, []);
+
+  // ── CarPlay smoke-test (SPIKE), iOS only ──
+  // iOS CarPlay shares the phone app's JS context, so it's driven from here.
+  // Android Auto runs in its OWN JS root and is handled by car/androidAutoEntry
+  // (imported above) — calling initCarSpike here too would double-register on
+  // Android. No-op unless the native module is present (CarPlay wiring is gated
+  // off by default — see plugins/withCarIntegration.js). See docs/carplay-android-auto.md.
+  useEffect(() => {
+    if (Platform.OS !== 'ios') return;
+    const cleanup = initCarSpike();
+    return cleanup;
   }, []);
 
   // ── Cold-start init: auth, location, Firebase native modules, Android channel ──

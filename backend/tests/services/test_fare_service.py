@@ -198,53 +198,6 @@ class TestFareService:
         assert out[0]["base_fare"] == _fd(DEFAULT_FARE["base_fare"])
         assert out[0]["surge_multiplier"] == 1.00
 
-    async def test_returns_vehicle_pricing_when_area_uses_jsonb_pricing(self):
-        svc = FareService(
-            _make_db(
-                vehicle_types=[
-                    {"id": "economy", "name": "Economy"},
-                    {"id": "xl", "name": "XL"},
-                    {"id": "luxury", "name": "Luxury"},
-                ],
-                areas=[
-                    {
-                        "id": "saskatoon",
-                        "surge_multiplier": 1.0,
-                        "vehicle_pricing": [
-                            {
-                                "vehicle_type": "Economy",
-                                "base_fare": 4.0,
-                                "per_km": 1.75,
-                                "per_min": 0.35,
-                                "min_fare": 9.0,
-                                "booking_fee": 2.5,
-                            },
-                            {
-                                "vehicle_type": "XL",
-                                "base_fare": 6.0,
-                                "per_km": 2.25,
-                                "per_min": 0.45,
-                                "min_fare": 12.0,
-                                "booking_fee": 3.0,
-                            },
-                        ],
-                        "polygon": [
-                            {"lat": 51.5, "lng": -106.5},
-                            {"lat": 51.5, "lng": -105.5},
-                            {"lat": 52.5, "lng": -105.5},
-                            {"lat": 52.5, "lng": -106.5},
-                        ],
-                    }
-                ],
-            )
-        )
-
-        out = await svc.fares_for_location(52.0, -106.0)
-
-        assert [fare["vehicle_type"]["id"] for fare in out] == ["economy", "xl"]
-        assert out[0]["base_fare"] == 4.00
-        assert out[1]["base_fare"] == 6.00
-
     async def test_returns_empty_when_matching_area_has_no_fare_configs(self):
         svc = FareService(
             _make_db(

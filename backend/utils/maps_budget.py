@@ -24,9 +24,9 @@ from datetime import datetime, timezone
 from typing import Literal
 
 try:
-    from .redis_client import redis_expire, redis_get, redis_incr
+    from .redis_client import redis_delete, redis_expire, redis_get, redis_incr
 except ImportError:  # pragma: no cover - dual import path
-    from utils.redis_client import redis_expire, redis_get, redis_incr  # type: ignore
+    from utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr  # type: ignore
 
 try:
     from ..core.config import settings
@@ -37,17 +37,20 @@ logger = logging.getLogger(__name__)
 
 Sku = Literal["autocomplete", "autocomplete_session", "details", "geocode"]
 
-# USD per call. Source: Google Maps Platform pricing 2025.
-# autocomplete_session is the per-session flat rate (covers N autocomplete
-# requests + 1 details call when the same session token is passed).
+# USD per call. Source: Google Maps Platform pricing 2026.
+# Places API (New) charges autocomplete requests separately for sessions that
+# terminate in Place Details Essentials; `autocomplete_session` remains for
+# historical counters that may still exist in today's Redis bucket.
 _PRICE_USD: dict[Sku, float] = {
     "autocomplete": 0.00283,
     "autocomplete_session": 0.017,
-    "details": 0.017,
+    "details": 0.005,
     "geocode": 0.005,
 }
 
 _BUCKET_TTL_SECONDS = 26 * 3600
+_SESSION_TTL_SECONDS = 30 * 60
+_SESSION_AUTOCOMPLETE_PAID_LIMIT = 12
 
 
 def _today_utc() -> str:
@@ -74,6 +77,49 @@ async def record_call(sku: Sku) -> None:
             await redis_expire(_key(sku), _BUCKET_TTL_SECONDS)
     except Exception:
         logger.warning("[maps_budget] record_call(%s) failed; skipping count", sku, exc_info=False)
+
+
+def _session_autocomplete_key(session_token: str) -> str:
+    return f"maps:places:new:session:{session_token}:autocomplete"
+
+
+async def record_autocomplete_request(session_token: str | None) -> None:
+    """Record the paid part of a Places API (New) autocomplete request.
+
+    For sessions that terminate in Place Details Essentials, Google bills only
+    the first 12 autocomplete requests at the Autocomplete Requests SKU. Later
+    requests in the same tokenized session are session-usage at no charge, so
+    do not include them in the daily-spend estimate.
+    """
+    if not session_token:
+        await record_call("autocomplete")
+        return
+
+    try:
+        key = _session_autocomplete_key(session_token)
+        count = await redis_incr(key)
+        if count == 1:
+            await redis_expire(key, _SESSION_TTL_SECONDS)
+        if count <= _SESSION_AUTOCOMPLETE_PAID_LIMIT:
+            await record_call("autocomplete")
+    except Exception:
+        logger.warning(
+            "[maps_budget] record_autocomplete_request failed; skipping count",
+            exc_info=False,
+        )
+
+
+async def close_autocomplete_session(session_token: str | None) -> None:
+    """Forget the per-session autocomplete counter after details closes it."""
+    if not session_token:
+        return
+    try:
+        await redis_delete(_session_autocomplete_key(session_token))
+    except Exception:
+        logger.warning(
+            "[maps_budget] close_autocomplete_session failed; skipping cleanup",
+            exc_info=False,
+        )
 
 
 async def estimate_today_usd() -> float:

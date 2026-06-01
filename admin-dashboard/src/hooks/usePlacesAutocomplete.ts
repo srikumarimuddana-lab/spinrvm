@@ -60,7 +60,6 @@ export function usePlacesAutocomplete(
             setLoading(false);
             return;
         }
-        if (debounceRef.current) clearTimeout(debounceRef.current);
         const mySeq = ++seqRef.current;
 
         debounceRef.current = setTimeout(async () => {

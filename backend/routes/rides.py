@@ -908,12 +908,22 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
                     if k not in _FCM_SPATIAL_EXCLUDE
                 }
                 fcm_data["deeplink"] = "/driver/"
+                fcm_data["booking_id"] = str(ride_id)
+
+                pickup_label = ride.get("pickup_address") or "Nearby pickup"
+                dropoff_label = ride.get("dropoff_address") or "destination"
+                try:
+                    earnings_label = f"${float(ride.get('driver_earnings') or 0):.2f}"
+                except (TypeError, ValueError):
+                    earnings_label = "New fare"
+
                 await send_push_notification(
                     driver["user_id"],
-                    "New ride request",
-                    f"{ride.get('pickup_address') or 'Nearby pickup'} → {ride.get('dropoff_address') or 'destination'}",
+                    f"{earnings_label} ride offer",
+                    f"Booking {ride_id} • {pickup_label} → {dropoff_label}",
                     fcm_data,
                     priority="dispatch",
+                    target_app="driver",
                 )
             except Exception as e:
                 logger.error(f"[DISPATCH] push failed for driver {driver['user_id']}: {e}", exc_info=True)

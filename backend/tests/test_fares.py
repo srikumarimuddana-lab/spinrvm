@@ -52,15 +52,9 @@ async def test_fare_estimate_surge_capped_at_2_5x():
 
 @pytest.mark.unit
 @pytest.mark.anyio
-async def test_build_fares_for_area_includes_unpriced_vehicle_types_with_defaults():
-    """Regression: partial area pricing must not hide vehicle types from booking.
-
-    The rider app renders vehicle cards from /rides/estimate. If a service area
-    has pricing for only one vehicle type, unpriced active types still need a
-    fare row so the app can show them greyed out when no drivers are available.
-    """
+async def test_build_fares_for_area_returns_only_configured_vehicle_types():
+    """Ride options should be scoped to vehicle types assigned to the area."""
     from backend.routes.fares import build_fares_for_area
-    from backend.services.fare_service import DEFAULT_FARE
 
     matched_area = {
         "id": "area_partial_pricing",
@@ -76,12 +70,21 @@ async def test_build_fares_for_area_includes_unpriced_vehicle_types_with_default
                 "per_min": 0.35,
                 "min_fare": 9.00,
                 "booking_fee": 2.50,
-            }
+            },
+            {
+                "vehicle_type": "XL",
+                "base_fare": 6.00,
+                "per_km": 2.25,
+                "per_min": 0.45,
+                "min_fare": 12.00,
+                "booking_fee": 3.00,
+            },
         ],
     }
     vehicle_types = [
         {"id": "vt_sedan", "name": "Sedan", "is_active": True},
         {"id": "vt_xl", "name": "XL", "is_active": True},
+        {"id": "vt_lux", "name": "Luxury", "is_active": True},
     ]
 
     with patch("backend.routes.fares.db_supabase.get_rows", new_callable=AsyncMock) as mock_get_rows:
@@ -91,5 +94,4 @@ async def test_build_fares_for_area_includes_unpriced_vehicle_types_with_default
     assert [fare["vehicle_type"]["id"] for fare in fares] == ["vt_sedan", "vt_xl"]
     fares_by_id = {fare["vehicle_type"]["id"]: fare for fare in fares}
     assert fares_by_id["vt_sedan"]["base_fare"] == "4.25"
-    assert fares_by_id["vt_xl"]["base_fare"] == f'{DEFAULT_FARE["base_fare"]:.2f}'
-    assert fares_by_id["vt_xl"]["per_km_rate"] == f'{DEFAULT_FARE["per_km_rate"]:.2f}'
+    assert fares_by_id["vt_xl"]["base_fare"] == "6.00"

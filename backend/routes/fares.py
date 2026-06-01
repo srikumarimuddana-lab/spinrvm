@@ -165,10 +165,10 @@ async def build_fares_for_area(matched_area, vehicle_types):
       2. ``fare_configs`` table                   — legacy rows keyed
          by vehicle_type_id. Used when the area has no vehicle_pricing
          entry for a given vehicle type.
-      3. _build_default_fares()                   — platform defaults
-         when neither source has anything.
+      3. No fare row                         — the vehicle type is not
+         assigned to this service area and must not be shown to riders.
 
-    All three paths merge into the same output shape downstream code
+    Configured paths merge into the same output shape downstream code
     (rides.py fare calc, rider-app estimates) already expects.
     Extracted from ``get_fares_for_location`` so callers that already
     resolved the area (e.g. ``create_ride``) can skip the second
@@ -233,31 +233,13 @@ async def build_fares_for_area(matched_area, vehicle_types):
         return None
 
     result = []
-    has_area_pricing = bool(vp_by_name) or bool(fc_by_vt_id)
     for vt in vehicle_types:
         pricing = _pick(vt)
         if not pricing:
-            # Always return every active vehicle type. The rider booking sheet
-            # uses the estimate list as its vehicle-type list, then greys out
-            # types with no nearby drivers. If a service area has partial
-            # pricing (for example only Sedan is configured), skipping the
-            # unpriced types makes the rider app look empty or incomplete
-            # instead of showing those types as unavailable. Use platform
-            # defaults for the missing pricing rows so availability remains a
-            # driver-presence decision, not an admin-pricing-data decision.
-            if has_area_pricing:
-                logger.warning(
-                    "Fares: missing area pricing for vehicle type %s in service area %s; using defaults",
-                    vt.get("name", vt.get("id")),
-                    matched_area.get("name", matched_area.get("id")),
-                )
-            pricing = {
-                "base_fare": DEFAULT_FARE["base_fare"],
-                "per_km_rate": DEFAULT_FARE["per_km_rate"],
-                "per_minute_rate": DEFAULT_FARE["per_minute_rate"],
-                "minimum_fare": DEFAULT_FARE["minimum_fare"],
-                "booking_fee": DEFAULT_FARE["booking_fee"],
-            }
+            # Only vehicle types explicitly priced/configured for the pickup
+            # service area should appear in ride options. Driver availability
+            # still controls whether each returned option is enabled/disabled.
+            continue
         # Normalise all monetary values from DB through _money_str() so they
         # serialise as exact Decimal strings; surge_multiplier stays float.
         result.append(
@@ -273,7 +255,7 @@ async def build_fares_for_area(matched_area, vehicle_types):
         )
 
     logger.info(
-        f"Fares: Returning {len(result)} fare estimates "
+        f"Fares: Returning {len(result)} service-area fare estimates "
         f"(vehicle_pricing={len(vp_by_name)}, fare_configs={len(fc_by_vt_id)})"
     )
     return result

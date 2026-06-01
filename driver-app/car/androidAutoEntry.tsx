@@ -7,10 +7,10 @@
  * car UI must be registered here as its own AppRegistry component — otherwise a
  * head-unit / DHU launch has no JS to run and never sets a template. (Codex P1)
  *
- * Registered at module load (imported for side-effect from app/_layout.tsx, exactly
- * like utils/backgroundLocation) so the component exists before native calls
- * runApplication. Android-only and fully guarded — a no-op on iOS / Expo Go /
- * missing native module.
+ * Registered at module load from the real bundle entry (driver-app/index.js) before
+ * expo-router/entry registers the phone root, so the component exists when native
+ * cold-launches the car surface via runApplication. Android-only and fully guarded
+ * — a no-op on iOS / Expo Go / missing native module.
  */
 import { useEffect } from 'react';
 import { AppRegistry, Platform } from 'react-native';

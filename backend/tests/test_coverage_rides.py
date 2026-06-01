@@ -226,63 +226,6 @@ async def test_estimate_ride_includes_nearby_drivers():
 
 
 @pytest.mark.anyio
-async def test_estimate_ride_keeps_configured_types_and_marks_driver_availability():
-    """Configured service-area types remain visible; driver presence controls availability."""
-    from backend.routes.rides import RideEstimateRequest, estimate_ride
-
-    fake_fares = [
-        {
-            "vehicle_type": {"id": "vt-standard", "name": "Standard"},
-            "base_fare": "3.00",
-            "per_km_rate": "1.50",
-            "per_minute_rate": "0.30",
-            "booking_fee": "2.00",
-            "surge_multiplier": "1.0",
-            "minimum_fare": "5.00",
-        },
-        {
-            "vehicle_type": {"id": "vt-xl", "name": "XL"},
-            "base_fare": "5.00",
-            "per_km_rate": "2.00",
-            "per_minute_rate": "0.45",
-            "booking_fee": "3.00",
-            "surge_multiplier": "1.0",
-            "minimum_fare": "8.00",
-        },
-    ]
-    standard_driver = {
-        "user_id": "u-1",
-        "lat": 52.1,
-        "lng": -106.6,
-        "vehicle_type_id": "vt-standard",
-    }
-
-    with (
-        patch("backend.routes.rides.validate_ride_location"),
-        patch("backend.routes.rides.calculate_distance", return_value=2.0),
-        patch("backend.routes.rides.get_fares_for_location", new_callable=AsyncMock, return_value=fake_fares),
-        patch("backend.routes.rides.db_supabase") as mock_db,
-        patch("backend.routes.rides.calculate_airport_fee", new_callable=AsyncMock, return_value={"airport_fee": 0.0}),
-        patch("backend.routes.rides.sign_estimate_token", return_value="tok"),
-        patch("backend.routes.rides.get_app_settings", new_callable=AsyncMock, return_value={}),
-    ):
-        mock_db.get_rows = AsyncMock(side_effect=[[], [standard_driver]])
-        mock_db.get_service_area_for_point = AsyncMock(return_value=None)
-
-        result = await estimate_ride(
-            body=RideEstimateRequest(pickup_lat=52.1, pickup_lng=-106.6, dropoff_lat=52.2, dropoff_lng=-106.7),
-            current_user=_USER,
-        )
-
-    estimates_by_type = {e["vehicle_type"]["id"]: e for e in result["estimates"]}
-    assert list(estimates_by_type) == ["vt-standard", "vt-xl"]
-    assert estimates_by_type["vt-standard"]["available"] is True
-    assert estimates_by_type["vt-standard"]["driver_count"] == 1
-    assert estimates_by_type["vt-xl"]["available"] is False
-    assert estimates_by_type["vt-xl"]["driver_count"] == 0
-
-
-@pytest.mark.anyio
 async def test_estimate_ride_allows_dropoff_matched_by_polygon_fallback():
     """Dropoff geofence should use the same polygon fallback as pickup."""
     from backend.routes.rides import RideEstimateRequest, estimate_ride

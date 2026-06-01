@@ -167,6 +167,7 @@ async def test_estimate_ride_returns_estimates():
         patch("backend.routes.rides.get_app_settings", new_callable=AsyncMock, return_value={}),
     ):
         mock_db.get_rows = AsyncMock(return_value=[])
+        mock_db.get_service_area_for_point = AsyncMock(return_value=None)
 
         result = await estimate_ride(
             body=RideEstimateRequest(pickup_lat=52.1, pickup_lng=-106.6, dropoff_lat=52.2, dropoff_lng=-106.7),
@@ -213,6 +214,7 @@ async def test_estimate_ride_includes_nearby_drivers():
         # First get_rows call fetches service_areas (return empty to skip geofence),
         # second fetches nearby drivers.
         mock_db.get_rows = AsyncMock(side_effect=[[], [nearby_driver]])
+        mock_db.get_service_area_for_point = AsyncMock(return_value=None)
 
         result = await estimate_ride(
             body=RideEstimateRequest(pickup_lat=52.1, pickup_lng=-106.6, dropoff_lat=52.2, dropoff_lng=-106.7),
@@ -221,6 +223,59 @@ async def test_estimate_ride_includes_nearby_drivers():
 
     assert result["estimates"][0]["driver_count"] == 1
     assert result["estimates"][0]["available"] is True
+
+
+@pytest.mark.anyio
+async def test_estimate_ride_allows_dropoff_matched_by_polygon_fallback():
+    """Dropoff geofence should use the same polygon fallback as pickup."""
+    from backend.routes.rides import RideEstimateRequest, estimate_ride
+
+    fake_fares = [
+        {
+            "vehicle_type": {"id": "vt-1", "name": "Standard"},
+            "base_fare": "3.00",
+            "per_km_rate": "1.50",
+            "per_minute_rate": "0.30",
+            "booking_fee": "2.00",
+            "surge_multiplier": "1.0",
+            "minimum_fare": "5.00",
+        }
+    ]
+    active_area = {
+        "id": "area-1",
+        "name": "Polygon Area",
+        "is_active": True,
+        "polygon": [
+            {"lat": 52.0, "lng": -107.0},
+            {"lat": 52.0, "lng": -106.0},
+            {"lat": 53.0, "lng": -106.0},
+            {"lat": 53.0, "lng": -107.0},
+        ],
+    }
+
+    with (
+        patch("backend.routes.rides.validate_ride_location"),
+        patch("backend.routes.rides.calculate_distance", return_value=5.0),
+        patch("backend.routes.rides.get_fares_for_location", new_callable=AsyncMock, return_value=fake_fares),
+        patch("backend.routes.rides.db_supabase") as mock_db,
+        patch("backend.routes.rides.calculate_airport_fee", new_callable=AsyncMock, return_value={"airport_fee": 0.0}),
+        patch("backend.routes.rides.calculate_all_fees", new_callable=AsyncMock, return_value={}),
+        patch("backend.routes.rides.sign_estimate_token", return_value="tok"),
+        patch("backend.routes.rides.get_app_settings", new_callable=AsyncMock, return_value={}),
+    ):
+        # Simulates production rows where the PostGIS geography column is empty
+        # or stale even though the admin-visible polygon contains both points.
+        mock_db.get_service_area_for_point = AsyncMock(return_value=None)
+        mock_db.get_rows = AsyncMock(side_effect=[[active_area], []])
+
+        result = await estimate_ride(
+            body=RideEstimateRequest(pickup_lat=52.1, pickup_lng=-106.6, dropoff_lat=52.2, dropoff_lng=-106.7),
+            current_user=_USER,
+        )
+
+    assert len(result["estimates"]) == 1
+    assert result["estimates"][0]["estimate_token"] == "tok"
+    assert mock_db.get_service_area_for_point.await_count == 2
 
 
 # ── get_active_ride ───────────────────────────────────────────────────────────

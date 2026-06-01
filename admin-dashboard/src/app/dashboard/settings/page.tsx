@@ -239,13 +239,13 @@ export default function SettingsPage() {
                         <Separator />
                         <CardContent className="pt-4 space-y-4">
                             <p className="text-xs text-muted-foreground">
-                                Used by the backend proxy for Places autocomplete, geocoding, and
-                                route distance/duration, and driver ETA ranking. Restrict the key to
-                                these five APIs in GCP Console: <strong>Maps JavaScript API</strong>,{" "}
-                                <strong>Places API</strong>, <strong>Geocoding API</strong>,{" "}
-                                <strong>Directions API</strong>, and{" "}
-                                <strong>Distance Matrix API</strong>. Omitting Distance Matrix causes
-                                ETA-based driver ranking to fall back to straight-line distance.
+                                Used by the backend proxy for Places autocomplete, geocoding,
+                                route distance/duration, driver ETA ranking, and static map images.
+                                Restrict the key to these APIs in GCP Console: <strong>Places API (New)</strong>,{" "}
+                                <strong>Geocoding API</strong>, <strong>Directions API</strong>,{" "}
+                                <strong>Distance Matrix API</strong>, and <strong>Maps Static API</strong>.
+                                Omitting Distance Matrix causes ETA-based driver ranking to fall back
+                                to straight-line distance.
                             </p>
                             <div className="space-y-2">
                                 <Label>API Key</Label>

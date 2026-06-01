@@ -41,10 +41,14 @@ def _local_set(key: str, value: str, ttl: Optional[int] = None) -> None:
 
 
 def _local_incr(key: str) -> int:
+    return _local_incrby(key, 1)
+
+
+def _local_incrby(key: str, amount: int) -> int:
     if _local_is_expired(key):
         _local.pop(key, None)
     current = int(_local.get(key, {}).get("value", 0))
-    new_val = current + 1
+    new_val = current + amount
     exp = _local.get(key, {}).get("expires_at")
     _local[key] = {"value": str(new_val), "expires_at": exp}
     return new_val
@@ -149,6 +153,17 @@ async def redis_incr(key: str) -> int:
             logger.error(f"[REDIS] redis_incr({key!r}) failed — Redis configured but unavailable: {e}")
             raise
     return _local_incr(key)
+
+
+async def redis_incrby(key: str, amount: int) -> int:
+    r = await _get_redis()
+    if r is not None:
+        try:
+            return await r.incrby(key, amount)
+        except Exception as e:
+            logger.error(f"[REDIS] redis_incrby({key!r}, {amount!r}) failed — Redis configured but unavailable: {e}")
+            raise
+    return _local_incrby(key, amount)
 
 
 async def redis_expire(key: str, ttl: int) -> None:

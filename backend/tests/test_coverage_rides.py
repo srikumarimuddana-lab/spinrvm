@@ -2179,6 +2179,57 @@ async def test_create_ride_idempotency_key_existing():
 
 
 @pytest.mark.anyio
+async def test_create_ride_rejects_unpriced_requested_vehicle_type():
+    """Direct/stale booking requests cannot use another type's fare."""
+    from fastapi import HTTPException
+
+    from backend.routes.rides import CreateRideRequest, create_ride
+
+    body = CreateRideRequest(
+        pickup_address="100 Main St",
+        pickup_lat=52.1,
+        pickup_lng=-106.6,
+        dropoff_address="200 Broadway Ave",
+        dropoff_lat=52.2,
+        dropoff_lng=-106.7,
+        vehicle_type_id="vt-unpriced",
+        payment_method="wallet",
+    )
+    configured_fare = {
+        "vehicle_type": {"id": "vt-configured", "name": "Standard"},
+        "per_km_rate": 1.5,
+        "per_minute_rate": 0.25,
+        "booking_fee": 2.0,
+        "base_fare": 3.0,
+        "minimum_fare": 5.0,
+        "surge_multiplier": 1.0,
+    }
+
+    with (
+        patch("backend.routes.rides.validate_ride_location"),
+        patch("backend.routes.rides.db_supabase") as mock_db,
+        patch("backend.routes.rides.db") as mock_ddb,
+        patch("backend.routes.rides._fares_for_location_impl", new_callable=AsyncMock, return_value=[configured_fare]),
+    ):
+        mock_db.find_one = AsyncMock(return_value=None)
+        mock_db.get_rows = AsyncMock(return_value=[])
+        mock_db.get_service_area_for_point = AsyncMock(return_value=None)
+        mock_db.insert_ride = AsyncMock()
+        mock_ddb.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active", "stripe_customer_id": "cus_1"})
+
+        with pytest.raises(HTTPException) as exc:
+            await create_ride(
+                request=_starlette_request("POST"),
+                body=body,
+                current_user=_USER,
+            )
+
+    assert exc.value.status_code == 400
+    assert "vehicle type" in exc.value.detail.lower()
+    mock_db.insert_ride.assert_not_called()
+
+
+@pytest.mark.anyio
 async def test_create_ride_full_happy_path():
     """create_ride: happy path from fare-calc through insert → match."""
     from backend.routes.rides import CreateRideRequest, create_ride

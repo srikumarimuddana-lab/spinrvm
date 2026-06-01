@@ -98,6 +98,44 @@ def find_service_area_for_point(
     return None
 
 
+def merge_vehicle_pricing_with_vehicle_types(
+    vehicle_pricing: List[Dict[str, Any]],
+    vehicle_types: List[Dict[str, Any]],
+    surge: Decimal,
+) -> List[Dict[str, Any]]:
+    """Join service_areas.vehicle_pricing rows to active vehicle types.
+
+    The admin Service Areas editor stores canonical area pricing as JSONB rows
+    keyed by vehicle type name. Only matched rows are returned so callers show
+    exactly the vehicle types assigned to that service area.
+    """
+    if not vehicle_pricing:
+        return []
+
+    pricing_by_name = {
+        row.get("vehicle_type"): row
+        for row in vehicle_pricing
+        if isinstance(row, dict) and row.get("vehicle_type")
+    }
+    result = []
+    for vt in vehicle_types:
+        pricing = pricing_by_name.get(vt.get("name"))
+        if not pricing:
+            continue
+        result.append(
+            {
+                "vehicle_type": vt,
+                "base_fare": _round(_d(pricing.get("base_fare", 0))),
+                "per_km_rate": _round(_d(pricing.get("per_km", pricing.get("per_km_rate", 0)))),
+                "per_minute_rate": _round(_d(pricing.get("per_min", pricing.get("per_minute_rate", 0)))),
+                "minimum_fare": _round(_d(pricing.get("min_fare", pricing.get("minimum_fare", 0)))),
+                "booking_fee": _round(_d(pricing.get("booking_fee", 0))),
+                "surge_multiplier": _round(_d(surge)),
+            }
+        )
+    return result
+
+
 def merge_fare_configs_with_vehicle_types(
     fare_configs: List[Dict[str, Any]],
     vehicle_types: List[Dict[str, Any]],
@@ -347,6 +385,13 @@ class FareService:
             if matching_area.get("surge_enabled", False) and matching_area.get("surge_active", False)
             else _d(1)
         )
+        vehicle_pricing = matching_area.get("vehicle_pricing") or []
+        vehicle_pricing_fares = merge_vehicle_pricing_with_vehicle_types(
+            vehicle_pricing, vehicle_types, surge
+        )
+        if vehicle_pricing_fares:
+            return vehicle_pricing_fares
+
         fare_configs = await self.db.get_rows(
             "fare_configs",
             {"service_area_id": matching_area["id"], "is_active": True},

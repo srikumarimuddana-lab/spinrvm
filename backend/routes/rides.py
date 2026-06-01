@@ -1858,11 +1858,15 @@ async def create_ride(
 
     fare_info = next(
         (f for f in fares if f["vehicle_type"]["id"] == body.vehicle_type_id),
-        fares[0] if fares else None,
+        None,
     )
 
     if not fare_info:
-        raise HTTPException(status_code=400, detail="Invalid vehicle type")
+        logger.info(
+            "[create_ride] reject vehicle_type_id=%s — not configured for pickup service area",
+            body.vehicle_type_id,
+        )
+        raise HTTPException(status_code=400, detail="Invalid vehicle type for this service area")
 
     # Use Decimal for all monetary arithmetic (CQ-009 — eliminates float rounding errors)
     # P0-4 surge-lock: if the client sent back the estimate_token we issued

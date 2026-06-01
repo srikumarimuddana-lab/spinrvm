@@ -175,7 +175,7 @@ class TestFareService:
         assert out[0]["base_fare"] == _fd(DEFAULT_FARE["base_fare"])
         assert out[0]["surge_multiplier"] == 1.00
 
-    async def test_returns_defaults_with_surge_when_no_fare_configs(self):
+    async def test_returns_empty_when_matching_area_has_no_fare_configs(self):
         svc = FareService(
             _make_db(
                 vehicle_types=[{"id": "economy"}],
@@ -195,8 +195,7 @@ class TestFareService:
             )
         )
         out = await svc.fares_for_location(52.0, -106.0)
-        assert len(out) == 1
-        assert out[0]["surge_multiplier"] == 1.50
+        assert out == []
 
     async def test_returns_merged_when_fare_configs_match(self):
         svc = FareService(

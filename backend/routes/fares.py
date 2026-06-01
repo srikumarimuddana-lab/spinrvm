@@ -200,19 +200,25 @@ async def build_fares_for_area(matched_area, vehicle_types):
             if isinstance(row, dict) and row.get("vehicle_type"):
                 vp_by_name[row["vehicle_type"]] = row
 
-    # fare_configs fallback, indexed by vehicle_type_id.
-    fc_rows = await db_supabase.get_rows(
-        "fare_configs",
-        {"service_area_id": matched_area["id"], "is_active": True},
-        limit=100,
-    )
-    fc_by_vt_id: dict = {r.get("vehicle_type_id"): r for r in (fc_rows or []) if r.get("vehicle_type_id")}
+    fc_by_vt_id: dict = {}
+    if not vp_by_name:
+        # Legacy fare_configs are a fallback only for areas that do not have
+        # canonical vehicle_pricing JSONB. Once vehicle_pricing exists, treat it
+        # as authoritative so stale fare_configs cannot re-expose vehicle types
+        # an admin removed from the service area.
+        fc_rows = await db_supabase.get_rows(
+            "fare_configs",
+            {"service_area_id": matched_area["id"], "is_active": True},
+            limit=100,
+        )
+        fc_by_vt_id = {r.get("vehicle_type_id"): r for r in (fc_rows or []) if r.get("vehicle_type_id")}
 
     def _pick(vt):
         """Return a pricing dict for this vehicle type or None."""
-        # Prefer JSONB-by-name (canonical admin-editor source).
-        vp = vp_by_name.get(vt.get("name"))
-        if vp:
+        if vp_by_name:
+            vp = vp_by_name.get(vt.get("name"))
+            if not vp:
+                return None
             return {
                 "base_fare": vp.get("base_fare", 0),
                 "per_km_rate": vp.get("per_km", vp.get("per_km_rate", 0)),
@@ -220,7 +226,8 @@ async def build_fares_for_area(matched_area, vehicle_types):
                 "minimum_fare": vp.get("min_fare", vp.get("minimum_fare", 0)),
                 "booking_fee": vp.get("booking_fee", 0),
             }
-        # Fall back to fare_configs legacy row.
+
+        # Fall back to fare_configs legacy rows only when no JSONB pricing exists.
         fc = fc_by_vt_id.get(vt.get("id"))
         if fc:
             return {

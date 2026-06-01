@@ -50,20 +50,32 @@ async def test_record_call_increments_per_sku_counter(mock_redis):
 
 
 @pytest.mark.anyio
-async def test_record_autocomplete_request_caps_tokenized_session_after_twelve(mock_redis):
+async def test_record_autocomplete_request_counts_abandoned_session_until_close(mock_redis):
     from utils import maps_budget
 
     for _ in range(13):
         await maps_budget.record_autocomplete_request("session-1")
 
     spent = await maps_budget.estimate_today_usd()
-    assert spent == pytest.approx(12 * 0.00283, rel=0.01)
+    assert spent == pytest.approx(13 * 0.00283, rel=0.01)
 
     await maps_budget.close_autocomplete_session("session-1")
-    await maps_budget.record_autocomplete_request("session-1")
 
     spent = await maps_budget.estimate_today_usd()
-    assert spent == pytest.approx(13 * 0.00283, rel=0.01)
+    assert spent == pytest.approx(12 * 0.00283, rel=0.01)
+
+
+@pytest.mark.anyio
+async def test_closed_autocomplete_session_reconciles_only_requests_after_twelve(mock_redis):
+    from utils import maps_budget
+
+    for _ in range(16):
+        await maps_budget.record_autocomplete_request("session-2")
+
+    await maps_budget.close_autocomplete_session("session-2")
+
+    spent = await maps_budget.estimate_today_usd()
+    assert spent == pytest.approx(12 * 0.00283, rel=0.01)
 
 
 @pytest.mark.anyio

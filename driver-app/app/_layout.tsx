@@ -154,6 +154,7 @@ setBackgroundMessageHandler(async (remoteMessage: any) => {
         PENDING_OFFER_KEY,
         JSON.stringify({
           ride_id: data.ride_id,
+          booking_id: data.booking_id || data.ride_id,
           pickup_address: data.pickup_address || '',
           dropoff_address: data.dropoff_address || '',
           pickup_lat: toNum(data.pickup_lat) ?? 0,
@@ -186,6 +187,7 @@ setBackgroundMessageHandler(async (remoteMessage: any) => {
       try {
         await displayRideOfferNotification({
           ride_id: data.ride_id,
+          booking_id: data.booking_id || data.ride_id,
           pickup_address: data.pickup_address,
           dropoff_address: data.dropoff_address,
           fare,

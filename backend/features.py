@@ -1285,7 +1285,7 @@ async def send_push_notification(
         try:
             from utils.push_retry import enqueue_push
 
-            await enqueue_push(user_id, title, body, data, priority=priority)
+            await enqueue_push(user_id, title, body, data, priority=priority, target_app=target_app)
             return True
         except Exception:
             logger.error("push enqueue failed, falling back to direct send", exc_info=True)

@@ -124,7 +124,7 @@ typer==0.25.0             # via -r requirements.in
 typing-extensions==4.15.0  # via aiosignal, anyio, fastapi, google-generativeai, grpcio, limits, pydantic, pydantic-core, pytest-asyncio, realtime, starlette, stripe, typing-inspection
 typing-inspection==0.4.2  # via fastapi, pydantic, pydantic-settings
 uritemplate==4.2.0        # via google-api-python-client
-urllib3==2.6.3            # via -r requirements.in, botocore, cloudinary, requests, sentry-sdk
+urllib3==2.7.0            # via -r requirements.in, botocore, cloudinary, requests, sentry-sdk
 uvicorn==0.46.0           # via -r requirements.in
 watchfiles==1.1.1         # via uvicorn
 websockets==15.0.1        # via -r requirements.in, realtime, uvicorn

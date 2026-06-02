@@ -110,6 +110,6 @@ redis[asyncio]>=5.0.0
 # Additional dependencies
 certifi>=2026.2.25
 idna>=3.11
-urllib3>=2.6.3
+urllib3>=2.7.0
 charset-normalizer>=3.4.7
 

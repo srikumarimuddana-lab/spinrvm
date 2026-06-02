@@ -1,22 +1,26 @@
-"""Road-snapped trip distance for billing (Feature P2 — billable distance).
+"""Road-snapped trip distance + route geometry for billing and SGI map review.
 
 After the haversine sum (with the spike filter from drivers.complete_ride),
 this module recomputes the trip distance by snapping the GPS breadcrumbs to
 the road network, so the billed distance respects the actual route the driver
-drove (detours, turns, road curvature) instead of straight-line GPS hops.
+drove (detours, turns, road curvature) instead of straight-line GPS hops. It
+also returns the **road-matched geometry** so the saved trip map follows the
+roads (raw GPS zig-zags; the snapped line is what an SGI/dispute map review
+should see).
 
 Two providers, in priority order:
   1. Self-hosted OSRM /match (preferred when OSRM_URL is configured). Map-
-     matching snaps the whole noisy trace onto roads and returns the matched
-     route distance directly. No per-call cost, runs on our own infra.
-  2. Google Roads API snapToRoads (fallback). Same idea, metered per request.
+     matching snaps the whole noisy trace onto roads and returns both the
+     matched route distance and its geometry. No per-call cost, our own infra.
+  2. Google Roads API snapToRoads (fallback). The snapped points are both the
+     distance basis and the geometry. Metered per request.
 
 Failure modes are soft: any provider error, missing config, or insufficient
 points returns None, and the caller falls back to the haversine value computed
-in complete_ride. The caller stores BOTH values in ride_metrics so ops can
-compare distributions before flipping fully to road-snapped billing, and it
-applies a 1/3×–3× sanity gate against the haversine baseline — so a misbehaving
-provider can never corrupt a fare.
+in complete_ride (and keeps the raw GPS polyline). The caller also applies a
+1/3x-3x sanity gate against the haversine baseline before trusting the distance
+OR saving the road geometry, so a misbehaving provider can never corrupt a fare
+or persist a bogus map.
 
 Why map-matching (OSRM /match) and not routing (OSRM /route or Directions)?
   * /route returns the *optimal* path between endpoints, not the path the
@@ -29,7 +33,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Optional
+from typing import List, Optional, Tuple
 
 import httpx
 
@@ -47,7 +51,7 @@ logger = logging.getLogger(__name__)
 
 # Trip-end SLA is < 1 s; the snap call is on the hot completion path so we cap
 # aggressively. Self-hosted OSRM on the same network usually answers in tens of
-# ms; Google Roads in 200–500 ms. Anything slower falls back to the haversine-
+# ms; Google Roads in 200-500 ms. Anything slower falls back to the haversine-
 # filtered value (already spike-protected by the P0 filter in complete_ride).
 _TIMEOUT_S = 2.0
 _MIN_POINTS = 5  # below this, snap-to-road isn't reliable
@@ -62,6 +66,13 @@ _OSRM_RADIUS_MIN_M = 10
 _OSRM_RADIUS_MAX_M = 50
 _OSRM_RADIUS_DEFAULT_M = 20
 
+# Cap the saved road geometry so the rides row stays bounded. The matched route
+# can contain hundreds of vertices; ~300 is plenty for a faithful map replay.
+_MAX_ROAD_POLYLINE_POINTS = 300
+
+# A road match: (distance_km, polyline) where polyline is [[lat, lng], ...].
+RoadMatch = Tuple[float, List[List[float]]]
+
 
 def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     R = 6371.0
@@ -72,26 +83,29 @@ def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
 
 
 def _downsample(points: list[dict], max_count: int) -> list[dict]:
-    """Evenly downsample to at most max_count points, always including the last.
-
-    Reserves one slot for the trailing dropoff point so the total never
-    exceeds max_count. Earlier versions built max_count points and then
-    appended the last one, producing max_count+1 — long trips would exceed the
-    provider's coordinate cap and silently fall back to the haversine result,
-    defeating the road-snap recompute for exactly the trips most likely to need
-    it.
-    """
+    """Evenly downsample dict points to at most max_count, always keeping the last."""
     if len(points) <= max_count:
         return points
     if max_count < 2:
         return [points[-1]]
-    # Pick max_count - 1 evenly spaced points across the input, then always
-    # append the actual last point. End-to-end length is at most max_count.
     step = len(points) / (max_count - 1)
     sampled = [points[int(i * step)] for i in range(max_count - 1)]
     if sampled[-1] is not points[-1]:
         sampled.append(points[-1])
     return sampled
+
+
+def _cap_polyline(coords: List[List[float]], max_count: int) -> List[List[float]]:
+    """Evenly downsample a [[lat,lng],...] line to at most max_count, keeping the last."""
+    if len(coords) <= max_count:
+        return coords
+    if max_count < 2:
+        return [coords[-1]]
+    step = len(coords) / (max_count - 1)
+    out = [coords[int(i * step)] for i in range(max_count - 1)]
+    if out[-1] is not coords[-1]:
+        out.append(coords[-1])
+    return out
 
 
 def _osrm_radius(point: dict) -> str:
@@ -110,22 +124,23 @@ def _osrm_radius(point: dict) -> str:
     return str(int(r))
 
 
-async def _compute_via_osrm(trip_points: list[dict], osrm_url: str) -> Optional[float]:
-    """Map-match the trace with OSRM /match; return the matched distance (km).
+async def _compute_via_osrm(trip_points: list[dict], osrm_url: str) -> Optional[RoadMatch]:
+    """Map-match the trace with OSRM /match; return (distance_km, [[lat,lng],...]).
 
-    OSRM expects {lng},{lat} order. We sum every matching's distance because a
-    sparse/messy trace can be split into several matchings; gaps=ignore keeps a
-    momentary signal loss from fragmenting the trip and tidy=true drops
-    outliers before matching.
+    OSRM expects {lng},{lat} order. We sum every matching's distance and
+    concatenate their geometries because a sparse/messy trace can be split into
+    several matchings; gaps=ignore keeps a momentary signal loss from
+    fragmenting the trip and tidy=true drops outliers before matching.
+    overview=full + geometries=geojson returns the snapped road geometry.
     """
     sampled = _downsample(trip_points, _OSRM_MAX_POINTS)
     coords = ";".join(f"{p['lng']},{p['lat']}" for p in sampled)
     radiuses = ";".join(_osrm_radius(p) for p in sampled)
     url = f"{osrm_url.rstrip('/')}/match/v1/driving/{coords}"
     params = {
-        "overview": "false",  # we only need distances, not geometry
+        "overview": "full",  # return the snapped road geometry, not just distance
+        "geometries": "geojson",  # [[lng,lat],...] — no polyline decoder needed
         "steps": "false",
-        "geometries": "polyline",
         "radiuses": radiuses,
         "gaps": "ignore",
         "tidy": "true",
@@ -148,17 +163,22 @@ async def _compute_via_osrm(trip_points: list[dict], osrm_url: str) -> Optional[
         return None
 
     total_m = 0.0
+    polyline: List[List[float]] = []
     for m in data.get("matchings") or []:
         d = m.get("distance")
         if isinstance(d, (int, float)) and d > 0:
             total_m += float(d)
+        # geometry.coordinates is [[lng, lat], ...] for geojson.
+        for lng, lat in (m.get("geometry") or {}).get("coordinates") or []:
+            polyline.append([round(float(lat), 6), round(float(lng), 6)])
+
     if total_m <= 0:
         return None
-    return round(total_m / 1000.0, 3)
+    return round(total_m / 1000.0, 3), _cap_polyline(polyline, _MAX_ROAD_POLYLINE_POINTS)
 
 
-async def _compute_via_google_roads(trip_points: list[dict], api_key: str) -> Optional[float]:
-    """Snap the trace with Google Roads snapToRoads; return the distance (km)."""
+async def _compute_via_google_roads(trip_points: list[dict], api_key: str) -> Optional[RoadMatch]:
+    """Snap the trace with Google Roads snapToRoads; return (distance_km, [[lat,lng],...])."""
     sampled = _downsample(trip_points, _GOOGLE_MAX_POINTS)
     path = "|".join(f"{p['lat']},{p['lng']}" for p in sampled)
 
@@ -169,7 +189,7 @@ async def _compute_via_google_roads(trip_points: list[dict], api_key: str) -> Op
                 params={
                     # interpolate=true returns extra snapped points filling the
                     # gaps along the road network between our samples — that's
-                    # the polyline we sum for the billable distance.
+                    # the polyline we sum AND the geometry we save.
                     "path": path,
                     "interpolate": "true",
                     "key": api_key,
@@ -187,32 +207,33 @@ async def _compute_via_google_roads(trip_points: list[dict], api_key: str) -> Op
     if len(snapped) < 2:
         return None
 
-    # Sum haversine between consecutive snapped points. Each snapped point is
-    # already on a road, so this approximates the driven road distance very
-    # closely (much better than summing raw GPS, even after the spike filter).
+    # Each snapped point is already on a road. Sum haversine between consecutive
+    # snapped points for distance, and collect them as the road geometry.
+    polyline: List[List[float]] = []
     total_km = 0.0
-    for i in range(1, len(snapped)):
-        a = snapped[i - 1].get("location") or {}
-        b = snapped[i].get("location") or {}
-        lat1, lng1 = a.get("latitude"), a.get("longitude")
-        lat2, lng2 = b.get("latitude"), b.get("longitude")
-        if None in (lat1, lng1, lat2, lng2):
+    prev: Optional[Tuple[float, float]] = None
+    for sp in snapped:
+        loc = sp.get("location") or {}
+        lat, lng = loc.get("latitude"), loc.get("longitude")
+        if lat is None or lng is None:
             continue
-        total_km += _haversine_km(lat1, lng1, lat2, lng2)
+        polyline.append([round(float(lat), 6), round(float(lng), 6)])
+        if prev is not None:
+            total_km += _haversine_km(prev[0], prev[1], lat, lng)
+        prev = (lat, lng)
 
     if total_km <= 0:
         return None
-    return round(total_km, 3)
+    return round(total_km, 3), _cap_polyline(polyline, _MAX_ROAD_POLYLINE_POINTS)
 
 
-async def compute_road_distance_km(breadcrumbs: list[dict]) -> Optional[float]:
-    """Recompute trip distance by snapping breadcrumbs to the road network.
+async def compute_road_route(breadcrumbs: list[dict]) -> Optional[dict]:
+    """Road-snap the trip and return {"distance_km": float, "polyline": [[lat,lng],...]}.
 
     Prefers self-hosted OSRM /match when OSRM_URL (or the app_settings
     ``osrm_url`` override) is set; otherwise Google Roads snapToRoads. Returns
-    km rounded to 3 dp, or None if no provider could compute a value — the
-    caller MUST treat None as "keep the haversine-filtered value already
-    computed".
+    None if no provider could compute a value — the caller MUST treat None as
+    "keep the haversine-filtered distance and the raw GPS polyline".
 
     Args:
       breadcrumbs: ordered list of {lat, lng, tracking_phase, ...} dicts from
@@ -231,17 +252,29 @@ async def compute_road_distance_km(breadcrumbs: list[dict]) -> Optional[float]:
 
     app_settings = await get_app_settings() or {}
 
-    # OSRM first when configured. DB override (rotatable via admin) wins over the
-    # OSRM_URL env var.
+    match: Optional[RoadMatch] = None
+    # OSRM first when configured. DB override (rotatable via admin) wins over env.
     osrm_url = (app_settings.get("osrm_url") or settings.OSRM_URL or "").strip()
     if osrm_url:
-        km = await _compute_via_osrm(trip_points, osrm_url)
-        if km is not None:
-            return km
-        logger.info("[route_distance] OSRM produced no value; trying Google Roads fallback")
+        match = await _compute_via_osrm(trip_points, osrm_url)
+        if match is None:
+            logger.info("[route_distance] OSRM produced no value; trying Google Roads fallback")
 
-    api_key = (app_settings.get("google_maps_api_key") or "").strip()
-    if api_key:
-        return await _compute_via_google_roads(trip_points, api_key)
+    if match is None:
+        api_key = (app_settings.get("google_maps_api_key") or "").strip()
+        if api_key:
+            match = await _compute_via_google_roads(trip_points, api_key)
 
-    return None
+    if match is None:
+        return None
+    distance_km, polyline = match
+    return {"distance_km": distance_km, "polyline": polyline}
+
+
+async def compute_road_distance_km(breadcrumbs: list[dict]) -> Optional[float]:
+    """Back-compat shim: road-snapped distance (km) only, or None to fall back.
+
+    Prefer compute_road_route() when you also need the geometry.
+    """
+    result = await compute_road_route(breadcrumbs)
+    return result["distance_km"] if result else None

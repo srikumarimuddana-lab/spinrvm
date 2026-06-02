@@ -35,24 +35,29 @@ const path = require('path');
 //   already declare FOREGROUND_SERVICE).
 // ─────────────────────────────────────────────────────────────────────────────
 
-const CARPLAY_ENTITLEMENT = 'com.apple.developer.carplay-driving-task';
+// Navigation/maps entitlement — REQUIRED because the car UI is a windowed
+// CPMapTemplate (the in-dash route map). The fork's CarSceneDelegate uses the
+// WINDOWED connect (`...didConnect:toWindow:`), which is exactly this maps path;
+// `carplay-driving-task` is windowless (no map) and would NOT render the route
+// map, so it is the wrong category here. See docs/carplay-android-auto.md.
+// TRADE-OFF: Apple scrutinizes the navigation entitlement and may steer a
+// rideshare *driver* app toward driving-task instead — which would force a
+// list/Information UI with no on-car map. The CarPlay *Simulator* does not
+// enforce the grant, so this is testable now; the App Store grant is a separate
+// conversation. Flip back to driving-task only if you also drop the map UI.
+const CARPLAY_ENTITLEMENT = 'com.apple.developer.carplay-maps';
 const CAR_SCENE_DELEGATE = 'CarSceneDelegate';
 
 // The ENTIRE iOS CarPlay wiring is OFF by default and opt-in via
 //   `SPINR_CARPLAY_IOS=1 npx expo prebuild`  (or set it in the EAS profile `env`).
 // Two reasons it must not touch default iOS builds:
-//   1. Signing — the managed `carplay-driving-task` entitlement fails code-signing
-//      until Apple grants it AND the provisioning profile includes it.
+//   1. Signing — the managed `carplay-maps` entitlement fails code-signing
+//      until Apple grants it AND the provisioning profile includes it (the
+//      Simulator is exempt, so emulator testing works before the grant).
 //   2. Phone scene — turning on UIApplicationSceneManifest opts the app into the
 //      UIScene lifecycle; with only a CarPlay scene declared, a normal phone launch
 //      can fail to build its window. Keeping the manifest out of default builds
 //      leaves the existing AppDelegate window path untouched (zero blast radius).
-// NOTE: the CarSceneDelegate uses the WINDOWED connect (`...didConnect:toWindow:`),
-// which is the CarPlay *navigation/maps* entitlement path the fork actually
-// supports. The fork does NOT expose a windowless connect, so the *driving-task*
-// (template-only, no map window) category is unsupported as-is — see
-// docs/carplay-android-auto.md. Android Auto (below) is the fork-supported,
-// no-entitlement path and stays always-on.
 const ENABLE_IOS_CARPLAY = process.env.SPINR_CARPLAY_IOS === '1';
 
 // Android permissions for the car app. The fork's OWN AndroidManifest already
@@ -134,6 +139,25 @@ function withCarPlaySceneManifest(config) {
   });
 }
 
+// Without declaring these in LSApplicationQueriesSchemes, iOS makes
+// Linking.canOpenURL() return false for them AND blocks the deep link — so the
+// CarPlay map could never detect or hand off to Google Maps / Waze. Apple Maps
+// (`maps://`) needs no declaration. Gated with the rest of the CarPlay wiring.
+const IOS_NAV_QUERY_SCHEMES = ['comgooglemaps', 'waze'];
+
+function withCarPlayQuerySchemes(config) {
+  return withInfoPlist(config, (cfg) => {
+    const plist = cfg.modResults;
+    const existing = Array.isArray(plist.LSApplicationQueriesSchemes)
+      ? plist.LSApplicationQueriesSchemes
+      : [];
+    const merged = new Set(existing);
+    for (const scheme of IOS_NAV_QUERY_SCHEMES) merged.add(scheme);
+    plist.LSApplicationQueriesSchemes = Array.from(merged);
+    return cfg;
+  });
+}
+
 function withCarSceneDelegateFile(config) {
   return withDangerousMod(config, [
     'ios',
@@ -192,6 +216,7 @@ const withCarIntegration = (config) => {
   if (ENABLE_IOS_CARPLAY) {
     config = withCarPlayEntitlement(config);
     config = withCarPlaySceneManifest(config);
+    config = withCarPlayQuerySchemes(config);
     config = withCarSceneDelegateFile(config);
     config = withCarSceneDelegateInXcode(config);
   }

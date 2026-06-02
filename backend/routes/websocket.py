@@ -7,8 +7,12 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from firebase_admin import auth as firebase_auth
 from loguru import logger
 
-from backend.utils.breadcrumbs import persist_ride_breadcrumbs
-from backend.utils.location_integrity import check_location_integrity
+try:
+    from ..utils.breadcrumbs import persist_ride_breadcrumbs
+    from ..utils.location_integrity import check_location_integrity
+except ImportError:
+    from utils.breadcrumbs import persist_ride_breadcrumbs  # type: ignore
+    from utils.location_integrity import check_location_integrity  # type: ignore
 
 try:
     from .. import db_supabase
@@ -79,6 +83,7 @@ def _parse_live_coordinate(value):
 
 def _valid_live_coordinates(lat: float, lng: float) -> bool:
     return -90 <= lat <= 90 and -180 <= lng <= 180 and not (lat == 0 and lng == 0)
+
 
 # GAP FIX: Heartbeat constants — tightened from 30s to 10s to match
 # Uber's ~4s/7s cadence more closely. A 30s ping meant a dead connection
@@ -774,7 +779,9 @@ async def websocket_endpoint(
                         )
                         if trusted:
                             await manager.update_driver_location(driver_id, _lat, _lng)
-                            await db_supabase.update_driver_location(driver_id, _lat, _lng, heading=last_pt.get("heading"))
+                            await db_supabase.update_driver_location(
+                                driver_id, _lat, _lng, heading=last_pt.get("heading")
+                            )
                             await mark_present(driver_id)
                     await websocket.send_json({"type": "location_batch_ack", "count": inserted})
 

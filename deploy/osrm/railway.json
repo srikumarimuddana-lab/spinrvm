@@ -1,0 +1,14 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "Dockerfile"
+  },
+  "deploy": {
+    "startCommand": "sh -c 'osrm-routed --algorithm mld --ip :: --port ${PORT:-5000} --max-matching-size 100 /data/region.osrm'",
+    "healthcheckPath": "/nearest/v1/driving/-104.6189,50.4452",
+    "healthcheckTimeout": 300,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 3
+  }
+}

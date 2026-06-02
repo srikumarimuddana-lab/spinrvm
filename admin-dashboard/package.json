@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "postinstall": "cp node_modules/maplibre-gl/dist/maplibre-gl-csp-worker.js public/maplibre-gl-csp-worker.js",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",

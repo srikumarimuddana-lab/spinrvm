@@ -1,10 +1,12 @@
 # CarPlay & Android Auto — integration strategy
 
-**Last verified:** 2026-05-30
-**Status:** Spike scaffold committed on branch `claude/sleepy-dijkstra-nTIqn` — the dependency,
-the `withCarIntegration` config plugin, and a JS smoke test (`car/carSpike.ts`). It must still
-be proven by an **EAS dev build** on a CarPlay Simulator / Android Auto DHU before anything
-relies on it; that build is the gate. No release branch should merge this until the spike passes.
+**Last verified:** 2026-06-02
+**Status:** Spike scaffold + first real surface. Committed: the dependency, the
+`withCarIntegration` config plugin, the JS smoke test (`car/carSpike.ts`), and the
+**Android Auto route map** (`car/carRoute.ts` + `car/carNav.tsx`) — see "Implemented" below.
+It must still be proven by an **EAS dev build** on a CarPlay Simulator / Android Auto DHU
+before anything relies on it; that build is the gate. No release branch should merge this
+until the spike passes.
 **Decision inputs:** Scope = *driving-task v1, architected for an in-dash-nav phase later*;
 platforms = *CarPlay + Android Auto in parallel*; approach = *`react-native-carplay` fork +
 a custom Expo config plugin* (keep all ride logic in shared TS/Zustand).
@@ -41,6 +43,43 @@ a custom Expo config plugin* (keep all ride logic in shared TS/Zustand).
   *or* navigation — see caveat) and **Google Play car-app review**. Start both early.
 
 ---
+
+## Implemented: Android Auto route map ("Path B look, Path A cost")
+
+The first real car surface, replacing the smoke-test list on the Android Auto root.
+**Decision:** render the route the driver expects to see (the Uber-style in-dash map),
+but do NOT pay for live navigation — draw the polyline we *already* store and hand
+turn-by-turn to the driver's own Google Maps / Waze.
+
+- **No new maps spend.** It reuses `rides.planned_route_polyline` (migration 100, a decoded
+  `[[lat,lng], …]` line captured once at ride creation). No Routes/Directions/Navigation-SDK
+  calls at all — so the per-ride cost stays $0, same as the existing `openNavigation()` deep link.
+- **Files:**
+  - `car/carRoute.ts` — pure logic: destination by ride state (pickup pre-trip, dropoff
+    in-trip), polyline parse, and the Google/Waze hand-off URLs. Fully unit-tested.
+  - `car/carNav.tsx` — `CarMapSurface` (react-native-maps `MapView`+`Polyline`+`Marker`),
+    `buildNavMapTemplate` (fork `MapTemplate`, surface `component`, two nav buttons), and
+    `initCarNav()` (subscribes `useDriverStore`, leg-debounced root swap, idle `ListTemplate`).
+  - `car/androidAutoEntry.tsx` — the Android Auto root now drives `initCarNav()`.
+- **Interaction model:** Android Auto routes taps through template **map buttons**, not
+  in-surface touchables (driver-distraction rules) — `nav-google` / `nav-waze` →
+  `Linking.openURL` brings the nav app up on the head unit.
+- **Still unproven on hardware:** map-button icons and the on-surface render need the EAS
+  dev build + DHU (checklist steps 3/5/6). The JS contract is covered by 20 unit tests.
+- **Not yet wired:** accept/decline from the car, online toggle, OTP/rating (stay on phone),
+  and the **CarPlay (iOS)** reuse of this same layer (see "CarPlay reuse" below).
+
+### CarPlay (iOS) reuse
+
+`carRoute.ts` is platform-agnostic and the fork's `MapTemplate` is cross-platform, so ~90% of
+this carries to CarPlay. What iOS still needs before it can ship:
+1. The Apple CarPlay **navigation entitlement** (the fork only does the *windowed* connect —
+   see the TL;DR caveat). Hard external gate; request early.
+2. iOS hand-off URL schemes in `buildHandoffUrl` (`maps:` / `comgooglemaps://` / `waze://`)
+   instead of the Android `google.navigation:` intent.
+3. Drive `initCarNav()` from `app/_layout.tsx` (CarPlay shares the phone JS context) rather
+   than a separate AppRegistry root, and drop the Android-only gate.
+All of this stays behind `SPINR_CARPLAY_IOS=1`, OFF by default.
 
 ## Integration model (separate vs integrated)
 

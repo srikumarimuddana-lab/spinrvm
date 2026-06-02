@@ -139,11 +139,12 @@ export function initCarNav(): () => void {
     if (key === lastKey) return;
     lastKey = key;
     try {
-      CarPlay.setRootTemplate(
-        route
-          ? buildNavMapTemplate(MapTemplate as unknown as MapCtor)
-          : buildIdleTemplate(ListTemplate as unknown as ListCtor)
-      );
+      const tpl = route
+        ? buildNavMapTemplate(MapTemplate as unknown as MapCtor)
+        : buildIdleTemplate(ListTemplate as unknown as ListCtor);
+      // The fork's setRootTemplate type union omits MapTemplate (its TS types lag
+      // the runtime, which accepts it as a root) — cast to the expected param.
+      CarPlay.setRootTemplate(tpl as Parameters<typeof CarPlay.setRootTemplate>[0]);
     } catch (e) {
       log('setRootTemplate failed:', e);
     }

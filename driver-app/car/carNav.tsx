@@ -24,7 +24,6 @@ import { useDriverStore } from '../store/driverStore';
 import {
   buildHandoffUrl,
   defaultNavButtons,
-  providerForButton,
   resolveNavButtons,
   selectCarRoute,
   type NavButton,
@@ -70,6 +69,10 @@ export function CarMapSurface(): React.ReactElement | null {
   return (
     <View style={styles.fill}>
       <MapView
+        // Re-mount (fresh initialRegion) when the destination changes so the
+        // camera re-centers on a leg/ride swap instead of staying on the stale
+        // ride — initialRegion only applies on mount. (Codex P2)
+        key={`${route.destination.latitude},${route.destination.longitude}`}
         style={styles.fill}
         // The projected car surface is non-interactive (Android Auto drives
         // interaction through template buttons, not in-surface touches).
@@ -98,9 +101,16 @@ export function handoffToNav(provider: NavProvider): void {
     log('hand-off skipped — no active route');
     return;
   }
+  const { latitude, longitude } = route.destination;
   const url = buildHandoffUrl(provider, route.destination, Platform.OS);
+  // Universal web Maps URL as a last resort so a missing/disabled nav app never
+  // leaves the button dead — `google.navigation:` throws "No Activity found" with
+  // no Maps app. Mirrors openMapsNavigation in ActiveRidePanel.tsx. (Codex P2)
+  const webFallback = `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}&travelmode=driving`;
   log('hand-off →', provider, url); // visible in Metro when testing on a head unit
-  Linking.openURL(url).catch((e) => log('hand-off openURL failed:', e));
+  Linking.openURL(url).catch(() =>
+    Linking.openURL(webFallback).catch((e) => log('hand-off failed:', e))
+  );
 }
 
 // ── Template builders (constructors injected → unit-testable w/o native) ──
@@ -169,7 +179,11 @@ export function initCarNav(): () => void {
   const apply = () => {
     const { rideState, activeRide } = useDriverStore.getState();
     const route = selectCarRoute(rideState, activeRide);
-    const key = route ? route.leg : 'idle';
+    // Include ride identity in the key so a same-leg ride swap (cached →
+    // fetchActiveRide replaces with a different trip_in_progress ride) still
+    // rebuilds the root + re-centers the map, instead of being suppressed. (Codex P2)
+    const rideId = (activeRide?.ride as { id?: string } | undefined)?.id ?? '';
+    const key = route ? `${route.leg}:${rideId}` : 'idle';
     if (key === lastKey) return;
     lastKey = key;
     try {
@@ -193,9 +207,14 @@ export function initCarNav(): () => void {
   // Route head-unit button presses to the nav hand-off via ONE emitter listener
   // per event: iOS emits `mapButtonPressed` ({id}); Android parses mapButtons as
   // an ActionStrip and emits `buttonPressed` ({buttonId}). (Codex P1)
+  // Only hand off for OUR nav button ids: the Android `buttonPressed` event is
+  // global and carries no template id, so any other car action/alert button id
+  // would otherwise fall through and launch navigation. Strict membership check
+  // — unknown ids are ignored. (Codex P2)
   const onButton = (e: { id?: string; buttonId?: string }) => {
     const id = e.buttonId ?? e.id;
-    if (id) handoffToNav(providerForButton(navButtons, id, Platform.OS));
+    const btn = id ? navButtons.find((b) => b.id === id) : undefined;
+    if (btn) handoffToNav(btn.provider);
   };
 
   const onConnect = () => {

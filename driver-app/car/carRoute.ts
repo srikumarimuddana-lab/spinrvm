@@ -167,11 +167,3 @@ export async function resolveNavButtons(
   if (hasWaze) buttons.push(BUTTON.waze);
   return buttons;
 }
-
-/** Resolve a pressed map-button id back to its provider, given the active button
- *  set (falls back to the platform default if the id is unrecognized). */
-export function providerForButton(buttons: NavButton[], id: string, os: string): NavProvider {
-  const found = buttons.find((b) => b.id === id);
-  if (found) return found.provider;
-  return os === 'ios' ? 'apple' : 'google';
-}

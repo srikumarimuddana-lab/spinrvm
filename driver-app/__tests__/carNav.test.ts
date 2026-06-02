@@ -82,7 +82,15 @@ beforeEach(() => {
   openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined as never);
   setCanOpen(jest.fn().mockResolvedValue(false));
   (CarPlay as unknown as { connected: boolean }).connected = false;
-  useDriverStore.setState({ rideState: 'idle', activeRide: null });
+  // Stub the cold-launch reconcile so it doesn't clobber the per-test ride state
+  // (its real behavior is exercised in the store tests). One test below overrides
+  // these to assert initCarNav invokes them.
+  useDriverStore.setState({
+    rideState: 'idle',
+    activeRide: null,
+    hydrateDriverRideState: jest.fn().mockResolvedValue(undefined),
+    fetchActiveRide: jest.fn().mockResolvedValue(undefined),
+  });
   setOS('android');
 });
 
@@ -197,10 +205,39 @@ describe('initCarNav', () => {
     cleanup();
   });
 
+  it('hydrates and reconciles the ride against the server on init (cold launch)', async () => {
+    const hydrate = jest.fn().mockResolvedValue(undefined);
+    const fetch = jest.fn().mockResolvedValue(undefined);
+    useDriverStore.setState({ hydrateDriverRideState: hydrate, fetchActiveRide: fetch });
+    const cleanup = initCarNav();
+    await new Promise((r) => setImmediate(r));
+    expect(hydrate).toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalled();
+    cleanup();
+  });
+
+  it('ignores store changes while the car is disconnected', () => {
+    // connected = false (beforeEach). On iOS initCarNav is mounted by the phone
+    // layout with no CarPlay session — store changes must not push templates.
+    const cleanup = initCarNav();
+    useDriverStore.setState({ rideState: 'trip_in_progress', activeRide: activeRide() });
+    expect(CarPlay.setRootTemplate).not.toHaveBeenCalled();
+    cleanup();
+  });
+
+  it('uses a MapTemplate idle root on iOS (CarPlay needs a CPMapTemplate)', () => {
+    setOS('ios');
+    (CarPlay as unknown as { connected: boolean }).connected = true;
+    const cleanup = initCarNav(); // connected → auto onConnect → idle root
+    expect((CarPlay.setRootTemplate as jest.Mock).mock.calls[0][0]).toBeInstanceOf(MapTemplate);
+    cleanup();
+  });
+
   it('sets an idle root on connect, then swaps to the map per leg', () => {
     const cleanup = initCarNav();
     expect(CarPlay.setRootTemplate).not.toHaveBeenCalled();
 
+    (CarPlay as unknown as { connected: boolean }).connected = true;
     const onConnect = (CarPlay.registerOnConnect as jest.Mock).mock.calls[0][0];
     onConnect();
     expect(CarPlay.setRootTemplate).toHaveBeenCalledTimes(1);
@@ -213,6 +250,7 @@ describe('initCarNav', () => {
   });
 
   it('destroys the previous template when rebuilding the root (no listener leak)', () => {
+    (CarPlay as unknown as { connected: boolean }).connected = true;
     const cleanup = initCarNav();
     const onConnect = (CarPlay.registerOnConnect as jest.Mock).mock.calls[0][0];
     onConnect(); // idle ListTemplate
@@ -235,10 +273,9 @@ describe('initCarNav', () => {
   });
 
   it('does NOT rebuild the root on same-leg store ticks', () => {
+    (CarPlay as unknown as { connected: boolean }).connected = true;
     const cleanup = initCarNav();
-    const onConnect = (CarPlay.registerOnConnect as jest.Mock).mock.calls[0][0];
     useDriverStore.setState({ rideState: 'trip_in_progress', activeRide: activeRide() });
-    onConnect();
     const calls = (CarPlay.setRootTemplate as jest.Mock).mock.calls.length;
     useDriverStore.setState({ countdownSeconds: 1 } as never);
     expect((CarPlay.setRootTemplate as jest.Mock).mock.calls.length).toBe(calls);
@@ -246,6 +283,7 @@ describe('initCarNav', () => {
   });
 
   it('cleanup unregisters, removes button listeners, and stops responding', () => {
+    (CarPlay as unknown as { connected: boolean }).connected = true;
     const cleanup = initCarNav();
     const sub = (CarPlay.emitter.addListener as jest.Mock).mock.results[0].value;
     cleanup();

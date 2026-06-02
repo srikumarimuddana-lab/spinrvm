@@ -9,6 +9,12 @@ jest.mock('@g4rb4g3/react-native-carplay/lib/CarPlayHeadlessJsTask', () => ({
   default: jest.fn(),
 }));
 
+// androidAutoEntry → carNav statically imports the auth store; this test never
+// runs initCarNav, so a minimal mock just needs to resolve the module.
+jest.mock('@shared/store/authStore', () => ({
+  useAuthStore: { getState: () => ({ token: 'tok', isLoading: false, initialize: () => Promise.resolve() }) },
+}));
+
 import { AppRegistry, Platform } from 'react-native';
 import { registerAndroidAuto, AndroidAutoRoot, AndroidAutoClusterRoot } from '../car/androidAutoEntry';
 

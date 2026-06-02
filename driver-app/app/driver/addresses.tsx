@@ -30,8 +30,8 @@ interface AutocompletePrediction {
 }
 
 /** Geocode a free-text address into {lat, lng} via the backend Places proxy.
- *  Uses one Places billing session (autocomplete → details = $0.017 flat)
- *  instead of a direct Geocoding API call. Falls back to null on no result. */
+ *  Uses one Places API (New) autocomplete → details session instead of a
+ *  direct Geocoding API call. Falls back to null on no result. */
 async function geocodeAddress(address: string): Promise<{ lat: number; lng: number } | null> {
     const sessionToken = newPlacesSessionToken();
     try {

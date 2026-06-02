@@ -111,6 +111,7 @@
         "connectionLost": "Connexion perdue",
         "noInternet": "Pas de connexion Internet",
         "findingRides": "Recherche de courses...",
+        "youreOnline": "Vous êtes en ligne",
         "completeProfile": "Complétez votre profil",
         "finishProfile": "Terminer le profil",
         "addVehicle": "Ajoutez votre véhicule",

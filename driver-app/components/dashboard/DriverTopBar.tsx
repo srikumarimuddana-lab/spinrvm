@@ -18,6 +18,7 @@ interface DriverTopBarProps {
   surgeMultiplier?: number;
   wsLatency?: number | null;
   earnings?: EarningsSummary | null;
+  unreadNotifCount?: number;
 }
 
 export const DriverTopBar: React.FC<DriverTopBarProps> = ({
@@ -25,6 +26,7 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
   connectionState,
   surgeMultiplier,
   earnings,
+  unreadNotifCount = 0,
 }) => {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -65,28 +67,47 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
 
   return (
     <View style={[styles.topBarContainer, { top: Math.max(insets.top, statusBarHeight) }]}>
-      <View style={styles.pillRow}>
-        <TouchableOpacity
-          style={styles.earningsPill}
-          onPress={() => router.push('/driver/activity' as never)}
-          activeOpacity={0.7}
-          accessibilityRole="button"
-          accessibilityLabel={`Today's earnings $${todayEarnings}, ${todayTrips} trips. Tap for details.`}
-        >
-          <Text allowFontScaling={false} style={styles.earningsAmount}>${todayEarnings}</Text>
-          <View style={styles.earningsDivider} />
-          <Text allowFontScaling={false} style={styles.earningsTrips}>
-            {todayTrips} {todayTrips === 1 ? 'trip' : 'trips'}
-          </Text>
-        </TouchableOpacity>
-        {isSurgeActive && (
-          <View style={styles.surgeBadge} accessibilityRole="text" accessibilityLabel={`Surge ${surgeMultiplier!.toFixed(1)} times`}>
-            <Ionicons name="flash" size={11} color="#fff" />
-            <Text allowFontScaling={false} style={styles.surgeBadgeText}>
-              {surgeMultiplier!.toFixed(1)}×
+      <View style={styles.topRow}>
+        <View style={styles.pillRow}>
+          <TouchableOpacity
+            style={styles.earningsPill}
+            onPress={() => router.push('/driver/activity' as never)}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel={`Today's earnings $${todayEarnings}, ${todayTrips} trips. Tap for details.`}
+          >
+            <Text allowFontScaling={false} style={styles.earningsAmount}>${todayEarnings}</Text>
+            <View style={styles.earningsDivider} />
+            <Text allowFontScaling={false} style={styles.earningsTrips}>
+              {todayTrips} {todayTrips === 1 ? 'trip' : 'trips'}
             </Text>
-          </View>
-        )}
+          </TouchableOpacity>
+          {isSurgeActive && (
+            <View style={styles.surgeBadge} accessibilityRole="text" accessibilityLabel={`Surge ${surgeMultiplier!.toFixed(1)} times`}>
+              <Ionicons name="flash" size={11} color="#fff" />
+              <Text allowFontScaling={false} style={styles.surgeBadgeText}>
+                {surgeMultiplier!.toFixed(1)}×
+              </Text>
+            </View>
+          )}
+        </View>
+        <TouchableOpacity
+          style={styles.notificationButton}
+          onPress={() => router.push('/driver/notifications' as never)}
+          activeOpacity={0.7}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          accessibilityRole="button"
+          accessibilityLabel={unreadNotifCount > 0 ? `Notifications, ${unreadNotifCount} unread` : 'Notifications'}
+        >
+          <Ionicons name="notifications-outline" size={22} color={colors.text} />
+          {unreadNotifCount > 0 && (
+            <View style={styles.notifBadge}>
+              <Text allowFontScaling={false} style={styles.notifBadgeText}>
+                {unreadNotifCount > 9 ? '9+' : unreadNotifCount}
+              </Text>
+            </View>
+          )}
+        </TouchableOpacity>
       </View>
       {showBanner && (
         <Animated.View
@@ -152,10 +173,47 @@ function createStyles(colors: ThemeColors) {
     bannerTextDisconnected: {
       color: '#991B1B',
     },
+    topRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
     pillRow: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 8,
+    },
+    notificationButton: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: colors.surface,
+      justifyContent: 'center',
+      alignItems: 'center',
+      position: 'relative',
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.1,
+      shadowRadius: 4,
+      elevation: 3,
+    },
+    notifBadge: {
+      position: 'absolute',
+      top: 6,
+      right: 6,
+      minWidth: 16,
+      height: 16,
+      borderRadius: 8,
+      backgroundColor: '#EF4444',
+      justifyContent: 'center',
+      alignItems: 'center',
+      paddingHorizontal: 3,
+    },
+    notifBadgeText: {
+      color: '#FFF',
+      fontSize: 10,
+      fontWeight: '700',
+      lineHeight: 14,
     },
     earningsPill: {
       flexDirection: 'row',

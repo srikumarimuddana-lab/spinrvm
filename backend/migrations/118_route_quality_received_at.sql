@@ -14,6 +14,27 @@ COMMENT ON COLUMN driver_location_history.received_at IS
 CREATE INDEX IF NOT EXISTS idx_dlh_received_at
     ON driver_location_history(received_at);
 
+-- Defensive bootstrap: production databases that missed migration 117 (or ran
+-- this migration manually from the SQL editor) otherwise fail with
+-- `relation "ride_routes" does not exist` before the new quality columns can be
+-- added. Keep this table definition aligned with 117_ride_routes.sql; migration
+-- 117 remains the authoritative migration for RLS/retention-function changes.
+CREATE TABLE IF NOT EXISTS ride_routes (
+    ride_id          text PRIMARY KEY REFERENCES rides(id) ON DELETE CASCADE,
+    phase_distances  jsonb NOT NULL DEFAULT '{}'::jsonb,
+    phase_durations  jsonb NOT NULL DEFAULT '{}'::jsonb,
+    phase_polylines  jsonb NOT NULL DEFAULT '{}'::jsonb,
+    road_polyline    jsonb NOT NULL DEFAULT '[]'::jsonb,
+    gps_points_count integer NOT NULL DEFAULT 0,
+    computed_at      timestamptz NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE ride_routes IS
+    'Per-ride route detail (per-phase distances/durations/polylines + OSRM road-matched line), 1:1 with rides. Write-once at completion, read-on-demand by the admin map modal. Geometry cleared at 3y by purge_pii_retention; row cascades on the 7y rides delete.';
+
+CREATE INDEX IF NOT EXISTS idx_ride_routes_computed_at ON ride_routes (computed_at);
+ALTER TABLE ride_routes ENABLE ROW LEVEL SECURITY;
+
 ALTER TABLE ride_routes
     ADD COLUMN IF NOT EXISTS route_quality JSONB NOT NULL DEFAULT '{}'::JSONB,
     ADD COLUMN IF NOT EXISTS save_status TEXT NOT NULL DEFAULT 'saved',

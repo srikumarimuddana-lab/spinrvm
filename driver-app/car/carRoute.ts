@@ -101,45 +101,72 @@ export function selectCarRoute(
 /**
  * Deep-link URL that hands live turn-by-turn to the driver's nav app. Launching
  * it while the head unit is connected brings the nav app up on the car screen.
- *   - google → Android `google.navigation:` intent (mirrors openNavigation())
- *   - apple  → Apple Maps directions (CarPlay-native, always installed on iOS)
- *   - waze   → Waze universal link (works on both platforms if installed)
+ * The scheme is per-platform because the SAME app uses different schemes:
+ *   - google → Android `google.navigation:` intent; iOS `comgooglemaps://`
+ *              (Google Maps supports CarPlay — offered when installed)
+ *   - apple  → Apple Maps directions (CarPlay-native, always present on iOS)
+ *   - waze   → `waze://` on iOS, Waze universal link on Android (web fallback)
  */
-export function buildHandoffUrl(provider: NavProvider, dest: LatLng): string {
-  const { latitude, longitude } = dest;
+export function buildHandoffUrl(provider: NavProvider, dest: LatLng, os: string): string {
+  const { latitude: la, longitude: lo } = dest;
+  const ios = os === 'ios';
   switch (provider) {
-    case 'waze':
-      return `https://waze.com/ul?ll=${latitude},${longitude}&navigate=yes`;
     case 'apple':
-      return `maps://?daddr=${latitude},${longitude}&dirflg=d`;
+      return `maps://?daddr=${la},${lo}&dirflg=d`;
     case 'google':
+      return ios
+        ? `comgooglemaps://?daddr=${la},${lo}&directionsmode=driving`
+        : `google.navigation:q=${la},${lo}`;
+    case 'waze':
     default:
-      return `google.navigation:q=${latitude},${longitude}`;
+      return ios
+        ? `waze://?ll=${la},${lo}&navigate=yes`
+        : `https://waze.com/ul?ll=${la},${lo}&navigate=yes`;
   }
 }
 
+const BUTTON: Record<NavProvider, NavButton> = {
+  apple: { id: 'nav-apple', provider: 'apple' },
+  google: { id: 'nav-google', provider: 'google' },
+  waze: { id: 'nav-waze', provider: 'waze' },
+};
+
 /**
- * The nav hand-off buttons to show on the car map, per platform: Android Auto
- * offers Google + Waze, CarPlay offers Apple Maps + Waze (Apple Maps is the
- * CarPlay-native, guaranteed-present option). The button id round-trips through
- * the head unit's press event back to `providerForButton`.
+ * Synchronous fallback button set, shown until `resolveNavButtons` finishes its
+ * install check. Uses only the guaranteed-present app per platform so the car
+ * never shows a dead button: Apple Maps on CarPlay, Google on Android Auto.
  */
-export function navButtonsForPlatform(os: string): NavButton[] {
-  return os === 'ios'
-    ? [
-        { id: 'nav-apple', provider: 'apple' },
-        { id: 'nav-waze', provider: 'waze' },
-      ]
-    : [
-        { id: 'nav-google', provider: 'google' },
-        { id: 'nav-waze', provider: 'waze' },
-      ];
+export function defaultNavButtons(os: string): NavButton[] {
+  return os === 'ios' ? [BUTTON.apple] : [BUTTON.google, BUTTON.waze];
 }
 
-/** Resolve a pressed map-button id back to its nav provider (falls back to the
- *  platform default if the id is unrecognized). */
-export function providerForButton(os: string, id: string): NavProvider {
-  const found = navButtonsForPlatform(os).find((b) => b.id === id);
+/**
+ * The nav hand-off buttons to show on the car map. On Android Auto this is
+ * static (Google + Waze). On CarPlay we only advertise apps the driver actually
+ * has — Apple Maps is always present; Google Maps and Waze are added only when
+ * `canOpen` confirms their scheme resolves (requires the schemes in
+ * LSApplicationQueriesSchemes — see withCarIntegration.js). This is why a driver
+ * with Google Maps on CarPlay gets a Google button and one without it does not.
+ */
+export async function resolveNavButtons(
+  os: string,
+  canOpen: (url: string) => Promise<boolean>
+): Promise<NavButton[]> {
+  if (os !== 'ios') return [BUTTON.google, BUTTON.waze];
+  const buttons: NavButton[] = [BUTTON.apple];
+  const [hasGoogle, hasWaze] = await Promise.all([
+    canOpen('comgooglemaps://').catch(() => false),
+    canOpen('waze://').catch(() => false),
+  ]);
+  if (hasGoogle) buttons.push(BUTTON.google);
+  if (hasWaze) buttons.push(BUTTON.waze);
+  return buttons;
+}
+
+/** Resolve a pressed map-button id back to its provider, given the active button
+ *  set (falls back to the platform default if the id is unrecognized). */
+export function providerForButton(buttons: NavButton[], id: string, os: string): NavProvider {
+  const found = buttons.find((b) => b.id === id);
   if (found) return found.provider;
   return os === 'ios' ? 'apple' : 'google';
 }

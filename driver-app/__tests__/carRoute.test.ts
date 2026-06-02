@@ -4,10 +4,11 @@
  */
 import {
   buildHandoffUrl,
+  defaultNavButtons,
   extractPolyline,
   isNavState,
-  navButtonsForPlatform,
   providerForButton,
+  resolveNavButtons,
   selectCarRoute,
 } from '../car/carRoute';
 import type { ActiveRide, RideState } from '../store/driverStore';
@@ -115,42 +116,86 @@ describe('selectCarRoute', () => {
 describe('buildHandoffUrl', () => {
   const dest = { latitude: 52.2, longitude: -106.6 };
 
-  it('builds the Google turn-by-turn navigation intent (matches openNavigation)', () => {
-    expect(buildHandoffUrl('google', dest)).toBe('google.navigation:q=52.2,-106.6');
+  it('uses the Google navigation intent on Android, comgooglemaps on iOS', () => {
+    expect(buildHandoffUrl('google', dest, 'android')).toBe('google.navigation:q=52.2,-106.6');
+    expect(buildHandoffUrl('google', dest, 'ios')).toBe(
+      'comgooglemaps://?daddr=52.2,-106.6&directionsmode=driving'
+    );
   });
 
   it('builds an Apple Maps driving-directions link (CarPlay)', () => {
-    expect(buildHandoffUrl('apple', dest)).toBe('maps://?daddr=52.2,-106.6&dirflg=d');
+    expect(buildHandoffUrl('apple', dest, 'ios')).toBe('maps://?daddr=52.2,-106.6&dirflg=d');
   });
 
-  it('builds a Waze navigate deep link (both platforms)', () => {
-    expect(buildHandoffUrl('waze', dest)).toBe('https://waze.com/ul?ll=52.2,-106.6&navigate=yes');
+  it('uses the waze:// scheme on iOS and the universal link on Android', () => {
+    expect(buildHandoffUrl('waze', dest, 'ios')).toBe('waze://?ll=52.2,-106.6&navigate=yes');
+    expect(buildHandoffUrl('waze', dest, 'android')).toBe(
+      'https://waze.com/ul?ll=52.2,-106.6&navigate=yes'
+    );
   });
 });
 
-describe('navButtonsForPlatform / providerForButton', () => {
-  it('offers Apple Maps + Waze on iOS (CarPlay)', () => {
-    expect(navButtonsForPlatform('ios')).toEqual([
-      { id: 'nav-apple', provider: 'apple' },
-      { id: 'nav-waze', provider: 'waze' },
-    ]);
-  });
-
-  it('offers Google + Waze on Android (Android Auto)', () => {
-    expect(navButtonsForPlatform('android')).toEqual([
+describe('defaultNavButtons', () => {
+  it('seeds only the guaranteed app per platform (no dead button)', () => {
+    expect(defaultNavButtons('ios')).toEqual([{ id: 'nav-apple', provider: 'apple' }]);
+    expect(defaultNavButtons('android')).toEqual([
       { id: 'nav-google', provider: 'google' },
       { id: 'nav-waze', provider: 'waze' },
     ]);
   });
+});
+
+describe('resolveNavButtons (CarPlay install detection)', () => {
+  it('is static Google + Waze on Android (no probing)', async () => {
+    const canOpen = jest.fn().mockResolvedValue(true);
+    await expect(resolveNavButtons('android', canOpen)).resolves.toEqual([
+      { id: 'nav-google', provider: 'google' },
+      { id: 'nav-waze', provider: 'waze' },
+    ]);
+    expect(canOpen).not.toHaveBeenCalled();
+  });
+
+  it('adds Google Maps + Waze on iOS only when both are installed', async () => {
+    const canOpen = jest.fn().mockResolvedValue(true);
+    const buttons = await resolveNavButtons('ios', canOpen);
+    expect(buttons.map((b) => b.provider)).toEqual(['apple', 'google', 'waze']);
+    expect(canOpen).toHaveBeenCalledWith('comgooglemaps://');
+    expect(canOpen).toHaveBeenCalledWith('waze://');
+  });
+
+  it('shows Google but not Waze when only Google Maps is installed', async () => {
+    const canOpen = jest.fn((url: string) => Promise.resolve(url.startsWith('comgooglemaps')));
+    const buttons = await resolveNavButtons('ios', canOpen);
+    expect(buttons.map((b) => b.provider)).toEqual(['apple', 'google']);
+  });
+
+  it('falls back to Apple Maps only when nothing else is installed', async () => {
+    const canOpen = jest.fn().mockResolvedValue(false);
+    const buttons = await resolveNavButtons('ios', canOpen);
+    expect(buttons.map((b) => b.provider)).toEqual(['apple']);
+  });
+
+  it('treats a canOpen rejection as "not installed" (never throws)', async () => {
+    const canOpen = jest.fn().mockRejectedValue(new Error('blocked scheme'));
+    await expect(resolveNavButtons('ios', canOpen)).resolves.toEqual([
+      { id: 'nav-apple', provider: 'apple' },
+    ]);
+  });
+});
+
+describe('providerForButton', () => {
+  const ios = [
+    { id: 'nav-apple', provider: 'apple' as const },
+    { id: 'nav-google', provider: 'google' as const },
+  ];
 
   it('round-trips a pressed button id back to its provider', () => {
-    expect(providerForButton('ios', 'nav-apple')).toBe('apple');
-    expect(providerForButton('ios', 'nav-waze')).toBe('waze');
-    expect(providerForButton('android', 'nav-google')).toBe('google');
+    expect(providerForButton(ios, 'nav-google', 'ios')).toBe('google');
+    expect(providerForButton(ios, 'nav-apple', 'ios')).toBe('apple');
   });
 
   it('falls back to the platform default for an unknown id', () => {
-    expect(providerForButton('ios', 'mystery')).toBe('apple');
-    expect(providerForButton('android', 'mystery')).toBe('google');
+    expect(providerForButton(ios, 'mystery', 'ios')).toBe('apple');
+    expect(providerForButton([], 'mystery', 'android')).toBe('google');
   });
 });

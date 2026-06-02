@@ -343,10 +343,7 @@ class EmergencyContactResponse(BaseModel):
 async def get_emergency_contacts(current_user: dict = Depends(get_current_user)):
     """Get the user's emergency contacts."""
     try:
-        contacts_cursor = db_supabase.get_rows("emergency_contacts", {"user_id": current_user["id"]}, limit=100)
-        contacts = (
-            await contacts_cursor.to_list(length=10) if hasattr(contacts_cursor, "to_list") else list(contacts_cursor)
-        )
+        contacts = await db_supabase.get_rows("emergency_contacts", {"user_id": current_user["id"]}, limit=100)
     except Exception as e:
         logger.error(
             f"Could not fetch emergency contacts for user {current_user['id']}: {e}",
@@ -360,10 +357,7 @@ async def get_emergency_contacts(current_user: dict = Depends(get_current_user))
 async def add_emergency_contact(contact: EmergencyContactCreate, current_user: dict = Depends(get_current_user)):
     """Add an emergency contact (max 3 contacts per user, matching Uber/Lyft)."""
     try:
-        existing_cursor = db_supabase.get_rows("emergency_contacts", {"user_id": current_user["id"]}, limit=100)
-        existing = (
-            await existing_cursor.to_list(length=10) if hasattr(existing_cursor, "to_list") else list(existing_cursor)
-        )
+        existing = await db_supabase.get_rows("emergency_contacts", {"user_id": current_user["id"]}, limit=100)
     except Exception:
         existing = []
 

@@ -20,6 +20,7 @@
  */
 import React from 'react';
 import { Linking, Platform, StyleSheet, View } from 'react-native';
+import { useAuthStore } from '@shared/store/authStore';
 import { useDriverStore } from '../store/driverStore';
 import {
   buildHandoffUrl,
@@ -164,25 +165,39 @@ export function initCarNav(): () => void {
   }
   const { CarPlay, MapTemplate, ListTemplate } = carplay;
 
-  // Cold car launch runs this separate JS root with the phone dashboard (and its
-  // hydrate + fetchActiveRide) never mounted, so the store would sit at `idle`.
-  // Restore the persisted ride AND reconcile against the server, so a cached ride
-  // that completed/cancelled/changed while the phone UI was unmounted doesn't show
-  // or hand off a stale route. fetchActiveRide is safe here — the api client
-  // resolves the token from SecureStore (shared/api/client.ts), so no in-memory
-  // auth bootstrap is needed. Both are guarded/idempotent; the store subscription
-  // rebuilds the root once state lands. (Codex P2)
+  // Cold car launch runs this separate JS root with the phone UI never mounted,
+  // so the store sits at `idle` AND auth is unbootstrapped. Restore the persisted
+  // ride (instant, no auth), bootstrap auth, then reconcile against the server.
+  //
+  // Auth bootstrap is REQUIRED before any authed call: access tokens are
+  // memory-only (authStore.setTokens deletes auth_token from SecureStore), and
+  // the phone UI — which registers the silent-refresh callback and refreshes from
+  // the persisted refresh token — hasn't run here. Without it, fetchActiveRide
+  // sends no Authorization, 401s, and (no refresh callback) logs the driver out,
+  // clearing the cached ride. initialize() registers the callback + restores the
+  // access token; guarded so we don't double-init when the phone already did. (Codex)
   void (async () => {
-    const store = useDriverStore.getState();
     try {
-      await store.hydrateDriverRideState?.();
+      await useDriverStore.getState().hydrateDriverRideState?.();
     } catch {
       /* cache miss — ignore */
     }
-    try {
-      await store.fetchActiveRide?.();
-    } catch {
-      /* offline / not authed — keep the cached snapshot */
+    const auth = useAuthStore.getState();
+    if (!auth.token && !auth.isLoading) {
+      try {
+        await auth.initialize?.();
+      } catch {
+        /* refresh failed (transient/expired) — keep the cached snapshot */
+      }
+    }
+    // Only reconcile when authenticated — skip a pointless 401 if genuinely
+    // logged out (a rejected refresh in initialize() clears the session).
+    if (useAuthStore.getState().token) {
+      try {
+        await useDriverStore.getState().fetchActiveRide?.();
+      } catch {
+        /* offline — keep the cached snapshot */
+      }
     }
   })();
 

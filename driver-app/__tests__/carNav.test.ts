@@ -35,8 +35,13 @@ jest.mock('@g4rb4g3/react-native-carplay', () => {
   };
 });
 
+jest.mock('@shared/store/authStore', () => ({
+  useAuthStore: { getState: jest.fn() },
+}));
+
 import { Linking, Platform } from 'react-native';
 import { CarPlay, MapTemplate, ListTemplate } from '@g4rb4g3/react-native-carplay';
+import { useAuthStore } from '@shared/store/authStore';
 import { useDriverStore } from '../store/driverStore';
 import { buildIdleTemplate, buildNavMapTemplate, handoffToNav, initCarNav } from '../car/carNav';
 
@@ -90,6 +95,12 @@ beforeEach(() => {
     activeRide: null,
     hydrateDriverRideState: jest.fn().mockResolvedValue(undefined),
     fetchActiveRide: jest.fn().mockResolvedValue(undefined),
+  });
+  // Default: already authenticated, so the cold-launch auth bootstrap is skipped.
+  (useAuthStore.getState as jest.Mock).mockReturnValue({
+    token: 'tok',
+    isLoading: false,
+    initialize: jest.fn().mockResolvedValue(undefined),
   });
   setOS('android');
 });
@@ -213,6 +224,48 @@ describe('initCarNav', () => {
     await new Promise((r) => setImmediate(r));
     expect(hydrate).toHaveBeenCalled();
     expect(fetch).toHaveBeenCalled();
+    cleanup();
+  });
+
+  it('bootstraps auth before reconciling when the access token is missing (cold launch)', async () => {
+    // No in-memory access token (memory-only tokens are wiped on process restart);
+    // a successful initialize() registers the refresh callback + restores the token.
+    const initialize = jest.fn(() => {
+      (useAuthStore.getState as jest.Mock).mockReturnValue({ token: 'tok', isLoading: false, initialize });
+      return Promise.resolve();
+    });
+    (useAuthStore.getState as jest.Mock).mockReturnValue({ token: null, isLoading: false, initialize });
+    const fetch = jest.fn().mockResolvedValue(undefined);
+    useDriverStore.setState({ fetchActiveRide: fetch });
+
+    const cleanup = initCarNav();
+    await new Promise((r) => setImmediate(r));
+
+    expect(initialize).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(1); // ran only after auth was restored
+    cleanup();
+  });
+
+  it('skips the auth bootstrap when already authenticated', async () => {
+    const initialize = jest.fn().mockResolvedValue(undefined);
+    (useAuthStore.getState as jest.Mock).mockReturnValue({ token: 'tok', isLoading: false, initialize });
+    const cleanup = initCarNav();
+    await new Promise((r) => setImmediate(r));
+    expect(initialize).not.toHaveBeenCalled();
+    cleanup();
+  });
+
+  it('does NOT reconcile when still logged out after bootstrap (avoids a pointless 401)', async () => {
+    const initialize = jest.fn().mockResolvedValue(undefined); // refresh failed → still no token
+    (useAuthStore.getState as jest.Mock).mockReturnValue({ token: null, isLoading: false, initialize });
+    const fetch = jest.fn().mockResolvedValue(undefined);
+    useDriverStore.setState({ fetchActiveRide: fetch });
+
+    const cleanup = initCarNav();
+    await new Promise((r) => setImmediate(r));
+
+    expect(initialize).toHaveBeenCalledTimes(1);
+    expect(fetch).not.toHaveBeenCalled();
     cleanup();
   });
 

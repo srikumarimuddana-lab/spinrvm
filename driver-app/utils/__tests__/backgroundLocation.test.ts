@@ -38,7 +38,30 @@ jest.mock('expo-secure-store', () => ({
 
 jest.mock('@shared/config', () => ({ API_URL: 'https://example.test' }), { virtual: true });
 
-import { updateBackgroundLocationCadence, TRIP_CADENCE, IDLE_CADENCE } from '../backgroundLocation';
+import {
+  updateBackgroundLocationCadence,
+  setBackgroundTripActive,
+  TRIP_CADENCE,
+  IDLE_CADENCE,
+} from '../backgroundLocation';
+import * as SecureStore from 'expo-secure-store';
+
+describe('setBackgroundTripActive (killed-app recovery cadence)', () => {
+  beforeEach(() => {
+    (SecureStore.setItemAsync as jest.Mock).mockClear();
+    (SecureStore.deleteItemAsync as jest.Mock).mockClear();
+  });
+
+  it('persists the trip flag when a ride is active', async () => {
+    await setBackgroundTripActive(true);
+    expect(SecureStore.setItemAsync).toHaveBeenCalledWith('spinr_bg_trip_active', 'true');
+  });
+
+  it('clears the trip flag when idle', async () => {
+    await setBackgroundTripActive(false);
+    expect(SecureStore.deleteItemAsync).toHaveBeenCalledWith('spinr_bg_trip_active');
+  });
+});
 
 describe('updateBackgroundLocationCadence', () => {
   beforeEach(() => {

@@ -1717,6 +1717,23 @@ async def update_location_batch(batch: Union[List[dict], dict], current_user: di
         # (Though update_one might not support setting multiple top-level fields easily if we rely on $set mapping)
         # Let's trust db.drivers.update_one to handle the schema or the wrapper.
 
+        # Persist the FULL batch as breadcrumbs, not just the live marker above.
+        # Until now this endpoint (background task + WS-down REST fallback) kept
+        # only the last point, so any backgrounded stretch of a trip produced no
+        # driver_location_history rows — settled distance and the per-insurance-
+        # period SGI audit trail both undercounted. The helper is a no-op unless
+        # the driver currently has an active ride, and derives ride_id + phase
+        # server-side (so a point the client tagged "background" still lands in
+        # trip_in_progress). Best-effort: never fail the marker update on it.
+        try:
+            from ..utils.breadcrumbs import persist_ride_breadcrumbs
+        except ImportError:
+            from utils.breadcrumbs import persist_ride_breadcrumbs  # type: ignore
+        try:
+            await persist_ride_breadcrumbs(driver_id, points)
+        except Exception:
+            logger.error("location-batch breadcrumb persist failed", exc_info=True)
+
         # Keep presence alive even when the driver's WebSocket briefly
         # drops but the REST location batch keeps flowing (e.g. phone on
         # cellular switching towers).

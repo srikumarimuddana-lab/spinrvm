@@ -1746,6 +1746,19 @@ async def update_location_batch(batch: Union[List[dict], dict], current_user: di
     return {"success": True}
 
 
+@api_router.post("/attest-nonce")
+async def attest_nonce(current_user: dict = Depends(get_current_user)):
+    """Issue a single-use nonce for Play Integrity / App Attest verification.
+
+    The client passes this nonce to the platform attestation API so the
+    signed token can't be replayed from a different session.
+    """
+    import secrets
+
+    nonce = secrets.token_hex(32)
+    return {"nonce": nonce}
+
+
 @api_router.post("/attest-device")
 async def attest_device(device_info: dict, current_user: dict = Depends(get_current_user)):
     """Verify device integrity on go-online. Flags emulators and suspicious devices."""

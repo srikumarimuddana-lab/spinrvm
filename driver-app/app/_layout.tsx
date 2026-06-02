@@ -469,12 +469,15 @@ export default function RootLayout() {
         console.log('[Push] FCM token registration failed:', e);
       }
     })();
+  }, [isAuthInitialized, authToken]);
 
-    // Subscribe to FCM token rotations. Firebase occasionally rotates
-    // the device token; without re-registering, push delivery silently
-    // fails until the next cold start. onTokenRefresh fires with the
-    // new token string and we POST it the same way as the initial
-    // registration above.
+  // ── FCM token rotation listener (permanent, not gated on auth token) ──
+  // onTokenRefresh must live in its OWN effect with empty deps. If it
+  // shared deps with the registration effect above, every 15-minute
+  // access-token rotation would trigger cleanup → the listener is
+  // unsubscribed → Firebase token rotations are never forwarded to the
+  // backend → stale FCM token → push notifications silently fail.
+  useEffect(() => {
     const unsubTokenRefresh = onTokenRefresh(async (newToken: string) => {
       try {
         const api = (await import('@shared/api/client')).default;
@@ -488,11 +491,10 @@ export default function RootLayout() {
         console.log('[Push] Refreshed FCM token registration failed:', e);
       }
     });
-
     return () => {
       if (typeof unsubTokenRefresh === 'function') unsubTokenRefresh();
     };
-  }, [isAuthInitialized, authToken]);
+  }, []);
 
   // ── Proactive token refresh on foreground resume + periodic ──
   // Ensures the access token is fresh BEFORE the driver taps a critical

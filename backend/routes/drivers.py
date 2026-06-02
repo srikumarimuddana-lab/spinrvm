@@ -3367,25 +3367,41 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     phase_polylines: Dict[str, list] = {}
     pickup_to_driver_km = 0.0
     route_polyline = []
+    road_polyline: list = []
     gps_points_count = 0
 
     try:
-        all_breadcrumbs = await db_supabase.get_rows(
-            "driver_location_history",
-            {
-                "ride_id": ride_id,
-            },
-            limit=1000,
-            order="timestamp",
-        )
+        # Page through ALL breadcrumbs for the ride (time-ordered). The old
+        # single limit=1000 read dropped the tail of long, densely-sampled
+        # trips (>~67 min at the 4s background cadence), under-reporting
+        # billable/phase distance and the SGI trail. Bounded by a hard ceiling
+        # so a pathological trail can't blow up settlement memory; the per-phase
+        # and route polylines are downsampled below regardless of input size.
+        _PAGE = 1000
+        _MAX_BREADCRUMBS = 10000  # ~11 h at 4s — beyond any real single trip
+        all_breadcrumbs = []
+        _offset = 0
+        while True:
+            _page = await db_supabase.get_rows(
+                "driver_location_history",
+                {"ride_id": ride_id},
+                order="timestamp",
+                limit=_PAGE,
+                offset=_offset,
+            )
+            if not _page:
+                break
+            all_breadcrumbs.extend(_page)
+            if len(_page) < _PAGE or len(all_breadcrumbs) >= _MAX_BREADCRUMBS:
+                break
+            _offset += _PAGE
+        if len(all_breadcrumbs) >= _MAX_BREADCRUMBS:
+            logger.warning(
+                f"GPS breadcrumbs hit ceiling {_MAX_BREADCRUMBS} for ride {ride_id}; tail beyond this is not summed"
+            )
         all_breadcrumbs = [b for b in all_breadcrumbs if b.get("lat") and b.get("lng")]
         all_breadcrumbs.sort(key=lambda b: str(b.get("timestamp", "")))
         gps_points_count = len(all_breadcrumbs)
-        if gps_points_count >= 1000:
-            logger.warning(
-                f"GPS breadcrumbs truncated at 1000 for ride {ride_id}; "
-                "actual_distance_km and route_polyline may be underreported"
-            )
 
         if gps_points_count >= 2:
             # Compute per-phase distances (attribute each segment to the
@@ -3490,22 +3506,27 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             # outage or an empty response can't be allowed to corrupt billing.
             actual_distance_km_haversine = actual_distance_km
             actual_distance_km_road = None
+            road_result = None
             try:
                 try:
-                    from ..utils.route_distance import compute_road_distance_km
+                    from ..utils.route_distance import compute_road_route
                 except ImportError:
-                    from utils.route_distance import compute_road_distance_km  # type: ignore
-                actual_distance_km_road = await compute_road_distance_km(all_breadcrumbs)
+                    from utils.route_distance import compute_road_route  # type: ignore
+                road_result = await compute_road_route(all_breadcrumbs)
             except Exception:
                 logger.warning(
                     "[complete_ride] road-snap recompute raised; keeping haversine",
                     exc_info=True,
                 )
-            if actual_distance_km_road is not None:
+            if road_result is not None:
+                actual_distance_km_road = road_result["distance_km"]
                 lo = max(0.1, actual_distance_km_haversine / 3.0)
                 hi = max(0.1, actual_distance_km_haversine * 3.0)
                 if lo <= actual_distance_km_road <= hi:
                     actual_distance_km = round(actual_distance_km_road, 2)
+                    # Trusted match → persist the road-snapped geometry (saved to
+                    # ride_routes below) for SGI / dispute map review.
+                    road_polyline = road_result.get("polyline") or []
                 else:
                     logger.warning(
                         f"Ride {ride_id}: road-snap distance {actual_distance_km_road}km "
@@ -3536,8 +3557,9 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                     for p in sampled
                 ]
 
-            # Legacy combined polyline (kept for the existing ride-detail
-            # map renderer that hasn't moved to phase_polylines yet).
+            # Combined polyline for the static map snapshot (route_snapshot_url)
+            # ONLY — kept in-memory, not persisted to rides (geometry now lives in
+            # ride_routes). [[lat, lng, phase], ...].
             trip_points = [b for b in all_breadcrumbs if b.get("tracking_phase") in phases_to_split]
             if trip_points:
                 MAX_POINTS = 200
@@ -3553,8 +3575,29 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                     ]
                     for p in sampled
                 ]
+
     except Exception as e:
         logger.error(f"Could not aggregate GPS data for ride {ride_id}: {e}", exc_info=True)
+
+    # Persist the heavy route geometry to the ride_routes side-table (1:1),
+    # keeping it OFF the hot rides row — written once here, read on-demand by the
+    # admin map modal. Best-effort: a settlement must not fail on the side write.
+    try:
+        await db_supabase.update_one(
+            "ride_routes",
+            {"ride_id": ride_id},
+            {
+                "phase_distances": phase_distances,
+                "phase_durations": phase_durations,
+                "phase_polylines": phase_polylines,
+                "road_polyline": road_polyline,
+                "gps_points_count": gps_points_count,
+                "computed_at": datetime.now(timezone.utc),
+            },
+            upsert=True,
+        )
+    except Exception:
+        logger.error(f"Could not persist ride_routes for ride {ride_id}", exc_info=True)
 
     # ── Build update payload ──
     # P0-5: do NOT write payment_status here. The driver completing the
@@ -3574,8 +3617,6 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         "pickup_to_driver_km": pickup_to_driver_km,
         "phase_distances": phase_distances,
         "phase_durations": phase_durations,
-        "phase_polylines": phase_polylines,
-        "route_polyline": route_polyline,
         "gps_points_count": gps_points_count,
     }
 

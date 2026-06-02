@@ -21,6 +21,7 @@ from services.fare_service import (  # noqa: E402
     build_default_fares,
     find_service_area_for_point,
     merge_fare_configs_with_vehicle_types,
+    merge_vehicle_pricing_with_vehicle_types,
 )
 
 # ── Pure helpers ──────────────────────────────────────────────────────────────
@@ -131,6 +132,28 @@ class TestMergeFareConfigs:
         assert out == []
 
 
+class TestMergeVehiclePricing:
+    def test_joins_vehicle_pricing_to_vehicle_types_by_name(self):
+        vehicle_pricing = [
+            {
+                "vehicle_type": "Economy",
+                "base_fare": 4.0,
+                "per_km": 1.5,
+                "per_min": 0.3,
+                "min_fare": 10.0,
+                "booking_fee": 2.5,
+            }
+        ]
+        vehicle_types = [
+            {"id": "economy", "name": "Economy"},
+            {"id": "xl", "name": "XL"},
+        ]
+        out = merge_vehicle_pricing_with_vehicle_types(vehicle_pricing, vehicle_types, surge=1.25)
+        assert [row["vehicle_type"]["id"] for row in out] == ["economy"]
+        assert out[0]["base_fare"] == 4.00
+        assert out[0]["surge_multiplier"] == 1.25
+
+
 # ── Service class ─────────────────────────────────────────────────────────────
 
 
@@ -139,7 +162,7 @@ def _make_db(vehicle_types=None, areas=None, fare_configs=None):
     db = MagicMock()
 
     # FareService calls db.get_rows(table_name, filters, limit=...) sequentially:
-    # 1st call: vehicle_types, 2nd call: service_areas, 3rd call: fare_configs
+    # 1st call: vehicle_types, 2nd call: service_areas, optional 3rd call: fare_configs
     side_effects = []
     side_effects.append(vehicle_types if vehicle_types is not None else [])
     if areas is not None:
@@ -175,7 +198,7 @@ class TestFareService:
         assert out[0]["base_fare"] == _fd(DEFAULT_FARE["base_fare"])
         assert out[0]["surge_multiplier"] == 1.00
 
-    async def test_returns_defaults_with_surge_when_no_fare_configs(self):
+    async def test_returns_empty_when_matching_area_has_no_fare_configs(self):
         svc = FareService(
             _make_db(
                 vehicle_types=[{"id": "economy"}],
@@ -195,8 +218,7 @@ class TestFareService:
             )
         )
         out = await svc.fares_for_location(52.0, -106.0)
-        assert len(out) == 1
-        assert out[0]["surge_multiplier"] == 1.50
+        assert out == []
 
     async def test_returns_merged_when_fare_configs_match(self):
         svc = FareService(

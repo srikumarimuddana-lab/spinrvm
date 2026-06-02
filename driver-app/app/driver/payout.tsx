@@ -213,6 +213,17 @@ function PayoutScreen() {
 
     const formatCurrency = (amount: string | number) => `$${parseFloat(String(amount)).toFixed(2)}`;
 
+    const nextPayoutLabel = useMemo(() => {
+        const now = new Date();
+        const dayOfWeek = now.getDay();
+        const daysUntilFriday = (5 - dayOfWeek + 7) % 7 || 7;
+        if (daysUntilFriday === 1) return 'Tomorrow (Friday)';
+        if (daysUntilFriday === 7 && dayOfWeek === 5) return 'Today (Friday)';
+        const target = new Date(now);
+        target.setDate(target.getDate() + daysUntilFriday);
+        return target.toLocaleDateString('en-CA', { weekday: 'long', month: 'short', day: 'numeric' });
+    }, []);
+
     const isStripeReady = stripeAccountStatus === 'active' || hasBankAccount;
 
     if (initialLoading) {
@@ -271,6 +282,18 @@ function PayoutScreen() {
                         </View>
                     </View>
                 </View>
+
+                {/* Next Payout Schedule */}
+                {isStripeReady && (
+                    <View style={styles.payoutScheduleCard}>
+                        <Ionicons name="calendar-outline" size={20} color={colors.primary} />
+                        <View style={{ flex: 1, marginLeft: 12 }}>
+                            <Text style={styles.payoutScheduleLabel}>Next payout</Text>
+                            <Text style={styles.payoutScheduleDate}>{nextPayoutLabel}</Text>
+                        </View>
+                        <Text style={styles.payoutScheduleNote}>Weekly</Text>
+                    </View>
+                )}
 
                 {/* Stripe Connect Setup */}
                 <View style={styles.section}>
@@ -586,6 +609,37 @@ function createStyles(colors: ThemeColors) {
         balanceDivider: {
             width: 1,
             backgroundColor: 'rgba(255,255,255,0.2)',
+        },
+
+        payoutScheduleCard: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            marginHorizontal: 16,
+            marginTop: 12,
+            padding: 14,
+            backgroundColor: colors.surface,
+            borderRadius: 12,
+            borderWidth: 1,
+            borderColor: colors.border,
+        },
+        payoutScheduleLabel: {
+            fontSize: 12,
+            color: colors.textDim,
+        },
+        payoutScheduleDate: {
+            fontSize: 15,
+            fontWeight: '700',
+            color: colors.text,
+            marginTop: 1,
+        },
+        payoutScheduleNote: {
+            fontSize: 12,
+            fontWeight: '600',
+            color: colors.primary,
+            backgroundColor: `${colors.primary}1A`,
+            paddingHorizontal: 10,
+            paddingVertical: 4,
+            borderRadius: 8,
         },
 
         section: {

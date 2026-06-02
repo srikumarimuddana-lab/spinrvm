@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { adminPlacesAutocomplete, type AdminPlaceBias } from "@/lib/api";
 
 const DEBOUNCE_MS = 300;
-const MIN_QUERY_LEN = 2;
+const MIN_QUERY_LEN = 3;
 
 interface Prediction {
     place_id: string;
@@ -54,18 +54,18 @@ export function usePlacesAutocomplete(
     const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
-        if (!input || input.length < MIN_QUERY_LEN) {
+        const searchInput = input.trim();
+        if (searchInput.length < MIN_QUERY_LEN) {
             setPredictions([]);
             setLoading(false);
             return;
         }
-        if (debounceRef.current) clearTimeout(debounceRef.current);
         const mySeq = ++seqRef.current;
 
         debounceRef.current = setTimeout(async () => {
             setLoading(true);
             try {
-                const data = await adminPlacesAutocomplete(input, sessionToken, bias ?? null);
+                const data = await adminPlacesAutocomplete(searchInput, sessionToken, bias ?? null);
                 if (mySeq !== seqRef.current) return;
                 setPredictions(data?.predictions ?? []);
             } catch {

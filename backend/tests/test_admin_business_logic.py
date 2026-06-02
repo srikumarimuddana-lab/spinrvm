@@ -249,7 +249,7 @@ class TestAdminUserStatus:
         audit_rows = [r for r in inserted if r["table"] == "audit_logs"]
         assert len(audit_rows) == 1
         assert audit_rows[0]["doc"]["action"] == "status_change"
-        assert audit_rows[0]["doc"]["resource_id"] == "usr-1"
+        assert audit_rows[0]["doc"]["entity_id"] == "usr-1"
 
 
 # ---------------------------------------------------------------------------

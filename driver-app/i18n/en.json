@@ -111,6 +111,7 @@
         "connectionLost": "Connection lost",
         "noInternet": "No internet connection",
         "findingRides": "Finding rides...",
+        "youreOnline": "You're Online",
         "completeProfile": "Complete Your Profile",
         "finishProfile": "Finish Profile",
         "addVehicle": "Add Your Vehicle",

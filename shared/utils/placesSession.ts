@@ -2,9 +2,9 @@
  * Google Places API session-token helper.
  *
  * One token per "user typing session" — N autocomplete requests + 1 details
- * lookup billed as a single $0.017 session instead of per-call. Regenerate
- * the token after closing a session (i.e. after a successful place details
- * call) to start the next session.
+ * lookup grouped for Google Places API (New) session pricing. Regenerate the
+ * token after closing a session (i.e. after a successful place details call)
+ * to start the next session.
  *
  * Not cryptographically sensitive — Google only requires opacity, not entropy.
  *

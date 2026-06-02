@@ -454,16 +454,37 @@ export default function ProfileScreen() {
                     );
                 const docStatus = matchedDoc?.status; // 'pending' | 'approved' | 'rejected' | undefined
 
-                const expiry = expiryKey ? (driverData?.[expiryKey] as string | null | undefined) : null;
+                // Use top-level driver field first; fall back to expiry_date on the document record itself
+                const expiry: string | null =
+                    (expiryKey ? (driverData?.[expiryKey] as string | null | undefined) : null)
+                    ?? (matchedDoc?.expiry_date as string | null | undefined)
+                    ?? null;
                 const isExpired = expiry ? new Date(expiry) < new Date() : false;
                 const expiresIn = expiry ? Math.ceil((new Date(expiry).getTime() - Date.now()) / (1000 * 60 * 60 * 24)) : null;
                 const isValid = expiry && !isExpired;
                 const isExpiringSoon = expiresIn !== null && expiresIn > 0 && expiresIn < 30;
 
-                const iconColor =
+                const badgeColor =
                     isExpired ? '#EF4444' :
+                    isExpiringSoon ? '#F59E0B' :
                     isValid ? '#10B981' :
                     docStatus === 'approved' ? '#10B981' :
+                    docStatus === 'pending' ? '#F59E0B' :
+                    docStatus === 'rejected' ? '#EF4444' :
+                    '#EF4444'; // upload required
+
+                const badgeLabel =
+                    isExpired ? 'EXPIRED' :
+                    isExpiringSoon ? `Exp in ${expiresIn}d` :
+                    isValid ? 'VALID' :
+                    docStatus === 'approved' ? 'APPROVED' :
+                    docStatus === 'pending' ? 'PENDING REVIEW' :
+                    docStatus === 'rejected' ? 'REJECTED' :
+                    'UPLOAD REQUIRED';
+
+                const iconColor =
+                    isExpired ? '#EF4444' :
+                    (isValid || docStatus === 'approved') ? '#10B981' :
                     docStatus === 'pending' ? '#F59E0B' :
                     docStatus === 'rejected' ? '#EF4444' :
                     colors.textDim;
@@ -479,40 +500,19 @@ export default function ProfileScreen() {
                     <React.Fragment key={req.id}>
                     {i > 0 && <View style={styles.cardDivider} />}
                     <View style={styles.cardRow}>
-                        <View style={[
-                            styles.iconBox,
-                            isExpired ? { backgroundColor: 'rgba(239, 68, 68, 0.1)' } :
-                            isValid ? { backgroundColor: 'rgba(16, 185, 129, 0.1)' } :
-                            { backgroundColor: '#F9FAFB' },
-                        ]}>
-                        <Ionicons name={icon} size={16} color={isExpired ? '#EF4444' : isValid ? '#10B981' : colors.textDim} />
+                        <View style={[styles.iconBox, { backgroundColor: iconBg }]}>
+                            <Ionicons name={icon} size={16} color={iconColor} />
                         </View>
                         <View style={styles.cardInfo}>
                         <Text style={styles.cardLabel}>{req.name}</Text>
-                        {expiry ? (
-                            <View style={{flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2}}>
+                        <View style={{flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2}}>
+                            {expiry && (
                                 <Text style={styles.cardValue}>{new Date(expiry).toLocaleDateString()}</Text>
-                                <View style={[styles.docStatusBadge, isExpired ? {backgroundColor: '#EF4444'} : isExpiringSoon ? {backgroundColor: '#F59E0B'} : {backgroundColor: '#10B981'}]}>
-                                    <Text style={styles.docStatusText}>
-                                        {isExpired ? 'EXPIRED' : isExpiringSoon ? `Exp in ${expiresIn}d` : 'VALID'}
-                                    </Text>
-                                </View>
+                            )}
+                            <View style={[styles.docStatusBadge, {backgroundColor: badgeColor}]}>
+                                <Text style={styles.docStatusText}>{badgeLabel}</Text>
                             </View>
-                        ) : docStatus === 'approved' ? (
-                            <View style={[styles.docStatusBadge, {backgroundColor: '#10B981', marginTop: 2}]}>
-                                <Text style={styles.docStatusText}>APPROVED</Text>
-                            </View>
-                        ) : docStatus === 'pending' ? (
-                            <View style={[styles.docStatusBadge, {backgroundColor: '#F59E0B', marginTop: 2}]}>
-                                <Text style={styles.docStatusText}>PENDING REVIEW</Text>
-                            </View>
-                        ) : docStatus === 'rejected' ? (
-                            <View style={[styles.docStatusBadge, {backgroundColor: '#EF4444', marginTop: 2}]}>
-                                <Text style={styles.docStatusText}>REJECTED</Text>
-                            </View>
-                        ) : (
-                            <Text style={styles.cardValueDim}>Not submitted</Text>
-                        )}
+                        </View>
                         </View>
                         <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
                     </View>
@@ -534,9 +534,9 @@ export default function ProfileScreen() {
                     <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
                 </TouchableOpacity>
                 <View style={styles.cardDivider} />
-                <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/notifications' as any)}>
-                    <View style={[styles.iconBox, { backgroundColor: colors.surfaceLight }]}>
-                        <Ionicons name="help-circle" size={18} color={colors.textDim} />
+                <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/help' as any)}>
+                    <View style={[styles.iconBox, { backgroundColor: 'rgba(37, 99, 235, 0.1)' }]}>
+                        <Ionicons name="help-circle" size={18} color="#2563EB" />
                     </View>
                     <Text style={styles.actionText}>Help Center</Text>
                     <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
@@ -1084,6 +1084,7 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 6,
+    alignSelf: 'flex-start',
   },
   docStatusText: {
     color: '#fff',

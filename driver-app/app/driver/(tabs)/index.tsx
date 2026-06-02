@@ -99,6 +99,20 @@ function DriverDashboard() {
     refreshLocation,
   } = useDriverDashboard();
 
+  // Unread notification count — fetched on mount, refreshed every 60s
+  const [unreadNotifCount, setUnreadNotifCount] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    const fetchUnread = () => {
+      api.get('/notifications?limit=1').then((res: any) => {
+        if (!cancelled) setUnreadNotifCount(res.data?.unread_count ?? 0);
+      }).catch(() => {});
+    };
+    fetchUnread();
+    const timer = setInterval(fetchUnread, 60 * 1000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, []);
+
   // Surge multiplier for the driver's service area — fetched on mount and
   // refreshed every 2 minutes (matching the surge engine interval).
   const [surgeMultiplier, setSurgeMultiplier] = useState<number>(1.0);
@@ -794,7 +808,7 @@ function DriverDashboard() {
       </View>
 
       {/* Top Bar */}
-      <DriverTopBar driverData={driverData ?? undefined} user={user ?? undefined} isOnline={isOnline} connectionState={connectionState} surgeMultiplier={surgeMultiplier} wsLatency={wsLatency} earnings={earnings} />
+      <DriverTopBar driverData={driverData ?? undefined} user={user ?? undefined} isOnline={isOnline} connectionState={connectionState} surgeMultiplier={surgeMultiplier} wsLatency={wsLatency} earnings={earnings} unreadNotifCount={unreadNotifCount} />
 
       {/* SOS Button — visible during active ride */}
       {(rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup' || rideState === 'trip_in_progress') && activeRide?.ride?.id && (

@@ -105,6 +105,14 @@ class Settings(BaseSettings):
     # WebSocket pub/sub backend (audit P0-B3). Falls back to REDIS_URL.
     WS_REDIS_URL: str = ""
 
+    # Self-hosted OSRM (map-matching) base URL for billable road-distance.
+    # No trailing slash, no path — e.g. "http://osrm.railway.internal:5000"
+    # (Railway private networking) or "https://osrm-xxxx.up.railway.app".
+    # When set, the trip-end road-snap prefers OSRM /match over Google Roads;
+    # empty disables OSRM and falls back to Google (and then haversine).
+    # A DB override `osrm_url` in app_settings, if present, takes precedence.
+    OSRM_URL: str = ""
+
     # OTP brute-force lockout (SEC-008)
     OTP_MAX_FAILURES: int = 5  # attempts before lockout
     OTP_FAILURE_WINDOW_SECONDS: int = 3600  # sliding window (1 hr)

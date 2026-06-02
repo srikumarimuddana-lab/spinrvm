@@ -14,28 +14,40 @@
  */
 import { useEffect } from 'react';
 import { AppRegistry, Platform } from 'react-native';
-import { initCarSpike } from './carSpike';
+import { initCarNav } from './carNav';
 
 // Android Auto renders Google car *templates*, not RN views, so this root renders
-// nothing — it just drives the template layer via initCarSpike() (which sets the
-// root template on connect; the car is already connected when this root mounts).
+// nothing itself — it drives the template layer via initCarNav(), which sets a
+// MapTemplate (the in-dash route map drawn from the stored polyline) as the car
+// root on an active ride and an idle ListTemplate otherwise. The map surface
+// component is rendered separately by the fork onto the car surface.
 function AndroidAutoRoot(): null {
   useEffect(() => {
-    const cleanup = initCarSpike();
+    const cleanup = initCarNav();
     return cleanup;
   }, []);
   return null;
 }
 
-export { AndroidAutoRoot };
+// Instrument-cluster surface: on cluster-equipped vehicles the fork runs a
+// SEPARATE "AndroidAutoCluster" root alongside the main one (CarPlaySession.kt,
+// by displayType). It must NOT call initCarNav — a second instance would
+// double-register the global button-press listeners and fire duplicate nav
+// hand-offs for a single tap. The cluster is guidance-only here, so it's a no-op.
+function AndroidAutoClusterRoot(): null {
+  return null;
+}
+
+export { AndroidAutoRoot, AndroidAutoClusterRoot };
 
 export function registerAndroidAuto(): void {
   if (Platform.OS !== 'android') return;
   try {
     AppRegistry.registerComponent('AndroidAuto', () => AndroidAutoRoot);
     // The fork requests "AndroidAutoCluster" for the instrument-cluster surface;
-    // register the same root so a cluster launch doesn't crash on a missing component.
-    AppRegistry.registerComponent('AndroidAutoCluster', () => AndroidAutoRoot);
+    // register a SEPARATE no-op root (not AndroidAutoRoot) so a cluster launch
+    // doesn't crash AND doesn't run a second initCarNav (duplicate-hand-off fix).
+    AppRegistry.registerComponent('AndroidAutoCluster', () => AndroidAutoClusterRoot);
     // The fork needs its headless task registered so timers keep firing while the
     // screen is off. It is only the default export of a subpath (not the index), so
     // require it defensively — a render still works without it.

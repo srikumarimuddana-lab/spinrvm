@@ -2,20 +2,16 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
-import maplibregl from 'maplibre-gl';
-import 'maplibre-gl/dist/maplibre-gl.css';
-import {
-  DEFAULT_CENTER,
-  addStandardControls,
-  trackBaseMapStyle,
-  MAP_STYLE_FALLBACK,
-} from '@/lib/map/maplibre-base';
+import Script from 'next/script';
 
-// Labeled vector basemap (Protomaps when a key is configured, otherwise the
-// keyless OpenFreeMap fallback). We deliberately do NOT use raw OSM raster
-// tiles here: OSM's tile-usage policy forbids using them as an app basemap and
-// they load blank/throttled in the field, which is what left the tracking map
-// showing pins floating over grey with no street detail.
+// Google Maps API key — add NEXT_PUBLIC_GOOGLE_MAPS_API_KEY to Vercel env vars.
+// Same value as EXPO_PUBLIC_GOOGLE_MAPS_API_KEY used by the mobile apps;
+// ensure spinrvm.vercel.app is listed as an authorised referrer in the
+// Google Cloud Console → Credentials page for this key.
+const GMAPS_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? '';
+
+// Saskatoon default centre — map lands somewhere operational before locations load.
+const DEFAULT_CENTER = { lat: 52.13, lng: -106.67 };
 
 interface RideInfo {
   status: string;
@@ -42,15 +38,26 @@ interface RideInfo {
   };
 }
 
-const STATUS_LABEL: Record<string, { label: string; color: string; bg: string }> = {
-  searching: { label: 'Finding driver', color: '#B45309', bg: '#FEF3C7' },
-  driver_assigned: { label: 'Driver assigned', color: '#1D4ED8', bg: '#DBEAFE' },
-  driver_accepted: { label: 'Driver on the way', color: '#1D4ED8', bg: '#DBEAFE' },
-  driver_arrived: { label: 'Driver arrived', color: '#047857', bg: '#D1FAE5' },
-  in_progress: { label: 'Trip in progress', color: '#5B21B6', bg: '#EDE9FE' },
-  completed: { label: 'Trip complete', color: '#4B5563', bg: '#F3F4F6' },
-  cancelled: { label: 'Trip cancelled', color: '#B91C1C', bg: '#FEE2E2' },
+const STATUS_LABEL: Record<string, { label: string; color: string }> = {
+  searching:        { label: 'Finding driver',    color: '#B45309' },
+  driver_assigned:  { label: 'Driver assigned',   color: '#1D4ED8' },
+  driver_accepted:  { label: 'Driver on the way', color: '#1D4ED8' },
+  driver_arrived:   { label: 'Driver arrived',    color: '#047857' },
+  in_progress:      { label: 'Trip in progress',  color: '#5B21B6' },
+  completed:        { label: 'Trip complete',      color: '#4B5563' },
+  cancelled:        { label: 'Trip cancelled',     color: '#B91C1C' },
 };
+
+// Statuses where the driver is heading to pickup (route: driver → pickup).
+// Once in_progress the driver heads to dropoff (route: driver → dropoff).
+const EN_ROUTE_TO_PICKUP = new Set(['driver_assigned', 'driver_accepted', 'driver_arrived']);
+
+// Minimum distance (degrees ~= ~10m) the driver must move before we re-fetch
+// the OSRM route — avoids hammering the public router on every poll tick.
+const ROUTE_REROUTE_THRESHOLD = 0.0001;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type G = any;
 
 export default function TrackRide() {
   const params = useParams();
@@ -59,192 +66,171 @@ export default function TrackRide() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [mapsReady, setMapsReady] = useState(false);
 
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<maplibregl.Map | null>(null);
-  const driverMarkerRef = useRef<maplibregl.Marker | null>(null);
-  const pickupMarkerRef = useRef<maplibregl.Marker | null>(null);
-  const dropoffMarkerRef = useRef<maplibregl.Marker | null>(null);
-  const didFitRef = useRef(false);
-  const routeFetchedRef = useRef(false);
-  const didFallbackRef = useRef(false);
-  const ROUTE_SOURCE_ID = 'spinr-route';
-  const ROUTE_LAYER_ID = 'spinr-route-line';
+  const mapRef       = useRef<G>(null);
+  const driverMarkerRef  = useRef<G>(null);
+  const pickupMarkerRef  = useRef<G>(null);
+  const dropoffMarkerRef = useRef<G>(null);
+  const routePolylineRef = useRef<G>(null);  // OSRM route drawn as a Polyline
+  const didFitRef    = useRef(false);
+  // Last driver position used for the current route line — used to decide
+  // whether to re-fetch from OSRM when the driver moves.
+  const lastRoutedDriverRef = useRef<{ lat: number; lng: number } | null>(null);
 
-  // Poll the public endpoint every 5 s while the ride is active. The endpoint
-  // is the canonical source — page just renders what it sends, no client math.
+  // ── Poll the public backend endpoint every 5 s ──────────────────────────────
   useEffect(() => {
     let cancelled = false;
-    const fetchRideStatus = async () => {
+    const fetchStatus = async () => {
       try {
         const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
         const res = await fetch(`${apiUrl}/api/v1/rides/track/${shareToken}`);
         if (!res.ok) throw new Error('Tracking link is invalid or has expired.');
         const data = await res.json();
-        if (cancelled) return;
-        setRide(data);
-        setLastUpdated(new Date());
-        setError('');
-      } catch (err: any) {
-        if (!cancelled) setError(err.message);
+        if (!cancelled) { setRide(data); setLastUpdated(new Date()); setError(''); }
+      } catch (err: unknown) {
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Unknown error');
       } finally {
         if (!cancelled) setLoading(false);
       }
     };
-    fetchRideStatus();
-    const id = setInterval(fetchRideStatus, 5000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
+    fetchStatus();
+    const id = setInterval(fetchStatus, 5000);
+    return () => { cancelled = true; clearInterval(id); };
   }, [shareToken]);
 
-  const statusCfg = STATUS_LABEL[ride?.status || ''] || STATUS_LABEL.searching;
-  const isActive = !!ride?.status && !['completed', 'cancelled'].includes(ride.status);
-  const driverName = ride?.driver?.name || 'Driver';
-  const vehicleLine = useMemo(() => {
-    const d = ride?.driver;
-    if (!d) return '';
-    return [d.vehicle_color, d.vehicle_year, d.vehicle_make, d.vehicle_model].filter(Boolean).join(' ');
+  // ── Initialise Google Maps once the script has loaded ───────────────────────
+  useEffect(() => {
+    if (!mapsReady || !mapContainerRef.current || mapRef.current) return;
+    const g: G = (window as G).google?.maps;
+    if (!g) return;
+
+    mapRef.current = new g.Map(mapContainerRef.current, {
+      center: DEFAULT_CENTER,
+      zoom: 12,
+      disableDefaultUI: true,
+      zoomControl: true,
+      gestureHandling: 'greedy',
+    });
+
+    // OSRM route will be drawn on this polyline — Google Maps renders it
+    // directly on the canvas without needing the Directions API.
+    routePolylineRef.current = new g.Polyline({
+      map: mapRef.current,
+      path: [],
+      strokeColor: '#111827',
+      strokeWeight: 4,
+      strokeOpacity: 0.85,
+    });
+  }, [mapsReady]);
+
+  // ── Sync markers + OSRM route whenever ride data changes ────────────────────
+  useEffect(() => {
+    const g: G = (window as G).google?.maps;
+    if (!g || !mapRef.current || !ride) return;
+    const map = mapRef.current;
+
+    // Helper: create or move a circular marker.
+    const upsertMarker = (
+      ref: React.MutableRefObject<G>,
+      lat: number | undefined,
+      lng: number | undefined,
+      color: string,
+      label?: string,
+      zIndex = 1,
+    ) => {
+      if (lat == null || lng == null) {
+        if (ref.current) { ref.current.setMap(null); ref.current = null; }
+        return;
+      }
+      const pos = { lat, lng };
+      const icon = {
+        path: g.SymbolPath.CIRCLE,
+        scale: label ? 14 : 9,
+        fillColor: color,
+        fillOpacity: 1,
+        strokeColor: '#ffffff',
+        strokeWeight: label ? 3 : 2.5,
+      };
+      if (!ref.current) {
+        ref.current = new g.Marker({
+          map, position: pos, icon, zIndex,
+          ...(label ? { label: { text: label, fontSize: '14px' } } : {}),
+        });
+      } else {
+        ref.current.setPosition(pos);
+      }
+    };
+
+    upsertMarker(pickupMarkerRef,  ride.pickup_lat,  ride.pickup_lng,  '#10B981');
+    upsertMarker(dropoffMarkerRef, ride.dropoff_lat, ride.dropoff_lng, '#EF4444');
+
+    const d = ride.driver;
+    upsertMarker(driverMarkerRef, d?.lat, d?.lng, '#111827', '🚗', 2);
+
+    // Pan to driver after initial fit.
+    if (d?.lat != null && didFitRef.current) {
+      map.panTo({ lat: d.lat, lng: d.lng! });
+    }
+
+    // ── Fit view on first load ─────────────────────────────────────────────────
+    if (!didFitRef.current) {
+      const bounds = new g.LatLngBounds();
+      let pts = 0;
+      if (ride.pickup_lat  != null) { bounds.extend({ lat: ride.pickup_lat,  lng: ride.pickup_lng!  }); pts++; }
+      if (ride.dropoff_lat != null) { bounds.extend({ lat: ride.dropoff_lat, lng: ride.dropoff_lng! }); pts++; }
+      if (d?.lat           != null) { bounds.extend({ lat: d.lat,            lng: d.lng!            }); pts++; }
+      if (pts >= 2) { map.fitBounds(bounds, 80); didFitRef.current = true; }
+    }
+
+    // ── OSRM route: recalculate from driver's current position ─────────────────
+    // Route origin = driver (when assigned) or pickup (no driver yet).
+    // Route destination = pickup (driver en route to pickup) or dropoff (trip in progress).
+    const hasDriver = d?.lat != null && d?.lng != null;
+    const driverMoved =
+      !lastRoutedDriverRef.current ||
+      (hasDriver && (
+        Math.abs(d!.lat! - lastRoutedDriverRef.current.lat) > ROUTE_REROUTE_THRESHOLD ||
+        Math.abs(d!.lng! - lastRoutedDriverRef.current.lng) > ROUTE_REROUTE_THRESHOLD
+      ));
+
+    if (driverMoved && ride.pickup_lat != null && ride.dropoff_lat != null) {
+      const originLat  = hasDriver ? d!.lat!  : ride.pickup_lat;
+      const originLng  = hasDriver ? d!.lng!  : ride.pickup_lng!;
+      const destLat    = EN_ROUTE_TO_PICKUP.has(ride.status) ? ride.pickup_lat  : ride.dropoff_lat;
+      const destLng    = EN_ROUTE_TO_PICKUP.has(ride.status) ? ride.pickup_lng! : ride.dropoff_lng!;
+
+      if (hasDriver) {
+        lastRoutedDriverRef.current = { lat: d!.lat!, lng: d!.lng! };
+      }
+
+      const url =
+        `https://router.project-osrm.org/route/v1/driving/` +
+        `${originLng},${originLat};${destLng},${destLat}` +
+        `?overview=full&geometries=geojson`;
+
+      fetch(url)
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          const coords: [number, number][] | undefined = data?.routes?.[0]?.geometry?.coordinates;
+          if (!coords || !routePolylineRef.current) return;
+          // OSRM returns [lng, lat]; Google Maps needs {lat, lng}.
+          routePolylineRef.current.setPath(coords.map(([lng, lat]) => ({ lat, lng })));
+        })
+        .catch(() => { /* silent — markers remain visible without a route line */ });
+    }
+  }, [ride, mapsReady]);
+
+  const statusCfg    = STATUS_LABEL[ride?.status ?? ''] ?? STATUS_LABEL.searching;
+  const isActive     = !!ride?.status && !['completed', 'cancelled'].includes(ride.status);
+  const driverName   = ride?.driver?.name || 'Driver';
+  const vehicleLine  = useMemo(() => {
+    const dr = ride?.driver;
+    if (!dr) return '';
+    return [dr.vehicle_color, dr.vehicle_year, dr.vehicle_make, dr.vehicle_model].filter(Boolean).join(' ');
   }, [ride?.driver]);
   const driverInitial = (driverName.trim()[0] || 'D').toUpperCase();
-
-  // Initialise the map once when the container mounts.
-  useEffect(() => {
-    if (!mapContainerRef.current || mapRef.current) return;
-    const primaryStyle = trackBaseMapStyle();
-    const map = new maplibregl.Map({
-      container: mapContainerRef.current,
-      style: primaryStyle,
-      center: DEFAULT_CENTER,
-      zoom: 11,
-      attributionControl: { compact: true },
-    });
-    map.on('error', (e) => {
-      // Surface tile/style load failures so they don't fail silently in the
-      // field — the screen would otherwise just stay blank. If the primary
-      // (Protomaps) style itself failed to load, fall back once to the keyless
-      // OpenFreeMap style so a misconfigured/over-quota key never leaves the
-      // rider with a blank map.
-      const msg = e?.error?.message || String(e);
-      console.warn('[track-map] map error:', msg);
-      if (!didFallbackRef.current && primaryStyle !== MAP_STYLE_FALLBACK && !map.isStyleLoaded()) {
-        didFallbackRef.current = true;
-        routeFetchedRef.current = false; // re-add the route layer onto the new style
-        map.setStyle(MAP_STYLE_FALLBACK);
-      }
-    });
-    addStandardControls(map);
-    mapRef.current = map;
-    return () => {
-      map.remove();
-      mapRef.current = null;
-    };
-  }, []);
-
-  // Sync markers + bounds whenever the ride payload changes.
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !ride) return;
-    if (!map.loaded()) {
-      map.once('load', () => syncMap());
-      return;
-    }
-    syncMap();
-
-    function syncMap() {
-      const points: { lat: number; lng: number }[] = [];
-
-      const setMarker = (
-        ref: React.MutableRefObject<maplibregl.Marker | null>,
-        lat: number | undefined,
-        lng: number | undefined,
-        el: HTMLElement,
-      ) => {
-        if (lat == null || lng == null) {
-          if (ref.current) {
-            ref.current.remove();
-            ref.current = null;
-          }
-          return;
-        }
-        if (!ref.current) {
-          ref.current = new maplibregl.Marker({ element: el }).setLngLat([lng, lat]).addTo(map!);
-        } else {
-          ref.current.setLngLat([lng, lat]);
-        }
-        points.push({ lat, lng });
-      };
-
-      setMarker(pickupMarkerRef, ride!.pickup_lat, ride!.pickup_lng, pinElement('#10B981', 'A'));
-      setMarker(dropoffMarkerRef, ride!.dropoff_lat, ride!.dropoff_lng, pinElement('#EF4444', 'B'));
-      const d = ride!.driver;
-      if (d?.lat != null && d?.lng != null) {
-        setMarker(driverMarkerRef, d.lat, d.lng, carElement());
-      } else if (driverMarkerRef.current) {
-        driverMarkerRef.current.remove();
-        driverMarkerRef.current = null;
-      }
-
-      // Draw a road-following route between pickup and drop-off once both
-      // endpoints are known. OSRM (public OSM routing service, no key
-      // required) returns the polyline; we render it as a layer underneath
-      // the markers so the rider sees the actual streets the driver will
-      // take, not a straight line cutting across the map.
-      if (
-        !routeFetchedRef.current
-        && ride!.pickup_lat != null && ride!.pickup_lng != null
-        && ride!.dropoff_lat != null && ride!.dropoff_lng != null
-      ) {
-        routeFetchedRef.current = true;
-        const url =
-          `https://router.project-osrm.org/route/v1/driving/` +
-          `${ride!.pickup_lng},${ride!.pickup_lat};${ride!.dropoff_lng},${ride!.dropoff_lat}` +
-          `?overview=full&geometries=geojson`;
-        fetch(url)
-          .then((r) => (r.ok ? r.json() : null))
-          .then((data) => {
-            const coords: [number, number][] | undefined =
-              data?.routes?.[0]?.geometry?.coordinates;
-            if (!coords || coords.length < 2 || !mapRef.current) return;
-            const m = mapRef.current;
-            if (m.getSource(ROUTE_SOURCE_ID)) {
-              (m.getSource(ROUTE_SOURCE_ID) as maplibregl.GeoJSONSource).setData({
-                type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords },
-              });
-            } else {
-              m.addSource(ROUTE_SOURCE_ID, {
-                type: 'geojson',
-                data: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords } },
-              });
-              m.addLayer({
-                id: ROUTE_LAYER_ID,
-                type: 'line',
-                source: ROUTE_SOURCE_ID,
-                layout: { 'line-cap': 'round', 'line-join': 'round' },
-                paint: { 'line-color': '#111827', 'line-width': 4, 'line-opacity': 0.85 },
-              });
-            }
-          })
-          .catch(() => { /* silent fallback — markers remain visible */ });
-      }
-
-      // Fit once on first load so the rider sees the whole trip; afterwards
-      // only re-center on the driver so the camera doesn't keep snapping back.
-      if (!didFitRef.current && points.length >= 2) {
-        // Build a LngLatBounds from the points and fit with our own options
-        // (the shared helper only takes a number for padding — no maxZoom).
-        const bounds = points.reduce(
-          (b, p) => b.extend([p.lng, p.lat] as [number, number]),
-          new maplibregl.LngLatBounds(),
-        );
-        map!.fitBounds(bounds, { padding: 80, maxZoom: 15, duration: 500 });
-        didFitRef.current = true;
-      } else if (d?.lat != null && d?.lng != null && didFitRef.current) {
-        map!.easeTo({ center: [d.lng, d.lat], duration: 800 });
-      }
-    }
-  }, [ride]);
 
   if (loading) {
     return (
@@ -270,21 +256,25 @@ export default function TrackRide() {
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
-      {/* Map fills the top of the viewport. Use explicit height (h-[60vh])
-          rather than flex-1 so the canvas always has dimensions on first
-          paint — flex-grow can resolve to 0 height on some mobile browsers
-          while the layout is settling, which kills MapLibre silently. */}
+      {/* Map — explicit height so the canvas always has dimensions on first paint */}
       <div className="relative w-full" style={{ height: '60vh', minHeight: 320 }}>
         <div ref={mapContainerRef} className="absolute inset-0 bg-gray-200" />
 
-        {/* Status pill, top-left over the map */}
-        <div
-          className="absolute top-4 left-4 right-4 mx-auto max-w-md flex items-center gap-2 px-3 py-2 rounded-full shadow-sm bg-white/95 backdrop-blur"
-        >
-          <span
-            className="inline-block w-2 h-2 rounded-full"
-            style={{ backgroundColor: statusCfg.color }}
+        {GMAPS_KEY ? (
+          <Script
+            src={`https://maps.googleapis.com/maps/api/js?key=${GMAPS_KEY}&v=weekly`}
+            strategy="afterInteractive"
+            onLoad={() => setMapsReady(true)}
           />
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-center bg-gray-100 text-gray-500 text-sm px-4 text-center">
+            Map unavailable — set <code className="mx-1">NEXT_PUBLIC_GOOGLE_MAPS_API_KEY</code> in Vercel
+          </div>
+        )}
+
+        {/* Status pill */}
+        <div className="absolute top-4 left-4 right-4 mx-auto max-w-md flex items-center gap-2 px-3 py-2 rounded-full shadow-sm bg-white/95 backdrop-blur">
+          <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: statusCfg.color }} />
           <span className="text-xs font-semibold text-gray-700 tracking-wide">
             {statusCfg.label.toUpperCase()}
           </span>
@@ -296,7 +286,7 @@ export default function TrackRide() {
         </div>
       </div>
 
-      {/* Bottom sheet: ETA, driver, route */}
+      {/* Bottom sheet */}
       <div className="bg-white rounded-t-3xl -mt-6 shadow-[0_-8px_30px_rgba(0,0,0,0.06)] relative">
         <div className="mx-auto w-12 h-1.5 bg-gray-200 rounded-full mt-3" />
 
@@ -317,11 +307,7 @@ export default function TrackRide() {
           <div className="mx-5 mb-5 rounded-2xl border border-gray-100 bg-gray-50/70 p-4 flex items-center gap-4">
             <div className="relative">
               {ride.driver.photo_url ? (
-                <img
-                  src={ride.driver.photo_url}
-                  alt={driverName}
-                  className="w-12 h-12 rounded-full object-cover"
-                />
+                <img src={ride.driver.photo_url} alt={driverName} className="w-12 h-12 rounded-full object-cover" />
               ) : (
                 <div className="w-12 h-12 rounded-full bg-gray-900 text-white flex items-center justify-center font-semibold">
                   {driverInitial}
@@ -369,9 +355,7 @@ export default function TrackRide() {
         <div className="px-5 pb-4 flex items-center justify-between text-[11px] text-gray-400">
           <span>{ride.ride_code ? `Ref ${ride.ride_code}` : ''}</span>
           {isActive && lastUpdated && (
-            <span>
-              Updated {lastUpdated.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}
-            </span>
+            <span>Updated {lastUpdated.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}</span>
           )}
         </div>
 
@@ -389,56 +373,4 @@ function Centered({ children }: { children: React.ReactNode }) {
       {children}
     </div>
   );
-}
-
-function pinElement(color: string, letter: string): HTMLElement {
-  const el = document.createElement('div');
-  el.style.cssText = `
-    width: 28px; height: 28px; border-radius: 50% 50% 50% 0;
-    transform: rotate(-45deg);
-    background: ${color};
-    border: 2px solid #fff;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.25);
-    display: flex; align-items: center; justify-content: center;
-    color: #fff; font-size: 12px; font-weight: 700; font-family: ui-sans-serif, system-ui;
-  `;
-  const inner = document.createElement('span');
-  inner.textContent = letter;
-  inner.style.cssText = 'transform: rotate(45deg);';
-  el.appendChild(inner);
-  return el;
-}
-
-function carElement(): HTMLElement {
-  const el = document.createElement('div');
-  el.style.cssText = `
-    width: 36px; height: 36px; border-radius: 50%;
-    background: #111827;
-    border: 3px solid #fff;
-    box-shadow: 0 4px 10px rgba(0,0,0,0.3);
-    display: flex; align-items: center; justify-content: center;
-    color: #fff; font-size: 18px;
-  `;
-  el.textContent = '🚗';
-  // Pulse ring
-  const ring = document.createElement('div');
-  ring.style.cssText = `
-    position: absolute; inset: -8px;
-    border-radius: 50%;
-    border: 2px solid rgba(17,24,39,0.25);
-    animation: pulse 2s ease-out infinite;
-  `;
-  el.style.position = 'relative';
-  el.appendChild(ring);
-  // Inject keyframes once
-  if (!document.getElementById('spinr-pulse-kf')) {
-    const style = document.createElement('style');
-    style.id = 'spinr-pulse-kf';
-    style.textContent = `@keyframes pulse {
-      0% { transform: scale(0.85); opacity: 0.9; }
-      100% { transform: scale(1.6); opacity: 0; }
-    }`;
-    document.head.appendChild(style);
-  }
-  return el;
 }

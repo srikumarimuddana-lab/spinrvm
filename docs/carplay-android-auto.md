@@ -1,12 +1,12 @@
 # CarPlay & Android Auto — integration strategy
 
 **Last verified:** 2026-06-02
-**Status:** Spike scaffold + first real surface. Committed: the dependency, the
-`withCarIntegration` config plugin, the JS smoke test (`car/carSpike.ts`), and the
-**Android Auto route map** (`car/carRoute.ts` + `car/carNav.tsx`) — see "Implemented" below.
-It must still be proven by an **EAS dev build** on a CarPlay Simulator / Android Auto DHU
-before anything relies on it; that build is the gate. No release branch should merge this
-until the spike passes.
+**Status:** Spike scaffold + first real surface, on **both** platforms. Committed: the
+dependency, the `withCarIntegration` config plugin, the JS smoke test (`car/carSpike.ts`), and
+the **route map** (`car/carRoute.ts` + `car/carNav.tsx`) wired for Android Auto AND CarPlay —
+see "Implemented" below. It must still be proven by an **EAS dev build** on a CarPlay Simulator
+/ Android Auto DHU before anything relies on it; that build is the gate. No release branch
+should merge this until the spike passes.
 **Decision inputs:** Scope = *driving-task v1, architected for an in-dash-nav phase later*;
 platforms = *CarPlay + Android Auto in parallel*; approach = *`react-native-carplay` fork +
 a custom Expo config plugin* (keep all ride logic in shared TS/Zustand).
@@ -66,20 +66,39 @@ turn-by-turn to the driver's own Google Maps / Waze.
   `Linking.openURL` brings the nav app up on the head unit.
 - **Still unproven on hardware:** map-button icons and the on-surface render need the EAS
   dev build + DHU (checklist steps 3/5/6). The JS contract is covered by 20 unit tests.
-- **Not yet wired:** accept/decline from the car, online toggle, OTP/rating (stay on phone),
-  and the **CarPlay (iOS)** reuse of this same layer (see "CarPlay reuse" below).
+- **Not yet wired:** accept/decline from the car, online toggle, OTP/rating (stay on phone).
 
-### CarPlay (iOS) reuse
+### CarPlay (iOS) — wired, emulator-testable
 
-`carRoute.ts` is platform-agnostic and the fork's `MapTemplate` is cross-platform, so ~90% of
-this carries to CarPlay. What iOS still needs before it can ship:
-1. The Apple CarPlay **navigation entitlement** (the fork only does the *windowed* connect —
-   see the TL;DR caveat). Hard external gate; request early.
-2. iOS hand-off URL schemes in `buildHandoffUrl` (`maps:` / `comgooglemaps://` / `waze://`)
-   instead of the Android `google.navigation:` intent.
-3. Drive `initCarNav()` from `app/_layout.tsx` (CarPlay shares the phone JS context) rather
-   than a separate AppRegistry root, and drop the Android-only gate.
-All of this stays behind `SPINR_CARPLAY_IOS=1`, OFF by default.
+The same route-map layer now runs on CarPlay (shares ~all of `carRoute.ts` + `carNav.tsx`):
+- `initCarNav()` runs on iOS as well as Android; CarPlay is driven from `app/_layout.tsx`
+  (shared phone JS context), Android Auto from its AppRegistry root. No double-init.
+- Hand-off is platform-aware: CarPlay offers **Apple Maps** (`maps://`, CarPlay-native) +
+  **Waze**; Android Auto offers Google + Waze. Map buttons use a bundled placeholder glyph.
+- Entitlement switched to **`com.apple.developer.carplay-maps`** (navigation) — REQUIRED for
+  the windowed `CPMapTemplate`; `driving-task` is windowless and can't show the map.
+  Still gated behind `SPINR_CARPLAY_IOS=1` (OFF by default).
+- **Apple-approval caveat:** Apple may push a rideshare *driver* app to driving-task (no map).
+  The **Simulator doesn't enforce the grant**, so the map is testable now; the production grant
+  is a separate request. If Apple insists on driving-task, swap the map for a list UI.
+
+#### CarPlay Simulator test script (macOS + Xcode)
+
+```bash
+cd driver-app
+SPINR_CARPLAY_IOS=1 npx expo prebuild -p ios --clean   # adds the CarPlay scene + entitlement
+npx expo run:ios                                        # or an EAS dev build
+```
+Then: Simulator running → **Xcode ▸ I/O ▸ External Displays ▸ CarPlay**. Expected:
+1. With **no active ride** → the idle "Spinr — waiting for trips" list on the CarPlay screen.
+2. Set the driver into a trip (a real offer→accept, or `useDriverStore.setState({ rideState:
+   'trip_in_progress', activeRide })` from a dev hook) → the map shows the stored polyline with
+   the dropoff pinned.
+3. Tap **Maps** / **Waze** → Metro logs `[car-nav] hand-off → apple maps://…` (the round-trip
+   reaching JS is the assertion; the Simulator won't actually switch nav apps).
+4. Repeat on the **Android Auto DHU** for the Google/Waze buttons.
+
+Remaining hardware-only unknowns: the on-surface map render fidelity and the map-button glyphs.
 
 ## Integration model (separate vs integrated)
 

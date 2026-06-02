@@ -131,13 +131,40 @@ export default function TrackRide() {
     if (!g || !mapRef.current || !ride) return;
     const map = mapRef.current;
 
-    // Helper: create or move a circular marker.
+    // Inline SVG for the pickup pin (green teardrop).
+    const pinSvg = (color: string, letter: string) =>
+      `data:image/svg+xml,${encodeURIComponent(
+        `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="40" viewBox="0 0 32 40">
+          <path d="M16 0C7.163 0 0 7.163 0 16c0 10 16 24 16 24S32 26 32 16C32 7.163 24.837 0 16 0z" fill="${color}"/>
+          <circle cx="16" cy="16" r="8" fill="white"/>
+          <text x="16" y="20" text-anchor="middle" font-size="10" font-weight="700"
+                font-family="ui-sans-serif,system-ui,sans-serif" fill="${color}">${letter}</text>
+        </svg>`
+      )}`;
+
+    // Top-down car SVG for the driver — looks professional and direction-neutral.
+    const carSvg =
+      `data:image/svg+xml,${encodeURIComponent(
+        `<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44">
+          <circle cx="22" cy="22" r="20" fill="#111827" stroke="white" stroke-width="3"/>
+          <g fill="white" transform="translate(10,11)">
+            <path d="M20 6H4L2 10h20L20 6z"/>
+            <rect x="2" y="11" width="20" height="6" rx="1"/>
+            <rect x="3" y="9" width="4" height="3" rx="1" fill="#93C5FD"/>
+            <rect x="17" y="9" width="4" height="3" rx="1" fill="#93C5FD"/>
+            <circle cx="5"  cy="18.5" r="2" fill="#6B7280"/>
+            <circle cx="19" cy="18.5" r="2" fill="#6B7280"/>
+          </g>
+        </svg>`
+      )}`;
+
+    // Helper: create or move a marker.
     const upsertMarker = (
       ref: React.MutableRefObject<G>,
       lat: number | undefined,
       lng: number | undefined,
-      color: string,
-      label?: string,
+      iconUrl: string,
+      size: number,
       zIndex = 1,
     ) => {
       if (lat == null || lng == null) {
@@ -145,29 +172,19 @@ export default function TrackRide() {
         return;
       }
       const pos = { lat, lng };
-      const icon = {
-        path: g.SymbolPath.CIRCLE,
-        scale: label ? 14 : 9,
-        fillColor: color,
-        fillOpacity: 1,
-        strokeColor: '#ffffff',
-        strokeWeight: label ? 3 : 2.5,
-      };
+      const icon = { url: iconUrl, scaledSize: new g.Size(size, size), anchor: new g.Point(size / 2, size / 2) };
       if (!ref.current) {
-        ref.current = new g.Marker({
-          map, position: pos, icon, zIndex,
-          ...(label ? { label: { text: label, fontSize: '14px' } } : {}),
-        });
+        ref.current = new g.Marker({ map, position: pos, icon, zIndex });
       } else {
         ref.current.setPosition(pos);
       }
     };
 
-    upsertMarker(pickupMarkerRef,  ride.pickup_lat,  ride.pickup_lng,  '#10B981');
-    upsertMarker(dropoffMarkerRef, ride.dropoff_lat, ride.dropoff_lng, '#EF4444');
+    upsertMarker(pickupMarkerRef,  ride.pickup_lat,  ride.pickup_lng,  pinSvg('#10B981', 'A'), 36);
+    upsertMarker(dropoffMarkerRef, ride.dropoff_lat, ride.dropoff_lng, pinSvg('#EF4444', 'B'), 36);
 
     const d = ride.driver;
-    upsertMarker(driverMarkerRef, d?.lat, d?.lng, '#111827', '🚗', 2);
+    upsertMarker(driverMarkerRef, d?.lat, d?.lng, carSvg, 44, 2);
 
     // Pan to driver after initial fit.
     if (d?.lat != null && didFitRef.current) {

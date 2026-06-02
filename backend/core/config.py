@@ -121,6 +121,12 @@ class Settings(BaseSettings):
     # Fare cache TTL (PERF-001)
     FARE_CACHE_TTL_SECONDS: int = 300  # 5-minute cache per lat/lng grid cell
 
+    # Public tracking page base URL — used when generating shareable trip links.
+    # Customer links are clean: "{TRACKING_BASE_URL}/{token}". The tracking
+    # domain rewrites /{token} → /track/{token} server-side. Set to the
+    # dedicated tracking subdomain in production (admin panel is NOT served here).
+    TRACKING_BASE_URL: str = "https://track.spinr.ca"
+
     # File storage
     STORAGE_BUCKET: str = "driver-documents"
 

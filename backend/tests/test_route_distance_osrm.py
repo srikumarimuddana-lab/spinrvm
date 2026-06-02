@@ -166,7 +166,12 @@ async def test_prefers_osrm_and_returns_polyline():
     ):
         result = await rd.compute_road_route(_trip(6))
 
-    assert result == {"distance_km": 7.42, "polyline": [[50.4, -104.6], [50.41, -104.61]]}
+    assert result == {
+        "distance_km": 7.42,
+        "polyline": [[50.4, -104.6], [50.41, -104.61]],
+        "provider": "osrm_match",
+        "input_points_count": 6,
+    }
     assert google_called["n"] == 0, "Google must not be called when OSRM returns a value"
 
 
@@ -190,7 +195,12 @@ async def test_falls_back_to_google_when_osrm_none():
     ):
         result = await rd.compute_road_route(_trip(6))
 
-    assert result == {"distance_km": 5.5, "polyline": [[50.0, -104.0]]}
+    assert result == {
+        "distance_km": 5.5,
+        "polyline": [[50.0, -104.0]],
+        "provider": "google_roads",
+        "input_points_count": 6,
+    }
 
 
 @pytest.mark.asyncio

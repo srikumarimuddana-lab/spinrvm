@@ -92,7 +92,7 @@ describe('buildNavMapTemplate', () => {
     ]);
   });
 
-  it('routes the Waze button to Waze and any other button to Google', () => {
+  it('routes the Waze button to Waze and the primary button to Google (Android)', () => {
     useDriverStore.setState({ rideState: 'trip_in_progress', activeRide: activeRide() });
     const cfg = configOf(buildNavMapTemplate(MapTemplate as never));
     const onPress = cfg.onMapButtonPressed as (e: { id: string }) => void;
@@ -102,6 +102,27 @@ describe('buildNavMapTemplate', () => {
 
     onPress({ id: 'nav-google' });
     expect(openURL).toHaveBeenLastCalledWith('google.navigation:q=52.2,-106.6');
+  });
+
+  it('offers Apple Maps + Waze and routes them on iOS (CarPlay)', () => {
+    setOS('ios');
+    useDriverStore.setState({ rideState: 'trip_in_progress', activeRide: activeRide() });
+    const cfg = configOf(buildNavMapTemplate(MapTemplate as never));
+    expect((cfg.mapButtons as { id: string }[]).map((b) => b.id)).toEqual([
+      'nav-apple',
+      'nav-waze',
+    ]);
+
+    const onPress = cfg.onMapButtonPressed as (e: { id: string }) => void;
+    onPress({ id: 'nav-apple' });
+    expect(openURL).toHaveBeenLastCalledWith('maps://?daddr=52.2,-106.6&dirflg=d');
+  });
+
+  it('gives every map button an icon (CarPlay/Android Auto buttons are icons)', () => {
+    const cfg = configOf(buildNavMapTemplate(MapTemplate as never));
+    for (const b of cfg.mapButtons as { image?: unknown }[]) {
+      expect(b.image).toBeDefined();
+    }
   });
 });
 
@@ -128,8 +149,15 @@ describe('handoffToNav', () => {
 });
 
 describe('initCarNav', () => {
-  it('is a no-op on iOS (the phone tree drives CarPlay there)', () => {
+  it('runs on iOS too (CarPlay shares the phone JS context)', () => {
     setOS('ios');
+    const cleanup = initCarNav();
+    expect(CarPlay.registerOnConnect).toHaveBeenCalledTimes(1);
+    cleanup();
+  });
+
+  it('is a no-op off-car (web / Expo Go)', () => {
+    setOS('web');
     const cleanup = initCarNav();
     expect(CarPlay.registerOnConnect).not.toHaveBeenCalled();
     cleanup();

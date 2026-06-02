@@ -43,8 +43,10 @@ export function trackBaseMapStyle(): string {
     return protomapsStyleUrl() ?? MAP_STYLE_POSITRON;
 }
 
-/** Keyless fallback style, used if the primary style fails to load at runtime. */
-export const MAP_STYLE_FALLBACK = MAP_STYLE_POSITRON;
+/** Keyless fallback style, used if the primary style fails to load at runtime.
+ *  Must differ from the primary so the error-handler's `primaryStyle !== MAP_STYLE_FALLBACK`
+ *  guard can actually switch styles on failure. */
+export const MAP_STYLE_FALLBACK = MAP_STYLE_URL; // liberty — different look from positron
 
 // Saskatoon by default — Spinr is a Saskatchewan-first service, so maps
 // should land somewhere operational even before service areas load or

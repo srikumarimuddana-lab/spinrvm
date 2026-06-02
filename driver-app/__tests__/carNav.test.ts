@@ -172,6 +172,14 @@ describe('button hand-off via the car emitter', () => {
     expect(openURL).not.toHaveBeenCalled();
     cleanup();
   });
+
+  it('ignores presses for ids that are not current nav buttons', () => {
+    useDriverStore.setState({ rideState: 'trip_in_progress', activeRide: activeRide() });
+    const cleanup = initCarNav();
+    emitterCb('buttonPressed')({ buttonId: 'some-other-car-action' });
+    expect(openURL).not.toHaveBeenCalled();
+    cleanup();
+  });
 });
 
 describe('initCarNav', () => {
@@ -212,6 +220,17 @@ describe('initCarNav', () => {
 
     useDriverStore.setState({ rideState: 'trip_in_progress', activeRide: activeRide() }); // → map
     expect(idleTpl.destroy).toHaveBeenCalledTimes(1);
+    cleanup();
+  });
+
+  it('rebuilds when the ride changes even on the same leg', () => {
+    (CarPlay as unknown as { connected: boolean }).connected = true;
+    const cleanup = initCarNav();
+    useDriverStore.setState({ rideState: 'trip_in_progress', activeRide: activeRide({ id: 'r1' }) });
+    const before = (CarPlay.setRootTemplate as jest.Mock).mock.calls.length;
+    // Same leg (trip_in_progress) but a DIFFERENT ride id → must rebuild + recenter.
+    useDriverStore.setState({ activeRide: activeRide({ id: 'r2' }) });
+    expect((CarPlay.setRootTemplate as jest.Mock).mock.calls.length).toBe(before + 1);
     cleanup();
   });
 

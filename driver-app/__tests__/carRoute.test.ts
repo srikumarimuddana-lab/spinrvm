@@ -7,7 +7,6 @@ import {
   defaultNavButtons,
   extractPolyline,
   isNavState,
-  providerForButton,
   resolveNavButtons,
   selectCarRoute,
 } from '../car/carRoute';
@@ -186,19 +185,3 @@ describe('resolveNavButtons (CarPlay install detection)', () => {
   });
 });
 
-describe('providerForButton', () => {
-  const ios = [
-    { id: 'nav-apple', provider: 'apple' as const },
-    { id: 'nav-google', provider: 'google' as const },
-  ];
-
-  it('round-trips a pressed button id back to its provider', () => {
-    expect(providerForButton(ios, 'nav-google', 'ios')).toBe('google');
-    expect(providerForButton(ios, 'nav-apple', 'ios')).toBe('apple');
-  });
-
-  it('falls back to the platform default for an unknown id', () => {
-    expect(providerForButton(ios, 'mystery', 'ios')).toBe('apple');
-    expect(providerForButton([], 'mystery', 'android')).toBe('google');
-  });
-});

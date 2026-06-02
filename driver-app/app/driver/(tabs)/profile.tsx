@@ -534,9 +534,9 @@ export default function ProfileScreen() {
                     <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
                 </TouchableOpacity>
                 <View style={styles.cardDivider} />
-                <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/notifications' as any)}>
-                    <View style={[styles.iconBox, { backgroundColor: colors.surfaceLight }]}>
-                        <Ionicons name="help-circle" size={18} color={colors.textDim} />
+                <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/faq' as any)}>
+                    <View style={[styles.iconBox, { backgroundColor: 'rgba(37, 99, 235, 0.1)' }]}>
+                        <Ionicons name="help-circle" size={18} color="#2563EB" />
                     </View>
                     <Text style={styles.actionText}>Help Center</Text>
                     <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
@@ -1084,6 +1084,7 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 6,
+    alignSelf: 'flex-start',
   },
   docStatusText: {
     color: '#fff',

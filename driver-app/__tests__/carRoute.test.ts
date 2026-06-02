@@ -6,6 +6,8 @@ import {
   buildHandoffUrl,
   extractPolyline,
   isNavState,
+  navButtonsForPlatform,
+  providerForButton,
   selectCarRoute,
 } from '../car/carRoute';
 import type { ActiveRide, RideState } from '../store/driverStore';
@@ -117,7 +119,38 @@ describe('buildHandoffUrl', () => {
     expect(buildHandoffUrl('google', dest)).toBe('google.navigation:q=52.2,-106.6');
   });
 
-  it('builds a Waze navigate deep link', () => {
+  it('builds an Apple Maps driving-directions link (CarPlay)', () => {
+    expect(buildHandoffUrl('apple', dest)).toBe('maps://?daddr=52.2,-106.6&dirflg=d');
+  });
+
+  it('builds a Waze navigate deep link (both platforms)', () => {
     expect(buildHandoffUrl('waze', dest)).toBe('https://waze.com/ul?ll=52.2,-106.6&navigate=yes');
+  });
+});
+
+describe('navButtonsForPlatform / providerForButton', () => {
+  it('offers Apple Maps + Waze on iOS (CarPlay)', () => {
+    expect(navButtonsForPlatform('ios')).toEqual([
+      { id: 'nav-apple', provider: 'apple' },
+      { id: 'nav-waze', provider: 'waze' },
+    ]);
+  });
+
+  it('offers Google + Waze on Android (Android Auto)', () => {
+    expect(navButtonsForPlatform('android')).toEqual([
+      { id: 'nav-google', provider: 'google' },
+      { id: 'nav-waze', provider: 'waze' },
+    ]);
+  });
+
+  it('round-trips a pressed button id back to its provider', () => {
+    expect(providerForButton('ios', 'nav-apple')).toBe('apple');
+    expect(providerForButton('ios', 'nav-waze')).toBe('waze');
+    expect(providerForButton('android', 'nav-google')).toBe('google');
+  });
+
+  it('falls back to the platform default for an unknown id', () => {
+    expect(providerForButton('ios', 'mystery')).toBe('apple');
+    expect(providerForButton('android', 'mystery')).toBe('google');
   });
 });

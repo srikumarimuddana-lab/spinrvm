@@ -13,7 +13,8 @@
 import type { ActiveRide, RideState } from '../store/driverStore';
 
 export type LatLng = { latitude: number; longitude: number };
-export type NavProvider = 'google' | 'waze';
+export type NavProvider = 'google' | 'apple' | 'waze';
+export type NavButton = { id: string; provider: NavProvider };
 
 export type CarRoute = {
   /** Where the driver is currently headed: pickup before the trip, dropoff during it. */
@@ -98,15 +99,47 @@ export function selectCarRoute(
 }
 
 /**
- * Deep-link URL that hands live turn-by-turn to the driver's nav app. Android
- * Auto is the only target, so this mirrors the Android branch of the existing
- * `openNavigation()` (`google.navigation:q=`) and adds Waze. Launching it while
- * Android Auto is connected brings the nav app up on the head unit.
+ * Deep-link URL that hands live turn-by-turn to the driver's nav app. Launching
+ * it while the head unit is connected brings the nav app up on the car screen.
+ *   - google → Android `google.navigation:` intent (mirrors openNavigation())
+ *   - apple  → Apple Maps directions (CarPlay-native, always installed on iOS)
+ *   - waze   → Waze universal link (works on both platforms if installed)
  */
 export function buildHandoffUrl(provider: NavProvider, dest: LatLng): string {
   const { latitude, longitude } = dest;
-  if (provider === 'waze') {
-    return `https://waze.com/ul?ll=${latitude},${longitude}&navigate=yes`;
+  switch (provider) {
+    case 'waze':
+      return `https://waze.com/ul?ll=${latitude},${longitude}&navigate=yes`;
+    case 'apple':
+      return `maps://?daddr=${latitude},${longitude}&dirflg=d`;
+    case 'google':
+    default:
+      return `google.navigation:q=${latitude},${longitude}`;
   }
-  return `google.navigation:q=${latitude},${longitude}`;
+}
+
+/**
+ * The nav hand-off buttons to show on the car map, per platform: Android Auto
+ * offers Google + Waze, CarPlay offers Apple Maps + Waze (Apple Maps is the
+ * CarPlay-native, guaranteed-present option). The button id round-trips through
+ * the head unit's press event back to `providerForButton`.
+ */
+export function navButtonsForPlatform(os: string): NavButton[] {
+  return os === 'ios'
+    ? [
+        { id: 'nav-apple', provider: 'apple' },
+        { id: 'nav-waze', provider: 'waze' },
+      ]
+    : [
+        { id: 'nav-google', provider: 'google' },
+        { id: 'nav-waze', provider: 'waze' },
+      ];
+}
+
+/** Resolve a pressed map-button id back to its nav provider (falls back to the
+ *  platform default if the id is unrecognized). */
+export function providerForButton(os: string, id: string): NavProvider {
+  const found = navButtonsForPlatform(os).find((b) => b.id === id);
+  if (found) return found.provider;
+  return os === 'ios' ? 'apple' : 'google';
 }

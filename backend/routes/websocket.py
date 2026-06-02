@@ -7,8 +7,12 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from firebase_admin import auth as firebase_auth
 from loguru import logger
 
-from backend.utils.breadcrumbs import persist_ride_breadcrumbs
-from backend.utils.location_integrity import check_location_integrity
+try:
+    from ..utils.breadcrumbs import persist_ride_breadcrumbs
+    from ..utils.location_integrity import check_location_integrity
+except ImportError:
+    from utils.breadcrumbs import persist_ride_breadcrumbs  # type: ignore
+    from utils.location_integrity import check_location_integrity  # type: ignore
 
 try:
     from .. import db_supabase

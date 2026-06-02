@@ -21,6 +21,9 @@ import {
   stopBackgroundLocation,
   startGeofenceRecovery,
   stopGeofenceRecovery,
+  updateBackgroundLocationCadence,
+  TRIP_CADENCE,
+  IDLE_CADENCE,
 } from '../utils/backgroundLocation';
 import { checkLocationIntegrity, resetLocationIntegrity } from '../utils/locationIntegrity';
 import { startSensorMonitoring, stopSensorMonitoring, checkMovementConsistency } from '../utils/sensorIntegrity';
@@ -444,6 +447,15 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       return;
     }
     const config = LOCATION_CONFIGS[rideState] ?? LOCATION_CONFIGS.idle;
+    // Re-tune the *background* task to match the phase too. The foreground
+    // watchPositionAsync below only fires while the app is foregrounded, so a
+    // trip driven with the app backgrounded (driver in Maps / screen locked)
+    // relies entirely on the background task — keep it dense during trip
+    // phases, coarse when idle. No-op until go-online has started the task.
+    const TRIP_PHASES = ['navigating_to_pickup', 'arrived_at_pickup', 'trip_in_progress'];
+    updateBackgroundLocationCadence(
+      TRIP_PHASES.includes(rideState) ? TRIP_CADENCE : IDLE_CADENCE,
+    ).catch(() => {});
     (async () => {
       if (locationSubRef.current) {
         try { locationSubRef.current.remove(); } catch {}

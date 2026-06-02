@@ -48,3 +48,51 @@ async def test_fare_estimate_surge_capped_at_2_5x():
         assert fare["surge_multiplier"] <= 2.5, (
             f"surge_multiplier {fare['surge_multiplier']} exceeds 2.5× cap (vehicle_type={fare.get('vehicle_type')})"
         )
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_build_fares_for_area_returns_only_configured_vehicle_types():
+    """Ride options should be scoped to vehicle types assigned to the area."""
+    from backend.routes.fares import build_fares_for_area
+
+    matched_area = {
+        "id": "area_partial_pricing",
+        "name": "Partial Pricing Area",
+        "surge_enabled": False,
+        "surge_active": False,
+        "surge_multiplier": 1.0,
+        "vehicle_pricing": [
+            {
+                "vehicle_type": "Sedan",
+                "base_fare": 4.25,
+                "per_km": 1.75,
+                "per_min": 0.35,
+                "min_fare": 9.00,
+                "booking_fee": 2.50,
+            },
+            {
+                "vehicle_type": "XL",
+                "base_fare": 6.00,
+                "per_km": 2.25,
+                "per_min": 0.45,
+                "min_fare": 12.00,
+                "booking_fee": 3.00,
+            },
+        ],
+    }
+    vehicle_types = [
+        {"id": "vt_sedan", "name": "Sedan", "is_active": True},
+        {"id": "vt_xl", "name": "XL", "is_active": True},
+        {"id": "vt_lux", "name": "Luxury", "is_active": True},
+    ]
+
+    with patch("backend.routes.fares.db_supabase.get_rows", new_callable=AsyncMock) as mock_get_rows:
+        mock_get_rows.return_value = stale_legacy_fares
+        fares = await build_fares_for_area(matched_area, vehicle_types)
+
+    mock_get_rows.assert_not_awaited()
+    assert [fare["vehicle_type"]["id"] for fare in fares] == ["vt_sedan", "vt_xl"]
+    fares_by_id = {fare["vehicle_type"]["id"]: fare for fare in fares}
+    assert fares_by_id["vt_sedan"]["base_fare"] == "4.25"
+    assert fares_by_id["vt_xl"]["base_fare"] == "6.00"

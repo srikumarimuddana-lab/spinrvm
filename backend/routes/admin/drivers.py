@@ -728,7 +728,7 @@ async def admin_get_expiring_documents(
             {
                 "driver_id": {"$in": list(affected_driver_ids)},
                 "status": "completed",
-                "completed_at": {"$gte": rides_30d_ago},
+                "ride_completed_at": {"$gte": rides_30d_ago},
             },
             limit=10000,
         )
@@ -1389,7 +1389,7 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
         (
             _dec(r.get("driver_earnings"))
             for r in rides
-            if (r.get("completed_at") or r.get("created_at") or "") >= year_start
+            if (r.get("ride_completed_at") or r.get("completed_at") or r.get("created_at") or "") >= year_start
         ),
         Decimal("0"),
     )
@@ -1398,9 +1398,9 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
     # days" earnings metric uses (≥1 completed ride on that calendar date).
     thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
     recent_dates = {
-        (r.get("completed_at") or r.get("created_at") or "")[:10]
+        (r.get("ride_completed_at") or r.get("completed_at") or r.get("created_at") or "")[:10]
         for r in rides
-        if (r.get("completed_at") or r.get("created_at") or "") >= thirty_days_ago
+        if (r.get("ride_completed_at") or r.get("completed_at") or r.get("created_at") or "") >= thirty_days_ago
     }
     active_days_30d = len([d for d in recent_dates if d])
 

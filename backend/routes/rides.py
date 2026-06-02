@@ -226,6 +226,29 @@ async def _fetch_directions_polyline(
         return None
 
 
+async def _get_active_service_area_for_point(
+    lat: float,
+    lng: float,
+    active_areas: List[dict],
+) -> Optional[dict]:
+    """Return an active service area containing a point.
+
+    Prefer the PostGIS RPC when its area geography column is populated, but
+    fall back to the JSON/GeoJSON polygon column used by the admin dashboard.
+    Some production rows have polygon coverage without a synced geography value;
+    the fallback keeps estimate geofence checks aligned with what admins see.
+    """
+    matched_area = await db_supabase.get_service_area_for_point(lat, lng)
+    if matched_area and matched_area.get("is_active", True) is not False:
+        return matched_area
+
+    for area in active_areas or []:
+        poly = get_service_area_polygon(area)
+        if poly and point_in_polygon(lat, lng, poly):
+            return area
+    return None
+
+
 async def _require_ride_in_state_rider(ride_id: str, rider_id: str, allowed_states: tuple) -> dict:
     """Load a rider's ride only if it is in one of allowed_states.
 
@@ -885,12 +908,22 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
                     if k not in _FCM_SPATIAL_EXCLUDE
                 }
                 fcm_data["deeplink"] = "/driver/"
+                fcm_data["booking_id"] = str(ride_id)
+
+                pickup_label = ride.get("pickup_address") or "Nearby pickup"
+                dropoff_label = ride.get("dropoff_address") or "destination"
+                try:
+                    earnings_label = f"${float(ride.get('driver_earnings') or 0):.2f}"
+                except (TypeError, ValueError):
+                    earnings_label = "New fare"
+
                 await send_push_notification(
                     driver["user_id"],
-                    "New ride request",
-                    f"{ride.get('pickup_address') or 'Nearby pickup'} → {ride.get('dropoff_address') or 'destination'}",
+                    f"{earnings_label} ride offer",
+                    f"Booking {ride_id} • {pickup_label} → {dropoff_label}",
                     fcm_data,
                     priority="dispatch",
+                    target_app="driver",
                 )
             except Exception as e:
                 logger.error(f"[DISPATCH] push failed for driver {driver['user_id']}: {e}", exc_info=True)
@@ -1279,19 +1312,13 @@ async def estimate_ride(
     # so calculate_all_fees doesn't re-fetch service_areas N times.
     _est_all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=500)
 
-    # Use PostGIS RPC for geofence checks — the capped list above is for fee
-    # resolution only and must not be treated as authoritative for coverage.
-    _est_matched_area = await db_supabase.get_service_area_for_point(body.pickup_lat, body.pickup_lng)
-    if _est_matched_area is None and _est_all_areas:
-        _est_matched_area = next(
-            (
-                a
-                for a in _est_all_areas
-                if get_service_area_polygon(a)
-                and point_in_polygon(body.pickup_lat, body.pickup_lng, get_service_area_polygon(a))
-            ),
-            None,
-        )
+    # Use PostGIS RPC for geofence checks, with a JSON/GeoJSON polygon
+    # fallback for service-area rows whose geography column is not synced.
+    _est_matched_area = await _get_active_service_area_for_point(
+        body.pickup_lat,
+        body.pickup_lng,
+        _est_all_areas,
+    )
     if _est_matched_area:
         logger.info(
             "[estimate] matched service area '%s' for fees",
@@ -1305,10 +1332,9 @@ async def estimate_ride(
         )
 
     # Geofence gates — pickup, dropoff, and every stop must be inside an
-    # active service area before we show prices. Uses PostGIS point lookup
-    # so the check is authoritative regardless of how many areas exist.
-    # Fail-open when the RPC returns None AND no areas are configured (DB
-    # outage or fresh install).
+    # active service area before we show prices. The lookup combines PostGIS
+    # with the admin-visible polygon JSON fallback above. Fail-open when no
+    # active areas are configured (DB outage or fresh install).
     if _est_all_areas:
         if _est_matched_area is None:
             raise HTTPException(
@@ -1321,7 +1347,11 @@ async def estimate_ride(
                     ),
                 },
             )
-        _dropoff_area = await db_supabase.get_service_area_for_point(body.dropoff_lat, body.dropoff_lng)
+        _dropoff_area = await _get_active_service_area_for_point(
+            body.dropoff_lat,
+            body.dropoff_lng,
+            _est_all_areas,
+        )
         if _dropoff_area is None:
             logger.info(
                 "[estimate] reject dropoff=(%.5f,%.5f) — outside service areas",
@@ -1342,7 +1372,7 @@ async def estimate_ride(
             s_lat, s_lng = stop.get("lat"), stop.get("lng")
             if s_lat is None or s_lng is None:
                 continue
-            _stop_area = await db_supabase.get_service_area_for_point(s_lat, s_lng)
+            _stop_area = await _get_active_service_area_for_point(s_lat, s_lng, _est_all_areas)
             if _stop_area is None:
                 logger.info(
                     "[estimate] reject stop[%d]=(%.5f,%.5f) — outside service areas",
@@ -1746,25 +1776,18 @@ async def create_ride(
         logger.error(f"Failed to fetch service areas: {e}", exc_info=True)
 
     # Resolve the pickup service area once and pass the match downstream.
-    matched_area = await db_supabase.get_service_area_for_point(body.pickup_lat, body.pickup_lng)
-    if matched_area is None and all_areas:
-        matched_area = next(
-            (
-                a
-                for a in all_areas
-                if get_service_area_polygon(a)
-                and point_in_polygon(body.pickup_lat, body.pickup_lng, get_service_area_polygon(a))
-            ),
-            None,
-        )
+    matched_area = await _get_active_service_area_for_point(
+        body.pickup_lat,
+        body.pickup_lng,
+        all_areas,
+    )
     service_area_id = matched_area["id"] if matched_area else None
 
     # Geofence gate: pickup must fall inside an active service area. Without
     # this the request silently dispatches against drivers anywhere on the
     # map, which is what produced the "I'm outside the zone but the app is
-    # still searching for drivers" report. Dropoff is intentionally NOT
-    # checked here — riders frequently travel out of town and we don't want
-    # to block that, but we do require their pickup to be inside coverage.
+    # still searching for drivers" report. Dropoff and intermediate stops are
+    # checked below with the same service-area matcher.
     if matched_area is None and all_areas:
         logger.info(
             "[geofence] reject pickup=(%.5f,%.5f) — outside %d active service area(s)",
@@ -1784,9 +1807,13 @@ async def create_ride(
         )
 
     # Geofence gate: dropoff must also fall inside an active service area.
-    # Uses PostGIS RPC so the check is authoritative regardless of list size.
+    # Uses PostGIS plus the admin-visible polygon JSON fallback.
     if all_areas:
-        _dropoff_area = await db_supabase.get_service_area_for_point(body.dropoff_lat, body.dropoff_lng)
+        _dropoff_area = await _get_active_service_area_for_point(
+            body.dropoff_lat,
+            body.dropoff_lng,
+            all_areas,
+        )
         if _dropoff_area is None:
             logger.info(
                 "[geofence] reject dropoff=(%.5f,%.5f) — outside service areas",
@@ -1810,7 +1837,7 @@ async def create_ride(
             s_lat, s_lng = stop.get("lat"), stop.get("lng")
             if s_lat is None or s_lng is None:
                 continue
-            _stop_area = await db_supabase.get_service_area_for_point(s_lat, s_lng)
+            _stop_area = await _get_active_service_area_for_point(s_lat, s_lng, all_areas)
             if _stop_area is None:
                 logger.info(
                     "[geofence] reject stop[%d]=(%.5f,%.5f) — outside service areas",
@@ -1841,11 +1868,15 @@ async def create_ride(
 
     fare_info = next(
         (f for f in fares if f["vehicle_type"]["id"] == body.vehicle_type_id),
-        fares[0] if fares else None,
+        None,
     )
 
     if not fare_info:
-        raise HTTPException(status_code=400, detail="Invalid vehicle type")
+        logger.info(
+            "[create_ride] reject vehicle_type_id=%s — not configured for pickup service area",
+            body.vehicle_type_id,
+        )
+        raise HTTPException(status_code=400, detail="Invalid vehicle type for this service area")
 
     # Use Decimal for all monetary arithmetic (CQ-009 — eliminates float rounding errors)
     # P0-4 surge-lock: if the client sent back the estimate_token we issued

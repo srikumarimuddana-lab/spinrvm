@@ -32,6 +32,7 @@ async def enqueue_push(
     body: str,
     data: dict | None = None,
     priority: str = "normal",
+    target_app: str | None = None,
 ) -> None:
     """Write a push notification to the retry queue (best-effort).
 
@@ -49,6 +50,7 @@ async def enqueue_push(
                         "body": body,
                         "data": data or {},
                         "priority": priority,
+                        "target_app": target_app,
                     }
                 )
                 .execute()
@@ -80,7 +82,7 @@ async def _tick() -> None:
         resp = await run_sync(
             lambda: (
                 supabase.table("push_retry_queue")
-                .select("*, users!inner(fcm_token)")
+                .select("*, users!inner(fcm_token,fcm_token_rider,fcm_token_driver)")
                 .is_("sent_at", "null")
                 .lte("next_attempt_at", now_iso)
                 .lte("attempts", _MAX_ATTEMPTS - 1)
@@ -110,13 +112,23 @@ async def _process_row(row: dict) -> None:
     body: str = row["body"]
     data: dict = row.get("data") or {}
     attempts: int = row["attempts"]
+    target_app: str | None = row.get("target_app")
 
-    # The join produces a nested dict under the "users" key.
+    # The join produces a nested dict under the "users" key. Prefer the
+    # app-specific token for queued pushes so a dual-role user's driver ride
+    # offer does not get sent to their rider app token (or vice versa).
     user_data = row.get("users") or {}
-    token: str | None = user_data.get("fcm_token") if isinstance(user_data, dict) else None
+    token: str | None = None
+    if isinstance(user_data, dict):
+        if target_app == "driver":
+            token = user_data.get("fcm_token_driver") or user_data.get("fcm_token")
+        elif target_app == "rider":
+            token = user_data.get("fcm_token_rider") or user_data.get("fcm_token")
+        else:
+            token = user_data.get("fcm_token")
 
     if not token:
-        logger.info(f"push_retry: no FCM token for user {user_id!r}, dropping row {row_id}")
+        logger.info(f"push_retry: no FCM token for user {user_id!r} (target_app={target_app!r}), dropping row {row_id}")
         await _delete_row(row_id)
         return
 

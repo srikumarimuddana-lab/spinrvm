@@ -694,7 +694,7 @@ async def websocket_endpoint(
                     # Broadcast live location to all connected admin monitoring clients
                     await manager.broadcast_to_admins(location_update)
 
-            elif data.get("type") == "location_batch":
+            elif data.get("type") in ("location_batch", "driver_location_batch"):
                 # Batch upload of buffered GPS points (offline recovery).
                 # Same ownership model as single-point updates: always use
                 # the driver_id bound to this authenticated socket; ignore
@@ -748,37 +748,23 @@ async def websocket_endpoint(
                     continue
 
                 if driver_id and points:
-                    docs = []
-                    for pt in points[:500]:  # cap at 500 points per batch
-                        docs.append(
-                            {
-                                "id": str(uuid.uuid4()),
-                                "driver_id": driver_id,
-                                "ride_id": pt.get("ride_id"),
-                                "lat": pt.get("lat"),
-                                "lng": pt.get("lng"),
-                                "speed": pt.get("speed"),
-                                "heading": pt.get("heading"),
-                                "accuracy": pt.get("accuracy"),
-                                "altitude": pt.get("altitude"),
-                                "tracking_phase": pt.get("tracking_phase", "online_idle"),
-                                "timestamp": (
-                                    datetime.fromisoformat(pt["timestamp"])
-                                    if pt.get("timestamp")
-                                    else datetime.now(timezone.utc)
-                                ),
-                            }
-                        )
-                    if docs:
-                        await db_supabase.insert_many("driver_location_history", docs)
-                        last = docs[-1]
-                        if last.get("lat") is not None and last.get("lng") is not None:
-                            await manager.update_driver_location(driver_id, last["lat"], last["lng"])
-                            await db_supabase.update_driver_location(
-                                driver_id, last["lat"], last["lng"], heading=last.get("heading")
-                            )
-                            await mark_present(driver_id)
-                    await websocket.send_json({"type": "location_batch_ack", "count": len(docs)})
+                    try:
+                        from ..utils.breadcrumbs import persist_ride_breadcrumbs
+                    except ImportError:
+                        from utils.breadcrumbs import persist_ride_breadcrumbs  # type: ignore
+                    # Shared persistence with the REST path: server-derived phase
+                    # per point (from its own timestamp vs the ride milestones),
+                    # stale / other-ride discard, and the 500-point cap. Never
+                    # trusts the client's ride_id/tracking_phase.
+                    inserted = await persist_ride_breadcrumbs(driver_id, points)
+                    # Live marker from the most recent point (best-effort).
+                    last_pt = points[-1]
+                    _lat, _lng = last_pt.get("lat"), last_pt.get("lng")
+                    if _lat is not None and _lng is not None:
+                        await manager.update_driver_location(driver_id, _lat, _lng)
+                        await db_supabase.update_driver_location(driver_id, _lat, _lng, heading=last_pt.get("heading"))
+                        await mark_present(driver_id)
+                    await websocket.send_json({"type": "location_batch_ack", "count": inserted})
 
             elif data.get("type") == "ride_status_update":
                 ride_id = data.get("ride_id")

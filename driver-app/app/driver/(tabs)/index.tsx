@@ -319,6 +319,45 @@ function DriverDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rideState, _hasRidePolyline]);
 
+  // OSRM live route + ETA. Google stays the map canvas; during active phases we
+  // poll the backend's OSRM route from the driver's live position to the current
+  // destination and draw that road-matched line + live ETA, replacing the static
+  // planned polyline. Falls back to the saved polyline / existing ETA if OSRM is
+  // unreachable. Avoids per-ride Google Directions calls.
+  useEffect(() => {
+    const rid = activeRide?.ride?.id;
+    if (!rid || !['navigating_to_pickup', 'arrived_at_pickup', 'trip_in_progress'].includes(rideState)) return;
+    let cancelled = false;
+    const fetchLiveRoute = async () => {
+      try {
+        const { data } = await api.get<{
+          polyline: [number, number][];
+          eta_seconds: number | null;
+          distance_km: number | null;
+        }>(`/rides/${rid}/live-route`);
+        if (cancelled || !data) return;
+        if (Array.isArray(data.polyline) && data.polyline.length > 1) {
+          setRouteCoords(data.polyline.map((p) => ({ latitude: p[0], longitude: p[1] })));
+        }
+        if (typeof data.eta_seconds === 'number' && data.eta_seconds > 0) {
+          setRouteEtaMinutes(Math.max(1, Math.ceil(data.eta_seconds / 60)));
+        }
+        if (typeof data.distance_km === 'number' && data.distance_km > 0) {
+          setRouteDistanceKm(data.distance_km);
+        }
+      } catch {
+        // OSRM unavailable — keep the saved-polyline route + existing ETA.
+      }
+    };
+    fetchLiveRoute();
+    const id = setInterval(fetchLiveRoute, 20000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeRide?.ride?.id, rideState]);
+
   // When the app comes back to the foreground, arm a one-shot re-center
   // for the next location update. `initialRegion` above is one-shot, so
   // without this the map stays pinned to whatever fix was set before the

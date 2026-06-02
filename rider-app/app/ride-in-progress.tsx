@@ -208,6 +208,42 @@ function RideInProgressScreenContent() {
     setLastEtaMin(etaMin);
   }, [routeFetched, currentDriver?.lat, currentDriver?.lng]);
 
+  // OSRM road-matched route + ETA for the live map. Google stays the map
+  // canvas — we just draw this road-snapped line and use the routed ETA when
+  // available; the haversine effect above remains the fallback if OSRM is
+  // unreachable. Polls every 20s (the backend routes from the driver's live
+  // position to pickup pre-trip / dropoff in-trip).
+  useEffect(() => {
+    if (!rideId) return;
+    let cancelled = false;
+    const fetchLiveRoute = async () => {
+      try {
+        const { data } = await api.get<{ polyline: [number, number][]; eta_seconds: number | null }>(
+          `/rides/${rideId}/live-route`,
+        );
+        if (cancelled || !data) return;
+        if (Array.isArray(data.polyline) && data.polyline.length > 1) {
+          const coords = data.polyline.map((p) => ({ latitude: p[0], longitude: p[1] }));
+          setTripRouteCoords(coords);
+          setActiveRideRouteCoords(coords);
+        }
+        if (typeof data.eta_seconds === 'number' && data.eta_seconds > 0) {
+          const m = Math.max(1, Math.ceil(data.eta_seconds / 60));
+          setEta(m);
+          setLastEtaMin(m);
+        }
+      } catch {
+        // OSRM unavailable — keep the haversine ETA + saved polyline.
+      }
+    };
+    fetchLiveRoute();
+    const id = setInterval(fetchLiveRoute, 20000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [rideId]);
+
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       setConfirmSheet({

@@ -557,7 +557,7 @@ async def websocket_endpoint(
                 lng = data.get("lng")
                 driver_id = current_driver_id if client_type == "driver" else None
 
-                if driver_id and lat and lng:
+                if driver_id and lat is not None and lng is not None:
                     try:
                         from ..utils.location_integrity import check_location_integrity
                     except ImportError:
@@ -580,12 +580,10 @@ async def websocket_endpoint(
                     # foregrounded, not just that TCP is open.
                     await mark_present(driver_id)
 
-                    # One query covers breadcrumb tagging AND rider fan-out;
-                    # previously we hit the rides table twice per GPS ping.
-                    # `driver_accepted` is included so breadcrumbs are tagged
-                    # navigating_to_pickup during that brief state, but the
-                    # rider fan-out list stays restricted to assigned/
-                    # arrived/in_progress to match the pre-refactor behaviour.
+                    # Resolve active rides for rider fan-out. The shared
+                    # breadcrumb writer below independently derives ride_id and
+                    # phase from server milestones so single pings and buffered
+                    # batches follow the same billing/dispute rules.
                     active_rides = await db_supabase.get_rows(
                         "rides",
                         {
@@ -604,31 +602,17 @@ async def websocket_endpoint(
                     active_ride = active_rides[0] if active_rides else None
                     ride_id = active_ride["id"] if active_ride else None
 
-                    status_map = {
-                        "driver_assigned": "navigating_to_pickup",
-                        "driver_accepted": "navigating_to_pickup",
-                        "driver_arrived": "arrived_at_pickup",
-                        "in_progress": "trip_in_progress",
-                    }
-                    tracking_phase = (
-                        status_map.get(active_ride.get("status", ""), "online_idle") if active_ride else "online_idle"
-                    )
-
-                    breadcrumb = {
-                        "id": str(uuid.uuid4()),
-                        "driver_id": driver_id,
-                        "ride_id": ride_id,
-                        "lat": lat,
-                        "lng": lng,
-                        "speed": data.get("speed"),
-                        "heading": data.get("heading"),
-                        "accuracy": data.get("accuracy"),
-                        "altitude": data.get("altitude"),
-                        "tracking_phase": tracking_phase,
-                        "timestamp": datetime.now(timezone.utc),
-                    }
-
-                    await db_supabase.insert_one("driver_location_history", breadcrumb)
+                    # Persist through the shared breadcrumb path even for a single
+                    # live ping. That path stores the device capture timestamp
+                    # when supplied (captured_at/device_timestamp/recorded_at/
+                    # timestamp), records received_at separately, and derives
+                    # ride phase from server ride milestones instead of trusting
+                    # the client's current message timing or phase tag.
+                    try:
+                        from ..utils.breadcrumbs import persist_ride_breadcrumbs
+                    except ImportError:
+                        from utils.breadcrumbs import persist_ride_breadcrumbs  # type: ignore
+                    await persist_ride_breadcrumbs(driver_id, [data], persist_idle=True)
 
                     # Refresh the Maps API key from DB at most every 60 s.
                     now_mono = asyncio.get_event_loop().time()

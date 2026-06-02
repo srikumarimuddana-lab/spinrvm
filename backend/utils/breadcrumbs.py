@@ -101,24 +101,32 @@ def _coord(point: Dict[str, Any], *keys: str) -> Optional[float]:
     return None
 
 
-async def persist_ride_breadcrumbs(driver_id: str, points: List[Dict[str, Any]]) -> int:
-    """Persist a batch of GPS points as ``driver_location_history`` breadcrumbs.
+async def persist_ride_breadcrumbs(
+    driver_id: str,
+    points: List[Dict[str, Any]],
+    *,
+    persist_idle: bool = False,
+) -> int:
+    """Persist GPS points as ``driver_location_history`` breadcrumbs.
 
-    Only writes when the driver currently has an active ride. ride_id + phase
-    are derived/validated server-side per point (see module docstring): stale
-    or other-ride points are discarded, phase comes from each point's own
-    capture timestamp, and the batch is capped at ``MAX_BREADCRUMB_BATCH``.
-    Returns the number of breadcrumbs inserted.
+    When the driver has an active ride, ride_id + phase are derived/validated
+    server-side per point (see module docstring): stale or other-ride points
+    are discarded, phase comes from each point's own capture timestamp, and
+    the batch is capped at ``MAX_BREADCRUMB_BATCH``. Single live WebSocket
+    pings can pass ``persist_idle=True`` to keep the historical online-idle
+    breadcrumb behavior when no active ride exists. Returns inserted rows.
     """
     ride = await resolve_active_ride(driver_id)
-    if not ride:
-        return 0
 
-    ride_id = ride.get("id")
-    current_phase = RIDE_STATUS_TO_PHASE.get(ride.get("status", ""), "online_idle")
+    ride_id = ride.get("id") if ride else None
+    current_phase = RIDE_STATUS_TO_PHASE.get(ride.get("status", ""), "online_idle") if ride else "online_idle"
     # Points captured before the ride was assigned to this driver are stale
     # (previous ride / idle) and must not attach to this trip.
-    window_start = parse_iso_utc(ride.get("driver_accepted_at")) or parse_iso_utc(ride.get("created_at"))
+    window_start = (
+        parse_iso_utc(ride.get("driver_accepted_at")) or parse_iso_utc(ride.get("created_at")) if ride else None
+    )
+    if not ride and not persist_idle:
+        return 0
 
     # Cap before building rows — keep the most recent points if over the bound.
     if len(points) > MAX_BREADCRUMB_BATCH:
@@ -145,9 +153,15 @@ async def persist_ride_breadcrumbs(driver_id: str, points: List[Dict[str, Any]])
         point_ride = p.get("ride_id")
         if point_ride and point_ride != ride_id:
             continue
-        ts = parse_iso_utc(p.get("timestamp"))
+        captured_at = parse_iso_utc(
+            p.get("captured_at")
+            or p.get("device_timestamp")
+            or p.get("recorded_at")
+            or p.get("timestamp")
+        )
+        received_at = datetime.now(timezone.utc)
         # Discard points captured before this ride's window (pre-ride / stale).
-        if ts is not None and window_start is not None and ts < window_start:
+        if captured_at is not None and window_start is not None and captured_at < window_start:
             continue
         rows.append(
             {
@@ -161,8 +175,9 @@ async def persist_ride_breadcrumbs(driver_id: str, points: List[Dict[str, Any]])
                 "accuracy": p.get("accuracy"),
                 "altitude": p.get("altitude"),
                 # Server-authoritative phase from the point's own capture time.
-                "tracking_phase": _phase_for_timestamp(ride, ts, current_phase),
-                "timestamp": ts or datetime.now(timezone.utc),
+                "tracking_phase": _phase_for_timestamp(ride, captured_at, current_phase) if ride else "online_idle",
+                "timestamp": captured_at or received_at,
+                "received_at": received_at,
             }
         )
 

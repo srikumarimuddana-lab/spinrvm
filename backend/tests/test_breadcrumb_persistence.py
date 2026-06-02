@@ -188,3 +188,20 @@ async def test_batch_capped_to_max():
         n = await persist_ride_breadcrumbs("drv_1", pts)
     assert n == MAX_BREADCRUMB_BATCH, "REST batch must be bounded"
     assert len(cap["docs"]) == MAX_BREADCRUMB_BATCH
+
+
+@pytest.mark.asyncio
+async def test_non_list_and_non_dict_points_are_ignored():
+    insert = AsyncMock()
+
+    async def _get_rows(table, query, **kw):
+        return [_ride()]
+
+    with (
+        patch("backend.utils.breadcrumbs.db_supabase.get_rows", _get_rows),
+        patch("backend.utils.breadcrumbs.db_supabase.insert_many", insert),
+    ):
+        assert await persist_ride_breadcrumbs("drv_1", "not-a-list") == 0
+        assert await persist_ride_breadcrumbs("drv_1", ["not-a-dict"]) == 0
+
+    insert.assert_not_called()

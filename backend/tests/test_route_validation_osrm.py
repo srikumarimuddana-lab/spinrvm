@@ -51,3 +51,12 @@ async def test_validate_trip_route_prefers_osrm_match():
     assert result["snapped_points"] == 3
     assert result["match_confidence"] == 0.92
     assert result["verdict"] == "suspicious"
+
+
+def test_downsample_preserves_latest_point():
+    points = [{"i": i} for i in range(250)]
+
+    sampled = rv._downsample(points, 100)
+
+    assert len(sampled) == 100
+    assert sampled[-1] == points[-1]

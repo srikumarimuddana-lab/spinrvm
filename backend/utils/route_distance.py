@@ -253,22 +253,32 @@ async def compute_road_route(breadcrumbs: list[dict]) -> Optional[dict]:
     app_settings = await get_app_settings() or {}
 
     match: Optional[RoadMatch] = None
+    provider: Optional[str] = None
     # OSRM first when configured. DB override (rotatable via admin) wins over env.
     osrm_url = (app_settings.get("osrm_url") or settings.OSRM_URL or "").strip()
     if osrm_url:
         match = await _compute_via_osrm(trip_points, osrm_url)
-        if match is None:
+        if match is not None:
+            provider = "osrm_match"
+        else:
             logger.info("[route_distance] OSRM produced no value; trying Google Roads fallback")
 
     if match is None:
         api_key = (app_settings.get("google_maps_api_key") or "").strip()
         if api_key:
             match = await _compute_via_google_roads(trip_points, api_key)
+            if match is not None:
+                provider = "google_roads"
 
     if match is None:
         return None
     distance_km, polyline = match
-    return {"distance_km": distance_km, "polyline": polyline}
+    return {
+        "distance_km": distance_km,
+        "polyline": polyline,
+        "provider": provider or "unknown",
+        "input_points_count": len(trip_points),
+    }
 
 
 async def compute_road_distance_km(breadcrumbs: list[dict]) -> Optional[float]:

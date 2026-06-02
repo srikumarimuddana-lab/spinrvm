@@ -291,7 +291,7 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
         return await run_sync(
             lambda rid=ride_id: _rows_from_res(
                 supabase.table("driver_location_history")
-                .select("lat,lng,speed,heading,tracking_phase,timestamp")
+                .select("lat,lng,speed,heading,accuracy,altitude,tracking_phase,timestamp,received_at")
                 .eq("ride_id", rid)
                 .order("timestamp")
                 .limit(5000)
@@ -433,9 +433,11 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
     route = await run_sync(_get_route)
     if route:
         ride["road_polyline"] = route.get("road_polyline") or []
-        for _k in ("phase_polylines", "phase_distances", "phase_durations"):
+        for _k in ("phase_polylines", "phase_distances", "phase_durations", "route_quality"):
             if route.get(_k):
                 ride[_k] = route[_k]
+        ride["route_geometry_status"] = route.get("save_status") or ride.get("route_geometry_status")
+        ride["route_geometry_error"] = route.get("save_error") or ride.get("route_geometry_error")
 
     return ride
 
@@ -519,7 +521,7 @@ async def get_ride_location_trail(ride_id: str) -> List[Dict[str, Any]]:
     return await run_sync(
         lambda: _rows_from_res(
             supabase.table("driver_location_history")
-            .select("lat,lng,speed,heading,tracking_phase,timestamp")
+            .select("lat,lng,speed,heading,accuracy,altitude,tracking_phase,timestamp,received_at")
             .eq("ride_id", ride_id)
             .order("timestamp")
             .limit(5000)

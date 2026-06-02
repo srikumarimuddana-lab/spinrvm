@@ -1637,7 +1637,7 @@ async def get_drivers(
     """
     Get all drivers (admin only) or nearby drivers (if lat/lng provided).
     """
-    if lat and lng:
+    if lat is not None and lng is not None:
         # Should rely on RPC or geospatial query
         # For now, simplistic implementation as seen in other parts
         drivers = await db_supabase.get_rows("drivers", {"is_online": True}, limit=100)
@@ -1680,11 +1680,11 @@ async def update_location_batch(batch: Union[List[dict], dict], current_user: di
         return {"success": True}
 
     latest = points[-1]
-    lat = latest.get("latitude") or latest.get("lat")
-    lng = latest.get("longitude") or latest.get("lng")
+    lat = latest.get("latitude") if latest.get("latitude") is not None else latest.get("lat")
+    lng = latest.get("longitude") if latest.get("longitude") is not None else latest.get("lng")
     heading = latest.get("heading")
 
-    if lat and lng:
+    if lat is not None and lng is not None:
         # GPS spoofing check
         driver_rows = await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
         driver_id = driver_rows[0]["id"] if driver_rows else current_user["id"]
@@ -3369,6 +3369,13 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     route_polyline = []
     road_polyline: list = []
     gps_points_count = 0
+    trip_points_count = 0
+    rejected_segments = 0
+    max_segment_gap_s = 0
+    road_distance_provider = "haversine_filtered"
+    route_quality: Dict[str, Any] = {"confidence": "low", "reason": "no_gps_breadcrumbs"}
+    route_geometry_status = "pending"
+    route_geometry_error: Optional[str] = None
 
     try:
         # Page through ALL breadcrumbs for the ride (time-ordered). The old
@@ -3399,7 +3406,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             logger.warning(
                 f"GPS breadcrumbs hit ceiling {_MAX_BREADCRUMBS} for ride {ride_id}; tail beyond this is not summed"
             )
-        all_breadcrumbs = [b for b in all_breadcrumbs if b.get("lat") and b.get("lng")]
+        all_breadcrumbs = [b for b in all_breadcrumbs if b.get("lat") is not None and b.get("lng") is not None]
         all_breadcrumbs.sort(key=lambda b: str(b.get("timestamp", "")))
         gps_points_count = len(all_breadcrumbs)
 
@@ -3426,6 +3433,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             MAX_SEG_KMH = 150.0
             MAX_SEG_GAP_S = 300
             rejected_segments = 0
+            max_segment_gap_s = 0
             phase_totals: Dict[str, float] = {}
             phase_secs: Dict[str, float] = {}
             for i in range(1, len(all_breadcrumbs)):
@@ -3439,6 +3447,8 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                 delta = None
                 if t_prev and t_curr:
                     delta = (t_curr - t_prev).total_seconds()
+                    if delta is not None and delta > max_segment_gap_s:
+                        max_segment_gap_s = int(round(delta))
 
                 # Reject anomalous segments before adding to phase totals.
                 if seg_km > MAX_SEG_KM:
@@ -3524,6 +3534,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                 hi = max(0.1, actual_distance_km_haversine * 3.0)
                 if lo <= actual_distance_km_road <= hi:
                     actual_distance_km = round(actual_distance_km_road, 2)
+                    road_distance_provider = str(road_result.get("provider") or "road_snapped")
                     # Trusted match → persist the road-snapped geometry (saved to
                     # ride_routes below) for SGI / dispute map review.
                     road_polyline = road_result.get("polyline") or []
@@ -3576,28 +3587,83 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                     for p in sampled
                 ]
 
+            rejected_ratio = rejected_segments / max(1, len(all_breadcrumbs) - 1)
+            if trip_points_count >= 20 and rejected_ratio <= 0.1 and max_segment_gap_s <= 120:
+                confidence = "high"
+            elif trip_points_count >= 5 and rejected_ratio <= 0.25 and max_segment_gap_s <= 300:
+                confidence = "medium"
+            else:
+                confidence = "low"
+            route_quality = {
+                "confidence": confidence,
+                "gps_points_count": gps_points_count,
+                "trip_points_count": trip_points_count,
+                "rejected_segments": rejected_segments,
+                "rejected_segment_ratio": round(rejected_ratio, 3),
+                "max_segment_gap_seconds": max_segment_gap_s,
+                "distance_provider": road_distance_provider,
+                "actual_distance_km_haversine": (
+                    round(float(actual_distance_km_haversine), 3) if actual_distance_km_haversine is not None else None
+                ),
+                "actual_distance_km_road_snapped": (
+                    round(float(actual_distance_km_road), 3) if actual_distance_km_road is not None else None
+                ),
+                "road_snap_accepted": bool(road_polyline),
+            }
+
     except Exception as e:
         logger.error(f"Could not aggregate GPS data for ride {ride_id}: {e}", exc_info=True)
 
     # Persist the heavy route geometry to the ride_routes side-table (1:1),
     # keeping it OFF the hot rides row — written once here, read on-demand by the
     # admin map modal. Best-effort: a settlement must not fail on the side write.
-    try:
-        await db_supabase.update_one(
-            "ride_routes",
-            {"ride_id": ride_id},
-            {
-                "phase_distances": phase_distances,
-                "phase_durations": phase_durations,
-                "phase_polylines": phase_polylines,
-                "road_polyline": road_polyline,
-                "gps_points_count": gps_points_count,
-                "computed_at": datetime.now(timezone.utc),
-            },
-            upsert=True,
-        )
-    except Exception:
-        logger.error(f"Could not persist ride_routes for ride {ride_id}", exc_info=True)
+    route_payload = {
+        "phase_distances": phase_distances,
+        "phase_durations": phase_durations,
+        "phase_polylines": phase_polylines,
+        "road_polyline": road_polyline,
+        "gps_points_count": gps_points_count,
+        "route_quality": route_quality,
+        "save_status": "saved",
+        "save_error": None,
+        "computed_at": datetime.now(timezone.utc),
+    }
+    for attempt in range(1, 4):
+        try:
+            await db_supabase.update_one(
+                "ride_routes",
+                {"ride_id": ride_id},
+                route_payload,
+                upsert=True,
+            )
+            route_geometry_status = "saved"
+            route_geometry_error = None
+            break
+        except Exception as exc:
+            route_geometry_error = str(exc)[:500]
+            route_geometry_status = "failed"
+            logger.error(
+                "Could not persist ride_routes for ride %s (attempt %s/3): %s",
+                ride_id,
+                attempt,
+                route_geometry_error,
+                exc_info=True,
+            )
+            if attempt < 3:
+                await asyncio.sleep(0.2 * attempt)
+    if route_geometry_status != "saved":
+        try:
+            await db_supabase.update_one(
+                "rides",
+                {"id": ride_id},
+                {
+                    "route_geometry_status": route_geometry_status,
+                    "route_geometry_error": route_geometry_error,
+                    "route_quality": route_quality,
+                },
+            )
+        except Exception:
+            logger.error("Could not record ride_routes persistence failure for ride %s", ride_id, exc_info=True)
 
     # ── Build update payload ──
     # P0-5: do NOT write payment_status here. The driver completing the
@@ -3618,6 +3684,12 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         "phase_distances": phase_distances,
         "phase_durations": phase_durations,
         "gps_points_count": gps_points_count,
+        "route_quality": route_quality,
+        "route_geometry_status": route_geometry_status,
+        # Clear any previous failed-save message when a retry/re-completion saves
+        # ride_routes successfully; otherwise admin list/detail can show a stale
+        # error while the status is now "saved".
+        "route_geometry_error": route_geometry_error,
     }
 
     # Check fare lock setting — when enabled, rider pays the booking-time

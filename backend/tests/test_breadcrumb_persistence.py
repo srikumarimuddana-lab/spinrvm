@@ -74,6 +74,7 @@ async def test_persists_all_points_with_trip_phase():
     # ts >= ride_started_at → trip_in_progress, derived server-side
     assert all(d["tracking_phase"] == "trip_in_progress" for d in docs)
     assert all(isinstance(d["timestamp"], datetime) for d in docs)
+    assert all(isinstance(d["received_at"], datetime) for d in docs)
 
 
 @pytest.mark.asyncio
@@ -90,6 +91,35 @@ async def test_no_active_ride_persists_nothing():
         n = await persist_ride_breadcrumbs("drv_1", [_pt(50.45, -104.62, "2026-06-01T23:06:17Z")])
     assert n == 0
     insert.assert_not_called()
+
+
+
+
+@pytest.mark.asyncio
+async def test_no_active_ride_can_persist_idle_for_live_ws_ping():
+    cap = {}
+
+    async def _get_rows(table, query, **kw):
+        return []
+
+    async def _insert_many(table, docs):
+        cap["table"] = table
+        cap["docs"] = docs
+        return docs
+
+    with (
+        patch("backend.utils.breadcrumbs.db_supabase.get_rows", _get_rows),
+        patch("backend.utils.breadcrumbs.db_supabase.insert_many", _insert_many),
+    ):
+        n = await persist_ride_breadcrumbs(
+            "drv_1",
+            [_pt(50.45, -104.62, "2026-06-01T23:06:17Z")],
+            persist_idle=True,
+        )
+
+    assert n == 1
+    assert cap["docs"][0]["ride_id"] is None
+    assert cap["docs"][0]["tracking_phase"] == "online_idle"
 
 
 @pytest.mark.asyncio
@@ -158,3 +188,76 @@ async def test_batch_capped_to_max():
         n = await persist_ride_breadcrumbs("drv_1", pts)
     assert n == MAX_BREADCRUMB_BATCH, "REST batch must be bounded"
     assert len(cap["docs"]) == MAX_BREADCRUMB_BATCH
+
+
+@pytest.mark.asyncio
+async def test_non_list_and_non_dict_points_are_ignored():
+    insert = AsyncMock()
+
+    async def _get_rows(table, query, **kw):
+        return [_ride()]
+
+    with (
+        patch("backend.utils.breadcrumbs.db_supabase.get_rows", _get_rows),
+        patch("backend.utils.breadcrumbs.db_supabase.insert_many", insert),
+    ):
+        assert await persist_ride_breadcrumbs("drv_1", "not-a-list") == 0
+        assert await persist_ride_breadcrumbs("drv_1", ["not-a-dict"]) == 0
+
+    insert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_active_ride_can_be_reused_without_lookup():
+    cap = {}
+    get_rows = AsyncMock(return_value=[_ride(id="wrong_ride")])
+
+    async def _insert_many(table, docs):
+        cap["docs"] = docs
+        return docs
+
+    with (
+        patch("backend.utils.breadcrumbs.db_supabase.get_rows", get_rows),
+        patch("backend.utils.breadcrumbs.db_supabase.insert_many", _insert_many),
+    ):
+        n = await persist_ride_breadcrumbs(
+            "drv_1",
+            [_pt(50.45, -104.62, "2026-06-01T23:06:17Z")],
+            active_ride=_ride(id="already_loaded"),
+        )
+
+    assert n == 1
+    get_rows.assert_not_called()
+    assert cap["docs"][0]["ride_id"] == "already_loaded"
+
+
+@pytest.mark.asyncio
+async def test_future_capture_time_is_clamped_to_received_at():
+    cap = {}
+    g, i = _patches([_ride()], cap)
+    with g, i:
+        n = await persist_ride_breadcrumbs(
+            "drv_1",
+            [_pt(50.45, -104.62, "2099-01-01T00:00:00Z")],
+        )
+
+    assert n == 1
+    assert cap["docs"][0]["timestamp"] == cap["docs"][0]["received_at"]
+
+
+@pytest.mark.asyncio
+async def test_invalid_coordinate_ranges_and_no_fix_are_skipped():
+    cap = {}
+    g, i = _patches([_ride()], cap)
+    with g, i:
+        n = await persist_ride_breadcrumbs(
+            "drv_1",
+            [
+                _pt(0, 0, "2026-06-01T23:06:00Z"),
+                _pt(91, -104.62, "2026-06-01T23:06:10Z"),
+                _pt(50.45, -104.62, "2026-06-01T23:06:20Z"),
+            ],
+        )
+
+    assert n == 1
+    assert cap["docs"][0]["lat"] == 50.45

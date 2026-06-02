@@ -1,10 +1,14 @@
 import asyncio
+import math
 import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from firebase_admin import auth as firebase_auth
 from loguru import logger
+
+from backend.utils.breadcrumbs import persist_ride_breadcrumbs
+from backend.utils.location_integrity import check_location_integrity
 
 try:
     from .. import db_supabase
@@ -61,6 +65,20 @@ _ETA_PICKUP_STATUSES = {"driver_assigned", "driver_accepted", "driver_arrived"}
 # Let's use a router.
 
 router = APIRouter()
+
+
+def _parse_live_coordinate(value):
+    if value is None or value == "":
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _valid_live_coordinates(lat: float, lng: float) -> bool:
+    return -90 <= lat <= 90 and -180 <= lng <= 180 and not (lat == 0 and lng == 0)
 
 # GAP FIX: Heartbeat constants — tightened from 30s to 10s to match
 # Uber's ~4s/7s cadence more closely. A 30s ping meant a dead connection
@@ -553,15 +571,11 @@ async def websocket_endpoint(
                 # we deliberately ignore any driver_id the client sent to
                 # prevent a compromised token from spoofing locations for
                 # another driver.
-                lat = data.get("lat")
-                lng = data.get("lng")
+                lat = _parse_live_coordinate(data.get("lat"))
+                lng = _parse_live_coordinate(data.get("lng"))
                 driver_id = current_driver_id if client_type == "driver" else None
 
-                if driver_id and lat and lng:
-                    try:
-                        from ..utils.location_integrity import check_location_integrity
-                    except ImportError:
-                        from utils.location_integrity import check_location_integrity  # type: ignore
+                if driver_id and lat is not None and lng is not None and _valid_live_coordinates(lat, lng):
                     trusted, reason = await check_location_integrity(
                         driver_id,
                         lat,
@@ -580,12 +594,10 @@ async def websocket_endpoint(
                     # foregrounded, not just that TCP is open.
                     await mark_present(driver_id)
 
-                    # One query covers breadcrumb tagging AND rider fan-out;
-                    # previously we hit the rides table twice per GPS ping.
-                    # `driver_accepted` is included so breadcrumbs are tagged
-                    # navigating_to_pickup during that brief state, but the
-                    # rider fan-out list stays restricted to assigned/
-                    # arrived/in_progress to match the pre-refactor behaviour.
+                    # Resolve active rides for rider fan-out. The shared
+                    # breadcrumb writer below independently derives ride_id and
+                    # phase from server milestones so single pings and buffered
+                    # batches follow the same billing/dispute rules.
                     active_rides = await db_supabase.get_rows(
                         "rides",
                         {
@@ -604,31 +616,13 @@ async def websocket_endpoint(
                     active_ride = active_rides[0] if active_rides else None
                     ride_id = active_ride["id"] if active_ride else None
 
-                    status_map = {
-                        "driver_assigned": "navigating_to_pickup",
-                        "driver_accepted": "navigating_to_pickup",
-                        "driver_arrived": "arrived_at_pickup",
-                        "in_progress": "trip_in_progress",
-                    }
-                    tracking_phase = (
-                        status_map.get(active_ride.get("status", ""), "online_idle") if active_ride else "online_idle"
-                    )
-
-                    breadcrumb = {
-                        "id": str(uuid.uuid4()),
-                        "driver_id": driver_id,
-                        "ride_id": ride_id,
-                        "lat": lat,
-                        "lng": lng,
-                        "speed": data.get("speed"),
-                        "heading": data.get("heading"),
-                        "accuracy": data.get("accuracy"),
-                        "altitude": data.get("altitude"),
-                        "tracking_phase": tracking_phase,
-                        "timestamp": datetime.now(timezone.utc),
-                    }
-
-                    await db_supabase.insert_one("driver_location_history", breadcrumb)
+                    # Persist through the shared breadcrumb path even for a single
+                    # live ping. That path stores the device capture timestamp
+                    # when supplied (captured_at/device_timestamp/recorded_at/
+                    # timestamp), records received_at separately, and derives
+                    # ride phase from server ride milestones instead of trusting
+                    # the client's current message timing or phase tag.
+                    await persist_ride_breadcrumbs(driver_id, [data], persist_idle=True, active_ride=active_ride)
 
                     # Refresh the Maps API key from DB at most every 60 s.
                     now_mono = asyncio.get_event_loop().time()
@@ -701,6 +695,9 @@ async def websocket_endpoint(
                 # any client-supplied value.
                 points = data.get("points", [])
                 driver_id = current_driver_id if client_type == "driver" else None
+                if not isinstance(points, list):
+                    await websocket.send_json({"type": "location_batch_ack", "count": 0})
+                    continue
 
                 # Per-USER sliding-window rate limit on total batch points to
                 # prevent a single user from flooding driver_location_history
@@ -747,23 +744,38 @@ async def websocket_endpoint(
                     )
                     continue
 
-                if driver_id and points:
-                    try:
-                        from ..utils.breadcrumbs import persist_ride_breadcrumbs
-                    except ImportError:
-                        from utils.breadcrumbs import persist_ride_breadcrumbs  # type: ignore
+                if driver_id and isinstance(points, list) and points:
+                    dict_points = [p for p in points if isinstance(p, dict)]
+                    if not dict_points:
+                        await websocket.send_json({"type": "location_batch_ack", "count": 0})
+                        continue
                     # Shared persistence with the REST path: server-derived phase
                     # per point (from its own timestamp vs the ride milestones),
                     # stale / other-ride discard, and the 500-point cap. Never
                     # trusts the client's ride_id/tracking_phase.
-                    inserted = await persist_ride_breadcrumbs(driver_id, points)
-                    # Live marker from the most recent point (best-effort).
-                    last_pt = points[-1]
-                    _lat, _lng = last_pt.get("lat"), last_pt.get("lng")
-                    if _lat is not None and _lng is not None:
-                        await manager.update_driver_location(driver_id, _lat, _lng)
-                        await db_supabase.update_driver_location(driver_id, _lat, _lng, heading=last_pt.get("heading"))
-                        await mark_present(driver_id)
+                    inserted = await persist_ride_breadcrumbs(driver_id, dict_points)
+                    # Live marker from the most recent point (best-effort). Accept
+                    # both compact lat/lng and REST-style latitude/longitude keys.
+                    last_pt = dict_points[-1]
+                    _lat = _parse_live_coordinate(
+                        last_pt.get("latitude") if last_pt.get("latitude") is not None else last_pt.get("lat")
+                    )
+                    _lng = _parse_live_coordinate(
+                        last_pt.get("longitude") if last_pt.get("longitude") is not None else last_pt.get("lng")
+                    )
+                    if _lat is not None and _lng is not None and _valid_live_coordinates(_lat, _lng):
+                        trusted, _reason = await check_location_integrity(
+                            driver_id,
+                            _lat,
+                            _lng,
+                            speed=last_pt.get("speed"),
+                            accuracy=last_pt.get("accuracy"),
+                            mocked=last_pt.get("mocked"),
+                        )
+                        if trusted:
+                            await manager.update_driver_location(driver_id, _lat, _lng)
+                            await db_supabase.update_driver_location(driver_id, _lat, _lng, heading=last_pt.get("heading"))
+                            await mark_present(driver_id)
                     await websocket.send_json({"type": "location_batch_ack", "count": inserted})
 
             elif data.get("type") == "ride_status_update":

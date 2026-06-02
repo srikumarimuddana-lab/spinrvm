@@ -64,7 +64,7 @@ cloudinary>=1.44.1
 
 # Data processing
 pandas>=3.0.2
-numpy>=2.4.4
+numpy>=2.4.6
 
 # Payments
 stripe>=15.0.1

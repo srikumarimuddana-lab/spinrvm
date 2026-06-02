@@ -18,9 +18,27 @@ const BACKEND_URL =
   process.env.NEXT_PUBLIC_API_URL ||
   "http://127.0.0.1:8000";
 
-// Content-Security-Policy is set dynamically per-request in src/middleware.ts
-// so a per-request nonce can be embedded. A static CSP here would clobber the
-// nonce-bearing header and ship unsafe-inline + unsafe-eval in production.
+// Content-Security-Policy for the admin dashboard is set dynamically
+// per-request in src/middleware.ts so a per-request nonce can be embedded.
+// The public /track/* pages are excluded from middleware and get their own
+// static CSP here — no nonce needed since they carry no privileged JS.
+const TRACK_CSP = [
+  "default-src 'self'",
+  // MapLibre GL v5 needs blob: for its tile-processing Web Worker.
+  // Chrome requires this even when the blob is created in the same origin.
+  "worker-src blob: 'self'",
+  // Next.js hydration scripts are inline; unsafe-inline is acceptable for
+  // a public, low-privilege page that holds no admin state.
+  "script-src 'self' 'unsafe-inline' https:",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: https:",
+  // Glyphs and fonts fetched by MapLibre style may come from third-party CDNs.
+  "font-src 'self' data: https:",
+  // Tile and routing requests go to openfreemap.org, protomaps, osrm, etc.
+  "connect-src 'self' https: wss: ws:",
+  "frame-ancestors 'none'",
+].join("; ");
+
 const securityHeaders = [
   { key: "X-Frame-Options", value: "DENY" },
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -46,6 +64,16 @@ const nextConfig: NextConfig = {
       {
         source: "/(.*)",
         headers: securityHeaders,
+      },
+      // Public tracking page: static CSP with worker-src blob: so MapLibre's
+      // tile-processing Web Worker is allowed. This overrides the generic
+      // rule above for /track/* and is guaranteed to be applied by Vercel
+      // regardless of middleware behaviour.
+      {
+        source: "/track/:path*",
+        headers: [
+          { key: "Content-Security-Policy", value: TRACK_CSP },
+        ],
       },
     ];
   },

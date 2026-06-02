@@ -10,8 +10,9 @@
  * The surface `component` is registered by the fork's MapTemplate
  * (`AppRegistry.registerComponent(this.id, …)`) and rendered onto the car
  * surface; it reads the SAME `useDriverStore` the phone uses (single source of
- * truth). Android-only and fully guarded — a no-op on iOS / Expo Go / missing
- * native module.
+ * truth). Cross-platform — Android Auto (separate AppRegistry root) and CarPlay
+ * (phone JS context, driven from app/_layout.tsx). Fully guarded: a no-op on
+ * Expo Go / web / missing native module.
  *
  * UNPROVEN ON HARDWARE: like the rest of car/, this is validated at the JS level
  * only. The map button icons and on-surface render must still be confirmed on an
@@ -20,11 +21,23 @@
 import React from 'react';
 import { Linking, Platform, StyleSheet, View } from 'react-native';
 import { useDriverStore } from '../store/driverStore';
-import { buildHandoffUrl, selectCarRoute, type NavProvider } from './carRoute';
+import {
+  buildHandoffUrl,
+  navButtonsForPlatform,
+  providerForButton,
+  selectCarRoute,
+  type NavProvider,
+} from './carRoute';
 
 const NAV_TEMPLATE_ID = 'spinr-car-nav';
 const IDLE_TEMPLATE_ID = 'spinr-car-idle';
 const SPINR_RED = '#ee2b2b';
+
+// Placeholder glyph for the map-button icons (CarPlay/Android Auto map buttons
+// are always icons). Reuses a bundled asset so the buttons render + are tappable
+// in the emulator; swap for proper nav/Waze glyphs before release.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const NAV_ICON = require('../assets/images/car_marker.png');
 
 const log = (...args: unknown[]) => {
   if (__DEV__) console.log('[car-nav]', ...args);
@@ -84,6 +97,7 @@ export function handoffToNav(provider: NavProvider): void {
     return;
   }
   const url = buildHandoffUrl(provider, route.destination);
+  log('hand-off →', provider, url); // visible in Metro when testing on a head unit
   Linking.openURL(url).catch((e) => log('hand-off openURL failed:', e));
 }
 
@@ -92,14 +106,16 @@ type MapCtor = new (cfg: Record<string, unknown>) => object;
 type ListCtor = new (cfg: Record<string, unknown>) => object;
 
 export function buildNavMapTemplate(MapTemplateCtor: MapCtor): object {
+  // Per-platform nav apps: CarPlay → Apple Maps + Waze, Android Auto → Google +
+  // Waze. Interaction is via template map buttons (driver-distraction model),
+  // not in-surface touches; each hands off to the chosen nav app.
+  const buttons = navButtonsForPlatform(Platform.OS);
   return new MapTemplateCtor({
     id: NAV_TEMPLATE_ID,
     component: CarMapSurface,
-    // Android Auto interaction is via template buttons (driver-distraction
-    // model), not in-surface touchables. Each hands off to a nav app.
-    mapButtons: [{ id: 'nav-google' }, { id: 'nav-waze' }],
+    mapButtons: buttons.map((b) => ({ id: b.id, image: NAV_ICON })),
     onMapButtonPressed: (e: { id: string }) => {
-      handoffToNav(e.id === 'nav-waze' ? 'waze' : 'google');
+      handoffToNav(providerForButton(Platform.OS, e.id));
     },
   });
 }
@@ -115,8 +131,11 @@ export function buildIdleTemplate(ListTemplateCtor: ListCtor): object {
 }
 
 // ── Wire it up: drive the car root from the ride state machine ──
+// Runs on both car platforms: Android Auto calls this from its AppRegistry root
+// (car/androidAutoEntry.tsx); CarPlay calls it from app/_layout.tsx (shared JS
+// context). The fork's CarPlay singleton abstracts the platform difference.
 export function initCarNav(): () => void {
-  if (Platform.OS !== 'android') return noop;
+  if (Platform.OS !== 'android' && Platform.OS !== 'ios') return noop;
 
   let carplay: typeof import('@g4rb4g3/react-native-carplay');
   try {

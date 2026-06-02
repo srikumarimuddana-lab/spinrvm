@@ -139,6 +139,25 @@ function withCarPlaySceneManifest(config) {
   });
 }
 
+// Without declaring these in LSApplicationQueriesSchemes, iOS makes
+// Linking.canOpenURL() return false for them AND blocks the deep link — so the
+// CarPlay map could never detect or hand off to Google Maps / Waze. Apple Maps
+// (`maps://`) needs no declaration. Gated with the rest of the CarPlay wiring.
+const IOS_NAV_QUERY_SCHEMES = ['comgooglemaps', 'waze'];
+
+function withCarPlayQuerySchemes(config) {
+  return withInfoPlist(config, (cfg) => {
+    const plist = cfg.modResults;
+    const existing = Array.isArray(plist.LSApplicationQueriesSchemes)
+      ? plist.LSApplicationQueriesSchemes
+      : [];
+    const merged = new Set(existing);
+    for (const scheme of IOS_NAV_QUERY_SCHEMES) merged.add(scheme);
+    plist.LSApplicationQueriesSchemes = Array.from(merged);
+    return cfg;
+  });
+}
+
 function withCarSceneDelegateFile(config) {
   return withDangerousMod(config, [
     'ios',
@@ -197,6 +216,7 @@ const withCarIntegration = (config) => {
   if (ENABLE_IOS_CARPLAY) {
     config = withCarPlayEntitlement(config);
     config = withCarPlaySceneManifest(config);
+    config = withCarPlayQuerySchemes(config);
     config = withCarSceneDelegateFile(config);
     config = withCarSceneDelegateInXcode(config);
   }

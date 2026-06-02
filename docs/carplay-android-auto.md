@@ -73,8 +73,11 @@ turn-by-turn to the driver's own Google Maps / Waze.
 The same route-map layer now runs on CarPlay (shares ~all of `carRoute.ts` + `carNav.tsx`):
 - `initCarNav()` runs on iOS as well as Android; CarPlay is driven from `app/_layout.tsx`
   (shared phone JS context), Android Auto from its AppRegistry root. No double-init.
-- Hand-off is platform-aware: CarPlay offers **Apple Maps** (`maps://`, CarPlay-native) +
-  **Waze**; Android Auto offers Google + Waze. Map buttons use a bundled placeholder glyph.
+- Hand-off is platform-aware AND install-aware: Android Auto offers Google + Waze; CarPlay
+  always offers **Apple Maps** (`maps://`, CarPlay-native) and adds **Google Maps**
+  (`comgooglemaps://`, which supports CarPlay) and **Waze** (`waze://`) only when
+  `canOpenURL` confirms the driver has them — so no dead buttons. Requires the schemes in
+  `LSApplicationQueriesSchemes` (added by the plugin, gated). Map buttons use a placeholder glyph.
 - Entitlement switched to **`com.apple.developer.carplay-maps`** (navigation) — REQUIRED for
   the windowed `CPMapTemplate`; `driving-task` is windowless and can't show the map.
   Still gated behind `SPINR_CARPLAY_IOS=1` (OFF by default).

@@ -23,9 +23,11 @@ import { Linking, Platform, StyleSheet, View } from 'react-native';
 import { useDriverStore } from '../store/driverStore';
 import {
   buildHandoffUrl,
-  navButtonsForPlatform,
+  defaultNavButtons,
   providerForButton,
+  resolveNavButtons,
   selectCarRoute,
+  type NavButton,
   type NavProvider,
 } from './carRoute';
 
@@ -96,7 +98,7 @@ export function handoffToNav(provider: NavProvider): void {
     log('hand-off skipped — no active route');
     return;
   }
-  const url = buildHandoffUrl(provider, route.destination);
+  const url = buildHandoffUrl(provider, route.destination, Platform.OS);
   log('hand-off →', provider, url); // visible in Metro when testing on a head unit
   Linking.openURL(url).catch((e) => log('hand-off openURL failed:', e));
 }
@@ -105,17 +107,16 @@ export function handoffToNav(provider: NavProvider): void {
 type MapCtor = new (cfg: Record<string, unknown>) => object;
 type ListCtor = new (cfg: Record<string, unknown>) => object;
 
-export function buildNavMapTemplate(MapTemplateCtor: MapCtor): object {
-  // Per-platform nav apps: CarPlay → Apple Maps + Waze, Android Auto → Google +
-  // Waze. Interaction is via template map buttons (driver-distraction model),
-  // not in-surface touches; each hands off to the chosen nav app.
-  const buttons = navButtonsForPlatform(Platform.OS);
+export function buildNavMapTemplate(MapTemplateCtor: MapCtor, buttons: NavButton[]): object {
+  // `buttons` is resolved per platform + installed apps (see resolveNavButtons).
+  // Interaction is via template map buttons (driver-distraction model), not
+  // in-surface touches; each hands off to the chosen nav app.
   return new MapTemplateCtor({
     id: NAV_TEMPLATE_ID,
     component: CarMapSurface,
     mapButtons: buttons.map((b) => ({ id: b.id, image: NAV_ICON })),
     onMapButtonPressed: (e: { id: string }) => {
-      handoffToNav(providerForButton(Platform.OS, e.id));
+      handoffToNav(providerForButton(buttons, e.id, Platform.OS));
     },
   });
 }
@@ -147,6 +148,10 @@ export function initCarNav(): () => void {
   }
   const { CarPlay, MapTemplate, ListTemplate } = carplay;
 
+  // Seed with the guaranteed app; the real set (incl. Google Maps / Waze if the
+  // driver has them) is resolved asynchronously below and triggers a rebuild.
+  let navButtons = defaultNavButtons(Platform.OS);
+
   // Rebuild the root only when the displayed leg changes (idle → pickup →
   // dropoff), not on every store tick — location updates fire constantly and
   // setRootTemplate is comparatively expensive.
@@ -159,7 +164,7 @@ export function initCarNav(): () => void {
     lastKey = key;
     try {
       const tpl = route
-        ? buildNavMapTemplate(MapTemplate as unknown as MapCtor)
+        ? buildNavMapTemplate(MapTemplate as unknown as MapCtor, navButtons)
         : buildIdleTemplate(ListTemplate as unknown as ListCtor);
       // The fork's setRootTemplate type union omits MapTemplate (its TS types lag
       // the runtime, which accepts it as a root) — cast to the expected param.
@@ -183,6 +188,22 @@ export function initCarNav(): () => void {
     log('init failed:', e);
     return noop;
   }
+
+  // Detect which nav apps the driver actually has (CarPlay varies — some have
+  // Google Maps, some don't). If the resolved set differs from the seed, rebuild
+  // the current root so the extra buttons appear.
+  resolveNavButtons(Platform.OS, (url) => Linking.canOpenURL(url))
+    .then((resolved) => {
+      const changed =
+        resolved.length !== navButtons.length ||
+        resolved.some((b, i) => b.id !== navButtons[i].id);
+      navButtons = resolved;
+      if (changed && CarPlay.connected) {
+        lastKey = null;
+        apply();
+      }
+    })
+    .catch((e) => log('nav-app detection failed:', e));
 
   return () => {
     try {

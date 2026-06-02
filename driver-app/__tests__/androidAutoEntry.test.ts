@@ -10,7 +10,7 @@ jest.mock('@g4rb4g3/react-native-carplay/lib/CarPlayHeadlessJsTask', () => ({
 }));
 
 import { AppRegistry, Platform } from 'react-native';
-import { registerAndroidAuto, AndroidAutoRoot } from '../car/androidAutoEntry';
+import { registerAndroidAuto, AndroidAutoRoot, AndroidAutoClusterRoot } from '../car/androidAutoEntry';
 
 const setOS = (os: string) => {
   (Platform as unknown as { OS: string }).OS = os;
@@ -39,9 +39,16 @@ describe('registerAndroidAuto', () => {
     expect(names).toContain('AndroidAuto');
     expect(names).toContain('AndroidAutoCluster');
 
-    // the registered factory yields our car root
-    const factory = spy.mock.calls.find((c) => c[0] === 'AndroidAuto')?.[1];
-    expect(factory()).toBe(AndroidAutoRoot);
+    // the main car surface yields the nav-driving root
+    const autoFactory = spy.mock.calls.find((c) => c[0] === 'AndroidAuto')?.[1];
+    expect(autoFactory()).toBe(AndroidAutoRoot);
+
+    // the cluster surface yields a SEPARATE no-op root (not AndroidAutoRoot), so
+    // initCarNav doesn't run twice and double-fire nav hand-offs.
+    const clusterFactory = spy.mock.calls.find((c) => c[0] === 'AndroidAutoCluster')?.[1];
+    expect(clusterFactory()).toBe(AndroidAutoClusterRoot);
+    expect(clusterFactory()).not.toBe(AndroidAutoRoot);
+    expect(AndroidAutoClusterRoot()).toBeNull();
   });
 
   it('is a no-op on iOS (the phone tree drives CarPlay there)', () => {

@@ -1,21 +1,23 @@
 /**
- * Unit tests for car/carNav.tsx — the Android Auto route-map wiring. The native
- * car module is fully mocked and the real useDriverStore drives state, so these
- * assert the JS contract without a head unit: template selection by ride state,
- * leg-debounced root rebuilds, and the Google/Waze hand-off.
+ * Unit tests for car/carNav.tsx — the cross-platform car route-map wiring. The
+ * native car module is fully mocked and the real useDriverStore drives state, so
+ * these assert the JS contract without a head unit: template selection by ride
+ * state, leg-debounced rebuilds with stale-template teardown, button-press
+ * hand-off via the emitter (Android `buttonPressed` / iOS `mapButtonPressed`),
+ * and installed-app detection.
  */
 
-// Mock the fork: MapTemplate / ListTemplate store their config so we can assert
-// instanceof + shape; CarPlay exposes the connect/root surface.
 jest.mock('@g4rb4g3/react-native-carplay', () => {
   class MapTemplate {
     config: Record<string, unknown>;
+    destroy = jest.fn();
     constructor(config: Record<string, unknown>) {
       this.config = config;
     }
   }
   class ListTemplate {
     config: Record<string, unknown>;
+    destroy = jest.fn();
     constructor(config: Record<string, unknown>) {
       this.config = config;
     }
@@ -26,6 +28,7 @@ jest.mock('@g4rb4g3/react-native-carplay', () => {
       registerOnConnect: jest.fn(),
       unregisterOnConnect: jest.fn(),
       setRootTemplate: jest.fn(),
+      emitter: { addListener: jest.fn(() => ({ remove: jest.fn() })) },
     },
     MapTemplate,
     ListTemplate,
@@ -35,16 +38,23 @@ jest.mock('@g4rb4g3/react-native-carplay', () => {
 import { Linking, Platform } from 'react-native';
 import { CarPlay, MapTemplate, ListTemplate } from '@g4rb4g3/react-native-carplay';
 import { useDriverStore } from '../store/driverStore';
-import {
-  buildIdleTemplate,
-  buildNavMapTemplate,
-  handoffToNav,
-  initCarNav,
-} from '../car/carNav';
+import { buildIdleTemplate, buildNavMapTemplate, handoffToNav, initCarNav } from '../car/carNav';
 
 const setOS = (os: string) => {
   (Platform as unknown as { OS: string }).OS = os;
 };
+const setCanOpen = (fn: jest.Mock) => {
+  (Linking as unknown as { canOpenURL: jest.Mock }).canOpenURL = fn;
+};
+
+// Grab the emitter callback initCarNav registered for a given event.
+const emitterCb = (event: string): ((e: unknown) => void) =>
+  (CarPlay.emitter.addListener as jest.Mock).mock.calls.find((c) => c[0] === event)?.[1];
+
+const AND_BUTTONS = [
+  { id: 'nav-google', provider: 'google' },
+  { id: 'nav-waze', provider: 'waze' },
+] as never;
 
 const activeRide = (over: Record<string, unknown> = {}) =>
   ({
@@ -67,17 +77,6 @@ const configOf = (t: unknown) => (t as { config: Record<string, unknown> }).conf
 
 let openURL: jest.SpyInstance;
 
-// Default: no extra nav apps installed (detection probes resolve false). Tests
-// that need Google Maps / Waze present override canOpenURL.
-const setCanOpen = (fn: jest.Mock) => {
-  (Linking as unknown as { canOpenURL: jest.Mock }).canOpenURL = fn;
-};
-
-const AND_BUTTONS = [
-  { id: 'nav-google', provider: 'google' },
-  { id: 'nav-waze', provider: 'waze' },
-] as never;
-
 beforeEach(() => {
   jest.clearAllMocks();
   openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined as never);
@@ -92,54 +91,20 @@ afterEach(() => {
 });
 
 describe('buildNavMapTemplate', () => {
-  it('builds a MapTemplate with the surface component + the given buttons', () => {
+  it('builds a MapTemplate with the surface component + the given buttons (icons)', () => {
     const t = buildNavMapTemplate(MapTemplate as never, AND_BUTTONS);
     const cfg = configOf(t);
     expect(t).toBeInstanceOf(MapTemplate);
     expect(cfg.id).toBe('spinr-car-nav');
     expect(typeof cfg.component).toBe('function');
-    expect((cfg.mapButtons as { id: string }[]).map((b) => b.id)).toEqual([
-      'nav-google',
-      'nav-waze',
-    ]);
+    const btns = cfg.mapButtons as { id: string; image?: unknown }[];
+    expect(btns.map((b) => b.id)).toEqual(['nav-google', 'nav-waze']);
+    btns.forEach((b) => expect(b.image).toBeDefined());
   });
 
-  it('routes each button id to its nav app (Android)', () => {
-    useDriverStore.setState({ rideState: 'trip_in_progress', activeRide: activeRide() });
+  it('does NOT use a config press callback (Android routes via the emitter)', () => {
     const cfg = configOf(buildNavMapTemplate(MapTemplate as never, AND_BUTTONS));
-    const onPress = cfg.onMapButtonPressed as (e: { id: string }) => void;
-
-    onPress({ id: 'nav-waze' });
-    expect(openURL).toHaveBeenLastCalledWith('https://waze.com/ul?ll=52.2,-106.6&navigate=yes');
-
-    onPress({ id: 'nav-google' });
-    expect(openURL).toHaveBeenLastCalledWith('google.navigation:q=52.2,-106.6');
-  });
-
-  it('routes Apple + Google Maps to their iOS schemes (CarPlay)', () => {
-    setOS('ios');
-    useDriverStore.setState({ rideState: 'trip_in_progress', activeRide: activeRide() });
-    const iosButtons = [
-      { id: 'nav-apple', provider: 'apple' },
-      { id: 'nav-google', provider: 'google' },
-    ] as never;
-    const cfg = configOf(buildNavMapTemplate(MapTemplate as never, iosButtons));
-    const onPress = cfg.onMapButtonPressed as (e: { id: string }) => void;
-
-    onPress({ id: 'nav-apple' });
-    expect(openURL).toHaveBeenLastCalledWith('maps://?daddr=52.2,-106.6&dirflg=d');
-
-    onPress({ id: 'nav-google' });
-    expect(openURL).toHaveBeenLastCalledWith(
-      'comgooglemaps://?daddr=52.2,-106.6&directionsmode=driving'
-    );
-  });
-
-  it('gives every map button an icon (CarPlay/Android Auto buttons are icons)', () => {
-    const cfg = configOf(buildNavMapTemplate(MapTemplate as never, AND_BUTTONS));
-    for (const b of cfg.mapButtons as { image?: unknown }[]) {
-      expect(b.image).toBeDefined();
-    }
+    expect(cfg.onMapButtonPressed).toBeUndefined();
   });
 });
 
@@ -152,7 +117,7 @@ describe('buildIdleTemplate', () => {
 });
 
 describe('handoffToNav', () => {
-  it('opens the nav app for the active destination', () => {
+  it('opens the nav app for the active destination (Android)', () => {
     useDriverStore.setState({ rideState: 'navigating_to_pickup', activeRide: activeRide() });
     handoffToNav('google');
     expect(openURL).toHaveBeenCalledWith('google.navigation:q=52.13,-106.67');
@@ -176,14 +141,40 @@ describe('handoffToNav', () => {
   });
 });
 
-describe('initCarNav', () => {
-  it('runs on iOS too (CarPlay shares the phone JS context)', () => {
-    setOS('ios');
+describe('button hand-off via the car emitter', () => {
+  it('routes the Android `buttonPressed` ({buttonId}) event to the nav app', () => {
+    useDriverStore.setState({ rideState: 'trip_in_progress', activeRide: activeRide() });
     const cleanup = initCarNav();
-    expect(CarPlay.registerOnConnect).toHaveBeenCalledTimes(1);
+
+    const cb = emitterCb('buttonPressed');
+    expect(typeof cb).toBe('function');
+    cb({ buttonId: 'nav-waze' });
+    expect(openURL).toHaveBeenLastCalledWith('https://waze.com/ul?ll=52.2,-106.6&navigate=yes');
+    cb({ buttonId: 'nav-google' });
+    expect(openURL).toHaveBeenLastCalledWith('google.navigation:q=52.2,-106.6');
     cleanup();
   });
 
+  it('routes the iOS `mapButtonPressed` ({id}) event to the nav app', () => {
+    setOS('ios');
+    useDriverStore.setState({ rideState: 'trip_in_progress', activeRide: activeRide() });
+    const cleanup = initCarNav();
+
+    emitterCb('mapButtonPressed')({ id: 'nav-apple' });
+    expect(openURL).toHaveBeenLastCalledWith('maps://?daddr=52.2,-106.6&dirflg=d');
+    cleanup();
+  });
+
+  it('ignores a press event with no id', () => {
+    useDriverStore.setState({ rideState: 'trip_in_progress', activeRide: activeRide() });
+    const cleanup = initCarNav();
+    emitterCb('buttonPressed')({});
+    expect(openURL).not.toHaveBeenCalled();
+    cleanup();
+  });
+});
+
+describe('initCarNav', () => {
   it('is a no-op off-car (web / Expo Go)', () => {
     setOS('web');
     const cleanup = initCarNav();
@@ -191,46 +182,56 @@ describe('initCarNav', () => {
     cleanup();
   });
 
-  it('sets an idle root on connect, then swaps to the map per leg', () => {
+  it('runs on iOS too (CarPlay shares the phone JS context)', () => {
+    setOS('ios');
     const cleanup = initCarNav();
     expect(CarPlay.registerOnConnect).toHaveBeenCalledTimes(1);
+    cleanup();
+  });
 
-    // Nothing set until the head unit connects.
+  it('sets an idle root on connect, then swaps to the map per leg', () => {
+    const cleanup = initCarNav();
     expect(CarPlay.setRootTemplate).not.toHaveBeenCalled();
 
-    // Connect while idle → idle ListTemplate root.
     const onConnect = (CarPlay.registerOnConnect as jest.Mock).mock.calls[0][0];
     onConnect();
     expect(CarPlay.setRootTemplate).toHaveBeenCalledTimes(1);
     expect((CarPlay.setRootTemplate as jest.Mock).mock.calls[0][0]).toBeInstanceOf(ListTemplate);
 
-    // Trip starts → MapTemplate (dropoff leg). Store change fires the subscriber.
     useDriverStore.setState({ rideState: 'trip_in_progress', activeRide: activeRide() });
     expect(CarPlay.setRootTemplate).toHaveBeenCalledTimes(2);
     expect((CarPlay.setRootTemplate as jest.Mock).mock.calls[1][0]).toBeInstanceOf(MapTemplate);
+    cleanup();
+  });
 
+  it('destroys the previous template when rebuilding the root (no listener leak)', () => {
+    const cleanup = initCarNav();
+    const onConnect = (CarPlay.registerOnConnect as jest.Mock).mock.calls[0][0];
+    onConnect(); // idle ListTemplate
+    const idleTpl = (CarPlay.setRootTemplate as jest.Mock).mock.calls[0][0];
+
+    useDriverStore.setState({ rideState: 'trip_in_progress', activeRide: activeRide() }); // → map
+    expect(idleTpl.destroy).toHaveBeenCalledTimes(1);
     cleanup();
   });
 
   it('does NOT rebuild the root on same-leg store ticks', () => {
     const cleanup = initCarNav();
     const onConnect = (CarPlay.registerOnConnect as jest.Mock).mock.calls[0][0];
-
     useDriverStore.setState({ rideState: 'trip_in_progress', activeRide: activeRide() });
-    onConnect(); // dropoff leg → 1 build
+    onConnect();
     const calls = (CarPlay.setRootTemplate as jest.Mock).mock.calls.length;
-
-    // A second store tick on the same leg (e.g. a location update) → no rebuild.
     useDriverStore.setState({ countdownSeconds: 1 } as never);
     expect((CarPlay.setRootTemplate as jest.Mock).mock.calls.length).toBe(calls);
-
     cleanup();
   });
 
-  it('cleanup unregisters and stops responding to store changes', () => {
+  it('cleanup unregisters, removes button listeners, and stops responding', () => {
     const cleanup = initCarNav();
+    const sub = (CarPlay.emitter.addListener as jest.Mock).mock.results[0].value;
     cleanup();
     expect(CarPlay.unregisterOnConnect).toHaveBeenCalledTimes(1);
+    expect(sub.remove).toHaveBeenCalled();
 
     (CarPlay.setRootTemplate as jest.Mock).mockClear();
     useDriverStore.setState({ rideState: 'trip_in_progress', activeRide: activeRide() });
@@ -244,8 +245,6 @@ describe('initCarNav', () => {
     (CarPlay as unknown as { connected: boolean }).connected = true;
 
     const cleanup = initCarNav();
-    // onConnect already drew the map with the seed (Apple Maps only); let the
-    // async install detection resolve, which rebuilds with the full set.
     await new Promise((r) => setImmediate(r));
 
     const calls = (CarPlay.setRootTemplate as jest.Mock).mock.calls;

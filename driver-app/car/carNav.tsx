@@ -109,15 +109,15 @@ type ListCtor = new (cfg: Record<string, unknown>) => object;
 
 export function buildNavMapTemplate(MapTemplateCtor: MapCtor, buttons: NavButton[]): object {
   // `buttons` is resolved per platform + installed apps (see resolveNavButtons).
-  // Interaction is via template map buttons (driver-distraction model), not
-  // in-surface touches; each hands off to the chosen nav app.
+  // PRESSES are handled by a CarPlay.emitter listener in initCarNav, NOT a config
+  // callback: on Android the fork parses `mapButtons` as an ActionStrip and emits
+  // `buttonPressed` (not the iOS `mapButtonPressed`), so a config `onMapButtonPressed`
+  // would be dead on Android. One emitter listener covers both platforms and avoids
+  // stale per-template callbacks firing after rebuilds.
   return new MapTemplateCtor({
     id: NAV_TEMPLATE_ID,
     component: CarMapSurface,
     mapButtons: buttons.map((b) => ({ id: b.id, image: NAV_ICON })),
-    onMapButtonPressed: (e: { id: string }) => {
-      handoffToNav(providerForButton(buttons, e.id, Platform.OS));
-    },
   });
 }
 
@@ -148,9 +148,19 @@ export function initCarNav(): () => void {
   }
   const { CarPlay, MapTemplate, ListTemplate } = carplay;
 
+  // Cold Android Auto launch runs this separate JS root with the phone dashboard
+  // (and its hydrate + fetchActiveRide) never mounted, so the store would sit at
+  // `idle` and show the idle list instead of the active route. Restore the
+  // persisted ride here. Safe + idempotent: hydrateDriverRideState only fills an
+  // empty store, never clobbers a live ride/offer, and is AsyncStorage-only (no
+  // auth). The store subscription below rebuilds the root once state lands.
+  // (Network reconciliation via fetchActiveRide needs auth bootstrap — deferred.)
+  useDriverStore.getState().hydrateDriverRideState?.().catch(() => {});
+
   // Seed with the guaranteed app; the real set (incl. Google Maps / Waze if the
   // driver has them) is resolved asynchronously below and triggers a rebuild.
   let navButtons = defaultNavButtons(Platform.OS);
+  let currentTemplate: { destroy?: () => void } | null = null;
 
   // Rebuild the root only when the displayed leg changes (idle → pickup →
   // dropoff), not on every store tick — location updates fire constantly and
@@ -169,9 +179,23 @@ export function initCarNav(): () => void {
       // The fork's setRootTemplate type union omits MapTemplate (its TS types lag
       // the runtime, which accepts it as a root) — cast to the expected param.
       CarPlay.setRootTemplate(tpl as Parameters<typeof CarPlay.setRootTemplate>[0]);
+      // Tear down the previous template: the fork registers per-instance emitter
+      // listeners keyed by the (shared) template id, so dropping the old instance
+      // without destroy() leaks listeners that keep firing. (Codex P2)
+      const prev = currentTemplate;
+      currentTemplate = tpl as { destroy?: () => void };
+      prev?.destroy?.();
     } catch (e) {
       log('setRootTemplate failed:', e);
     }
+  };
+
+  // Route head-unit button presses to the nav hand-off via ONE emitter listener
+  // per event: iOS emits `mapButtonPressed` ({id}); Android parses mapButtons as
+  // an ActionStrip and emits `buttonPressed` ({buttonId}). (Codex P1)
+  const onButton = (e: { id?: string; buttonId?: string }) => {
+    const id = e.buttonId ?? e.id;
+    if (id) handoffToNav(providerForButton(navButtons, id, Platform.OS));
   };
 
   const onConnect = () => {
@@ -179,10 +203,13 @@ export function initCarNav(): () => void {
     apply();
   };
 
+  const buttonSubs: Array<{ remove: () => void }> = [];
   let unsub = noop;
   try {
     CarPlay.registerOnConnect(onConnect);
     unsub = useDriverStore.subscribe(apply);
+    buttonSubs.push(CarPlay.emitter.addListener('mapButtonPressed', onButton));
+    buttonSubs.push(CarPlay.emitter.addListener('buttonPressed', onButton));
     if (CarPlay.connected) onConnect();
   } catch (e) {
     log('init failed:', e);
@@ -209,6 +236,8 @@ export function initCarNav(): () => void {
     try {
       CarPlay.unregisterOnConnect(onConnect);
       unsub();
+      buttonSubs.forEach((s) => s.remove());
+      currentTemplate?.destroy?.();
     } catch {
       /* no-op */
     }

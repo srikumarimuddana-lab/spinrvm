@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
+import { Share } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import api from '@shared/api/client';
 import { useLanguageStore } from '../../store/languageStore';
@@ -78,13 +79,14 @@ export default function ReferralScreen() {
     };
 
     const shareReferral = async () => {
-        if (referralInfo?.referral_link) {
+        if (!referralInfo?.referral_link) return;
+        try {
+            await Share.share({
+                message: `Join me on Spinr! Use my referral code ${referralInfo.referral_code} to sign up and start driving. ${referralInfo.referral_link}`,
+            });
+        } catch {
             await Clipboard.setStringAsync(referralInfo.referral_link);
-            showToast(
-                'info',
-                'Share Link',
-                `Your referral link has been copied: ${referralInfo.referral_link}`,
-            );
+            showToast('info', 'Link Copied', 'Referral link copied to clipboard');
         }
     };
 

@@ -8,13 +8,18 @@ import {
     KeyboardAvoidingView,
     ScrollView,
     Platform,
+    Alert,
 } from 'react-native';
+import { Image } from 'expo-image';
+import * as ImagePicker from 'expo-image-picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import api from '@shared/api/client';
+import { getAuthHeader } from '@shared/api/client';
+import SpinrConfig from '@shared/config/spinr.config';
 import { showToast } from '../hooks/useToast';
 import { useLocationStore } from '@shared/store/locationStore';
 import useDriverStore from '../store/driverStore';
@@ -42,10 +47,35 @@ export default function ReportSafetyScreen() {
     const styles = useMemo(() => createStyles(colors), [colors]);
     const [category, setCategory] = useState<SafetyCategory | null>(null);
     const [issue, setIssue] = useState('');
+    const [photos, setPhotos] = useState<string[]>([]);
     const [submitting, setSubmitting] = useState(false);
 
     const location = useLocationStore(state => state.currentLocation);
     const activeRide = useDriverStore(state => state.activeRide);
+
+    const addPhoto = () => {
+        Alert.alert('Add Evidence', 'Choose a source', [
+            { text: 'Camera', onPress: launchCamera },
+            { text: 'Photo Library', onPress: launchGallery },
+            { text: 'Cancel', style: 'cancel' },
+        ]);
+    };
+
+    const launchCamera = async () => {
+        const { status } = await ImagePicker.requestCameraPermissionsAsync();
+        if (status !== 'granted') return showToast('error', 'Permission Denied', 'Camera access is needed.');
+        const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.7 });
+        if (!result.canceled && result.assets[0]) setPhotos(prev => [...prev, result.assets[0].uri]);
+    };
+
+    const launchGallery = async () => {
+        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (status !== 'granted') return showToast('error', 'Permission Denied', 'Library access is needed.');
+        const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.7, allowsMultipleSelection: true, selectionLimit: 4 - photos.length });
+        if (!result.canceled) setPhotos(prev => [...prev, ...result.assets.map(a => a.uri)].slice(0, 4));
+    };
+
+    const removePhoto = (index: number) => setPhotos(prev => prev.filter((_, i) => i !== index));
 
     const handleSubmit = async () => {
         if (!category) {
@@ -62,6 +92,7 @@ export default function ReportSafetyScreen() {
         const reportData = {
             category,
             description: issue,
+            photo_count: photos.length,
             location: (location?.latitude != null && location?.longitude != null) ? {
                 latitude: location.latitude,
                 longitude: location.longitude,
@@ -77,7 +108,29 @@ export default function ReportSafetyScreen() {
         };
 
         try {
-            await api.post('/safety/report', reportData);
+            const res = await api.post<{ incident_id?: string }>('/safety/report', reportData);
+            const reportId = res.data?.incident_id;
+
+            if (reportId && photos.length > 0) {
+                const token = await getAuthHeader();
+                for (const [i, uri] of photos.entries()) {
+                    try {
+                        const fd = new FormData();
+                        fd.append('file', { uri, name: `evidence_${i}.jpg`, type: 'image/jpeg' } as any);
+                        await fetch(`${SpinrConfig.backendUrl}/api/v1/safety/report/${reportId}/photo`, {
+                            method: 'POST',
+                            headers: {
+                                ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                                Accept: 'application/json',
+                            },
+                            body: fd as any,
+                        });
+                    } catch {
+                        // Photo upload failure is non-fatal
+                    }
+                }
+            }
+
             showToast('success', 'Report Submitted', 'Your safety report has been submitted. Our trust and safety team will review it promptly.');
             router.back();
         } catch (e) {
@@ -157,6 +210,25 @@ export default function ReportSafetyScreen() {
                         onChangeText={setIssue}
                         editable={!submitting}
                     />
+
+                    {/* Photo Evidence */}
+                    <Text style={[styles.label, { marginTop: 20 }]}>Photo Evidence (optional)</Text>
+                    <View style={styles.photoGrid}>
+                        {photos.map((uri, i) => (
+                            <View key={i} style={styles.photoThumb}>
+                                <Image source={{ uri }} style={styles.photoImage} contentFit="cover" />
+                                <TouchableOpacity style={styles.photoRemove} onPress={() => removePhoto(i)}>
+                                    <Ionicons name="close-circle" size={22} color="#EF4444" />
+                                </TouchableOpacity>
+                            </View>
+                        ))}
+                        {photos.length < 4 && (
+                            <TouchableOpacity style={styles.photoAdd} onPress={addPhoto} disabled={submitting}>
+                                <Ionicons name="camera-outline" size={28} color={colors.textDim} />
+                                <Text style={styles.photoAddText}>Add</Text>
+                            </TouchableOpacity>
+                        )}
+                    </View>
 
                     <TouchableOpacity
                         style={[styles.submitButton, submitting && styles.submitButtonDisabled]}
@@ -269,6 +341,43 @@ function createStyles(colors: ThemeColors) {
             color: colors.text,
             minHeight: 160,
             marginBottom: 24,
+        },
+        photoGrid: {
+            flexDirection: 'row',
+            flexWrap: 'wrap',
+            gap: 10,
+            marginBottom: 24,
+        },
+        photoThumb: {
+            width: 80,
+            height: 80,
+            borderRadius: 10,
+            overflow: 'hidden',
+        },
+        photoImage: {
+            width: 80,
+            height: 80,
+        },
+        photoRemove: {
+            position: 'absolute',
+            top: 2,
+            right: 2,
+        },
+        photoAdd: {
+            width: 80,
+            height: 80,
+            borderRadius: 10,
+            borderWidth: 1.5,
+            borderColor: colors.border,
+            borderStyle: 'dashed',
+            justifyContent: 'center',
+            alignItems: 'center',
+            backgroundColor: colors.surfaceLight,
+        },
+        photoAddText: {
+            fontSize: 11,
+            color: colors.textDim,
+            marginTop: 2,
         },
         submitButton: {
             backgroundColor: colors.primary,

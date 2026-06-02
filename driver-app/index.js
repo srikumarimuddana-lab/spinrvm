@@ -1,8 +1,8 @@
-// Custom JS entry point.
-//
-// `expo-router/entry` registers the phone app's root component and routing.
-// We import it first so nothing about the normal app changes, then register
-// the Android Auto root component. Both registrations must happen at bundle
-// load so Android Auto can launch the app car-only (without the phone UI).
+// Register Android Auto's separate AppRegistry roots before expo-router registers
+// the phone root. Android Auto/DHU can cold-launch directly into the car root via
+// native AppRegistry.runApplication("AndroidAuto", ...), so this must live in the
+// real bundle entry rather than a route layout that may never be evaluated first.
+import './car/androidAutoEntry';
+
+// Keep Expo Router as the app's phone entry after car roots are registered.
 import 'expo-router/entry';
-import './lib/androidAuto/register';

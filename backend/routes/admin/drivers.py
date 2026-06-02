@@ -728,7 +728,7 @@ async def admin_get_expiring_documents(
             {
                 "driver_id": {"$in": list(affected_driver_ids)},
                 "status": "completed",
-                "completed_at": {"$gte": rides_30d_ago},
+                "ride_completed_at": {"$gte": rides_30d_ago},
             },
             limit=10000,
         )
@@ -1389,7 +1389,7 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
         (
             _dec(r.get("driver_earnings"))
             for r in rides
-            if (r.get("completed_at") or r.get("created_at") or "") >= year_start
+            if (r.get("ride_completed_at") or r.get("completed_at") or r.get("created_at") or "") >= year_start
         ),
         Decimal("0"),
     )
@@ -1398,9 +1398,9 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
     # days" earnings metric uses (≥1 completed ride on that calendar date).
     thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
     recent_dates = {
-        (r.get("completed_at") or r.get("created_at") or "")[:10]
+        (r.get("ride_completed_at") or r.get("completed_at") or r.get("created_at") or "")[:10]
         for r in rides
-        if (r.get("completed_at") or r.get("created_at") or "") >= thirty_days_ago
+        if (r.get("ride_completed_at") or r.get("completed_at") or r.get("created_at") or "") >= thirty_days_ago
     }
     active_days_30d = len([d for d in recent_dates if d])
 
@@ -1689,3 +1689,52 @@ async def admin_get_driver_location_trail(
         }
         for loc in locations
     ]
+
+
+@router.get("/drivers/{driver_id}/daily-activity")
+async def admin_driver_daily_activity(
+    driver_id: str,
+    date: Optional[str] = Query(None, description="YYYY-MM-DD in Regina time; defaults to today"),
+    admin_user: dict = Depends(get_admin_user),
+):
+    """Driver daily activity: per-phase km, empty (P1+P2) vs riding (P3) time, and
+    a per-ride breakdown with phase km/timestamps and the empty gap before each
+    ride. Day boundaries in America/Regina."""
+    try:
+        from ...utils.driver_activity import REGINA_TZ, build_daily_activity, regina_day_bounds_utc
+    except ImportError:
+        from utils.driver_activity import REGINA_TZ, build_daily_activity, regina_day_bounds_utc  # type: ignore
+
+    if date:
+        try:
+            d = datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD") from None
+    else:
+        d = datetime.now(REGINA_TZ).date()
+
+    win_start, win_end = regina_day_bounds_utc(d)
+    ws_iso, we_iso = win_start.isoformat(), win_end.isoformat()
+
+    # Periods overlapping the day: fetch from one day before the window start
+    # (to catch a period that began just before midnight and spans in) through
+    # the window end; build_daily_activity clips each interval to the window.
+    lookback_iso = (win_start - timedelta(days=1)).isoformat()
+    periods = await db_supabase.get_rows(
+        "driver_insurance_periods",
+        {"driver_id": driver_id, "started_at": {"$gte": lookback_iso, "$lt": we_iso}},
+        order="started_at",
+        limit=2000,
+    )
+    # Rides the driver worked that day (keyed on when they accepted it).
+    rides = await db_supabase.get_rows(
+        "rides",
+        {"driver_id": driver_id, "driver_accepted_at": {"$gte": ws_iso, "$lt": we_iso}},
+        order="driver_accepted_at",
+        limit=500,
+    )
+
+    report = build_daily_activity(periods, rides, win_start, win_end)
+    report["date"] = d.isoformat()
+    report["tz"] = "America/Regina"
+    return report

@@ -51,6 +51,7 @@ export interface ChatMessage {
     text: string;
     sender: 'driver' | 'rider';
     timestamp: string;
+    read?: boolean;
 }
 
 export type RideState =
@@ -261,6 +262,7 @@ interface IncomingRide {
     duration_minutes?: number;
     rider_name?: string;
     rider_rating?: number;
+    rider_profile_image?: string;
     // Wheelchair-accessible vehicle requested by rider — Saskatchewan
     // Transportation Act s.22. Drivers with WAV-equipped vehicles see this
     // flag in the ride offer panel; non-WAV drivers should not receive
@@ -324,6 +326,7 @@ interface DriverState {
 
     // In-ride chat (real-time via WS, seeded from REST on screen mount)
     chatMessages: ChatMessage[];
+    riderTyping: boolean;
 
     // Loading states
     isLoading: boolean;
@@ -344,7 +347,7 @@ interface DriverState {
 
     // Fetch
     fetchActiveRide: () => Promise<void>;
-    fetchRideHistory: (limit?: number, offset?: number) => Promise<void>;
+    fetchRideHistory: (limit?: number, offset?: number, append?: boolean) => Promise<void>;
     fetchEarnings: (period?: string) => Promise<void>;
     fetchDailyEarnings: (days?: number) => Promise<void>;
     fetchWeeklyEarnings: (weeks?: number) => Promise<void>;
@@ -370,6 +373,7 @@ interface DriverState {
     addChatMessage: (msg: ChatMessage) => void;
     setChatMessages: (msgs: ChatMessage[]) => void;
     clearChatMessages: () => void;
+    setRiderTyping: (typing: boolean) => void;
 
     // State management
     hydrateDriverRideState: () => Promise<void>;
@@ -408,6 +412,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     historyTotal: 0,
     // Chat messages for the active ride (seeded via REST, kept live by WS)
     chatMessages: [],
+    riderTyping: false,
     isLoading: false,
     isCancellingRide: false,
     error: null,
@@ -758,10 +763,32 @@ export const useDriverStore = create<DriverState>((set, get) => ({
         }
     },
 
-    fetchRideHistory: async (limit = 20, offset = 0) => {
+    fetchRideHistory: async (limit = 20, offset = 0, append = false) => {
         try {
             const res = await api.get<{ rides: RideHistoryItem[]; total: number }>(`/drivers/rides/history?limit=${limit}&offset=${offset}`);
-            set({ rideHistory: res.data.rides || [], historyTotal: res.data.total || 0 });
+            const nextRides = res.data.rides || [];
+            set((state) => {
+                if (!append || offset === 0) {
+                    return {
+                        rideHistory: nextRides,
+                        historyTotal: res.data.total || 0,
+                    };
+                }
+
+                const seen = new Set(state.rideHistory.map((ride) => ride.id).filter(Boolean));
+                const merged = [...state.rideHistory];
+                nextRides.forEach((ride) => {
+                    if (!ride.id || !seen.has(ride.id)) {
+                        merged.push(ride);
+                        if (ride.id) seen.add(ride.id);
+                    }
+                });
+
+                return {
+                    rideHistory: merged,
+                    historyTotal: res.data.total || merged.length,
+                };
+            });
         } catch (err) {
             console.log('Fetch history error:', err);
         }
@@ -835,7 +862,9 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     setChatMessages: (msgs: ChatMessage[]) => set({ chatMessages: msgs }),
 
-    clearChatMessages: () => set({ chatMessages: [] }),
+    clearChatMessages: () => set({ chatMessages: [], riderTyping: false }),
+
+    setRiderTyping: (typing: boolean) => set({ riderTyping: typing }),
 
     // ── Offline hydration ────────────────────────────────────────────
     // Called once on mount (before fetchActiveRide). Restores the last

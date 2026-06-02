@@ -3,6 +3,7 @@ import {
     View, Text, TouchableOpacity, StyleSheet, ActivityIndicator,
     BackHandler, Animated, Easing, Dimensions, Platform, Vibration
 } from 'react-native';
+import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -35,6 +36,7 @@ interface IncomingRide {
     duration_minutes?: number;
     rider_name?: string;
     rider_rating?: number;
+    rider_profile_image?: string;
     requires_wav?: boolean;
     surge_multiplier?: number;
     incentives?: IncentiveItem[];
@@ -160,11 +162,19 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                             </View>
                             {incomingRide.rider_name ? (
                                 <View style={styles.riderInfo}>
-                                    <View style={styles.riderAvatar}>
-                                        <Text style={styles.riderInitial}>
-                                            {incomingRide.rider_name.charAt(0).toUpperCase()}
-                                        </Text>
-                                    </View>
+                                    {incomingRide.rider_profile_image ? (
+                                        <Image
+                                            source={{ uri: incomingRide.rider_profile_image }}
+                                            style={styles.riderPhoto}
+                                            contentFit="cover"
+                                        />
+                                    ) : (
+                                        <View style={styles.riderAvatar}>
+                                            <Text style={styles.riderInitial}>
+                                                {incomingRide.rider_name.charAt(0).toUpperCase()}
+                                            </Text>
+                                        </View>
+                                    )}
                                     <Text style={styles.riderName} numberOfLines={1}>{incomingRide.rider_name}</Text>
                                     {incomingRide.rider_rating ? (
                                         <>
@@ -424,6 +434,10 @@ function createStyles(colors: ThemeColors, isDark: boolean) {
             flexDirection: 'row',
             alignItems: 'center',
             gap: 8,
+        },
+        riderPhoto: {
+            width: 30, height: 30,
+            borderRadius: 15,
         },
         riderAvatar: {
             width: 30, height: 30,

@@ -336,3 +336,30 @@ class DispatchService:
         )
         last_ride = _last_rides[0] if _last_rides else None
         return last_ride["driver_id"] if last_ride else None
+
+    async def claim_driver(self, driver_id: str) -> bool:
+        """Atomically mark a driver unavailable for dispatch.
+
+        Filters on ``is_available=True`` so only one concurrent dispatcher
+        wins the race. Returns True if this caller claimed the driver,
+        False if the driver was already taken.
+        """
+        result = await self.db.update_one(
+            "drivers",
+            {"id": driver_id, "is_available": True},
+            {"$set": {"is_available": False}},
+        )
+        # Real db returns the updated row dict or None.
+        # Test mocks return an object with modified_count.
+        # Both are handled: a None result is always False; a dict (no
+        # modified_count attr) defaults to 1 so truth follows result; a
+        # mock with modified_count=0 evaluates False.
+        return bool(result and getattr(result, "modified_count", 1) > 0)
+
+    async def claim_any_driver(self, ranked: List[Tuple[Dict[str, Any], float]]) -> Optional[Dict[str, Any]]:
+        """Walk a ranked list of (driver, score) pairs and return the first
+        successfully claimed driver, or None if all were already taken."""
+        for driver, _score in ranked:
+            if await self.claim_driver(driver["id"]):
+                return driver
+        return None

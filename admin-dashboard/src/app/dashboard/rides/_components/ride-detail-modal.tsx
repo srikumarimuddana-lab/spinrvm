@@ -595,9 +595,19 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                 if (pickupPts.length > 1) pickupProp = pickupPts;
                                                 else emptyHint = "No Phase 2 GPS trail for this ride";
                                             } else if (selectedPhase === "actual") {
-                                                label = "Pickup → Dropoff (actual GPS)";
-                                                if (tripPts.length > 1) { tripProp = tripPts; }
-                                                else {
+                                                // Prefer the OSRM road-matched line (ride_routes.road_polyline) —
+                                                // the clean on-road route SGI / dispute review should see — then
+                                                // fall back to raw trip GPS, then the legacy combined polyline.
+                                                const roadPts = Array.isArray(ride.road_polyline) && ride.road_polyline.length > 1
+                                                    ? ride.road_polyline.map((p: any) => ({ lat: p[0], lng: p[1] })) : [];
+                                                if (roadPts.length > 1) {
+                                                    label = "Pickup → Dropoff (road-matched)";
+                                                    tripProp = roadPts;
+                                                } else if (tripPts.length > 1) {
+                                                    label = "Pickup → Dropoff (actual GPS)";
+                                                    tripProp = tripPts;
+                                                } else {
+                                                    label = "Pickup → Dropoff (actual GPS)";
                                                     const legacy = Array.isArray(ride.route_polyline) && ride.route_polyline.length > 1
                                                         ? ride.route_polyline.map((p: any) => ({ lat: p[0], lng: p[1] })) : [];
                                                     if (legacy.length > 1) trailForMap = legacy;

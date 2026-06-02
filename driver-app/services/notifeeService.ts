@@ -37,6 +37,7 @@ export type NotifeeAction = 'accept' | 'decline';
 
 export interface RideOfferDisplayData {
     ride_id: string;
+    booking_id?: string;
     pickup_address?: string;
     dropoff_address?: string;
     fare: number;
@@ -94,7 +95,7 @@ export async function ensureNotifeeReady(): Promise<void> {
                     actions: [
                         {
                             id: 'accept',
-                            title: 'Accept',
+                            title: 'Approve',
                             foreground: true,
                             authenticationRequired: false,
                         },
@@ -136,6 +137,7 @@ export async function displayRideOfferNotification(
 
     const title = `$${totalEarnings.toFixed(2)}${surgeBadge} — New ride`;
     const body = [
+        `Booking: ${offer.booking_id || offer.ride_id}`,
         offer.pickup_address ? `From: ${offer.pickup_address}` : null,
         offer.dropoff_address ? `To: ${offer.dropoff_address}` : null,
         offer.distance_km && offer.duration_minutes
@@ -145,6 +147,7 @@ export async function displayRideOfferNotification(
 
     const dataPayload: Record<string, string> = {
         ride_id: offer.ride_id,
+        booking_id: offer.booking_id || offer.ride_id,
         type: 'new_ride_assignment',
     };
 
@@ -173,7 +176,7 @@ export async function displayRideOfferNotification(
             } as any,
             actions: [
                 {
-                    title: '<b><font color="#00D26A">ACCEPT</font></b>',
+                    title: '<b><font color="#00D26A">APPROVE</font></b>',
                     pressAction: { id: 'accept', launchActivity: 'default' },
                 },
                 {

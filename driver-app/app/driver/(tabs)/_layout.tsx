@@ -60,18 +60,6 @@ export default function DriverTabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="rides"
-        options={{
-          href: null,
-        }}
-      />
-      <Tabs.Screen
-        name="earnings"
-        options={{
-          href: null,
-        }}
-      />
-      <Tabs.Screen
         name="profile"
         options={{
           title: 'Profile',

@@ -15,6 +15,16 @@ try:
     from ...settings_loader import get_app_settings
     from ...socket_manager import manager
     from ...utils.audit_logger import log_admin_action
+    from ...utils.google_places_new import (
+        PLACES_NEW_AUTOCOMPLETE_FIELD_MASK,
+        PLACES_NEW_AUTOCOMPLETE_URL,
+        PLACES_NEW_DETAILS_FIELD_MASK,
+        build_autocomplete_payload,
+        legacy_details_from_new_response,
+        legacy_predictions_from_new_response,
+        places_new_details_url,
+        places_new_headers,
+    )
     from ...utils.insurance_periods import record_period_transition
     from ...utils.rate_limiter import default_limiter as limiter
 except ImportError:
@@ -25,6 +35,16 @@ except ImportError:
     from settings_loader import get_app_settings
     from socket_manager import manager
     from utils.audit_logger import log_admin_action
+    from utils.google_places_new import (
+        PLACES_NEW_AUTOCOMPLETE_FIELD_MASK,
+        PLACES_NEW_AUTOCOMPLETE_URL,
+        PLACES_NEW_DETAILS_FIELD_MASK,
+        build_autocomplete_payload,
+        legacy_details_from_new_response,
+        legacy_predictions_from_new_response,
+        places_new_details_url,
+        places_new_headers,
+    )
     from utils.insurance_periods import record_period_transition
     from utils.rate_limiter import default_limiter as limiter
 
@@ -448,15 +468,14 @@ async def admin_places_autocomplete(
     radius: int = Query(default=50000, ge=1000, le=100000),
     admin_user: dict = Depends(get_admin_user),
 ):
-    """Proxy Google Maps Places Autocomplete API to avoid exposing key to browser.
+    """Proxy Google Places API (New) Autocomplete to avoid exposing key to browser.
 
-    Pass session_token to bundle N autocomplete + 1 details call into one billing session
-    ($0.017 flat vs per-call). Generate one UUID per user typing session on the client.
+    Pass session_token to group autocomplete calls with the final details call. Generate one UUID per user typing session on the client.
 
-    Pass ``location`` ("lat,lng") + ``radius`` (meters, default 50 km) to bias
+    Pass ``location`` ("lat,lng") + ``radius`` (meters, default 50 km) to restrict
     results to a point — typically the admin's geolocation or the ride's pickup —
-    so a search like "Walmart" returns the nearest stores first instead of
-    matches across Canada. Soft bias: distant well-known places still appear.
+    so a search like "Walmart" returns nearby stores instead of matches across
+    Canada.
     Mirrors ``routes/maps_proxy.py:places_autocomplete``.
     """
     import httpx
@@ -466,30 +485,23 @@ async def admin_places_autocomplete(
     if not api_key:
         raise HTTPException(status_code=503, detail="Google Maps API key not configured")
 
-    url = "https://maps.googleapis.com/maps/api/place/autocomplete/json"
-    params: dict = {
-        "input": input,
-        "key": api_key,
-        "language": "en",
-        "components": "country:ca",
-    }
-    if session_token:
-        params["sessiontoken"] = session_token
-    if location:
-        params["location"] = location
-        params["radius"] = str(radius)
-        params["origin"] = location
+    payload = build_autocomplete_payload(input, session_token, location, radius)
 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(url, params=params)
+            resp = await client.post(
+                PLACES_NEW_AUTOCOMPLETE_URL,
+                headers=places_new_headers(api_key, PLACES_NEW_AUTOCOMPLETE_FIELD_MASK),
+                json=payload,
+            )
+            resp.raise_for_status()
             data = resp.json()
-            if data.get("status") not in ("OK", "ZERO_RESULTS"):
-                logger.error(f"Places autocomplete API error: {data.get('status')}")
-                raise HTTPException(status_code=502, detail="Places API error")
-            return {"predictions": data.get("predictions", [])}
+            return {"predictions": legacy_predictions_from_new_response(data)}
     except HTTPException:
         raise
+    except httpx.HTTPStatusError as e:
+        logger.error("Places autocomplete(new) API error: %s", e.response.text[:500])
+        raise HTTPException(status_code=502, detail="Places API error") from e
     except Exception as e:
         logger.error(f"Failed to call Places autocomplete API: {e}")
         raise HTTPException(status_code=502, detail="Failed to call Places API") from e
@@ -503,9 +515,9 @@ async def admin_places_details(
     session_token: Optional[str] = None,
     admin_user: dict = Depends(get_admin_user),
 ):
-    """Proxy Google Maps Place Details API to get lat/lng.
+    """Proxy Google Places API (New) Place Details to get lat/lng.
 
-    Pass the same session_token used for autocomplete to close the billing session.
+    Pass the same session_token used for autocomplete to close the session.
     """
     import httpx
 
@@ -514,31 +526,24 @@ async def admin_places_details(
     if not api_key:
         raise HTTPException(status_code=503, detail="Google Maps API key not configured")
 
-    url = "https://maps.googleapis.com/maps/api/place/details/json"
-    params: dict = {
-        "place_id": place_id,
-        "fields": "geometry,formatted_address",
-        "key": api_key,
-    }
+    params: dict = {}
     if session_token:
-        params["sessiontoken"] = session_token
+        params["sessionToken"] = session_token
 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(url, params=params)
-            data = resp.json()
-            if data.get("status") != "OK":
-                logger.error(f"Places details API error: {data.get('status')}")
-                raise HTTPException(status_code=502, detail="Places API error")
-
-            loc = data.get("result", {}).get("geometry", {}).get("location", {})
-            return {
-                "lat": loc.get("lat"),
-                "lng": loc.get("lng"),
-                "formatted_address": data.get("result", {}).get("formatted_address"),
-            }
+            resp = await client.get(
+                places_new_details_url(place_id),
+                headers=places_new_headers(api_key, PLACES_NEW_DETAILS_FIELD_MASK),
+                params=params,
+            )
+            resp.raise_for_status()
+            return legacy_details_from_new_response(resp.json())
     except HTTPException:
         raise
+    except httpx.HTTPStatusError as e:
+        logger.error("Places details(new) API error: %s", e.response.text[:500])
+        raise HTTPException(status_code=502, detail="Places API error") from e
     except Exception as e:
         logger.error(f"Failed to call Places details API: {e}")
         raise HTTPException(status_code=502, detail="Failed to call Places API") from e

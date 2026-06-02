@@ -8,9 +8,9 @@
  * the existing `openNavigation()` deep link in `hooks/useDriverDashboard.ts`.
  *
  * Pure + framework-free so it is fully unit-testable without the native car
- * module or a head unit (the rendering/template layer lives in car/carNav.tsx).
+ * module or a head unit (the rendering/template layer lives in register.ts).
  */
-import type { ActiveRide, RideState } from '../store/driverStore';
+import type { ActiveRide, RideState } from '../../store/driverStore';
 
 export type LatLng = { latitude: number; longitude: number };
 export type NavProvider = 'google' | 'apple' | 'waze';

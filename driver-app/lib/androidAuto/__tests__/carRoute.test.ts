@@ -1,6 +1,6 @@
 /**
- * Unit tests for car/carRoute.ts — the pure route-selection + hand-off logic
- * behind the Android Auto map. No native module / head unit required.
+ * Unit tests for lib/androidAuto/carRoute.ts — the pure route-selection +
+ * hand-off logic behind the Android Auto map. No native module / head unit.
  */
 import {
   buildHandoffUrl,
@@ -9,8 +9,8 @@ import {
   isNavState,
   resolveNavButtons,
   selectCarRoute,
-} from '../car/carRoute';
-import type { ActiveRide, RideState } from '../store/driverStore';
+} from '../carRoute';
+import type { ActiveRide, RideState } from '../../../store/driverStore';
 
 const makeRide = (overrides: Record<string, unknown> = {}): ActiveRide =>
   ({

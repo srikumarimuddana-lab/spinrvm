@@ -150,8 +150,10 @@ export function defaultNavButtons(os: string): NavButton[] {
  * static (Google + Waze). On CarPlay we only advertise apps the driver actually
  * has — Apple Maps is always present; Google Maps and Waze are added only when
  * `canOpen` confirms their scheme resolves (requires the schemes in
- * LSApplicationQueriesSchemes — see withCarIntegration.js). This is why a driver
- * with Google Maps on CarPlay gets a Google button and one without it does not.
+ * LSApplicationQueriesSchemes, to be added when iOS CarPlay is wired up). This is
+ * why a driver with Google Maps on CarPlay gets a Google button, one without does
+ * not. Android-only today (register.ts uses the static defaultNavButtons); kept
+ * for the dormant iOS CarPlay path.
  */
 export async function resolveNavButtons(
   os: string,

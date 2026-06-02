@@ -172,11 +172,13 @@ export function middleware(request: NextRequest) {
   return response;
 }
 
-// Match everything except Next.js internals, /api/* routes, and static assets.
-// /api/* is excluded here so the login endpoint (and all other API calls) pass
-// through to the Next.js rewrite proxy without being redirected to /login.
+// Match everything except:
+//   - Next.js internals and static assets
+//   - /api/* routes (login endpoint must not redirect to /login)
+//   - /track/* routes (public share-link pages; have their own static CSP
+//     in next.config.ts and must never be bounced to the admin login screen)
 export const config = {
   matcher: [
-    "/((?!api/|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
+    "/((?!api/|track/|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
   ],
 };

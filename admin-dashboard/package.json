@@ -36,7 +36,7 @@
     "recharts": "^3.8.1",
     "tailwind-merge": "^3.4.0",
     "uuid": "^14.0.0",
-    "zustand": "^5.0.12"
+    "zustand": "^5.0.14"
   },
   "overrides": {
     "jspdf": {

@@ -71,21 +71,24 @@ describe('extractPolyline', () => {
 });
 
 describe('selectCarRoute', () => {
-  it('targets the PICKUP before the trip starts', () => {
+  it('targets the PICKUP before the trip starts, with NO route line drawn', () => {
     for (const s of ['navigating_to_pickup', 'arrived_at_pickup'] as RideState[]) {
       const route = selectCarRoute(s, makeRide());
       expect(route?.leg).toBe('pickup');
       expect(route?.destination).toEqual({ latitude: 52.13, longitude: -106.67 });
       expect(route?.destinationLabel).toBe('101 Pickup St');
-      expect(route?.polyline).toHaveLength(3);
+      // The stored line is pickup→dropoff; it must NOT be drawn on the
+      // driver→pickup leg (it would point away from the pickup hand-off).
+      expect(route?.polyline).toEqual([]);
     }
   });
 
-  it('targets the DROPOFF once in progress', () => {
+  it('targets the DROPOFF once in progress and draws the stored route line', () => {
     const route = selectCarRoute('trip_in_progress', makeRide());
     expect(route?.leg).toBe('dropoff');
     expect(route?.destination).toEqual({ latitude: 52.2, longitude: -106.6 });
     expect(route?.destinationLabel).toBe('202 Dropoff Ave');
+    expect(route?.polyline).toHaveLength(3);
   });
 
   it('returns null for non-nav states and a null ride', () => {

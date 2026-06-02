@@ -94,7 +94,12 @@ export function selectCarRoute(
       ? ride.dropoff_address || 'Dropoff'
       : ride.pickup_address || 'Pickup',
     leg: toDropoff ? 'dropoff' : 'pickup',
-    polyline: extractPolyline(activeRide),
+    // Only draw the stored line on the DROPOFF leg — `planned_route_polyline` is
+    // the pickup→dropoff trip route, captured at creation. Pre-pickup (driver→
+    // pickup) we have no stored line, so drawing it would show a route leaving
+    // the pickup toward the dropoff while the hand-off targets the pickup —
+    // misleading exactly when the driver is heading to the rider. Marker only.
+    polyline: toDropoff ? extractPolyline(activeRide) : [],
   };
 }
 

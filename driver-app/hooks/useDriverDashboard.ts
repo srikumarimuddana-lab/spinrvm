@@ -21,6 +21,7 @@ import {
   stopBackgroundLocation,
   startGeofenceRecovery,
   stopGeofenceRecovery,
+  setBackgroundTripActive,
   updateBackgroundLocationCadence,
   TRIP_CADENCE,
   IDLE_CADENCE,
@@ -453,9 +454,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // relies entirely on the background task — keep it dense during trip
     // phases, coarse when idle. No-op until go-online has started the task.
     const TRIP_PHASES = ['navigating_to_pickup', 'arrived_at_pickup', 'trip_in_progress'];
-    updateBackgroundLocationCadence(
-      TRIP_PHASES.includes(rideState) ? TRIP_CADENCE : IDLE_CADENCE,
-    ).catch(() => {});
+    const inTripPhase = TRIP_PHASES.includes(rideState);
+    updateBackgroundLocationCadence(inTripPhase ? TRIP_CADENCE : IDLE_CADENCE).catch(() => {});
+    // Persist the trip-active flag so a force-kill geofence recovery re-arms at
+    // trip cadence rather than the coarse idle default.
+    setBackgroundTripActive(inTripPhase).catch(() => {});
     (async () => {
       if (locationSubRef.current) {
         try { locationSubRef.current.remove(); } catch {}
@@ -526,10 +529,17 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
             }
           }
 
-          locationBufferRef.current.push(payload);
-
-          if (locationBufferRef.current.length > 500) {
-            locationBufferRef.current = locationBufferRef.current.slice(-500);
+          // Only buffer for the REST fallback when the socket is DOWN. When WS
+          // is open it already persists each point as a breadcrumb server-side,
+          // so also REST-flushing this buffer would double-write
+          // driver_location_history — inflating gps_points_count and hitting
+          // the settlement row cap sooner. Background-only/WS-down uploads are
+          // the sole REST persistence path.
+          if (wsRef.current?.readyState !== WebSocket.OPEN) {
+            locationBufferRef.current.push(payload);
+            if (locationBufferRef.current.length > 500) {
+              locationBufferRef.current = locationBufferRef.current.slice(-500);
+            }
           }
         }
       );

@@ -1,7 +1,7 @@
 """Tests for the rider-facing Google Maps proxy.
 
 Covers the cost-control contracts that justify the proxy's existence:
-  - session-token aware billing (the May 2026 overage fix)
+  - Places API (New) autocomplete/details billing
   - reverse-geocode Redis cache (avoids paying for repeat lookups)
   - daily-budget circuit breaker (defence in depth on top of GCP budget alerts)
 
@@ -48,6 +48,36 @@ async def test_record_call_increments_per_sku_counter(mock_redis):
     assert 0.010 < spent < 0.012
 
 
+
+@pytest.mark.anyio
+async def test_record_autocomplete_request_counts_abandoned_session_until_close(mock_redis):
+    from utils import maps_budget
+
+    for _ in range(13):
+        await maps_budget.record_autocomplete_request("session-1")
+
+    spent = await maps_budget.estimate_today_usd()
+    assert spent == pytest.approx(13 * 0.00283, rel=0.01)
+
+    await maps_budget.close_autocomplete_session("session-1")
+
+    spent = await maps_budget.estimate_today_usd()
+    assert spent == pytest.approx(12 * 0.00283, rel=0.01)
+
+
+@pytest.mark.anyio
+async def test_closed_autocomplete_session_reconciles_only_requests_after_twelve(mock_redis):
+    from utils import maps_budget
+
+    for _ in range(16):
+        await maps_budget.record_autocomplete_request("session-2")
+
+    await maps_budget.close_autocomplete_session("session-2")
+
+    spent = await maps_budget.estimate_today_usd()
+    assert spent == pytest.approx(12 * 0.00283, rel=0.01)
+
+
 @pytest.mark.anyio
 async def test_check_budget_trips_over_threshold(mock_redis, monkeypatch):
     from utils import maps_budget
@@ -67,24 +97,25 @@ async def test_check_budget_allows_under_threshold(mock_redis, monkeypatch):
     from utils import maps_budget
 
     monkeypatch.setattr(maps_budget, "_daily_budget_usd", lambda: 1.0)
-    await maps_budget.record_call("autocomplete_session")
+    await maps_budget.record_call("details")
 
     allowed, _, _ = await maps_budget.check_budget()
     assert allowed is True
 
 
-# ── route-level: session-token billing ────────────────────────────────────────
+# ── route-level: Places API (New) proxy/billing ──────────────────────────────
 
 
 def _mock_httpx_response(payload: dict) -> MagicMock:
     """Build an httpx-like response object for unit testing."""
     resp = MagicMock()
     resp.json.return_value = payload
+    resp.raise_for_status.return_value = None
     return resp
 
 
 @pytest.mark.anyio
-async def test_autocomplete_records_session_when_token_passed(mock_redis, monkeypatch):
+async def test_autocomplete_uses_new_api_and_records_per_request_when_token_passed(mock_redis, monkeypatch):
     from routes import maps_proxy
     from utils import maps_budget
 
@@ -93,8 +124,24 @@ async def test_autocomplete_records_session_when_token_passed(mock_redis, monkey
     mock_client = MagicMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
-    mock_client.get = AsyncMock(
-        return_value=_mock_httpx_response({"status": "OK", "predictions": [{"description": "X"}]})
+    mock_client.post = AsyncMock(
+        return_value=_mock_httpx_response(
+            {
+                "suggestions": [
+                    {
+                        "placePrediction": {
+                            "placeId": "ChIJ_123",
+                            "text": {"text": "123 Main St, Regina, SK, Canada"},
+                            "structuredFormat": {
+                                "mainText": {"text": "123 Main St"},
+                                "secondaryText": {"text": "Regina, SK, Canada"},
+                            },
+                            "distanceMeters": 42,
+                        }
+                    }
+                ]
+            }
+        )
     )
 
     with patch("routes.maps_proxy.httpx.AsyncClient", return_value=mock_client):
@@ -102,13 +149,31 @@ async def test_autocomplete_records_session_when_token_passed(mock_redis, monkey
             request=_fake_request(),
             input="123 main",
             session_token="abc-uuid",
+            location="52.1000,-106.6000",
+            radius=50000,
             current_user={"id": "rider_1"},
         )
 
-    assert result == {"predictions": [{"description": "X"}]}
-    # Cost recorded against the session-priced bucket, not the per-call bucket.
+    assert result == {
+        "predictions": [
+            {
+                "place_id": "ChIJ_123",
+                "description": "123 Main St, Regina, SK, Canada",
+                "structured_formatting": {
+                    "main_text": "123 Main St",
+                    "secondary_text": "Regina, SK, Canada",
+                },
+                "distance_meters": 42,
+            }
+        ]
+    }
+    mock_client.post.assert_awaited_once()
+    _, kwargs = mock_client.post.await_args
+    assert kwargs["json"]["sessionToken"] == "abc-uuid"
+    assert kwargs["headers"]["X-Goog-FieldMask"]
+    # Places API (New) bills this Essentials-terminating flow per autocomplete request.
     spent = await maps_budget.estimate_today_usd()
-    assert spent == pytest.approx(0.017, rel=0.01)
+    assert spent == pytest.approx(0.00283, rel=0.01)
 
 
 @pytest.mark.anyio
@@ -121,7 +186,7 @@ async def test_autocomplete_records_per_call_without_token(mock_redis, monkeypat
     mock_client = MagicMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
-    mock_client.get = AsyncMock(return_value=_mock_httpx_response({"status": "OK", "predictions": []}))
+    mock_client.post = AsyncMock(return_value=_mock_httpx_response({"suggestions": []}))
 
     with patch("routes.maps_proxy.httpx.AsyncClient", return_value=mock_client):
         await maps_proxy.places_autocomplete(
@@ -132,12 +197,12 @@ async def test_autocomplete_records_per_call_without_token(mock_redis, monkeypat
         )
 
     spent = await maps_budget.estimate_today_usd()
-    # Per-call autocomplete is $0.00283; never $0.017.
+    # Per-call autocomplete is $0.00283; never the legacy $0.017 session rate.
     assert spent == pytest.approx(0.00283, rel=0.01)
 
 
 @pytest.mark.anyio
-async def test_details_does_not_double_bill_when_session_token_used(mock_redis, monkeypatch):
+async def test_details_uses_new_api_and_records_essentials_charge(mock_redis, monkeypatch):
     from routes import maps_proxy
     from utils import maps_budget
 
@@ -149,27 +214,27 @@ async def test_details_does_not_double_bill_when_session_token_used(mock_redis, 
     mock_client.get = AsyncMock(
         return_value=_mock_httpx_response(
             {
-                "status": "OK",
-                "result": {
-                    "geometry": {"location": {"lat": 52.1, "lng": -106.6}},
-                    "formatted_address": "123 Main St",
-                },
+                "location": {"latitude": 52.1, "longitude": -106.6},
+                "formattedAddress": "123 Main St",
             }
         )
     )
 
     with patch("routes.maps_proxy.httpx.AsyncClient", return_value=mock_client):
-        await maps_proxy.places_details(
+        result = await maps_proxy.places_details(
             request=_fake_request(),
             place_id="ChIJ_123",
             session_token="abc-uuid",
             current_user={"id": "rider_1"},
         )
 
-    # Session-bundled details are billed via the autocomplete_session line; this
-    # call must not record an additional `details` charge.
+    assert result == {"lat": 52.1, "lng": -106.6, "formatted_address": "123 Main St"}
+    mock_client.get.assert_awaited_once()
+    _, kwargs = mock_client.get.await_args
+    assert kwargs["params"] == {"sessionToken": "abc-uuid"}
+    assert kwargs["headers"]["X-Goog-FieldMask"] == "location,formattedAddress"
     spent = await maps_budget.estimate_today_usd()
-    assert spent == 0.0
+    assert spent == pytest.approx(0.005, rel=0.01)
 
 
 # ── route-level: reverse-geocode caching ──────────────────────────────────────
@@ -240,7 +305,7 @@ async def test_autocomplete_503s_when_budget_exhausted(mock_redis, monkeypatch):
 
     # Pin budget tiny and pre-spend over it.
     monkeypatch.setattr(maps_budget, "_daily_budget_usd", lambda: 0.001)
-    await maps_budget.record_call("autocomplete_session")  # 0.017 spent
+    await maps_budget.record_call("autocomplete")  # 0.00283 spent
 
     monkeypatch.setattr(maps_proxy, "_maps_key", AsyncMock(return_value="dummy_key"))
 

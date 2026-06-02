@@ -11,7 +11,8 @@ Endpoints (mounted at ``/api/v1/maps/*``):
 - ``GET /maps/places/details?place_id=&session_token=`` — finalise a session
 - ``GET /maps/reverse-geocode?lat=&lng=`` — drop-pin → address
 
-Cost shape: with session tokens, N autocomplete + 1 details = $0.017 flat.
+Cost shape: Places API (New) bills autocomplete requests and the final
+Place Details Essentials call separately when a user selects a prediction.
 Reverse-geocode hits a 24h Redis cache keyed by 4-decimal lat/lng (~11m).
 
 All endpoints require an authenticated rider/driver. The Maps key is read
@@ -30,12 +31,32 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 try:
     from ..dependencies import get_current_user
     from ..settings_loader import get_app_settings
+    from ..utils.google_places_new import (
+        PLACES_NEW_AUTOCOMPLETE_FIELD_MASK,
+        PLACES_NEW_AUTOCOMPLETE_URL,
+        PLACES_NEW_DETAILS_FIELD_MASK,
+        build_autocomplete_payload,
+        legacy_details_from_new_response,
+        legacy_predictions_from_new_response,
+        places_new_details_url,
+        places_new_headers,
+    )
     from ..utils.maps_budget import check_budget, record_call
     from ..utils.rate_limiter import default_limiter as limiter
     from ..utils.redis_client import redis_get, redis_set
 except ImportError:  # pragma: no cover - dual import path
     from dependencies import get_current_user  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
+    from utils.google_places_new import (  # type: ignore
+        PLACES_NEW_AUTOCOMPLETE_FIELD_MASK,
+        PLACES_NEW_AUTOCOMPLETE_URL,
+        PLACES_NEW_DETAILS_FIELD_MASK,
+        build_autocomplete_payload,
+        legacy_details_from_new_response,
+        legacy_predictions_from_new_response,
+        places_new_details_url,
+        places_new_headers,
+    )
     from utils.maps_budget import check_budget, record_call  # type: ignore
     from utils.rate_limiter import default_limiter as limiter  # type: ignore
     from utils.redis_client import redis_get, redis_set  # type: ignore
@@ -82,58 +103,44 @@ async def places_autocomplete(
     radius: int = Query(default=50000, ge=1000, le=100000),
     current_user: dict = Depends(get_current_user),
 ):
-    """Proxy Places Autocomplete. Pass session_token to bundle billing."""
+    """Proxy Places API (New) Autocomplete using session_token when present."""
     await _ensure_budget()
     api_key = await _maps_key()
 
-    params: dict = {
-        "input": input,
-        "key": api_key,
-        "language": "en",
-        "components": "country:ca",
-    }
-    if session_token:
-        params["sessiontoken"] = session_token
-
-    if location:
-        # Strict bias: only return results inside the radius around the rider's
-        # location. For ride-sharing this is what users want — they're searching
-        # for pickup/dropoff in their city, not browsing places nation-wide.
-        # Without strictbounds, brand searches like "Walmart" return matches from
-        # all over Canada ranked above the local store.
-        params["location"] = location
-        params["radius"] = str(radius)
-        params["origin"] = location
-        params["strictbounds"] = "true"
+    payload = build_autocomplete_payload(input, session_token, location, radius)
 
     logger.info(
-        "[maps_proxy] autocomplete input=%r location=%s radius=%s strictbounds=%s",
+        "[maps_proxy] autocomplete(new) input=%r location=%s radius=%s restricted=%s",
         input,
-        params.get("location", "(none)"),
-        params.get("radius", "(none)"),
-        params.get("strictbounds", "false"),
+        location or "(none)",
+        radius if location else "(none)",
+        bool(location),
     )
 
     try:
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-            resp = await client.get(
-                "https://maps.googleapis.com/maps/api/place/autocomplete/json",
-                params=params,
+            resp = await client.post(
+                PLACES_NEW_AUTOCOMPLETE_URL,
+                headers=places_new_headers(api_key, PLACES_NEW_AUTOCOMPLETE_FIELD_MASK),
+                json=payload,
             )
+            resp.raise_for_status()
             data = resp.json()
+    except httpx.HTTPStatusError as e:
+        logger.error(
+            "[maps_proxy] autocomplete(new) API error: %s",
+            e.response.text[:500],
+        )
+        raise HTTPException(status_code=502, detail="Places API error") from e
     except Exception as e:
-        logger.error("[maps_proxy] autocomplete request failed: %s", e)
+        logger.error("[maps_proxy] autocomplete(new) request failed: %s", e)
         raise HTTPException(status_code=502, detail="Failed to call Places API") from e
 
-    status = data.get("status")
-    if status not in ("OK", "ZERO_RESULTS"):
-        logger.error("[maps_proxy] autocomplete API error: %s", status)
-        raise HTTPException(status_code=502, detail="Places API error")
+    # Places API (New) bills autocomplete requests individually for sessions
+    # ending in Place Details Essentials, so record each proxied request.
+    await record_call("autocomplete")
 
-    # Bill as session-priced when client opted in, per-keystroke otherwise.
-    await record_call("autocomplete_session" if session_token else "autocomplete")
-
-    predictions = data.get("predictions", [])
+    predictions = legacy_predictions_from_new_response(data)
 
     logger.info(
         "[maps_proxy] autocomplete results=%d top=%s",
@@ -167,41 +174,29 @@ async def places_details(
     await _ensure_budget()
     api_key = await _maps_key()
 
-    params: dict = {
-        "place_id": place_id,
-        "fields": "geometry,formatted_address",
-        "key": api_key,
-    }
+    params: dict = {}
     if session_token:
-        params["sessiontoken"] = session_token
+        params["sessionToken"] = session_token
 
     try:
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
             resp = await client.get(
-                "https://maps.googleapis.com/maps/api/place/details/json",
+                places_new_details_url(place_id),
+                headers=places_new_headers(api_key, PLACES_NEW_DETAILS_FIELD_MASK),
                 params=params,
             )
+            resp.raise_for_status()
             data = resp.json()
+    except httpx.HTTPStatusError as e:
+        logger.error("[maps_proxy] details(new) API error: %s", e.response.text[:500])
+        raise HTTPException(status_code=502, detail="Places API error") from e
     except Exception as e:
-        logger.error("[maps_proxy] details request failed: %s", e)
+        logger.error("[maps_proxy] details(new) request failed: %s", e)
         raise HTTPException(status_code=502, detail="Failed to call Places API") from e
 
-    if data.get("status") != "OK":
-        logger.error("[maps_proxy] details API error: %s", data.get("status"))
-        raise HTTPException(status_code=502, detail="Places API error")
+    await record_call("details")
 
-    # When session_token is set, billing is bundled into the autocomplete_session
-    # tier already recorded — no further record needed. Without a session token
-    # this is a per-call Place Details bill.
-    if not session_token:
-        await record_call("details")
-
-    loc = data.get("result", {}).get("geometry", {}).get("location", {})
-    return {
-        "lat": loc.get("lat"),
-        "lng": loc.get("lng"),
-        "formatted_address": data.get("result", {}).get("formatted_address"),
-    }
+    return legacy_details_from_new_response(data)
 
 
 @api_router.get("/reverse-geocode")

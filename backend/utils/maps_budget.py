@@ -20,13 +20,13 @@ take Maps offline for users; the GCP-side budget alert is still our safety net.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 try:
-    from .redis_client import redis_expire, redis_get, redis_incr
+    from .redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_incrby
 except ImportError:  # pragma: no cover - dual import path
-    from utils.redis_client import redis_expire, redis_get, redis_incr  # type: ignore
+    from utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_incrby  # type: ignore
 
 try:
     from ..core.config import settings
@@ -37,17 +37,20 @@ logger = logging.getLogger(__name__)
 
 Sku = Literal["autocomplete", "autocomplete_session", "details", "geocode"]
 
-# USD per call. Source: Google Maps Platform pricing 2025.
-# autocomplete_session is the per-session flat rate (covers N autocomplete
-# requests + 1 details call when the same session token is passed).
+# USD per call. Source: Google Maps Platform pricing 2026.
+# Places API (New) charges autocomplete requests separately for sessions that
+# terminate in Place Details Essentials; `autocomplete_session` remains for
+# historical counters that may still exist in today's Redis bucket.
 _PRICE_USD: dict[Sku, float] = {
     "autocomplete": 0.00283,
     "autocomplete_session": 0.017,
-    "details": 0.017,
+    "details": 0.005,
     "geocode": 0.005,
 }
 
 _BUCKET_TTL_SECONDS = 26 * 3600
+_SESSION_TTL_SECONDS = 30 * 60
+_SESSION_AUTOCOMPLETE_PAID_LIMIT = 12
 
 
 def _today_utc() -> str:
@@ -74,6 +77,86 @@ async def record_call(sku: Sku) -> None:
             await redis_expire(_key(sku), _BUCKET_TTL_SECONDS)
     except Exception:
         logger.warning("[maps_budget] record_call(%s) failed; skipping count", sku, exc_info=False)
+
+
+def _session_autocomplete_key(session_token: str, day: str | None = None) -> str:
+    return f"maps:places:new:session:{day or _today_utc()}:{session_token}:autocomplete"
+
+
+def _yesterday_utc() -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+async def record_autocomplete_request(session_token: str | None) -> None:
+    """Record a Places API (New) autocomplete request as paid until proven free.
+
+    Incomplete/abandoned sessions are billed per Autocomplete Requests, so every
+    successful autocomplete must immediately count toward the circuit breaker. If
+    the session later closes with this proxy's Place Details Essentials call,
+    ``close_autocomplete_session`` reconciles requests 13+ back out because those
+    completed-session requests become no-charge session usage.
+    """
+    await record_call("autocomplete")
+
+    if not session_token:
+        return
+
+    try:
+        key = _session_autocomplete_key(session_token)
+        count = await redis_incr(key)
+        if count == 1:
+            await redis_expire(key, _SESSION_TTL_SECONDS)
+    except Exception:
+        logger.warning(
+            "[maps_budget] record_autocomplete_request failed; request counted without session tracking",
+            exc_info=False,
+        )
+
+
+async def _reconcile_closed_session_day(session_token: str, day: str) -> None:
+    session_key = _session_autocomplete_key(session_token, day)
+    raw_count = await redis_get(session_key)
+    if raw_count is None:
+        return
+
+    try:
+        request_count = int(raw_count)
+    except (TypeError, ValueError):
+        request_count = 0
+
+    free_count = max(0, request_count - _SESSION_AUTOCOMPLETE_PAID_LIMIT)
+    if free_count:
+        autocomplete_key = _key("autocomplete", day)
+        raw_daily = await redis_get(autocomplete_key)
+        try:
+            daily_count = int(raw_daily) if raw_daily is not None else 0
+        except (TypeError, ValueError):
+            daily_count = 0
+        decrement = min(free_count, daily_count)
+        if decrement:
+            new_daily_count = await redis_incrby(autocomplete_key, -decrement)
+            if new_daily_count == 0:
+                await redis_expire(autocomplete_key, _BUCKET_TTL_SECONDS)
+
+    await redis_delete(session_key)
+
+
+async def close_autocomplete_session(session_token: str | None) -> None:
+    """Reconcile and forget a tokenized session after details closes it.
+
+    A session may begin before UTC midnight and close shortly after, so reconcile
+    both today's and yesterday's short-lived session counters.
+    """
+    if not session_token:
+        return
+    try:
+        await _reconcile_closed_session_day(session_token, _today_utc())
+        await _reconcile_closed_session_day(session_token, _yesterday_utc())
+    except Exception:
+        logger.warning(
+            "[maps_budget] close_autocomplete_session failed; skipping reconciliation",
+            exc_info=False,
+        )
 
 
 async def estimate_today_usd() -> float:

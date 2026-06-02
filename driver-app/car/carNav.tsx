@@ -141,6 +141,12 @@ export function buildIdleTemplate(ListTemplateCtor: ListCtor): object {
   });
 }
 
+// CarPlay idle root: a MapTemplate (no nav buttons) so a navigation-category app
+// always has a CPMapTemplate root, even while waiting for a trip. (Codex P2)
+export function buildIdleMapTemplate(MapTemplateCtor: MapCtor): object {
+  return new MapTemplateCtor({ id: IDLE_TEMPLATE_ID, component: CarMapSurface });
+}
+
 // ── Wire it up: drive the car root from the ride state machine ──
 // Runs on both car platforms: Android Auto calls this from its AppRegistry root
 // (car/androidAutoEntry.tsx); CarPlay calls it from app/_layout.tsx (shared JS
@@ -158,14 +164,27 @@ export function initCarNav(): () => void {
   }
   const { CarPlay, MapTemplate, ListTemplate } = carplay;
 
-  // Cold Android Auto launch runs this separate JS root with the phone dashboard
-  // (and its hydrate + fetchActiveRide) never mounted, so the store would sit at
-  // `idle` and show the idle list instead of the active route. Restore the
-  // persisted ride here. Safe + idempotent: hydrateDriverRideState only fills an
-  // empty store, never clobbers a live ride/offer, and is AsyncStorage-only (no
-  // auth). The store subscription below rebuilds the root once state lands.
-  // (Network reconciliation via fetchActiveRide needs auth bootstrap — deferred.)
-  useDriverStore.getState().hydrateDriverRideState?.().catch(() => {});
+  // Cold car launch runs this separate JS root with the phone dashboard (and its
+  // hydrate + fetchActiveRide) never mounted, so the store would sit at `idle`.
+  // Restore the persisted ride AND reconcile against the server, so a cached ride
+  // that completed/cancelled/changed while the phone UI was unmounted doesn't show
+  // or hand off a stale route. fetchActiveRide is safe here — the api client
+  // resolves the token from SecureStore (shared/api/client.ts), so no in-memory
+  // auth bootstrap is needed. Both are guarded/idempotent; the store subscription
+  // rebuilds the root once state lands. (Codex P2)
+  void (async () => {
+    const store = useDriverStore.getState();
+    try {
+      await store.hydrateDriverRideState?.();
+    } catch {
+      /* cache miss — ignore */
+    }
+    try {
+      await store.fetchActiveRide?.();
+    } catch {
+      /* offline / not authed — keep the cached snapshot */
+    }
+  })();
 
   // Seed with the guaranteed app; the real set (incl. Google Maps / Waze if the
   // driver has them) is resolved asynchronously below and triggers a rebuild.
@@ -177,6 +196,11 @@ export function initCarNav(): () => void {
   // setRootTemplate is comparatively expensive.
   let lastKey: string | null = null;
   const apply = () => {
+    // Only push templates when a car is actually connected. On iOS initCarNav is
+    // mounted by the phone layout even with no CarPlay session, so unguarded
+    // store changes (accept/progress a ride while unplugged) would call
+    // setRootTemplate on a nil interface. onConnect re-applies on connect. (Codex P2)
+    if (!CarPlay.connected) return;
     const { rideState, activeRide } = useDriverStore.getState();
     const route = selectCarRoute(rideState, activeRide);
     // Include ride identity in the key so a same-leg ride swap (cached →
@@ -187,9 +211,15 @@ export function initCarNav(): () => void {
     if (key === lastKey) return;
     lastKey = key;
     try {
+      // CarPlay navigation apps (carplay-maps) require a CPMapTemplate root, so
+      // the iOS idle state is a MapTemplate too — a ListTemplate root can be
+      // rejected by the host. Android Auto's idle ListTemplate is fine for the
+      // NAVIGATION category. (Codex P2)
       const tpl = route
         ? buildNavMapTemplate(MapTemplate as unknown as MapCtor, navButtons)
-        : buildIdleTemplate(ListTemplate as unknown as ListCtor);
+        : Platform.OS === 'ios'
+          ? buildIdleMapTemplate(MapTemplate as unknown as MapCtor)
+          : buildIdleTemplate(ListTemplate as unknown as ListCtor);
       // The fork's setRootTemplate type union omits MapTemplate (its TS types lag
       // the runtime, which accepts it as a root) — cast to the expected param.
       CarPlay.setRootTemplate(tpl as Parameters<typeof CarPlay.setRootTemplate>[0]);

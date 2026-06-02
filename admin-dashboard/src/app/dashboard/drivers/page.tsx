@@ -22,6 +22,7 @@ import AreaStatsTable from "./_components/area-stats-table";
 import DriverActionBar from "./_components/driver-action-bar";
 import DriverNotes from "./_components/driver-notes";
 import DriverTimeline from "./_components/driver-timeline";
+import DriverActivity from "./_components/driver-activity";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useToast } from "@/components/ui/use-toast";
 import { useAuthStore } from "@/store/authStore";
@@ -1053,8 +1054,9 @@ export default function DriversPage() {
                                     <DriverNotes driverId={selected.id} />
                                 </TabsContent>
 
-                                {/* History / Audit Timeline */}
-                                <TabsContent value="history" className="mt-4">
+                                {/* History: daily activity (per-phase km + empty/riding time) + audit timeline */}
+                                <TabsContent value="history" className="mt-4 space-y-6">
+                                    <DriverActivity driverId={selected.id} />
                                     <DriverTimeline driverId={selected.id} driver={selected} />
                                 </TabsContent>
                             </div>

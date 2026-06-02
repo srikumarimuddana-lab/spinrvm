@@ -16,6 +16,9 @@ const TASK_NAME = 'spinr-background-location';
 const GEOFENCE_TASK = 'spinr-geofence-recovery';
 const GEOFENCE_RADIUS_M = 500;          // 500m boundary — re-arms ~1 block away
 const GEOFENCE_ID = 'spinr-recovery';
+// Persisted across app death so the headless geofence-recovery task knows
+// whether to re-arm at trip cadence (a ride is active) or idle cadence.
+const TRIP_ACTIVE_KEY = 'spinr_bg_trip_active';
 
 type LocationTaskData = {
   locations: Location.LocationObject[];
@@ -224,7 +227,25 @@ export async function stopBackgroundLocation(): Promise<void> {
   // Clear cached background token so a new sign-in starts fresh
   await SecureStore.deleteItemAsync('bg_access_token').catch(() => {});
   await SecureStore.deleteItemAsync('bg_access_token_expires').catch(() => {});
+  await SecureStore.deleteItemAsync(TRIP_ACTIVE_KEY).catch(() => {});
   console.log('[BgLocation] Stopped');
+}
+
+/**
+ * Persist whether a ride is active so the headless geofence-recovery task can
+ * re-arm tracking at trip cadence after a force-kill (it has no access to the
+ * React/zustand ride state). Best-effort.
+ */
+export async function setBackgroundTripActive(active: boolean): Promise<void> {
+  try {
+    if (active) {
+      await SecureStore.setItemAsync(TRIP_ACTIVE_KEY, 'true');
+    } else {
+      await SecureStore.deleteItemAsync(TRIP_ACTIVE_KEY);
+    }
+  } catch {
+    // best-effort — recovery falls back to idle cadence if unreadable
+  }
 }
 
 // ── Geofence recovery task ─────────────────────────────────────────────
@@ -247,8 +268,13 @@ TaskManager.defineTask(GEOFENCE_TASK, async ({ data, error }) => {
     //    short-circuits if the task is already running, so this is cheap.
     const isRunning = await TaskManager.isTaskRegisteredAsync(TASK_NAME);
     if (!isRunning) {
-      await startBackgroundLocation();
-      console.log('[Geofence] Recovered background tracking after kill');
+      // Re-arm at trip cadence if a ride was active when the app was killed,
+      // otherwise the rest of the trip is sampled at the coarse idle cadence
+      // and undercounts. The flag is persisted by setBackgroundTripActive
+      // since this headless task can't read the React/zustand ride state.
+      const tripActive = (await SecureStore.getItemAsync(TRIP_ACTIVE_KEY).catch(() => null)) === 'true';
+      await startBackgroundLocation(tripActive ? TRIP_CADENCE : undefined);
+      console.log(`[Geofence] Recovered background tracking after kill (cadence=${tripActive ? 'trip' : 'idle'})`);
     }
 
     // 2. Refresh the geofence around the current location so subsequent

@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { TRACK_CSP } from "./src/lib/track-host";
 
 // Fail fast on Vercel production if the API URL is missing — prevents silent
 // localhost fallback. Uses VERCEL_ENV (not NODE_ENV) because next build always
@@ -20,24 +21,8 @@ const BACKEND_URL =
 
 // Content-Security-Policy for the admin dashboard is set dynamically
 // per-request in src/middleware.ts so a per-request nonce can be embedded.
-// The public /track/* pages are excluded from middleware and get their own
-// static CSP here — no nonce needed since they carry no privileged JS.
-const TRACK_CSP = [
-  "default-src 'self'",
-  // MapLibre GL v5 needs blob: for its tile-processing Web Worker.
-  // Chrome requires this even when the blob is created in the same origin.
-  "worker-src blob: 'self'",
-  // Next.js hydration scripts are inline; unsafe-inline is acceptable for
-  // a public, low-privilege page that holds no admin state.
-  "script-src 'self' 'unsafe-inline' https:",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https:",
-  // Glyphs and fonts fetched by MapLibre style may come from third-party CDNs.
-  "font-src 'self' data: https:",
-  // Tile and routing requests go to openfreemap.org, protomaps, osrm, etc.
-  "connect-src 'self' https: wss: ws:",
-  "frame-ancestors 'none'",
-].join("; ");
+// The public /track/* pages get the static TRACK_CSP (shared with middleware
+// via src/lib/track-host.ts) — no nonce needed since they carry no admin state.
 
 const securityHeaders = [
   { key: "X-Frame-Options", value: "DENY" },
@@ -65,10 +50,9 @@ const nextConfig: NextConfig = {
         source: "/(.*)",
         headers: securityHeaders,
       },
-      // Public tracking page: static CSP with worker-src blob: so MapLibre's
-      // tile-processing Web Worker is allowed. This overrides the generic
-      // rule above for /track/* and is guaranteed to be applied by Vercel
-      // regardless of middleware behaviour.
+      // Public tracking page: static CSP (Google Maps + OSRM sources). Applies
+      // to direct /track/* requests on any host; the tracking-domain rewrite
+      // (/{token} → /track/{token}) sets the same CSP from middleware.
       {
         source: "/track/:path*",
         headers: [

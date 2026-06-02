@@ -1,9 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isTrackingHost, TRACK_CSP } from "@/lib/track-host";
 
 /**
- * Edge middleware — first line of defense for the admin dashboard.
+ * Edge middleware — first line of defense, and host-based router.
  *
- * Strategy:
+ * The same Next.js app is served on two domains:
+ *
+ *   - admin-spinr.spinr.ca  → full admin panel (this middleware enforces auth)
+ *   - track.spinr.ca        → ONLY the public read-only tracking page, on
+ *                             clean URLs: track.spinr.ca/{token} is rewritten
+ *                             to /track/{token}. Every admin route 404s here so
+ *                             the admin surface is never exposed to customers.
+ *
+ * Admin-domain strategy:
  *
  *   1. On login success the access token is dual-written: held in Zustand memory
  *      (for React/api.ts) AND written to an HttpOnly `admin_token` cookie via
@@ -135,9 +144,47 @@ function passThroughWithNonce(request: NextRequest, nonce: string): NextResponse
   return response;
 }
 
+// ── Tracking-domain router ───────────────────────────────────────────────────
+// On track.spinr.ca the ONLY thing served is the public read-only tracking
+// page. Customers get clean links — track.spinr.ca/{token} — which we rewrite
+// to the /track/[rideId] route. Any other path (admin login, dashboard, a bare
+// root with no token) returns 404 so the admin surface is never reachable here.
+function handleTrackingHost(request: NextRequest): NextResponse {
+  const { pathname } = request.nextUrl;
+
+  // Already a canonical /track/... path: serve it directly with the public CSP.
+  // (The matcher normally excludes /track/, so this branch is belt-and-braces.)
+  if (pathname === "/track" || pathname.startsWith("/track/")) {
+    const response = NextResponse.next();
+    response.headers.set("Content-Security-Policy", TRACK_CSP);
+    return response;
+  }
+
+  // A single path segment is the share token: /{token} → /track/{token}.
+  const segment = pathname.replace(/^\/+/, "");
+  if (segment.length > 0 && !segment.includes("/")) {
+    const url = request.nextUrl.clone();
+    url.pathname = `/track/${segment}`;
+    const response = NextResponse.rewrite(url);
+    response.headers.set("Content-Security-Policy", TRACK_CSP);
+    return response;
+  }
+
+  // Root, or any multi-segment / admin path on the tracking domain → not found.
+  return new NextResponse("Not found", { status: 404 });
+}
+
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
+  // ── Host-based routing ──────────────────────────────────────────────────────
+  // The tracking domain serves only the public page and never the admin panel.
+  const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
+  if (isTrackingHost(host)) {
+    return handleTrackingHost(request);
+  }
+
+  // ── Admin domain below ──────────────────────────────────────────────────────
   // IP allowlist check — runs before auth so blocked IPs see 403, not /login
   if (!isIpAllowed(request)) {
     return new NextResponse("Forbidden", { status: 403 });

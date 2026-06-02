@@ -3329,9 +3329,9 @@ async def get_share_trip_link(ride_id: str, current_user: dict = Depends(get_cur
         share_token = secrets.token_urlsafe(32)
         await db_supabase.update_ride(ride_id, {"shared_trip_token": share_token})
 
-    # The frontend would use this token to show a read-only tracking page
-    # In production, this would be a full URL like: https://spinr.app/track/{share_token}
-    share_url = f"/track/{share_token}"
+    # Clean customer-facing link: {tracking-domain}/{token}. The tracking
+    # domain (e.g. track.spinr.ca) rewrites /{token} → /track/{token} server-side.
+    share_url = f"{_settings.TRACKING_BASE_URL}/{share_token}"
 
     return {
         "success": True,
@@ -3394,7 +3394,9 @@ async def share_trip_with_contact(
             {"$set": {"shared_with": shared_with}},
         )
 
-    share_url = f"/track/{share_token}"
+    # Clean customer-facing link: {tracking-domain}/{token}. The tracking
+    # domain (e.g. track.spinr.ca) rewrites /{token} → /track/{token} server-side.
+    share_url = f"{_settings.TRACKING_BASE_URL}/{share_token}"
 
     # Send push notification to contact if they're a registered user
     contact_user = await db.find_one("users", {"phone": body.contact_phone})

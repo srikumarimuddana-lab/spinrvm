@@ -470,7 +470,8 @@ export default function ProfileScreen() {
                     isValid ? '#10B981' :
                     docStatus === 'approved' ? '#10B981' :
                     docStatus === 'pending' ? '#F59E0B' :
-                    docStatus === 'rejected' ? '#EF4444' : null;
+                    docStatus === 'rejected' ? '#EF4444' :
+                    '#EF4444'; // upload required
 
                 const badgeLabel =
                     isExpired ? 'EXPIRED' :
@@ -478,7 +479,8 @@ export default function ProfileScreen() {
                     isValid ? 'VALID' :
                     docStatus === 'approved' ? 'APPROVED' :
                     docStatus === 'pending' ? 'PENDING REVIEW' :
-                    docStatus === 'rejected' ? 'REJECTED' : null;
+                    docStatus === 'rejected' ? 'REJECTED' :
+                    'UPLOAD REQUIRED';
 
                 const iconColor =
                     isExpired ? '#EF4444' :
@@ -503,18 +505,14 @@ export default function ProfileScreen() {
                         </View>
                         <View style={styles.cardInfo}>
                         <Text style={styles.cardLabel}>{req.name}</Text>
-                        {badgeLabel ? (
-                            <View style={{flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2}}>
-                                {expiry && (
-                                    <Text style={styles.cardValue}>{new Date(expiry).toLocaleDateString()}</Text>
-                                )}
-                                <View style={[styles.docStatusBadge, {backgroundColor: badgeColor!}]}>
-                                    <Text style={styles.docStatusText}>{badgeLabel}</Text>
-                                </View>
+                        <View style={{flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2}}>
+                            {expiry && (
+                                <Text style={styles.cardValue}>{new Date(expiry).toLocaleDateString()}</Text>
+                            )}
+                            <View style={[styles.docStatusBadge, {backgroundColor: badgeColor}]}>
+                                <Text style={styles.docStatusText}>{badgeLabel}</Text>
                             </View>
-                        ) : (
-                            <Text style={styles.cardValueDim}>Not submitted</Text>
-                        )}
+                        </View>
                         </View>
                         <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
                     </View>

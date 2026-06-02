@@ -25,7 +25,6 @@ import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
 import { useDriverStore } from '../store/driverStore';
-import { initCarNav } from '../car/carNav';
 import SpinrConfig from '@shared/config/spinr.config';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
@@ -356,17 +355,9 @@ export default function RootLayout() {
     }
   }, []);
 
-  // ── CarPlay in-dash route map, iOS only ──
-  // iOS CarPlay shares the phone app's JS context, so it's driven from here.
-  // Android Auto runs in its OWN JS root (car/androidAutoEntry, imported above)
-  // — calling initCarNav here too would double-init on Android, hence the iOS
-  // guard. No-op unless the native module is present (CarPlay wiring is gated off
-  // by default — see plugins/withCarIntegration.js). See docs/carplay-android-auto.md.
-  useEffect(() => {
-    if (Platform.OS !== 'ios') return;
-    const cleanup = initCarNav();
-    return cleanup;
-  }, []);
+  // Android Auto is registered at JS bundle load in index.js (registerAutoPlay,
+  // @iternio/react-native-auto-play) — nothing for the phone layout to do here.
+  // iOS CarPlay is dormant (needs an Apple entitlement + scene wiring not present).
 
   // ── Cold-start init: auth, location, Firebase native modules, Android channel ──
   useEffect(() => {

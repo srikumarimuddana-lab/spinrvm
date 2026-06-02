@@ -98,7 +98,20 @@ async def _validate_via_osrm(trip_points: list[dict], osrm_url: str) -> Optional
         return None
 
     if data.get("code") != "Ok":
-        logger.warning("[route_validation] OSRM code=%s", data.get("code"))
+        code = data.get("code")
+        logger.warning("[route_validation] OSRM code=%s", code)
+        if code == "NoMatch":
+            total = len(sampled)
+            return {
+                "provider": "osrm_match",
+                "total_points": total,
+                "snapped_points": 0,
+                "deviation_pct": 100.0,
+                "avg_deviation_m": 999.0,
+                "max_deviation_m": 999.0,
+                "match_confidence": None,
+                "verdict": "likely_spoofed",
+            }
         return None
 
     tracepoints = data.get("tracepoints") or []

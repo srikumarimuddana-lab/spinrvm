@@ -3637,6 +3637,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                 upsert=True,
             )
             route_geometry_status = "saved"
+            route_geometry_error = None
             break
         except Exception as exc:
             route_geometry_error = str(exc)[:500]

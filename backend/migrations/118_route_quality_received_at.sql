@@ -62,3 +62,13 @@ COMMENT ON COLUMN rides.route_geometry_status IS
 
 COMMENT ON COLUMN rides.route_geometry_error IS
     'Last route geometry side-table save error, if saving failed after retries.';
+
+-- Existing databases can already have ride_routes from migration 117. Backfill
+-- the lightweight rides status so admin list views do not report completed
+-- historical rides with saved geometry as still pending.
+UPDATE rides r
+SET route_geometry_status = 'saved',
+    route_geometry_error = NULL
+FROM ride_routes rr
+WHERE rr.ride_id = r.id
+  AND COALESCE(r.route_geometry_status, 'pending') = 'pending';

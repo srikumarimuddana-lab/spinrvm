@@ -47,7 +47,7 @@ export function extractPolyline(activeRide: ActiveRide | null): LatLng[] {
   const ride = activeRide.ride as Record<string, unknown> | undefined;
   const raw =
     (ride?.planned_route_polyline as unknown) ??
-    ((activeRide as Record<string, unknown>).planned_route_polyline as unknown) ??
+    ((activeRide as unknown as Record<string, unknown>).planned_route_polyline as unknown) ??
     null;
   if (!Array.isArray(raw)) return [];
   const out: LatLng[] = [];

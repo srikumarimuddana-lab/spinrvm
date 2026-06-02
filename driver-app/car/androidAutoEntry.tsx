@@ -14,14 +14,16 @@
  */
 import { useEffect } from 'react';
 import { AppRegistry, Platform } from 'react-native';
-import { initCarSpike } from './carSpike';
+import { initCarNav } from './carNav';
 
 // Android Auto renders Google car *templates*, not RN views, so this root renders
-// nothing — it just drives the template layer via initCarSpike() (which sets the
-// root template on connect; the car is already connected when this root mounts).
+// nothing itself — it drives the template layer via initCarNav(), which sets a
+// MapTemplate (the in-dash route map drawn from the stored polyline) as the car
+// root on an active ride and an idle ListTemplate otherwise. The map surface
+// component is rendered separately by the fork onto the car surface.
 function AndroidAutoRoot(): null {
   useEffect(() => {
-    const cleanup = initCarSpike();
+    const cleanup = initCarNav();
     return cleanup;
   }, []);
   return null;

@@ -112,6 +112,10 @@ export default function TrackRide() {
   // Initialise the map once when the container mounts.
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
+    // Serve the tile-processing worker from the same origin so it passes
+    // `worker-src 'self'` without needing `worker-src blob:` in the CSP.
+    // The file is copied from node_modules at build time (see public/).
+    maplibregl.workerUrl = '/maplibre-gl-csp-worker.js';
     const primaryStyle = trackBaseMapStyle();
     const map = new maplibregl.Map({
       container: mapContainerRef.current,

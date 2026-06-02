@@ -45,3 +45,6 @@ next-env.d.ts
 /playwright-report/
 /test-results/
 /playwright/.auth/
+
+# Generated at install time by postinstall script (node_modules copy)
+/public/maplibre-gl-csp-worker.js

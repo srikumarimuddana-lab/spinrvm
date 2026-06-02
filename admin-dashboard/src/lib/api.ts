@@ -468,6 +468,9 @@ export const adminSearchUsers = (opts: {
 export const getDriverRides = (id: string) =>
     request<any>(`/api/admin/drivers/${id}/rides`);
 
+export const getDriverDailyActivity = (id: string, date?: string) =>
+    request<any>(`/api/admin/drivers/${id}/daily-activity${date ? `?date=${date}` : ""}`);
+
 export interface DriverLiveStats {
     total_rides: number;
     total_earnings: number;

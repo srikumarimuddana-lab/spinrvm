@@ -16,6 +16,9 @@ const TASK_NAME = 'spinr-background-location';
 const GEOFENCE_TASK = 'spinr-geofence-recovery';
 const GEOFENCE_RADIUS_M = 500;          // 500m boundary — re-arms ~1 block away
 const GEOFENCE_ID = 'spinr-recovery';
+// Persisted across app death so the headless geofence-recovery task knows
+// whether to re-arm at trip cadence (a ride is active) or idle cadence.
+const TRIP_ACTIVE_KEY = 'spinr_bg_trip_active';
 
 type LocationTaskData = {
   locations: Location.LocationObject[];
@@ -129,9 +132,49 @@ TaskManager.defineTask<LocationTaskData>(TASK_NAME, async ({ data, error }) => {
   }
 });
 
-interface BgLocationConfig {
+export interface BgLocationConfig {
   timeInterval?: number;
   distanceInterval?: number;
+  accuracy?: Location.Accuracy;
+}
+
+// Idle cadence: coarse + battery-friendly — the driver is online but not on a
+// trip, so a rough live marker is enough. Trip cadence: dense + high accuracy
+// so a trip stays well-sampled even while the app is backgrounded (driver in
+// Google Maps / screen locked) — exactly when the foreground watchPositionAsync
+// stops firing. Billed distance is settled from these breadcrumbs, so
+// under-sampling here directly undercounts km and the SGI per-period audit.
+export const IDLE_CADENCE: BgLocationConfig = {
+  timeInterval: 30_000,
+  distanceInterval: 50,
+  accuracy: Location.Accuracy.Balanced,
+};
+export const TRIP_CADENCE: BgLocationConfig = {
+  timeInterval: 4_000,
+  distanceInterval: 10,
+  accuracy: Location.Accuracy.High,
+};
+
+async function _applyTaskOptions(config?: BgLocationConfig): Promise<void> {
+  const interval = config?.timeInterval ?? IDLE_CADENCE.timeInterval!;
+  const distance = config?.distanceInterval ?? IDLE_CADENCE.distanceInterval!;
+
+  await Location.startLocationUpdatesAsync(TASK_NAME, {
+    accuracy: config?.accuracy ?? Location.Accuracy.Balanced,
+    timeInterval: interval,
+    distanceInterval: distance,
+    deferredUpdatesInterval: interval,
+    showsBackgroundLocationIndicator: true,
+    // iOS: prevent CoreLocation from silently pausing updates when the
+    // driver appears stationary (red light, loading zone, traffic jam).
+    pausesUpdatesAutomatically: false,
+    activityType: Location.ActivityType.AutomotiveNavigation,
+    foregroundService: {
+      notificationTitle: 'Spinr Driver',
+      notificationBody: "You're online and receiving ride requests",
+      notificationColor: '#6C63FF',
+    },
+  });
 }
 
 export async function startBackgroundLocation(config?: BgLocationConfig): Promise<boolean> {
@@ -151,28 +194,29 @@ export async function startBackgroundLocation(config?: BgLocationConfig): Promis
     return false;
   }
 
-  const interval = config?.timeInterval ?? 30_000;
-  const distance = config?.distanceInterval ?? 50;
-
-  await Location.startLocationUpdatesAsync(TASK_NAME, {
-    accuracy: Location.Accuracy.Balanced,
-    timeInterval: interval,
-    distanceInterval: distance,
-    deferredUpdatesInterval: interval,
-    showsBackgroundLocationIndicator: true,
-    // iOS: prevent CoreLocation from silently pausing updates when the
-    // driver appears stationary (red light, loading zone, traffic jam).
-    pausesUpdatesAutomatically: false,
-    activityType: Location.ActivityType.AutomotiveNavigation,
-    foregroundService: {
-      notificationTitle: 'Spinr Driver',
-      notificationBody: "You're online and receiving ride requests",
-      notificationColor: '#6C63FF',
-    },
-  });
-
+  await _applyTaskOptions(config);
   console.log('[BgLocation] Started');
   return true;
+}
+
+/**
+ * Re-tune the cadence/accuracy of the *already-running* background task —
+ * tighten to TRIP_CADENCE while a ride is active so a backgrounded trip is
+ * still sampled densely, relax to IDLE_CADENCE when idle. No-op if the task
+ * isn't registered (go-online hasn't started it yet) or permission was
+ * revoked. Calling startLocationUpdatesAsync on a live task replaces its
+ * options in place — the task identity and handler are unchanged.
+ */
+export async function updateBackgroundLocationCadence(config: BgLocationConfig): Promise<void> {
+  const isRunning = await TaskManager.isTaskRegisteredAsync(TASK_NAME);
+  if (!isRunning) return;
+  const { status } = await Location.getBackgroundPermissionsAsync();
+  if (status !== 'granted') return;
+  await _applyTaskOptions(config);
+  console.log(
+    `[BgLocation] Cadence updated (t=${config.timeInterval ?? IDLE_CADENCE.timeInterval}ms ` +
+      `d=${config.distanceInterval ?? IDLE_CADENCE.distanceInterval}m)`,
+  );
 }
 
 export async function stopBackgroundLocation(): Promise<void> {
@@ -183,7 +227,25 @@ export async function stopBackgroundLocation(): Promise<void> {
   // Clear cached background token so a new sign-in starts fresh
   await SecureStore.deleteItemAsync('bg_access_token').catch(() => {});
   await SecureStore.deleteItemAsync('bg_access_token_expires').catch(() => {});
+  await SecureStore.deleteItemAsync(TRIP_ACTIVE_KEY).catch(() => {});
   console.log('[BgLocation] Stopped');
+}
+
+/**
+ * Persist whether a ride is active so the headless geofence-recovery task can
+ * re-arm tracking at trip cadence after a force-kill (it has no access to the
+ * React/zustand ride state). Best-effort.
+ */
+export async function setBackgroundTripActive(active: boolean): Promise<void> {
+  try {
+    if (active) {
+      await SecureStore.setItemAsync(TRIP_ACTIVE_KEY, 'true');
+    } else {
+      await SecureStore.deleteItemAsync(TRIP_ACTIVE_KEY);
+    }
+  } catch {
+    // best-effort — recovery falls back to idle cadence if unreadable
+  }
 }
 
 // ── Geofence recovery task ─────────────────────────────────────────────
@@ -206,8 +268,13 @@ TaskManager.defineTask(GEOFENCE_TASK, async ({ data, error }) => {
     //    short-circuits if the task is already running, so this is cheap.
     const isRunning = await TaskManager.isTaskRegisteredAsync(TASK_NAME);
     if (!isRunning) {
-      await startBackgroundLocation();
-      console.log('[Geofence] Recovered background tracking after kill');
+      // Re-arm at trip cadence if a ride was active when the app was killed,
+      // otherwise the rest of the trip is sampled at the coarse idle cadence
+      // and undercounts. The flag is persisted by setBackgroundTripActive
+      // since this headless task can't read the React/zustand ride state.
+      const tripActive = (await SecureStore.getItemAsync(TRIP_ACTIVE_KEY).catch(() => null)) === 'true';
+      await startBackgroundLocation(tripActive ? TRIP_CADENCE : undefined);
+      console.log(`[Geofence] Recovered background tracking after kill (cadence=${tripActive ? 'trip' : 'idle'})`);
     }
 
     // 2. Refresh the geofence around the current location so subsequent

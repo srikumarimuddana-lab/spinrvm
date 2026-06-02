@@ -2110,7 +2110,7 @@
   resolved "https://registry.npmjs.org/@istanbuljs/schema/-/schema-0.1.6.tgz"
   integrity sha512-+Sg6GCR/wy1oSmQDFq4LQDAhm3ETKnorxN+y5nbLULOR3P0c14f2Wurzj3/xqPXtasLFfHd5iRFQ7AJt4KH2cw==
 
-"@iternio/react-native-auto-play@^0.4.7":
+"@iternio/react-native-auto-play@0.4.7":
   version "0.4.7"
   resolved "https://registry.yarnpkg.com/@iternio/react-native-auto-play/-/react-native-auto-play-0.4.7.tgz#f54e8cc2b857f60a952f1b4208c2ce8b6cb34b3d"
   integrity sha512-Y4XzbTUqU2JhsFJST+RZkkYTbcmEQQgeKP3MPC1Vfc4ft0qJ9AWLCGkl72uebKgONtNkKCdVnCoTuaN9wJJykA==
@@ -9051,7 +9051,7 @@ react-native-maps@1.27.2:
   dependencies:
     "@types/geojson" "^7946.0.13"
 
-react-native-nitro-modules@^0.35.9:
+react-native-nitro-modules@0.35.9:
   version "0.35.9"
   resolved "https://registry.yarnpkg.com/react-native-nitro-modules/-/react-native-nitro-modules-0.35.9.tgz#fe84f9fbcfc93305018fe3773cf0b39d8efa9c6d"
   integrity sha512-yCO6eJ85SPPUo4a4an7H5oj6wPCSIT72fbjr5WZ/20n6zswaJ2gNNpnWtg2We0AZwkAOjSqkOJ0Vjc05p6kGiA==

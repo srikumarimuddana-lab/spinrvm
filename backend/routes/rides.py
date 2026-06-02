@@ -226,6 +226,29 @@ async def _fetch_directions_polyline(
         return None
 
 
+async def _get_active_service_area_for_point(
+    lat: float,
+    lng: float,
+    active_areas: List[dict],
+) -> Optional[dict]:
+    """Return an active service area containing a point.
+
+    Prefer the PostGIS RPC when its area geography column is populated, but
+    fall back to the JSON/GeoJSON polygon column used by the admin dashboard.
+    Some production rows have polygon coverage without a synced geography value;
+    the fallback keeps estimate geofence checks aligned with what admins see.
+    """
+    matched_area = await db_supabase.get_service_area_for_point(lat, lng)
+    if matched_area and matched_area.get("is_active", True) is not False:
+        return matched_area
+
+    for area in active_areas or []:
+        poly = get_service_area_polygon(area)
+        if poly and point_in_polygon(lat, lng, poly):
+            return area
+    return None
+
+
 async def _require_ride_in_state_rider(ride_id: str, rider_id: str, allowed_states: tuple) -> dict:
     """Load a rider's ride only if it is in one of allowed_states.
 
@@ -858,6 +881,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             "duration_minutes": ride.get("duration_minutes"),
             "rider_name": rider_display_name,
             "rider_rating": (rider_user or {}).get("rating"),
+            "rider_profile_image": (rider_user or {}).get("profile_image"),
             "requires_wav": bool(ride.get("requires_wav")),
             "countdown_seconds": offer_timeout,
             "offer_expires_at": _offer_expires_at,
@@ -877,19 +901,29 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
                 # enforces a 4 KB data-message limit and detailed polygons/
                 # polylines can easily blow it. Drivers receive these via the
                 # WebSocket message (dispatch_payload) which has no size cap.
-                _FCM_SPATIAL_EXCLUDE = {"service_area_polygon", "planned_route_polyline"}
+                _FCM_SPATIAL_EXCLUDE = {"service_area_polygon", "planned_route_polyline", "rider_profile_image"}
                 fcm_data = {
                     k: json.dumps(v) if isinstance(v, (dict, list)) else str(v) if v is not None else ""
                     for k, v in dispatch_payload.items()
                     if k not in _FCM_SPATIAL_EXCLUDE
                 }
                 fcm_data["deeplink"] = "/driver/"
+                fcm_data["booking_id"] = str(ride_id)
+
+                pickup_label = ride.get("pickup_address") or "Nearby pickup"
+                dropoff_label = ride.get("dropoff_address") or "destination"
+                try:
+                    earnings_label = f"${float(ride.get('driver_earnings') or 0):.2f}"
+                except (TypeError, ValueError):
+                    earnings_label = "New fare"
+
                 await send_push_notification(
                     driver["user_id"],
-                    "New ride request",
-                    f"{ride.get('pickup_address') or 'Nearby pickup'} → {ride.get('dropoff_address') or 'destination'}",
+                    f"{earnings_label} ride offer",
+                    f"Booking {ride_id} • {pickup_label} → {dropoff_label}",
                     fcm_data,
                     priority="dispatch",
+                    target_app="driver",
                 )
             except Exception as e:
                 logger.error(f"[DISPATCH] push failed for driver {driver['user_id']}: {e}", exc_info=True)
@@ -1276,15 +1310,14 @@ async def estimate_ride(
 
     # Resolve service area once for fees/taxes — shared across all vehicle-type iterations
     # so calculate_all_fees doesn't re-fetch service_areas N times.
-    _est_all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=100)
-    _est_matched_area = next(
-        (
-            a
-            for a in _est_all_areas
-            if get_service_area_polygon(a)
-            and point_in_polygon(body.pickup_lat, body.pickup_lng, get_service_area_polygon(a))
-        ),
-        None,
+    _est_all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=500)
+
+    # Use PostGIS RPC for geofence checks, with a JSON/GeoJSON polygon
+    # fallback for service-area rows whose geography column is not synced.
+    _est_matched_area = await _get_active_service_area_for_point(
+        body.pickup_lat,
+        body.pickup_lng,
+        _est_all_areas,
     )
     if _est_matched_area:
         logger.info(
@@ -1298,9 +1331,10 @@ async def estimate_ride(
             body.pickup_lng,
         )
 
-    # Geofence gates — both pickup and dropoff must be inside an active
-    # service area before we show any prices. Fail-open when no areas are
-    # configured so a DB outage doesn't block all estimates.
+    # Geofence gates — pickup, dropoff, and every stop must be inside an
+    # active service area before we show prices. The lookup combines PostGIS
+    # with the admin-visible polygon JSON fallback above. Fail-open when no
+    # active areas are configured (DB outage or fresh install).
     if _est_all_areas:
         if _est_matched_area is None:
             raise HTTPException(
@@ -1313,16 +1347,16 @@ async def estimate_ride(
                     ),
                 },
             )
-        _dropoff_in_area = any(
-            (poly := get_service_area_polygon(a)) and point_in_polygon(body.dropoff_lat, body.dropoff_lng, poly)
-            for a in _est_all_areas
+        _dropoff_area = await _get_active_service_area_for_point(
+            body.dropoff_lat,
+            body.dropoff_lng,
+            _est_all_areas,
         )
-        if not _dropoff_in_area:
+        if _dropoff_area is None:
             logger.info(
-                "[estimate] reject dropoff=(%.5f,%.5f) — outside %d active service area(s)",
+                "[estimate] reject dropoff=(%.5f,%.5f) — outside service areas",
                 body.dropoff_lat,
                 body.dropoff_lng,
-                len(_est_all_areas),
             )
             raise HTTPException(
                 status_code=400,
@@ -1334,6 +1368,28 @@ async def estimate_ride(
                     ),
                 },
             )
+        for idx, stop in enumerate(body.stops or []):
+            s_lat, s_lng = stop.get("lat"), stop.get("lng")
+            if s_lat is None or s_lng is None:
+                continue
+            _stop_area = await _get_active_service_area_for_point(s_lat, s_lng, _est_all_areas)
+            if _stop_area is None:
+                logger.info(
+                    "[estimate] reject stop[%d]=(%.5f,%.5f) — outside service areas",
+                    idx,
+                    s_lat,
+                    s_lng,
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "OUTSIDE_SERVICE_AREA",
+                        "message": (
+                            "Sorry, one of your stops is outside our coverage area. "
+                            "Please choose stops within a serviced zone."
+                        ),
+                    },
+                )
 
     # Fetch nearby online+available drivers once. Order by went_online_at DESC
     # so recently-toggled-online drivers fill the 200-row page first. Ghost
@@ -1715,30 +1771,23 @@ async def create_ride(
     # table independently — 3-4 full scans per POST /rides.
     all_areas = []
     try:
-        all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=100)
+        all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=500)
     except Exception as e:
         logger.error(f"Failed to fetch service areas: {e}", exc_info=True)
 
     # Resolve the pickup service area once and pass the match downstream.
-    matched_area = await db_supabase.get_service_area_for_point(body.pickup_lat, body.pickup_lng)
-    if matched_area is None and all_areas:
-        matched_area = next(
-            (
-                a
-                for a in all_areas
-                if get_service_area_polygon(a)
-                and point_in_polygon(body.pickup_lat, body.pickup_lng, get_service_area_polygon(a))
-            ),
-            None,
-        )
+    matched_area = await _get_active_service_area_for_point(
+        body.pickup_lat,
+        body.pickup_lng,
+        all_areas,
+    )
     service_area_id = matched_area["id"] if matched_area else None
 
     # Geofence gate: pickup must fall inside an active service area. Without
     # this the request silently dispatches against drivers anywhere on the
     # map, which is what produced the "I'm outside the zone but the app is
-    # still searching for drivers" report. Dropoff is intentionally NOT
-    # checked here — riders frequently travel out of town and we don't want
-    # to block that, but we do require their pickup to be inside coverage.
+    # still searching for drivers" report. Dropoff and intermediate stops are
+    # checked below with the same service-area matcher.
     if matched_area is None and all_areas:
         logger.info(
             "[geofence] reject pickup=(%.5f,%.5f) — outside %d active service area(s)",
@@ -1758,19 +1807,18 @@ async def create_ride(
         )
 
     # Geofence gate: dropoff must also fall inside an active service area.
-    # Rides that start within coverage but end in an unserviced zone are
-    # rejected here so dispatch never runs for out-of-area trips.
+    # Uses PostGIS plus the admin-visible polygon JSON fallback.
     if all_areas:
-        _dropoff_in_area = any(
-            (poly := get_service_area_polygon(a)) and point_in_polygon(body.dropoff_lat, body.dropoff_lng, poly)
-            for a in all_areas
+        _dropoff_area = await _get_active_service_area_for_point(
+            body.dropoff_lat,
+            body.dropoff_lng,
+            all_areas,
         )
-        if not _dropoff_in_area:
+        if _dropoff_area is None:
             logger.info(
-                "[geofence] reject dropoff=(%.5f,%.5f) — outside %d active service area(s)",
+                "[geofence] reject dropoff=(%.5f,%.5f) — outside service areas",
                 body.dropoff_lat,
                 body.dropoff_lng,
-                len(all_areas),
             )
             raise HTTPException(
                 status_code=400,
@@ -1782,6 +1830,31 @@ async def create_ride(
                     ),
                 },
             )
+
+    # Geofence gate: every intermediate stop must also be in coverage.
+    if all_areas:
+        for idx, stop in enumerate(body.stops or []):
+            s_lat, s_lng = stop.get("lat"), stop.get("lng")
+            if s_lat is None or s_lng is None:
+                continue
+            _stop_area = await _get_active_service_area_for_point(s_lat, s_lng, all_areas)
+            if _stop_area is None:
+                logger.info(
+                    "[geofence] reject stop[%d]=(%.5f,%.5f) — outside service areas",
+                    idx,
+                    s_lat,
+                    s_lng,
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "OUTSIDE_SERVICE_AREA",
+                        "message": (
+                            "Sorry, one of your stops is outside our coverage area. "
+                            "Please choose stops within a serviced zone."
+                        ),
+                    },
+                )
 
     # Vehicle types are also needed by fare building — fetch once, reuse.
     vehicle_types = await db_supabase.get_rows("vehicle_types", {"is_active": True}, limit=100)
@@ -1795,11 +1868,15 @@ async def create_ride(
 
     fare_info = next(
         (f for f in fares if f["vehicle_type"]["id"] == body.vehicle_type_id),
-        fares[0] if fares else None,
+        None,
     )
 
     if not fare_info:
-        raise HTTPException(status_code=400, detail="Invalid vehicle type")
+        logger.info(
+            "[create_ride] reject vehicle_type_id=%s — not configured for pickup service area",
+            body.vehicle_type_id,
+        )
+        raise HTTPException(status_code=400, detail="Invalid vehicle type for this service area")
 
     # Use Decimal for all monetary arithmetic (CQ-009 — eliminates float rounding errors)
     # P0-4 surge-lock: if the client sent back the estimate_token we issued
@@ -4365,6 +4442,43 @@ async def send_ride_message(
     return {"success": True, "message": msg_data}
 
 
+class TypingRequest(BaseModel):
+    sender: str
+
+
+@api_router.post("/{ride_id}/typing")
+async def send_typing_indicator(
+    ride_id: str,
+    body: TypingRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Broadcast a typing indicator to the other party via WebSocket."""
+    ride = await db_supabase.get_ride(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    uid = current_user["id"]
+    rider_id = ride.get("rider_id")
+    driver_id = ride.get("driver_id")
+
+    if uid == rider_id:
+        sender = "rider"
+        target = f"driver_{driver_id}" if driver_id else None
+    elif uid == driver_id or uid in ((await db_supabase.get_driver_by_id(driver_id) or {}).get("user_id", ""),):
+        sender = "driver"
+        target = f"rider_{rider_id}" if rider_id else None
+    else:
+        raise HTTPException(status_code=403, detail="Not a participant")
+
+    if target:
+        await manager.send_personal_message(
+            {"type": "chat_typing", "ride_id": ride_id, "sender": sender},
+            target,
+        )
+
+    return {"success": True}
+
+
 @api_router.delete("/scheduled/{ride_id}")
 @cancel_ride_limit
 async def cancel_scheduled_ride(
@@ -4915,3 +5029,61 @@ async def safety_checkin_response(
 
     logger.info(f"[SAFETY_CHECKIN] Rider {user_id} confirmed OK for ride {ride_id}")
     return {"success": True}
+
+
+@api_router.get("/{ride_id}/live-route")
+async def get_live_route(ride_id: str, current_user: dict = Depends(get_current_user)):
+    """OSRM-routed line + ETA from the driver's live position to the active
+    destination (pickup pre-trip, dropoff in-trip) for the live share map.
+
+    Returns an empty polyline (eta_seconds=None) when there's no active route,
+    no live driver position, or OSRM is unavailable — the client then falls back
+    to its own straight-line rendering. Keeps OSRM internal (the apps draw this
+    line on the Google map canvas)."""
+    ride = await db_supabase.get_ride(ride_id)
+    if not ride:
+        raise RideNotFoundException(ride_id=ride_id, message_key=ErrorKeys.RIDE_NOT_FOUND)
+
+    # Ownership: rider or assigned driver (admin allowed).
+    is_rider = ride.get("rider_id") == current_user["id"]
+    driver_self = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
+    is_driver = bool(driver_self) and ride.get("driver_id") == driver_self["id"]
+    if not (is_rider or is_driver) and current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized to view this ride")
+
+    status = ride.get("status")
+    if status in ("driver_assigned", "driver_accepted", "driver_arrived"):
+        dest_lat, dest_lng, destination = ride.get("pickup_lat"), ride.get("pickup_lng"), "pickup"
+    elif status == "in_progress":
+        dest_lat, dest_lng, destination = ride.get("dropoff_lat"), ride.get("dropoff_lng"), "dropoff"
+    else:
+        # No live leg for searching / scheduled / completed / cancelled.
+        return {"polyline": [], "eta_seconds": None, "distance_km": None, "destination": None}
+
+    empty = {"polyline": [], "eta_seconds": None, "distance_km": None, "destination": destination}
+
+    # Live origin = the assigned driver's current position (drivers.lat/lng).
+    assigned = (
+        (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows("drivers", {"id": ride.get("driver_id")}, limit=1)
+        )
+        if ride.get("driver_id")
+        else None
+    )
+    o_lat = assigned.get("lat") if assigned else None
+    o_lng = assigned.get("lng") if assigned else None
+    if o_lat is None or o_lng is None or dest_lat is None or dest_lng is None:
+        return empty
+
+    try:
+        from ..utils.route_distance import compute_route
+    except ImportError:
+        from utils.route_distance import compute_route  # type: ignore
+
+    result = await compute_route(float(o_lat), float(o_lng), float(dest_lat), float(dest_lng))
+    if not result:
+        return empty
+    result["destination"] = destination
+    return result

@@ -506,6 +506,44 @@ class TestGetRideHistory:
         assert result["total"] == 2
         assert len(result["rides"]) == 2
 
+    def test_period_filter_uses_activity_timestamps(self):
+        from backend.routes import drivers as drv
+
+        completed_ride = _ride(
+            "completed",
+            created_at=(datetime.now(timezone.utc) - timedelta(days=3)).isoformat(),
+            ride_completed_at=datetime.now(timezone.utc).isoformat(),
+        )
+        captured_filters = []
+
+        async def count_documents_side_effect(table, filters=None):
+            captured_filters.append(filters)
+            return 1 if filters and filters.get("status") == "completed" else 0
+
+        def get_rows_side_effect(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            captured_filters.append(filters)
+            if filters and filters.get("status") == "completed":
+                return [completed_ride]
+            return []
+
+        with (
+            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch(
+                "backend.routes.drivers.db_supabase.count_documents",
+                AsyncMock(side_effect=count_documents_side_effect),
+            ),
+        ):
+            result = asyncio.run(drv.get_ride_history(limit=20, offset=0, period="today", current_user={"id": USER_ID}))
+
+        ride_filters = [f for f in captured_filters if f and f.get("driver_id") == DRIVER_ID]
+        assert result["total"] == 1
+        assert len(result["rides"]) == 1
+        assert any("ride_completed_at" in f for f in ride_filters)
+        assert any("cancelled_at" in f for f in ride_filters)
+        assert all("created_at" not in f for f in ride_filters)
+
     def test_raises_404_when_driver_not_found(self):
         from fastapi import HTTPException
 
@@ -747,6 +785,71 @@ class TestCompleteRide:
         assert captured["actual_distance_km"] < 15, (
             f"GPS spike leaked into actual_distance_km: {captured['actual_distance_km']}"
         )
+
+    def test_geometry_saved_to_ride_routes_not_rides(self):
+        """Heavy geometry → ride_routes (upsert); rides keeps only scalars."""
+        from backend.routes import drivers as drv
+
+        ride = _ride("in_progress")
+        completed = _ride("completed")
+
+        base_ts = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)
+
+        def _ts(seconds: int) -> str:
+            return (base_ts + timedelta(seconds=seconds)).isoformat().replace("+00:00", "Z")
+
+        crumbs = [
+            {"lat": 52.10 + i * 0.001, "lng": -106.70, "timestamp": _ts(i * 30), "tracking_phase": "trip_in_progress"}
+            for i in range(8)
+        ]
+        road = {"distance_km": 0.7, "polyline": [[52.10, -106.70], [52.108, -106.70]]}
+
+        rides_update: dict = {}
+        routes_upsert: dict = {}
+
+        async def fake_update_one(table, _filters, fields, **kw):
+            if table == "rides":
+                rides_update.update(fields)
+            elif table == "ride_routes":
+                routes_upsert["fields"] = fields
+                routes_upsert["upsert"] = kw.get("upsert")
+            return completed
+
+        def get_rows_side_effect(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                return [ride]
+            if table == "driver_location_history":
+                return crumbs
+            return []
+
+        async def fake_route(_crumbs):
+            return road
+
+        with (
+            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(side_effect=fake_update_one)),
+            patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=completed)),
+            patch("backend.routes.drivers.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
+            patch("backend.routes.drivers.record_period_transition", AsyncMock()),
+            patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.drivers.manager.broadcast_to_admins", AsyncMock()),
+            patch("backend.routes.drivers.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers._generate_and_store_ride_snapshot", AsyncMock()),
+            patch("utils.route_distance.compute_road_route", fake_route),
+        ):
+            asyncio.run(drv.complete_ride(ride_id=RIDE_ID, current_user={"id": USER_ID}))
+
+        # Geometry persisted to ride_routes via upsert.
+        assert routes_upsert.get("upsert") is True
+        assert routes_upsert["fields"]["road_polyline"] == road["polyline"]
+        assert "phase_polylines" in routes_upsert["fields"]
+        # rides row no longer carries the heavy geometry; billing scalar wins.
+        assert "phase_polylines" not in rides_update
+        assert "route_polyline" not in rides_update
+        assert rides_update["actual_distance_km"] == 0.7
 
     def test_rejects_non_in_progress_state(self):
         from backend.routes import drivers as drv

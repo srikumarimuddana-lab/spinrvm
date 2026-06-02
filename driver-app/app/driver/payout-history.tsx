@@ -1,10 +1,11 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
     View,
     Text,
     StyleSheet,
     FlatList,
     TouchableOpacity,
+    ScrollView,
 } from 'react-native';
 import SafeRefreshControl from '../../components/SafeRefreshControl';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -21,10 +22,21 @@ export default function PayoutHistoryScreen() {
     const { colors } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
     const { payoutHistory, fetchPayoutHistory, isLoading } = useDriverStore();
+    const [statusFilter, setStatusFilter] = useState<string>('all');
+
+    const STATUS_FILTERS = ['all', 'completed', 'pending', 'processing', 'failed'] as const;
 
     useEffect(() => {
         fetchPayoutHistory();
     }, []);
+
+    const filteredHistory = useMemo(() => {
+        const sorted = [...(payoutHistory || [])].sort((a, b) =>
+            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        );
+        if (statusFilter === 'all') return sorted;
+        return sorted.filter(p => p.status === statusFilter);
+    }, [payoutHistory, statusFilter]);
 
     const getStatusColor = (status: string) => {
         switch (status) {
@@ -138,8 +150,23 @@ export default function PayoutHistoryScreen() {
                 </View>
             </LinearGradient>
 
+            {/* Status Filter */}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterRow} contentContainerStyle={styles.filterContent}>
+                {STATUS_FILTERS.map(s => (
+                    <TouchableOpacity
+                        key={s}
+                        style={[styles.filterPill, statusFilter === s && styles.filterPillActive]}
+                        onPress={() => setStatusFilter(s)}
+                    >
+                        <Text style={[styles.filterPillText, statusFilter === s && styles.filterPillTextActive]}>
+                            {s === 'all' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
+                        </Text>
+                    </TouchableOpacity>
+                ))}
+            </ScrollView>
+
             <FlatList
-                data={payoutHistory}
+                data={filteredHistory}
                 renderItem={renderPayoutItem}
                 keyExtractor={(item) => item.id}
                 contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 40 }}
@@ -188,6 +215,35 @@ function createStyles(colors: ThemeColors) {
             alignItems: 'center',
         },
         headerTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
+
+        filterRow: {
+            maxHeight: 44,
+            marginBottom: 4,
+        },
+        filterContent: {
+            paddingHorizontal: 16,
+            gap: 8,
+        },
+        filterPill: {
+            paddingHorizontal: 16,
+            paddingVertical: 8,
+            borderRadius: 20,
+            backgroundColor: colors.surfaceLight,
+            borderWidth: 1,
+            borderColor: colors.border,
+        },
+        filterPillActive: {
+            backgroundColor: colors.primary,
+            borderColor: colors.primary,
+        },
+        filterPillText: {
+            fontSize: 13,
+            fontWeight: '600',
+            color: colors.textDim,
+        },
+        filterPillTextActive: {
+            color: '#fff',
+        },
 
         payoutCard: {
             backgroundColor: colors.surface,

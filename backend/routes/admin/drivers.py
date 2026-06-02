@@ -1691,8 +1691,8 @@ async def admin_get_driver_location_trail(
     ]
 
 
-@router.get("/drivers/{driver_id}/activity")
-async def admin_driver_activity(
+@router.get("/drivers/{driver_id}/daily-activity")
+async def admin_driver_daily_activity(
     driver_id: str,
     date: Optional[str] = Query(None, description="YYYY-MM-DD in Regina time; defaults to today"),
     admin_user: dict = Depends(get_admin_user),

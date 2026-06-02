@@ -455,6 +455,8 @@ def init_middleware(app):
         "https://www.spinr.app",
         "https://spinr-track.app",
         "https://www.spinr-track.app",
+        "https://track.spinr.ca",
+        "https://admin-spinr.spinr.ca",
         "http://localhost:3000",
         "http://localhost:3001",
     ]

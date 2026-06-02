@@ -67,6 +67,8 @@ async def resolve_active_ride(driver_id: str) -> Optional[Dict[str, Any]]:
     active_rides = await db_supabase.get_rows(
         "rides",
         {"driver_id": driver_id, "status": {"$in": _ACTIVE_STATUSES}},
+        order="created_at",
+        desc=True,
         limit=10,
     )
     return active_rides[0] if active_rides else None
@@ -116,6 +118,13 @@ async def persist_ride_breadcrumbs(
     pings can pass ``persist_idle=True`` to keep the historical online-idle
     breadcrumb behavior when no active ride exists. Returns inserted rows.
     """
+    if not isinstance(points, list):
+        logger.warning("breadcrumb persist received non-list points for driver_id=%s", driver_id)
+        return 0
+    points = [p for p in points if isinstance(p, dict)]
+    if not points:
+        return 0
+
     ride = await resolve_active_ride(driver_id)
 
     ride_id = ride.get("id") if ride else None

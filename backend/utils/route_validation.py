@@ -53,11 +53,16 @@ def _haversine_meters(lat1: float, lng1: float, lat2: float, lng2: float) -> flo
 
 
 def _downsample(points: list[dict], max_count: int) -> list[dict]:
-    """Evenly downsample points to fit API limit."""
+    """Evenly downsample points to fit API limit, always keeping the last point."""
     if len(points) <= max_count:
         return points
-    step = len(points) / max_count
-    return [points[int(i * step)] for i in range(max_count)]
+    if max_count < 2:
+        return [points[-1]]
+    step = len(points) / (max_count - 1)
+    sampled = [points[int(i * step)] for i in range(max_count - 1)]
+    if sampled[-1] is not points[-1]:
+        sampled.append(points[-1])
+    return sampled
 
 
 def _osrm_radius(point: dict) -> str:

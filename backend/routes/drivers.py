@@ -3685,9 +3685,11 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         "gps_points_count": gps_points_count,
         "route_quality": route_quality,
         "route_geometry_status": route_geometry_status,
+        # Clear any previous failed-save message when a retry/re-completion saves
+        # ride_routes successfully; otherwise admin list/detail can show a stale
+        # error while the status is now "saved".
+        "route_geometry_error": route_geometry_error,
     }
-    if route_geometry_error:
-        update_fields["route_geometry_error"] = route_geometry_error
 
     # Check fare lock setting — when enabled, rider pays the booking-time
     # estimate regardless of actual distance/time (SK regulatory requirement).

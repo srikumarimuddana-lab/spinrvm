@@ -1,9 +1,9 @@
 // Pure mapping from the driver ride-state machine to a car-screen model.
 //
-// Kept free of the react-native-carplay package and of React so it can be
+// Kept free of the auto-play native package and of React so it can be
 // unit-tested in plain Jest and reused for both Android Auto (today) and
 // iOS CarPlay (once the Apple entitlement is granted). The register module
-// turns this plain model into a native PaneTemplate.
+// turns this plain model into a native InformationTemplate (a Pane on Android).
 import type { ActiveRide, RideState } from '../../store/driverStore';
 
 /** A single informational row on the car screen. */

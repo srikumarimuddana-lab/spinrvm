@@ -241,13 +241,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // show the ride-offer panel like an incoming call when the app is
         // backgrounded or killed. See plugins/withNotifeePermissions.js.
         './plugins/withNotifeePermissions',
-        // CarPlay (iOS, "Driving Task" entitlement) + Android Auto scaffolding for
-        // @g4rb4g3/react-native-carplay. Declares only the CarPlay scene (phone
-        // window untouched) + the iOS CarSceneDelegate, and ensures the
-        // foreground-service-location perms the fork's CarAppService needs.
-        // SPIKE-GATED: validate with an EAS dev build before relying on it.
+        // Android Auto is provided by @iternio/react-native-auto-play, which ships
+        // its own merged AndroidManifest (CarAppService + permissions) and needs no
+        // app-side config plugin. iOS CarPlay stays dormant: it requires an
+        // Apple-granted entitlement plus scene-delegate wiring not present here.
         // See docs/carplay-android-auto.md.
-        './plugins/withCarIntegration',
         '@logrocket/react-native',
     ],
     experiments: {

@@ -3370,22 +3370,37 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     gps_points_count = 0
 
     try:
-        all_breadcrumbs = await db_supabase.get_rows(
-            "driver_location_history",
-            {
-                "ride_id": ride_id,
-            },
-            limit=1000,
-            order="timestamp",
-        )
+        # Page through ALL breadcrumbs for the ride (time-ordered). The old
+        # single limit=1000 read dropped the tail of long, densely-sampled
+        # trips (>~67 min at the 4s background cadence), under-reporting
+        # billable/phase distance and the SGI trail. Bounded by a hard ceiling
+        # so a pathological trail can't blow up settlement memory; the per-phase
+        # and route polylines are downsampled below regardless of input size.
+        _PAGE = 1000
+        _MAX_BREADCRUMBS = 10000  # ~11 h at 4s — beyond any real single trip
+        all_breadcrumbs = []
+        _offset = 0
+        while True:
+            _page = await db_supabase.get_rows(
+                "driver_location_history",
+                {"ride_id": ride_id},
+                order="timestamp",
+                limit=_PAGE,
+                offset=_offset,
+            )
+            if not _page:
+                break
+            all_breadcrumbs.extend(_page)
+            if len(_page) < _PAGE or len(all_breadcrumbs) >= _MAX_BREADCRUMBS:
+                break
+            _offset += _PAGE
+        if len(all_breadcrumbs) >= _MAX_BREADCRUMBS:
+            logger.warning(
+                f"GPS breadcrumbs hit ceiling {_MAX_BREADCRUMBS} for ride {ride_id}; tail beyond this is not summed"
+            )
         all_breadcrumbs = [b for b in all_breadcrumbs if b.get("lat") and b.get("lng")]
         all_breadcrumbs.sort(key=lambda b: str(b.get("timestamp", "")))
         gps_points_count = len(all_breadcrumbs)
-        if gps_points_count >= 1000:
-            logger.warning(
-                f"GPS breadcrumbs truncated at 1000 for ride {ride_id}; "
-                "actual_distance_km and route_polyline may be underreported"
-            )
 
         if gps_points_count >= 2:
             # Compute per-phase distances (attribute each segment to the

@@ -3331,7 +3331,7 @@ async def get_share_trip_link(ride_id: str, current_user: dict = Depends(get_cur
 
     # The frontend would use this token to show a read-only tracking page
     # In production, this would be a full URL like: https://spinr.app/track/{share_token}
-    share_url = f"/track/{share_token}"
+    share_url = f"{_settings.TRACKING_BASE_URL}/track/{share_token}"
 
     return {
         "success": True,
@@ -3394,7 +3394,7 @@ async def share_trip_with_contact(
             {"$set": {"shared_with": shared_with}},
         )
 
-    share_url = f"/track/{share_token}"
+    share_url = f"{_settings.TRACKING_BASE_URL}/track/{share_token}"
 
     # Send push notification to contact if they're a registered user
     contact_user = await db.find_one("users", {"phone": body.contact_phone})

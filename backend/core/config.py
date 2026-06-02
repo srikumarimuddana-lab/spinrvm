@@ -121,6 +121,11 @@ class Settings(BaseSettings):
     # Fare cache TTL (PERF-001)
     FARE_CACHE_TTL_SECONDS: int = 300  # 5-minute cache per lat/lng grid cell
 
+    # Public tracking page base URL — used when generating shareable trip links.
+    # Set to the custom domain e.g. "https://go.spinr.ca" in production.
+    # Falls back to the Vercel deployment URL if unset.
+    TRACKING_BASE_URL: str = "https://spinrvm.vercel.app"
+
     # File storage
     STORAGE_BUCKET: str = "driver-documents"
 

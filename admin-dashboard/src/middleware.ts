@@ -55,6 +55,12 @@ function buildCsp(nonce: string): string {
     "img-src 'self' data: blob: https:",
     "font-src 'self'",
     "connect-src 'self' https: wss: ws:",
+    // MapLibre GL (and any map library) instantiates its tile-processing Web
+    // Worker from a blob: URL. Chrome does NOT extend 'self' to cover blob:
+    // workers even though the blob was created in the same origin — it requires
+    // an explicit blob: source in worker-src. Without this the worker is blocked,
+    // vector tiles never decode, and the map canvas stays blank.
+    "worker-src blob: 'self'",
     "frame-ancestors 'none'",
   ].join("; ");
 }

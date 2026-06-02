@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 import httpx
 
@@ -278,3 +278,56 @@ async def compute_road_distance_km(breadcrumbs: list[dict]) -> Optional[float]:
     """
     result = await compute_road_route(breadcrumbs)
     return result["distance_km"] if result else None
+
+
+async def compute_route(from_lat: float, from_lng: float, to_lat: float, to_lng: float) -> Optional[dict]:
+    """Live driver→destination route via OSRM /route (NOT /match).
+
+    For the live share map: returns the optimal road route + ETA between the
+    driver's current position and the destination (pickup or dropoff). Returns
+    ``{"polyline": [[lat,lng],...], "eta_seconds": int, "distance_km": float}``
+    or None when OSRM is unavailable (caller can fall back to a straight line /
+    Google). This is /route (point-to-point optimal path), distinct from /match
+    (snap a driven trace) used for billing.
+    """
+    app_settings = await get_app_settings() or {}
+    osrm_url = (app_settings.get("osrm_url") or settings.OSRM_URL or "").strip()
+    if not osrm_url:
+        return None
+
+    coords = f"{from_lng},{from_lat};{to_lng},{to_lat}"  # OSRM is lng,lat
+    url = f"{osrm_url.rstrip('/')}/route/v1/driving/{coords}"
+    params = {"overview": "full", "geometries": "geojson", "steps": "false", "alternatives": "false"}
+
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
+            resp = await client.get(url, params=params)
+            if resp.status_code != 200:
+                logger.warning("[route_distance] OSRM /route returned %d", resp.status_code)
+                return None
+            data = resp.json()
+    except Exception as e:
+        logger.warning("[route_distance] OSRM /route call failed: %s", e)
+        return None
+
+    if data.get("code") != "Ok" or not data.get("routes"):
+        return None
+    r0 = data["routes"][0]
+    polyline = [
+        [round(float(lat), 6), round(float(lng), 6)]
+        for lng, lat in ((r0.get("geometry") or {}).get("coordinates") or [])
+    ]
+    if len(polyline) < 2:
+        return None
+    return {
+        "polyline": _cap_polyline(polyline, _MAX_ROAD_POLYLINE_POINTS),
+        "eta_seconds": int(round(_num_or_zero(r0.get("duration")))),
+        "distance_km": round(_num_or_zero(r0.get("distance")) / 1000.0, 3),
+    }
+
+
+def _num_or_zero(v: Any) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0

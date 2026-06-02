@@ -242,3 +242,55 @@ async def test_distance_shim_returns_float_only():
 
     with patch.object(rd, "compute_road_route", _none):
         assert await rd.compute_road_distance_km(_trip(6)) is None
+
+
+# ── compute_route (live OSRM /route — route line + ETA) ───────────────────────
+
+
+async def _empty_settings():
+    return {}
+
+
+@pytest.mark.asyncio
+async def test_compute_route_returns_polyline_eta_distance():
+    payload = {
+        "code": "Ok",
+        "routes": [
+            {
+                "distance": 1500.0,
+                "duration": 300.0,
+                "geometry": {"coordinates": [[-104.62, 50.45], [-104.63, 50.44]]},
+            }
+        ],
+    }
+    cap = {}
+    with (
+        patch.object(rd, "get_app_settings", _empty_settings),
+        patch.object(rd.settings, "OSRM_URL", "http://osrm:5000"),
+        patch.object(rd.httpx, "AsyncClient", _client_factory(resp=_FakeResp(payload=payload), capture=cap)),
+    ):
+        out = await rd.compute_route(50.45, -104.62, 50.44, -104.63)
+
+    assert out["eta_seconds"] == 300
+    assert out["distance_km"] == 1.5
+    assert out["polyline"][0] == [50.45, -104.62]  # geojson [lng,lat] -> [lat,lng]
+    assert "/route/v1/driving/" in cap["url"]
+    assert "-104.62,50.45" in cap["url"]  # lng,lat order in the request
+
+
+@pytest.mark.asyncio
+async def test_compute_route_none_when_osrm_unset():
+    with patch.object(rd, "get_app_settings", _empty_settings), patch.object(rd.settings, "OSRM_URL", ""):
+        assert await rd.compute_route(50.45, -104.62, 50.44, -104.63) is None
+
+
+@pytest.mark.asyncio
+async def test_compute_route_non_ok_returns_none():
+    with (
+        patch.object(rd, "get_app_settings", _empty_settings),
+        patch.object(rd.settings, "OSRM_URL", "http://osrm:5000"),
+        patch.object(
+            rd.httpx, "AsyncClient", _client_factory(resp=_FakeResp(payload={"code": "NoRoute", "routes": []}))
+        ),
+    ):
+        assert await rd.compute_route(50.45, -104.62, 50.44, -104.63) is None

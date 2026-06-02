@@ -1,6 +1,6 @@
 {
   "name": "spinr-driver",
-  "main": "expo-router/entry",
+  "main": "index.js",
   "version": "1.0.0",
   "dependencies": {
     "@expo-google-fonts/plus-jakarta-sans": "^0.4.2",

@@ -2,7 +2,7 @@ import '../utils/backgroundLocation';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { View, ActivityIndicator, StyleSheet, Text, Platform, LogBox, AppState } from 'react-native';
+import { View, Text, Platform, LogBox, AppState } from 'react-native';
 
 // LogBox's notification container uses a codegen native component that's
 // broken under Bridgeless mode (RN 0.85.2). Disable it in dev to prevent
@@ -25,7 +25,7 @@ import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
 import { useDriverStore } from '../store/driverStore';
-import SpinrConfig from '@shared/config/spinr.config';
+import BrandSplash from '../components/BrandSplash';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
 import { ThemeProvider, useTheme } from '@shared/theme/ThemeContext';
@@ -532,10 +532,7 @@ export default function RootLayout() {
     return (
       <QueryClientProvider client={queryClient}>
         <ErrorBoundary>
-          <View style={styles.loadingContainer} onLayout={onLoadingLayout}>
-            <Text style={styles.logoText}>Spinr</Text>
-            <ActivityIndicator size="large" color="#FFFFFF" style={{ marginTop: 20 }} />
-          </View>
+          <BrandSplash onLayout={onLoadingLayout} />
         </ErrorBoundary>
       </QueryClientProvider>
     );
@@ -597,16 +594,3 @@ function DriverRootLayoutInner({
   );
 }
 
-const styles = StyleSheet.create({
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: SpinrConfig.theme.colors.primary,
-  },
-  logoText: {
-    fontSize: 56,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-});

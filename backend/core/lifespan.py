@@ -316,6 +316,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to import push retry loop: {e}", exc_info=True)
 
+    # Zoho Desk mirror sync — upserts recent tickets into zoho_desk_tickets so
+    # the Help Desk serves lists/dashboards/trends from our DB (saves Zoho API
+    # credits). No-op when the integration is disabled. Replay-safe (upsert).
+    try:
+        from utils.zoho_desk_sync import zoho_desk_sync_loop
+
+        _spawn("zoho_desk_sync (10min)", zoho_desk_sync_loop)
+    except Exception as e:
+        logger.error(f"Failed to import Zoho Desk sync loop: {e}", exc_info=True)
+
     # Loop watchdog — scans heartbeats every 5 minutes and posts a
     # Slack-compatible alert when any loop has gone stale.  No-op when
     # ALERT_WEBHOOK_URL is unset.

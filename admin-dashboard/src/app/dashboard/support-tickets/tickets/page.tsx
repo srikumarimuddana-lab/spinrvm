@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { getDeskTickets, getDeskAgents } from "@/lib/api";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
     Table,
@@ -22,10 +23,12 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
-import { Inbox, ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
+import { Inbox, ChevronLeft, ChevronRight, RefreshCw, Search, ArrowUp, ArrowDown } from "lucide-react";
 
-const PAGE_SIZE = 25;
 const STATUSES = ["All", "Open", "On Hold", "Escalated", "Closed"];
+const PRIORITIES = ["All", "Low", "Medium", "High", "Urgent"];
+const CHANNELS = ["All", "Email", "Web", "Phone", "Chat", "Twitter", "Facebook", "Forums"];
+const PAGE_SIZES = [25, 50, 100];
 
 function statusClass(status: string): string {
     const s = (status || "").toLowerCase();
@@ -43,13 +46,32 @@ function priorityClass(p: string): string {
     return "bg-slate-100 text-slate-700 hover:bg-slate-100";
 }
 
+function tagNames(t: any): string {
+    const tags = t?.tags;
+    if (!Array.isArray(tags)) return "";
+    return tags.map((x: any) => (typeof x === "string" ? x : x?.name)).filter(Boolean).join(", ");
+}
+
 export default function TicketListPage() {
     const { allowed } = useRequireModule("support_tickets");
     const [tickets, setTickets] = useState<any[]>([]);
     const [agents, setAgents] = useState<any[]>([]);
+
+    // Server-side filters (Zoho List Tickets supports these).
     const [status, setStatus] = useState("All");
+    const [priority, setPriority] = useState("All");
+    const [channel, setChannel] = useState("All");
     const [assignee, setAssignee] = useState("all");
+
+    // Sorting + pagination.
+    const [sortField, setSortField] = useState("createdTime");
+    const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
+    const [pageSize, setPageSize] = useState(25);
     const [page, setPage] = useState(0);
+
+    // Client-side refine (filters the loaded page by contact/category/tag/subject).
+    const [refine, setRefine] = useState("");
+
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
@@ -58,10 +80,13 @@ export default function TicketListPage() {
         setError(null);
         try {
             const res = await getDeskTickets({
-                from: page * PAGE_SIZE + 1,
-                limit: PAGE_SIZE,
+                from: page * pageSize + 1,
+                limit: pageSize,
                 status: status === "All" ? undefined : status,
+                priority: priority === "All" ? undefined : priority,
+                channel: channel === "All" ? undefined : channel,
                 assigneeId: assignee === "all" ? undefined : assignee,
+                sortBy: `${sortDir === "desc" ? "-" : ""}${sortField}`,
             });
             setTickets(res.data || []);
         } catch (e: any) {
@@ -70,7 +95,7 @@ export default function TicketListPage() {
         } finally {
             setLoading(false);
         }
-    }, [page, status, assignee]);
+    }, [page, pageSize, status, priority, channel, assignee, sortField, sortDir]);
 
     useEffect(() => {
         if (allowed) load();
@@ -81,7 +106,49 @@ export default function TicketListPage() {
         getDeskAgents().then((r) => setAgents(r.data || [])).catch(() => {});
     }, [allowed]);
 
+    // Client refine across the loaded page (contact, category, tags, subject, #).
+    const shown = useMemo(() => {
+        const q = refine.trim().toLowerCase();
+        if (!q) return tickets;
+        return tickets.filter((t) => {
+            const hay = [
+                t.subject,
+                t.ticketNumber,
+                t.category,
+                t.contact?.email,
+                t.email,
+                `${t.contact?.firstName || ""} ${t.contact?.lastName || ""}`,
+                tagNames(t),
+            ]
+                .filter(Boolean)
+                .join(" ")
+                .toLowerCase();
+            return hay.includes(q);
+        });
+    }, [tickets, refine]);
+
+    const toggleSort = (field: string) => {
+        setPage(0);
+        if (sortField === field) {
+            setSortDir((d) => (d === "desc" ? "asc" : "desc"));
+        } else {
+            setSortField(field);
+            setSortDir("desc");
+        }
+    };
+
+    const SortHead = ({ field, label }: { field: string; label: string }) => (
+        <TableHead>
+            <button className="flex items-center gap-1 hover:text-foreground" onClick={() => toggleSort(field)}>
+                {label}
+                {sortField === field && (sortDir === "desc" ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3" />)}
+            </button>
+        </TableHead>
+    );
+
     if (!allowed) return null;
+
+    const reset = (fn: (v: string) => void) => (v: string) => { setPage(0); fn(v); };
 
     return (
         <div className="space-y-4">
@@ -89,27 +156,44 @@ export default function TicketListPage() {
                 <h1 className="flex items-center gap-2 text-2xl font-bold">
                     <Inbox className="h-6 w-6" /> Tickets
                 </h1>
-                <div className="flex flex-wrap items-center gap-2">
-                    <Select value={status} onValueChange={(v) => { setPage(0); setStatus(v); }}>
-                        <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                            {STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                        </SelectContent>
-                    </Select>
-                    <Select value={assignee} onValueChange={(v) => { setPage(0); setAssignee(v); }}>
-                        <SelectTrigger className="w-44"><SelectValue placeholder="Assignee" /></SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="all">All assignees</SelectItem>
-                            {agents.map((a) => (
-                                <SelectItem key={a.id} value={a.id}>
-                                    {a.firstName || ""} {a.lastName || a.emailId || a.id}
-                                </SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
-                    <Button variant="outline" size="icon" onClick={load} disabled={loading}>
-                        <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-                    </Button>
+                <Button variant="outline" size="icon" onClick={load} disabled={loading}>
+                    <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+                </Button>
+            </div>
+
+            {/* Filters */}
+            <div className="flex flex-wrap items-center gap-2">
+                <Select value={status} onValueChange={reset(setStatus)}>
+                    <SelectTrigger className="w-32"><SelectValue placeholder="Status" /></SelectTrigger>
+                    <SelectContent>{STATUSES.map((s) => <SelectItem key={s} value={s}>{s === "All" ? "All status" : s}</SelectItem>)}</SelectContent>
+                </Select>
+                <Select value={priority} onValueChange={reset(setPriority)}>
+                    <SelectTrigger className="w-32"><SelectValue placeholder="Priority" /></SelectTrigger>
+                    <SelectContent>{PRIORITIES.map((p) => <SelectItem key={p} value={p}>{p === "All" ? "All priority" : p}</SelectItem>)}</SelectContent>
+                </Select>
+                <Select value={channel} onValueChange={reset(setChannel)}>
+                    <SelectTrigger className="w-32"><SelectValue placeholder="Channel" /></SelectTrigger>
+                    <SelectContent>{CHANNELS.map((c) => <SelectItem key={c} value={c}>{c === "All" ? "All channels" : c}</SelectItem>)}</SelectContent>
+                </Select>
+                <Select value={assignee} onValueChange={reset(setAssignee)}>
+                    <SelectTrigger className="w-44"><SelectValue placeholder="Assignee" /></SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="all">All assignees</SelectItem>
+                        {agents.map((a) => (
+                            <SelectItem key={a.id} value={a.id}>
+                                {`${a.firstName || ""} ${a.lastName || ""}`.trim() || a.emailId || a.id}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+                <div className="relative">
+                    <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input
+                        value={refine}
+                        onChange={(e) => setRefine(e.target.value)}
+                        placeholder="Refine: contact, category, tag…"
+                        className="w-64 pl-8"
+                    />
                 </div>
             </div>
 
@@ -122,19 +206,21 @@ export default function TicketListPage() {
                             <TableHead className="w-20">#</TableHead>
                             <TableHead>Subject</TableHead>
                             <TableHead>Requester</TableHead>
+                            <TableHead>Category</TableHead>
                             <TableHead>Priority</TableHead>
                             <TableHead>Assignee</TableHead>
+                            <SortHead field="createdTime" label="Created" />
                             <TableHead>Status</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
                         {loading && (
-                            <TableRow><TableCell colSpan={6} className="py-8 text-center text-muted-foreground">Loading…</TableCell></TableRow>
+                            <TableRow><TableCell colSpan={8} className="py-8 text-center text-muted-foreground">Loading…</TableCell></TableRow>
                         )}
-                        {!loading && tickets.length === 0 && (
-                            <TableRow><TableCell colSpan={6} className="py-8 text-center text-muted-foreground">No tickets found.</TableCell></TableRow>
+                        {!loading && shown.length === 0 && (
+                            <TableRow><TableCell colSpan={8} className="py-8 text-center text-muted-foreground">No tickets found.</TableCell></TableRow>
                         )}
-                        {!loading && tickets.map((t) => (
+                        {!loading && shown.map((t) => (
                             <TableRow key={t.id} className="cursor-pointer">
                                 <TableCell>
                                     <Link href={`/dashboard/support-tickets/tickets/${t.id}`} className="font-mono text-sm text-blue-600">
@@ -145,11 +231,16 @@ export default function TicketListPage() {
                                     <Link href={`/dashboard/support-tickets/tickets/${t.id}`} className="block truncate font-medium hover:underline">
                                         {t.subject || "(no subject)"}
                                     </Link>
+                                    {tagNames(t) && <p className="truncate text-xs text-muted-foreground">{tagNames(t)}</p>}
                                 </TableCell>
                                 <TableCell className="text-sm">{t.contact?.email || t.email || "—"}</TableCell>
+                                <TableCell className="text-sm">{t.category || "—"}</TableCell>
                                 <TableCell><Badge variant="secondary" className={priorityClass(t.priority)}>{t.priority || "None"}</Badge></TableCell>
                                 <TableCell className="text-sm">
                                     {t.assignee ? `${t.assignee.firstName || ""} ${t.assignee.lastName || ""}`.trim() || "—" : "Unassigned"}
+                                </TableCell>
+                                <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                                    {t.createdTime?.slice(0, 10) || "—"}
                                 </TableCell>
                                 <TableCell><Badge variant="secondary" className={statusClass(t.status)}>{t.status}</Badge></TableCell>
                             </TableRow>
@@ -158,14 +249,25 @@ export default function TicketListPage() {
                 </Table>
             </div>
 
-            <div className="flex items-center justify-end gap-2">
-                <Button variant="outline" size="sm" onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0 || loading}>
-                    <ChevronLeft className="h-4 w-4" /> Prev
-                </Button>
-                <span className="text-sm text-muted-foreground">Page {page + 1}</span>
-                <Button variant="outline" size="sm" onClick={() => setPage((p) => p + 1)} disabled={tickets.length < PAGE_SIZE || loading}>
-                    Next <ChevronRight className="h-4 w-4" />
-                </Button>
+            {/* Pagination + page size */}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <span>Rows per page</span>
+                    <Select value={String(pageSize)} onValueChange={(v) => { setPage(0); setPageSize(Number(v)); }}>
+                        <SelectTrigger className="w-20"><SelectValue /></SelectTrigger>
+                        <SelectContent>{PAGE_SIZES.map((n) => <SelectItem key={n} value={String(n)}>{n}</SelectItem>)}</SelectContent>
+                    </Select>
+                    {refine && <span>· {shown.length} of {tickets.length} shown</span>}
+                </div>
+                <div className="flex items-center gap-2">
+                    <Button variant="outline" size="sm" onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0 || loading}>
+                        <ChevronLeft className="h-4 w-4" /> Prev
+                    </Button>
+                    <span className="text-sm text-muted-foreground">Page {page + 1}</span>
+                    <Button variant="outline" size="sm" onClick={() => setPage((p) => p + 1)} disabled={tickets.length < pageSize || loading}>
+                        Next <ChevronRight className="h-4 w-4" />
+                    </Button>
+                </div>
             </div>
         </div>
     );

@@ -207,9 +207,71 @@ export default function TrendsPage() {
                             </CardContent>
                         </Card>
                     </div>
+
+                    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                        <HBarCard title="By category" rec={data.by_category} color="#8b5cf6" />
+                        <ContactsCard contacts={data.top_contacts} />
+                        {Object.keys(data.by_tag).length > 0 && (
+                            <HBarCard title="By tag" rec={data.by_tag} color="#ec4899" />
+                        )}
+                        {Object.keys(data.by_classification).length > 0 && (
+                            <HBarCard title="By classification" rec={data.by_classification} color="#0ea5e9" />
+                        )}
+                    </div>
                 </>
             )}
         </div>
+    );
+}
+
+/** Horizontal bar chart for a {label: count} map (good for long category/tag names). */
+function HBarCard({ title, rec, color }: { title: string; rec: Record<string, number>; color: string }) {
+    const data = Object.entries(rec)
+        .map(([name, value]) => ({ name, value }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 10);
+    return (
+        <Card>
+            <CardHeader><CardTitle className="text-base">{title}</CardTitle></CardHeader>
+            <CardContent>
+                {data.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No data.</p>
+                ) : (
+                    <ResponsiveContainer width="100%" height={Math.max(160, data.length * 32)}>
+                        <BarChart data={data} layout="vertical" margin={{ left: 20, right: 16 }}>
+                            <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                            <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} />
+                            <YAxis type="category" dataKey="name" width={120} tick={{ fontSize: 11 }} />
+                            <Tooltip />
+                            <Bar dataKey="value" fill={color} />
+                        </BarChart>
+                    </ResponsiveContainer>
+                )}
+            </CardContent>
+        </Card>
+    );
+}
+
+function ContactsCard({ contacts }: { contacts: Array<{ name: string; count: number }> }) {
+    return (
+        <Card>
+            <CardHeader><CardTitle className="text-base">Top requesters</CardTitle></CardHeader>
+            <CardContent>
+                {contacts.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No data.</p>
+                ) : (
+                    <ResponsiveContainer width="100%" height={Math.max(160, contacts.length * 32)}>
+                        <BarChart data={contacts} layout="vertical" margin={{ left: 20, right: 16 }}>
+                            <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                            <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} />
+                            <YAxis type="category" dataKey="name" width={160} tick={{ fontSize: 10 }} />
+                            <Tooltip />
+                            <Bar dataKey="count" fill="#3b82f6" />
+                        </BarChart>
+                    </ResponsiveContainer>
+                )}
+            </CardContent>
+        </Card>
     );
 }
 

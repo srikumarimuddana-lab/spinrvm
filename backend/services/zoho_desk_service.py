@@ -72,8 +72,7 @@ def _dc_domains(data_center: str) -> Dict[str, str]:
     dc = (data_center or "ca").strip().lower()
     if dc not in _DATA_CENTERS:
         raise ZohoDeskError(
-            f"Unknown Zoho data center '{data_center}'. Expected one of: "
-            f"{', '.join(sorted(_DATA_CENTERS))}.",
+            f"Unknown Zoho data center '{data_center}'. Expected one of: {', '.join(sorted(_DATA_CENTERS))}.",
             status=503,
         )
     return _DATA_CENTERS[dc]
@@ -92,10 +91,7 @@ async def _load_config() -> Dict[str, Any]:
 def _require_connected(cfg: Dict[str, Any]) -> None:
     if not cfg.get("enabled"):
         raise ZohoDeskError("Zoho Desk integration is disabled.", status=503)
-    missing = [
-        k for k in ("client_id", "client_secret", "refresh_token", "org_id")
-        if not (cfg.get(k) or "").strip()
-    ]
+    missing = [k for k in ("client_id", "client_secret", "refresh_token", "org_id") if not (cfg.get(k) or "").strip()]
     if missing:
         raise ZohoDeskError(
             f"Zoho Desk is not fully configured (missing: {', '.join(missing)}).",
@@ -236,6 +232,7 @@ async def _request(
 # Public API used by routes/admin/support_tickets.py
 # --------------------------------------------------------------------------
 
+
 async def list_tickets(
     *,
     from_index: int = 1,
@@ -243,7 +240,7 @@ async def list_tickets(
     status: Optional[str] = None,
     department_id: Optional[str] = None,
     assignee_id: Optional[str] = None,
-    sort_by: str = "-modifiedTime",
+    sort_by: str = "-createdTime",
 ) -> Dict[str, Any]:
     params: Dict[str, Any] = {
         "from": max(1, from_index),
@@ -254,7 +251,10 @@ async def list_tickets(
     if status:
         params["status"] = status
     if department_id:
-        params["departmentId"] = department_id
+        # The List Tickets endpoint filters by `departmentIds` (plural,
+        # comma-separated) — `departmentId` (singular) is silently ignored
+        # here (it's only valid on the count endpoints).
+        params["departmentIds"] = department_id
     if assignee_id:
         params["assignee"] = assignee_id
     data = await _request("GET", "/api/v1/tickets", params=params)
@@ -262,16 +262,12 @@ async def list_tickets(
 
 
 async def get_ticket(ticket_id: str) -> Dict[str, Any]:
-    return await _request(
-        "GET", f"/api/v1/tickets/{ticket_id}", params={"include": "contacts,assignee,team"}
-    )
+    return await _request("GET", f"/api/v1/tickets/{ticket_id}", params={"include": "contacts,assignee,team"})
 
 
 async def get_ticket_threads(ticket_id: str) -> Dict[str, Any]:
     """Conversation thread (replies + comments) for a ticket."""
-    data = await _request(
-        "GET", f"/api/v1/tickets/{ticket_id}/conversations", params={"limit": 100}
-    )
+    data = await _request("GET", f"/api/v1/tickets/{ticket_id}/conversations", params={"limit": 100})
     return data or {"data": []}
 
 
@@ -280,8 +276,8 @@ async def send_reply(
     *,
     content: str,
     to: Optional[str] = None,
+    from_email: Optional[str] = None,
     channel: str = "EMAIL",
-    is_public: bool = True,
 ) -> Dict[str, Any]:
     body: Dict[str, Any] = {
         "channel": channel,
@@ -291,6 +287,10 @@ async def send_reply(
     }
     if to:
         body["to"] = to
+    # EMAIL replies require `fromEmailAddress` to be one of the portal's
+    # configured support addresses, or Zoho rejects the reply.
+    if from_email:
+        body["fromEmailAddress"] = from_email
     return await _request("POST", f"/api/v1/tickets/{ticket_id}/sendReply", json_body=body)
 
 

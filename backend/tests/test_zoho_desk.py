@@ -176,9 +176,7 @@ async def test_refresh_failure_raises_502(monkeypatch):
 async def test_upstream_error_surfaced_502(monkeypatch):
     _patch_db(
         monkeypatch,
-        _connected_config(
-            access_token="AT", access_token_expires_at="2999-01-01T00:00:00+00:00"
-        ),
+        _connected_config(access_token="AT", access_token_expires_at="2999-01-01T00:00:00+00:00"),
     )
 
     def handler(method, url, kwargs):
@@ -204,9 +202,7 @@ async def test_ticket_count_omits_status_param(monkeypatch):
     # only ever send departmentId there (status breakdown is sampled instead).
     _patch_db(
         monkeypatch,
-        _connected_config(
-            access_token="AT", access_token_expires_at="2999-01-01T00:00:00+00:00"
-        ),
+        _connected_config(access_token="AT", access_token_expires_at="2999-01-01T00:00:00+00:00"),
     )
     seen = {}
 
@@ -221,6 +217,46 @@ async def test_ticket_count_omits_status_param(monkeypatch):
     assert "ticketsCount" in seen["url"]
     assert "status" not in seen["params"]
     assert seen["params"].get("departmentId") == "dep1"
+
+
+@pytest.mark.anyio
+async def test_list_tickets_uses_departmentids_and_created_sort(monkeypatch):
+    # Codex P2: List Tickets filters by `departmentIds` (plural); singular is
+    # ignored. Default sort must be a supported field (`-createdTime`).
+    _patch_db(
+        monkeypatch,
+        _connected_config(access_token="AT", access_token_expires_at="2999-01-01T00:00:00+00:00"),
+    )
+    seen = {}
+
+    def handler(method, url, kwargs):
+        seen["params"] = kwargs.get("params") or {}
+        return _FakeResponse(200, {"data": []})
+
+    _patch_http(monkeypatch, handler)
+    await zoho.list_tickets(department_id="dep1")
+    assert seen["params"].get("departmentIds") == "dep1"
+    assert "departmentId" not in seen["params"]
+    assert seen["params"].get("sortBy") == "-createdTime"
+
+
+@pytest.mark.anyio
+async def test_send_reply_includes_from_email(monkeypatch):
+    # Codex P2: EMAIL replies must carry `fromEmailAddress` or Zoho rejects them.
+    _patch_db(
+        monkeypatch,
+        _connected_config(access_token="AT", access_token_expires_at="2999-01-01T00:00:00+00:00"),
+    )
+    seen = {}
+
+    def handler(method, url, kwargs):
+        seen["body"] = kwargs.get("json") or {}
+        return _FakeResponse(200, {"id": "r1"})
+
+    _patch_http(monkeypatch, handler)
+    await zoho.send_reply("t1", content="hi", to="x@y.ca", from_email="support@spinr.ca")
+    assert seen["body"]["fromEmailAddress"] == "support@spinr.ca"
+    assert seen["body"]["to"] == "x@y.ca"
 
 
 def test_parse_zoho_time_window():

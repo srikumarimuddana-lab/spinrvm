@@ -2289,6 +2289,7 @@ export interface ZohoConfigStatus {
     data_center: string;
     org_id: string;
     default_department_id: string;
+    default_from_email: string;
     has_client_id: boolean;
     has_client_secret: boolean;
     has_refresh_token: boolean;
@@ -2300,6 +2301,7 @@ export interface ZohoConfigUpdate {
     data_center?: string;
     org_id?: string;
     default_department_id?: string;
+    default_from_email?: string;
     client_id?: string;
     client_secret?: string;
     refresh_token?: string;

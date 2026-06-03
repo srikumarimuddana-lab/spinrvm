@@ -1,0 +1,87 @@
+"use client";
+
+import { useRef, useEffect } from "react";
+import { Bold, Italic, Underline, List, ListOrdered, Link as LinkIcon } from "lucide-react";
+
+/**
+ * Minimal dependency-free rich-text editor (contentEditable + a small toolbar)
+ * that emits HTML. Used for ticket replies so agents can send formatted email
+ * (bold, lists, links, line breaks) instead of a single collapsed line.
+ *
+ * Uncontrolled internally to keep the caret stable; the parent resets it by
+ * passing value="" (e.g. after sending).
+ */
+export function RichTextEditor({
+    value,
+    onChange,
+    placeholder,
+    minHeight = 140,
+    disabled,
+}: {
+    value: string;
+    onChange: (html: string) => void;
+    placeholder?: string;
+    minHeight?: number;
+    disabled?: boolean;
+}) {
+    const ref = useRef<HTMLDivElement>(null);
+
+    // Reset the editor body when the parent clears the value (post-send).
+    useEffect(() => {
+        if (ref.current && !value && ref.current.innerHTML !== "") {
+            ref.current.innerHTML = "";
+        }
+    }, [value]);
+
+    const emit = () => onChange(ref.current?.innerHTML || "");
+
+    const exec = (cmd: string, arg?: string) => {
+        ref.current?.focus();
+        // execCommand is deprecated but remains the simplest cross-browser way
+        // to do inline formatting in a contentEditable without a heavy editor.
+        document.execCommand(cmd, false, arg);
+        emit();
+    };
+
+    const addLink = () => {
+        const url = window.prompt("Link URL (https://…)");
+        if (url) exec("createLink", url);
+    };
+
+    const Btn = ({ cmd, arg, title, children }: { cmd?: string; arg?: string; title: string; children: React.ReactNode }) => (
+        <button
+            type="button"
+            title={title}
+            disabled={disabled}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => (cmd ? exec(cmd, arg) : addLink())}
+            className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+        >
+            {children}
+        </button>
+    );
+
+    return (
+        <div className="rounded-md border focus-within:ring-1 focus-within:ring-ring">
+            <div className="flex items-center gap-0.5 border-b px-1 py-1">
+                <Btn cmd="bold" title="Bold"><Bold className="h-4 w-4" /></Btn>
+                <Btn cmd="italic" title="Italic"><Italic className="h-4 w-4" /></Btn>
+                <Btn cmd="underline" title="Underline"><Underline className="h-4 w-4" /></Btn>
+                <span className="mx-1 h-4 w-px bg-border" />
+                <Btn cmd="insertUnorderedList" title="Bullet list"><List className="h-4 w-4" /></Btn>
+                <Btn cmd="insertOrderedList" title="Numbered list"><ListOrdered className="h-4 w-4" /></Btn>
+                <span className="mx-1 h-4 w-px bg-border" />
+                <Btn title="Insert link"><LinkIcon className="h-4 w-4" /></Btn>
+            </div>
+            <div
+                ref={ref}
+                contentEditable={!disabled}
+                onInput={emit}
+                data-placeholder={placeholder}
+                style={{ minHeight }}
+                suppressContentEditableWarning
+                className="prose-sm max-w-none overflow-auto p-3 text-sm outline-none [&_a]:text-blue-600 [&_a]:underline [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5 empty:before:text-muted-foreground empty:before:content-[attr(data-placeholder)]"
+            />
+        </div>
+    );
+}

@@ -101,16 +101,21 @@ async def _upsert_batch(rows: List[Dict[str, Any]]) -> None:
 async def run_sync() -> Dict[str, Any]:
     """Incrementally pull tickets by -modifiedTime and upsert into the mirror.
 
-    Stops as soon as it reaches a ticket modified at/before the stored cursor,
-    so a steady-state run is typically a single page. The first run (no cursor)
-    seeds up to SEED_MAX_PAGES. Skips silently when the integration is disabled.
+    Until the mirror is marked backfilled it does a FULL seed (pages to the end,
+    ignoring any stale cursor). Once backfilled, runs are incremental and stop at
+    the stored cursor — typically a single page. Skips when disabled.
     """
     cfg = await db_supabase.find_one(_CONFIG_TABLE, {"id": _CONFIG_ID})
     if not cfg or not cfg.get("enabled"):
         return {"skipped": "disabled"}
 
-    cursor = _parse(cfg.get("sync_cursor"))
-    seeding = cursor is None and not cfg.get("mirror_backfilled")
+    # A mirror that hasn't been marked backfilled needs a FULL backfill,
+    # regardless of any stale sync_cursor left by a pre-backfill sync (or an
+    # environment upgraded before mirror_backfilled existed). Ignore the cursor
+    # while seeding so we page all the way to the end instead of stopping at it.
+    backfilled = bool(cfg.get("mirror_backfilled"))
+    seeding = not backfilled
+    cursor = None if seeding else _parse(cfg.get("sync_cursor"))
     newest = cursor
     max_pages = SEED_MAX_PAGES if seeding else INCREMENTAL_MAX_PAGES
     total = 0
@@ -147,9 +152,9 @@ async def run_sync() -> Dict[str, Any]:
     }
     if newest:
         updates["sync_cursor"] = newest.isoformat()
-    # The mirror is only authoritative for reads once a full backfill has paged
-    # to the end. Incremental runs (cursor already set) keep it true.
-    if reached_end and (seeding or cfg.get("mirror_backfilled")):
+    # The mirror becomes authoritative for reads only once a run has paged all
+    # the way to the end (seed completed, or an incremental run reached the end).
+    if reached_end:
         updates["mirror_backfilled"] = True
     await db_supabase.update_one(_CONFIG_TABLE, {"id": _CONFIG_ID}, updates)
     logger.info(

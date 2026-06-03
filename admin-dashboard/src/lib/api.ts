@@ -2314,6 +2314,8 @@ export interface ZohoDashboard {
     open: number;
     by_status: Record<string, number>;
     recent: any[];
+    sample_size: number;
+    approximate: boolean;
 }
 export interface ZohoTrends {
     sample_size: number;

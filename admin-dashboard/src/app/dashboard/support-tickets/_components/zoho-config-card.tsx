@@ -192,9 +192,11 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
                             Generate a self-client refresh token in the Zoho API console with the
                             <code className="mx-1">Desk.tickets.ALL</code>,
                             <code className="mx-1">Desk.search.READ</code>,
+                            <code className="mx-1">Desk.agents.READ</code>,
                             <code className="mx-1">Desk.settings.READ</code> and
                             <code className="mx-1">Desk.basic.READ</code> scopes.
-                            <code className="ml-1">Desk.search.READ</code> is required for the dashboard ticket counts.
+                            <code className="ml-1">Desk.search.READ</code> powers the dashboard counts and
+                            <code className="mx-1">Desk.agents.READ</code> the assignee filters/assignment controls.
                         </p>
                     </div>
                 </div>

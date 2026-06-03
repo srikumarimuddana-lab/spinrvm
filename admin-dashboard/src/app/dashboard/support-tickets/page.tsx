@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ZohoConfigCard } from "./_components/zoho-config-card";
-import { Headphones, Inbox, BarChart3, Settings as SettingsIcon, AlertCircle, Ticket as TicketIcon } from "lucide-react";
+import { Headphones, Inbox, BarChart3, Settings as SettingsIcon, AlertCircle, Info, Ticket as TicketIcon } from "lucide-react";
 
 function statusClass(status: string): string {
     const s = (status || "").toLowerCase();
@@ -94,23 +94,46 @@ export default function HelpDeskPage() {
             {!loading && connected && data && (
                 <>
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                        {/* Only `total` is an exact account-wide count. The open/status
+                            figures are derived from the latest sample, so label them
+                            as such rather than presenting them as account-wide totals. */}
                         <StatCard label="Total tickets" value={data.total} />
-                        <StatCard label="Open / active" value={data.open} accent />
+                        <StatCard
+                            label="Open / active"
+                            value={data.open}
+                            accent
+                            sub={data.approximate ? `of latest ${data.sample_size}` : undefined}
+                        />
                         {Object.entries(data.by_status).slice(0, 2).map(([k, v]) => (
-                            <StatCard key={k} label={k} value={v} />
+                            <StatCard
+                                key={k}
+                                label={k}
+                                value={v}
+                                sub={data.approximate ? `of latest ${data.sample_size}` : undefined}
+                            />
                         ))}
                     </div>
 
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                        {Object.entries(data.by_status).map(([k, v]) => (
-                            <Card key={k}>
-                                <CardContent className="flex items-center justify-between p-4">
+                    <Card>
+                        <CardHeader className="pb-2">
+                            <CardTitle className="flex items-center gap-2 text-base">
+                                Status breakdown
+                                {data.approximate && (
+                                    <span className="flex items-center gap-1 text-xs font-normal text-muted-foreground">
+                                        <Info className="h-3 w-3" /> latest {data.sample_size} tickets (sample)
+                                    </span>
+                                )}
+                            </CardTitle>
+                        </CardHeader>
+                        <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                            {Object.entries(data.by_status).map(([k, v]) => (
+                                <div key={k} className="flex items-center justify-between rounded-lg border p-4">
                                     <Badge variant="secondary" className={statusClass(k)}>{k}</Badge>
                                     <span className="text-xl font-semibold">{v}</span>
-                                </CardContent>
-                            </Card>
-                        ))}
-                    </div>
+                                </div>
+                            ))}
+                        </CardContent>
+                    </Card>
 
                     <Card>
                         <CardHeader><CardTitle className="text-base">Recent tickets</CardTitle></CardHeader>
@@ -144,12 +167,13 @@ export default function HelpDeskPage() {
     );
 }
 
-function StatCard({ label, value, accent }: { label: string; value: number; accent?: boolean }) {
+function StatCard({ label, value, accent, sub }: { label: string; value: number; accent?: boolean; sub?: string }) {
     return (
         <Card>
             <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle></CardHeader>
             <CardContent>
                 <div className={`text-2xl font-bold ${accent ? "text-blue-600" : ""}`}>{value}</div>
+                {sub && <p className="mt-1 text-xs text-muted-foreground">{sub}</p>}
             </CardContent>
         </Card>
     );

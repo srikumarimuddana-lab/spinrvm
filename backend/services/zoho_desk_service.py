@@ -24,7 +24,7 @@ References: https://desk.zoho.com/DeskAPIDocument
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import httpx
 

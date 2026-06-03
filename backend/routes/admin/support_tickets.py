@@ -134,7 +134,7 @@ async def test_connection(admin: dict = Depends(get_admin_user)):
     try:
         depts = await zoho.list_departments()
     except ZohoDeskError as e:
-        raise _err(e)
+        raise _err(e) from e
     return {"ok": True, "departments": (depts or {}).get("data", [])}
 
 
@@ -155,7 +155,7 @@ async def dashboard(
             by_status[status] = await zoho.ticket_count(status=status, department_id=department_id)
         recent = await zoho.list_tickets(limit=10, department_id=department_id, sort_by="-createdTime")
     except ZohoDeskError as e:
-        raise _err(e)
+        raise _err(e) from e
 
     open_count = by_status.get("Open", 0) + by_status.get("Escalated", 0) + by_status.get("On Hold", 0)
     return {
@@ -182,7 +182,7 @@ async def trends(
     try:
         page = await zoho.list_tickets(limit=100, department_id=department_id, sort_by="-createdTime")
     except ZohoDeskError as e:
-        raise _err(e)
+        raise _err(e) from e
 
     tickets: List[Dict[str, Any]] = (page or {}).get("data", [])
     by_day: Counter = Counter()
@@ -219,7 +219,7 @@ async def agents(admin: dict = Depends(require_module("support_tickets"))):
     try:
         return await zoho.list_agents()
     except ZohoDeskError as e:
-        raise _err(e)
+        raise _err(e) from e
 
 
 @router.get("/departments")
@@ -227,7 +227,7 @@ async def departments(admin: dict = Depends(require_module("support_tickets"))):
     try:
         return await zoho.list_departments()
     except ZohoDeskError as e:
-        raise _err(e)
+        raise _err(e) from e
 
 
 @router.get("/tickets")
@@ -250,7 +250,7 @@ async def tickets(
             sort_by=sort_by,
         )
     except ZohoDeskError as e:
-        raise _err(e)
+        raise _err(e) from e
 
 
 @router.get("/tickets/{ticket_id}")
@@ -258,7 +258,7 @@ async def ticket_detail(ticket_id: str, admin: dict = Depends(require_module("su
     try:
         return await zoho.get_ticket(ticket_id)
     except ZohoDeskError as e:
-        raise _err(e)
+        raise _err(e) from e
 
 
 @router.get("/tickets/{ticket_id}/threads")
@@ -266,7 +266,7 @@ async def ticket_threads(ticket_id: str, admin: dict = Depends(require_module("s
     try:
         return await zoho.get_ticket_threads(ticket_id)
     except ZohoDeskError as e:
-        raise _err(e)
+        raise _err(e) from e
 
 
 class ReplyRequest(BaseModel):
@@ -284,7 +284,7 @@ async def reply_ticket(
     try:
         result = await zoho.send_reply(ticket_id, content=payload.content, to=payload.to, channel=payload.channel)
     except ZohoDeskError as e:
-        raise _err(e)
+        raise _err(e) from e
     await log_admin_action(admin, "zoho_desk_ticket_reply", "zoho_desk_ticket", ticket_id, {"channel": payload.channel})
     return result
 
@@ -303,7 +303,7 @@ async def comment_ticket(
     try:
         result = await zoho.add_comment(ticket_id, content=payload.content, is_public=payload.is_public)
     except ZohoDeskError as e:
-        raise _err(e)
+        raise _err(e) from e
     await log_admin_action(admin, "zoho_desk_ticket_comment", "zoho_desk_ticket", ticket_id, None)
     return result
 
@@ -327,6 +327,6 @@ async def patch_ticket(
     try:
         result = await zoho.update_ticket(ticket_id, fields)
     except ZohoDeskError as e:
-        raise _err(e)
+        raise _err(e) from e
     await log_admin_action(admin, "zoho_desk_ticket_updated", "zoho_desk_ticket", ticket_id, {"fields": list(fields)})
     return result

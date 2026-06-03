@@ -19,6 +19,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { RichTextEditor } from "@/components/ui/rich-text-editor";
+import DOMPurify from "dompurify";
 import {
     Select,
     SelectContent,
@@ -177,10 +179,11 @@ export default function TicketDetailPage() {
     };
 
     const sendReply = async () => {
-        if (!reply.trim()) return;
+        const html = DOMPurify.sanitize(reply).trim();
+        if (!toText(html).trim()) return;
         setSending(true);
         try {
-            await replyDeskTicket(id, { content: reply, to: ticket?.email || ticket?.contact?.email });
+            await replyDeskTicket(id, { content: html, to: ticket?.email || ticket?.contact?.email });
             setReply("");
             toast({ title: "Reply sent" });
             await load();
@@ -193,9 +196,16 @@ export default function TicketDetailPage() {
 
     const sendNote = async () => {
         if (!note.trim()) return;
+        // Notes are sent as HTML — escape and convert newlines so multi-line
+        // notes don't collapse into a single line.
+        const html = note
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/\n/g, "<br>");
         setSending(true);
         try {
-            await commentDeskTicket(id, { content: note, is_public: false });
+            await commentDeskTicket(id, { content: html, is_public: false });
             setNote("");
             toast({ title: "Internal note added" });
             await load();
@@ -334,9 +344,14 @@ export default function TicketDetailPage() {
                         <Card>
                             <CardHeader><CardTitle className="text-base">Reply to requester</CardTitle></CardHeader>
                             <CardContent className="space-y-2">
-                                <Textarea rows={4} value={reply} onChange={(e) => setReply(e.target.value)} placeholder="Type your reply…" />
+                                <RichTextEditor
+                                    value={reply}
+                                    onChange={setReply}
+                                    placeholder="Type your reply… (bold, lists, links supported)"
+                                    disabled={sending}
+                                />
                                 <div className="flex justify-end">
-                                    <Button onClick={sendReply} disabled={sending || !reply.trim()}>
+                                    <Button onClick={sendReply} disabled={sending || !toText(reply).trim()}>
                                         <Send className="mr-2 h-4 w-4" /> Send reply
                                     </Button>
                                 </div>

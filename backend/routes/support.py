@@ -22,6 +22,8 @@ try:
     from services.zoho_desk_service import ZohoDeskError
 except ImportError:
     from .dependencies import get_current_user  # type: ignore
+    from .services.zoho_desk_integration import create_support_ticket  # type: ignore
+    from .services.zoho_desk_service import ZohoDeskError  # type: ignore
 
 api_router = APIRouter(tags=["Support Chat"])
 

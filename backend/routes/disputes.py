@@ -2,6 +2,7 @@
 disputes.py – Payment dispute/refund request endpoints for Spinr.
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -15,11 +16,13 @@ try:
     from .. import db_supabase
     from ..dependencies import get_admin_user, get_current_user
     from ..features import send_push_notification
+    from ..services.zoho_desk_integration import create_ticket_for_dispute
     from ..settings_loader import get_app_settings
     from ..utils.audit_logger import log_admin_action
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user, get_current_user
+    from services.zoho_desk_integration import create_ticket_for_dispute
     from settings_loader import get_app_settings
 
 db = db_supabase  # legacy alias
@@ -100,6 +103,10 @@ async def create_dispute(
             )
         except Exception as notif_err:
             logger.debug(f"Dispute created notification failed: {notif_err}")
+
+    # Raise a Zoho Desk ticket for support to track the dispute/refund —
+    # fire-and-forget; no-op when the integration is disabled.
+    asyncio.create_task(create_ticket_for_dispute(dispute, ride))
 
     return {"success": True, "dispute": dispute}
 

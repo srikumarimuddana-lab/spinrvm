@@ -91,3 +91,58 @@ async def create_ticket_for_lost_and_found(
         logger.error(
             "Failed to create Zoho ticket for L&F case %s", case.get("id"), exc_info=True
         )
+
+
+async def create_ticket_for_dispute(
+    dispute: Dict[str, Any], ride: Optional[Dict[str, Any]] = None
+) -> None:
+    """Open a Zoho Desk ticket for a payment dispute / refund request and link
+    it back via ``disputes.zoho_ticket_id``. Fire-and-forget; idempotent."""
+    try:
+        if dispute.get("zoho_ticket_id") or not await _enabled():
+            return
+
+        user: Dict[str, Any] = {}
+        uid = dispute.get("user_id")
+        if uid:
+            user = await db_supabase.find_one("users", {"id": uid}) or {}
+
+        name = (user.get("name") or "").strip() or (
+            f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
+        )
+        first, last = _split_name(name or "Rider")
+        reason = dispute.get("reason") or "Dispute"
+        ride_code = (ride or {}).get("ride_code") or dispute.get("ride_id") or ""
+        description = (
+            "Dispute / refund request opened from the Spinr app.\n\n"
+            f"Reason: {reason}\n"
+            f"Details: {dispute.get('description') or '—'}\n"
+            f"Requested amount: {dispute.get('requested_amount')}\n"
+            f"Original fare: {dispute.get('original_fare')}\n"
+            f"Ride: {ride_code}\n"
+            f"Dispute ID: {dispute.get('id')}"
+        )
+
+        result = await zoho.create_ticket(
+            subject=f"Dispute & Refund — {str(reason)[:50]}",
+            description=description,
+            email=user.get("email"),
+            first_name=first,
+            last_name=last,
+            phone=user.get("phone"),
+            priority="High",
+            channel="Web",
+            category="Payment",
+        )
+        zoho_id = str(result.get("id") or "")
+        if zoho_id:
+            await db_supabase.update_one(
+                "disputes", {"id": dispute["id"]}, {"zoho_ticket_id": zoho_id}
+            )
+            logger.info("Created Zoho ticket %s for dispute %s", zoho_id, dispute.get("id"))
+    except ZohoDeskError as e:
+        logger.warning("Zoho dispute ticket skipped (%s): %s", e.status, e.message)
+    except Exception:
+        logger.error(
+            "Failed to create Zoho ticket for dispute %s", dispute.get("id"), exc_info=True
+        )

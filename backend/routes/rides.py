@@ -917,13 +917,20 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
                 except (TypeError, ValueError):
                     earnings_label = "New fare"
 
-                await send_push_notification(
-                    driver["user_id"],
-                    f"{earnings_label} ride offer",
-                    f"Booking {ride_id} • {pickup_label} → {dropoff_label}",
-                    fcm_data,
-                    priority="dispatch",
-                    target_app="driver",
+                # Fire the push without blocking the per-driver offer loop —
+                # send_push_notification now delivers inline (≈100–300 ms FCM
+                # round-trip), and we don't want N drivers serialized on it.
+                # The WebSocket offer above already reached any foreground app;
+                # this push covers backgrounded / locked / killed devices.
+                asyncio.create_task(
+                    send_push_notification(
+                        driver["user_id"],
+                        f"{earnings_label} ride offer",
+                        f"Booking {ride_id} • {pickup_label} → {dropoff_label}",
+                        fcm_data,
+                        priority="dispatch",
+                        target_app="driver",
+                    )
                 )
             except Exception as e:
                 logger.error(f"[DISPATCH] push failed for driver {driver['user_id']}: {e}", exc_info=True)

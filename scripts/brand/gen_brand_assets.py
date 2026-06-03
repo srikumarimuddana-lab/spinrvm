@@ -178,6 +178,38 @@ def render_mark(size: int, *, bg, pad: float, with_idot: bool = False) -> bytear
     return buf
 
 
+def spiral_svg(view: int = 100, pad: float = 0.12) -> str:
+    """Emit the Spinr spiral mark as a scalable SVG (same geometry as the PNGs).
+
+    Ideal for web favicons (crisp at every size, tiny file). Next.js App Router
+    auto-uses an `icon.svg` placed in the app directory.
+    """
+    import math
+
+    cx = cy = view / 2.0
+    R = (view / 2.0) * (1.0 - pad)
+    theta1 = 2.0 * math.pi * TURNS
+    b = R / theta1
+    hw = BAND_FRAC * (2.0 * math.pi * b)
+    red = "#%02X%02X%02X" % RED
+
+    n = 480
+    pts = []
+    for i in range(n + 1):
+        th = theta1 * i / n
+        r = b * th
+        pts.append((cx + r * math.cos(th), cy + r * math.sin(th)))
+    d = "M " + " L ".join(f"{x:.2f} {y:.2f}" for x, y in pts)
+
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {view} {view}" fill="none">'
+        f'<path d="{d}" stroke="{red}" stroke-width="{2.0 * hw:.2f}" '
+        f'stroke-linecap="round" stroke-linejoin="round"/>'
+        f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="{CORE_DOT * R:.2f}" fill="{red}"/>'
+        f"</svg>\n"
+    )
+
+
 def main() -> None:
     out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("/tmp/brand")
     out.mkdir(parents=True, exist_ok=True)
@@ -193,6 +225,9 @@ def main() -> None:
         buf = render_mark(size, bg=bg, pad=pad, with_idot=with_idot)
         _write_png(out / name, size, size, buf)
         print(f"wrote {out / name} ({size}x{size})")
+
+    (out / "mark.svg").write_text(spiral_svg(), encoding="utf-8")
+    print(f"wrote {out / 'mark.svg'} (vector)")
 
 
 if __name__ == "__main__":

@@ -102,7 +102,11 @@ export default function HelpDeskPage() {
                         {/* Only `total` is an exact account-wide count. The open/status
                             figures are derived from the latest sample, so label them
                             as such rather than presenting them as account-wide totals. */}
-                        <StatCard label="Total tickets" value={data.total} />
+                        <StatCard
+                            label="Total tickets"
+                            value={data.total}
+                            sub={!data.total_available ? "needs Desk.search.READ scope" : undefined}
+                        />
                         <StatCard
                             label="Open / active"
                             value={data.open}
@@ -172,12 +176,12 @@ export default function HelpDeskPage() {
     );
 }
 
-function StatCard({ label, value, accent, sub }: { label: string; value: number; accent?: boolean; sub?: string }) {
+function StatCard({ label, value, accent, sub }: { label: string; value: number | null; accent?: boolean; sub?: string }) {
     return (
         <Card>
             <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle></CardHeader>
             <CardContent>
-                <div className={`text-2xl font-bold ${accent ? "text-blue-600" : ""}`}>{value}</div>
+                <div className={`text-2xl font-bold ${accent ? "text-blue-600" : ""}`}>{value ?? "—"}</div>
                 {sub && <p className="mt-1 text-xs text-muted-foreground">{sub}</p>}
             </CardContent>
         </Card>

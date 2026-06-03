@@ -171,15 +171,21 @@ async def dashboard(
     admin: dict = Depends(require_module("support_tickets")),
 ):
     dept = await _resolve_department(department_id)
+    # Listing tickets is the core of the dashboard — if this fails, surface it.
     try:
-        # `total` is an accurate count from Zoho's /ticketsCount. The
-        # per-status breakdown is derived from a recent sample because
-        # /ticketsCount does not support a `status` filter and the REST tier
-        # has no generic group-by endpoint we can rely on across accounts.
-        total = await zoho.ticket_count(department_id=dept)
         sample = await zoho.list_tickets(limit=100, department_id=dept, sort_by="-createdTime")
     except ZohoDeskError as e:
         raise _err(e) from e
+
+    # The exact account-wide total comes from /ticketsCount, which needs the
+    # Desk.search.READ scope. If the connected token lacks it (or the call
+    # otherwise fails), degrade gracefully to the sampled view instead of
+    # 502-ing the whole page — the breakdown below is still useful.
+    total: Optional[int] = None
+    try:
+        total = await zoho.ticket_count(department_id=dept)
+    except ZohoDeskError as e:
+        logger.warning("Zoho ticket_count unavailable (scope/credentials?): %s", e.message)
 
     tickets: List[Dict[str, Any]] = (sample or {}).get("data", [])
     by_status: Counter = Counter()
@@ -189,6 +195,7 @@ async def dashboard(
     open_count = sum(c for s, c in by_status.items() if "closed" not in s.lower())
     return {
         "total": total,
+        "total_available": total is not None,
         "open": open_count,
         "by_status": dict(by_status),
         "recent": tickets[:10],

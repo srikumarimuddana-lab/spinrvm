@@ -2403,6 +2403,25 @@ export const createDeskTicket = (body: CreateDeskTicket) =>
         method: "POST",
         body: JSON.stringify(body),
     });
+export const searchDeskTickets = (opts: {
+    q: string;
+    from?: number;
+    limit?: number;
+    departmentId?: string;
+    status?: string;
+    priority?: string;
+    assigneeId?: string;
+}) => {
+    const sp = new URLSearchParams();
+    sp.set("q", opts.q);
+    if (opts.from) sp.set("from", String(opts.from));
+    if (opts.limit) sp.set("limit", String(opts.limit));
+    if (opts.departmentId) sp.set("department_id", opts.departmentId);
+    if (opts.status) sp.set("status", opts.status);
+    if (opts.priority) sp.set("priority", opts.priority);
+    if (opts.assigneeId) sp.set("assignee_id", opts.assigneeId);
+    return request<ZohoTicketsResponse>(`/api/admin/support-tickets/search?${sp.toString()}`);
+};
 export const getDeskTicket = (id: string) =>
     request<any>(`/api/admin/support-tickets/tickets/${id}`);
 export const getDeskTicketThreads = (id: string) =>

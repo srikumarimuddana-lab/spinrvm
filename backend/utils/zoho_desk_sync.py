@@ -25,10 +25,12 @@ from typing import Any, Dict, List, Optional
 try:
     from .. import db_supabase
     from ..services import zoho_desk_service as zoho
+    from ..services.zoho_desk_integration import close_linked_records
     from ..services.zoho_desk_service import ZohoDeskError
 except ImportError:  # pragma: no cover - allow direct module imports
     import db_supabase
     from services import zoho_desk_service as zoho
+    from services.zoho_desk_integration import close_linked_records
     from services.zoho_desk_service import ZohoDeskError
 
 logger = logging.getLogger(__name__)
@@ -120,6 +122,7 @@ async def run_sync() -> Dict[str, Any]:
     max_pages = SEED_MAX_PAGES if seeding else INCREMENTAL_MAX_PAGES
     total = 0
     reached_end = False
+    closed_ids: List[str] = []
 
     for p in range(max_pages):
         page = await zoho.list_tickets(from_index=p * 100 + 1, limit=100, sort_by="-modifiedTime")
@@ -138,6 +141,8 @@ async def run_sync() -> Dict[str, Any]:
             batch.append(_map_ticket(t))
             if mod and (newest is None or mod > newest):
                 newest = mod
+            if (t.get("statusType") or "").lower() == "closed" or "closed" in (t.get("status") or "").lower():
+                closed_ids.append(str(t.get("id")))
 
         if batch:
             await _upsert_batch(batch)
@@ -145,6 +150,12 @@ async def run_sync() -> Dict[str, Any]:
         if stop or len(rows) < 100:
             reached_end = True
             break
+
+    # Reverse sync: close linked Spinr records (L&F / disputes / complaints /
+    # safety / flags) for tickets that just closed. Skipped during the seed —
+    # we only act on incremental transitions, not the initial backfill.
+    if not seeding and closed_ids:
+        await close_linked_records(closed_ids)
 
     updates: Dict[str, Any] = {
         "last_synced_at": datetime.now(timezone.utc).isoformat(),

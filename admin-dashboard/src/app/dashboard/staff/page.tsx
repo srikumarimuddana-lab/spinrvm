@@ -31,12 +31,13 @@ const ALL_MODULES = [
   { key: "heatmap", label: "Heat Map" },
   { key: "staff", label: "Staff Management" },
   { key: "audit", label: "Audit Logs" },
+  { key: "support_tickets", label: "Help Desk (Zoho)" },
 ];
 
 const ROLE_PRESETS: Record<string, string[]> = {
   super_admin: ALL_MODULES.map((m) => m.key),
   operations: ["dashboard", "rides", "drivers", "surge", "service_areas", "vehicle_types", "heatmap"],
-  support: ["dashboard", "support", "disputes", "notifications", "users"],
+  support: ["dashboard", "support", "support_tickets", "disputes", "notifications", "users"],
   finance: ["dashboard", "earnings", "promotions", "corporate_accounts", "pricing", "audit"],
 };
 

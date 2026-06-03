@@ -65,6 +65,7 @@ AVAILABLE_MODULES = [
     "heatmap",
     "staff",  # Only super_admin can access this
     "audit",
+    "support_tickets",
 ]
 
 ROLE_PRESETS = {
@@ -78,7 +79,7 @@ ROLE_PRESETS = {
         "vehicle_types",
         "heatmap",
     ],
-    "support": ["dashboard", "support", "disputes", "notifications", "users"],
+    "support": ["dashboard", "support", "support_tickets", "disputes", "notifications", "users"],
     "finance": ["dashboard", "earnings", "promotions", "corporate_accounts", "pricing", "audit"],
 }
 

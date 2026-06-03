@@ -271,6 +271,63 @@ async def get_ticket(ticket_id: str) -> Dict[str, Any]:
     return await _request("GET", f"/api/v1/tickets/{ticket_id}", params={"include": "contacts,assignee,team"})
 
 
+async def get_default_department_id() -> Optional[str]:
+    """The admin-configured default department, used when a caller (e.g. an
+    app event creating a ticket) doesn't specify one."""
+    cfg = await _load_config()
+    return (cfg.get("default_department_id") or "").strip() or None
+
+
+async def create_ticket(
+    *,
+    subject: str,
+    description: str = "",
+    department_id: Optional[str] = None,
+    email: Optional[str] = None,
+    first_name: Optional[str] = None,
+    last_name: Optional[str] = None,
+    phone: Optional[str] = None,
+    priority: Optional[str] = None,
+    channel: str = "Web",
+    category: Optional[str] = None,
+    contact_id: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Create a Zoho Desk ticket. ``departmentId`` is required by Zoho — falls
+    back to the configured default. A contact is required: pass ``contact_id``
+    for an existing contact, or contact details to create/link inline."""
+    dept = department_id or await get_default_department_id()
+    if not dept:
+        raise ZohoDeskError(
+            "No department for the ticket. Set a default department in Help Desk settings.",
+            status=400,
+        )
+    body: Dict[str, Any] = {
+        "subject": subject or "(no subject)",
+        "departmentId": dept,
+        "description": description or "",
+        "channel": channel,
+    }
+    if priority:
+        body["priority"] = priority
+    if category:
+        body["category"] = category
+    if contact_id:
+        body["contactId"] = contact_id
+    else:
+        # Inline contact — Zoho creates/links it. lastName is required by Zoho
+        # for a contact, so synthesise one from the email if missing.
+        body["contact"] = {
+            "lastName": last_name or (email.split("@")[0] if email else "Customer"),
+            "firstName": first_name or "",
+            "email": email or "",
+            "phone": phone or "",
+        }
+    if extra:
+        body.update(extra)
+    return await _request("POST", "/api/v1/tickets", json_body=body)
+
+
 async def get_ticket_threads(ticket_id: str) -> Dict[str, Any]:
     """Conversation thread (replies + comments) for a ticket."""
     data = await _request("GET", f"/api/v1/tickets/{ticket_id}/conversations", params={"limit": 100})

@@ -333,6 +333,43 @@ async def departments(admin: dict = Depends(require_module("support_tickets"))):
         raise _err(e) from e
 
 
+class CreateTicketRequest(BaseModel):
+    subject: str = Field(..., min_length=1)
+    description: str = ""
+    email: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    phone: Optional[str] = None
+    priority: Optional[str] = None
+    channel: str = "Web"
+    category: Optional[str] = None
+    department_id: Optional[str] = None
+
+
+@router.post("/tickets")
+async def create_ticket(
+    payload: CreateTicketRequest,
+    admin: dict = Depends(require_module("support_tickets")),
+):
+    try:
+        result = await zoho.create_ticket(
+            subject=payload.subject,
+            description=payload.description,
+            department_id=payload.department_id,
+            email=payload.email,
+            first_name=payload.first_name,
+            last_name=payload.last_name,
+            phone=payload.phone,
+            priority=payload.priority,
+            channel=payload.channel,
+            category=payload.category,
+        )
+    except ZohoDeskError as e:
+        raise _err(e) from e
+    await log_admin_action(admin, "zoho_desk_ticket_created", "zoho_desk_ticket", str(result.get("id") or ""), None)
+    return result
+
+
 @router.get("/tickets")
 async def tickets(
     from_index: int = Query(1, ge=1, alias="from"),

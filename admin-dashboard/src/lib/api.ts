@@ -2386,6 +2386,23 @@ export const getDeskTickets = (opts?: {
     const qs = sp.toString();
     return request<ZohoTicketsResponse>(`/api/admin/support-tickets/tickets${qs ? `?${qs}` : ""}`);
 };
+export interface CreateDeskTicket {
+    subject: string;
+    description?: string;
+    email?: string;
+    first_name?: string;
+    last_name?: string;
+    phone?: string;
+    priority?: string;
+    channel?: string;
+    category?: string;
+    department_id?: string;
+}
+export const createDeskTicket = (body: CreateDeskTicket) =>
+    request<any>(`/api/admin/support-tickets/tickets`, {
+        method: "POST",
+        body: JSON.stringify(body),
+    });
 export const getDeskTicket = (id: string) =>
     request<any>(`/api/admin/support-tickets/tickets/${id}`);
 export const getDeskTicketThreads = (id: string) =>

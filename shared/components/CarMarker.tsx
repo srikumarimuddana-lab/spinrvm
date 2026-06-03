@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { View, Image } from 'react-native';
+import { View } from 'react-native';
 import { Marker } from 'react-native-maps';
+import { VehicleMarker } from './VehicleMarkers';
 
 interface CarMarkerProps {
     coordinate: {
@@ -11,21 +12,28 @@ interface CarMarkerProps {
     size?: number;
     zIndex?: number;
     identifier?: string;
+    /**
+     * Vehicle tier the driver is on — backend `icon`
+     * (car-compact / car-sport / bus / bus-outline) or the tier name
+     * (Economy / Premium / Van / XL). Picks which car silhouette to draw.
+     * Defaults to the economy sedan when omitted.
+     */
+    vehicleType?: string | null;
 }
 
 /**
- * Top-down car marker using the transparent PNG from shared/assets.
+ * Top-down car marker that renders a tier-specific SVG silhouette
+ * (see VehicleMarkers.tsx).
  *
- * Renders the car image via a child <View><Image/></View> (not the native
- * `image` prop) so `size` controls the rendered dimensions — the native
- * prop renders at the PNG's physical size which is far too large.
+ * Renders the car via a child <View> so `size` controls the rendered
+ * dimensions and the marker rotates with the driver's heading.
  *
  * Transparent backgrounds are set on every wrapper layer (and on the Marker
  * itself) to kill the default Android callout-style bubble that
  * react-native-maps otherwise draws around custom child views.
  *
- * `tracksViewChanges` starts `true` so the native view catches the image
- * after it loads, then flips to `false` to avoid per-frame re-snapshots.
+ * `tracksViewChanges` starts `true` so the native view catches the SVG
+ * after it paints, then flips to `false` to avoid per-frame re-snapshots.
  */
 const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     coordinate,
@@ -33,6 +41,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     size = 40,
     zIndex = 1,
     identifier,
+    vehicleType,
 }) => {
     // See driver-app CarMarker for why we keep tracking briefly instead of
     // flipping on Image.onLoad: flipping too fast races the Android
@@ -63,15 +72,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                     justifyContent: 'center',
                 }}
             >
-                <Image
-                    source={require('../assets/car_marker.png')}
-                    style={{
-                        width: size,
-                        height: size,
-                        resizeMode: 'contain',
-                        backgroundColor: 'transparent',
-                    }}
-                />
+                <VehicleMarker type={vehicleType} size={size} />
             </View>
         </Marker>
     );
@@ -84,7 +85,8 @@ function _propsAreEqual(prev: CarMarkerProps, next: CarMarkerProps): boolean {
         prev.heading === next.heading &&
         prev.size === next.size &&
         prev.zIndex === next.zIndex &&
-        prev.identifier === next.identifier
+        prev.identifier === next.identifier &&
+        prev.vehicleType === next.vehicleType
     );
 }
 

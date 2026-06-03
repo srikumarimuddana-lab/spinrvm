@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { View, Image } from 'react-native';
+import { View } from 'react-native';
 import { Marker } from 'react-native-maps';
+import { VehicleMarker } from '@shared/components/VehicleMarkers';
 
 interface CarMarkerProps {
     coordinate: {
@@ -10,14 +11,18 @@ interface CarMarkerProps {
     heading?: number | null;
     isOnline?: boolean;
     size?: number;
+    /**
+     * The driver's own vehicle tier — backend `icon`
+     * (car-compact / car-sport / bus / bus-outline) or tier name.
+     * Defaults to the economy sedan when omitted.
+     */
+    vehicleType?: string | null;
 }
 
 /**
- * Top-down car marker with configurable size.
- *
- * We use a child <View><Image/></View> (not the native `image` prop) so we
- * can control the rendered size via the `size` prop — the native prop
- * renders at the PNG's physical dimensions which is way too large.
+ * Top-down car marker that renders a tier-specific SVG silhouette
+ * (see @shared/components/VehicleMarkers). The `size` prop controls the
+ * rendered dimensions; the car greys out while the driver is offline.
  *
  * Two gotchas this component solves:
  *
@@ -29,8 +34,8 @@ interface CarMarkerProps {
  *    Marker itself to suppress the native bubble.
  *
  * 2. Marker doesn't render until a location update arrives.
- *    `tracksViewChanges` starts as `true` so the native view catches the
- *    image once it loads, then flips to `false` so we don't re-snapshot
+ *    `tracksViewChanges` starts as `true` so the native view snapshots the
+ *    SVG once it paints, then flips to `false` so we don't re-snapshot
  *    on every frame (perf).
  */
 export const CarMarker: React.FC<CarMarkerProps> = ({
@@ -38,6 +43,7 @@ export const CarMarker: React.FC<CarMarkerProps> = ({
     heading,
     isOnline = true,
     size = 40,
+    vehicleType,
 }) => {
     // One-shot: keep tracksViewChanges true briefly on mount so Android's
     // Marker snapshots the child View once the image paints. We do NOT
@@ -69,14 +75,12 @@ export const CarMarker: React.FC<CarMarkerProps> = ({
                     justifyContent: 'center',
                 }}
             >
-                <Image
-                    source={require('../assets/images/car_marker.png')}
-                    style={{
-                        width: size,
-                        height: size,
-                        resizeMode: 'contain',
-                        backgroundColor: 'transparent',
-                    }}
+                <VehicleMarker
+                    type={vehicleType}
+                    size={size}
+                    // Grey out the car while the driver is offline so the
+                    // map reads "not dispatchable" at a glance.
+                    color={isOnline ? undefined : '#9AA0A6'}
                 />
             </View>
         </Marker>

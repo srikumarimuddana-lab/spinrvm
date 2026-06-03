@@ -31,6 +31,7 @@ try:
 except ImportError:  # pragma: no cover - direct module import in tests
     import db_supabase
     from dependencies import get_admin_user, require_module
+    from services import zoho_desk_db
     from services import zoho_desk_service as zoho
     from services.zoho_desk_service import ZohoDeskError
     from utils.audit_logger import log_admin_action

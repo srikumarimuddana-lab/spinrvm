@@ -398,6 +398,34 @@ async def tickets(
         raise _err(e) from e
 
 
+@router.get("/search")
+async def search(
+    q: str = Query(..., min_length=1),
+    from_index: int = Query(1, ge=1, alias="from"),
+    limit: int = Query(50, ge=1, le=100),
+    department_id: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    priority: Optional[str] = Query(None),
+    assignee_id: Optional[str] = Query(None),
+    admin: dict = Depends(require_module("support_tickets")),
+):
+    """Account-wide ticket search (Zoho /tickets/search). Falls back to the
+    configured default department when none is supplied."""
+    dept = await _resolve_department(department_id)
+    try:
+        return await zoho.search_tickets(
+            query=q,
+            from_index=from_index,
+            limit=limit,
+            department_id=dept,
+            status=status,
+            priority=priority,
+            assignee_id=assignee_id,
+        )
+    except ZohoDeskError as e:
+        raise _err(e) from e
+
+
 @router.get("/tickets/{ticket_id}")
 async def ticket_detail(ticket_id: str, admin: dict = Depends(require_module("support_tickets"))):
     try:

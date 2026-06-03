@@ -2278,3 +2278,115 @@ export const bulkRetryPayouts = (body: BulkRetryPayoutsRequest) =>
         method: "POST",
         body: JSON.stringify(body),
     });
+
+/* ── Zoho Desk support tickets ──────────────────────────────────────────
+ * Native admin UI proxied to Zoho Desk via the backend. Secrets are
+ * write-only; getZohoConfig returns presence flags only. Gated by the
+ * `support_tickets` RBAC module (config endpoints require any admin).
+ */
+export interface ZohoConfigStatus {
+    enabled: boolean;
+    data_center: string;
+    org_id: string;
+    default_department_id: string;
+    has_client_id: boolean;
+    has_client_secret: boolean;
+    has_refresh_token: boolean;
+    connected: boolean;
+    updated_at?: string | null;
+}
+export interface ZohoConfigUpdate {
+    enabled?: boolean;
+    data_center?: string;
+    org_id?: string;
+    default_department_id?: string;
+    client_id?: string;
+    client_secret?: string;
+    refresh_token?: string;
+}
+export interface ZohoTicketsResponse {
+    data: any[];
+}
+export interface ZohoDashboard {
+    total: number;
+    open: number;
+    by_status: Record<string, number>;
+    recent: any[];
+}
+export interface ZohoTrends {
+    sample_size: number;
+    approximate: boolean;
+    volume: Array<{ date: string; count: number }>;
+    by_status: Record<string, number>;
+    by_priority: Record<string, number>;
+    by_channel: Record<string, number>;
+}
+
+export const getZohoConfig = () =>
+    request<ZohoConfigStatus>("/api/admin/support-tickets/config");
+export const updateZohoConfig = (body: ZohoConfigUpdate) =>
+    request<ZohoConfigStatus>("/api/admin/support-tickets/config", {
+        method: "PUT",
+        body: JSON.stringify(body),
+    });
+export const testZohoConnection = () =>
+    request<{ ok: boolean; departments: any[] }>("/api/admin/support-tickets/config/test", {
+        method: "POST",
+    });
+
+export const getTicketDashboard = (departmentId?: string) => {
+    const qs = departmentId ? `?department_id=${encodeURIComponent(departmentId)}` : "";
+    return request<ZohoDashboard>(`/api/admin/support-tickets/dashboard${qs}`);
+};
+export const getTicketTrends = (opts?: { days?: number; departmentId?: string }) => {
+    const sp = new URLSearchParams();
+    if (opts?.days) sp.set("days", String(opts.days));
+    if (opts?.departmentId) sp.set("department_id", opts.departmentId);
+    const qs = sp.toString();
+    return request<ZohoTrends>(`/api/admin/support-tickets/trends${qs ? `?${qs}` : ""}`);
+};
+
+export const getTickets = (opts?: {
+    from?: number;
+    limit?: number;
+    status?: string;
+    departmentId?: string;
+    assigneeId?: string;
+    sortBy?: string;
+}) => {
+    const sp = new URLSearchParams();
+    if (opts?.from) sp.set("from", String(opts.from));
+    if (opts?.limit) sp.set("limit", String(opts.limit));
+    if (opts?.status) sp.set("status", opts.status);
+    if (opts?.departmentId) sp.set("department_id", opts.departmentId);
+    if (opts?.assigneeId) sp.set("assignee_id", opts.assigneeId);
+    if (opts?.sortBy) sp.set("sort_by", opts.sortBy);
+    const qs = sp.toString();
+    return request<ZohoTicketsResponse>(`/api/admin/support-tickets/tickets${qs ? `?${qs}` : ""}`);
+};
+export const getTicket = (id: string) =>
+    request<any>(`/api/admin/support-tickets/tickets/${id}`);
+export const getTicketThreads = (id: string) =>
+    request<ZohoTicketsResponse>(`/api/admin/support-tickets/tickets/${id}/threads`);
+export const replyTicket = (id: string, body: { content: string; to?: string; channel?: string }) =>
+    request<any>(`/api/admin/support-tickets/tickets/${id}/reply`, {
+        method: "POST",
+        body: JSON.stringify(body),
+    });
+export const commentTicket = (id: string, body: { content: string; is_public?: boolean }) =>
+    request<any>(`/api/admin/support-tickets/tickets/${id}/comment`, {
+        method: "POST",
+        body: JSON.stringify(body),
+    });
+export const updateTicket = (
+    id: string,
+    body: { status?: string; priority?: string; assigneeId?: string; departmentId?: string },
+) =>
+    request<any>(`/api/admin/support-tickets/tickets/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+    });
+export const getTicketAgents = () =>
+    request<ZohoTicketsResponse>("/api/admin/support-tickets/agents");
+export const getTicketDepartments = () =>
+    request<ZohoTicketsResponse>("/api/admin/support-tickets/departments");

@@ -2321,10 +2321,18 @@ export interface ZohoDashboard {
 export interface ZohoTrends {
     sample_size: number;
     approximate: boolean;
-    volume: Array<{ date: string; count: number }>;
+    volume: Array<{ date: string; opened: number; closed: number }>;
     by_status: Record<string, number>;
     by_priority: Record<string, number>;
     by_channel: Record<string, number>;
+    stats: {
+        opened: number;
+        closed: number;
+        open_now: number;
+        avg_resolution_hours: number | null;
+        median_resolution_hours: number | null;
+        resolved_sample: number;
+    };
 }
 
 export const getZohoConfig = () =>
@@ -2343,10 +2351,11 @@ export const getDeskDashboard = (departmentId?: string) => {
     const qs = departmentId ? `?department_id=${encodeURIComponent(departmentId)}` : "";
     return request<ZohoDashboard>(`/api/admin/support-tickets/dashboard${qs}`);
 };
-export const getDeskTrends = (opts?: { days?: number; departmentId?: string }) => {
+export const getDeskTrends = (opts?: { days?: number; departmentId?: string; assigneeId?: string }) => {
     const sp = new URLSearchParams();
     if (opts?.days) sp.set("days", String(opts.days));
     if (opts?.departmentId) sp.set("department_id", opts.departmentId);
+    if (opts?.assigneeId) sp.set("assignee_id", opts.assigneeId);
     const qs = sp.toString();
     return request<ZohoTrends>(`/api/admin/support-tickets/trends${qs ? `?${qs}` : ""}`);
 };

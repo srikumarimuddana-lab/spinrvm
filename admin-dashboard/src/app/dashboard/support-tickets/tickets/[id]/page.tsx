@@ -25,7 +25,7 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/components/ui/use-toast";
-import { ArrowLeft, Send, StickyNote, User, Mail } from "lucide-react";
+import { ArrowLeft, Send, StickyNote, User, Mail, ExternalLink, Clock, CheckCircle2, Timer } from "lucide-react";
 
 const STATUSES = ["Open", "On Hold", "Escalated", "Closed"];
 const PRIORITIES = ["Low", "Medium", "High", "Urgent"];
@@ -37,6 +37,22 @@ function statusClass(status: string): string {
     if (s.includes("escal")) return "bg-red-100 text-red-800 hover:bg-red-100";
     if (s.includes("closed")) return "bg-gray-200 text-gray-700 hover:bg-gray-200";
     return "bg-slate-100 text-slate-700 hover:bg-slate-100";
+}
+
+function fmtTime(s?: string): string {
+    return s ? s.slice(0, 16).replace("T", " ") : "—";
+}
+
+/** Human-readable duration between two Zoho ISO timestamps. */
+function duration(from?: string, to?: string): string {
+    if (!from || !to) return "—";
+    const ms = new Date(to).getTime() - new Date(from).getTime();
+    if (!isFinite(ms) || ms < 0) return "—";
+    const mins = Math.round(ms / 60000);
+    if (mins < 60) return `${mins}m`;
+    const hrs = mins / 60;
+    if (hrs < 48) return `${hrs.toFixed(1)}h`;
+    return `${(hrs / 24).toFixed(1)}d`;
 }
 
 /** Strip HTML to plain text. Thread/comment bodies originate from customer
@@ -141,6 +157,13 @@ export default function TicketDetailPage() {
                 <Button asChild variant="ghost" size="sm">
                     <Link href="/dashboard/support-tickets/tickets"><ArrowLeft className="mr-2 h-4 w-4" /> Back to tickets</Link>
                 </Button>
+                {ticket?.webUrl && (
+                    <Button asChild variant="outline" size="sm">
+                        <a href={ticket.webUrl} target="_blank" rel="noopener noreferrer">
+                            <ExternalLink className="mr-2 h-4 w-4" /> Open in Zoho Desk
+                        </a>
+                    </Button>
+                )}
             </div>
 
             {loading && <Card><CardContent className="p-6 text-muted-foreground">Loading…</CardContent></Card>}
@@ -226,6 +249,32 @@ export default function TicketDetailPage() {
                                 <p className="flex items-center gap-2 text-muted-foreground"><Mail className="h-4 w-4" />
                                     {ticket.contact?.email || ticket.email || "—"}
                                 </p>
+                            </CardContent>
+                        </Card>
+
+                        <Card>
+                            <CardHeader><CardTitle className="text-base">Timeline</CardTitle></CardHeader>
+                            <CardContent className="space-y-2 text-sm">
+                                <div className="flex items-center justify-between">
+                                    <span className="flex items-center gap-2 text-muted-foreground"><Clock className="h-4 w-4" /> Opened</span>
+                                    <span>{fmtTime(ticket.createdTime)}</span>
+                                </div>
+                                <div className="flex items-center justify-between">
+                                    <span className="flex items-center gap-2 text-muted-foreground"><CheckCircle2 className="h-4 w-4" /> Closed</span>
+                                    <span>{ticket.closedTime ? fmtTime(ticket.closedTime) : "Not closed"}</span>
+                                </div>
+                                <div className="flex items-center justify-between">
+                                    <span className="flex items-center gap-2 text-muted-foreground"><Timer className="h-4 w-4" /> Resolution time</span>
+                                    <span className="font-medium">
+                                        {ticket.closedTime ? duration(ticket.createdTime, ticket.closedTime) : "—"}
+                                    </span>
+                                </div>
+                                {(ticket.dueDate || ticket.responseDueDate) && (
+                                    <div className="flex items-center justify-between">
+                                        <span className="flex items-center gap-2 text-muted-foreground"><Timer className="h-4 w-4" /> Due</span>
+                                        <span>{fmtTime(ticket.dueDate || ticket.responseDueDate)}</span>
+                                    </div>
+                                )}
                             </CardContent>
                         </Card>
 

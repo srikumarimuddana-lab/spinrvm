@@ -73,7 +73,7 @@ export default function TrackRide() {
   const driverMarkerRef  = useRef<G>(null);
   const pickupMarkerRef  = useRef<G>(null);
   const dropoffMarkerRef = useRef<G>(null);
-  const routePolylineRef = useRef<G>(null);  // OSRM route drawn as a Polyline
+  const routePolylinesRef = useRef<G[]>([]);  // OSRM gradient route (array of coloured segments)
   const didFitRef    = useRef(false);
   // Last driver position used for the current route line — used to decide
   // whether to re-fetch from OSRM when the driver moves.
@@ -115,15 +115,8 @@ export default function TrackRide() {
       mapId: process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID ?? 'DEMO_MAP_ID',
     });
 
-    // OSRM route will be drawn on this polyline — Google Maps renders it
-    // directly on the canvas without needing the Directions API.
-    routePolylineRef.current = new g.Polyline({
-      map: mapRef.current,
-      path: [],
-      strokeColor: '#111827',
-      strokeWeight: 4,
-      strokeOpacity: 0.85,
-    });
+    // Route gradient lines are created dynamically per-segment; nothing to
+    // initialise here — routePolylinesRef starts as an empty array.
   }, [mapsReady]);
 
   // ── Sync markers + OSRM route whenever ride data changes ────────────────────
@@ -132,45 +125,50 @@ export default function TrackRide() {
     if (!g || !mapRef.current || !ride) return;
     const map = mapRef.current;
 
-    // Clean map pin — soft drop shadow, white ring, solid colour dot.
-    // Reads as a precise location marker rather than a flat teardrop.
-    const pinSvg = (color: string) =>
+    // Green navigation-arrow icon for the pickup location.
+    const pickupNavSvg =
       `data:image/svg+xml,${encodeURIComponent(
-        `<svg xmlns="http://www.w3.org/2000/svg" width="34" height="46" viewBox="0 0 34 46">
-          <defs>
-            <filter id="s" x="-40%" y="-20%" width="180%" height="160%">
-              <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#000" flood-opacity="0.25"/>
-            </filter>
-          </defs>
-          <path filter="url(#s)" fill="${color}"
-            d="M17 1C9.27 1 3 7.16 3 14.78c0 5.4 4.07 11.9 12.2 19.6a2.6 2.6 0 0 0 3.6 0c8.13-7.7 12.2-14.2 12.2-19.6C31 7.16 24.73 1 17 1z"/>
-          <circle cx="17" cy="15" r="9" fill="#fff"/>
-          <circle cx="17" cy="15" r="5" fill="${color}"/>
+        `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
+          <circle cx="20" cy="21" r="17" fill="#000000" opacity="0.18"/>
+          <circle cx="20" cy="20" r="17" fill="#10B981" stroke="white" stroke-width="2.5"/>
+          <path d="M20 8 L30 31 L20 25.5 L10 31 Z" fill="white"/>
         </svg>`
       )}`;
 
-    // Top-down sedan inside a white pin-puck — the classic ride-share "car on
-    // the map" look. Soft shadow, crisp silhouette, blue glass.
+    // Red teardrop pin for the dropoff location.
+    const dropoffPinSvg =
+      `data:image/svg+xml,${encodeURIComponent(
+        `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="40" viewBox="0 0 32 40">
+          <path d="M16 0C7.163 0 0 7.163 0 16c0 10 16 24 16 24S32 26 32 16C32 7.163 24.837 0 16 0z" fill="#EF4444"/>
+          <circle cx="16" cy="16" r="7" fill="white" opacity="0.9"/>
+          <circle cx="16" cy="16" r="4" fill="#EF4444"/>
+        </svg>`
+      )}`;
+
+    // Polished top-down car: dark circle with drop shadow, white body, blue
+    // windshield + side windows, yellow headlights, red taillights, 4 wheels.
     const carSvg =
       `data:image/svg+xml,${encodeURIComponent(
-        `<svg xmlns="http://www.w3.org/2000/svg" width="46" height="46" viewBox="0 0 46 46">
-          <defs>
-            <filter id="cs" x="-30%" y="-30%" width="160%" height="160%">
-              <feDropShadow dx="0" dy="2" stdDeviation="2.5" flood-color="#000" flood-opacity="0.3"/>
-            </filter>
-          </defs>
-          <circle cx="23" cy="23" r="18" fill="#fff" filter="url(#cs)"/>
-          <circle cx="23" cy="23" r="18" fill="none" stroke="#0F172A" stroke-width="1.5"/>
-          <g transform="translate(23 23) rotate(0)">
-            <rect x="-6.5" y="-11" width="13" height="22" rx="5.5" fill="#0F172A"/>
-            <path d="M-5 -6.5 C-5 -9 -3 -9.5 0 -9.5 C3 -9.5 5 -9 5 -6.5 L4 -3 L-4 -3 Z" fill="#60A5FA"/>
-            <path d="M-4.5 7.5 L4.5 7.5 L4 9.5 C3 10 -3 10 -4 9.5 Z" fill="#3B82F6"/>
-            <rect x="-5" y="-1.5" width="10" height="5" rx="1.5" fill="#1E293B"/>
-            <rect x="-7" y="-7" width="2" height="5" rx="1" fill="#0F172A"/>
-            <rect x="5" y="-7" width="2" height="5" rx="1" fill="#0F172A"/>
-            <rect x="-7" y="3" width="2" height="5" rx="1" fill="#0F172A"/>
-            <rect x="5" y="3" width="2" height="5" rx="1" fill="#0F172A"/>
-          </g>
+        `<svg xmlns="http://www.w3.org/2000/svg" width="52" height="52" viewBox="0 0 52 52">
+          <circle cx="26" cy="28" r="21" fill="#000000" opacity="0.22"/>
+          <circle cx="26" cy="26" r="21" fill="#0F172A" stroke="white" stroke-width="2.5"/>
+          <path d="M20 9.5 C18.5 9.5 17.5 11 16.5 13 L15 17.5 L12.5 19 L12.5 34 L15 34.5 L15 37 C15 38.1 16 38.5 17 38.5 L18.5 38.5 L18.5 36.5 L33.5 36.5 L33.5 38.5 L35 38.5 C36 38.5 37 38.1 37 37 L37 34.5 L39.5 34 L39.5 19 L37 17.5 L35.5 13 C34.5 11 33.5 9.5 32 9.5 Z" fill="white"/>
+          <path d="M20.5 11.5 L18 17.5 L34 17.5 L31.5 11.5 Z" fill="#60A5FA"/>
+          <rect x="20" y="17.5" width="12" height="12" rx="0.5" fill="#F1F5F9"/>
+          <rect x="20" y="30" width="12" height="6" rx="0.5" fill="#DBEAFE" opacity="0.85"/>
+          <rect x="12.5" y="20" width="6" height="8.5" rx="1" fill="#BFDBFE" opacity="0.8"/>
+          <rect x="33.5" y="20" width="6" height="8.5" rx="1" fill="#BFDBFE" opacity="0.8"/>
+          <line x1="20" y1="20" x2="20" y2="29.5" stroke="#CBD5E1" stroke-width="0.75"/>
+          <line x1="32" y1="20" x2="32" y2="29.5" stroke="#CBD5E1" stroke-width="0.75"/>
+          <line x1="12.5" y1="24" x2="39.5" y2="24" stroke="#E2E8F0" stroke-width="0.6"/>
+          <rect x="18.5" y="8.5" width="4.5" height="2.5" rx="1.2" fill="#FDE68A"/>
+          <rect x="29" y="8.5" width="4.5" height="2.5" rx="1.2" fill="#FDE68A"/>
+          <rect x="18.5" y="37" width="4.5" height="2" rx="1" fill="#FCA5A5"/>
+          <rect x="29" y="37" width="4.5" height="2" rx="1" fill="#FCA5A5"/>
+          <rect x="10.5" y="19" width="4" height="7" rx="2" fill="#1E293B"/>
+          <rect x="37.5" y="19" width="4" height="7" rx="2" fill="#1E293B"/>
+          <rect x="10.5" y="28" width="4" height="7" rx="2" fill="#1E293B"/>
+          <rect x="37.5" y="28" width="4" height="7" rx="2" fill="#1E293B"/>
         </svg>`
       )}`;
 
@@ -217,11 +215,11 @@ export default function TrackRide() {
       }
     };
 
-    upsertMarker(pickupMarkerRef,  ride.pickup_lat,  ride.pickup_lng,  pinSvg('#10B981'), 38);
-    upsertMarker(dropoffMarkerRef, ride.dropoff_lat, ride.dropoff_lng, pinSvg('#EF4444'), 38);
+    upsertMarker(pickupMarkerRef,  ride.pickup_lat,  ride.pickup_lng,  pickupNavSvg,  40);
+    upsertMarker(dropoffMarkerRef, ride.dropoff_lat, ride.dropoff_lng, dropoffPinSvg, 36);
 
     const d = ride.driver;
-    upsertMarker(driverMarkerRef, d?.lat, d?.lng, carSvg, 46, true, 2);
+    upsertMarker(driverMarkerRef, d?.lat, d?.lng, carSvg, 52, 2);
 
     // Pan to driver after initial fit.
     if (d?.lat != null && didFitRef.current) {
@@ -268,9 +266,38 @@ export default function TrackRide() {
         .then(r => r.ok ? r.json() : null)
         .then(data => {
           const coords: [number, number][] | undefined = data?.routes?.[0]?.geometry?.coordinates;
-          if (!coords || !routePolylineRef.current) return;
+          if (!coords || !mapRef.current) return;
+
+          // Clear previous gradient segments.
+          routePolylinesRef.current.forEach(l => l.setMap(null));
+          routePolylinesRef.current = [];
+
           // OSRM returns [lng, lat]; Google Maps needs {lat, lng}.
-          routePolylineRef.current.setPath(coords.map(([lng, lat]) => ({ lat, lng })));
+          const path = coords.map(([lng, lat]) => ({ lat, lng }));
+
+          // Draw the route as N coloured segments blending orange → red.
+          const SEGMENTS = 14;
+          const segLen = Math.max(1, Math.floor(path.length / SEGMENTS));
+          for (let i = 0; i < SEGMENTS; i++) {
+            const t = i / Math.max(SEGMENTS - 1, 1);          // 0 → 1
+            // Interpolate #F97316 (orange-500) → #DC2626 (red-600)
+            const rv = Math.round(249 + (220 - 249) * t);
+            const gv = Math.round(115 + ( 38 - 115) * t);
+            const bv = Math.round( 22 + ( 38 -  22) * t);
+            const color = `#${rv.toString(16).padStart(2, '0')}${gv.toString(16).padStart(2, '0')}${bv.toString(16).padStart(2, '0')}`;
+            const start = i * segLen;
+            const end   = i === SEGMENTS - 1 ? path.length : (i + 1) * segLen + 1;
+            const seg   = path.slice(start, end);
+            if (seg.length < 2) continue;
+            routePolylinesRef.current.push(new g.Polyline({
+              map: mapRef.current,
+              path: seg,
+              strokeColor: color,
+              strokeWeight: 4,
+              strokeOpacity: 0.9,
+              zIndex: 1,
+            }));
+          }
         })
         .catch(() => { /* silent — markers remain visible without a route line */ });
     }

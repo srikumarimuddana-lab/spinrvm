@@ -53,7 +53,7 @@ except ImportError:
     import db_supabase
     from dependencies import get_admin_user, get_current_user
     from features import send_email, send_push_notification
-    from geo_utils import calculate_distance
+    from geo_utils import calculate_distance, get_service_area_polygon
     from logging_utils import diag_logger
     from models.ride_status import RideStatus  # noqa: F401
     from schemas import Driver, RideRatingRequest

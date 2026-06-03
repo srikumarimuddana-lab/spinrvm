@@ -20,7 +20,7 @@ webhooks — a later enhancement.)
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 try:
     from .. import db_supabase
@@ -38,7 +38,18 @@ _CONFIG_TABLE = "zoho_desk_config"
 _CONFIG_ID = "default"
 
 SYNC_INTERVAL_SECONDS = 600  # 10 minutes
-SYNC_PAGES = 3  # up to 300 most-recent tickets per cycle
+SEED_MAX_PAGES = 10  # first run: pull up to 1000 most-recently-modified tickets
+INCREMENTAL_MAX_PAGES = 50  # safety cap; incremental runs stop at the cursor
+
+
+def _parse(value) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
 
 
 def _name(obj: Dict[str, Any]) -> str:
@@ -87,33 +98,53 @@ async def _upsert_batch(rows: List[Dict[str, Any]]) -> None:
     await db_supabase.run_sync(_fn)
 
 
-async def run_sync(pages: int = SYNC_PAGES) -> Dict[str, Any]:
-    """Pull recent tickets and upsert into the mirror. Returns a small summary.
-    Skips silently when the integration is disabled."""
+async def run_sync() -> Dict[str, Any]:
+    """Incrementally pull tickets by -modifiedTime and upsert into the mirror.
+
+    Stops as soon as it reaches a ticket modified at/before the stored cursor,
+    so a steady-state run is typically a single page. The first run (no cursor)
+    seeds up to SEED_MAX_PAGES. Skips silently when the integration is disabled.
+    """
     cfg = await db_supabase.find_one(_CONFIG_TABLE, {"id": _CONFIG_ID})
     if not cfg or not cfg.get("enabled"):
         return {"skipped": "disabled"}
 
+    cursor = _parse(cfg.get("sync_cursor"))
+    newest = cursor
+    max_pages = INCREMENTAL_MAX_PAGES if cursor else SEED_MAX_PAGES
     total = 0
-    for p in range(max(1, pages)):
-        page = await zoho.list_tickets(from_index=p * 100 + 1, limit=100, sort_by="-createdTime")
+
+    for p in range(max_pages):
+        page = await zoho.list_tickets(from_index=p * 100 + 1, limit=100, sort_by="-modifiedTime")
         rows = (page or {}).get("data", [])
         if not rows:
             break
-        await _upsert_batch([_map_ticket(t) for t in rows])
-        total += len(rows)
-        if len(rows) < 100:
+
+        batch: List[Dict[str, Any]] = []
+        stop = False
+        for t in rows:
+            mod = _parse(t.get("modifiedTime"))
+            if cursor and mod and mod <= cursor:
+                stop = True
+                break
+            batch.append(_map_ticket(t))
+            if mod and (newest is None or mod > newest):
+                newest = mod
+
+        if batch:
+            await _upsert_batch(batch)
+            total += len(batch)
+        if stop or len(rows) < 100:
             break
 
-    await db_supabase.update_one(
-        _CONFIG_TABLE,
-        {"id": _CONFIG_ID},
-        {
-            "last_synced_at": datetime.now(timezone.utc).isoformat(),
-            "last_sync_count": total,
-        },
-    )
-    logger.info("Zoho Desk sync upserted %s tickets", total)
+    updates: Dict[str, Any] = {
+        "last_synced_at": datetime.now(timezone.utc).isoformat(),
+        "last_sync_count": total,
+    }
+    if newest:
+        updates["sync_cursor"] = newest.isoformat()
+    await db_supabase.update_one(_CONFIG_TABLE, {"id": _CONFIG_ID}, updates)
+    logger.info("Zoho Desk sync upserted %s tickets (cursor=%s)", total, newest)
     return {"upserted": total}
 
 

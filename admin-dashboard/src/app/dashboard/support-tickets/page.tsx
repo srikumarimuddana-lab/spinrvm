@@ -2,13 +2,26 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { getZohoConfig, getDeskDashboard, ZohoDashboard } from "@/lib/api";
+import { getZohoConfig, getDeskDashboard, syncDeskTickets, ZohoDashboard, ZohoConfigStatus } from "@/lib/api";
 import { useRequireModule } from "@/hooks/useRequireModule";
+import { useToast } from "@/components/ui/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ZohoConfigCard } from "./_components/zoho-config-card";
-import { Headphones, Inbox, BarChart3, Settings as SettingsIcon, AlertCircle, Info, Ticket as TicketIcon } from "lucide-react";
+import { Headphones, Inbox, BarChart3, Settings as SettingsIcon, AlertCircle, Info, RefreshCw, Ticket as TicketIcon } from "lucide-react";
+
+function timeAgo(iso?: string | null): string {
+    if (!iso) return "never";
+    const ms = Date.now() - new Date(iso).getTime();
+    if (!isFinite(ms) || ms < 0) return "just now";
+    const m = Math.floor(ms / 60000);
+    if (m < 1) return "just now";
+    if (m < 60) return `${m} min ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    return `${Math.floor(h / 24)}d ago`;
+}
 
 function statusClass(status: string): string {
     const s = (status || "").toLowerCase();
@@ -21,9 +34,12 @@ function statusClass(status: string): string {
 
 export default function HelpDeskPage() {
     const { allowed } = useRequireModule("support_tickets");
+    const { toast } = useToast();
     const [connected, setConnected] = useState<boolean | null>(null);
+    const [cfg, setCfg] = useState<ZohoConfigStatus | null>(null);
     const [data, setData] = useState<ZohoDashboard | null>(null);
     const [loading, setLoading] = useState(true);
+    const [syncing, setSyncing] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [showSettings, setShowSettings] = useState(false);
 
@@ -31,15 +47,32 @@ export default function HelpDeskPage() {
         setLoading(true);
         setError(null);
         try {
-            const cfg = await getZohoConfig();
-            setConnected(cfg.connected);
-            if (cfg.connected) {
+            const c = await getZohoConfig();
+            setCfg(c);
+            setConnected(c.connected);
+            if (c.connected) {
                 setData(await getDeskDashboard());
             }
         } catch (e: any) {
             setError(e?.message || "Failed to load");
         } finally {
             setLoading(false);
+        }
+    };
+
+    const runSync = async () => {
+        setSyncing(true);
+        try {
+            const r = await syncDeskTickets();
+            toast({
+                title: r.skipped ? "Sync skipped" : "Synced",
+                description: r.skipped ? r.skipped : `${r.upserted ?? 0} tickets updated`,
+            });
+            await loadDashboard();
+        } catch (e: any) {
+            toast({ title: "Sync failed", description: e?.message, variant: "destructive" });
+        } finally {
+            setSyncing(false);
         }
     };
 
@@ -63,7 +96,13 @@ export default function HelpDeskPage() {
                     </h1>
                     <p className="text-sm text-muted-foreground">Zoho Desk support tickets</p>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex items-center gap-2">
+                    {connected && (
+                        <Button variant="outline" size="sm" onClick={runSync} disabled={syncing} title={`Last synced ${timeAgo(cfg?.last_synced_at)}`}>
+                            <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
+                            {syncing ? "Syncing…" : `Synced ${timeAgo(cfg?.last_synced_at)}`}
+                        </Button>
+                    )}
                     <Button asChild variant="outline">
                         <Link href="/dashboard/support-tickets/tickets"><Inbox className="mr-2 h-4 w-4" /> Tickets</Link>
                     </Button>

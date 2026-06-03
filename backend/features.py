@@ -1374,40 +1374,62 @@ async def send_push_notification(
 
     Delivery is attempted INLINE for every priority. Dispatch (ride offer) and
     safety (SOS) pushes are time-critical — a ride offer expires in ~15s — so
-    they must never wait on the 30s push_retry loop. Only when the immediate
-    send fails do dispatch/safety pushes fall back to the push_retry_queue, so
-    a transient FCM/Expo outage still doesn't silently drop a ride offer or
-    SOS alert. Normal (informational) pushes are best-effort and not retried.
+    they must never wait on the 30s push_retry loop. If the immediate attempt
+    fails for any reason — the FCM/Expo send OR a transient error in the users
+    lookup — dispatch/safety pushes fall back to the push_retry_queue so the
+    offer/SOS is never silently dropped (the retry loop re-reads the user at
+    send time). Normal (informational) pushes are best-effort: a lookup error
+    surfaces to the caller rather than being masked.
     """
-    user = await db.find_one("users", {"id": user_id})
-    if not user:
-        logger.warning(f"No user found for {user_id} — push dropped")
-        return False
+    time_critical = priority in ("dispatch", "safety")
 
-    token: str | None = None
-    if target_app == "rider":
-        token = user.get("fcm_token_rider") or user.get("fcm_token")
-    elif target_app == "driver":
-        token = user.get("fcm_token_driver") or user.get("fcm_token")
-    else:
-        token = user.get("fcm_token")
+    # The whole immediate path (users lookup + token select + send) is guarded:
+    # for a time-critical push a transient Supabase read hiccup must fall back
+    # to the retry queue, NOT escape — dispatch fires this fire-and-forget, so a
+    # raise would vanish and drop the offer (the queued-first path it replaced
+    # could not do that). _deliver_push_now never raises, so a caught exception
+    # here is the lookup path.
+    try:
+        user = await db.find_one("users", {"id": user_id})
+        if not user:
+            logger.warning(f"No user found for {user_id} — push dropped")
+            return False
 
-    if not token:
-        logger.warning(f"No FCM token on file for user {user_id} (target_app={target_app}) — push dropped")
-        return False
+        token: str | None = None
+        if target_app == "rider":
+            token = user.get("fcm_token_rider") or user.get("fcm_token")
+        elif target_app == "driver":
+            token = user.get("fcm_token_driver") or user.get("fcm_token")
+        else:
+            token = user.get("fcm_token")
 
-    # Primary path: deliver right now (≈100–300 ms) so a ride offer reaches the
-    # driver's phone well inside the offer window. A queued-only dispatch would
-    # arrive after the 30s retry tick — long after the offer has expired.
-    delivered = await _deliver_push_now(token, title, body, data, user_id, target_app)
-    if delivered:
-        return True
+        if not token:
+            logger.warning(f"No FCM token on file for user {user_id} (target_app={target_app}) — push dropped")
+            return False
 
-    # Immediate delivery failed. For time-critical pushes, enqueue for retry
-    # (exponential back-off) so a transient outage doesn't drop a ride offer or
-    # SOS alert. A missing token already returned above, so this only covers
-    # genuine send failures worth retrying.
-    if priority in ("dispatch", "safety"):
+        # Primary path: deliver right now (≈100–300 ms) so a ride offer reaches
+        # the driver's phone well inside the offer window. A queued-only dispatch
+        # would arrive after the 30s retry tick — long after the offer expired.
+        delivered = await _deliver_push_now(token, title, body, data, user_id, target_app)
+        if delivered:
+            return True
+    except Exception:
+        logger.error(
+            f"push: immediate send path errored for user {user_id} (priority={priority})",
+            exc_info=True,
+        )
+        if not time_critical:
+            # Informational push: keep the existing best-effort contract and let
+            # the DB error surface to the caller instead of masking it.
+            raise
+        # Time-critical: fall through to the retry-queue enqueue below.
+
+    # Immediate delivery failed (send returned False) or the immediate path
+    # errored for a time-critical push. Enqueue for retry (exponential back-off)
+    # so a transient outage doesn't silently drop a ride offer or SOS alert. The
+    # retry loop re-reads the user/token at send time, so a failed lookup here is
+    # recoverable; a genuinely missing user/token already returned above.
+    if time_critical:
         try:
             try:
                 from .utils.push_retry import enqueue_push

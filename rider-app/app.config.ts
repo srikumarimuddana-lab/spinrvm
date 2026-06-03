@@ -23,10 +23,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // with no production users, OTA compatibility risk is zero.
     runtimeVersion: '1.0.0',
     splash: {
-        backgroundColor: '#ee2b2b',
+        backgroundColor: '#FFFFFF',
         resizeMode: 'contain',
-        image: './assets/images/icon.png',
-        imageWidth: 160,
+        image: './assets/images/splash-mark.png',
+        imageWidth: 140,
     },
     ios: {
         supportsTablet: true,
@@ -89,7 +89,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     android: {
         adaptiveIcon: {
             foregroundImage: './assets/images/adaptive-icon.png',
-            backgroundColor: '#ee2b2b'
+            backgroundColor: '#FFFFFF'
         },
         package: BUNDLE_ID,
         googleServicesFile: './google-services.json',
@@ -131,10 +131,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         [
             'expo-splash-screen',
             {
-                image: './assets/images/icon.png',
-                imageWidth: 160,
+                image: './assets/images/splash-mark.png',
+                imageWidth: 140,
                 resizeMode: 'contain',
-                backgroundColor: '#ee2b2b'
+                backgroundColor: '#FFFFFF'
             }
         ],
         '@react-native-firebase/app',

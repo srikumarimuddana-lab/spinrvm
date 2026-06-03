@@ -4,35 +4,34 @@ import Svg, { Rect, Path, G } from 'react-native-svg';
 /**
  * Top-down (bird's-eye) car SVG markers, one silhouette per vehicle tier.
  *
- * Lyft-style look: a WHITE body with a domed front and squarer rear, a
- * near-black windshield carrying a glowing RED pill at the front (the brand
- * colour), faint roof panel seams, a dark rear window, a thin red taillight
- * accent at the rear, and small wheel/mirror nubs poking out. A soft drop
- * shadow sits underneath.
+ * Lyft-style look: a WHITE body with a near-black windshield at the front, a
+ * white roof with faint panel seams, a smaller dark rear window, a thin red
+ * taillight strip at the rear, small wheel/mirror nubs and a soft drop shadow.
+ * The big front windshield vs. the small rear window + red tail makes heading
+ * obvious as the Marker rotates — no glow/pill needed.
  *
- * Every car is drawn nose-up (north) on a 48×64 canvas so `rotation={heading}`
- * on the Marker points it the right way. The glowing pill lives at the FRONT,
- * so heading reads at a glance. No gradients/filters — keeps the Android
- * Marker snapshot cheap.
+ * Tiers are told apart by SILHOUETTE so they read at map size:
+ *   - Sedans (Economy / Premium) use a slender capsule: domed nose, straight
+ *     sides, rounded tail.
+ *   - Van / XL use a wide straight-sided BOX with squared corners and bigger
+ *     wheels; XL is the widest and carries roof rails.
  *
- * Tiers are told apart by SHAPE, not colour: Economy = compact sedan,
- * Premium = sleeker sedan, Van = long boxy minivan, XL = wide SUV with roof
- * rails. They mirror backend/seed_vehicle_types.py. `resolveVehicleTier()`
- * maps the backend `icon` (car-compact / car-sport / bus / bus-outline) or
- * the human name onto a silhouette, falling back to the economy sedan.
+ * Drawn nose-up (north) on a 48×64 canvas so `rotation={heading}` on the
+ * Marker points it the right way. No gradients/filters — keeps the Android
+ * Marker snapshot cheap. Mirrors backend/seed_vehicle_types.py;
+ * `resolveVehicleTier()` maps the backend `icon` or human name onto a
+ * silhouette, falling back to the economy sedan.
  */
 
 export type VehicleTier = 'economy' | 'premium' | 'van' | 'xl';
 
 // Shared white-and-red palette.
-const BODY = '#F6F7F9';
-const EDGE = 'rgba(0,0,0,0.14)';
-const GLASS = '#1B1C22'; // dark windshield / rear window
-const SEAM = '#D6D9DF'; // roof panel lines
-const GLOW = '#FF1E4D'; // red brand pill
-const GLOW_CORE = '#FF9DB2'; // lighter pill centre
+const BODY = '#F7F8FA';
+const EDGE = 'rgba(0,0,0,0.16)';
+const GLASS = '#191A20'; // dark windshield / rear window
+const SEAM = '#D4D7DE'; // roof panel lines
 const TAIL = '#E11D2A'; // rear taillight accent
-const WHEEL = '#2A2A30';
+const WHEEL = '#26262C';
 const MIRROR = '#E2E4EA';
 const RAIL = '#E11D2A';
 
@@ -45,92 +44,102 @@ interface VehicleSvgProps {
 }
 
 interface Geometry {
+    shape: 'sedan' | 'box';
     x: number;
     y: number;
     w: number;
     h: number;
-    frontR: number; // front dome height (smaller = flatter/boxier nose)
-    rearR: number; // rear corner radius
+    frontRy?: number; // sedan front-dome height
+    rearR?: number; // corner radius (sedan tail / box corners)
     rails?: boolean; // SUV roof rails
+}
+
+/** Slender sedan capsule: domed front (top), straight sides, rounded rear. */
+function sedanPath(g: Geometry): string {
+    const { x: bx, y: by, w: bw, h: bh } = g;
+    const rx = bw / 2;
+    const ry = g.frontRy ?? 12;
+    const rr = g.rearR ?? 12;
+    const sh = by + ry; // front shoulder
+    const rsY = by + bh - rr; // rear shoulder
+    return (
+        `M${f(bx)} ${f(sh)} A${f(rx)} ${f(ry)} 0 0 1 ${f(bx + bw)} ${f(sh)} ` +
+        `L${f(bx + bw)} ${f(rsY)} Q${f(bx + bw)} ${f(by + bh)} ${f(bx + bw - rr)} ${f(by + bh)} ` +
+        `L${f(bx + rr)} ${f(by + bh)} Q${f(bx)} ${f(by + bh)} ${f(bx)} ${f(rsY)} Z`
+    );
 }
 
 /** One reusable top-down car; geometry varies the silhouette per tier. */
 const TopDownCar: React.FC<{ g: Geometry; size: number; color?: string }> = ({ g, size, color }) => {
     const body = color ?? BODY;
-    const { x: bx, y: by, w: bw, h: bh, frontR, rearR } = g;
+    const { shape, x: bx, y: by, w: bw, h: bh } = g;
     const cx = bx + bw / 2;
-    const shoulder = by + frontR; // where the front dome meets the straight sides
-    const rx = bw / 2;
+    const isBox = shape === 'box';
+    const boxR = g.rearR ?? 6;
 
-    // Body outline: elliptical domed front, straight sides, rounded rear.
-    const bodyPath =
-        `M${f(bx)} ${f(shoulder)} ` +
-        `A${f(rx)} ${f(frontR)} 0 0 1 ${f(bx + bw)} ${f(shoulder)} ` +
-        `L${f(bx + bw)} ${f(by + bh - rearR)} ` +
-        `Q${f(bx + bw)} ${f(by + bh)} ${f(bx + bw - rearR)} ${f(by + bh)} ` +
-        `L${f(bx + rearR)} ${f(by + bh)} ` +
-        `Q${f(bx)} ${f(by + bh)} ${f(bx)} ${f(by + bh - rearR)} Z`;
-
-    // Windshield: follows the dome (inset), down to ~40% of the body.
-    const i = 1.5;
-    const wsBottom = by + bh * 0.4;
-    const wsPath =
-        `M${f(bx + i)} ${f(shoulder)} ` +
-        `A${f(rx - i)} ${f(frontR - i)} 0 0 1 ${f(bx + bw - i)} ${f(shoulder)} ` +
-        `L${f(bx + bw - i)} ${f(wsBottom)} L${f(bx + i)} ${f(wsBottom)} Z`;
-
-    // Glowing red pill in the windshield centre.
-    const pw = bw * 0.14;
-    const ph = bh * 0.11;
-    const pcy = by + bh * 0.31;
+    // Glass + accents positioned by fractions of the body box.
+    const wsInset = isBox ? 2.5 : 2;
+    const rwInset = isBox ? 3 : 3;
+    const ww = isBox ? 3.4 : 2.4; // wheel size (boxes get bigger wheels)
+    const wh = isBox ? 8 : 6;
 
     return (
         <Svg width={size} height={size} viewBox="0 0 48 64">
-            {/* soft drop shadow (body offset down/right) */}
-            <Path d={bodyPath} fill="rgba(0,0,0,0.16)" transform="translate(1, 3)" />
-            {/* wheel nubs (drawn under the body so they peek out at the sides) */}
+            {/* soft drop shadow (two offset layers for a softer edge) */}
+            {isBox ? (
+                <>
+                    <Rect x={bx + 1.3} y={by + 4} width={bw} height={bh} rx={boxR} fill="rgba(0,0,0,0.09)" />
+                    <Rect x={bx + 0.8} y={by + 2.2} width={bw} height={bh} rx={boxR} fill="rgba(0,0,0,0.15)" />
+                </>
+            ) : (
+                <>
+                    <Path d={sedanPath(g)} fill="rgba(0,0,0,0.09)" transform="translate(1.3, 4)" />
+                    <Path d={sedanPath(g)} fill="rgba(0,0,0,0.15)" transform="translate(0.8, 2.2)" />
+                </>
+            )}
+            {/* wheel nubs (under the body so they peek out) */}
             <G fill={WHEEL}>
-                <Rect x={bx - 1.5} y={by + bh * 0.3} width={3} height={7} rx={1.2} />
-                <Rect x={bx + bw - 1.5} y={by + bh * 0.3} width={3} height={7} rx={1.2} />
-                <Rect x={bx - 1.5} y={by + bh * 0.62} width={3} height={7} rx={1.2} />
-                <Rect x={bx + bw - 1.5} y={by + bh * 0.62} width={3} height={7} rx={1.2} />
+                <Rect x={bx - ww * 0.5} y={by + bh * 0.27} width={ww} height={wh} rx={1.1} />
+                <Rect x={bx + bw - ww * 0.5} y={by + bh * 0.27} width={ww} height={wh} rx={1.1} />
+                <Rect x={bx - ww * 0.5} y={by + bh * 0.71} width={ww} height={wh} rx={1.1} />
+                <Rect x={bx + bw - ww * 0.5} y={by + bh * 0.71} width={ww} height={wh} rx={1.1} />
             </G>
             {/* side mirror nubs near the front */}
             <G fill={MIRROR}>
-                <Rect x={bx - 2} y={by + bh * 0.25} width={3} height={2.5} rx={1} />
-                <Rect x={bx + bw - 1} y={by + bh * 0.25} width={3} height={2.5} rx={1} />
+                <Rect x={bx - 2} y={by + bh * 0.205} width={2.6} height={2.4} rx={1} />
+                <Rect x={bx + bw - 0.6} y={by + bh * 0.205} width={2.6} height={2.4} rx={1} />
             </G>
             {/* body */}
-            <Path d={bodyPath} fill={body} stroke={EDGE} strokeWidth={1} />
-            {/* thin red taillight accent at the rear edge */}
-            <Rect x={bx + rearR} y={by + bh - 3.2} width={bw - rearR * 2} height={2.2} rx={1.1} fill={TAIL} />
+            {isBox ? (
+                <Rect x={bx} y={by} width={bw} height={bh} rx={boxR} fill={body} stroke={EDGE} strokeWidth={1} />
+            ) : (
+                <Path d={sedanPath(g)} fill={body} stroke={EDGE} strokeWidth={1} />
+            )}
+            {/* thin red taillight at the rear edge */}
+            <Rect x={cx - bw * 0.35} y={by + bh - 3.4} width={bw * 0.7} height={1.8} rx={0.9} fill={TAIL} />
             {/* roof panel seams */}
-            <Rect x={bx + 4} y={by + bh * 0.5} width={bw - 8} height={0.9} fill={SEAM} />
-            <Rect x={bx + 4} y={by + bh * 0.62} width={bw - 8} height={0.9} fill={SEAM} />
-            {/* dark rear window */}
-            <Rect x={bx + 3} y={by + bh * 0.72} width={bw - 6} height={bh * 0.12} rx={3} fill={GLASS} />
+            <Rect x={bx + 3} y={by + bh * 0.5} width={bw - 6} height={0.8} fill={SEAM} />
+            <Rect x={bx + 3} y={by + bh * 0.625} width={bw - 6} height={0.8} fill={SEAM} />
             {/* roof rails (SUV only) */}
             {g.rails && (
                 <>
-                    <Rect x={bx + 3.5} y={shoulder} width={2.5} height={by + bh - rearR - shoulder} rx={1.2} fill={RAIL} opacity={0.85} />
-                    <Rect x={bx + bw - 6} y={shoulder} width={2.5} height={by + bh - rearR - shoulder} rx={1.2} fill={RAIL} opacity={0.85} />
+                    <Rect x={bx + 3.5} y={by + bh * 0.18} width={2.5} height={bh * 0.6} rx={1.2} fill={RAIL} opacity={0.85} />
+                    <Rect x={bx + bw - 6} y={by + bh * 0.18} width={2.5} height={bh * 0.6} rx={1.2} fill={RAIL} opacity={0.85} />
                 </>
             )}
-            {/* dark windshield */}
-            <Path d={wsPath} fill={GLASS} />
-            {/* glowing red pill: outer halo, body, lighter core */}
-            <Rect x={cx - pw} y={pcy - ph * 0.9} width={pw * 2} height={ph * 1.8} rx={pw} fill={GLOW} opacity={0.32} />
-            <Rect x={cx - pw / 2} y={pcy - ph / 2} width={pw} height={ph} rx={pw / 2} fill={GLOW} />
-            <Rect x={cx - pw * 0.22} y={pcy - ph * 0.28} width={pw * 0.44} height={ph * 0.56} rx={pw * 0.22} fill={GLOW_CORE} />
+            {/* dark rear window (smaller than the windshield) */}
+            <Rect x={bx + rwInset} y={by + bh * 0.7} width={bw - rwInset * 2} height={bh * 0.134} rx={4} fill={GLASS} />
+            {/* big dark windshield near the front (white hood sits above it) */}
+            <Rect x={bx + wsInset} y={by + bh * 0.15} width={bw - wsInset * 2} height={bh * 0.215} rx={isBox ? 3 : 5} fill={GLASS} />
         </Svg>
     );
 };
 
 const GEOMETRY: Record<VehicleTier, Geometry> = {
-    economy: { x: 10, y: 6, w: 28, h: 52, frontR: 14, rearR: 7 },
-    premium: { x: 11, y: 5, w: 26, h: 54, frontR: 13, rearR: 8 },
-    van: { x: 8, y: 4, w: 32, h: 56, frontR: 10, rearR: 5 },
-    xl: { x: 7, y: 5, w: 34, h: 52, frontR: 10, rearR: 5, rails: true },
+    economy: { shape: 'sedan', x: 11, y: 4, w: 26, h: 56, frontRy: 12, rearR: 12 },
+    premium: { shape: 'sedan', x: 12, y: 3, w: 24, h: 58, frontRy: 11, rearR: 11 },
+    van: { shape: 'box', x: 8, y: 4, w: 32, h: 57, rearR: 6 },
+    xl: { shape: 'box', x: 6, y: 5, w: 36, h: 54, rearR: 5, rails: true },
 };
 
 /** Economy — compact sedan. icon: car-compact */
@@ -141,11 +150,11 @@ export const EconomyCar: React.FC<VehicleSvgProps> = ({ size = 44, color }) => (
 export const PremiumCar: React.FC<VehicleSvgProps> = ({ size = 44, color }) => (
     <TopDownCar g={GEOMETRY.premium} size={size} color={color} />
 );
-/** Van — long minivan. icon: bus */
+/** Van — long boxy minivan. icon: bus */
 export const VanCar: React.FC<VehicleSvgProps> = ({ size = 44, color }) => (
     <TopDownCar g={GEOMETRY.van} size={size} color={color} />
 );
-/** XL — wide SUV with roof rails. icon: bus-outline */
+/** XL — wide boxy SUV with roof rails. icon: bus-outline */
 export const XLCar: React.FC<VehicleSvgProps> = ({ size = 44, color }) => (
     <TopDownCar g={GEOMETRY.xl} size={size} color={color} />
 );

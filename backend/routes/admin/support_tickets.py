@@ -240,6 +240,10 @@ async def trends(
     by_status: Counter = Counter()
     by_priority: Counter = Counter()
     by_channel: Counter = Counter()
+    by_category: Counter = Counter()
+    by_classification: Counter = Counter()
+    by_tag: Counter = Counter()
+    by_contact: Counter = Counter()
     resolution_hours: List[float] = []
     closed_count = 0
 
@@ -249,6 +253,22 @@ async def trends(
         by_status[t.get("status") or "Unknown"] += 1
         by_priority[t.get("priority") or "None"] += 1
         by_channel[t.get("channel") or "Unknown"] += 1
+        by_category[t.get("category") or "Uncategorized"] += 1
+        by_classification[t.get("classification") or "None"] += 1
+
+        contact = t.get("contact") or {}
+        cname = (
+            (contact.get("email") or "").strip()
+            or f"{contact.get('firstName', '')} {contact.get('lastName', '')}".strip()
+            or (t.get("email") or "").strip()
+            or "Unknown"
+        )
+        by_contact[cname] += 1
+
+        for tag in t.get("tags") or []:
+            name = tag.get("name") if isinstance(tag, dict) else str(tag)
+            if name:
+                by_tag[name] += 1
 
         closed_at = _parse_zoho_time(t.get("closedTime") or "")
         if closed_at:
@@ -276,6 +296,11 @@ async def trends(
         "by_status": dict(by_status),
         "by_priority": dict(by_priority),
         "by_channel": dict(by_channel),
+        "by_category": dict(by_category),
+        "by_classification": dict(by_classification),
+        "by_tag": dict(by_tag),
+        # Top requesters by ticket count in the window (max 10).
+        "top_contacts": [{"name": n, "count": c} for n, c in by_contact.most_common(10)],
         "stats": {
             "opened": len(tickets),
             "closed": closed_count,
@@ -315,6 +340,8 @@ async def tickets(
     status: Optional[str] = Query(None),
     department_id: Optional[str] = Query(None),
     assignee_id: Optional[str] = Query(None),
+    priority: Optional[str] = Query(None),
+    channel: Optional[str] = Query(None),
     sort_by: str = Query("-createdTime"),
     admin: dict = Depends(require_module("support_tickets")),
 ):
@@ -326,6 +353,8 @@ async def tickets(
             status=status,
             department_id=dept,
             assignee_id=assignee_id,
+            priority=priority,
+            channel=channel,
             sort_by=sort_by,
         )
     except ZohoDeskError as e:

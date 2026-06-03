@@ -2325,6 +2325,10 @@ export interface ZohoTrends {
     by_status: Record<string, number>;
     by_priority: Record<string, number>;
     by_channel: Record<string, number>;
+    by_category: Record<string, number>;
+    by_classification: Record<string, number>;
+    by_tag: Record<string, number>;
+    top_contacts: Array<{ name: string; count: number }>;
     stats: {
         opened: number;
         closed: number;
@@ -2366,6 +2370,8 @@ export const getDeskTickets = (opts?: {
     status?: string;
     departmentId?: string;
     assigneeId?: string;
+    priority?: string;
+    channel?: string;
     sortBy?: string;
 }) => {
     const sp = new URLSearchParams();
@@ -2374,6 +2380,8 @@ export const getDeskTickets = (opts?: {
     if (opts?.status) sp.set("status", opts.status);
     if (opts?.departmentId) sp.set("department_id", opts.departmentId);
     if (opts?.assigneeId) sp.set("assignee_id", opts.assigneeId);
+    if (opts?.priority) sp.set("priority", opts.priority);
+    if (opts?.channel) sp.set("channel", opts.channel);
     if (opts?.sortBy) sp.set("sort_by", opts.sortBy);
     const qs = sp.toString();
     return request<ZohoTicketsResponse>(`/api/admin/support-tickets/tickets${qs ? `?${qs}` : ""}`);

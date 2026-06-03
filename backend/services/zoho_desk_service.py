@@ -426,14 +426,15 @@ async def update_ticket(ticket_id: str, fields: Dict[str, Any]) -> Dict[str, Any
 
 
 async def add_tags(ticket_id: str, names: List[str]) -> Any:
-    """Associate tags (by name) with a ticket."""
-    body = {"tags": [{"name": n} for n in names if n]}
+    """Associate tags (by name) with a ticket. Zoho expects `tags` as an array
+    of name strings, not objects."""
+    body = {"tags": [n for n in names if n]}
     return await _request("POST", f"/api/v1/tickets/{ticket_id}/associateTag", json_body=body)
 
 
 async def remove_tags(ticket_id: str, names: List[str]) -> Any:
     """Disassociate tags (by name) from a ticket."""
-    body = {"tags": [{"name": n} for n in names if n]}
+    body = {"tags": [n for n in names if n]}
     return await _request("POST", f"/api/v1/tickets/{ticket_id}/disassociateTag", json_body=body)
 
 

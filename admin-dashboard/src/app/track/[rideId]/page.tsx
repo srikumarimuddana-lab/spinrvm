@@ -145,30 +145,32 @@ export default function TrackRide() {
         </svg>`
       )}`;
 
-    // Polished top-down car: dark circle with drop shadow, white body, blue
-    // windshield + side windows, yellow headlights, red taillights, 4 wheels.
+    // Lyft-style driver marker: a clean top-down sedan. Single dark body with
+    // a soft drop shadow, tinted windshield, roof panel, rear window, and
+    // subtle side mirrors — minimal and professional, no cartoon wheels or
+    // headlights. Nose points up; the icon is centre-anchored on the GPS point.
     const carSvg =
       `data:image/svg+xml,${encodeURIComponent(
         `<svg xmlns="http://www.w3.org/2000/svg" width="52" height="52" viewBox="0 0 52 52">
-          <circle cx="26" cy="28" r="21" fill="#000000" opacity="0.22"/>
-          <circle cx="26" cy="26" r="21" fill="#0F172A" stroke="white" stroke-width="2.5"/>
-          <path d="M20 9.5 C18.5 9.5 17.5 11 16.5 13 L15 17.5 L12.5 19 L12.5 34 L15 34.5 L15 37 C15 38.1 16 38.5 17 38.5 L18.5 38.5 L18.5 36.5 L33.5 36.5 L33.5 38.5 L35 38.5 C36 38.5 37 38.1 37 37 L37 34.5 L39.5 34 L39.5 19 L37 17.5 L35.5 13 C34.5 11 33.5 9.5 32 9.5 Z" fill="white"/>
-          <path d="M20.5 11.5 L18 17.5 L34 17.5 L31.5 11.5 Z" fill="#60A5FA"/>
-          <rect x="20" y="17.5" width="12" height="12" rx="0.5" fill="#F1F5F9"/>
-          <rect x="20" y="30" width="12" height="6" rx="0.5" fill="#DBEAFE" opacity="0.85"/>
-          <rect x="12.5" y="20" width="6" height="8.5" rx="1" fill="#BFDBFE" opacity="0.8"/>
-          <rect x="33.5" y="20" width="6" height="8.5" rx="1" fill="#BFDBFE" opacity="0.8"/>
-          <line x1="20" y1="20" x2="20" y2="29.5" stroke="#CBD5E1" stroke-width="0.75"/>
-          <line x1="32" y1="20" x2="32" y2="29.5" stroke="#CBD5E1" stroke-width="0.75"/>
-          <line x1="12.5" y1="24" x2="39.5" y2="24" stroke="#E2E8F0" stroke-width="0.6"/>
-          <rect x="18.5" y="8.5" width="4.5" height="2.5" rx="1.2" fill="#FDE68A"/>
-          <rect x="29" y="8.5" width="4.5" height="2.5" rx="1.2" fill="#FDE68A"/>
-          <rect x="18.5" y="37" width="4.5" height="2" rx="1" fill="#FCA5A5"/>
-          <rect x="29" y="37" width="4.5" height="2" rx="1" fill="#FCA5A5"/>
-          <rect x="10.5" y="19" width="4" height="7" rx="2" fill="#1E293B"/>
-          <rect x="37.5" y="19" width="4" height="7" rx="2" fill="#1E293B"/>
-          <rect x="10.5" y="28" width="4" height="7" rx="2" fill="#1E293B"/>
-          <rect x="37.5" y="28" width="4" height="7" rx="2" fill="#1E293B"/>
+          <defs>
+            <filter id="cshadow" x="-40%" y="-40%" width="180%" height="180%">
+              <feDropShadow dx="0" dy="1.5" stdDeviation="2.2" flood-color="#0B1220" flood-opacity="0.45"/>
+            </filter>
+            <linearGradient id="cbody" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#283244"/>
+              <stop offset="1" stop-color="#161E2B"/>
+            </linearGradient>
+          </defs>
+          <g filter="url(#cshadow)">
+            <path d="M17.8 17.5 L15.3 18 L15.7 20.2 L18 19.6 Z" fill="#1B2433"/>
+            <path d="M34.2 17.5 L36.7 18 L36.3 20.2 L34 19.6 Z" fill="#1B2433"/>
+            <path d="M26 7 C21.4 7 18.7 9.6 18.1 14.2 L17.5 20 C17.1 26 17.1 33 17.9 39 C18.3 42.6 20.5 44.6 26 44.6 C31.5 44.6 33.7 42.6 34.1 39 C34.9 33 34.9 26 34.5 20 L33.9 14.2 C33.3 9.6 30.6 7 26 7 Z"
+                  fill="url(#cbody)" stroke="#0B1220" stroke-width="0.8"/>
+            <path d="M21 15.8 C23 14 29 14 31 15.8 L30 20.2 L22 20.2 Z" fill="#8FB7DB"/>
+            <rect x="21" y="21" width="10" height="9.5" rx="2.4" fill="#3A4759"/>
+            <rect x="22.5" y="22.2" width="7" height="2" rx="1" fill="#4B5A6E"/>
+            <path d="M22 31.4 L30 31.4 L29.2 35.4 C27.6 36.3 24.4 36.3 22.8 35.4 Z" fill="#5A6B82"/>
+          </g>
         </svg>`
       )}`;
 

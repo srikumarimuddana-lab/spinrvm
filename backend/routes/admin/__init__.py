@@ -72,6 +72,7 @@ from .settings import router as settings_router
 from .staff import router as staff_router
 from .subscriptions import router as subscriptions_router
 from .support import router as support_router
+from .support_tickets import router as support_tickets_router
 from .users import router as users_router
 from .vehicle_fleet import router as vehicle_fleet_router
 from .wallet import router as wallet_router
@@ -99,6 +100,10 @@ admin_router.include_router(rides_router, dependencies=[Depends(require_module("
 admin_router.include_router(users_router, dependencies=[Depends(require_module("users"))])
 admin_router.include_router(promotions_router, dependencies=[Depends(require_module("promotions"))])
 admin_router.include_router(support_router, dependencies=[Depends(require_module("support"))])
+# support_tickets sub-router enforces require_module("support_tickets") per-handler
+# (the dashboard/trends/ticket routes carry it explicitly); config routes use
+# get_admin_user so any admin can connect the integration.
+admin_router.include_router(support_tickets_router)
 admin_router.include_router(safety_router, dependencies=[Depends(require_module("support"))])
 admin_router.include_router(faqs_router, dependencies=[Depends(require_module("support"))])
 admin_router.include_router(legal_documents_router, dependencies=[Depends(require_module("documents"))])

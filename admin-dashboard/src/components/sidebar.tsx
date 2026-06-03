@@ -8,7 +8,7 @@ import {
     Flame, Building2, LifeBuoy, HelpCircle,
     LogOut, Menu, X, ChevronLeft, ChevronRight,
     Sun, Moon, Shield, ShieldAlert, Cloud, Trophy, TrendingUp, Activity,
-    Inbox, Clock,
+    Inbox, Clock, Headphones, BarChart3,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useState, useEffect } from "react";
@@ -83,6 +83,16 @@ const NAV_GROUPS: NavGroup[] = [
         title: "Support",
         items: [
             { href: "/dashboard/support", label: "Support & Issues", icon: LifeBuoy, module: "support" },
+            {
+                href: "/dashboard/support-tickets",
+                label: "Help Desk",
+                icon: Headphones,
+                module: "support_tickets",
+                children: [
+                    { href: "/dashboard/support-tickets/tickets", label: "Tickets", icon: Inbox, module: "support_tickets" },
+                    { href: "/dashboard/support-tickets/trends", label: "Trends", icon: BarChart3, module: "support_tickets" },
+                ],
+            },
             { href: "/dashboard/safety", label: "Safety", icon: ShieldAlert, module: "support" },
             { href: "/dashboard/disputes", label: "Disputes & Refunds", icon: Shield, module: "support" },
             { href: "/dashboard/faqs", label: "FAQs", icon: HelpCircle, module: "support" },

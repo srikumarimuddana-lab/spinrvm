@@ -96,12 +96,47 @@ interface UseDriverDashboardReturn {
 // Lazy-load Notifee helpers; mirrors the gating in _layout.tsx so the
 // dashboard still mounts in Expo Go / web (where the native module is absent).
 let _dismissRideOfferNotification: (() => Promise<void>) | null = null;
+let _displayRideOfferNotification: ((o: any) => Promise<void>) | null = null;
 if (Platform.OS === 'android' || Platform.OS === 'ios') {
   try {
-    _dismissRideOfferNotification = require('../services/notifeeService').dismissRideOfferNotification;
+    const _notifee = require('../services/notifeeService');
+    _dismissRideOfferNotification = _notifee.dismissRideOfferNotification;
+    _displayRideOfferNotification = _notifee.displayRideOfferNotification;
   } catch {
     _dismissRideOfferNotification = null;
+    _displayRideOfferNotification = null;
   }
+}
+
+// Surface the heads-up / lock-screen Notifee card for an incoming offer when
+// the app is NOT foreground-active. While online the foreground service keeps
+// the WebSocket (and the foreground-FCM handler) alive in the background, so
+// the offer is processed in-JS while the in-app panel is hidden — nothing else
+// raises a system notification and the driver only feels the vibration. The FCM
+// background handler in _layout.tsx covers the fully-killed case; Notifee
+// dedupes by notification id, so calling this too never yields a duplicate.
+// Dismissal is handled by the rideState effect inside the hook.
+function _surfaceOfferNotification(data: any): void {
+  const display = _displayRideOfferNotification;
+  if (!display) return;
+  if (AppState.currentState === 'active') return; // in-app panel handles foreground
+  const _num = (v: unknown): number | undefined => {
+    if (v === null || v === undefined || v === '' || v === 'None') return undefined;
+    const n = typeof v === 'number' ? v : parseFloat(String(v));
+    return Number.isFinite(n) ? n : undefined;
+  };
+  display({
+    ride_id: data.ride_id,
+    booking_id: data.booking_id || data.ride_id,
+    pickup_address: data.pickup_address,
+    dropoff_address: data.dropoff_address,
+    fare: _num(data.fare) ?? 0,
+    total_bonus: _num(data.total_bonus),
+    distance_km: _num(data.distance_km),
+    duration_minutes: _num(data.duration_minutes),
+    surge_multiplier: _num(data.surge_multiplier),
+    rider_name: data.rider_name || undefined,
+  }).catch((e: any) => console.warn('[Offer] Notifee surface failed:', e));
 }
 const PENDING_ACTION_KEY = 'spinr_pending_notifee_action';
 
@@ -592,6 +627,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         }
         Vibration.vibrate([0, 500, 200, 500]);
         offerSound.play();
+        // Backgrounded-but-alive: the in-app panel is hidden, so surface the
+        // heads-up Notifee card here — the WS offer is the first, most reliable
+        // trigger. No-op when foreground; deduped against the FCM path by id.
+        _surfaceOfferNotification(data);
         router.replace('/driver/' as any);
         setIncomingRide({
           ride_id: data.ride_id,
@@ -1254,6 +1293,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         if (!isUpdate) {
           Vibration.vibrate([0, 500, 200, 500]);
           offerSound.play();
+          _surfaceOfferNotification(data);
           router.replace('/driver/' as any);
         }
         // FCM values are all strings. Parse JSON for arrays/objects.

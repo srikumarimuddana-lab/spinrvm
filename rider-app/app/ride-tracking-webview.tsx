@@ -108,9 +108,9 @@ export default function RideTrackingWebviewScreen() {
           </View>
           <Text style={styles.headerTitle}>Ride Tracking</Text>
         </View>
-        <TouchableOpacity style={styles.shareBtn} onPress={handleShare} disabled={!resolvedUrl}>
-          <Ionicons name="share-outline" size={22} color={resolvedUrl ? colors.primary : colors.textDim} />
-        </TouchableOpacity>
+        {/* Spacer keeps the title centred against the back button. Sharing
+            lives in the single labelled footer button below. */}
+        <View style={styles.shareBtn} />
       </View>
 
       {/* URL bar */}

@@ -419,3 +419,115 @@ class TestNativePushDelivery:
         msg_arg = mock_messaging.Message.call_args
         assert msg_arg is not None
         assert msg_arg.kwargs.get("token") == android_token or (msg_arg.args and android_token in str(msg_arg.args))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dispatch (ride-offer) pushes must be delivered INLINE, not parked on the
+# 30s push_retry loop — a ride offer expires in ~15s, so a queued-only send
+# arrives after the offer is already gone (the "no push when minimized" bug).
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestDispatchPushIsImmediate:
+    """Pins send_push_notification's dispatch path.
+
+    Code under test: backend/features.py::send_push_notification, priority="dispatch".
+    """
+
+    async def test_dispatch_push_sent_immediately_not_queued(self):
+        """A dispatch push reaches messaging.send on the request path and is
+        NOT parked on the retry queue when delivery succeeds."""
+        import sys
+        from unittest.mock import MagicMock
+
+        mock_messaging = MagicMock()
+        mock_messaging.send = MagicMock(return_value="projects/spinr/messages/ok")
+        mock_firebase = MagicMock()
+        mock_firebase.messaging = mock_messaging
+
+        user_row = {"id": USER_ID, "fcm_token_driver": "android-fcm-driver-token"}
+        enqueued: list = []
+
+        async def _enqueue(*args, **kwargs):  # pragma: no cover - must not run
+            enqueued.append(kwargs or args)
+
+        with (
+            patch.dict(
+                sys.modules,
+                {"firebase_admin": mock_firebase, "firebase_admin.messaging": mock_messaging},
+            ),
+            patch("backend.features.db_supabase.find_one", AsyncMock(return_value=user_row)),
+            patch("backend.utils.push_retry.enqueue_push", AsyncMock(side_effect=_enqueue)),
+        ):
+            from backend import features as features_mod
+
+            result = await features_mod.send_push_notification(
+                user_id=USER_ID,
+                title="$12.50 ride offer",
+                body="Booking r1 • A → B",
+                data={"type": "new_ride_assignment", "ride_id": "r1"},
+                priority="dispatch",
+                target_app="driver",
+            )
+
+        assert result is True
+        mock_messaging.send.assert_called_once()
+        assert enqueued == [], "dispatch push must be sent inline, not parked on the 30s retry queue"
+
+    async def test_dispatch_push_falls_back_to_queue_when_send_fails(self):
+        """If the immediate send fails, the dispatch push is enqueued for retry
+        so a transient FCM outage doesn't silently drop the offer."""
+        user_row = {"id": USER_ID, "fcm_token_driver": "android-fcm-driver-token"}
+        enqueued: list = []
+
+        async def _enqueue(user_id, title, body, data=None, priority="normal", target_app=None):
+            enqueued.append({"user_id": user_id, "priority": priority, "target_app": target_app})
+
+        with (
+            patch("backend.features.db_supabase.find_one", AsyncMock(return_value=user_row)),
+            patch("backend.features._deliver_push_now", AsyncMock(return_value=False)),
+            patch("backend.utils.push_retry.enqueue_push", AsyncMock(side_effect=_enqueue)),
+        ):
+            from backend import features as features_mod
+
+            result = await features_mod.send_push_notification(
+                user_id=USER_ID,
+                title="$12.50 ride offer",
+                body="Booking r1 • A → B",
+                data={"type": "new_ride_assignment", "ride_id": "r1"},
+                priority="dispatch",
+                target_app="driver",
+            )
+
+        assert result is False
+        assert len(enqueued) == 1, "a failed dispatch push must be enqueued for retry"
+        assert enqueued[0]["priority"] == "dispatch"
+        assert enqueued[0]["target_app"] == "driver"
+
+    async def test_missing_token_is_not_queued(self):
+        """No token on file → drop immediately; enqueuing can't fix a missing
+        token and would just churn the retry loop."""
+        user_row = {"id": USER_ID}  # no fcm_token_driver / fcm_token
+        enqueued: list = []
+
+        async def _enqueue(*args, **kwargs):  # pragma: no cover - must not run
+            enqueued.append(kwargs or args)
+
+        with (
+            patch("backend.features.db_supabase.find_one", AsyncMock(return_value=user_row)),
+            patch("backend.utils.push_retry.enqueue_push", AsyncMock(side_effect=_enqueue)),
+        ):
+            from backend import features as features_mod
+
+            result = await features_mod.send_push_notification(
+                user_id=USER_ID,
+                title="$12.50 ride offer",
+                body="Booking r1 • A → B",
+                data={"type": "new_ride_assignment", "ride_id": "r1"},
+                priority="dispatch",
+                target_app="driver",
+            )
+
+        assert result is False
+        assert enqueued == [], "missing-token dispatch must not be enqueued"

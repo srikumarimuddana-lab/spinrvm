@@ -1258,55 +1258,21 @@ async def _send_expo_push(token: str, title: str, body: str, data: Dict[str, str
         return False
 
 
-async def send_push_notification(
-    user_id: str,
+async def _deliver_push_now(
+    token: str,
     title: str,
     body: str,
-    data: Dict[str, str] | None = None,
-    priority: str = "normal",
-    target_app: str | None = None,
-):
-    """Send a push notification to a user.
+    data: Dict[str, str] | None,
+    user_id: str,
+    target_app: str | None,
+) -> bool:
+    """Attempt a single, immediate push delivery. Returns True on success.
 
-    Routes automatically: Expo push tokens go via Expo's REST API; all other
-    tokens are assumed to be FCM and sent via Firebase Admin SDK.
-
-    ``target_app`` selects which per-app token column to read:
-      - ``"rider"``  → ``fcm_token_rider``
-      - ``"driver"`` → ``fcm_token_driver``
-      - ``None``     → legacy ``fcm_token`` (backward compat)
-
-    Dispatch and safety priority pushes are written to the push_retry_queue
-    table first so that a transient FCM/Expo outage doesn't silently drop a
-    ride offer or SOS alert.  Normal (informational) pushes continue to use
-    the existing direct-send path.
+    Routes Expo push tokens via Expo's REST API; everything else is treated as
+    an FCM token and sent through the Firebase Admin SDK. A stale FCM token is
+    purged so the next login re-registers. Never raises — returns False on any
+    failure so the caller can decide whether to enqueue a retry.
     """
-    if priority in ("dispatch", "safety"):
-        try:
-            from utils.push_retry import enqueue_push
-
-            await enqueue_push(user_id, title, body, data, priority=priority, target_app=target_app)
-            return True
-        except Exception:
-            logger.error("push enqueue failed, falling back to direct send", exc_info=True)
-
-    user = await db.find_one("users", {"id": user_id})
-    if not user:
-        logger.warning(f"No user found for {user_id} — push dropped")
-        return False
-
-    token: str | None = None
-    if target_app == "rider":
-        token = user.get("fcm_token_rider") or user.get("fcm_token")
-    elif target_app == "driver":
-        token = user.get("fcm_token_driver") or user.get("fcm_token")
-    else:
-        token = user.get("fcm_token")
-
-    if not token:
-        logger.warning(f"No FCM token on file for user {user_id} (target_app={target_app}) — push dropped")
-        return False
-
     if _is_expo_token(token):
         return await _send_expo_push(token, title, body, data)
 
@@ -1346,6 +1312,21 @@ async def send_push_notification(
                     "apns-priority": "10",
                     "apns-push-type": "alert",
                 },
+                # iOS has no full-screen intent — a dispatch offer rides on a
+                # time-sensitive alert payload (custom sound + category for the
+                # Accept/Decline actions). Without this aps block, iOS shows
+                # nothing for an otherwise data-only dispatch message.
+                payload=messaging.APNSPayload(
+                    aps=messaging.Aps(
+                        alert=messaging.ApsAlert(title=title, body=body),
+                        sound="ride_offer.caf" if is_dispatch else "default",
+                        category="ride-offer" if is_dispatch else None,
+                        content_available=True,
+                        mutable_content=True,
+                    ),
+                )
+                if is_dispatch
+                else None,
             ),
         )
         response = await asyncio.to_thread(messaging.send, message)
@@ -1371,6 +1352,73 @@ async def send_push_notification(
     except Exception as e:
         logger.error(f"Failed to send push notification to user {user_id}: {e}", exc_info=True)
         return False
+
+
+async def send_push_notification(
+    user_id: str,
+    title: str,
+    body: str,
+    data: Dict[str, str] | None = None,
+    priority: str = "normal",
+    target_app: str | None = None,
+):
+    """Send a push notification to a user.
+
+    Routes automatically: Expo push tokens go via Expo's REST API; all other
+    tokens are assumed to be FCM and sent via Firebase Admin SDK.
+
+    ``target_app`` selects which per-app token column to read:
+      - ``"rider"``  → ``fcm_token_rider``
+      - ``"driver"`` → ``fcm_token_driver``
+      - ``None``     → legacy ``fcm_token`` (backward compat)
+
+    Delivery is attempted INLINE for every priority. Dispatch (ride offer) and
+    safety (SOS) pushes are time-critical — a ride offer expires in ~15s — so
+    they must never wait on the 30s push_retry loop. Only when the immediate
+    send fails do dispatch/safety pushes fall back to the push_retry_queue, so
+    a transient FCM/Expo outage still doesn't silently drop a ride offer or
+    SOS alert. Normal (informational) pushes are best-effort and not retried.
+    """
+    user = await db.find_one("users", {"id": user_id})
+    if not user:
+        logger.warning(f"No user found for {user_id} — push dropped")
+        return False
+
+    token: str | None = None
+    if target_app == "rider":
+        token = user.get("fcm_token_rider") or user.get("fcm_token")
+    elif target_app == "driver":
+        token = user.get("fcm_token_driver") or user.get("fcm_token")
+    else:
+        token = user.get("fcm_token")
+
+    if not token:
+        logger.warning(f"No FCM token on file for user {user_id} (target_app={target_app}) — push dropped")
+        return False
+
+    # Primary path: deliver right now (≈100–300 ms) so a ride offer reaches the
+    # driver's phone well inside the offer window. A queued-only dispatch would
+    # arrive after the 30s retry tick — long after the offer has expired.
+    delivered = await _deliver_push_now(token, title, body, data, user_id, target_app)
+    if delivered:
+        return True
+
+    # Immediate delivery failed. For time-critical pushes, enqueue for retry
+    # (exponential back-off) so a transient outage doesn't drop a ride offer or
+    # SOS alert. A missing token already returned above, so this only covers
+    # genuine send failures worth retrying.
+    if priority in ("dispatch", "safety"):
+        try:
+            try:
+                from .utils.push_retry import enqueue_push
+            except ImportError:
+                from utils.push_retry import enqueue_push
+
+            await enqueue_push(user_id, title, body, data, priority=priority, target_app=target_app)
+            logger.warning(f"push: immediate send failed for user {user_id} — enqueued {priority} push for retry")
+        except Exception:
+            logger.error("push_retry enqueue (fallback) failed", exc_info=True)
+    return False
 
 
 async def send_email(*, to: str, subject: str, body: str) -> bool:

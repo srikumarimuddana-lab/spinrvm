@@ -259,6 +259,54 @@ async def test_send_reply_includes_from_email(monkeypatch):
     assert seen["body"]["to"] == "x@y.ca"
 
 
+@pytest.mark.anyio
+async def test_lost_and_found_autocreate_happy(monkeypatch):
+    import services.zoho_desk_integration as integ
+
+    db = MagicMock()
+    db.find_one = AsyncMock(side_effect=[
+        {"id": "default", "enabled": True},  # config
+        {"id": "u1", "name": "Jane Doe", "email": "j@x.ca", "phone": "+1"},  # rider
+    ])
+    db.update_one = AsyncMock()
+    monkeypatch.setattr(integ, "db_supabase", db)
+    created = AsyncMock(return_value={"id": "zt1"})
+    monkeypatch.setattr(integ.zoho, "create_ticket", created)
+
+    await integ.create_ticket_for_lost_and_found(
+        {"id": "c1", "rider_user_id": "u1", "item_description": "Wallet", "item_category": "bag",
+         "ride_id": "r1", "reporter_type": "driver"},
+        {"ride_code": "SPN-1"},
+    )
+    created.assert_awaited_once()
+    kwargs = created.call_args.kwargs
+    assert kwargs["category"] == "Lost & Found"
+    assert kwargs["email"] == "j@x.ca" and kwargs["first_name"] == "Jane"
+    # linked the ticket id back onto the case
+    db.update_one.assert_awaited_once()
+    assert db.update_one.call_args.args[2] == {"zoho_ticket_id": "zt1"}
+
+
+@pytest.mark.anyio
+async def test_lost_and_found_autocreate_skips(monkeypatch):
+    import services.zoho_desk_integration as integ
+
+    db = MagicMock()
+    db.find_one = AsyncMock(return_value={"id": "default", "enabled": False})
+    db.update_one = AsyncMock()
+    monkeypatch.setattr(integ, "db_supabase", db)
+    created = AsyncMock()
+    monkeypatch.setattr(integ.zoho, "create_ticket", created)
+
+    # disabled integration -> no ticket
+    await integ.create_ticket_for_lost_and_found({"id": "c1"}, None)
+    created.assert_not_awaited()
+
+    # already linked -> no ticket (and never even checks config)
+    await integ.create_ticket_for_lost_and_found({"id": "c1", "zoho_ticket_id": "zt9"}, None)
+    created.assert_not_awaited()
+
+
 def test_parse_zoho_time_window():
     # Codex P2: the trends `days` selector must actually filter by created
     # time. The route helper parses Zoho timestamps; unparseable -> None.

@@ -6,10 +6,12 @@ import { useParams } from "next/navigation";
 import {
     getDeskTicket,
     getDeskTicketThreads,
+    getDeskThread,
     getDeskAgents,
     replyDeskTicket,
     commentDeskTicket,
     updateDeskTicket,
+    updateDeskTicketTags,
 } from "@/lib/api";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -25,10 +27,29 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/components/ui/use-toast";
-import { ArrowLeft, Send, StickyNote, User, Mail, ExternalLink, Clock, CheckCircle2, Timer } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import {
+    ArrowLeft, Send, StickyNote, User, Mail, ExternalLink, Clock, CheckCircle2, Timer,
+    ChevronDown, ChevronUp, Tag, Plus, X, Save,
+} from "lucide-react";
 
 const STATUSES = ["Open", "On Hold", "Escalated", "Closed"];
 const PRIORITIES = ["Low", "Medium", "High", "Urgent"];
+const CLASSIFICATIONS = ["Question", "Problem", "Feature", "Others"];
+// One-click tag presets for Spinr's common ticket types (tags are free-form).
+const QUICK_TAGS = ["Driver request", "Client request", "Payment issue", "Lost & found", "Safety", "Refund"];
+
+function initials(name: string): string {
+    const parts = (name || "").trim().split(/[\s@.]+/).filter(Boolean);
+    if (parts.length === 0) return "?";
+    return (parts[0][0] + (parts[1]?.[0] || "")).toUpperCase();
+}
+
+function ticketTagNames(t: any): string[] {
+    const tags = t?.tags;
+    if (!Array.isArray(tags)) return [];
+    return tags.map((x: any) => (typeof x === "string" ? x : x?.name)).filter(Boolean);
+}
 
 function statusClass(status: string): string {
     const s = (status || "").toLowerCase();
@@ -83,6 +104,37 @@ export default function TicketDetailPage() {
     const [sending, setSending] = useState(false);
     const [savingField, setSavingField] = useState(false);
 
+    // Editable classification fields (seeded from the ticket on load).
+    const [category, setCategory] = useState("");
+    const [subCategory, setSubCategory] = useState("");
+    const [classification, setClassification] = useState("");
+    const [tagInput, setTagInput] = useState("");
+
+    // Conversation expand/collapse + lazily-fetched full thread bodies. The
+    // /conversations list only returns a truncated summary per email thread.
+    const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+    const [fullBody, setFullBody] = useState<Record<string, string>>({});
+    const [loadingMsg, setLoadingMsg] = useState<Record<string, boolean>>({});
+
+    const toggleMsg = async (m: any) => {
+        const key = String(m.id ?? "");
+        if (!key) return;
+        const willOpen = !expanded[key];
+        setExpanded((e) => ({ ...e, [key]: willOpen }));
+        // Comments already carry full content; only threads need a fetch.
+        if (willOpen && m.type !== "comment" && fullBody[key] === undefined) {
+            setLoadingMsg((l) => ({ ...l, [key]: true }));
+            try {
+                const full = await getDeskThread(id, key);
+                setFullBody((f) => ({ ...f, [key]: toText(full?.content || full?.plainText || "") }));
+            } catch {
+                setFullBody((f) => ({ ...f, [key]: "" }));
+            } finally {
+                setLoadingMsg((l) => ({ ...l, [key]: false }));
+            }
+        }
+    };
+
     const load = useCallback(async () => {
         setLoading(true);
         setError(null);
@@ -90,6 +142,11 @@ export default function TicketDetailPage() {
             const [t, th] = await Promise.all([getDeskTicket(id), getDeskTicketThreads(id)]);
             setTicket(t);
             setThread(th.data || []);
+            setCategory(t.category || "");
+            setSubCategory(t.subCategory || "");
+            setClassification(t.classification || "");
+            setExpanded({});
+            setFullBody({});
         } catch (e: any) {
             setError(e?.message || "Failed to load ticket");
         } finally {
@@ -149,6 +206,36 @@ export default function TicketDetailPage() {
         }
     };
 
+    const saveClassify = async () => {
+        const fields: Record<string, string> = {};
+        if (category.trim()) fields.category = category.trim();
+        if (subCategory.trim()) fields.subCategory = subCategory.trim();
+        if (classification.trim()) fields.classification = classification.trim();
+        if (Object.keys(fields).length === 0) return;
+        await patch(fields, "Ticket details");
+    };
+
+    const mutateTags = async (body: { add?: string[]; remove?: string[] }, label: string) => {
+        setSavingField(true);
+        try {
+            await updateDeskTicketTags(id, body);
+            toast({ title: `Tags ${label}` });
+            await load();
+        } catch (e: any) {
+            toast({ title: "Tag update failed", description: e?.message, variant: "destructive" });
+        } finally {
+            setSavingField(false);
+        }
+    };
+
+    const addTags = (raw: string) => {
+        const names = raw.split(",").map((s) => s.trim()).filter(Boolean);
+        if (names.length) mutateTags({ add: names }, "added");
+        setTagInput("");
+    };
+
+    const currentTags = ticketTagNames(ticket);
+
     if (!allowed) return null;
 
     return (
@@ -189,24 +276,55 @@ export default function TicketDetailPage() {
                         </Card>
 
                         <Card>
-                            <CardHeader><CardTitle className="text-base">Conversation</CardTitle></CardHeader>
+                            <CardHeader className="flex flex-row items-center justify-between">
+                                <CardTitle className="text-base">Conversation</CardTitle>
+                                <span className="text-xs text-muted-foreground">
+                                    {thread.length} message{thread.length === 1 ? "" : "s"}
+                                </span>
+                            </CardHeader>
                             <CardContent className="space-y-3">
                                 {thread.length === 0 && <p className="text-sm text-muted-foreground">No replies yet.</p>}
                                 {thread.map((m: any, i: number) => {
+                                    const key = String(m.id ?? i);
                                     const isComment = m.type === "comment";
+                                    const isOut = (m.direction || "").toLowerCase() === "out";
                                     const author = m.author?.name || m.commenter?.name || m.fromEmailAddress || m.from || "—";
                                     const when = (m.createdTime || m.commentedTime || m.summary?.time || "").slice(0, 16).replace("T", " ");
-                                    const body = toText(m.content || m.summary || m.plainText || "");
+                                    const isOpen = !!expanded[key];
+                                    const preview = toText(m.summary || m.content || m.plainText || "");
+                                    const body = isOpen && fullBody[key] ? fullBody[key] : preview;
+                                    const role = isComment ? "Internal note" : isOut ? "Agent reply" : "Customer";
+                                    const accent = isComment
+                                        ? "border-l-amber-400 bg-amber-50/60 dark:bg-amber-950/20"
+                                        : isOut
+                                        ? "border-l-blue-400"
+                                        : "border-l-slate-300";
                                     return (
-                                        <div key={m.id || i} className={`rounded-lg border p-3 ${isComment ? "bg-amber-50 dark:bg-amber-950/20" : ""}`}>
-                                            <div className="mb-1 flex items-center justify-between">
-                                                <span className="flex items-center gap-1 text-sm font-medium">
-                                                    {isComment ? <StickyNote className="h-3 w-3" /> : <Mail className="h-3 w-3" />}
-                                                    {author} {isComment && <span className="text-xs text-amber-700">(internal note)</span>}
-                                                </span>
-                                                <span className="text-xs text-muted-foreground">{when}</span>
+                                        <div key={key} className={`rounded-lg border border-l-4 ${accent} p-3`}>
+                                            <div className="mb-2 flex items-start justify-between gap-2">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] font-semibold">
+                                                        {initials(author)}
+                                                    </span>
+                                                    <div className="leading-tight">
+                                                        <p className="text-sm font-medium">{author}</p>
+                                                        <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                                                            {isComment ? <StickyNote className="h-3 w-3" /> : <Mail className="h-3 w-3" />}
+                                                            {role}{m.channel ? ` · ${m.channel}` : ""}
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                                <span className="whitespace-nowrap text-xs text-muted-foreground">{when}</span>
                                             </div>
-                                            <p className="whitespace-pre-wrap text-sm">{body}</p>
+                                            <p className={`whitespace-pre-wrap text-sm ${isOpen ? "" : "line-clamp-3"}`}>
+                                                {loadingMsg[key] ? "Loading full message…" : body || "(no content)"}
+                                            </p>
+                                            <button
+                                                onClick={() => toggleMsg(m)}
+                                                className="mt-1 flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline"
+                                            >
+                                                {isOpen ? <><ChevronUp className="h-3 w-3" /> Show less</> : <><ChevronDown className="h-3 w-3" /> Show full message</>}
+                                            </button>
                                         </div>
                                     );
                                 })}
@@ -315,6 +433,71 @@ export default function TicketDetailPage() {
                                             ))}
                                         </SelectContent>
                                     </Select>
+                                </div>
+                            </CardContent>
+                        </Card>
+
+                        <Card>
+                            <CardHeader><CardTitle className="text-base">Classify & tag</CardTitle></CardHeader>
+                            <CardContent className="space-y-3">
+                                <div className="space-y-1">
+                                    <Label>Category</Label>
+                                    <Input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="e.g. Driver Request" disabled={savingField} />
+                                </div>
+                                <div className="space-y-1">
+                                    <Label>Sub-category</Label>
+                                    <Input value={subCategory} onChange={(e) => setSubCategory(e.target.value)} placeholder="optional" disabled={savingField} />
+                                </div>
+                                <div className="space-y-1">
+                                    <Label>Classification</Label>
+                                    <Select value={classification || undefined} onValueChange={setClassification} disabled={savingField}>
+                                        <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+                                        <SelectContent>
+                                            {CLASSIFICATIONS.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                                <Button size="sm" onClick={saveClassify} disabled={savingField}>
+                                    <Save className="mr-2 h-4 w-4" /> Save details
+                                </Button>
+
+                                <div className="space-y-2 border-t pt-3">
+                                    <Label className="flex items-center gap-1"><Tag className="h-3.5 w-3.5" /> Tags</Label>
+                                    <div className="flex flex-wrap gap-1">
+                                        {currentTags.length === 0 && <span className="text-xs text-muted-foreground">No tags yet.</span>}
+                                        {currentTags.map((name) => (
+                                            <Badge key={name} variant="secondary" className="gap-1">
+                                                {name}
+                                                <button onClick={() => mutateTags({ remove: [name] }, "removed")} disabled={savingField}>
+                                                    <X className="h-3 w-3" />
+                                                </button>
+                                            </Badge>
+                                        ))}
+                                    </div>
+                                    <div className="flex flex-wrap gap-1">
+                                        {QUICK_TAGS.filter((q) => !currentTags.includes(q)).map((q) => (
+                                            <button
+                                                key={q}
+                                                onClick={() => mutateTags({ add: [q] }, "added")}
+                                                disabled={savingField}
+                                                className="rounded-full border px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted"
+                                            >
+                                                <Plus className="mr-0.5 inline h-3 w-3" />{q}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <Input
+                                            value={tagInput}
+                                            onChange={(e) => setTagInput(e.target.value)}
+                                            onKeyDown={(e) => { if (e.key === "Enter") addTags(tagInput); }}
+                                            placeholder="Add tag(s), comma-separated"
+                                            disabled={savingField}
+                                        />
+                                        <Button variant="outline" size="sm" onClick={() => addTags(tagInput)} disabled={savingField || !tagInput.trim()}>
+                                            Add
+                                        </Button>
+                                    </div>
                                 </div>
                             </CardContent>
                         </Card>

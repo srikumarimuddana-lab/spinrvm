@@ -2,11 +2,22 @@
 
 import { useEffect, useState, useCallback, useMemo } from "react";
 import Link from "next/link";
-import { getDeskTickets, getDeskAgents } from "@/lib/api";
+import { getDeskTickets, getDeskAgents, createDeskTicket } from "@/lib/api";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog";
+import { useToast } from "@/components/ui/use-toast";
 import { Badge } from "@/components/ui/badge";
 import {
     Table,
@@ -23,7 +34,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
-import { Inbox, ChevronLeft, ChevronRight, RefreshCw, Search, ArrowUp, ArrowDown } from "lucide-react";
+import { Inbox, ChevronLeft, ChevronRight, RefreshCw, Search, ArrowUp, ArrowDown, Plus } from "lucide-react";
 
 const STATUSES = ["All", "Open", "On Hold", "Escalated", "Closed"];
 const PRIORITIES = ["All", "Low", "Medium", "High", "Urgent"];
@@ -71,9 +82,44 @@ export default function TicketListPage() {
 
     // Client-side refine (filters the loaded page by contact/category/tag/subject).
     const [refine, setRefine] = useState("");
+    const [fromDate, setFromDate] = useState("");
+    const [toDate, setToDate] = useState("");
 
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+
+    // New-ticket dialog.
+    const { toast } = useToast();
+    const [createOpen, setCreateOpen] = useState(false);
+    const [creating, setCreating] = useState(false);
+    const [form, setForm] = useState({ subject: "", description: "", email: "", name: "", priority: "Medium" });
+    const setF = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
+
+    const create = async () => {
+        if (!form.subject.trim()) return;
+        setCreating(true);
+        try {
+            const [first, ...rest] = form.name.trim().split(" ");
+            await createDeskTicket({
+                subject: form.subject.trim(),
+                description: form.description.trim(),
+                email: form.email.trim() || undefined,
+                first_name: first || undefined,
+                last_name: rest.join(" ") || undefined,
+                priority: form.priority,
+                channel: "Web",
+            });
+            toast({ title: "Ticket created" });
+            setCreateOpen(false);
+            setForm({ subject: "", description: "", email: "", name: "", priority: "Medium" });
+            setPage(0);
+            load();
+        } catch (e: any) {
+            toast({ title: "Create failed", description: e?.message, variant: "destructive" });
+        } finally {
+            setCreating(false);
+        }
+    };
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -106,26 +152,32 @@ export default function TicketListPage() {
         getDeskAgents().then((r) => setAgents(r.data || [])).catch(() => {});
     }, [allowed]);
 
-    // Client refine across the loaded page (contact, category, tags, subject, #).
+    // Client refine across the loaded page (contact, category, tags, subject, #)
+    // plus a created-date range.
     const shown = useMemo(() => {
         const q = refine.trim().toLowerCase();
-        if (!q) return tickets;
         return tickets.filter((t) => {
-            const hay = [
-                t.subject,
-                t.ticketNumber,
-                t.category,
-                t.contact?.email,
-                t.email,
-                `${t.contact?.firstName || ""} ${t.contact?.lastName || ""}`,
-                tagNames(t),
-            ]
-                .filter(Boolean)
-                .join(" ")
-                .toLowerCase();
-            return hay.includes(q);
+            if (q) {
+                const hay = [
+                    t.subject,
+                    t.ticketNumber,
+                    t.category,
+                    t.contact?.email,
+                    t.email,
+                    `${t.contact?.firstName || ""} ${t.contact?.lastName || ""}`,
+                    tagNames(t),
+                ]
+                    .filter(Boolean)
+                    .join(" ")
+                    .toLowerCase();
+                if (!hay.includes(q)) return false;
+            }
+            const created = (t.createdTime || "").slice(0, 10);
+            if (fromDate && created && created < fromDate) return false;
+            if (toDate && created && created > toDate) return false;
+            return true;
         });
-    }, [tickets, refine]);
+    }, [tickets, refine, fromDate, toDate]);
 
     const toggleSort = (field: string) => {
         setPage(0);
@@ -156,10 +208,57 @@ export default function TicketListPage() {
                 <h1 className="flex items-center gap-2 text-2xl font-bold">
                     <Inbox className="h-6 w-6" /> Tickets
                 </h1>
-                <Button variant="outline" size="icon" onClick={load} disabled={loading}>
-                    <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-                </Button>
+                <div className="flex items-center gap-2">
+                    <Button onClick={() => setCreateOpen(true)}>
+                        <Plus className="mr-2 h-4 w-4" /> New ticket
+                    </Button>
+                    <Button variant="outline" size="icon" onClick={load} disabled={loading}>
+                        <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+                    </Button>
+                </div>
             </div>
+
+            <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>New ticket</DialogTitle>
+                        <DialogDescription>Creates a ticket in Zoho Desk.</DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-3">
+                        <div className="space-y-1">
+                            <Label>Subject *</Label>
+                            <Input value={form.subject} onChange={(e) => setF("subject", e.target.value)} />
+                        </div>
+                        <div className="space-y-1">
+                            <Label>Description</Label>
+                            <Textarea rows={3} value={form.description} onChange={(e) => setF("description", e.target.value)} />
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                            <div className="space-y-1">
+                                <Label>Requester name</Label>
+                                <Input value={form.name} onChange={(e) => setF("name", e.target.value)} />
+                            </div>
+                            <div className="space-y-1">
+                                <Label>Requester email</Label>
+                                <Input type="email" value={form.email} onChange={(e) => setF("email", e.target.value)} />
+                            </div>
+                        </div>
+                        <div className="space-y-1">
+                            <Label>Priority</Label>
+                            <Select value={form.priority} onValueChange={(v) => setF("priority", v)}>
+                                <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+                                <SelectContent>{PRIORITIES.filter((p) => p !== "All").map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}</SelectContent>
+                            </Select>
+                        </div>
+                    </div>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
+                        <Button onClick={create} disabled={creating || !form.subject.trim()}>
+                            {creating ? "Creating…" : "Create ticket"}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
 
             {/* Filters */}
             <div className="flex flex-wrap items-center gap-2">
@@ -191,9 +290,18 @@ export default function TicketListPage() {
                     <Input
                         value={refine}
                         onChange={(e) => setRefine(e.target.value)}
-                        placeholder="Refine: contact, category, tag…"
+                        placeholder="Refine: ticket #, contact, category, tag…"
                         className="w-64 pl-8"
                     />
+                </div>
+                <div className="flex items-center gap-1 text-sm text-muted-foreground">
+                    <span>Created</span>
+                    <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="w-40" />
+                    <span>→</span>
+                    <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="w-40" />
+                    {(fromDate || toDate) && (
+                        <Button variant="ghost" size="sm" onClick={() => { setFromDate(""); setToDate(""); }}>Clear</Button>
+                    )}
                 </div>
             </div>
 

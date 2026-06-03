@@ -333,6 +333,43 @@ async def departments(admin: dict = Depends(require_module("support_tickets"))):
         raise _err(e) from e
 
 
+class CreateTicketRequest(BaseModel):
+    subject: str = Field(..., min_length=1)
+    description: str = ""
+    email: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    phone: Optional[str] = None
+    priority: Optional[str] = None
+    channel: str = "Web"
+    category: Optional[str] = None
+    department_id: Optional[str] = None
+
+
+@router.post("/tickets")
+async def create_ticket(
+    payload: CreateTicketRequest,
+    admin: dict = Depends(require_module("support_tickets")),
+):
+    try:
+        result = await zoho.create_ticket(
+            subject=payload.subject,
+            description=payload.description,
+            department_id=payload.department_id,
+            email=payload.email,
+            first_name=payload.first_name,
+            last_name=payload.last_name,
+            phone=payload.phone,
+            priority=payload.priority,
+            channel=payload.channel,
+            category=payload.category,
+        )
+    except ZohoDeskError as e:
+        raise _err(e) from e
+    await log_admin_action(admin, "zoho_desk_ticket_created", "zoho_desk_ticket", str(result.get("id") or ""), None)
+    return result
+
+
 @router.get("/tickets")
 async def tickets(
     from_index: int = Query(1, ge=1, alias="from"),
@@ -373,6 +410,16 @@ async def ticket_detail(ticket_id: str, admin: dict = Depends(require_module("su
 async def ticket_threads(ticket_id: str, admin: dict = Depends(require_module("support_tickets"))):
     try:
         return await zoho.get_ticket_threads(ticket_id)
+    except ZohoDeskError as e:
+        raise _err(e) from e
+
+
+@router.get("/tickets/{ticket_id}/threads/{thread_id}")
+async def ticket_thread_detail(
+    ticket_id: str, thread_id: str, admin: dict = Depends(require_module("support_tickets"))
+):
+    try:
+        return await zoho.get_thread(ticket_id, thread_id)
     except ZohoDeskError as e:
         raise _err(e) from e
 
@@ -435,6 +482,9 @@ class TicketUpdate(BaseModel):
     priority: Optional[str] = None
     assigneeId: Optional[str] = None
     departmentId: Optional[str] = None
+    category: Optional[str] = None
+    subCategory: Optional[str] = None
+    classification: Optional[str] = None
 
 
 @router.patch("/tickets/{ticket_id}")
@@ -452,3 +502,33 @@ async def patch_ticket(
         raise _err(e) from e
     await log_admin_action(admin, "zoho_desk_ticket_updated", "zoho_desk_ticket", ticket_id, {"fields": list(fields)})
     return result
+
+
+class TicketTagsUpdate(BaseModel):
+    add: List[str] = Field(default_factory=list)
+    remove: List[str] = Field(default_factory=list)
+
+
+@router.post("/tickets/{ticket_id}/tags")
+async def update_ticket_tags(
+    ticket_id: str,
+    payload: TicketTagsUpdate,
+    admin: dict = Depends(require_module("support_tickets")),
+):
+    if not payload.add and not payload.remove:
+        raise HTTPException(status_code=400, detail="No tag changes supplied")
+    try:
+        if payload.remove:
+            await zoho.remove_tags(ticket_id, payload.remove)
+        if payload.add:
+            await zoho.add_tags(ticket_id, payload.add)
+    except ZohoDeskError as e:
+        raise _err(e) from e
+    await log_admin_action(
+        admin,
+        "zoho_desk_ticket_tags",
+        "zoho_desk_ticket",
+        ticket_id,
+        {"added": payload.add, "removed": payload.remove},
+    )
+    return {"ok": True}

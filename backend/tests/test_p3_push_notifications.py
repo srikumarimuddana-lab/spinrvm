@@ -488,6 +488,7 @@ class TestDispatchPushIsImmediate:
             patch("backend.features.db_supabase.find_one", AsyncMock(return_value=user_row)),
             patch("backend.features._deliver_push_now", AsyncMock(return_value=False)),
             patch("backend.utils.push_retry.enqueue_push", AsyncMock(side_effect=_enqueue)),
+            patch("utils.push_retry.enqueue_push", AsyncMock(side_effect=_enqueue)),
         ):
             from backend import features as features_mod
 
@@ -547,6 +548,7 @@ class TestDispatchPushIsImmediate:
                 AsyncMock(side_effect=RuntimeError("supabase read timeout")),
             ),
             patch("backend.utils.push_retry.enqueue_push", AsyncMock(side_effect=_enqueue)),
+            patch("utils.push_retry.enqueue_push", AsyncMock(side_effect=_enqueue)),
         ):
             from backend import features as features_mod
 

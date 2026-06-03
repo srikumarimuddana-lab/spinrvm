@@ -24,6 +24,42 @@ _TABLE = "zoho_desk_tickets"
 _PAGE = 1000  # Supabase per-request row cap
 
 
+async def mirror_ready() -> bool:
+    """True only after a full backfill has completed — until then reads are
+    served live so a partially-seeded mirror never hides historical tickets or
+    reports wrong totals."""
+    if not db_supabase.supabase:
+        return False
+    try:
+        cfg = await db_supabase.find_one("zoho_desk_config", {"id": "default"})
+        return bool(cfg and cfg.get("mirror_backfilled"))
+    except Exception:
+        return False
+
+
+async def open_closed_counts(department_id: Optional[str]) -> Optional[Tuple[int, int]]:
+    """Exact (total, closed) using `status_type` so custom closed statuses
+    (e.g. 'Resolved') count as closed — not just the literal 'Closed' label."""
+    if not db_supabase.supabase:
+        return None
+
+    def _count(closed: bool):
+        q = db_supabase.supabase.table(_TABLE).select("zoho_id", count="exact").limit(1)
+        if department_id:
+            q = q.eq("department_id", department_id)
+        if closed:
+            q = q.eq("status_type", "Closed")
+        return getattr(q.execute(), "count", 0) or 0
+
+    try:
+        total = await db_supabase.run_sync(lambda: _count(False))
+        closed = await db_supabase.run_sync(lambda: _count(True))
+        return total, closed
+    except Exception as e:
+        logger.warning("Zoho mirror open/closed count failed: %s", e)
+        return None
+
+
 async def mirror_count() -> Optional[int]:
     """Total rows in the mirror, or None if the table is unavailable."""
     if not db_supabase.supabase:

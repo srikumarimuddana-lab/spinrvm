@@ -375,6 +375,48 @@ async def test_support_escalation(monkeypatch):
     assert created.call_args.kwargs["subject"].startswith("Support — Card declined")
 
 
+@pytest.mark.anyio
+async def test_complaint_and_safety_autocreate(monkeypatch):
+    import services.zoho_desk_integration as integ
+
+    db = MagicMock()
+    db.find_one = AsyncMock(return_value={"id": "default", "enabled": True})
+    db.update_one = AsyncMock()
+    monkeypatch.setattr(integ, "db_supabase", db)
+    created = AsyncMock(return_value={"id": "zt1"})
+    monkeypatch.setattr(integ.zoho, "create_ticket", created)
+
+    await integ.create_ticket_for_safety(
+        {"id": "s1", "category": "assault", "role": "rider", "reported_by_user_id": None}
+    )
+    assert created.call_args.kwargs["category"] == "Safety"
+    assert created.call_args.kwargs["priority"] == "Urgent"
+    db.update_one.assert_awaited()  # linked back to safety_incidents
+
+
+@pytest.mark.anyio
+async def test_reverse_close_links(monkeypatch):
+    import services.zoho_desk_integration as integ
+
+    db = MagicMock()
+    # complaints has one open row linked to a closed ticket; flags one active row
+    async def _get_rows(table, *a, **k):
+        if table == "complaints":
+            return [{"id": "c1", "status": "open", "zoho_ticket_id": "zt1"}]
+        if table == "flags":
+            return [{"id": "f1", "is_active": True, "zoho_ticket_id": "zt1"}]
+        return []
+
+    db.get_rows = AsyncMock(side_effect=_get_rows)
+    db.update_one = AsyncMock()
+    monkeypatch.setattr(integ, "db_supabase", db)
+
+    await integ.close_linked_records(["zt1"])
+    calls = {c.args[0]: c.args[2] for c in db.update_one.call_args_list}
+    assert calls["complaints"]["status"] == "resolved"
+    assert calls["flags"] == {"is_active": False}
+
+
 def test_parse_zoho_time_window():
     # Codex P2: the trends `days` selector must actually filter by created
     # time. The route helper parses Zoho timestamps; unparseable -> None.

@@ -24,7 +24,7 @@ References: https://desk.zoho.com/DeskAPIDocument
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -271,10 +271,74 @@ async def get_ticket(ticket_id: str) -> Dict[str, Any]:
     return await _request("GET", f"/api/v1/tickets/{ticket_id}", params={"include": "contacts,assignee,team"})
 
 
+async def get_default_department_id() -> Optional[str]:
+    """The admin-configured default department, used when a caller (e.g. an
+    app event creating a ticket) doesn't specify one."""
+    cfg = await _load_config()
+    return (cfg.get("default_department_id") or "").strip() or None
+
+
+async def create_ticket(
+    *,
+    subject: str,
+    description: str = "",
+    department_id: Optional[str] = None,
+    email: Optional[str] = None,
+    first_name: Optional[str] = None,
+    last_name: Optional[str] = None,
+    phone: Optional[str] = None,
+    priority: Optional[str] = None,
+    channel: str = "Web",
+    category: Optional[str] = None,
+    contact_id: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Create a Zoho Desk ticket. ``departmentId`` is required by Zoho — falls
+    back to the configured default. A contact is required: pass ``contact_id``
+    for an existing contact, or contact details to create/link inline."""
+    dept = department_id or await get_default_department_id()
+    if not dept:
+        raise ZohoDeskError(
+            "No department for the ticket. Set a default department in Help Desk settings.",
+            status=400,
+        )
+    body: Dict[str, Any] = {
+        "subject": subject or "(no subject)",
+        "departmentId": dept,
+        "description": description or "",
+        "channel": channel,
+    }
+    if priority:
+        body["priority"] = priority
+    if category:
+        body["category"] = category
+    if contact_id:
+        body["contactId"] = contact_id
+    else:
+        # Inline contact — Zoho creates/links it. lastName is required by Zoho
+        # for a contact, so synthesise one from the email if missing.
+        body["contact"] = {
+            "lastName": last_name or (email.split("@")[0] if email else "Customer"),
+            "firstName": first_name or "",
+            "email": email or "",
+            "phone": phone or "",
+        }
+    if extra:
+        body.update(extra)
+    return await _request("POST", "/api/v1/tickets", json_body=body)
+
+
 async def get_ticket_threads(ticket_id: str) -> Dict[str, Any]:
     """Conversation thread (replies + comments) for a ticket."""
     data = await _request("GET", f"/api/v1/tickets/{ticket_id}/conversations", params={"limit": 100})
     return data or {"data": []}
+
+
+async def get_thread(ticket_id: str, thread_id: str) -> Dict[str, Any]:
+    """Full content of a single email thread. The /conversations list only
+    returns a truncated `summary` per thread; the full `content`/`plainText`
+    lives on the individual thread resource."""
+    return await _request("GET", f"/api/v1/tickets/{ticket_id}/threads/{thread_id}")
 
 
 async def send_reply(
@@ -307,12 +371,32 @@ async def add_comment(ticket_id: str, *, content: str, is_public: bool = False) 
 
 async def update_ticket(ticket_id: str, fields: Dict[str, Any]) -> Dict[str, Any]:
     """PATCH a ticket. Callers pass only the Zoho fields they want changed
-    (status, priority, assigneeId, departmentId, etc.)."""
-    allowed = {"status", "priority", "assigneeId", "departmentId", "category", "subCategory"}
+    (status, priority, assigneeId, departmentId, category, classification...)."""
+    allowed = {
+        "status",
+        "priority",
+        "assigneeId",
+        "departmentId",
+        "category",
+        "subCategory",
+        "classification",
+    }
     payload = {k: v for k, v in fields.items() if k in allowed and v is not None}
     if not payload:
         raise ZohoDeskError("No updatable ticket fields supplied.", status=400)
     return await _request("PATCH", f"/api/v1/tickets/{ticket_id}", json_body=payload)
+
+
+async def add_tags(ticket_id: str, names: List[str]) -> Any:
+    """Associate tags (by name) with a ticket."""
+    body = {"tags": [{"name": n} for n in names if n]}
+    return await _request("POST", f"/api/v1/tickets/{ticket_id}/associateTag", json_body=body)
+
+
+async def remove_tags(ticket_id: str, names: List[str]) -> Any:
+    """Disassociate tags (by name) from a ticket."""
+    body = {"tags": [{"name": n} for n in names if n]}
+    return await _request("POST", f"/api/v1/tickets/{ticket_id}/disassociateTag", json_body=body)
 
 
 async def list_agents(limit: int = 100) -> Dict[str, Any]:

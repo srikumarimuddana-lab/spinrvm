@@ -80,6 +80,7 @@ class ZohoConfigUpdate(BaseModel):
     data_center: Optional[str] = None
     org_id: Optional[str] = None
     default_department_id: Optional[str] = None
+    default_from_email: Optional[str] = None
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
     refresh_token: Optional[str] = None
@@ -96,6 +97,7 @@ def _config_status(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "data_center": cfg.get("data_center") or "ca",
         "org_id": cfg.get("org_id") or "",
         "default_department_id": cfg.get("default_department_id") or "",
+        "default_from_email": cfg.get("default_from_email") or "",
         "has_client_id": _has("client_id"),
         "has_client_secret": _has("client_secret"),
         "has_refresh_token": _has("refresh_token"),
@@ -274,7 +276,7 @@ async def tickets(
     status: Optional[str] = Query(None),
     department_id: Optional[str] = Query(None),
     assignee_id: Optional[str] = Query(None),
-    sort_by: str = Query("-modifiedTime"),
+    sort_by: str = Query("-createdTime"),
     admin: dict = Depends(require_module("support_tickets")),
 ):
     dept = await _resolve_department(department_id)
@@ -319,8 +321,22 @@ async def reply_ticket(
     payload: ReplyRequest,
     admin: dict = Depends(require_module("support_tickets")),
 ):
+    # EMAIL replies need a configured portal from-address or Zoho rejects them.
+    cfg = await db_supabase.find_one(_CONFIG_TABLE, {"id": _CONFIG_ID}) or {}
+    from_email = (cfg.get("default_from_email") or "").strip() or None
+    if payload.channel.upper() == "EMAIL" and not from_email:
+        raise HTTPException(
+            status_code=400,
+            detail="No reply-from email configured. Set a default reply-from address in Help Desk settings.",
+        )
     try:
-        result = await zoho.send_reply(ticket_id, content=payload.content, to=payload.to, channel=payload.channel)
+        result = await zoho.send_reply(
+            ticket_id,
+            content=payload.content,
+            to=payload.to,
+            from_email=from_email,
+            channel=payload.channel,
+        )
     except ZohoDeskError as e:
         raise _err(e) from e
     await log_admin_action(admin, "zoho_desk_ticket_reply", "zoho_desk_ticket", ticket_id, {"channel": payload.channel})

@@ -46,6 +46,7 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
     const [dataCenter, setDataCenter] = useState("ca");
     const [orgId, setOrgId] = useState("");
     const [departmentId, setDepartmentId] = useState("");
+    const [fromEmail, setFromEmail] = useState("");
     const [clientId, setClientId] = useState("");
     const [clientSecret, setClientSecret] = useState("");
     const [refreshToken, setRefreshToken] = useState("");
@@ -58,6 +59,7 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
             setDataCenter(s.data_center || "ca");
             setOrgId(s.org_id || "");
             setDepartmentId(s.default_department_id || "");
+            setFromEmail(s.default_from_email || "");
         } catch {
             toast({ title: "Failed to load Zoho config", variant: "destructive" });
         } finally {
@@ -78,6 +80,7 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
                 data_center: dataCenter,
                 org_id: orgId,
                 default_department_id: departmentId,
+                default_from_email: fromEmail,
             };
             // Only send secrets the admin actually typed.
             if (clientId.trim()) body.client_id = clientId.trim();
@@ -158,6 +161,18 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
                     <div className="space-y-1">
                         <Label>Default Department ID (optional)</Label>
                         <Input value={departmentId} onChange={(e) => setDepartmentId(e.target.value)} />
+                    </div>
+                    <div className="space-y-1">
+                        <Label>Reply-from email</Label>
+                        <Input
+                            type="email"
+                            value={fromEmail}
+                            onChange={(e) => setFromEmail(e.target.value)}
+                            placeholder="support@spinr.ca"
+                        />
+                        <p className="text-xs text-muted-foreground">
+                            Must be a verified support address in your Zoho Desk portal. Required to send email replies.
+                        </p>
                     </div>
                 </div>
 

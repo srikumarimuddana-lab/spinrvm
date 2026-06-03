@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="560" viewBox="0 0 1000 560">
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#FFFFFF"/>
+      <stop offset="62%" stop-color="#FAFBFC"/>
+      <stop offset="100%" stop-color="#E9ECF1"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="0.15" y2="1">
+      <stop offset="0%"  stop-color="#5C6B7A"/>
+      <stop offset="100%" stop-color="#2B3742"/>
+    </linearGradient>
+    <linearGradient id="redband" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#EE2B2B"/>
+      <stop offset="100%" stop-color="#C81E26"/>
+    </linearGradient>
+    <radialGradient id="rim" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0%"  stop-color="#FFFFFF"/>
+      <stop offset="55%" stop-color="#C9CED6"/>
+      <stop offset="100%" stop-color="#9AA0AB"/>
+    </radialGradient>
+    <radialGradient id="ground" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0%"  stop-color="rgba(20,24,31,0.22)"/>
+      <stop offset="70%" stop-color="rgba(20,24,31,0.10)"/>
+      <stop offset="100%" stop-color="rgba(20,24,31,0)"/>
+    </radialGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="rgba(255,255,255,0.9)"/>
+      <stop offset="100%" stop-color="rgba(255,255,255,0)"/>
+    </linearGradient>
+  </defs>
+  <ellipse cx="500" cy="476" rx="402" ry="40" fill="url(#ground)"/>
+
+  <g>
+    <!-- main body -->
+    <path d="M 96 392
+             C 104 352, 150 338, 214 330
+             L 300 256 C 318 238, 348 230, 388 228
+             L 612 228 C 660 228, 690 240, 712 268
+             L 770 332 C 836 338, 884 352, 902 378
+             C 912 392, 910 414, 902 428
+             L 96 428 C 90 414, 90 404, 96 392 Z"
+          fill="url(#body)" stroke="#D5D9E0" stroke-width="2"/>
+    <!-- greenhouse / glass -->
+    <path d="M 318 256 C 332 244, 356 240, 392 240
+             L 604 240 C 642 240, 666 250, 684 272
+             L 720 318 L 300 318 Z"
+          fill="url(#glass)"/>
+    <!-- B-pillar + door split -->
+    <line x1="506" y1="240" x2="506" y2="318" stroke="rgba(255,255,255,0.35)" stroke-width="6"/>
+    <line x1="500" y1="330" x2="500" y2="420" stroke="#D5D9E0" stroke-width="2"/>
+    <!-- red brand beltline + lower rocker accent -->
+    <line x1="118" y1="372" x2="884" y2="372" stroke="#EE2B2B" stroke-width="14" stroke-linecap="round"/><line x1="126" y1="380.7" x2="876" y2="380.7" stroke="#A3161D" stroke-width="3" stroke-linecap="round" opacity="0.7"/>
+    <line x1="240" y1="416" x2="772" y2="416" stroke="#EE2B2B" stroke-width="7" stroke-linecap="round" opacity="0.9"/>
+    <!-- door handles -->
+    <rect x="430" y="350" width="34" height="9" rx="4.5" fill="#C7CDD6"/>
+    <rect x="556" y="350" width="34" height="9" rx="4.5" fill="#C7CDD6"/>
+    <!-- roof sheen -->
+    <path d="M 330 246 C 360 240, 600 240, 676 268 L 660 252 C 600 244, 360 244, 340 250 Z"
+          fill="url(#sheen)" opacity="0.7"/>
+    <g><path d="M 296 318 q -22 -2 -30 12 q -2 8 8 9 l 22 -3 Z" fill="#EE2B2B" stroke="#C81E26" stroke-width="1.5"/><path d="M 270 332 l 8 7" stroke="#A3161D" stroke-width="3" stroke-linecap="round"/></g>
+    <!-- lights -->
+    <path d="M 96 392 C 92 396, 92 408, 100 410 L 132 408 L 132 386 L 104 386 Z" fill="#F4F6F8"/>
+    <rect x="100" y="392" width="30" height="12" rx="4" fill="#EAF6FF"/>
+    <path d="M 902 384 L 872 384 L 872 406 L 900 406 C 906 402, 906 388, 902 384 Z" fill="#EE2B2B"/>
+  </g>
+  <g>
+    <circle cx="300" cy="412" r="60" fill="#23262C"/>
+    <circle cx="300" cy="412" r="60" fill="none" stroke="#0E1014" stroke-width="2"/>
+    <circle cx="300" cy="412" r="37.2" fill="url(#rim)"/>
+    <line x1="300.0" y1="412.0" x2="300.0" y2="384.4" stroke="#9AA0AB" stroke-width="7.8" stroke-linecap="round"/><line x1="300.0" y1="412.0" x2="326.2" y2="403.5" stroke="#9AA0AB" stroke-width="7.8" stroke-linecap="round"/><line x1="300.0" y1="412.0" x2="316.2" y2="434.3" stroke="#9AA0AB" stroke-width="7.8" stroke-linecap="round"/><line x1="300.0" y1="412.0" x2="283.8" y2="434.3" stroke="#9AA0AB" stroke-width="7.8" stroke-linecap="round"/><line x1="300.0" y1="412.0" x2="273.8" y2="403.5" stroke="#9AA0AB" stroke-width="7.8" stroke-linecap="round"/>
+    <circle cx="300" cy="412" r="9.6" fill="#9AA0AB"/>
+    <circle cx="300" cy="412" r="9.6" fill="none" stroke="#7C828D" stroke-width="2"/>
+  </g>
+  <g>
+    <circle cx="712" cy="412" r="60" fill="#23262C"/>
+    <circle cx="712" cy="412" r="60" fill="none" stroke="#0E1014" stroke-width="2"/>
+    <circle cx="712" cy="412" r="37.2" fill="url(#rim)"/>
+    <line x1="712.0" y1="412.0" x2="712.0" y2="384.4" stroke="#9AA0AB" stroke-width="7.8" stroke-linecap="round"/><line x1="712.0" y1="412.0" x2="738.2" y2="403.5" stroke="#9AA0AB" stroke-width="7.8" stroke-linecap="round"/><line x1="712.0" y1="412.0" x2="728.2" y2="434.3" stroke="#9AA0AB" stroke-width="7.8" stroke-linecap="round"/><line x1="712.0" y1="412.0" x2="695.8" y2="434.3" stroke="#9AA0AB" stroke-width="7.8" stroke-linecap="round"/><line x1="712.0" y1="412.0" x2="685.8" y2="403.5" stroke="#9AA0AB" stroke-width="7.8" stroke-linecap="round"/>
+    <circle cx="712" cy="412" r="9.6" fill="#9AA0AB"/>
+    <circle cx="712" cy="412" r="9.6" fill="none" stroke="#7C828D" stroke-width="2"/>
+  </g>
+  <g fill="none" stroke="rgba(20,24,31,0.18)" stroke-width="3">
+    <path d="M 234 412 A 66 66 0 0 1 366 412"/>
+    <path d="M 646 412 A 66 66 0 0 1 778 412"/>
+  </g>
+</svg>

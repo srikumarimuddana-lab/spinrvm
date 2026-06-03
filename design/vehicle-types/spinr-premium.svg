@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="560" viewBox="0 0 1000 560">
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"  stop-color="#FFFFFF"/>
+      <stop offset="62%" stop-color="#FAFBFC"/>
+      <stop offset="100%" stop-color="#E9ECF1"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="0.15" y2="1">
+      <stop offset="0%"  stop-color="#5C6B7A"/>
+      <stop offset="100%" stop-color="#2B3742"/>
+    </linearGradient>
+    <linearGradient id="redband" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#EE2B2B"/>
+      <stop offset="100%" stop-color="#C81E26"/>
+    </linearGradient>
+    <radialGradient id="rim" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0%"  stop-color="#FFFFFF"/>
+      <stop offset="55%" stop-color="#C9CED6"/>
+      <stop offset="100%" stop-color="#9AA0AB"/>
+    </radialGradient>
+    <radialGradient id="ground" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0%"  stop-color="rgba(20,24,31,0.22)"/>
+      <stop offset="70%" stop-color="rgba(20,24,31,0.10)"/>
+      <stop offset="100%" stop-color="rgba(20,24,31,0)"/>
+    </radialGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="rgba(255,255,255,0.9)"/>
+      <stop offset="100%" stop-color="rgba(255,255,255,0)"/>
+    </linearGradient>
+  </defs>
+  <ellipse cx="500" cy="476" rx="402" ry="40" fill="url(#ground)"/>
+
+  <g>
+    <path d="M 88 396
+             C 96 350, 150 336, 220 330
+             L 322 250 C 344 232, 378 224, 420 223
+             L 600 223 C 652 223, 686 236, 706 266
+             L 772 330 C 846 336, 896 352, 912 380
+             C 920 394, 916 416, 906 430
+             L 88 430 C 82 416, 82 408, 88 396 Z"
+          fill="url(#body)" stroke="#D5D9E0" stroke-width="2"/>
+    <path d="M 336 250 C 352 238, 380 234, 422 234
+             L 592 234 C 636 234, 660 244, 678 268
+             L 716 314 L 312 314 Z"
+          fill="url(#glass)"/>
+    <line x1="500" y1="234" x2="500" y2="314" stroke="rgba(255,255,255,0.35)" stroke-width="6"/>
+    <line x1="494" y1="326" x2="494" y2="422" stroke="#D5D9E0" stroke-width="2"/>
+    <!-- bold red beltline + a fine red roof-line for the premium two-tone feel -->
+    <line x1="110" y1="366" x2="898" y2="366" stroke="#EE2B2B" stroke-width="15" stroke-linecap="round"/><line x1="118" y1="375.3" x2="890" y2="375.3" stroke="#A3161D" stroke-width="3" stroke-linecap="round" opacity="0.7"/>
+    <line x1="356" y1="230" x2="676" y2="230" stroke="#EE2B2B" stroke-width="5" stroke-linecap="round" opacity="0.85"/>
+    <line x1="150" y1="408" x2="858" y2="408" stroke="#C81E26" stroke-width="5" stroke-linecap="round" opacity="0.7"/>
+    <rect x="408" y="346" width="40" height="9" rx="4.5" fill="#C7CDD6"/>
+    <rect x="548" y="346" width="40" height="9" rx="4.5" fill="#C7CDD6"/>
+    <path d="M 344 240 C 380 234, 590 234, 670 264 L 652 248 C 590 238, 380 238, 354 244 Z"
+          fill="url(#sheen)" opacity="0.75"/>
+    <g><path d="M 312 312 q -22 -2 -30 12 q -2 8 8 9 l 22 -3 Z" fill="#EE2B2B" stroke="#C81E26" stroke-width="1.5"/><path d="M 286 326 l 8 7" stroke="#A3161D" stroke-width="3" stroke-linecap="round"/></g>
+    <rect x="92" y="392" width="34" height="13" rx="4" fill="#EAF6FF"/>
+    <path d="M 912 384 L 876 384 L 876 406 L 908 408 C 916 404, 916 388, 912 384 Z" fill="#EE2B2B"/>
+  </g>
+  <g>
+    <circle cx="296" cy="414" r="62" fill="#23262C"/>
+    <circle cx="296" cy="414" r="62" fill="none" stroke="#0E1014" stroke-width="2"/>
+    <circle cx="296" cy="414" r="38.4" fill="url(#rim)"/>
+    <line x1="296.0" y1="414.0" x2="296.0" y2="385.5" stroke="#9AA0AB" stroke-width="8.1" stroke-linecap="round"/><line x1="296.0" y1="414.0" x2="323.1" y2="405.2" stroke="#9AA0AB" stroke-width="8.1" stroke-linecap="round"/><line x1="296.0" y1="414.0" x2="312.8" y2="437.1" stroke="#9AA0AB" stroke-width="8.1" stroke-linecap="round"/><line x1="296.0" y1="414.0" x2="279.2" y2="437.1" stroke="#9AA0AB" stroke-width="8.1" stroke-linecap="round"/><line x1="296.0" y1="414.0" x2="268.9" y2="405.2" stroke="#9AA0AB" stroke-width="8.1" stroke-linecap="round"/>
+    <circle cx="296" cy="414" r="9.9" fill="#9AA0AB"/>
+    <circle cx="296" cy="414" r="9.9" fill="none" stroke="#7C828D" stroke-width="2"/>
+  </g>
+  <g>
+    <circle cx="724" cy="414" r="62" fill="#23262C"/>
+    <circle cx="724" cy="414" r="62" fill="none" stroke="#0E1014" stroke-width="2"/>
+    <circle cx="724" cy="414" r="38.4" fill="url(#rim)"/>
+    <line x1="724.0" y1="414.0" x2="724.0" y2="385.5" stroke="#9AA0AB" stroke-width="8.1" stroke-linecap="round"/><line x1="724.0" y1="414.0" x2="751.1" y2="405.2" stroke="#9AA0AB" stroke-width="8.1" stroke-linecap="round"/><line x1="724.0" y1="414.0" x2="740.8" y2="437.1" stroke="#9AA0AB" stroke-width="8.1" stroke-linecap="round"/><line x1="724.0" y1="414.0" x2="707.2" y2="437.1" stroke="#9AA0AB" stroke-width="8.1" stroke-linecap="round"/><line x1="724.0" y1="414.0" x2="696.9" y2="405.2" stroke="#9AA0AB" stroke-width="8.1" stroke-linecap="round"/>
+    <circle cx="724" cy="414" r="9.9" fill="#9AA0AB"/>
+    <circle cx="724" cy="414" r="9.9" fill="none" stroke="#7C828D" stroke-width="2"/>
+  </g>
+  <g fill="none" stroke="rgba(20,24,31,0.18)" stroke-width="3">
+    <path d="M 228 414 A 68 68 0 0 1 364 414"/>
+    <path d="M 656 414 A 68 68 0 0 1 792 414"/>
+  </g>
+</svg>

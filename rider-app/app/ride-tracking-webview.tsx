@@ -12,11 +12,17 @@ import type { ThemeColors } from '@shared/theme/index';
 import { TrackBaseUrlContext } from './_layout';
 
 // Hosts that are allowed to load inside the in-app WebView.
-// spinr-track.app is the Spinr-controlled live-tracking domain; the backend's
-// app_settings.track_base_url is validated against this same set at render time.
-// Any other origin — including attacker-controlled deep-link injections — is
-// rejected with an error state before the WebView loads.
-const ALLOWED_TRACKING_HOSTS = new Set(['spinr-track.app', 'www.spinr-track.app']);
+// track.spinr.ca is the current Spinr-controlled live-tracking domain;
+// spinr-track.app is kept for backward compatibility with links already
+// sent out before the domain move. The backend's app_settings.track_base_url
+// must resolve to one of these. Any other origin — including
+// attacker-controlled deep-link injections — is rejected with an error
+// state before the WebView loads.
+const ALLOWED_TRACKING_HOSTS = new Set([
+  'track.spinr.ca',
+  'spinr-track.app',
+  'www.spinr-track.app',
+]);
 
 function isAllowedTrackingUrl(raw: string): boolean {
   try {

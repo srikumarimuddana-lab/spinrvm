@@ -219,7 +219,11 @@ export default function TrackRide() {
     upsertMarker(dropoffMarkerRef, ride.dropoff_lat, ride.dropoff_lng, dropoffPinSvg, 36);
 
     const d = ride.driver;
-    upsertMarker(driverMarkerRef, d?.lat, d?.lng, carSvg, 52, 2);
+    // Args: (ref, lat, lng, svgUrl, size, centerAnchor, zIndex).
+    // centerAnchor MUST be the 6th arg (a boolean) — passing zIndex here
+    // directly is a type error and breaks the Vercel build. The car is a
+    // round puck so it centre-anchors on the driver's GPS position.
+    upsertMarker(driverMarkerRef, d?.lat, d?.lng, carSvg, 52, true, 2);
 
     // Pan to driver after initial fit.
     if (d?.lat != null && didFitRef.current) {

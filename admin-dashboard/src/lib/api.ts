@@ -2334,11 +2334,11 @@ export const testZohoConnection = () =>
         method: "POST",
     });
 
-export const getTicketDashboard = (departmentId?: string) => {
+export const getDeskDashboard = (departmentId?: string) => {
     const qs = departmentId ? `?department_id=${encodeURIComponent(departmentId)}` : "";
     return request<ZohoDashboard>(`/api/admin/support-tickets/dashboard${qs}`);
 };
-export const getTicketTrends = (opts?: { days?: number; departmentId?: string }) => {
+export const getDeskTrends = (opts?: { days?: number; departmentId?: string }) => {
     const sp = new URLSearchParams();
     if (opts?.days) sp.set("days", String(opts.days));
     if (opts?.departmentId) sp.set("department_id", opts.departmentId);
@@ -2346,7 +2346,7 @@ export const getTicketTrends = (opts?: { days?: number; departmentId?: string })
     return request<ZohoTrends>(`/api/admin/support-tickets/trends${qs ? `?${qs}` : ""}`);
 };
 
-export const getTickets = (opts?: {
+export const getDeskTickets = (opts?: {
     from?: number;
     limit?: number;
     status?: string;
@@ -2364,21 +2364,21 @@ export const getTickets = (opts?: {
     const qs = sp.toString();
     return request<ZohoTicketsResponse>(`/api/admin/support-tickets/tickets${qs ? `?${qs}` : ""}`);
 };
-export const getTicket = (id: string) =>
+export const getDeskTicket = (id: string) =>
     request<any>(`/api/admin/support-tickets/tickets/${id}`);
-export const getTicketThreads = (id: string) =>
+export const getDeskTicketThreads = (id: string) =>
     request<ZohoTicketsResponse>(`/api/admin/support-tickets/tickets/${id}/threads`);
-export const replyTicket = (id: string, body: { content: string; to?: string; channel?: string }) =>
+export const replyDeskTicket = (id: string, body: { content: string; to?: string; channel?: string }) =>
     request<any>(`/api/admin/support-tickets/tickets/${id}/reply`, {
         method: "POST",
         body: JSON.stringify(body),
     });
-export const commentTicket = (id: string, body: { content: string; is_public?: boolean }) =>
+export const commentDeskTicket = (id: string, body: { content: string; is_public?: boolean }) =>
     request<any>(`/api/admin/support-tickets/tickets/${id}/comment`, {
         method: "POST",
         body: JSON.stringify(body),
     });
-export const updateTicket = (
+export const updateDeskTicket = (
     id: string,
     body: { status?: string; priority?: string; assigneeId?: string; departmentId?: string },
 ) =>
@@ -2386,7 +2386,7 @@ export const updateTicket = (
         method: "PATCH",
         body: JSON.stringify(body),
     });
-export const getTicketAgents = () =>
+export const getDeskAgents = () =>
     request<ZohoTicketsResponse>("/api/admin/support-tickets/agents");
-export const getTicketDepartments = () =>
+export const getDeskDepartments = () =>
     request<ZohoTicketsResponse>("/api/admin/support-tickets/departments");

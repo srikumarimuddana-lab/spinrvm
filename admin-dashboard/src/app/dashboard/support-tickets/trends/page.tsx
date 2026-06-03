@@ -17,7 +17,7 @@ import {
     Tooltip,
     Legend,
 } from "recharts";
-import { getTicketTrends, ZohoTrends } from "@/lib/api";
+import { getDeskTrends, ZohoTrends } from "@/lib/api";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -47,7 +47,7 @@ export default function TrendsPage() {
         setLoading(true);
         setError(null);
         try {
-            setData(await getTicketTrends({ days: Number(days) }));
+            setData(await getDeskTrends({ days: Number(days) }));
         } catch (e: any) {
             setError(e?.message || "Failed to load trends");
         } finally {

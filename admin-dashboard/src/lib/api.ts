@@ -2390,6 +2390,8 @@ export const getDeskTicket = (id: string) =>
     request<any>(`/api/admin/support-tickets/tickets/${id}`);
 export const getDeskTicketThreads = (id: string) =>
     request<ZohoTicketsResponse>(`/api/admin/support-tickets/tickets/${id}/threads`);
+export const getDeskThread = (ticketId: string, threadId: string) =>
+    request<any>(`/api/admin/support-tickets/tickets/${ticketId}/threads/${threadId}`);
 export const replyDeskTicket = (id: string, body: { content: string; to?: string; channel?: string }) =>
     request<any>(`/api/admin/support-tickets/tickets/${id}/reply`, {
         method: "POST",
@@ -2402,10 +2404,23 @@ export const commentDeskTicket = (id: string, body: { content: string; is_public
     });
 export const updateDeskTicket = (
     id: string,
-    body: { status?: string; priority?: string; assigneeId?: string; departmentId?: string },
+    body: {
+        status?: string;
+        priority?: string;
+        assigneeId?: string;
+        departmentId?: string;
+        category?: string;
+        subCategory?: string;
+        classification?: string;
+    },
 ) =>
     request<any>(`/api/admin/support-tickets/tickets/${id}`, {
         method: "PATCH",
+        body: JSON.stringify(body),
+    });
+export const updateDeskTicketTags = (id: string, body: { add?: string[]; remove?: string[] }) =>
+    request<{ ok: boolean }>(`/api/admin/support-tickets/tickets/${id}/tags`, {
+        method: "POST",
         body: JSON.stringify(body),
     });
 export const getDeskAgents = () =>

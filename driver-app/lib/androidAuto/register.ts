@@ -9,17 +9,16 @@
 // - registerAutoPlay() must be called at JS bundle load (from index.js): Android
 //   Auto can launch the JS context car-only, where the phone route layout never
 //   mounts. We act only on HybridAutoPlay 'didConnect'.
-// - Two car surfaces, chosen by ride state:
-//     * navigating_to_pickup / arrived_at_pickup / trip_in_progress → MapTemplate
-//       with the stored route drawn on the surface (carSurface.tsx) and nav
-//       hand-off buttons (Google / Waze) that launch live turn-by-turn.
-//     * everything else (idle / ride_offered / trip_completed) → InformationTemplate
-//       status screen (a Pane on Android) from the buildCarScreen model.
-//   The map shows the route we ALREADY stored at ride creation, so there is no
-//   live Routes/Directions API spend.
+// - ONE car surface: a live MapTemplate shown in every ride state. carSurface.tsx
+//   always draws the driver's current location (a car marker) so the idle car
+//   screen is a useful map, not a blank status pane, and overlays the stored
+//   route + destination during a ride. The map shows the route we ALREADY stored
+//   at ride creation, so there is no live Routes/Directions API spend.
+// - Map buttons (the only interaction Android Auto allows on the surface): zoom
+//   out / zoom in in every state, plus Google / Waze turn-by-turn hand-off
+//   buttons while navigating.
 import { Linking, Platform } from 'react-native';
 import { useDriverStore } from '../../store/driverStore';
-import { buildCarScreen, type CarRow } from './carScreen';
 import {
   buildHandoffUrl,
   defaultNavButtons,
@@ -27,28 +26,21 @@ import {
   type NavProvider,
 } from './carRoute';
 import { CarMapSurface } from './carSurface';
+import { useCarMapCamera } from './carMapCamera';
 
 const NAV_TEMPLATE_ID = 'spinr-aa-nav';
-const INFO_TEMPLATE_ID = 'spinr-aa-info';
 
-// Map-button icon. iternio's AutoImage accepts a bundled asset; reuse the car
-// marker so the buttons render + are tappable. Swap for proper nav glyphs before
-// release (would need a registered icon font via setIconFont).
+// Map-button icons. iternio's AutoImage accepts a bundled asset. The nav-handoff
+// glyph still reuses the car marker (swap for proper nav glyphs before release);
+// the zoom glyphs are purpose-built +/- template icons.
 const NAV_ICON = require('../../assets/images/car_marker.png');
+const ZOOM_IN_ICON = require('../../assets/images/zoom_in.png');
+const ZOOM_OUT_ICON = require('../../assets/images/zoom_out.png');
 
 const log = (...args: unknown[]) => {
   if (__DEV__) console.log('[android-auto]', ...args);
 };
 const noop = () => {};
-
-// Map our neutral car-screen model onto iternio's TextRow shape.
-function toInformationItems(rows: CarRow[]) {
-  return rows.map((row) => ({
-    type: 'text' as const,
-    title: { text: row.text },
-    ...(row.detailText ? { detailedText: { text: row.detailText } } : {}),
-  }));
-}
 
 export default function registerAutoPlay(): void {
   if (Platform.OS !== 'android') {
@@ -57,7 +49,7 @@ export default function registerAutoPlay(): void {
 
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const autoPlay = require('@iternio/react-native-auto-play');
-  const { HybridAutoPlay, MapTemplate, InformationTemplate } = autoPlay;
+  const { HybridAutoPlay, MapTemplate } = autoPlay;
 
   // Android Auto: Google + Waze hand-off buttons (both ~always present).
   const navButtons = defaultNavButtons(Platform.OS);
@@ -81,10 +73,25 @@ export default function registerAutoPlay(): void {
     );
   };
 
+  // Zoom buttons drive the (non-interactive) surface through the shared camera
+  // store; carSurface.tsx reads `delta` and reframes the map.
+  const zoomButtons = [
+    {
+      type: 'custom' as const,
+      image: { type: 'asset' as const, image: ZOOM_OUT_ICON },
+      onPress: () => useCarMapCamera.getState().zoomOut(),
+    },
+    {
+      type: 'custom' as const,
+      image: { type: 'asset' as const, image: ZOOM_IN_ICON },
+      onPress: () => useCarMapCamera.getState().zoomIn(),
+    },
+  ];
+
   // Rebuild the root only when the displayed surface actually changes, not on
-  // every store tick (location updates fire constantly; setRootTemplate is
-  // comparatively expensive). The key folds in ride identity so a same-leg ride
-  // swap still re-centers the map.
+  // every store tick (location + zoom never round-trip through here — the surface
+  // reads them directly — so setRootTemplate fires only on a leg/ride change).
+  // The key folds in ride identity so a same-leg ride swap still re-centers.
   let lastKey: string | null = null;
 
   const apply = () => {
@@ -94,44 +101,32 @@ export default function registerAutoPlay(): void {
     const { rideState, activeRide } = useDriverStore.getState();
     const route = selectCarRoute(rideState, activeRide);
 
-    if (route) {
-      const rideId = (activeRide?.ride as { id?: string } | undefined)?.id ?? '';
-      const key = `map:${route.leg}:${rideId}`;
-      if (key === lastKey) return;
-      lastKey = key;
-      try {
-        const tpl = new MapTemplate({
-          id: NAV_TEMPLATE_ID,
-          component: CarMapSurface,
-          // We never run our own turn-by-turn; the system stop is a no-op.
-          onStopNavigation: noop,
-          mapButtons: navButtons.map((b) => ({
-            type: 'custom' as const,
-            image: { type: 'asset' as const, image: NAV_ICON },
-            onPress: () => handoffToNav(b.provider),
-          })),
-        });
-        tpl.setRootTemplate();
-      } catch (e) {
-        log('setRootTemplate (map) failed:', e);
-      }
-      return;
-    }
-
-    // Non-navigation states → status screen.
-    const model = buildCarScreen(rideState, activeRide);
-    const key = `info:${JSON.stringify(model)}`;
+    const rideId = (activeRide?.ride as { id?: string } | undefined)?.id ?? '';
+    const leg = route ? route.leg : 'idle';
+    const key = `map:${leg}:${rideId}`;
     if (key === lastKey) return;
     lastKey = key;
+
+    // Nav hand-off buttons only while navigating; zoom buttons in every state.
+    const navHandoffButtons = route
+      ? navButtons.map((b) => ({
+          type: 'custom' as const,
+          image: { type: 'asset' as const, image: NAV_ICON },
+          onPress: () => handoffToNav(b.provider),
+        }))
+      : [];
+
     try {
-      const tpl = new InformationTemplate({
-        id: INFO_TEMPLATE_ID,
-        title: { text: model.title },
-        items: toInformationItems(model.items) as never,
+      const tpl = new MapTemplate({
+        id: NAV_TEMPLATE_ID,
+        component: CarMapSurface,
+        // We never run our own turn-by-turn; the system stop is a no-op.
+        onStopNavigation: noop,
+        mapButtons: [...navHandoffButtons, ...zoomButtons],
       });
       tpl.setRootTemplate();
     } catch (e) {
-      log('setRootTemplate (info) failed:', e);
+      log('setRootTemplate (map) failed:', e);
     }
   };
 
@@ -139,6 +134,7 @@ export default function registerAutoPlay(): void {
 
   const onConnect = () => {
     lastKey = null; // force a fresh root on (re)connect
+    useCarMapCamera.getState().reset(); // start each session framed at the default zoom
     apply();
     if (!unsubscribe) {
       unsubscribe = useDriverStore.subscribe(apply);

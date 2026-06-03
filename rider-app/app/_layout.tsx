@@ -8,7 +8,7 @@ export const StripeKeyContext = React.createContext<string | null>(null);
 export const TrackBaseUrlContext = React.createContext<string | null>(null);
 import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { AppState, View, ActivityIndicator, StyleSheet, Text, Platform } from 'react-native';
+import { AppState, View, Text, Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StripeProvider } from '@stripe/stripe-react-native';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
@@ -25,7 +25,7 @@ import { useLocationStore } from '@shared/store/locationStore';
 import { useRideStore } from '../store/rideStore';
 import { useWorkProfileStore } from '../store/workProfileStore';
 import { useRiderSocket } from '../hooks/useRiderSocket';
-import SpinrConfig from '@shared/config/spinr.config';
+import BrandSplash from '../components/BrandSplash';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
 import { ThemeProvider, useTheme } from '@shared/theme/ThemeContext';
@@ -521,10 +521,7 @@ export default function RootLayout() {
   if (!fontsLoaded || fontError || !isAuthInitialized || !isLocationInitialized) {
     return (
       <ErrorBoundary>
-        <View style={styles.loadingContainer} onLayout={onLoadingLayout}>
-          <Text style={styles.logoText}>Spinr</Text>
-          <ActivityIndicator size="large" color="#FFFFFF" style={{ marginTop: 20 }} />
-        </View>
+        <BrandSplash onLayout={onLoadingLayout} />
       </ErrorBoundary>
     );
   }
@@ -655,16 +652,3 @@ function RootLayoutInner({
   );
 }
 
-const styles = StyleSheet.create({
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: SpinrConfig.theme.colors.primary,
-  },
-  logoText: {
-    fontSize: 56,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-});

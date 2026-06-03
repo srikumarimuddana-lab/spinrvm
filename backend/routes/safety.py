@@ -7,6 +7,7 @@ issue (weapon, assault, medical) also broadcasts to on-call admins
 over the admin WebSocket channel.
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -19,9 +20,11 @@ try:
     from .. import db_supabase
     from ..dependencies import get_current_user
     from ..features import notify_safety_team
+    from ..services.zoho_desk_integration import create_ticket_for_safety
 except ImportError:
     import db_supabase
     from dependencies import get_current_user
+    from services.zoho_desk_integration import create_ticket_for_safety
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +93,10 @@ async def submit_safety_report(
         f"[SAFETY] Incident {incident_id} reported by {user_role} {user_id} "
         f"category={body.category} ride_id={incident['ride_id']}"
     )
+
+    # Raise a Zoho Desk ticket (urgent) for the safety team — fire-and-forget,
+    # no-op when the integration is disabled; never blocks the report.
+    asyncio.create_task(create_ticket_for_safety(incident))
 
     # Notify the safety team — WS broadcast to admin dashboard + email
     # to the configured distribution list + CRITICAL log line for

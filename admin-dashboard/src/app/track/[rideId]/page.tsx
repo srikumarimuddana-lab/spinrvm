@@ -112,6 +112,7 @@ export default function TrackRide() {
       disableDefaultUI: true,
       zoomControl: true,
       gestureHandling: 'greedy',
+      mapId: process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID ?? 'DEMO_MAP_ID',
     });
 
     // Route gradient lines are created dynamically per-segment; nothing to
@@ -171,25 +172,46 @@ export default function TrackRide() {
         </svg>`
       )}`;
 
-    // Helper: create or move a marker.
+    // Helper: create or move an AdvancedMarkerElement.
+    // centerAnchor=true wraps the image in a zero-height div so the image
+    // center (not its bottom edge) lands on the map position — used for the
+    // circular car icon. Pin markers use the default bottom-center anchor so
+    // the teardrop tip naturally points at the location.
     const upsertMarker = (
       ref: React.MutableRefObject<G>,
       lat: number | undefined,
       lng: number | undefined,
-      iconUrl: string,
+      svgUrl: string,
       size: number,
+      centerAnchor = false,
       zIndex = 1,
     ) => {
       if (lat == null || lng == null) {
-        if (ref.current) { ref.current.setMap(null); ref.current = null; }
+        if (ref.current) { ref.current.map = null; ref.current = null; }
         return;
       }
       const pos = { lat, lng };
-      const icon = { url: iconUrl, scaledSize: new g.Size(size, size), anchor: new g.Point(size / 2, size / 2) };
       if (!ref.current) {
-        ref.current = new g.Marker({ map, position: pos, icon, zIndex });
+        const img = document.createElement('img');
+        img.src = svgUrl;
+        img.style.width = `${size}px`;
+        // height:auto preserves the SVG aspect ratio — the pin is taller than
+        // it is wide (34x46); the car is square so width===height there.
+        img.style.height = centerAnchor ? `${size}px` : 'auto';
+        img.style.display = 'block';
+        let content: HTMLElement = img;
+        if (centerAnchor) {
+          const wrapper = document.createElement('div');
+          wrapper.style.width = `${size}px`;
+          wrapper.style.height = '0';
+          wrapper.style.overflow = 'visible';
+          img.style.marginTop = `-${size / 2}px`;
+          wrapper.appendChild(img);
+          content = wrapper;
+        }
+        ref.current = new g.marker.AdvancedMarkerElement({ map, position: pos, content, zIndex });
       } else {
-        ref.current.setPosition(pos);
+        ref.current.position = pos;
       }
     };
 
@@ -321,7 +343,7 @@ export default function TrackRide() {
 
         {GMAPS_KEY ? (
           <Script
-            src={`https://maps.googleapis.com/maps/api/js?key=${GMAPS_KEY}&v=weekly`}
+            src={`https://maps.googleapis.com/maps/api/js?key=${GMAPS_KEY}&libraries=marker&loading=async&v=weekly`}
             strategy="afterInteractive"
             onLoad={() => setMapsReady(true)}
           />

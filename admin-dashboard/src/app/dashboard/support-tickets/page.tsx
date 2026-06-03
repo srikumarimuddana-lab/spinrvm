@@ -49,6 +49,11 @@ export default function HelpDeskPage() {
 
     if (!allowed) return null;
 
+    // Show the config form when the admin opens Settings, OR whenever we know
+    // the integration isn't connected (including when the config call errored,
+    // so the form is always reachable to set things up / fix credentials).
+    const showConfig = showSettings || connected !== true;
+
     return (
         <div className="space-y-6">
             <div className="flex items-center justify-between">
@@ -73,23 +78,23 @@ export default function HelpDeskPage() {
 
             {loading && <Card><CardContent className="p-6 text-muted-foreground">Loading…</CardContent></Card>}
 
-            {!loading && connected === false && (
-                <>
-                    <Card>
-                        <CardContent className="flex items-center gap-3 p-4 text-sm text-amber-700">
-                            <AlertCircle className="h-5 w-5" />
-                            Zoho Desk is not connected yet. Add your credentials below to enable the Help Desk.
-                        </CardContent>
-                    </Card>
-                    <ZohoConfigCard onSaved={() => loadDashboard()} />
-                </>
-            )}
-
-            {!loading && connected && showSettings && <ZohoConfigCard onSaved={() => loadDashboard()} />}
-
-            {!loading && connected && error && (
+            {/* Surface any load error regardless of connection state, so a missing
+                table / expired token / network failure is visible instead of a
+                blank page. */}
+            {!loading && error && (
                 <Card><CardContent className="p-4 text-sm text-red-600">{error}</CardContent></Card>
             )}
+
+            {!loading && connected === false && (
+                <Card>
+                    <CardContent className="flex items-center gap-3 p-4 text-sm text-amber-700">
+                        <AlertCircle className="h-5 w-5" />
+                        Zoho Desk is not connected yet. Add your credentials below to enable the Help Desk.
+                    </CardContent>
+                </Card>
+            )}
+
+            {!loading && showConfig && <ZohoConfigCard onSaved={() => loadDashboard()} />}
 
             {!loading && connected && data && (
                 <>

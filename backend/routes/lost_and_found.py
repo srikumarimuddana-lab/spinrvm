@@ -12,6 +12,7 @@ Endpoints:
     POST /lost-and-found/{case_id}/messages — send a chat message
 """
 
+import asyncio
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -24,10 +25,12 @@ try:
     from .. import db_supabase
     from ..dependencies import get_current_user
     from ..features import send_push_notification
+    from ..services.zoho_desk_integration import create_ticket_for_lost_and_found
 except ImportError:
     import db_supabase  # type: ignore
     from dependencies import get_current_user  # type: ignore
     from features import send_push_notification  # type: ignore
+    from services.zoho_desk_integration import create_ticket_for_lost_and_found  # type: ignore
 
 api_router = APIRouter(prefix="/lost-and-found", tags=["Lost & Found"])
 
@@ -221,6 +224,11 @@ async def driver_report_found_item(
             {"type": "lost_and_found", "case_id": case["id"]},
             target_app="rider",
         )
+
+    # Raise a Zoho Desk ticket for support to track the return — fire-and-forget
+    # so a Zoho hiccup never blocks or fails the driver's report. No-op when the
+    # integration is disabled.
+    asyncio.create_task(create_ticket_for_lost_and_found(case, ride))
 
     return {"success": True, "case": case}
 

@@ -175,8 +175,11 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
                         <Input type="password" value={refreshToken} onChange={(e) => setRefreshToken(e.target.value)} placeholder={status?.has_refresh_token ? "•••••• (unchanged)" : ""} />
                         <p className="text-xs text-muted-foreground">
                             Generate a self-client refresh token in the Zoho API console with the
-                            <code className="mx-1">Desk.tickets.ALL</code> and
+                            <code className="mx-1">Desk.tickets.ALL</code>,
+                            <code className="mx-1">Desk.search.READ</code>,
+                            <code className="mx-1">Desk.settings.READ</code> and
                             <code className="mx-1">Desk.basic.READ</code> scopes.
+                            <code className="ml-1">Desk.search.READ</code> is required for the dashboard ticket counts.
                         </p>
                     </div>
                 </div>

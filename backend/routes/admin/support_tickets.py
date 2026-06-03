@@ -14,7 +14,7 @@ GET /config returns presence flags, never the secrets themselves.
 
 import logging
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -37,17 +37,37 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/support-tickets", tags=["Admin Support Tickets"])
 
-# Default Zoho Desk status buckets surfaced on the dashboard. Zoho statuses
-# are configurable per-account; these are the out-of-the-box values and the
-# dashboard tolerates extras (they show up under by_status).
-_DASHBOARD_STATUSES = ["Open", "On Hold", "Escalated", "Closed"]
-
 _CONFIG_TABLE = "zoho_desk_config"
 _CONFIG_ID = "default"
 
 
 def _err(e: ZohoDeskError) -> HTTPException:
     return HTTPException(status_code=e.status, detail=str(e.message))
+
+
+async def _resolve_department(department_id: Optional[str]) -> Optional[str]:
+    """Fall back to the admin-configured default department when the caller
+    does not pass one explicitly, so a saved default actually scopes the
+    dashboard / trends / ticket list in multi-department accounts."""
+    if department_id:
+        return department_id
+    cfg = await db_supabase.find_one(_CONFIG_TABLE, {"id": _CONFIG_ID}) or {}
+    dep = (cfg.get("default_department_id") or "").strip()
+    return dep or None
+
+
+def _parse_zoho_time(value: str):
+    """Parse a Zoho ISO timestamp (e.g. '2026-06-01T12:00:00.000Z') to an
+    aware datetime, or None if unparseable."""
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 # --------------------------------------------------------------------------
@@ -148,21 +168,30 @@ async def dashboard(
     department_id: Optional[str] = Query(None),
     admin: dict = Depends(require_module("support_tickets")),
 ):
+    dept = await _resolve_department(department_id)
     try:
-        total = await zoho.ticket_count(department_id=department_id)
-        by_status: Dict[str, int] = {}
-        for status in _DASHBOARD_STATUSES:
-            by_status[status] = await zoho.ticket_count(status=status, department_id=department_id)
-        recent = await zoho.list_tickets(limit=10, department_id=department_id, sort_by="-createdTime")
+        # `total` is an accurate count from Zoho's /ticketsCount. The
+        # per-status breakdown is derived from a recent sample because
+        # /ticketsCount does not support a `status` filter and the REST tier
+        # has no generic group-by endpoint we can rely on across accounts.
+        total = await zoho.ticket_count(department_id=dept)
+        sample = await zoho.list_tickets(limit=100, department_id=dept, sort_by="-createdTime")
     except ZohoDeskError as e:
         raise _err(e) from e
 
-    open_count = by_status.get("Open", 0) + by_status.get("Escalated", 0) + by_status.get("On Hold", 0)
+    tickets: List[Dict[str, Any]] = (sample or {}).get("data", [])
+    by_status: Counter = Counter()
+    for t in tickets:
+        by_status[t.get("status") or "Unknown"] += 1
+
+    open_count = sum(c for s, c in by_status.items() if "closed" not in s.lower())
     return {
         "total": total,
         "open": open_count,
-        "by_status": by_status,
-        "recent": (recent or {}).get("data", []),
+        "by_status": dict(by_status),
+        "recent": tickets[:10],
+        "sample_size": len(tickets),
+        "approximate": len(tickets) >= 100,
     }
 
 
@@ -175,16 +204,22 @@ async def trends(
     """Time-series + breakdowns derived from the most recent tickets.
 
     Zoho's API does not expose a generic aggregate report endpoint on the
-    REST tier, so we aggregate the latest page of tickets client-side. This
-    is approximate for very high volumes (capped at 100 tickets) and is
-    clearly labelled as such in the UI.
+    REST tier, so we aggregate the latest page of tickets client-side, keeping
+    only those created within the selected window. This is approximate when
+    more than 100 tickets fall inside the window, and is labelled as such.
     """
+    dept = await _resolve_department(department_id)
     try:
-        page = await zoho.list_tickets(limit=100, department_id=department_id, sort_by="-createdTime")
+        page = await zoho.list_tickets(limit=100, department_id=dept, sort_by="-createdTime")
     except ZohoDeskError as e:
         raise _err(e) from e
 
-    tickets: List[Dict[str, Any]] = (page or {}).get("data", [])
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    raw: List[Dict[str, Any]] = (page or {}).get("data", [])
+    # Honor the requested window: drop tickets created before the cutoff so
+    # the Last 7/14/30/90-day selector produces the report it promises.
+    tickets = [t for t in raw if (_parse_zoho_time(t.get("createdTime") or "") or cutoff) >= cutoff]
+
     by_day: Counter = Counter()
     by_status: Counter = Counter()
     by_priority: Counter = Counter()
@@ -201,7 +236,9 @@ async def trends(
     volume = [{"date": d, "count": c} for d, c in sorted(by_day.items()) if d != "unknown"]
     return {
         "sample_size": len(tickets),
-        "approximate": len(tickets) >= 100,
+        # Approximate when the raw page was capped AND everything we fetched is
+        # inside the window (i.e. there may be more we didn't see).
+        "approximate": len(raw) >= 100 and len(tickets) == len(raw),
         "volume": volume,
         "by_status": dict(by_status),
         "by_priority": dict(by_priority),
@@ -240,12 +277,13 @@ async def tickets(
     sort_by: str = Query("-modifiedTime"),
     admin: dict = Depends(require_module("support_tickets")),
 ):
+    dept = await _resolve_department(department_id)
     try:
         return await zoho.list_tickets(
             from_index=from_index,
             limit=limit,
             status=status,
-            department_id=department_id,
+            department_id=dept,
             assignee_id=assignee_id,
             sort_by=sort_by,
         )

@@ -319,12 +319,15 @@ async def list_departments() -> Dict[str, Any]:
     return data or {"data": []}
 
 
-async def ticket_count(
-    *, status: Optional[str] = None, department_id: Optional[str] = None
-) -> int:
+async def ticket_count(*, department_id: Optional[str] = None) -> int:
+    """Total ticket count via Zoho's /ticketsCount.
+
+    Note: /ticketsCount filters by department/assignee/contact/date — NOT by
+    `status` (status is not a supported filter there). Per-status breakdowns
+    are derived from a recent-ticket sample in the route layer instead.
+    Requires the ``Desk.search.READ`` OAuth scope.
+    """
     params: Dict[str, Any] = {}
-    if status:
-        params["status"] = status
     if department_id:
         params["departmentId"] = department_id
     data = await _request("GET", "/api/v1/ticketsCount", params=params)

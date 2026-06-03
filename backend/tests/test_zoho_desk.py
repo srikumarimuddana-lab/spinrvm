@@ -196,3 +196,39 @@ async def test_update_ticket_rejects_empty(monkeypatch):
     with pytest.raises(ZohoDeskError) as ei:
         await zoho.update_ticket("1", {"unknown_field": "x"})
     assert ei.value.status == 400
+
+
+@pytest.mark.anyio
+async def test_ticket_count_omits_status_param(monkeypatch):
+    # Codex P2: /ticketsCount does not support a `status` filter. Ensure we
+    # only ever send departmentId there (status breakdown is sampled instead).
+    _patch_db(
+        monkeypatch,
+        _connected_config(
+            access_token="AT", access_token_expires_at="2999-01-01T00:00:00+00:00"
+        ),
+    )
+    seen = {}
+
+    def handler(method, url, kwargs):
+        seen["url"] = url
+        seen["params"] = kwargs.get("params") or {}
+        return _FakeResponse(200, {"count": 42})
+
+    _patch_http(monkeypatch, handler)
+    out = await zoho.ticket_count(department_id="dep1")
+    assert out == 42
+    assert "ticketsCount" in seen["url"]
+    assert "status" not in seen["params"]
+    assert seen["params"].get("departmentId") == "dep1"
+
+
+def test_parse_zoho_time_window():
+    # Codex P2: the trends `days` selector must actually filter by created
+    # time. The route helper parses Zoho timestamps; unparseable -> None.
+    from routes.admin.support_tickets import _parse_zoho_time
+
+    dt = _parse_zoho_time("2026-06-01T12:00:00.000Z")
+    assert dt is not None and dt.tzinfo is not None
+    assert _parse_zoho_time("") is None
+    assert _parse_zoho_time("not-a-date") is None

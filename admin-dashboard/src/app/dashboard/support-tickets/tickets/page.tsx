@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from "react";
 import Link from "next/link";
-import { getDeskTickets, getDeskAgents, createDeskTicket, searchDeskTickets } from "@/lib/api";
+import { getDeskTickets, getDeskAgents, getDeskDepartments, createDeskTicket, searchDeskTickets } from "@/lib/api";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -93,7 +93,8 @@ export default function TicketListPage() {
     const { toast } = useToast();
     const [createOpen, setCreateOpen] = useState(false);
     const [creating, setCreating] = useState(false);
-    const [form, setForm] = useState({ subject: "", description: "", email: "", name: "", priority: "Medium" });
+    const [departments, setDepartments] = useState<any[]>([]);
+    const [form, setForm] = useState({ subject: "", description: "", email: "", name: "", priority: "Medium", department: "" });
     const setF = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
 
     const create = async () => {
@@ -109,10 +110,11 @@ export default function TicketListPage() {
                 last_name: rest.join(" ") || undefined,
                 priority: form.priority,
                 channel: "Web",
+                department_id: form.department || undefined,
             });
             toast({ title: "Ticket created" });
             setCreateOpen(false);
-            setForm({ subject: "", description: "", email: "", name: "", priority: "Medium" });
+            setForm({ subject: "", description: "", email: "", name: "", priority: "Medium", department: "" });
             setPage(0);
             load();
         } catch (e: any) {
@@ -162,6 +164,11 @@ export default function TicketListPage() {
     useEffect(() => {
         if (!allowed) return;
         getDeskAgents().then((r) => setAgents(r.data || [])).catch(() => {});
+        getDeskDepartments().then((r) => {
+            const d = r.data || [];
+            setDepartments(d);
+            if (d.length) setForm((f) => ({ ...f, department: f.department || d[0].id }));
+        }).catch(() => {});
     }, [allowed]);
 
     // Created-date range narrows the loaded results (client-side).
@@ -242,12 +249,23 @@ export default function TicketListPage() {
                                 <Input type="email" value={form.email} onChange={(e) => setF("email", e.target.value)} />
                             </div>
                         </div>
-                        <div className="space-y-1">
-                            <Label>Priority</Label>
-                            <Select value={form.priority} onValueChange={(v) => setF("priority", v)}>
-                                <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
-                                <SelectContent>{PRIORITIES.filter((p) => p !== "All").map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}</SelectContent>
-                            </Select>
+                        <div className="grid grid-cols-2 gap-3">
+                            <div className="space-y-1">
+                                <Label>Department</Label>
+                                <Select value={form.department || undefined} onValueChange={(v) => setF("department", v)}>
+                                    <SelectTrigger><SelectValue placeholder={departments.length ? "Select" : "No departments"} /></SelectTrigger>
+                                    <SelectContent>
+                                        {departments.map((d) => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                            <div className="space-y-1">
+                                <Label>Priority</Label>
+                                <Select value={form.priority} onValueChange={(v) => setF("priority", v)}>
+                                    <SelectTrigger><SelectValue /></SelectTrigger>
+                                    <SelectContent>{PRIORITIES.filter((p) => p !== "All").map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}</SelectContent>
+                                </Select>
+                            </div>
                         </div>
                     </div>
                     <DialogFooter>

@@ -13,6 +13,7 @@ GET /config returns presence flags, never the secrets themselves.
 """
 
 import logging
+import statistics
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -171,15 +172,21 @@ async def dashboard(
     admin: dict = Depends(require_module("support_tickets")),
 ):
     dept = await _resolve_department(department_id)
+    # Listing tickets is the core of the dashboard — if this fails, surface it.
     try:
-        # `total` is an accurate count from Zoho's /ticketsCount. The
-        # per-status breakdown is derived from a recent sample because
-        # /ticketsCount does not support a `status` filter and the REST tier
-        # has no generic group-by endpoint we can rely on across accounts.
-        total = await zoho.ticket_count(department_id=dept)
         sample = await zoho.list_tickets(limit=100, department_id=dept, sort_by="-createdTime")
     except ZohoDeskError as e:
         raise _err(e) from e
+
+    # The exact account-wide total comes from /ticketsCount, which needs the
+    # Desk.search.READ scope. If the connected token lacks it (or the call
+    # otherwise fails), degrade gracefully to the sampled view instead of
+    # 502-ing the whole page — the breakdown below is still useful.
+    total: Optional[int] = None
+    try:
+        total = await zoho.ticket_count(department_id=dept)
+    except ZohoDeskError as e:
+        logger.warning("Zoho ticket_count unavailable (scope/credentials?): %s", e.message)
 
     tickets: List[Dict[str, Any]] = (sample or {}).get("data", [])
     by_status: Counter = Counter()
@@ -189,6 +196,7 @@ async def dashboard(
     open_count = sum(c for s, c in by_status.items() if "closed" not in s.lower())
     return {
         "total": total,
+        "total_available": total is not None,
         "open": open_count,
         "by_status": dict(by_status),
         "recent": tickets[:10],
@@ -201,6 +209,7 @@ async def dashboard(
 async def trends(
     days: int = Query(14, ge=1, le=90),
     department_id: Optional[str] = Query(None),
+    assignee_id: Optional[str] = Query(None),
     admin: dict = Depends(require_module("support_tickets")),
 ):
     """Time-series + breakdowns derived from the most recent tickets.
@@ -209,10 +218,14 @@ async def trends(
     REST tier, so we aggregate the latest page of tickets client-side, keeping
     only those created within the selected window. This is approximate when
     more than 100 tickets fall inside the window, and is labelled as such.
+
+    Includes opened-vs-closed per day and resolution-time stats (computed from
+    closedTime − createdTime on closed tickets in the sample). Optional
+    `assignee_id` scopes everything to one agent.
     """
     dept = await _resolve_department(department_id)
     try:
-        page = await zoho.list_tickets(limit=100, department_id=dept, sort_by="-createdTime")
+        page = await zoho.list_tickets(limit=100, department_id=dept, assignee_id=assignee_id, sort_by="-createdTime")
     except ZohoDeskError as e:
         raise _err(e) from e
 
@@ -222,20 +235,58 @@ async def trends(
     # the Last 7/14/30/90-day selector produces the report it promises.
     tickets = [t for t in raw if (_parse_zoho_time(t.get("createdTime") or "") or cutoff) >= cutoff]
 
-    by_day: Counter = Counter()
+    opened_by_day: Counter = Counter()
+    closed_by_day: Counter = Counter()
     by_status: Counter = Counter()
     by_priority: Counter = Counter()
     by_channel: Counter = Counter()
+    by_category: Counter = Counter()
+    by_classification: Counter = Counter()
+    by_tag: Counter = Counter()
+    by_contact: Counter = Counter()
+    resolution_hours: List[float] = []
+    closed_count = 0
 
     for t in tickets:
         created = t.get("createdTime") or ""
-        day = created[:10] if len(created) >= 10 else "unknown"
-        by_day[day] += 1
+        opened_by_day[created[:10]] += 1
         by_status[t.get("status") or "Unknown"] += 1
         by_priority[t.get("priority") or "None"] += 1
         by_channel[t.get("channel") or "Unknown"] += 1
+        by_category[t.get("category") or "Uncategorized"] += 1
+        by_classification[t.get("classification") or "None"] += 1
 
-    volume = [{"date": d, "count": c} for d, c in sorted(by_day.items()) if d != "unknown"]
+        contact = t.get("contact") or {}
+        cname = (
+            (contact.get("email") or "").strip()
+            or f"{contact.get('firstName', '')} {contact.get('lastName', '')}".strip()
+            or (t.get("email") or "").strip()
+            or "Unknown"
+        )
+        by_contact[cname] += 1
+
+        for tag in t.get("tags") or []:
+            name = tag.get("name") if isinstance(tag, dict) else str(tag)
+            if name:
+                by_tag[name] += 1
+
+        closed_at = _parse_zoho_time(t.get("closedTime") or "")
+        if closed_at:
+            closed_count += 1
+            closed_by_day[(t.get("closedTime") or "")[:10]] += 1
+            opened_at = _parse_zoho_time(created)
+            if opened_at:
+                hrs = (closed_at - opened_at).total_seconds() / 3600.0
+                if hrs >= 0:
+                    resolution_hours.append(hrs)
+
+    # Merge opened+closed into one per-day series for the timeline chart.
+    all_days = sorted(d for d in set(opened_by_day) | set(closed_by_day) if d and d != "unknown")
+    volume = [{"date": d, "opened": opened_by_day.get(d, 0), "closed": closed_by_day.get(d, 0)} for d in all_days]
+
+    avg_res = round(sum(resolution_hours) / len(resolution_hours), 1) if resolution_hours else None
+    median_res = round(statistics.median(resolution_hours), 1) if resolution_hours else None
+
     return {
         "sample_size": len(tickets),
         # Approximate when the raw page was capped AND everything we fetched is
@@ -245,6 +296,19 @@ async def trends(
         "by_status": dict(by_status),
         "by_priority": dict(by_priority),
         "by_channel": dict(by_channel),
+        "by_category": dict(by_category),
+        "by_classification": dict(by_classification),
+        "by_tag": dict(by_tag),
+        # Top requesters by ticket count in the window (max 10).
+        "top_contacts": [{"name": n, "count": c} for n, c in by_contact.most_common(10)],
+        "stats": {
+            "opened": len(tickets),
+            "closed": closed_count,
+            "open_now": len(tickets) - closed_count,
+            "avg_resolution_hours": avg_res,
+            "median_resolution_hours": median_res,
+            "resolved_sample": len(resolution_hours),
+        },
     }
 
 
@@ -276,6 +340,8 @@ async def tickets(
     status: Optional[str] = Query(None),
     department_id: Optional[str] = Query(None),
     assignee_id: Optional[str] = Query(None),
+    priority: Optional[str] = Query(None),
+    channel: Optional[str] = Query(None),
     sort_by: str = Query("-createdTime"),
     admin: dict = Depends(require_module("support_tickets")),
 ):
@@ -287,6 +353,8 @@ async def tickets(
             status=status,
             department_id=dept,
             assignee_id=assignee_id,
+            priority=priority,
+            channel=channel,
             sort_by=sort_by,
         )
     except ZohoDeskError as e:

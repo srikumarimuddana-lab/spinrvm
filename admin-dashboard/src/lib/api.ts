@@ -2294,6 +2294,8 @@ export interface ZohoConfigStatus {
     has_client_secret: boolean;
     has_refresh_token: boolean;
     connected: boolean;
+    last_synced_at?: string | null;
+    last_sync_count?: number | null;
     updated_at?: string | null;
 }
 export interface ZohoConfigUpdate {
@@ -2348,6 +2350,10 @@ export const updateZohoConfig = (body: ZohoConfigUpdate) =>
     });
 export const testZohoConnection = () =>
     request<{ ok: boolean; departments: any[] }>("/api/admin/support-tickets/config/test", {
+        method: "POST",
+    });
+export const syncDeskTickets = () =>
+    request<{ upserted?: number; skipped?: string }>("/api/admin/support-tickets/sync", {
         method: "POST",
     });
 

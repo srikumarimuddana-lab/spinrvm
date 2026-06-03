@@ -123,6 +123,7 @@ ALL_MODULES = [
     "heatmap",
     "staff",
     "audit",
+    "support_tickets",
 ]
 
 # Auth sub-router — mounted at /admin/auth by server.py directly

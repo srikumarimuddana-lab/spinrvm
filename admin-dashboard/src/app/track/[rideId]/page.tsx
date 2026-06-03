@@ -347,7 +347,7 @@ export default function TrackRide() {
 
         {GMAPS_KEY ? (
           <Script
-            src={`https://maps.googleapis.com/maps/api/js?key=${GMAPS_KEY}&libraries=marker&loading=async&v=weekly`}
+            src={`https://maps.googleapis.com/maps/api/js?key=${GMAPS_KEY}&libraries=marker&v=weekly`}
             strategy="afterInteractive"
             onLoad={() => setMapsReady(true)}
           />

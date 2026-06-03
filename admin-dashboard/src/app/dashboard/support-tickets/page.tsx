@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { getZohoConfig, getTicketDashboard, ZohoDashboard } from "@/lib/api";
+import { getZohoConfig, getDeskDashboard, ZohoDashboard } from "@/lib/api";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -34,7 +34,7 @@ export default function HelpDeskPage() {
             const cfg = await getZohoConfig();
             setConnected(cfg.connected);
             if (cfg.connected) {
-                setData(await getTicketDashboard());
+                setData(await getDeskDashboard());
             }
         } catch (e: any) {
             setError(e?.message || "Failed to load");

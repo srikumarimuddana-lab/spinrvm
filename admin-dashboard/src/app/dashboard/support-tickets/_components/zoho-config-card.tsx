@@ -67,6 +67,7 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
 
     useEffect(() => {
         load();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const save = async () => {

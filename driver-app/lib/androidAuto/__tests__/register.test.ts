@@ -1,9 +1,10 @@
 /**
  * Unit tests for lib/androidAuto/register.ts — the Android Auto orchestration.
- * The native @iternio module, the surface component, and the store are mocked,
- * so these assert the JS contract without a head unit: surface selection by ride
- * state (MapTemplate while navigating, InformationTemplate otherwise), leg-keyed
- * rebuild de-duping, the not-connected guard, and nav-button hand-off.
+ * The native @iternio module, the surface component, the driver store, and the
+ * zoom camera store are mocked, so these assert the JS contract without a head
+ * unit: a live MapTemplate in every state (idle + navigating), zoom buttons
+ * always present (nav hand-off buttons added only while navigating), leg-keyed
+ * rebuild de-duping, the not-connected guard, and the button callbacks.
  *
  * Vars referenced inside jest.mock factories are `mock`-prefixed (jest hoisting).
  */
@@ -18,6 +19,10 @@ const mockListeners: Record<string, () => void> = {};
 let mockConnected = true;
 const mockBuilt: { kind: string; config: Record<string, unknown>; setRootTemplate: jest.Mock }[] = [];
 
+const mockZoomIn = jest.fn();
+const mockZoomOut = jest.fn();
+const mockReset = jest.fn();
+
 jest.mock('../../../store/driverStore', () => ({
   useDriverStore: {
     // Lazy references — the mock factory runs (at import time) before these
@@ -29,6 +34,12 @@ jest.mock('../../../store/driverStore', () => ({
 
 // Surface component is passed to the template, never rendered here.
 jest.mock('../carSurface', () => ({ CarMapSurface: () => null }));
+
+jest.mock('../carMapCamera', () => ({
+  useCarMapCamera: {
+    getState: () => ({ zoomIn: mockZoomIn, zoomOut: mockZoomOut, reset: mockReset }),
+  },
+}));
 
 jest.mock('@iternio/react-native-auto-play', () => {
   const make = (kind: string) =>
@@ -73,6 +84,8 @@ const navRide = () =>
   }) as unknown;
 
 const lastOf = (kind: string) => [...mockBuilt].reverse().find((t) => t.kind === kind);
+const buttonsOf = (t: { config: Record<string, unknown> }) =>
+  t.config.mapButtons as { onPress: () => void }[];
 
 beforeEach(() => {
   (Platform as unknown as { OS: string }).OS = 'android';
@@ -80,6 +93,9 @@ beforeEach(() => {
   for (const k of Object.keys(mockListeners)) delete mockListeners[k];
   mockBuilt.length = 0;
   mockSubscribe.mockClear();
+  mockZoomIn.mockClear();
+  mockZoomOut.mockClear();
+  mockReset.mockClear();
   mockConnected = true;
   mockState.rideState = 'idle';
   mockState.activeRide = null;
@@ -93,18 +109,27 @@ it('does nothing on non-Android platforms', () => {
   expect(mockListeners.didConnect).toBeUndefined();
 });
 
-it('shows the InformationTemplate status screen when idle', () => {
+it('shows a live MapTemplate with zoom-only buttons when idle', () => {
   registerAutoPlay();
   mockListeners.didConnect();
-  const info = lastOf('info');
-  expect(info).toBeDefined();
-  expect((info!.config.title as { text: string }).text).toBe('Spinr Driver');
-  expect(info!.setRootTemplate).toHaveBeenCalled();
-  expect(lastOf('map')).toBeUndefined();
+
+  const map = lastOf('map');
+  expect(map).toBeDefined();
+  expect(map!.setRootTemplate).toHaveBeenCalled();
+  expect(lastOf('info')).toBeUndefined(); // no more blank status pane
+
+  const buttons = buttonsOf(map!);
+  expect(buttons).toHaveLength(2); // zoom out + zoom in only
+  buttons[0].onPress();
+  buttons[1].onPress();
+  expect(mockZoomOut).toHaveBeenCalledTimes(1);
+  expect(mockZoomIn).toHaveBeenCalledTimes(1);
+
+  expect(mockReset).toHaveBeenCalled(); // camera reframed on connect
   expect(mockSubscribe).toHaveBeenCalled();
 });
 
-it('shows a MapTemplate with Google + Waze hand-off buttons while navigating', () => {
+it('adds Google + Waze hand-off buttons (before zoom) while navigating', () => {
   mockState.rideState = 'trip_in_progress';
   mockState.activeRide = navRide();
   registerAutoPlay();
@@ -112,14 +137,18 @@ it('shows a MapTemplate with Google + Waze hand-off buttons while navigating', (
 
   const map = lastOf('map');
   expect(map).toBeDefined();
-  expect(map!.setRootTemplate).toHaveBeenCalled();
-  const buttons = map!.config.mapButtons as { onPress: () => void }[];
-  expect(buttons).toHaveLength(2);
+  const buttons = buttonsOf(map!);
+  expect(buttons).toHaveLength(4); // google, waze, zoom out, zoom in
 
-  buttons[0].onPress();
+  buttons[0].onPress(); // Google hand-off
   expect(Linking.openURL).toHaveBeenCalledWith(
     expect.stringContaining('google.navigation:q=52.2,-106.6'),
   );
+
+  buttons[2].onPress(); // zoom out
+  buttons[3].onPress(); // zoom in
+  expect(mockZoomOut).toHaveBeenCalledTimes(1);
+  expect(mockZoomIn).toHaveBeenCalledTimes(1);
 });
 
 it('does not rebuild the root when the leg + ride are unchanged', () => {
@@ -131,6 +160,19 @@ it('does not rebuild the root when the leg + ride are unchanged', () => {
   const mapCount = mockBuilt.filter((t) => t.kind === 'map').length;
   apply(); // same state → suppressed
   expect(mockBuilt.filter((t) => t.kind === 'map').length).toBe(mapCount);
+});
+
+it('rebuilds the root when transitioning from idle to a navigation leg', () => {
+  registerAutoPlay();
+  mockListeners.didConnect();
+  const apply = mockSubscribe.mock.calls[0][0] as () => void;
+  const before = mockBuilt.filter((t) => t.kind === 'map').length;
+
+  mockState.rideState = 'trip_in_progress';
+  mockState.activeRide = navRide();
+  apply(); // idle → dropoff leg → new root
+
+  expect(mockBuilt.filter((t) => t.kind === 'map').length).toBe(before + 1);
 });
 
 it('never sets a template when no car is connected', () => {

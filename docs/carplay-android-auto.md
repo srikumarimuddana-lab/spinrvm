@@ -3,8 +3,9 @@
 **Last verified:** 2026-06-02
 **Status:** Android Auto implemented on **@iternio/react-native-auto-play** (Nitro / New
 Architecture). Committed: the dependency, the JS entry registration, and the car-UI layer
-(`driver-app/lib/androidAuto/`) — a route map for navigation states + a status screen
-otherwise. **Still unproven on hardware:** it must be confirmed by an **EAS dev build** on an
+(`driver-app/lib/androidAuto/`) — an always-on live map (the driver's current location shown
+as a car marker, with zoom buttons) that overlays the stored route during a ride.
+**Still unproven on hardware:** it must be confirmed by an **EAS dev build** on an
 Android Auto DHU (Nitro codegen under Expo prebuild + the on-surface map render are the two
 open unknowns). No release branch should merge until that build passes.
 **Decision inputs:** Scope = *driving-task v1, architected for an in-dash-nav phase later*;
@@ -37,37 +38,50 @@ native library + keep all ride logic in shared TS/Zustand*.
 
 ---
 
-## Implemented: Android Auto route map ("Path B look, Path A cost")
+## Implemented: Android Auto live map ("Path B look, Path A cost")
 
-**Decision:** render the route the driver expects (the Uber-style in-dash map), but do NOT pay
-for live navigation — draw the polyline we *already* store and hand turn-by-turn to the
-driver's own Google Maps / Waze.
+**Decision:** always show the driver an in-dash map (the Uber-style experience): a car marker
+that follows the phone's current location, with zoom-in/zoom-out buttons, in every state — so
+the car screen is useful even when idle, not a blank status pane. During a ride, overlay the
+route the driver expects without paying for live navigation — draw the polyline we *already*
+store and hand turn-by-turn to the driver's own Google Maps / Waze.
 
 - **No new maps spend.** It reuses `rides.planned_route_polyline` (migration 100, a decoded
   `[[lat,lng], …]` line captured once at ride creation). No Routes/Directions/Navigation-SDK
   calls — per-ride cost stays $0, same as the existing `openNavigation()` deep link.
 - **Files (`driver-app/lib/androidAuto/`):**
-  - `carScreen.ts` — pure model for the **status** states (idle / ride_offered /
-    trip_completed): title + 1–4 rows. Fully unit-tested.
   - `carRoute.ts` — pure logic for the **navigation** states: destination by ride state
     (pickup pre-trip, dropoff in-trip), polyline parse, and the Google/Waze hand-off URLs.
     Package-agnostic and fully unit-tested.
-  - `carSurface.tsx` — `CarMapSurface`: react-native-maps `MapView`+`Polyline`+`Marker` drawn
-    on the head-unit map surface, reading the same `useDriverStore`. Lazy-requires maps so it
-    degrades to `null` off-device.
-  - `register.ts` — `registerAutoPlay()`: on `HybridAutoPlay` `didConnect`, selects the surface
-    by ride state — an iternio `MapTemplate` (surface `component` + Google/Waze hand-off
-    buttons) during `navigating_to_pickup` / `arrived_at_pickup` / `trip_in_progress`, and an
-    `InformationTemplate` status screen otherwise. Leg+ride-id-keyed root swaps; `isConnected()`
-    guard. Registered from `driver-app/index.js` at bundle load (car-only cold launch never
-    mounts the phone route layout).
+  - `carMapCamera.ts` — pure zoom math + a tiny `useCarMapCamera` zustand store. The projected
+    surface is non-interactive, so the template's zoom buttons (register.ts) and the rendered
+    surface (carSurface.tsx) can't share React state directly — this store is the channel.
+    Clamped to a street↔city span. Unit-tested.
+  - `useCarLocation.ts` — a self-contained foreground location watcher for the surface,
+    independent of the phone UI (which isn't mounted on a car-only cold launch). Seeds from the
+    dashboard's last-known fix in AsyncStorage; only watches when permission is already granted.
+  - `carSurface.tsx` — `CarMapSurface`: react-native-maps `MapView` drawn on the head-unit
+    surface, reading the same `useDriverStore`. **Always** renders a live map with a `CarMarker`
+    at the driver's current location and a controlled, zoom-driven camera; overlays the stored
+    `Polyline` + destination `Marker` during a ride. Lazy-requires maps so it degrades to `null`
+    off-device.
+  - `carScreen.ts` — pure status-row model (title + 1–4 rows). No longer on the live Android
+    path (the map now covers idle too); retained for the dormant iOS CarPlay path + its tests.
+  - `register.ts` — `registerAutoPlay()`: on `HybridAutoPlay` `didConnect`, pushes an iternio
+    `MapTemplate` (surface `component`) in **every** state. Map buttons: zoom-out / zoom-in
+    always, plus Google/Waze hand-off during `navigating_to_pickup` / `arrived_at_pickup` /
+    `trip_in_progress`. Leg+ride-id-keyed root swaps (idle is its own key); `isConnected()`
+    guard; camera reset on connect. Registered from `driver-app/index.js` at bundle load
+    (car-only cold launch never mounts the phone route layout).
 - **Interaction model:** Android Auto routes taps through template **map buttons**, not
   in-surface touchables (driver-distraction rules). iternio's per-button `onPress` callbacks
-  (`nav-google` / `nav-waze` → `Linking.openURL`, web-Maps fallback) replace the old fork's
-  cross-platform emitter juggling.
+  drive zoom (`→ useCarMapCamera`) and nav hand-off (`nav-google` / `nav-waze` →
+  `Linking.openURL`, web-Maps fallback), replacing the old fork's cross-platform emitter
+  juggling. Up to 4 map buttons during a ride (2 nav + 2 zoom) — at Android Auto's action-strip
+  ceiling, so confirm on the DHU.
 - **Still unproven on hardware:** Nitro codegen building under Expo prebuild, the on-surface
   map render, and the map-button icons need the EAS dev build + DHU. The JS contract is covered
-  by **29 unit tests** (`lib/androidAuto/__tests__/`).
+  by **38 unit tests** (`lib/androidAuto/__tests__/`).
 - **Not yet wired:** accept/decline from the car, online toggle, OTP/rating (stay on phone).
 
 ### iOS CarPlay — dormant
@@ -160,7 +174,7 @@ launch path (iternio's `CarAppService` is a new `<service>` merged from its libr
 ## What's committed vs what the build must validate
 
 Committed on this branch (verifiable without a device): the dependency swap to iternio, the
-entry registration, and the `lib/androidAuto/` car-UI layer with 29 unit tests (lint/tsc clean
+entry registration, and the `lib/androidAuto/` car-UI layer with 38 unit tests (lint/tsc clean
 on the new files; pure logic fully covered).
 
 **Not yet validated** (needs an EAS build + head unit, which this environment can't run): that

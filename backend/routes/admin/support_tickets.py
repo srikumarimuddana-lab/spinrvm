@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user, require_module
+    from ...services import zoho_desk_db
     from ...services import zoho_desk_service as zoho
     from ...services.zoho_desk_service import ZohoDeskError
     from ...utils.audit_logger import log_admin_action
@@ -109,6 +110,8 @@ def _config_status(cfg: Dict[str, Any]) -> Dict[str, Any]:
             and _has("refresh_token")
             and _has("org_id")
         ),
+        "last_synced_at": cfg.get("last_synced_at"),
+        "last_sync_count": cfg.get("last_sync_count"),
         "updated_at": cfg.get("updated_at"),
     }
 
@@ -182,75 +185,13 @@ async def test_connection(admin: dict = Depends(get_admin_user)):
 # --------------------------------------------------------------------------
 
 
-@router.get("/dashboard")
-async def dashboard(
-    department_id: Optional[str] = Query(None),
-    admin: dict = Depends(require_module("support_tickets")),
-):
-    dept = await _resolve_department(department_id)
-    # Listing tickets is the core of the dashboard — if this fails, surface it.
-    try:
-        sample = await zoho.list_tickets(limit=100, department_id=dept, sort_by="-createdTime")
-    except ZohoDeskError as e:
-        raise _err(e) from e
-
-    # The exact account-wide total comes from /ticketsCount, which needs the
-    # Desk.search.READ scope. If the connected token lacks it (or the call
-    # otherwise fails), degrade gracefully to the sampled view instead of
-    # 502-ing the whole page — the breakdown below is still useful.
-    total: Optional[int] = None
-    try:
-        total = await zoho.ticket_count(department_id=dept)
-    except ZohoDeskError as e:
-        logger.warning("Zoho ticket_count unavailable (scope/credentials?): %s", e.message)
-
-    tickets: List[Dict[str, Any]] = (sample or {}).get("data", [])
-    by_status: Counter = Counter()
-    for t in tickets:
-        by_status[t.get("status") or "Unknown"] += 1
-
-    open_count = sum(c for s, c in by_status.items() if "closed" not in s.lower())
-    return {
-        "total": total,
-        "total_available": total is not None,
-        "open": open_count,
-        "by_status": dict(by_status),
-        "recent": tickets[:10],
-        "sample_size": len(tickets),
-        "approximate": len(tickets) >= 100,
-    }
+_DASHBOARD_STATUSES = ["Open", "On Hold", "Escalated", "Closed"]
 
 
-@router.get("/trends")
-async def trends(
-    days: int = Query(14, ge=1, le=90),
-    department_id: Optional[str] = Query(None),
-    assignee_id: Optional[str] = Query(None),
-    admin: dict = Depends(require_module("support_tickets")),
-):
-    """Time-series + breakdowns derived from the most recent tickets.
-
-    Zoho's API does not expose a generic aggregate report endpoint on the
-    REST tier, so we aggregate the latest page of tickets client-side, keeping
-    only those created within the selected window. This is approximate when
-    more than 100 tickets fall inside the window, and is labelled as such.
-
-    Includes opened-vs-closed per day and resolution-time stats (computed from
-    closedTime − createdTime on closed tickets in the sample). Optional
-    `assignee_id` scopes everything to one agent.
-    """
-    dept = await _resolve_department(department_id)
-    try:
-        page = await zoho.list_tickets(limit=100, department_id=dept, assignee_id=assignee_id, sort_by="-createdTime")
-    except ZohoDeskError as e:
-        raise _err(e) from e
-
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    raw: List[Dict[str, Any]] = (page or {}).get("data", [])
-    # Honor the requested window: drop tickets created before the cutoff so
-    # the Last 7/14/30/90-day selector produces the report it promises.
-    tickets = [t for t in raw if (_parse_zoho_time(t.get("createdTime") or "") or cutoff) >= cutoff]
-
+def _aggregate_trends(tickets: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Aggregate a windowed list of Zoho ticket payloads into the trends
+    response (volume, breakdowns, resolution stats). Source-agnostic — used for
+    both the DB mirror (full history) and the live 100-ticket sample."""
     opened_by_day: Counter = Counter()
     closed_by_day: Counter = Counter()
     by_status: Counter = Counter()
@@ -296,18 +237,12 @@ async def trends(
                 if hrs >= 0:
                     resolution_hours.append(hrs)
 
-    # Merge opened+closed into one per-day series for the timeline chart.
     all_days = sorted(d for d in set(opened_by_day) | set(closed_by_day) if d and d != "unknown")
     volume = [{"date": d, "opened": opened_by_day.get(d, 0), "closed": closed_by_day.get(d, 0)} for d in all_days]
-
     avg_res = round(sum(resolution_hours) / len(resolution_hours), 1) if resolution_hours else None
     median_res = round(statistics.median(resolution_hours), 1) if resolution_hours else None
 
     return {
-        "sample_size": len(tickets),
-        # Approximate when the raw page was capped AND everything we fetched is
-        # inside the window (i.e. there may be more we didn't see).
-        "approximate": len(raw) >= 100 and len(tickets) == len(raw),
         "volume": volume,
         "by_status": dict(by_status),
         "by_priority": dict(by_priority),
@@ -315,7 +250,6 @@ async def trends(
         "by_category": dict(by_category),
         "by_classification": dict(by_classification),
         "by_tag": dict(by_tag),
-        # Top requesters by ticket count in the window (max 10).
         "top_contacts": [{"name": n, "count": c} for n, c in by_contact.most_common(10)],
         "stats": {
             "opened": len(tickets),
@@ -326,6 +260,91 @@ async def trends(
             "resolved_sample": len(resolution_hours),
         },
     }
+
+
+@router.get("/dashboard")
+async def dashboard(
+    department_id: Optional[str] = Query(None),
+    admin: dict = Depends(require_module("support_tickets")),
+):
+    dept = await _resolve_department(department_id)
+
+    # Prefer the local mirror — exact counts, no Zoho credits, no sample cap.
+    db = await zoho_desk_db.count_by_status(dept, _DASHBOARD_STATUSES)
+    if db is not None and db[0] > 0:
+        total, by_status = db
+        recent = await zoho_desk_db.list_mirror(limit=10, department_id=dept, sort_by="-createdTime") or []
+        return {
+            "total": total,
+            "total_available": True,
+            "open": total - by_status.get("Closed", 0),
+            "by_status": by_status,
+            "recent": recent,
+            "sample_size": total,
+            "approximate": False,
+            "source": "db",
+        }
+
+    # Live fallback (before the first sync / migration).
+    try:
+        sample = await zoho.list_tickets(limit=100, department_id=dept, sort_by="-createdTime")
+    except ZohoDeskError as e:
+        raise _err(e) from e
+    total = None
+    try:
+        total = await zoho.ticket_count(department_id=dept)
+    except ZohoDeskError as e:
+        logger.warning("Zoho ticket_count unavailable (scope/credentials?): %s", e.message)
+    tickets: List[Dict[str, Any]] = (sample or {}).get("data", [])
+    by_status_c: Counter = Counter()
+    for t in tickets:
+        by_status_c[t.get("status") or "Unknown"] += 1
+    open_count = sum(c for s, c in by_status_c.items() if "closed" not in s.lower())
+    return {
+        "total": total,
+        "total_available": total is not None,
+        "open": open_count,
+        "by_status": dict(by_status_c),
+        "recent": tickets[:10],
+        "sample_size": len(tickets),
+        "approximate": len(tickets) >= 100,
+        "source": "live",
+    }
+
+
+@router.get("/trends")
+async def trends(
+    days: int = Query(14, ge=1, le=90),
+    department_id: Optional[str] = Query(None),
+    assignee_id: Optional[str] = Query(None),
+    admin: dict = Depends(require_module("support_tickets")),
+):
+    """Opened-vs-closed timeline, breakdowns, and resolution stats over the
+    selected window. Served from the local mirror (full history) once synced;
+    otherwise a live 100-ticket sample (flagged approximate)."""
+    dept = await _resolve_department(department_id)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+    rows = await zoho_desk_db.fetch_window(since_iso=cutoff.isoformat(), department_id=dept, assignee_id=assignee_id)
+    if rows is not None and len(rows) > 0:
+        result = _aggregate_trends(rows)
+        result["sample_size"] = len(rows)
+        result["approximate"] = False
+        result["source"] = "db"
+        return result
+
+    # Live fallback.
+    try:
+        page = await zoho.list_tickets(limit=100, department_id=dept, assignee_id=assignee_id, sort_by="-createdTime")
+    except ZohoDeskError as e:
+        raise _err(e) from e
+    raw: List[Dict[str, Any]] = (page or {}).get("data", [])
+    tickets = [t for t in raw if (_parse_zoho_time(t.get("createdTime") or "") or cutoff) >= cutoff]
+    result = _aggregate_trends(tickets)
+    result["sample_size"] = len(tickets)
+    result["approximate"] = len(raw) >= 100 and len(tickets) == len(raw)
+    result["source"] = "live"
+    return result
 
 
 # --------------------------------------------------------------------------
@@ -399,6 +418,19 @@ async def tickets(
     admin: dict = Depends(require_module("support_tickets")),
 ):
     dept = await _resolve_department(department_id)
+    # DB-first: serve from the mirror when it has data; else live.
+    rows = await zoho_desk_db.list_mirror(
+        limit=limit,
+        offset=from_index - 1,
+        status=status,
+        priority=priority,
+        channel=channel,
+        assignee_id=assignee_id,
+        department_id=dept,
+        sort_by=sort_by,
+    )
+    if rows is not None and (rows or (await zoho_desk_db.mirror_count() or 0) > 0):
+        return {"data": rows, "source": "db"}
     try:
         return await zoho.list_tickets(
             from_index=from_index,
@@ -425,9 +457,21 @@ async def search(
     assignee_id: Optional[str] = Query(None),
     admin: dict = Depends(require_module("support_tickets")),
 ):
-    """Account-wide ticket search (Zoho /tickets/search). Falls back to the
-    configured default department when none is supplied."""
+    """Account-wide ticket search. Served from the local mirror when synced
+    (fast, no Zoho credits); otherwise Zoho /tickets/search."""
     dept = await _resolve_department(department_id)
+    rows = await zoho_desk_db.list_mirror(
+        limit=limit,
+        offset=from_index - 1,
+        search=q,
+        status=status,
+        priority=priority,
+        assignee_id=assignee_id,
+        department_id=dept,
+        sort_by="-createdTime",
+    )
+    if rows is not None and (rows or (await zoho_desk_db.mirror_count() or 0) > 0):
+        return {"data": rows, "source": "db"}
     try:
         return await zoho.search_tickets(
             query=q,

@@ -264,18 +264,26 @@ async def test_lost_and_found_autocreate_happy(monkeypatch):
     import services.zoho_desk_integration as integ
 
     db = MagicMock()
-    db.find_one = AsyncMock(side_effect=[
-        {"id": "default", "enabled": True},  # config
-        {"id": "u1", "name": "Jane Doe", "email": "j@x.ca", "phone": "+1"},  # rider
-    ])
+    db.find_one = AsyncMock(
+        side_effect=[
+            {"id": "default", "enabled": True},  # config
+            {"id": "u1", "name": "Jane Doe", "email": "j@x.ca", "phone": "+1"},  # rider
+        ]
+    )
     db.update_one = AsyncMock()
     monkeypatch.setattr(integ, "db_supabase", db)
     created = AsyncMock(return_value={"id": "zt1"})
     monkeypatch.setattr(integ.zoho, "create_ticket", created)
 
     await integ.create_ticket_for_lost_and_found(
-        {"id": "c1", "rider_user_id": "u1", "item_description": "Wallet", "item_category": "bag",
-         "ride_id": "r1", "reporter_type": "driver"},
+        {
+            "id": "c1",
+            "rider_user_id": "u1",
+            "item_description": "Wallet",
+            "item_category": "bag",
+            "ride_id": "r1",
+            "reporter_type": "driver",
+        },
         {"ride_code": "SPN-1"},
     )
     created.assert_awaited_once()
@@ -312,24 +320,59 @@ async def test_dispute_autocreate_happy(monkeypatch):
     import services.zoho_desk_integration as integ
 
     db = MagicMock()
-    db.find_one = AsyncMock(side_effect=[
-        {"id": "default", "enabled": True},  # config
-        {"id": "u1", "name": "Sam Rider", "email": "s@x.ca"},  # user
-    ])
+    db.find_one = AsyncMock(
+        side_effect=[
+            {"id": "default", "enabled": True},  # config
+            {"id": "u1", "name": "Sam Rider", "email": "s@x.ca"},  # user
+        ]
+    )
     db.update_one = AsyncMock()
     monkeypatch.setattr(integ, "db_supabase", db)
     created = AsyncMock(return_value={"id": "zt7"})
     monkeypatch.setattr(integ.zoho, "create_ticket", created)
 
     await integ.create_ticket_for_dispute(
-        {"id": "d1", "user_id": "u1", "reason": "Overcharged", "description": "x",
-         "requested_amount": 12, "original_fare": 20, "ride_id": "r1"},
+        {
+            "id": "d1",
+            "user_id": "u1",
+            "reason": "Overcharged",
+            "description": "x",
+            "requested_amount": 12,
+            "original_fare": 20,
+            "ride_id": "r1",
+        },
         {"ride_code": "SPN-9"},
     )
     created.assert_awaited_once()
     assert created.call_args.kwargs["category"] == "Payment"
     assert created.call_args.kwargs["priority"] == "High"
     assert db.update_one.call_args.args[2] == {"zoho_ticket_id": "zt7"}
+
+
+@pytest.mark.anyio
+async def test_support_escalation(monkeypatch):
+    import services.zoho_desk_integration as integ
+    from services.zoho_desk_service import ZohoDeskError as ZErr
+
+    db = MagicMock()
+    monkeypatch.setattr(integ, "db_supabase", db)
+    created = AsyncMock(return_value={"id": "zt8", "ticketNumber": "555"})
+    monkeypatch.setattr(integ.zoho, "create_ticket", created)
+
+    # disabled -> raises (route turns this into the fallback reply)
+    db.find_one = AsyncMock(return_value={"id": "default", "enabled": False})
+    with pytest.raises(ZErr):
+        await integ.create_support_ticket(user={"id": "u1", "email": "a@b.ca"}, message="help")
+    created.assert_not_awaited()
+
+    # enabled -> creates a Chat-channel ticket
+    db.find_one = AsyncMock(return_value={"id": "default", "enabled": True})
+    res = await integ.create_support_ticket(
+        user={"id": "u1", "email": "a@b.ca", "name": "Al B"}, message="Card declined\nplease help"
+    )
+    assert res["ticketNumber"] == "555"
+    assert created.call_args.kwargs["channel"] == "Chat"
+    assert created.call_args.kwargs["subject"].startswith("Support — Card declined")
 
 
 def test_parse_zoho_time_window():

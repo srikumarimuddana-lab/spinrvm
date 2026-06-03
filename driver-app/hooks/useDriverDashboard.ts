@@ -486,7 +486,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
 
           locationRef.current = loc;
           const now = Date.now();
-          if (now - lastRenderMsRef.current >= 10000) {
+          // Tighten the render cadence during active trip phases so the driver
+          // UI distance counter and map marker stay responsive; coarse throttle
+          // is fine when idle to avoid unnecessary re-renders.
+          const renderThrottleMs = inTripPhase ? 3000 : 10000;
+          if (now - lastRenderMsRef.current >= renderThrottleMs) {
             lastRenderMsRef.current = now;
             setLocation(loc);
           }

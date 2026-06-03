@@ -132,29 +132,44 @@ export default function TrackRide() {
     if (!g || !mapRef.current || !ride) return;
     const map = mapRef.current;
 
-    // Inline SVG for the pickup pin (green teardrop).
-    const pinSvg = (color: string, letter: string) =>
+    // Clean map pin — soft drop shadow, white ring, solid colour dot.
+    // Reads as a precise location marker rather than a flat teardrop.
+    const pinSvg = (color: string) =>
       `data:image/svg+xml,${encodeURIComponent(
-        `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="40" viewBox="0 0 32 40">
-          <path d="M16 0C7.163 0 0 7.163 0 16c0 10 16 24 16 24S32 26 32 16C32 7.163 24.837 0 16 0z" fill="${color}"/>
-          <circle cx="16" cy="16" r="8" fill="white"/>
-          <text x="16" y="20" text-anchor="middle" font-size="10" font-weight="700"
-                font-family="ui-sans-serif,system-ui,sans-serif" fill="${color}">${letter}</text>
+        `<svg xmlns="http://www.w3.org/2000/svg" width="34" height="46" viewBox="0 0 34 46">
+          <defs>
+            <filter id="s" x="-40%" y="-20%" width="180%" height="160%">
+              <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#000" flood-opacity="0.25"/>
+            </filter>
+          </defs>
+          <path filter="url(#s)" fill="${color}"
+            d="M17 1C9.27 1 3 7.16 3 14.78c0 5.4 4.07 11.9 12.2 19.6a2.6 2.6 0 0 0 3.6 0c8.13-7.7 12.2-14.2 12.2-19.6C31 7.16 24.73 1 17 1z"/>
+          <circle cx="17" cy="15" r="9" fill="#fff"/>
+          <circle cx="17" cy="15" r="5" fill="${color}"/>
         </svg>`
       )}`;
 
-    // Top-down car SVG for the driver — looks professional and direction-neutral.
+    // Top-down sedan inside a white pin-puck — the classic ride-share "car on
+    // the map" look. Soft shadow, crisp silhouette, blue glass.
     const carSvg =
       `data:image/svg+xml,${encodeURIComponent(
-        `<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44">
-          <circle cx="22" cy="22" r="20" fill="#111827" stroke="white" stroke-width="3"/>
-          <g fill="white" transform="translate(10,11)">
-            <path d="M20 6H4L2 10h20L20 6z"/>
-            <rect x="2" y="11" width="20" height="6" rx="1"/>
-            <rect x="3" y="9" width="4" height="3" rx="1" fill="#93C5FD"/>
-            <rect x="17" y="9" width="4" height="3" rx="1" fill="#93C5FD"/>
-            <circle cx="5"  cy="18.5" r="2" fill="#6B7280"/>
-            <circle cx="19" cy="18.5" r="2" fill="#6B7280"/>
+        `<svg xmlns="http://www.w3.org/2000/svg" width="46" height="46" viewBox="0 0 46 46">
+          <defs>
+            <filter id="cs" x="-30%" y="-30%" width="160%" height="160%">
+              <feDropShadow dx="0" dy="2" stdDeviation="2.5" flood-color="#000" flood-opacity="0.3"/>
+            </filter>
+          </defs>
+          <circle cx="23" cy="23" r="18" fill="#fff" filter="url(#cs)"/>
+          <circle cx="23" cy="23" r="18" fill="none" stroke="#0F172A" stroke-width="1.5"/>
+          <g transform="translate(23 23) rotate(0)">
+            <rect x="-6.5" y="-11" width="13" height="22" rx="5.5" fill="#0F172A"/>
+            <path d="M-5 -6.5 C-5 -9 -3 -9.5 0 -9.5 C3 -9.5 5 -9 5 -6.5 L4 -3 L-4 -3 Z" fill="#60A5FA"/>
+            <path d="M-4.5 7.5 L4.5 7.5 L4 9.5 C3 10 -3 10 -4 9.5 Z" fill="#3B82F6"/>
+            <rect x="-5" y="-1.5" width="10" height="5" rx="1.5" fill="#1E293B"/>
+            <rect x="-7" y="-7" width="2" height="5" rx="1" fill="#0F172A"/>
+            <rect x="5" y="-7" width="2" height="5" rx="1" fill="#0F172A"/>
+            <rect x="-7" y="3" width="2" height="5" rx="1" fill="#0F172A"/>
+            <rect x="5" y="3" width="2" height="5" rx="1" fill="#0F172A"/>
           </g>
         </svg>`
       )}`;
@@ -182,7 +197,9 @@ export default function TrackRide() {
         const img = document.createElement('img');
         img.src = svgUrl;
         img.style.width = `${size}px`;
-        img.style.height = `${size}px`;
+        // height:auto preserves the SVG aspect ratio — the pin is taller than
+        // it is wide (34x46); the car is square so width===height there.
+        img.style.height = centerAnchor ? `${size}px` : 'auto';
         img.style.display = 'block';
         let content: HTMLElement = img;
         if (centerAnchor) {
@@ -200,11 +217,11 @@ export default function TrackRide() {
       }
     };
 
-    upsertMarker(pickupMarkerRef,  ride.pickup_lat,  ride.pickup_lng,  pinSvg('#10B981', 'A'), 36);
-    upsertMarker(dropoffMarkerRef, ride.dropoff_lat, ride.dropoff_lng, pinSvg('#EF4444', 'B'), 36);
+    upsertMarker(pickupMarkerRef,  ride.pickup_lat,  ride.pickup_lng,  pinSvg('#10B981'), 38);
+    upsertMarker(dropoffMarkerRef, ride.dropoff_lat, ride.dropoff_lng, pinSvg('#EF4444'), 38);
 
     const d = ride.driver;
-    upsertMarker(driverMarkerRef, d?.lat, d?.lng, carSvg, 44, true, 2);
+    upsertMarker(driverMarkerRef, d?.lat, d?.lng, carSvg, 46, true, 2);
 
     // Pan to driver after initial fit.
     if (d?.lat != null && didFitRef.current) {

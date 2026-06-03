@@ -24,7 +24,7 @@ References: https://desk.zoho.com/DeskAPIDocument
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -277,6 +277,13 @@ async def get_ticket_threads(ticket_id: str) -> Dict[str, Any]:
     return data or {"data": []}
 
 
+async def get_thread(ticket_id: str, thread_id: str) -> Dict[str, Any]:
+    """Full content of a single email thread. The /conversations list only
+    returns a truncated `summary` per thread; the full `content`/`plainText`
+    lives on the individual thread resource."""
+    return await _request("GET", f"/api/v1/tickets/{ticket_id}/threads/{thread_id}")
+
+
 async def send_reply(
     ticket_id: str,
     *,
@@ -307,12 +314,32 @@ async def add_comment(ticket_id: str, *, content: str, is_public: bool = False) 
 
 async def update_ticket(ticket_id: str, fields: Dict[str, Any]) -> Dict[str, Any]:
     """PATCH a ticket. Callers pass only the Zoho fields they want changed
-    (status, priority, assigneeId, departmentId, etc.)."""
-    allowed = {"status", "priority", "assigneeId", "departmentId", "category", "subCategory"}
+    (status, priority, assigneeId, departmentId, category, classification...)."""
+    allowed = {
+        "status",
+        "priority",
+        "assigneeId",
+        "departmentId",
+        "category",
+        "subCategory",
+        "classification",
+    }
     payload = {k: v for k, v in fields.items() if k in allowed and v is not None}
     if not payload:
         raise ZohoDeskError("No updatable ticket fields supplied.", status=400)
     return await _request("PATCH", f"/api/v1/tickets/{ticket_id}", json_body=payload)
+
+
+async def add_tags(ticket_id: str, names: List[str]) -> Any:
+    """Associate tags (by name) with a ticket."""
+    body = {"tags": [{"name": n} for n in names if n]}
+    return await _request("POST", f"/api/v1/tickets/{ticket_id}/associateTag", json_body=body)
+
+
+async def remove_tags(ticket_id: str, names: List[str]) -> Any:
+    """Disassociate tags (by name) from a ticket."""
+    body = {"tags": [{"name": n} for n in names if n]}
+    return await _request("POST", f"/api/v1/tickets/{ticket_id}/disassociateTag", json_body=body)
 
 
 async def list_agents(limit: int = 100) -> Dict[str, Any]:

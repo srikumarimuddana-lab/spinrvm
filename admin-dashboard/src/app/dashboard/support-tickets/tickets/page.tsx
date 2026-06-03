@@ -71,6 +71,8 @@ export default function TicketListPage() {
 
     // Client-side refine (filters the loaded page by contact/category/tag/subject).
     const [refine, setRefine] = useState("");
+    const [fromDate, setFromDate] = useState("");
+    const [toDate, setToDate] = useState("");
 
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -106,26 +108,32 @@ export default function TicketListPage() {
         getDeskAgents().then((r) => setAgents(r.data || [])).catch(() => {});
     }, [allowed]);
 
-    // Client refine across the loaded page (contact, category, tags, subject, #).
+    // Client refine across the loaded page (contact, category, tags, subject, #)
+    // plus a created-date range.
     const shown = useMemo(() => {
         const q = refine.trim().toLowerCase();
-        if (!q) return tickets;
         return tickets.filter((t) => {
-            const hay = [
-                t.subject,
-                t.ticketNumber,
-                t.category,
-                t.contact?.email,
-                t.email,
-                `${t.contact?.firstName || ""} ${t.contact?.lastName || ""}`,
-                tagNames(t),
-            ]
-                .filter(Boolean)
-                .join(" ")
-                .toLowerCase();
-            return hay.includes(q);
+            if (q) {
+                const hay = [
+                    t.subject,
+                    t.ticketNumber,
+                    t.category,
+                    t.contact?.email,
+                    t.email,
+                    `${t.contact?.firstName || ""} ${t.contact?.lastName || ""}`,
+                    tagNames(t),
+                ]
+                    .filter(Boolean)
+                    .join(" ")
+                    .toLowerCase();
+                if (!hay.includes(q)) return false;
+            }
+            const created = (t.createdTime || "").slice(0, 10);
+            if (fromDate && created && created < fromDate) return false;
+            if (toDate && created && created > toDate) return false;
+            return true;
         });
-    }, [tickets, refine]);
+    }, [tickets, refine, fromDate, toDate]);
 
     const toggleSort = (field: string) => {
         setPage(0);
@@ -191,9 +199,18 @@ export default function TicketListPage() {
                     <Input
                         value={refine}
                         onChange={(e) => setRefine(e.target.value)}
-                        placeholder="Refine: contact, category, tag…"
+                        placeholder="Refine: ticket #, contact, category, tag…"
                         className="w-64 pl-8"
                     />
+                </div>
+                <div className="flex items-center gap-1 text-sm text-muted-foreground">
+                    <span>Created</span>
+                    <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="w-40" />
+                    <span>→</span>
+                    <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="w-40" />
+                    {(fromDate || toDate) && (
+                        <Button variant="ghost" size="sm" onClick={() => { setFromDate(""); setToDate(""); }}>Clear</Button>
+                    )}
                 </div>
             </div>
 

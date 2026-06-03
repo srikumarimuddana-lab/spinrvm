@@ -377,6 +377,16 @@ async def ticket_threads(ticket_id: str, admin: dict = Depends(require_module("s
         raise _err(e) from e
 
 
+@router.get("/tickets/{ticket_id}/threads/{thread_id}")
+async def ticket_thread_detail(
+    ticket_id: str, thread_id: str, admin: dict = Depends(require_module("support_tickets"))
+):
+    try:
+        return await zoho.get_thread(ticket_id, thread_id)
+    except ZohoDeskError as e:
+        raise _err(e) from e
+
+
 class ReplyRequest(BaseModel):
     content: str = Field(..., min_length=1)
     to: Optional[str] = None
@@ -435,6 +445,9 @@ class TicketUpdate(BaseModel):
     priority: Optional[str] = None
     assigneeId: Optional[str] = None
     departmentId: Optional[str] = None
+    category: Optional[str] = None
+    subCategory: Optional[str] = None
+    classification: Optional[str] = None
 
 
 @router.patch("/tickets/{ticket_id}")
@@ -452,3 +465,33 @@ async def patch_ticket(
         raise _err(e) from e
     await log_admin_action(admin, "zoho_desk_ticket_updated", "zoho_desk_ticket", ticket_id, {"fields": list(fields)})
     return result
+
+
+class TicketTagsUpdate(BaseModel):
+    add: List[str] = Field(default_factory=list)
+    remove: List[str] = Field(default_factory=list)
+
+
+@router.post("/tickets/{ticket_id}/tags")
+async def update_ticket_tags(
+    ticket_id: str,
+    payload: TicketTagsUpdate,
+    admin: dict = Depends(require_module("support_tickets")),
+):
+    if not payload.add and not payload.remove:
+        raise HTTPException(status_code=400, detail="No tag changes supplied")
+    try:
+        if payload.remove:
+            await zoho.remove_tags(ticket_id, payload.remove)
+        if payload.add:
+            await zoho.add_tags(ticket_id, payload.add)
+    except ZohoDeskError as e:
+        raise _err(e) from e
+    await log_admin_action(
+        admin,
+        "zoho_desk_ticket_tags",
+        "zoho_desk_ticket",
+        ticket_id,
+        {"added": payload.add, "removed": payload.remove},
+    )
+    return {"ok": True}

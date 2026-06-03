@@ -1,24 +1,18 @@
-import React, { useEffect } from 'react';
-import { View, Text, StyleSheet, LayoutChangeEvent } from 'react-native';
-import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withTiming,
-  withRepeat,
-  withDelay,
-  Easing,
-  cancelAnimation,
-} from 'react-native-reanimated';
+import React, { useEffect, useRef } from 'react';
+import { Animated, Easing, View, Text, StyleSheet, LayoutChangeEvent } from 'react-native';
 
 /**
  * BrandSplash — the animated launch screen shown while fonts / auth / location
- * initialise. Designed to hand off seamlessly from the white native splash
- * (white background + the same red Spinr mark), then come alive:
+ * initialise. Hands off seamlessly from the white native splash (white
+ * background + the same red Spinr mark), then comes alive:
  *   - the lockup fades + scales in
  *   - the red mark (the dotted "i") spins continuously — the literal "spinr"
  *   - "ride local · support local" fades up
  *
- * Pure vector + Reanimated (no extra deps). The mark is the exact splash-mark
+ * Uses React Native's core Animated (native-driven) rather than Reanimated:
+ * these apps run the old architecture (newArchEnabled: false) and the bundled
+ * Reanimated 4 only supports the New Architecture. No extra deps, no babel
+ * plugin requirement, works on both arches. The mark is the exact splash-mark
  * asset used by the native splash, so the two layers match.
  */
 
@@ -30,38 +24,49 @@ const WORD_FONT = 'PlusJakartaSans_700Bold';
 type Props = { onLayout?: (e: LayoutChangeEvent) => void };
 
 export default function BrandSplash({ onLayout }: Props) {
-  const enter = useSharedValue(0); // 0 -> 1 entrance
-  const spin = useSharedValue(0); // 0 -> 360 continuous
-  const tag = useSharedValue(0); // tagline reveal
+  const enter = useRef(new Animated.Value(0)).current; // 0 -> 1 entrance
+  const spin = useRef(new Animated.Value(0)).current; // 0 -> 1 continuous
+  const tag = useRef(new Animated.Value(0)).current; // tagline reveal
 
   useEffect(() => {
-    enter.value = withTiming(1, { duration: 480, easing: Easing.out(Easing.cubic) });
-    spin.value = withRepeat(
-      withTiming(360, { duration: 5200, easing: Easing.linear }),
-      -1,
-      false,
+    const entrance = Animated.timing(enter, {
+      toValue: 1,
+      duration: 480,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    });
+    const tagline = Animated.timing(tag, {
+      toValue: 1,
+      duration: 620,
+      delay: 380,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    });
+    const loop = Animated.loop(
+      Animated.timing(spin, {
+        toValue: 1,
+        duration: 5200,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      }),
     );
-    tag.value = withDelay(380, withTiming(1, { duration: 620, easing: Easing.out(Easing.cubic) }));
+    entrance.start();
+    tagline.start();
+    loop.start();
     return () => {
-      cancelAnimation(spin);
+      entrance.stop();
+      tagline.stop();
+      loop.stop();
     };
   }, [enter, spin, tag]);
 
-  const lockupStyle = useAnimatedStyle(() => ({
-    opacity: enter.value,
-    transform: [{ scale: 0.92 + 0.08 * enter.value }],
-  }));
-  const markStyle = useAnimatedStyle(() => ({
-    transform: [{ rotate: `${spin.value}deg` }],
-  }));
-  const tagStyle = useAnimatedStyle(() => ({
-    opacity: tag.value,
-    transform: [{ translateY: 10 * (1 - tag.value) }],
-  }));
+  const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+  const scale = enter.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1] });
+  const tagY = tag.interpolate({ inputRange: [0, 1], outputRange: [10, 0] });
 
   return (
     <View style={styles.root} onLayout={onLayout}>
-      <Animated.View style={[styles.lockup, lockupStyle]}>
+      <Animated.View style={[styles.lockup, { opacity: enter, transform: [{ scale }] }]}>
         <View style={styles.word}>
           <Text style={styles.letters} allowFontScaling={false}>
             sp
@@ -69,13 +74,20 @@ export default function BrandSplash({ onLayout }: Props) {
           {/* the "i": charcoal tittle + spinning red mark */}
           <View style={styles.iWrap}>
             <View style={styles.tittle} />
-            <Animated.Image source={MARK} style={[styles.mark, markStyle]} resizeMode="contain" />
+            <Animated.Image
+              source={MARK}
+              style={[styles.mark, { transform: [{ rotate }] }]}
+              resizeMode="contain"
+            />
           </View>
           <Text style={styles.letters} allowFontScaling={false}>
             nr
           </Text>
         </View>
-        <Animated.Text style={[styles.tagline, tagStyle]} allowFontScaling={false}>
+        <Animated.Text
+          style={[styles.tagline, { opacity: tag, transform: [{ translateY: tagY }] }]}
+          allowFontScaling={false}
+        >
           ride local · support local
         </Animated.Text>
       </Animated.View>

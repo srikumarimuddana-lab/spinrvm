@@ -49,6 +49,7 @@ function DriverArrivingScreenContent() {
   const trackBaseUrl = useContext(TrackBaseUrlContext);
   const {
     currentRide, currentDriver, fetchRide, triggerEmergency,
+    selectedVehicle,
     isLoading, error, driverEtaSeconds, cancelRide, clearRide,
     wsConnected,
     activeRideRouteCoords, activeDriverRouteCoords,
@@ -387,7 +388,8 @@ function DriverArrivingScreenContent() {
           {/* Driver car */}
           {currentDriver?.lat != null && currentDriver?.lng != null && (
             <CarMarker coordinate={{ latitude: currentDriver.lat, longitude: currentDriver.lng }}
-              heading={(currentDriver as any).heading} size={44} zIndex={105} />
+              heading={(currentDriver as any).heading} size={44} zIndex={105}
+              vehicleType={selectedVehicle?.icon ?? selectedVehicle?.name} />
           )}
           {serviceAreaPolygons.map((coords, idx) => (
             <Polygon

@@ -52,6 +52,7 @@ function RideInProgressScreenContent() {
   const trackBaseUrl = useContext(TrackBaseUrlContext);
   const {
     currentRide, currentDriver, fetchRide, cancelRide, clearRide,
+    selectedVehicle,
     triggerEmergency, isLoading, error, wsConnected,
     activeRideRouteCoords, lastEtaMin,
     setActiveRideRouteCoords, setLastEtaMin,
@@ -716,6 +717,7 @@ I've shared my live location with you for safety.
                 heading={(currentDriver as any).heading}
                 size={44}
                 zIndex={100}
+                vehicleType={selectedVehicle?.icon ?? selectedVehicle?.name}
               />
             )}
           </MapView>

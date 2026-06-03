@@ -35,7 +35,7 @@ export default function DriverArrivedScreen() {
 function DriverArrivedScreenContent() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
-  const { currentRide, currentDriver, fetchRide, cancelRide, clearRide, triggerEmergency, wsConnected } = useRideStore();
+  const { currentRide, currentDriver, fetchRide, cancelRide, clearRide, triggerEmergency, wsConnected, selectedVehicle } = useRideStore();
   const mapRef = React.useRef<MapView>(null);
   const bottomSheetRef = React.useRef<any>(null);
   const snapPoints = useMemo(() => ['42%', '70%'], []);
@@ -221,6 +221,7 @@ function DriverArrivedScreenContent() {
               heading={(currentDriver as any).heading}
               size={44}
               zIndex={100}
+              vehicleType={selectedVehicle?.icon ?? selectedVehicle?.name}
             />
           )}
         </MapView>

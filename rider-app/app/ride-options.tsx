@@ -492,7 +492,8 @@ function RideOptionsScreenContent() {
           ).map((driver) => (
             <CarMarker key={driver.id} identifier={driver.id}
               coordinate={{ latitude: driver.lat, longitude: driver.lng }}
-              heading={(driver as any).heading ?? Math.random() * 360} size={36} zIndex={101} />
+              heading={(driver as any).heading ?? Math.random() * 360} size={36} zIndex={101}
+              vehicleType={estimates.find(e => e.vehicle_type.id === driver.vehicle_type_id)?.vehicle_type.icon} />
           ))}
           {serviceAreaPolygons.map((coords, idx) => (
             <Polygon

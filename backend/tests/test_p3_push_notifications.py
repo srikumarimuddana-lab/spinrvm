@@ -531,3 +531,63 @@ class TestDispatchPushIsImmediate:
 
         assert result is False
         assert enqueued == [], "missing-token dispatch must not be enqueued"
+
+    async def test_dispatch_push_enqueued_when_user_lookup_fails(self):
+        """A transient Supabase read failure in the users lookup must NOT drop a
+        time-critical offer — it falls back to the retry queue (the queued-first
+        path this replaced couldn't drop it either)."""
+        enqueued: list = []
+
+        async def _enqueue(user_id, title, body, data=None, priority="normal", target_app=None):
+            enqueued.append({"user_id": user_id, "priority": priority, "target_app": target_app})
+
+        with (
+            patch(
+                "backend.features.db_supabase.find_one",
+                AsyncMock(side_effect=RuntimeError("supabase read timeout")),
+            ),
+            patch("backend.utils.push_retry.enqueue_push", AsyncMock(side_effect=_enqueue)),
+        ):
+            from backend import features as features_mod
+
+            result = await features_mod.send_push_notification(
+                user_id=USER_ID,
+                title="$12.50 ride offer",
+                body="Booking r1 • A → B",
+                data={"type": "new_ride_assignment", "ride_id": "r1"},
+                priority="dispatch",
+                target_app="driver",
+            )
+
+        assert result is False
+        assert len(enqueued) == 1, "a dispatch push must be enqueued when the user lookup fails"
+        assert enqueued[0]["priority"] == "dispatch"
+        assert enqueued[0]["target_app"] == "driver"
+
+    async def test_normal_push_lookup_failure_surfaces_not_masked(self):
+        """A non-time-critical push keeps its best-effort contract: a DB error in
+        the lookup surfaces to the caller and is never silently queued."""
+        enqueued: list = []
+
+        async def _enqueue(*args, **kwargs):  # pragma: no cover - must not run
+            enqueued.append(kwargs or args)
+
+        with (
+            patch(
+                "backend.features.db_supabase.find_one",
+                AsyncMock(side_effect=RuntimeError("db down")),
+            ),
+            patch("backend.utils.push_retry.enqueue_push", AsyncMock(side_effect=_enqueue)),
+        ):
+            from backend import features as features_mod
+
+            with pytest.raises(RuntimeError):
+                await features_mod.send_push_notification(
+                    user_id=USER_ID,
+                    title="Ride completed",
+                    body="Thanks for riding",
+                    data={"type": "ride_completed"},
+                    priority="normal",
+                )
+
+        assert enqueued == [], "normal pushes must not be enqueued for retry"

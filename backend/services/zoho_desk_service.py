@@ -240,6 +240,8 @@ async def list_tickets(
     status: Optional[str] = None,
     department_id: Optional[str] = None,
     assignee_id: Optional[str] = None,
+    priority: Optional[str] = None,
+    channel: Optional[str] = None,
     sort_by: str = "-createdTime",
 ) -> Dict[str, Any]:
     params: Dict[str, Any] = {
@@ -257,6 +259,10 @@ async def list_tickets(
         params["departmentIds"] = department_id
     if assignee_id:
         params["assignee"] = assignee_id
+    if priority:
+        params["priority"] = priority
+    if channel:
+        params["channel"] = channel
     data = await _request("GET", "/api/v1/tickets", params=params)
     return data or {"data": []}
 

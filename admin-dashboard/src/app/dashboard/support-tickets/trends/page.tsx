@@ -17,7 +17,7 @@ import {
     Tooltip,
     Legend,
 } from "recharts";
-import { getDeskTrends, ZohoTrends } from "@/lib/api";
+import { getDeskTrends, getDeskAgents, ZohoTrends } from "@/lib/api";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -36,9 +36,18 @@ function toSeries(rec: Record<string, number>) {
     return Object.entries(rec).map(([name, value]) => ({ name, value }));
 }
 
+function fmtHours(h: number | null): string {
+    if (h == null) return "—";
+    if (h < 1) return `${Math.round(h * 60)}m`;
+    if (h < 48) return `${h.toFixed(1)}h`;
+    return `${(h / 24).toFixed(1)}d`;
+}
+
 export default function TrendsPage() {
     const { allowed } = useRequireModule("support_tickets");
     const [days, setDays] = useState("14");
+    const [assignee, setAssignee] = useState("all");
+    const [agents, setAgents] = useState<any[]>([]);
     const [data, setData] = useState<ZohoTrends | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -47,7 +56,12 @@ export default function TrendsPage() {
         setLoading(true);
         setError(null);
         try {
-            setData(await getDeskTrends({ days: Number(days) }));
+            setData(
+                await getDeskTrends({
+                    days: Number(days),
+                    assigneeId: assignee === "all" ? undefined : assignee,
+                }),
+            );
         } catch (e: any) {
             setError(e?.message || "Failed to load trends");
         } finally {
@@ -58,7 +72,12 @@ export default function TrendsPage() {
     useEffect(() => {
         if (allowed) load();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [allowed, days]);
+    }, [allowed, days, assignee]);
+
+    useEffect(() => {
+        if (!allowed) return;
+        getDeskAgents().then((r) => setAgents(r.data || [])).catch(() => {});
+    }, [allowed]);
 
     if (!allowed) return null;
 
@@ -71,7 +90,18 @@ export default function TrendsPage() {
                     </h1>
                     <p className="text-sm text-muted-foreground">Volume and breakdowns over time</p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                    <Select value={assignee} onValueChange={setAssignee}>
+                        <SelectTrigger className="w-44"><SelectValue placeholder="Assignee" /></SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all">All assignees</SelectItem>
+                            {agents.map((a) => (
+                                <SelectItem key={a.id} value={a.id}>
+                                    {`${a.firstName || ""} ${a.lastName || ""}`.trim() || a.emailId || a.id}
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
                     <Select value={days} onValueChange={setDays}>
                         <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
                         <SelectContent>
@@ -101,8 +131,19 @@ export default function TrendsPage() {
                         </Card>
                     )}
 
+                    {/* Level stats for the selected window / assignee */}
+                    <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+                        <StatCard label="Opened" value={String(data.stats.opened)} />
+                        <StatCard label="Closed" value={String(data.stats.closed)} />
+                        <StatCard label="Still open" value={String(data.stats.open_now)} accent />
+                        <StatCard label="Avg resolution" value={fmtHours(data.stats.avg_resolution_hours)} />
+                        <StatCard label="Median resolution" value={fmtHours(data.stats.median_resolution_hours)} />
+                    </div>
+
                     <Card>
-                        <CardHeader><CardTitle className="text-base">Ticket volume (by day created)</CardTitle></CardHeader>
+                        <CardHeader>
+                            <CardTitle className="text-base">Opened vs closed (by day)</CardTitle>
+                        </CardHeader>
                         <CardContent>
                             <ResponsiveContainer width="100%" height={280}>
                                 <LineChart data={data.volume} margin={{ top: 10, right: 16, left: -8, bottom: 0 }}>
@@ -110,7 +151,9 @@ export default function TrendsPage() {
                                     <XAxis dataKey="date" tick={{ fontSize: 11 }} />
                                     <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
                                     <Tooltip />
-                                    <Line type="monotone" dataKey="count" stroke="#3b82f6" strokeWidth={2} dot={{ r: 2 }} />
+                                    <Legend />
+                                    <Line type="monotone" dataKey="opened" name="Opened" stroke="#3b82f6" strokeWidth={2} dot={{ r: 2 }} />
+                                    <Line type="monotone" dataKey="closed" name="Closed" stroke="#10b981" strokeWidth={2} dot={{ r: 2 }} />
                                 </LineChart>
                             </ResponsiveContainer>
                         </CardContent>
@@ -164,8 +207,83 @@ export default function TrendsPage() {
                             </CardContent>
                         </Card>
                     </div>
+
+                    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                        <HBarCard title="By category" rec={data.by_category} color="#8b5cf6" />
+                        <ContactsCard contacts={data.top_contacts} />
+                        {Object.keys(data.by_tag).length > 0 && (
+                            <HBarCard title="By tag" rec={data.by_tag} color="#ec4899" />
+                        )}
+                        {Object.keys(data.by_classification).length > 0 && (
+                            <HBarCard title="By classification" rec={data.by_classification} color="#0ea5e9" />
+                        )}
+                    </div>
                 </>
             )}
         </div>
+    );
+}
+
+/** Horizontal bar chart for a {label: count} map (good for long category/tag names). */
+function HBarCard({ title, rec, color }: { title: string; rec: Record<string, number>; color: string }) {
+    const data = Object.entries(rec)
+        .map(([name, value]) => ({ name, value }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 10);
+    return (
+        <Card>
+            <CardHeader><CardTitle className="text-base">{title}</CardTitle></CardHeader>
+            <CardContent>
+                {data.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No data.</p>
+                ) : (
+                    <ResponsiveContainer width="100%" height={Math.max(160, data.length * 32)}>
+                        <BarChart data={data} layout="vertical" margin={{ left: 20, right: 16 }}>
+                            <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                            <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} />
+                            <YAxis type="category" dataKey="name" width={120} tick={{ fontSize: 11 }} />
+                            <Tooltip />
+                            <Bar dataKey="value" fill={color} />
+                        </BarChart>
+                    </ResponsiveContainer>
+                )}
+            </CardContent>
+        </Card>
+    );
+}
+
+function ContactsCard({ contacts }: { contacts: Array<{ name: string; count: number }> }) {
+    return (
+        <Card>
+            <CardHeader><CardTitle className="text-base">Top requesters</CardTitle></CardHeader>
+            <CardContent>
+                {contacts.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No data.</p>
+                ) : (
+                    <ResponsiveContainer width="100%" height={Math.max(160, contacts.length * 32)}>
+                        <BarChart data={contacts} layout="vertical" margin={{ left: 20, right: 16 }}>
+                            <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                            <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} />
+                            <YAxis type="category" dataKey="name" width={160} tick={{ fontSize: 10 }} />
+                            <Tooltip />
+                            <Bar dataKey="count" fill="#3b82f6" />
+                        </BarChart>
+                    </ResponsiveContainer>
+                )}
+            </CardContent>
+        </Card>
+    );
+}
+
+function StatCard({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+    return (
+        <Card>
+            <CardHeader className="pb-2">
+                <CardTitle className="text-xs font-medium text-muted-foreground">{label}</CardTitle>
+            </CardHeader>
+            <CardContent>
+                <div className={`text-2xl font-bold ${accent ? "text-blue-600" : ""}`}>{value}</div>
+            </CardContent>
+        </Card>
     );
 }

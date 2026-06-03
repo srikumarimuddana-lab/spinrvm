@@ -2310,7 +2310,8 @@ export interface ZohoTicketsResponse {
     data: any[];
 }
 export interface ZohoDashboard {
-    total: number;
+    total: number | null;
+    total_available: boolean;
     open: number;
     by_status: Record<string, number>;
     recent: any[];
@@ -2320,10 +2321,22 @@ export interface ZohoDashboard {
 export interface ZohoTrends {
     sample_size: number;
     approximate: boolean;
-    volume: Array<{ date: string; count: number }>;
+    volume: Array<{ date: string; opened: number; closed: number }>;
     by_status: Record<string, number>;
     by_priority: Record<string, number>;
     by_channel: Record<string, number>;
+    by_category: Record<string, number>;
+    by_classification: Record<string, number>;
+    by_tag: Record<string, number>;
+    top_contacts: Array<{ name: string; count: number }>;
+    stats: {
+        opened: number;
+        closed: number;
+        open_now: number;
+        avg_resolution_hours: number | null;
+        median_resolution_hours: number | null;
+        resolved_sample: number;
+    };
 }
 
 export const getZohoConfig = () =>
@@ -2342,10 +2355,11 @@ export const getDeskDashboard = (departmentId?: string) => {
     const qs = departmentId ? `?department_id=${encodeURIComponent(departmentId)}` : "";
     return request<ZohoDashboard>(`/api/admin/support-tickets/dashboard${qs}`);
 };
-export const getDeskTrends = (opts?: { days?: number; departmentId?: string }) => {
+export const getDeskTrends = (opts?: { days?: number; departmentId?: string; assigneeId?: string }) => {
     const sp = new URLSearchParams();
     if (opts?.days) sp.set("days", String(opts.days));
     if (opts?.departmentId) sp.set("department_id", opts.departmentId);
+    if (opts?.assigneeId) sp.set("assignee_id", opts.assigneeId);
     const qs = sp.toString();
     return request<ZohoTrends>(`/api/admin/support-tickets/trends${qs ? `?${qs}` : ""}`);
 };
@@ -2356,6 +2370,8 @@ export const getDeskTickets = (opts?: {
     status?: string;
     departmentId?: string;
     assigneeId?: string;
+    priority?: string;
+    channel?: string;
     sortBy?: string;
 }) => {
     const sp = new URLSearchParams();
@@ -2364,6 +2380,8 @@ export const getDeskTickets = (opts?: {
     if (opts?.status) sp.set("status", opts.status);
     if (opts?.departmentId) sp.set("department_id", opts.departmentId);
     if (opts?.assigneeId) sp.set("assignee_id", opts.assigneeId);
+    if (opts?.priority) sp.set("priority", opts.priority);
+    if (opts?.channel) sp.set("channel", opts.channel);
     if (opts?.sortBy) sp.set("sort_by", opts.sortBy);
     const qs = sp.toString();
     return request<ZohoTicketsResponse>(`/api/admin/support-tickets/tickets${qs ? `?${qs}` : ""}`);

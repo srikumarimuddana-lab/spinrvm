@@ -151,6 +151,22 @@ async def update_config(payload: ZohoConfigUpdate, admin: dict = Depends(get_adm
     return _config_status(cfg)
 
 
+@router.post("/sync")
+async def trigger_sync(admin: dict = Depends(require_module("support_tickets"))):
+    """Run a Zoho -> DB mirror sync now (the background loop also runs every
+    ~10 min). Returns how many tickets were upserted."""
+    try:
+        from ...utils.zoho_desk_sync import run_sync
+    except ImportError:
+        from utils.zoho_desk_sync import run_sync
+    try:
+        result = await run_sync()
+    except ZohoDeskError as e:
+        raise _err(e) from e
+    await log_admin_action(admin, "zoho_desk_sync", "zoho_desk_config", _CONFIG_ID, result)
+    return result
+
+
 @router.post("/config/test")
 async def test_connection(admin: dict = Depends(get_admin_user)):
     """Verify the stored credentials by making a lightweight Zoho call."""

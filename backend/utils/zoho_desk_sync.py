@@ -38,7 +38,7 @@ _CONFIG_TABLE = "zoho_desk_config"
 _CONFIG_ID = "default"
 
 SYNC_INTERVAL_SECONDS = 600  # 10 minutes
-SEED_MAX_PAGES = 10  # first run: pull up to 1000 most-recently-modified tickets
+SEED_MAX_PAGES = 500  # first run: full backfill (safety cap ~50k tickets)
 INCREMENTAL_MAX_PAGES = 50  # safety cap; incremental runs stop at the cursor
 
 
@@ -110,14 +110,17 @@ async def run_sync() -> Dict[str, Any]:
         return {"skipped": "disabled"}
 
     cursor = _parse(cfg.get("sync_cursor"))
+    seeding = cursor is None and not cfg.get("mirror_backfilled")
     newest = cursor
-    max_pages = INCREMENTAL_MAX_PAGES if cursor else SEED_MAX_PAGES
+    max_pages = SEED_MAX_PAGES if seeding else INCREMENTAL_MAX_PAGES
     total = 0
+    reached_end = False
 
     for p in range(max_pages):
         page = await zoho.list_tickets(from_index=p * 100 + 1, limit=100, sort_by="-modifiedTime")
         rows = (page or {}).get("data", [])
         if not rows:
+            reached_end = True
             break
 
         batch: List[Dict[str, Any]] = []
@@ -135,6 +138,7 @@ async def run_sync() -> Dict[str, Any]:
             await _upsert_batch(batch)
             total += len(batch)
         if stop or len(rows) < 100:
+            reached_end = True
             break
 
     updates: Dict[str, Any] = {
@@ -143,9 +147,18 @@ async def run_sync() -> Dict[str, Any]:
     }
     if newest:
         updates["sync_cursor"] = newest.isoformat()
+    # The mirror is only authoritative for reads once a full backfill has paged
+    # to the end. Incremental runs (cursor already set) keep it true.
+    if reached_end and (seeding or cfg.get("mirror_backfilled")):
+        updates["mirror_backfilled"] = True
     await db_supabase.update_one(_CONFIG_TABLE, {"id": _CONFIG_ID}, updates)
-    logger.info("Zoho Desk sync upserted %s tickets (cursor=%s)", total, newest)
-    return {"upserted": total}
+    logger.info(
+        "Zoho Desk sync upserted %s tickets (cursor=%s, backfilled=%s)",
+        total,
+        newest,
+        updates.get("mirror_backfilled", cfg.get("mirror_backfilled")),
+    )
+    return {"upserted": total, "backfilled": bool(updates.get("mirror_backfilled") or cfg.get("mirror_backfilled"))}
 
 
 async def zoho_desk_sync_loop() -> None:

@@ -270,21 +270,25 @@ async def dashboard(
 ):
     dept = await _resolve_department(department_id)
 
-    # Prefer the local mirror — exact counts, no Zoho credits, no sample cap.
-    db = await zoho_desk_db.count_by_status(dept, _DASHBOARD_STATUSES)
-    if db is not None and db[0] > 0:
-        total, by_status = db
-        recent = await zoho_desk_db.list_mirror(limit=10, department_id=dept, sort_by="-createdTime") or []
-        return {
-            "total": total,
-            "total_available": True,
-            "open": total - by_status.get("Closed", 0),
-            "by_status": by_status,
-            "recent": recent,
-            "sample_size": total,
-            "approximate": False,
-            "source": "db",
-        }
+    # Serve from the mirror only after a full backfill (exact counts, no Zoho
+    # credits, no sample cap). Open count uses status_type so custom closed
+    # statuses (e.g. 'Resolved') aren't reported as open.
+    if await zoho_desk_db.mirror_ready():
+        oc = await zoho_desk_db.open_closed_counts(dept)
+        by = await zoho_desk_db.count_by_status(dept, _DASHBOARD_STATUSES)
+        if oc is not None and by is not None:
+            total, closed = oc
+            recent = await zoho_desk_db.list_mirror(limit=10, department_id=dept, sort_by="-createdTime") or []
+            return {
+                "total": total,
+                "total_available": True,
+                "open": max(0, total - closed),
+                "by_status": by[1],
+                "recent": recent,
+                "sample_size": total,
+                "approximate": False,
+                "source": "db",
+            }
 
     # Live fallback (before the first sync / migration).
     try:
@@ -326,13 +330,16 @@ async def trends(
     dept = await _resolve_department(department_id)
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
-    rows = await zoho_desk_db.fetch_window(since_iso=cutoff.isoformat(), department_id=dept, assignee_id=assignee_id)
-    if rows is not None and len(rows) > 0:
-        result = _aggregate_trends(rows)
-        result["sample_size"] = len(rows)
-        result["approximate"] = False
-        result["source"] = "db"
-        return result
+    if await zoho_desk_db.mirror_ready():
+        rows = await zoho_desk_db.fetch_window(
+            since_iso=cutoff.isoformat(), department_id=dept, assignee_id=assignee_id
+        )
+        if rows is not None:
+            result = _aggregate_trends(rows)
+            result["sample_size"] = len(rows)
+            result["approximate"] = False
+            result["source"] = "db"
+            return result
 
     # Live fallback.
     try:
@@ -419,19 +426,21 @@ async def tickets(
     admin: dict = Depends(require_module("support_tickets")),
 ):
     dept = await _resolve_department(department_id)
-    # DB-first: serve from the mirror when it has data; else live.
-    rows = await zoho_desk_db.list_mirror(
-        limit=limit,
-        offset=from_index - 1,
-        status=status,
-        priority=priority,
-        channel=channel,
-        assignee_id=assignee_id,
-        department_id=dept,
-        sort_by=sort_by,
-    )
-    if rows is not None and (rows or (await zoho_desk_db.mirror_count() or 0) > 0):
-        return {"data": rows, "source": "db"}
+    # Serve from the mirror only after a full backfill; else live (so an empty
+    # page from a partially-seeded mirror never hides historical tickets).
+    if await zoho_desk_db.mirror_ready():
+        rows = await zoho_desk_db.list_mirror(
+            limit=limit,
+            offset=from_index - 1,
+            status=status,
+            priority=priority,
+            channel=channel,
+            assignee_id=assignee_id,
+            department_id=dept,
+            sort_by=sort_by,
+        )
+        if rows is not None:
+            return {"data": rows, "source": "db"}
     try:
         return await zoho.list_tickets(
             from_index=from_index,
@@ -461,18 +470,19 @@ async def search(
     """Account-wide ticket search. Served from the local mirror when synced
     (fast, no Zoho credits); otherwise Zoho /tickets/search."""
     dept = await _resolve_department(department_id)
-    rows = await zoho_desk_db.list_mirror(
-        limit=limit,
-        offset=from_index - 1,
-        search=q,
-        status=status,
-        priority=priority,
-        assignee_id=assignee_id,
-        department_id=dept,
-        sort_by="-createdTime",
-    )
-    if rows is not None and (rows or (await zoho_desk_db.mirror_count() or 0) > 0):
-        return {"data": rows, "source": "db"}
+    if await zoho_desk_db.mirror_ready():
+        rows = await zoho_desk_db.list_mirror(
+            limit=limit,
+            offset=from_index - 1,
+            search=q,
+            status=status,
+            priority=priority,
+            assignee_id=assignee_id,
+            department_id=dept,
+            sort_by="-createdTime",
+        )
+        if rows is not None:
+            return {"data": rows, "source": "db"}
     try:
         return await zoho.search_tickets(
             query=q,

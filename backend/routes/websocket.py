@@ -783,6 +783,64 @@ async def websocket_endpoint(
                                 driver_id, _lat, _lng, heading=last_pt.get("heading")
                             )
                             await mark_present(driver_id)
+
+                            # Fan-out latest batch position to riders — the single-ping
+                            # handler does this for `driver_location` messages; batches
+                            # must mirror that so the rider's blue dot moves during trips.
+                            _batch_active_rides = await db_supabase.get_rows(
+                                "rides",
+                                {
+                                    "driver_id": driver_id,
+                                    "status": {
+                                        "$in": [
+                                            "driver_assigned",
+                                            "driver_accepted",
+                                            "driver_arrived",
+                                            "in_progress",
+                                        ]
+                                    },
+                                },
+                                limit=10,
+                            )
+                            _batch_loc_update = {
+                                "type": "driver_location_update",
+                                "driver_id": driver_id,
+                                "lat": _lat,
+                                "lng": _lng,
+                                "speed": last_pt.get("speed"),
+                                "heading": last_pt.get("heading"),
+                            }
+                            for _batch_ride in _batch_active_rides:
+                                if _batch_ride.get("status") == "driver_accepted":
+                                    continue
+                                _batch_rider_msg = _batch_loc_update.copy()
+                                _batch_ride_status = _batch_ride.get("status", "")
+                                if _batch_ride_status in _ETA_PICKUP_STATUSES:
+                                    _p_lat = _batch_ride.get("pickup_lat")
+                                    _p_lng = _batch_ride.get("pickup_lng")
+                                    if _p_lat is not None and _p_lng is not None:
+                                        try:
+                                            _eta_sec = await get_ride_eta_seconds(
+                                                driver_lat=_lat,
+                                                driver_lng=_lng,
+                                                dest_lat=_p_lat,
+                                                dest_lng=_p_lng,
+                                                maps_api_key=_maps_key_cache,
+                                                driver_id=driver_id,
+                                                ride_id=_batch_ride["id"],
+                                            )
+                                            if _eta_sec is not None:
+                                                _batch_rider_msg["eta_seconds"] = _eta_sec
+                                        except Exception:
+                                            logger.debug(
+                                                "ETA fetch failed for batch; omitting eta_seconds",
+                                                exc_info=True,
+                                            )
+                                await manager.send_personal_message(
+                                    _batch_rider_msg,
+                                    f"rider_{_batch_ride['rider_id']}",
+                                )
+                            await manager.broadcast_to_admins(_batch_loc_update)
                     await websocket.send_json({"type": "location_batch_ack", "count": inserted})
 
             elif data.get("type") == "ride_status_update":

@@ -4,120 +4,151 @@ import Svg, { Rect, Path, G } from 'react-native-svg';
 /**
  * Top-down (bird's-eye) car SVG markers, one silhouette per vehicle tier.
  *
- * These are designed to be dropped inside a react-native-maps <Marker> and
- * rotated by the driver's heading. Every car is drawn nose-up (north) on a
- * 48×64 canvas so a `rotation={heading}` on the Marker points the car the
- * right way. Keep them lightweight — no gradients, no filters — so the
- * Android Marker snapshot stays cheap.
+ * Lyft-style look: a WHITE body with a domed front and squarer rear, a
+ * near-black windshield carrying a glowing RED pill at the front (the brand
+ * colour), faint roof panel seams, a dark rear window, a thin red taillight
+ * accent at the rear, and small wheel/mirror nubs poking out. A soft drop
+ * shadow sits underneath.
  *
- * The four tiers mirror backend/seed_vehicle_types.py (Economy / Premium /
- * Van / XL). `resolveVehicleMarker()` maps either the backend `icon` value
- * (car-compact, car-sport, bus, bus-outline) or the human name onto a
- * silhouette, falling back to the economy sedan for anything unknown.
+ * Every car is drawn nose-up (north) on a 48×64 canvas so `rotation={heading}`
+ * on the Marker points it the right way. The glowing pill lives at the FRONT,
+ * so heading reads at a glance. No gradients/filters — keeps the Android
+ * Marker snapshot cheap.
+ *
+ * Tiers are told apart by SHAPE, not colour: Economy = compact sedan,
+ * Premium = sleeker sedan, Van = long boxy minivan, XL = wide SUV with roof
+ * rails. They mirror backend/seed_vehicle_types.py. `resolveVehicleTier()`
+ * maps the backend `icon` (car-compact / car-sport / bus / bus-outline) or
+ * the human name onto a silhouette, falling back to the economy sedan.
  */
 
 export type VehicleTier = 'economy' | 'premium' | 'van' | 'xl';
 
+// Shared white-and-red palette.
+const BODY = '#F6F7F9';
+const EDGE = 'rgba(0,0,0,0.14)';
+const GLASS = '#1B1C22'; // dark windshield / rear window
+const SEAM = '#D6D9DF'; // roof panel lines
+const GLOW = '#FF1E4D'; // red brand pill
+const GLOW_CORE = '#FF9DB2'; // lighter pill centre
+const TAIL = '#E11D2A'; // rear taillight accent
+const WHEEL = '#2A2A30';
+const MIRROR = '#E2E4EA';
+const RAIL = '#E11D2A';
+
+const f = (n: number): number => Math.round(n * 100) / 100;
+
 interface VehicleSvgProps {
     size?: number;
-    /** Override the body colour; each tier has a sensible default. */
+    /** Override the body colour (e.g. grey-out when a driver is offline). */
     color?: string;
 }
 
-const VIEWBOX = '0 0 48 64';
+interface Geometry {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    frontR: number; // front dome height (smaller = flatter/boxier nose)
+    rearR: number; // rear corner radius
+    rails?: boolean; // SUV roof rails
+}
 
-/** Four wheels drawn as dark rounded rects at the given axle Y positions. */
-const Wheels: React.FC<{ left: number; right: number; frontY: number; rearY: number; w?: number; h?: number }> = ({
-    left,
-    right,
-    frontY,
-    rearY,
-    w = 5,
-    h = 11,
-}) => (
-    <G fill="#15151B">
-        <Rect x={left} y={frontY} width={w} height={h} rx={2} />
-        <Rect x={right} y={frontY} width={w} height={h} rx={2} />
-        <Rect x={left} y={rearY} width={w} height={h} rx={2} />
-        <Rect x={right} y={rearY} width={w} height={h} rx={2} />
-    </G>
-);
+/** One reusable top-down car; geometry varies the silhouette per tier. */
+const TopDownCar: React.FC<{ g: Geometry; size: number; color?: string }> = ({ g, size, color }) => {
+    const body = color ?? BODY;
+    const { x: bx, y: by, w: bw, h: bh, frontR, rearR } = g;
+    const cx = bx + bw / 2;
+    const shoulder = by + frontR; // where the front dome meets the straight sides
+    const rx = bw / 2;
 
-/** Economy — compact sedan (Spinr teal). icon: car-compact */
-export const EconomyCar: React.FC<VehicleSvgProps> = ({ size = 44, color = '#00C9A7' }) => (
-    <Svg width={size} height={size} viewBox={VIEWBOX}>
-        <Rect x={10} y={9} width={30} height={52} rx={11} fill="rgba(0,0,0,0.18)" />
-        <Wheels left={6} right={37} frontY={15} rearY={40} />
-        <Rect x={9} y={6} width={30} height={52} rx={11} fill={color} stroke="rgba(0,0,0,0.22)" strokeWidth={1} />
-        <Path d="M14 20 L34 20 L31 11 L17 11 Z" fill="#BFEFE6" opacity={0.92} />
-        <Rect x={13} y={22} width={22} height={17} rx={4} fill="#ffffff" opacity={0.16} />
-        <Path d="M15 41 L33 41 L31 49 L17 49 Z" fill="#BFEFE6" opacity={0.7} />
-        <Rect x={12} y={7} width={5} height={3} rx={1.5} fill="#FFE08A" />
-        <Rect x={31} y={7} width={5} height={3} rx={1.5} fill="#FFE08A" />
-        <Rect x={12} y={54} width={5} height={3} rx={1.5} fill="#FF5A5A" />
-        <Rect x={31} y={54} width={5} height={3} rx={1.5} fill="#FF5A5A" />
-    </Svg>
-);
+    // Body outline: elliptical domed front, straight sides, rounded rear.
+    const bodyPath =
+        `M${f(bx)} ${f(shoulder)} ` +
+        `A${f(rx)} ${f(frontR)} 0 0 1 ${f(bx + bw)} ${f(shoulder)} ` +
+        `L${f(bx + bw)} ${f(by + bh - rearR)} ` +
+        `Q${f(bx + bw)} ${f(by + bh)} ${f(bx + bw - rearR)} ${f(by + bh)} ` +
+        `L${f(bx + rearR)} ${f(by + bh)} ` +
+        `Q${f(bx)} ${f(by + bh)} ${f(bx)} ${f(by + bh - rearR)} Z`;
 
-/** Premium — sleek luxury sedan (graphite + gold accent). icon: car-sport */
-export const PremiumCar: React.FC<VehicleSvgProps> = ({ size = 44, color = '#1B1B26' }) => (
-    <Svg width={size} height={size} viewBox={VIEWBOX}>
-        <Rect x={11} y={8} width={26} height={54} rx={13} fill="rgba(0,0,0,0.2)" />
-        <Wheels left={7} right={36} frontY={15} rearY={41} />
-        <Rect x={11} y={5} width={26} height={54} rx={13} fill={color} stroke="#E8C45A" strokeWidth={1.1} />
-        <Path d="M15 21 L33 21 L30 12 L18 12 Z" fill="#7FC7E8" opacity={0.9} />
-        <Rect x={15} y={23} width={18} height={17} rx={4} fill="#E8C45A" opacity={0.16} />
-        <Path d="M16 42 L32 42 L30 50 L18 50 Z" fill="#7FC7E8" opacity={0.68} />
-        <Rect x={13} y={6} width={5} height={3} rx={1.5} fill="#FFFFFF" />
-        <Rect x={30} y={6} width={5} height={3} rx={1.5} fill="#FFFFFF" />
-        <Rect x={13} y={55} width={5} height={3} rx={1.5} fill="#FF4D4D" />
-        <Rect x={30} y={55} width={5} height={3} rx={1.5} fill="#FF4D4D" />
-    </Svg>
-);
+    // Windshield: follows the dome (inset), down to ~40% of the body.
+    const i = 1.5;
+    const wsBottom = by + bh * 0.4;
+    const wsPath =
+        `M${f(bx + i)} ${f(shoulder)} ` +
+        `A${f(rx - i)} ${f(frontR - i)} 0 0 1 ${f(bx + bw - i)} ${f(shoulder)} ` +
+        `L${f(bx + bw - i)} ${f(wsBottom)} L${f(bx + i)} ${f(wsBottom)} Z`;
 
-/** Van — long minivan, boxier roof (blue). icon: bus */
-export const VanCar: React.FC<VehicleSvgProps> = ({ size = 44, color = '#2F7DEB' }) => (
-    <Svg width={size} height={size} viewBox={VIEWBOX}>
-        <Rect x={9} y={6} width={32} height={56} rx={8} fill="rgba(0,0,0,0.18)" />
-        <Wheels left={5} right={38} frontY={16} rearY={42} h={12} />
-        <Rect x={8} y={3} width={32} height={56} rx={8} fill={color} stroke="rgba(0,0,0,0.22)" strokeWidth={1} />
-        <Path d="M13 18 L35 18 L33 9 L15 9 Z" fill="#CFE5FF" opacity={0.92} />
-        <Rect x={12} y={21} width={24} height={26} rx={4} fill="#ffffff" opacity={0.14} />
-        <Rect x={11} y={24} width={4} height={18} rx={2} fill="#CFE5FF" opacity={0.6} />
-        <Rect x={33} y={24} width={4} height={18} rx={2} fill="#CFE5FF" opacity={0.6} />
-        <Path d="M13 50 L35 50 L33 56 L15 56 Z" fill="#CFE5FF" opacity={0.7} />
-        <Rect x={11} y={4} width={5} height={3} rx={1.5} fill="#FFE08A" />
-        <Rect x={32} y={4} width={5} height={3} rx={1.5} fill="#FFE08A" />
-        <Rect x={11} y={55} width={5} height={3} rx={1.5} fill="#FF5A5A" />
-        <Rect x={32} y={55} width={5} height={3} rx={1.5} fill="#FF5A5A" />
-    </Svg>
-);
+    // Glowing red pill in the windshield centre.
+    const pw = bw * 0.14;
+    const ph = bh * 0.11;
+    const pcy = by + bh * 0.31;
 
-/** XL — wide boxy SUV with roof rails (purple). icon: bus-outline */
-export const XLCar: React.FC<VehicleSvgProps> = ({ size = 44, color = '#7C4DDB' }) => (
-    <Svg width={size} height={size} viewBox={VIEWBOX}>
-        <Rect x={8} y={8} width={34} height={52} rx={7} fill="rgba(0,0,0,0.18)" />
-        <Wheels left={4} right={39} frontY={16} rearY={41} w={6} h={12} />
-        <Rect x={7} y={5} width={34} height={52} rx={7} fill={color} stroke="rgba(0,0,0,0.22)" strokeWidth={1} />
-        {/* roof rails */}
-        <Rect x={12} y={9} width={3} height={44} rx={1.5} fill="rgba(0,0,0,0.28)" />
-        <Rect x={33} y={9} width={3} height={44} rx={1.5} fill="rgba(0,0,0,0.28)" />
-        <Path d="M15 19 L33 19 L31 10 L17 10 Z" fill="#E0D2FB" opacity={0.92} />
-        <Rect x={16} y={22} width={16} height={20} rx={4} fill="#ffffff" opacity={0.14} />
-        <Path d="M16 45 L32 45 L30 53 L18 53 Z" fill="#E0D2FB" opacity={0.7} />
-        <Rect x={10} y={6} width={6} height={3} rx={1.5} fill="#FFE08A" />
-        <Rect x={32} y={6} width={6} height={3} rx={1.5} fill="#FFE08A" />
-        <Rect x={10} y={53} width={6} height={3} rx={1.5} fill="#FF5A5A" />
-        <Rect x={32} y={53} width={6} height={3} rx={1.5} fill="#FF5A5A" />
-    </Svg>
-);
-
-const TIER_COMPONENTS: Record<VehicleTier, React.FC<VehicleSvgProps>> = {
-    economy: EconomyCar,
-    premium: PremiumCar,
-    van: VanCar,
-    xl: XLCar,
+    return (
+        <Svg width={size} height={size} viewBox="0 0 48 64">
+            {/* soft drop shadow (body offset down/right) */}
+            <Path d={bodyPath} fill="rgba(0,0,0,0.16)" transform="translate(1, 3)" />
+            {/* wheel nubs (drawn under the body so they peek out at the sides) */}
+            <G fill={WHEEL}>
+                <Rect x={bx - 1.5} y={by + bh * 0.3} width={3} height={7} rx={1.2} />
+                <Rect x={bx + bw - 1.5} y={by + bh * 0.3} width={3} height={7} rx={1.2} />
+                <Rect x={bx - 1.5} y={by + bh * 0.62} width={3} height={7} rx={1.2} />
+                <Rect x={bx + bw - 1.5} y={by + bh * 0.62} width={3} height={7} rx={1.2} />
+            </G>
+            {/* side mirror nubs near the front */}
+            <G fill={MIRROR}>
+                <Rect x={bx - 2} y={by + bh * 0.25} width={3} height={2.5} rx={1} />
+                <Rect x={bx + bw - 1} y={by + bh * 0.25} width={3} height={2.5} rx={1} />
+            </G>
+            {/* body */}
+            <Path d={bodyPath} fill={body} stroke={EDGE} strokeWidth={1} />
+            {/* thin red taillight accent at the rear edge */}
+            <Rect x={bx + rearR} y={by + bh - 3.2} width={bw - rearR * 2} height={2.2} rx={1.1} fill={TAIL} />
+            {/* roof panel seams */}
+            <Rect x={bx + 4} y={by + bh * 0.5} width={bw - 8} height={0.9} fill={SEAM} />
+            <Rect x={bx + 4} y={by + bh * 0.62} width={bw - 8} height={0.9} fill={SEAM} />
+            {/* dark rear window */}
+            <Rect x={bx + 3} y={by + bh * 0.72} width={bw - 6} height={bh * 0.12} rx={3} fill={GLASS} />
+            {/* roof rails (SUV only) */}
+            {g.rails && (
+                <>
+                    <Rect x={bx + 3.5} y={shoulder} width={2.5} height={by + bh - rearR - shoulder} rx={1.2} fill={RAIL} opacity={0.85} />
+                    <Rect x={bx + bw - 6} y={shoulder} width={2.5} height={by + bh - rearR - shoulder} rx={1.2} fill={RAIL} opacity={0.85} />
+                </>
+            )}
+            {/* dark windshield */}
+            <Path d={wsPath} fill={GLASS} />
+            {/* glowing red pill: outer halo, body, lighter core */}
+            <Rect x={cx - pw} y={pcy - ph * 0.9} width={pw * 2} height={ph * 1.8} rx={pw} fill={GLOW} opacity={0.32} />
+            <Rect x={cx - pw / 2} y={pcy - ph / 2} width={pw} height={ph} rx={pw / 2} fill={GLOW} />
+            <Rect x={cx - pw * 0.22} y={pcy - ph * 0.28} width={pw * 0.44} height={ph * 0.56} rx={pw * 0.22} fill={GLOW_CORE} />
+        </Svg>
+    );
 };
+
+const GEOMETRY: Record<VehicleTier, Geometry> = {
+    economy: { x: 10, y: 6, w: 28, h: 52, frontR: 14, rearR: 7 },
+    premium: { x: 11, y: 5, w: 26, h: 54, frontR: 13, rearR: 8 },
+    van: { x: 8, y: 4, w: 32, h: 56, frontR: 10, rearR: 5 },
+    xl: { x: 7, y: 5, w: 34, h: 52, frontR: 10, rearR: 5, rails: true },
+};
+
+/** Economy — compact sedan. icon: car-compact */
+export const EconomyCar: React.FC<VehicleSvgProps> = ({ size = 44, color }) => (
+    <TopDownCar g={GEOMETRY.economy} size={size} color={color} />
+);
+/** Premium — sleeker sedan. icon: car-sport */
+export const PremiumCar: React.FC<VehicleSvgProps> = ({ size = 44, color }) => (
+    <TopDownCar g={GEOMETRY.premium} size={size} color={color} />
+);
+/** Van — long minivan. icon: bus */
+export const VanCar: React.FC<VehicleSvgProps> = ({ size = 44, color }) => (
+    <TopDownCar g={GEOMETRY.van} size={size} color={color} />
+);
+/** XL — wide SUV with roof rails. icon: bus-outline */
+export const XLCar: React.FC<VehicleSvgProps> = ({ size = 44, color }) => (
+    <TopDownCar g={GEOMETRY.xl} size={size} color={color} />
+);
 
 /**
  * Map a backend `icon` value or human name onto a tier.
@@ -144,8 +175,8 @@ interface VehicleMarkerProps extends VehicleSvgProps {
  * renders the matching silhouette. Use this inside CarMarker / a Marker child.
  */
 export const VehicleMarker: React.FC<VehicleMarkerProps> = ({ type, size = 44, color }) => {
-    const Car = TIER_COMPONENTS[resolveVehicleTier(type)];
-    return <Car size={size} color={color} />;
+    const tier = resolveVehicleTier(type);
+    return <TopDownCar g={GEOMETRY[tier]} size={size} color={color} />;
 };
 
 export default VehicleMarker;

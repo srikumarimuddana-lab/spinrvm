@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -10,10 +11,20 @@ from pydantic import BaseModel
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
+    from ...services.zoho_desk_integration import (
+        create_ticket_for_complaint,
+        create_ticket_for_dispute,
+        create_ticket_for_flag,
+    )
     from ...utils.audit_logger import log_admin_action
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user  # noqa: F401
+    from services.zoho_desk_integration import (
+        create_ticket_for_complaint,
+        create_ticket_for_dispute,
+        create_ticket_for_flag,
+    )
     from utils.audit_logger import log_admin_action  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -160,6 +171,7 @@ async def admin_create_dispute(dispute: DisputeCreateRequest):
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db_supabase.insert_one("disputes", doc)
+    asyncio.create_task(create_ticket_for_dispute(doc))
     return {"success": True, "dispute": doc}
 
 
@@ -395,6 +407,7 @@ async def admin_flag_ride_participant(
         "is_active": True,
     }
     result = await db_supabase.create_flag(flag_data)
+    asyncio.create_task(create_ticket_for_flag(result or flag_data, ride))
     await log_admin_action(
         admin,
         "flag_created",
@@ -485,6 +498,8 @@ async def admin_create_complaint(ride_id: str, req: ComplaintRequest):
         "created_by": "admin",
     }
     complaint = await db_supabase.create_complaint(complaint_data)
+    # Raise a Zoho Desk ticket for support — fire-and-forget, no-op if disabled.
+    asyncio.create_task(create_ticket_for_complaint(complaint or complaint_data, ride))
     return complaint
 
 

@@ -2310,7 +2310,8 @@ export interface ZohoTicketsResponse {
     data: any[];
 }
 export interface ZohoDashboard {
-    total: number;
+    total: number | null;
+    total_available: boolean;
     open: number;
     by_status: Record<string, number>;
     recent: any[];

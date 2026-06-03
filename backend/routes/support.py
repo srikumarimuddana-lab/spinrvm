@@ -18,12 +18,16 @@ from pydantic import BaseModel
 
 try:
     from dependencies import get_current_user
+    from services.zoho_desk_integration import create_support_ticket
+    from services.zoho_desk_service import ZohoDeskError
 except ImportError:
     from .dependencies import get_current_user  # type: ignore
 
 api_router = APIRouter(tags=["Support Chat"])
 
-FALLBACK_REPLY = "I'm unable to answer that right now. Please call our driver support line: 1-800-SPINR or email support@spinr.ca"
+FALLBACK_REPLY = (
+    "I'm unable to answer that right now. Please call our driver support line: 1-800-SPINR or email support@spinr.ca"
+)
 
 SYSTEM_PROMPT = """You are a helpful support assistant for Spinr, a Canadian rideshare platform.
 You help drivers with questions about the Spinr driver app.
@@ -144,3 +148,30 @@ async def support_chat(
 
         logging.warning("Gemini support chat failed: %s", exc)
         return {"reply": FALLBACK_REPLY}
+
+
+class EscalateRequest(BaseModel):
+    message: str
+    transcript: str = ""
+
+
+@api_router.post("/support/escalate")
+async def support_escalate(
+    req: EscalateRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Escalate a support chat to a human by opening a Zoho Desk ticket.
+
+    Returns the ticket number on success; on a Zoho outage / disabled
+    integration it falls back to the support contact line so the user is never
+    left without a path to help.
+    """
+    try:
+        result = await create_support_ticket(user=current_user, message=req.message, transcript=req.transcript or None)
+    except ZohoDeskError:
+        return {"success": False, "reply": FALLBACK_REPLY}
+    return {
+        "success": True,
+        "ticket_number": result.get("ticketNumber"),
+        "reply": "Your request has been escalated to our support team. We'll follow up by email shortly.",
+    }

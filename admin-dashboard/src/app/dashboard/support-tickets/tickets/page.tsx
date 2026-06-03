@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from "react";
 import Link from "next/link";
-import { getDeskTickets, getDeskAgents, createDeskTicket } from "@/lib/api";
+import { getDeskTickets, getDeskAgents, getDeskDepartments, createDeskTicket, searchDeskTickets } from "@/lib/api";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -34,7 +34,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
-import { Inbox, ChevronLeft, ChevronRight, RefreshCw, Search, ArrowUp, ArrowDown, Plus } from "lucide-react";
+import { Inbox, ChevronLeft, ChevronRight, RefreshCw, Search, ArrowUp, ArrowDown, Plus, X } from "lucide-react";
 
 const STATUSES = ["All", "Open", "On Hold", "Escalated", "Closed"];
 const PRIORITIES = ["All", "Low", "Medium", "High", "Urgent"];
@@ -80,8 +80,9 @@ export default function TicketListPage() {
     const [pageSize, setPageSize] = useState(25);
     const [page, setPage] = useState(0);
 
-    // Client-side refine (filters the loaded page by contact/category/tag/subject).
+    // Search box (server-side, account-wide) + a created-date refine (client).
     const [refine, setRefine] = useState("");
+    const [searchQ, setSearchQ] = useState("");
     const [fromDate, setFromDate] = useState("");
     const [toDate, setToDate] = useState("");
 
@@ -92,7 +93,8 @@ export default function TicketListPage() {
     const { toast } = useToast();
     const [createOpen, setCreateOpen] = useState(false);
     const [creating, setCreating] = useState(false);
-    const [form, setForm] = useState({ subject: "", description: "", email: "", name: "", priority: "Medium" });
+    const [departments, setDepartments] = useState<any[]>([]);
+    const [form, setForm] = useState({ subject: "", description: "", email: "", name: "", priority: "Medium", department: "" });
     const setF = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
 
     const create = async () => {
@@ -108,10 +110,11 @@ export default function TicketListPage() {
                 last_name: rest.join(" ") || undefined,
                 priority: form.priority,
                 channel: "Web",
+                department_id: form.department || undefined,
             });
             toast({ title: "Ticket created" });
             setCreateOpen(false);
-            setForm({ subject: "", description: "", email: "", name: "", priority: "Medium" });
+            setForm({ subject: "", description: "", email: "", name: "", priority: "Medium", department: "" });
             setPage(0);
             load();
         } catch (e: any) {
@@ -125,15 +128,26 @@ export default function TicketListPage() {
         setLoading(true);
         setError(null);
         try {
-            const res = await getDeskTickets({
-                from: page * pageSize + 1,
-                limit: pageSize,
-                status: status === "All" ? undefined : status,
-                priority: priority === "All" ? undefined : priority,
-                channel: channel === "All" ? undefined : channel,
-                assigneeId: assignee === "all" ? undefined : assignee,
-                sortBy: `${sortDir === "desc" ? "-" : ""}${sortField}`,
-            });
+            // When a search term is active, query Zoho account-wide; otherwise
+            // page the filtered list.
+            const res = searchQ
+                ? await searchDeskTickets({
+                      q: searchQ,
+                      from: page * pageSize + 1,
+                      limit: pageSize,
+                      status: status === "All" ? undefined : status,
+                      priority: priority === "All" ? undefined : priority,
+                      assigneeId: assignee === "all" ? undefined : assignee,
+                  })
+                : await getDeskTickets({
+                      from: page * pageSize + 1,
+                      limit: pageSize,
+                      status: status === "All" ? undefined : status,
+                      priority: priority === "All" ? undefined : priority,
+                      channel: channel === "All" ? undefined : channel,
+                      assigneeId: assignee === "all" ? undefined : assignee,
+                      sortBy: `${sortDir === "desc" ? "-" : ""}${sortField}`,
+                  });
             setTickets(res.data || []);
         } catch (e: any) {
             setError(e?.message || "Failed to load tickets");
@@ -141,7 +155,7 @@ export default function TicketListPage() {
         } finally {
             setLoading(false);
         }
-    }, [page, pageSize, status, priority, channel, assignee, sortField, sortDir]);
+    }, [page, pageSize, status, priority, channel, assignee, sortField, sortDir, searchQ]);
 
     useEffect(() => {
         if (allowed) load();
@@ -150,34 +164,26 @@ export default function TicketListPage() {
     useEffect(() => {
         if (!allowed) return;
         getDeskAgents().then((r) => setAgents(r.data || [])).catch(() => {});
+        getDeskDepartments().then((r) => {
+            const d = r.data || [];
+            setDepartments(d);
+            if (d.length) setForm((f) => ({ ...f, department: f.department || d[0].id }));
+        }).catch(() => {});
     }, [allowed]);
 
-    // Client refine across the loaded page (contact, category, tags, subject, #)
-    // plus a created-date range.
+    // Created-date range narrows the loaded results (client-side).
     const shown = useMemo(() => {
-        const q = refine.trim().toLowerCase();
+        if (!fromDate && !toDate) return tickets;
         return tickets.filter((t) => {
-            if (q) {
-                const hay = [
-                    t.subject,
-                    t.ticketNumber,
-                    t.category,
-                    t.contact?.email,
-                    t.email,
-                    `${t.contact?.firstName || ""} ${t.contact?.lastName || ""}`,
-                    tagNames(t),
-                ]
-                    .filter(Boolean)
-                    .join(" ")
-                    .toLowerCase();
-                if (!hay.includes(q)) return false;
-            }
             const created = (t.createdTime || "").slice(0, 10);
             if (fromDate && created && created < fromDate) return false;
             if (toDate && created && created > toDate) return false;
             return true;
         });
-    }, [tickets, refine, fromDate, toDate]);
+    }, [tickets, fromDate, toDate]);
+
+    const runSearch = () => { setPage(0); setSearchQ(refine.trim()); };
+    const clearSearch = () => { setRefine(""); setSearchQ(""); setPage(0); };
 
     const toggleSort = (field: string) => {
         setPage(0);
@@ -243,12 +249,23 @@ export default function TicketListPage() {
                                 <Input type="email" value={form.email} onChange={(e) => setF("email", e.target.value)} />
                             </div>
                         </div>
-                        <div className="space-y-1">
-                            <Label>Priority</Label>
-                            <Select value={form.priority} onValueChange={(v) => setF("priority", v)}>
-                                <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
-                                <SelectContent>{PRIORITIES.filter((p) => p !== "All").map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}</SelectContent>
-                            </Select>
+                        <div className="grid grid-cols-2 gap-3">
+                            <div className="space-y-1">
+                                <Label>Department</Label>
+                                <Select value={form.department || undefined} onValueChange={(v) => setF("department", v)}>
+                                    <SelectTrigger><SelectValue placeholder={departments.length ? "Select" : "No departments"} /></SelectTrigger>
+                                    <SelectContent>
+                                        {departments.map((d) => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                            <div className="space-y-1">
+                                <Label>Priority</Label>
+                                <Select value={form.priority} onValueChange={(v) => setF("priority", v)}>
+                                    <SelectTrigger><SelectValue /></SelectTrigger>
+                                    <SelectContent>{PRIORITIES.filter((p) => p !== "All").map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}</SelectContent>
+                                </Select>
+                            </div>
                         </div>
                     </div>
                     <DialogFooter>
@@ -285,14 +302,24 @@ export default function TicketListPage() {
                         ))}
                     </SelectContent>
                 </Select>
-                <div className="relative">
-                    <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                    <Input
-                        value={refine}
-                        onChange={(e) => setRefine(e.target.value)}
-                        placeholder="Refine: ticket #, contact, category, tag…"
-                        className="w-64 pl-8"
-                    />
+                <div className="flex items-center gap-1">
+                    <div className="relative">
+                        <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                        <Input
+                            value={refine}
+                            onChange={(e) => setRefine(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === "Enter") runSearch(); }}
+                            placeholder="Search all tickets: # / subject / contact…"
+                            className="w-64 pl-8"
+                        />
+                    </div>
+                    <Button variant="secondary" size="sm" onClick={runSearch} disabled={!refine.trim()}>Search</Button>
+                    {searchQ && (
+                        <Badge variant="secondary" className="gap-1">
+                            “{searchQ}”
+                            <button onClick={clearSearch}><X className="h-3 w-3" /></button>
+                        </Badge>
+                    )}
                 </div>
                 <div className="flex items-center gap-1 text-sm text-muted-foreground">
                     <span>Created</span>

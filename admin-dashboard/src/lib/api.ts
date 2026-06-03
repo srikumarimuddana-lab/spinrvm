@@ -2294,6 +2294,8 @@ export interface ZohoConfigStatus {
     has_client_secret: boolean;
     has_refresh_token: boolean;
     connected: boolean;
+    last_synced_at?: string | null;
+    last_sync_count?: number | null;
     updated_at?: string | null;
 }
 export interface ZohoConfigUpdate {
@@ -2350,6 +2352,10 @@ export const testZohoConnection = () =>
     request<{ ok: boolean; departments: any[] }>("/api/admin/support-tickets/config/test", {
         method: "POST",
     });
+export const syncDeskTickets = () =>
+    request<{ upserted?: number; skipped?: string }>("/api/admin/support-tickets/sync", {
+        method: "POST",
+    });
 
 export const getDeskDashboard = (departmentId?: string) => {
     const qs = departmentId ? `?department_id=${encodeURIComponent(departmentId)}` : "";
@@ -2403,6 +2409,25 @@ export const createDeskTicket = (body: CreateDeskTicket) =>
         method: "POST",
         body: JSON.stringify(body),
     });
+export const searchDeskTickets = (opts: {
+    q: string;
+    from?: number;
+    limit?: number;
+    departmentId?: string;
+    status?: string;
+    priority?: string;
+    assigneeId?: string;
+}) => {
+    const sp = new URLSearchParams();
+    sp.set("q", opts.q);
+    if (opts.from) sp.set("from", String(opts.from));
+    if (opts.limit) sp.set("limit", String(opts.limit));
+    if (opts.departmentId) sp.set("department_id", opts.departmentId);
+    if (opts.status) sp.set("status", opts.status);
+    if (opts.priority) sp.set("priority", opts.priority);
+    if (opts.assigneeId) sp.set("assignee_id", opts.assigneeId);
+    return request<ZohoTicketsResponse>(`/api/admin/support-tickets/search?${sp.toString()}`);
+};
 export const getDeskTicket = (id: string) =>
     request<any>(`/api/admin/support-tickets/tickets/${id}`);
 export const getDeskTicketThreads = (id: string) =>

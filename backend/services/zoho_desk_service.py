@@ -267,6 +267,44 @@ async def list_tickets(
     return data or {"data": []}
 
 
+async def search_tickets(
+    *,
+    query: str,
+    from_index: int = 1,
+    limit: int = 50,
+    department_id: Optional[str] = None,
+    status: Optional[str] = None,
+    priority: Optional[str] = None,
+    assignee_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Server-side ticket search across the whole account (not just one page).
+
+    Uses Zoho's /tickets/search. A purely numeric query is treated as a ticket
+    number; otherwise it's a wildcard keyword (`_all`) match over subject,
+    contact, etc. Requires the Desk.search.READ scope. Note: search uses the
+    singular `departmentId`/`assigneeId` params (unlike the list endpoint)."""
+    params: Dict[str, Any] = {
+        "from": max(1, from_index),
+        "limit": min(max(1, limit), 100),
+        "include": "contacts,assignee",
+    }
+    q = (query or "").strip()
+    if q.isdigit():
+        params["ticketNumber"] = q
+    elif q:
+        params["_all"] = f"*{q}*"
+    if department_id:
+        params["departmentId"] = department_id
+    if status:
+        params["status"] = status
+    if priority:
+        params["priority"] = priority
+    if assignee_id:
+        params["assigneeId"] = assignee_id
+    data = await _request("GET", "/api/v1/tickets/search", params=params)
+    return data or {"data": []}
+
+
 async def get_ticket(ticket_id: str) -> Dict[str, Any]:
     return await _request("GET", f"/api/v1/tickets/{ticket_id}", params={"include": "contacts,assignee,team"})
 

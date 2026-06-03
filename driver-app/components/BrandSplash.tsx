@@ -6,44 +6,42 @@ const LOGO = require('../assets/images/spinr-logo.png');
 type Props = { onLayout?: (e: LayoutChangeEvent) => void };
 
 export default function BrandSplash({ onLayout }: Props) {
-  const logoOpacity = useRef(new Animated.Value(0)).current;
-  const tagOpacity  = useRef(new Animated.Value(0)).current;
-  const logoScale   = useRef(new Animated.Value(0.93)).current;
+  const tagOpacity = useRef(new Animated.Value(0)).current;
+  const tagY       = useRef(new Animated.Value(8)).current;
 
   useEffect(() => {
-    Animated.sequence([
-      Animated.parallel([
-        Animated.timing(logoOpacity, {
-          toValue: 1,
-          duration: 500,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }),
-        Animated.timing(logoScale, {
-          toValue: 1,
-          duration: 500,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }),
-      ]),
+    // Logo is visible immediately — no fade-in — so the moment the native
+    // splash cross-fades out, the Spinr logo is already there underneath.
+    // Only the tagline animates in after a brief pause.
+    Animated.parallel([
       Animated.timing(tagOpacity, {
         toValue: 1,
-        duration: 400,
-        delay: 100,
+        duration: 500,
+        delay: 300,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(tagY, {
+        toValue: 0,
+        duration: 500,
+        delay: 300,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }),
     ]).start();
-  }, [logoOpacity, logoScale, tagOpacity]);
+  }, [tagOpacity, tagY]);
 
   return (
     <View style={styles.root} onLayout={onLayout}>
       <Animated.Image
         source={LOGO}
-        style={[styles.logo, { opacity: logoOpacity, transform: [{ scale: logoScale }] }]}
+        style={styles.logo}
         resizeMode="contain"
       />
-      <Animated.Text style={[styles.tagline, { opacity: tagOpacity }]} allowFontScaling={false}>
+      <Animated.Text
+        style={[styles.tagline, { opacity: tagOpacity, transform: [{ translateY: tagY }] }]}
+        allowFontScaling={false}
+      >
         Ride Local · Support Local
       </Animated.Text>
     </View>

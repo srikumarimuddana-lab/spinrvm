@@ -1,0 +1,156 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import { getZohoConfig, getTicketDashboard, ZohoDashboard } from "@/lib/api";
+import { useRequireModule } from "@/hooks/useRequireModule";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { ZohoConfigCard } from "./_components/zoho-config-card";
+import { Headphones, Inbox, BarChart3, Settings as SettingsIcon, AlertCircle, Ticket as TicketIcon } from "lucide-react";
+
+function statusClass(status: string): string {
+    const s = (status || "").toLowerCase();
+    if (s.includes("open")) return "bg-blue-100 text-blue-800 hover:bg-blue-100";
+    if (s.includes("hold")) return "bg-amber-100 text-amber-800 hover:bg-amber-100";
+    if (s.includes("escal")) return "bg-red-100 text-red-800 hover:bg-red-100";
+    if (s.includes("closed")) return "bg-gray-200 text-gray-700 hover:bg-gray-200";
+    return "bg-slate-100 text-slate-700 hover:bg-slate-100";
+}
+
+export default function HelpDeskPage() {
+    const { allowed } = useRequireModule("support_tickets");
+    const [connected, setConnected] = useState<boolean | null>(null);
+    const [data, setData] = useState<ZohoDashboard | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+    const [showSettings, setShowSettings] = useState(false);
+
+    const loadDashboard = async () => {
+        setLoading(true);
+        setError(null);
+        try {
+            const cfg = await getZohoConfig();
+            setConnected(cfg.connected);
+            if (cfg.connected) {
+                setData(await getTicketDashboard());
+            }
+        } catch (e: any) {
+            setError(e?.message || "Failed to load");
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        if (allowed) loadDashboard();
+    }, [allowed]);
+
+    if (!allowed) return null;
+
+    return (
+        <div className="space-y-6">
+            <div className="flex items-center justify-between">
+                <div>
+                    <h1 className="flex items-center gap-2 text-2xl font-bold">
+                        <Headphones className="h-6 w-6" /> Help Desk
+                    </h1>
+                    <p className="text-sm text-muted-foreground">Zoho Desk support tickets</p>
+                </div>
+                <div className="flex gap-2">
+                    <Button asChild variant="outline">
+                        <Link href="/dashboard/support-tickets/tickets"><Inbox className="mr-2 h-4 w-4" /> Tickets</Link>
+                    </Button>
+                    <Button asChild variant="outline">
+                        <Link href="/dashboard/support-tickets/trends"><BarChart3 className="mr-2 h-4 w-4" /> Trends</Link>
+                    </Button>
+                    <Button variant="ghost" onClick={() => setShowSettings((v) => !v)}>
+                        <SettingsIcon className="mr-2 h-4 w-4" /> Settings
+                    </Button>
+                </div>
+            </div>
+
+            {loading && <Card><CardContent className="p-6 text-muted-foreground">Loading…</CardContent></Card>}
+
+            {!loading && connected === false && (
+                <>
+                    <Card>
+                        <CardContent className="flex items-center gap-3 p-4 text-sm text-amber-700">
+                            <AlertCircle className="h-5 w-5" />
+                            Zoho Desk is not connected yet. Add your credentials below to enable the Help Desk.
+                        </CardContent>
+                    </Card>
+                    <ZohoConfigCard onSaved={() => loadDashboard()} />
+                </>
+            )}
+
+            {!loading && connected && showSettings && <ZohoConfigCard onSaved={() => loadDashboard()} />}
+
+            {!loading && connected && error && (
+                <Card><CardContent className="p-4 text-sm text-red-600">{error}</CardContent></Card>
+            )}
+
+            {!loading && connected && data && (
+                <>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                        <StatCard label="Total tickets" value={data.total} />
+                        <StatCard label="Open / active" value={data.open} accent />
+                        {Object.entries(data.by_status).slice(0, 2).map(([k, v]) => (
+                            <StatCard key={k} label={k} value={v} />
+                        ))}
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                        {Object.entries(data.by_status).map(([k, v]) => (
+                            <Card key={k}>
+                                <CardContent className="flex items-center justify-between p-4">
+                                    <Badge variant="secondary" className={statusClass(k)}>{k}</Badge>
+                                    <span className="text-xl font-semibold">{v}</span>
+                                </CardContent>
+                            </Card>
+                        ))}
+                    </div>
+
+                    <Card>
+                        <CardHeader><CardTitle className="text-base">Recent tickets</CardTitle></CardHeader>
+                        <CardContent className="space-y-2">
+                            {data.recent.length === 0 && (
+                                <p className="text-sm text-muted-foreground">No recent tickets.</p>
+                            )}
+                            {data.recent.map((t: any) => (
+                                <Link
+                                    key={t.id}
+                                    href={`/dashboard/support-tickets/tickets/${t.id}`}
+                                    className="flex items-center justify-between rounded-lg border p-3 hover:bg-muted/50"
+                                >
+                                    <div className="flex min-w-0 items-center gap-3">
+                                        <TicketIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                                        <div className="min-w-0">
+                                            <p className="truncate font-medium">{t.subject || "(no subject)"}</p>
+                                            <p className="truncate text-xs text-muted-foreground">
+                                                #{t.ticketNumber} · {t.contact?.email || t.email || "—"}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <Badge variant="secondary" className={statusClass(t.status)}>{t.status}</Badge>
+                                </Link>
+                            ))}
+                        </CardContent>
+                    </Card>
+                </>
+            )}
+        </div>
+    );
+}
+
+function StatCard({ label, value, accent }: { label: string; value: number; accent?: boolean }) {
+    return (
+        <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">{label}</CardTitle></CardHeader>
+            <CardContent>
+                <div className={`text-2xl font-bold ${accent ? "text-blue-600" : ""}`}>{value}</div>
+            </CardContent>
+        </Card>
+    );
+}

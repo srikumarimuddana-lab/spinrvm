@@ -3007,10 +3007,13 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
         )
         loser_ids = [r["driver_id"] for r in (losers.data or [])]
         if loser_ids:
+            # 'preempted' (not 'expired'): these drivers didn't ignore/time out —
+            # another driver simply accepted first. Analytics must not count this
+            # against their ignore rate.
             await db_supabase.run_sync(
                 lambda: (
                     db_supabase.supabase.table("ride_offers")
-                    .update({"status": "expired", "responded_at": now_iso})
+                    .update({"status": "preempted", "responded_at": now_iso})
                     .eq("ride_id", ride_id)
                     .eq("status", "pending")
                     .execute()

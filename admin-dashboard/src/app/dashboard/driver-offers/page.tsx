@@ -25,13 +25,19 @@ export default function DriverOffersPage() {
   const [dateRange, setDateRange] = useState("30d");
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("offered");
 
   const fetchData = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
-      const res = await getDriverOfferStats(dateRange).catch(() => null);
-      setData(res);
+      // Don't swallow the error into null — a 403/503/network failure must
+      // read as an error, not a false "No offers in this window".
+      setData(await getDriverOfferStats(dateRange));
+    } catch (e: any) {
+      setData(null);
+      setError(e?.message || "Failed to load offer analytics. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -106,6 +112,11 @@ export default function DriverOffersPage() {
         <CardContent>
           {loading ? (
             <div className="py-16 text-center text-sm text-muted-foreground">Loading…</div>
+          ) : error ? (
+            <div className="py-16 text-center space-y-3">
+              <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+              <button onClick={fetchData} className="text-xs font-semibold border rounded-lg px-3 py-1.5 hover:bg-muted transition-colors">Retry</button>
+            </div>
           ) : drivers.length === 0 ? (
             <div className="py-16 text-center text-sm text-muted-foreground">No offers in this window.</div>
           ) : (

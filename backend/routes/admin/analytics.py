@@ -51,6 +51,21 @@ def _parse_iso(value) -> Optional[datetime]:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+async def _fetch_rows_in_chunks(table: str, ids: list, chunk_size: int = 200) -> list:
+    """Fetch rows by id in bounded `IN (...)` batches.
+
+    A single huge `IN` over thousands of distinct ids can blow past URL/query
+    limits and dominate latency. Chunking keeps each query bounded.
+    """
+    out: list = []
+    for i in range(0, len(ids), chunk_size):
+        batch = ids[i : i + chunk_size]
+        if not batch:
+            continue
+        out.extend(await db.get_rows(table, {"id": {"$in": batch}}, limit=len(batch)))
+    return out
+
+
 # ── Cancellation Reason Breakdown ────────────────────────────────────
 
 
@@ -513,7 +528,7 @@ async def get_driver_offer_stats(
     drivers_list: list = []
     if driver_ids:
         try:
-            drivers_list = await db.get_rows("drivers", {"id": {"$in": driver_ids}}, limit=len(driver_ids))
+            drivers_list = await _fetch_rows_in_chunks("drivers", driver_ids)
         except Exception as e:
             logger.error(
                 f"Failed to fetch drivers for offer stats: {e}",
@@ -531,7 +546,7 @@ async def get_driver_offer_stats(
     users_list: list = []
     if user_ids:
         try:
-            users_list = await db.get_rows("users", {"id": {"$in": user_ids}}, limit=len(user_ids))
+            users_list = await _fetch_rows_in_chunks("users", user_ids)
         except Exception as e:
             logger.error(
                 f"Failed to fetch users for offer stats: {e}",

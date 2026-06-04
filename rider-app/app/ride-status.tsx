@@ -19,6 +19,7 @@ import { useRideStore } from '../store/rideStore';
 import api from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import ConfirmSheet from '../components/ConfirmSheet';
+import CancelReasonSheet from '../components/CancelReasonSheet';
 import { FreeCancelTimer } from '../components/FreeCancelTimer';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -98,9 +99,20 @@ export default function RideStatusScreen() {
     variant: 'info' | 'warning' | 'danger' | 'success';
     buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
   }>({ visible: false, title: '', variant: 'info' });
+  const [reasonVisible, setReasonVisible] = useState(false);
 
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+
+  const performCancel = async (reason?: string) => {
+    try {
+      await cancelRide(reason);
+      clearRide();
+      router.replace('/(tabs)' as any);
+    } catch {
+      showToast('Could not cancel', 'The server rejected the request. Please try again.', 'danger');
+    }
+  };
 
   useEffect(() => {
     if (rideId) {
@@ -156,15 +168,9 @@ export default function RideStatusScreen() {
     const isFreeCancel = freeCancelSecondsLeft === null || freeCancelSecondsLeft > 0;
     const status = currentRide.status;
 
-    const doCancel = async () => {
-      try {
-        await cancelRide();
-        clearRide();
-        router.replace('/(tabs)' as any);
-      } catch {
-        showToast('Could not cancel', 'The server rejected the request. Please try again.', 'danger');
-      }
-    };
+    // A driver is involved → collect a reason before cancelling. Plain search
+    // cancels (no driver yet) skip the reason step.
+    const askReason = () => setReasonVisible(true);
 
     if (status === 'driver_arrived') {
       setConfirmSheet({
@@ -173,7 +179,7 @@ export default function RideStatusScreen() {
         message: `Your driver has arrived. A cancellation fee of $${cancellationFee.toFixed(2)} will be charged.`,
         variant: 'warning',
         buttons: [
-          { text: `Cancel & Pay $${cancellationFee.toFixed(2)}`, style: 'destructive', onPress: doCancel },
+          { text: `Cancel & Pay $${cancellationFee.toFixed(2)}`, style: 'destructive', onPress: askReason },
           { text: 'Keep Ride', style: 'cancel' },
         ],
       });
@@ -186,7 +192,7 @@ export default function RideStatusScreen() {
           : `Cancellation fee of $${cancellationFee.toFixed(2)} applies.`,
         variant: 'warning',
         buttons: [
-          { text: isFreeCancel ? 'Cancel (Free)' : `Cancel & Pay $${cancellationFee.toFixed(2)}`, style: 'destructive', onPress: doCancel },
+          { text: isFreeCancel ? 'Cancel (Free)' : `Cancel & Pay $${cancellationFee.toFixed(2)}`, style: 'destructive', onPress: askReason },
           { text: 'Keep Ride', style: 'cancel' },
         ],
       });
@@ -197,7 +203,7 @@ export default function RideStatusScreen() {
         message: 'Stop looking for a driver? No charge.',
         variant: 'info',
         buttons: [
-          { text: 'Cancel', onPress: doCancel },
+          { text: 'Cancel', onPress: () => performCancel() },
           { text: 'Keep searching', style: 'cancel' },
         ],
       });
@@ -480,6 +486,11 @@ export default function RideStatusScreen() {
         variant={confirmSheet.variant}
         buttons={confirmSheet.buttons || [{ text: 'OK', style: 'default' }]}
         onClose={() => setConfirmSheet(prev => ({ ...prev, visible: false }))}
+      />
+      <CancelReasonSheet
+        visible={reasonVisible}
+        onConfirm={performCancel}
+        onClose={() => setReasonVisible(false)}
       />
 
       {/* Note-for-driver editor — opened from the chip above. Backend

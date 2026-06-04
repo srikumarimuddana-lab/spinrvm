@@ -665,21 +665,24 @@ function DriverDashboard() {
           const driverLat = location?.coords?.latitude != null ? Math.round(location.coords.latitude * 1000) / 1000 : null;
           const driverLng = location?.coords?.longitude != null ? Math.round(location.coords.longitude * 1000) / 1000 : null;
 
+          // Road-snapped pickup the driver can actually reach (fallback to pin).
+          const pNavLat = (ride as any).pickup_nav_lat ?? ride.pickup_lat;
+          const pNavLng = (ride as any).pickup_nav_lng ?? ride.pickup_lng;
           let origin: { latitude: number; longitude: number };
           let destination: { latitude: number; longitude: number };
           if (rideState === 'ride_offered') {
-            origin = { latitude: ride.pickup_lat, longitude: ride.pickup_lng };
+            origin = { latitude: pNavLat, longitude: pNavLng };
             destination = { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng };
           } else if (rideState === 'trip_in_progress') {
             origin = driverLat != null && driverLng != null
               ? { latitude: driverLat, longitude: driverLng }
-              : { latitude: ride.pickup_lat, longitude: ride.pickup_lng };
+              : { latitude: pNavLat, longitude: pNavLng };
             destination = { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng };
           } else {
             origin = driverLat != null && driverLng != null
               ? { latitude: driverLat, longitude: driverLng }
-              : { latitude: ride.pickup_lat, longitude: ride.pickup_lng };
-            destination = { latitude: ride.pickup_lat, longitude: ride.pickup_lng };
+              : { latitude: pNavLat, longitude: pNavLng };
+            destination = { latitude: pNavLat, longitude: pNavLng };
           }
 
           return (
@@ -893,7 +896,7 @@ function DriverDashboard() {
             await uploadLocationBatch().catch(() => {});
             await completeRide(rideId);
           }}
-          onCancelRide={() => cancelRide(activeRide!.ride.id)}
+          onCancelRide={(reason) => cancelRide(activeRide!.ride.id, reason)}
           routeEtaMinutes={routeEtaMinutes}
           routeDistanceKm={routeDistanceKm}
           slideUpAnim={slideUpAnim}

@@ -370,8 +370,12 @@ async def _snap_pickup_leg_async(ride_id: str, breadcrumbs: list) -> None:
         result = await compute_road_route(breadcrumbs, phase="navigating_to_pickup")
         poly = (result or {}).get("polyline") or []
         if poly:
+            # update-only (no upsert): if the main settlement geometry write
+            # failed and no ride_routes row exists, we must NOT insert a partial
+            # row — that would default save_status and mask the failed settlement
+            # in the admin detail merge. No row => this backfill is a no-op.
             await db_supabase.update_one(
-                "ride_routes", {"ride_id": ride_id}, {"road_polyline_pickup": poly}, upsert=True
+                "ride_routes", {"ride_id": ride_id}, {"road_polyline_pickup": poly}, upsert=False
             )
     except Exception:
         logger.warning("[complete_ride] pickup-leg road-snap backfill failed for ride %s", ride_id, exc_info=True)

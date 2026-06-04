@@ -9,7 +9,7 @@ import {
     DollarSign, Receipt, Ticket, AlertTriangle, Flag, Radio,
     FileWarning, MapPinned, CalendarDays, Hash,
     Gauge, Shield, Users, MapPin, CheckCircle2, XCircle,
-    TrendingUp, CreditCard, Ban,
+    TrendingUp, CreditCard, Ban, MessageSquare,
 } from "lucide-react";
 import { Sec, FR, MStat, TL, getStatusBadge, fmtTime, isRideLive, computePhaseDistances } from "./ride-ui-helpers";
 import RideInvoice from "./ride-invoice";
@@ -228,6 +228,15 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     </div>
                                                 </div>
                                             </div>
+                                            {ride.rider_notes && (
+                                                <div className="mt-3 pt-3 border-t flex items-start gap-2">
+                                                    <MessageSquare className="h-3.5 w-3.5 text-muted-foreground mt-0.5 shrink-0" />
+                                                    <div>
+                                                        <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-0.5">Rider note / meeting instructions</p>
+                                                        <p className="text-sm">{ride.rider_notes}</p>
+                                                    </div>
+                                                </div>
+                                            )}
                                         </div>
                                     </Card>
 
@@ -486,8 +495,11 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                         <CardHead title="Driver & Platform Earnings" icon={TrendingUp} />
                                         {(() => {
                                             const n = (v: any) => parseFloat(String(v ?? 0)) || 0;
-                                            // 0% commission: driver keeps 100% of the ride fare components.
-                                            const rideFare = n(ride.base_fare) + n(ride.distance_fare) + n(ride.time_fare);
+                                            const isCancelled = ride.status === "cancelled";
+                                            // 0% commission: driver keeps 100% of the ride fare components — but a
+                                            // CANCELLED ride never ran, so the driver earns only the cancellation
+                                            // fee (the estimated fare components on the row are not earned).
+                                            const rideFare = isCancelled ? 0 : n(ride.base_fare) + n(ride.distance_fare) + n(ride.time_fare);
                                             const tip = n(ride.tip_amount);
                                             const incentives = n(ride.incentive_total);
                                             const claims = Array.isArray(ride.incentive_claims) ? ride.incentive_claims : [];
@@ -524,7 +536,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     </div>
                                                     <div className="border-t pt-3 space-y-1.5">
                                                         <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">Driver</p>
-                                                        <FR l="Ride fare (100%)" v={rideFare} />
+                                                        {!isCancelled && <FR l="Ride fare (100%)" v={rideFare} />}
                                                         {cancelFee > 0 && <FR l="Cancellation fee" v={cancelFee} />}
                                                         {tip > 0 && <FR l="Tip" v={tip} />}
                                                         {claims.length > 0
@@ -789,21 +801,26 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     const d = (new Date(o.responded_at).getTime() - new Date(o.offered_at).getTime()) / 1000;
                                                     return Number.isFinite(d) && d >= 0 ? d : null;
                                                 };
-                                                const counts = ride.offers.reduce((acc: Record<string, number>, o: any) => {
+                                                const counts = offers.reduce((acc: Record<string, number>, o: any) => {
                                                     const k = o.status === "expired" ? "ignored" : (o.status || "pending");
                                                     acc[k] = (acc[k] || 0) + 1; return acc;
                                                 }, {});
+                                                const summary = [
+                                                    { k: "received", lbl: "Received", v: offers.length, cls: "text-foreground" },
+                                                    { k: "accepted", lbl: "Accepted", v: counts.accepted || 0, cls: "text-emerald-600 dark:text-emerald-400" },
+                                                    { k: "declined", lbl: "Rejected", v: counts.declined || 0, cls: "text-red-600 dark:text-red-400" },
+                                                    { k: "ignored", lbl: "Ignored", v: counts.ignored || 0, cls: "text-amber-600 dark:text-amber-400" },
+                                                    { k: "preempted", lbl: "Preempted", v: counts.preempted || 0, cls: "text-blue-600 dark:text-blue-400" },
+                                                ];
                                                 return (
                                                     <>
-                                                        <div className="flex flex-wrap gap-2 mb-1">
-                                                            {[["accepted", "Accepted"], ["declined", "Declined"], ["ignored", "Ignored"], ["preempted", "Preempted"], ["pending", "Pending"]].map(([k, lbl]) =>
-                                                                counts[k] ? (
-                                                                    <span key={k} className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-muted/60">
-                                                                        {lbl}: {counts[k]}
-                                                                    </span>
-                                                                ) : null
-                                                            )}
-                                                            <span className="text-[11px] font-semibold text-foreground px-2 py-0.5 ml-auto">Offered to {offers.length} driver{offers.length === 1 ? "" : "s"}</span>
+                                                        <div className="grid grid-cols-5 gap-2 mb-2">
+                                                            {summary.map((s) => (
+                                                                <div key={s.k} className="rounded-lg bg-muted/50 px-2 py-2 text-center">
+                                                                    <p className={`text-lg font-extrabold tabular-nums leading-none ${s.cls}`}>{s.v}</p>
+                                                                    <p className="text-[10px] text-muted-foreground mt-1">{s.lbl}</p>
+                                                                </div>
+                                                            ))}
                                                         </div>
                                                         {offers.map((o: any, i: number) => {
                                                             const meta = OFFER_META[o.status] || OFFER_META.pending;

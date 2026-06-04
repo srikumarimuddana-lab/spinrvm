@@ -1017,7 +1017,16 @@ async def admin_get_ride_financials(
     def _s(rows, key):
         return float(sum(Decimal(str(r.get(key) or 0)) for r in rows))
 
-    rider_paid = float(sum(Decimal(str(r.get("grand_total") or r.get("total_fare") or 0)) for r in completed))
+    def _rider_paid(r):
+        # A free-ride promo persists grand_total = 0 (intentional) while
+        # total_fare keeps the pre-promo subtotal. Use an explicit None check so
+        # comped $0 rides aren't counted at full fare.
+        gt = r.get("grand_total")
+        if gt is None:
+            gt = r.get("total_fare")
+        return Decimal(str(gt or 0))
+
+    rider_paid = float(sum(_rider_paid(r) for r in completed))
     gross_fare = _s(completed, "total_fare")
     driver_revenue = float(
         sum(

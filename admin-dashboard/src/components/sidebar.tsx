@@ -66,6 +66,7 @@ const NAV_GROUPS: NavGroup[] = [
         title: "Configuration",
         items: [
             { href: "/dashboard/service-areas", label: "Service Areas", icon: MapPin, module: "service_areas" },
+            { href: "/dashboard/venues", label: "Pickup Venues", icon: MapPin, module: "service_areas" },
             { href: "/dashboard/vehicle-types", label: "Vehicle Types", icon: Car, module: "pricing" },
             // Pricing & Billing, including surge, is managed per-area under
             // Service Areas → Vehicle Pricing. No standalone pricing page.

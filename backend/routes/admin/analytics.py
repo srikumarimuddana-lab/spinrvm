@@ -613,3 +613,71 @@ async def get_driver_offer_stats(
         "totals": totals,
         "drivers": result[:limit],
     }
+
+
+@api_router.get("/driver-offer-trends")
+async def get_driver_offer_trends(
+    date_range: str = Query("30d", pattern="^(today|7d|30d|90d|1y)$"),
+    driver_id: Optional[str] = None,
+    service_area_id: Optional[str] = None,
+    admin: dict = Depends(get_admin_user),
+):
+    """Daily offer-outcome trend for the Driver Offers page chart.
+
+    Buckets ride_offers by day (offered_at) into accepted/declined/ignored/
+    preempted counts. Optional driver_id drills into one driver's trend;
+    optional service_area_id scopes to drivers in that area.
+    """
+    start_date = _parse_date_range(date_range)
+
+    filters: dict = {"offered_at": {"$gte": start_date.isoformat()}}
+    if driver_id:
+        filters["driver_id"] = driver_id
+    try:
+        offers = await db.get_rows("ride_offers", filters, limit=100000)
+    except Exception as e:
+        logger.error(
+            f"Failed to fetch ride_offers for offer trends: {e}",
+            exc_info=True,
+            extra={"domain": "admin"},
+        )
+        raise HTTPException(status_code=503, detail="analytics_unavailable") from e
+
+    # Scope to a service area by intersecting with that area's drivers.
+    if service_area_id and not driver_id:
+        try:
+            area_drivers = await db.get_rows("drivers", {"service_area_id": service_area_id}, limit=10000)
+        except Exception as e:
+            logger.error(
+                f"Failed to fetch area drivers for offer trends: {e}",
+                exc_info=True,
+                extra={"domain": "admin"},
+            )
+            raise HTTPException(status_code=503, detail="analytics_unavailable") from e
+        area_ids = {d["id"] for d in area_drivers if d.get("id")}
+        offers = [o for o in offers if o.get("driver_id") in area_ids]
+
+    daily: dict = defaultdict(lambda: {"offered": 0, "accepted": 0, "declined": 0, "ignored": 0, "preempted": 0})
+    for o in offers:
+        day = (o.get("offered_at") or "")[:10]
+        if not day:
+            continue
+        b = daily[day]
+        b["offered"] += 1
+        status = o.get("status")
+        if status == "accepted":
+            b["accepted"] += 1
+        elif status == "declined":
+            b["declined"] += 1
+        elif status == "expired":
+            b["ignored"] += 1
+        elif status == "preempted":
+            b["preempted"] += 1
+
+    daily_chart = [{"date": d, **counts} for d, counts in sorted(daily.items())]
+    return {
+        "date_range": date_range,
+        "driver_id": driver_id,
+        "service_area_id": service_area_id,
+        "daily_chart": daily_chart,
+    }

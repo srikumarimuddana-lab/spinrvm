@@ -17,6 +17,7 @@ import { CarMarker } from '@shared/components/CarMarker';
 import api from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import ConfirmSheet from '../components/ConfirmSheet';
+import CancelReasonSheet from '../components/CancelReasonSheet';
 import { SOSButton } from '@shared/components/SOSButton';
 import { FreeCancelTimer } from '../components/FreeCancelTimer';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -48,6 +49,7 @@ function DriverArrivedScreenContent() {
     variant: 'info' | 'warning' | 'danger' | 'success';
     buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
   }>({ visible: false, title: '', variant: 'info' });
+  const [reasonVisible, setReasonVisible] = useState(false);
   const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -68,19 +70,22 @@ function DriverArrivedScreenContent() {
       buttons: [
         {
           text: `Cancel & Pay $${cancellationFee.toFixed(2)}`, style: 'destructive',
-          onPress: async () => {
-            try {
-              await cancelRide();
-              clearRide();
-              router.replace('/(tabs)' as any);
-            } catch {
-              showToast('Could not cancel', 'The server rejected the request. Please try again.', 'danger');
-            }
-          },
+          // Collect a reason before cancelling.
+          onPress: () => setReasonVisible(true),
         },
         { text: 'Keep Ride', style: 'cancel' },
       ],
     });
+  };
+
+  const doCancel = async (reason: string) => {
+    try {
+      await cancelRide(reason);
+      clearRide();
+      router.replace('/(tabs)' as any);
+    } catch {
+      showToast('Could not cancel', 'The server rejected the request. Please try again.', 'danger');
+    }
   };
 
   const cancelDialogMessage = `Your driver has arrived and is waiting. A cancellation fee of $${cancellationFee.toFixed(2)} will be charged.`;
@@ -407,6 +412,12 @@ function DriverArrivedScreenContent() {
         variant={confirmSheet.variant}
         buttons={confirmSheet.buttons || [{ text: 'OK', style: 'default' }]}
         onClose={() => setConfirmSheet(prev => ({ ...prev, visible: false }))}
+      />
+      <CancelReasonSheet
+        visible={reasonVisible}
+        message={cancelDialogMessage}
+        onConfirm={doCancel}
+        onClose={() => setReasonVisible(false)}
       />
     </View>
   );

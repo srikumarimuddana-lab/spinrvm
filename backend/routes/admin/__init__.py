@@ -75,6 +75,7 @@ from .support import router as support_router
 from .support_tickets import router as support_tickets_router
 from .users import router as users_router
 from .vehicle_fleet import router as vehicle_fleet_router
+from .venues import router as venues_router
 from .wallet import router as wallet_router
 
 # Router-level dependency: every request that lands on an admin_router
@@ -94,6 +95,7 @@ admin_router = APIRouter(
 admin_router.include_router(auth_router)
 admin_router.include_router(settings_router, dependencies=[Depends(require_module("settings"))])
 admin_router.include_router(service_areas_router, dependencies=[Depends(require_module("service_areas"))])
+admin_router.include_router(venues_router, dependencies=[Depends(require_module("service_areas"))])
 admin_router.include_router(vehicle_fleet_router, dependencies=[Depends(require_module("vehicle_types"))])
 admin_router.include_router(drivers_router, dependencies=[Depends(require_module("drivers"))])
 admin_router.include_router(rides_router, dependencies=[Depends(require_module("rides"))])

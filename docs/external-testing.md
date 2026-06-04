@@ -27,7 +27,7 @@ testing catches them.
 **Platform:** HackerOne or Bugcrowd private program (decision: `security` + `legal`).
 
 **Scope:**
-- `api.spinr.ca`, `*.spinr.ca`
+- `api-spinr.spinr.ca`, `*.spinr.ca`
 - `com.spinr.user` and `com.spinr.driver` published app versions
 - Admin panel — invite-only tier
 
@@ -84,7 +84,7 @@ Already in place at repo root. Process:
 
 ```
 Targets:
-  - Backend API: api.spinr.ca (prod or isolated staging-mirror)
+  - Backend API: api-spinr.spinr.ca (prod or isolated staging-mirror)
   - Rider app: com.spinr.user vX.Y.Z
   - Driver app: com.spinr.driver vX.Y.Z
   - Admin panel: admin.spinr.ca (invite tester IPs only)
@@ -126,7 +126,7 @@ with QSA.
 
 **Vendor:** Qualys, Trustwave, or equivalent ASV.
 
-**Target:** `api.spinr.ca` (prod public endpoints).
+**Target:** `api-spinr.spinr.ca` (prod public endpoints).
 
 **Cadence:** Quarterly (required by PCI-DSS v4).
 

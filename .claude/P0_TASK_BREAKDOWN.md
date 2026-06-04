@@ -316,10 +316,10 @@ client.interceptors.response.use(
 **Monitoring**:
 ```bash
 # Check for auth errors
-curl https://api.spinr.ca/sentry/logs?type=auth_error&hours=1
+curl https://api-spinr.spinr.ca/sentry/logs?type=auth_error&hours=1
 
 # Verify no 401s in prod
-curl https://api.spinr.ca/metrics?metric=http_401&hours=1
+curl https://api-spinr.spinr.ca/metrics?metric=http_401&hours=1
 ```
 
 **Done**: Phase 3 complete when:

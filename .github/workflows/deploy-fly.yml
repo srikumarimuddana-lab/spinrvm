@@ -26,6 +26,10 @@ jobs:
   deploy:
     name: Deploy to Fly.io
     runs-on: ubuntu-latest
+    # Hoisted to job env because the `secrets` context is not available in a step
+    # `if:` conditional — gate the health probe on `env.FLY_HEALTH_URL` instead.
+    env:
+      FLY_HEALTH_URL: ${{ secrets.FLY_HEALTH_URL }}
     steps:
       - uses: actions/checkout@v6
 
@@ -52,8 +56,13 @@ jobs:
       # machines must pass the /health check before old ones are replaced, so a
       # bad deploy cannot take the app down — flyctl exits non-zero and the job
       # fails with the previous release still serving.
+      #
+      # Run from backend/ so the Docker build context is backend/ — fly deploy
+      # uses the working directory as the build context, and the root Dockerfile
+      # COPYs a root requirements.txt that does not exist (only backend/ has one).
       - name: Deploy to Fly.io
-        run: flyctl deploy --remote-only --config backend/fly.toml
+        working-directory: backend
+        run: flyctl deploy --remote-only --config fly.toml
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
@@ -62,13 +71,11 @@ jobs:
       # (or leave unset to skip the probe in forks/staging).
       - name: Health check
         id: health
-        if: ${{ secrets.FLY_HEALTH_URL != '' }}
-        env:
-          HEALTH_URL: ${{ secrets.FLY_HEALTH_URL }}
+        if: ${{ env.FLY_HEALTH_URL != '' }}
         run: |
-          echo "Polling ${HEALTH_URL}/health …"
+          echo "Polling ${FLY_HEALTH_URL}/health …"
           for i in $(seq 1 18); do
-            STATUS=$(curl -sf --max-time 5 "${HEALTH_URL}/health" \
+            STATUS=$(curl -sf --max-time 5 "${FLY_HEALTH_URL}/health" \
               -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
             echo "  attempt ${i}/18 → HTTP ${STATUS}"
             if [ "$STATUS" = "200" ]; then

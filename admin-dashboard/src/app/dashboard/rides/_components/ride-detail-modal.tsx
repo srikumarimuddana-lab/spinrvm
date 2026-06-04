@@ -425,6 +425,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                             const n = (v: any) => parseFloat(String(v ?? 0)) || 0;
                                             const areaFees = Array.isArray(ride.area_fees_breakdown) ? ride.area_fees_breakdown : [];
                                             const hasAreaFees = areaFees.some((f: any) => n(f.calculated_value) > 0);
+                                            const areaFeesTotal = n(ride.area_fees_total) || areaFees.reduce((s: number, f: any) => s + n(f.calculated_value), 0);
                                             // tax_breakdown: { "GST": {rate, amount}, "PST": {rate, amount} }
                                             const taxEntries: [string, number, number | null][] = ride.tax_breakdown && typeof ride.tax_breakdown === "object"
                                                 ? Object.entries(ride.tax_breakdown).map(([k, t]: any) => [
@@ -453,7 +454,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                         n(f.calculated_value) > 0 ? <FR key={i} l={f.name || "Area fee"} v={n(f.calculated_value)} /> : null
                                                     ))}
                                                     <div className="border-t my-2" />
-                                                    <FR l="Subtotal" v={ride.subtotal_fare ?? ride.total_fare} b />
+                                                    <FR l="Subtotal (pre-tax)" v={n(ride.total_fare) + areaFeesTotal} b />
                                                     {discount > 0 && (
                                                         <div className="flex justify-between items-center">
                                                             <span className="flex items-center gap-2 text-sm"><Ticket className="h-4 w-4 text-violet-500" />Promo{ride.promo_code ? <b className="font-mono text-xs bg-violet-50 dark:bg-violet-900/20 px-1.5 py-0.5 rounded">{ride.promo_code}</b> : null}</span>
@@ -489,10 +490,19 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                             const incentives = n(ride.incentive_total);
                                             const claims = Array.isArray(ride.incentive_claims) ? ride.incentive_claims : [];
                                             const driverTotal = rideFare + tip + incentives;
-                                            const platformFees = n(ride.admin_earnings); // booking + airport
+                                            // Platform revenue = booking + airport (admin_earnings) PLUS area fees
+                                            // (Platform/Insurance/City/Infra) — these are collected in grand_total
+                                            // but never written to admin_earnings, so add them here.
+                                            const areaFeesArr = Array.isArray(ride.area_fees_breakdown) ? ride.area_fees_breakdown : [];
+                                            const areaFeesTotal = n(ride.area_fees_total) || areaFeesArr.reduce((s: number, f: any) => s + n(f.calculated_value), 0);
+                                            const bookingAirport = n(ride.admin_earnings); // booking + airport
+                                            const platformGross = bookingAirport + areaFeesTotal;
                                             const discount = n(ride.discount_amount);
+                                            // GST/PST are pass-through: collected from the rider, remitted by the
+                                            // driver (the GST registrant) — NOT platform income.
+                                            const taxTotal = n(ride.tax_amount);
                                             // Platform funds incentives + absorbs promo discount (0% commission model).
-                                            const platformNet = platformFees - incentives - discount;
+                                            const platformNet = platformGross - incentives - discount;
                                             return (
                                                 <div className="p-4">
                                                     <div className="grid grid-cols-3 gap-2.5 mb-4">
@@ -521,10 +531,19 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                         <FR l="Driver total" v={driverTotal} b />
                                                         <div className="border-t my-2" />
                                                         <p className="text-[10px] font-bold uppercase tracking-wider text-violet-600 dark:text-violet-400">Platform</p>
-                                                        <FR l="Booking + airport fees" v={platformFees} />
+                                                        <FR l="Booking + airport fees" v={bookingAirport} />
+                                                        {areaFeesTotal > 0 && <FR l="Area fees (Platform/Insurance/City/Infra)" v={areaFeesTotal} />}
                                                         {incentives > 0 && <FR l="Less incentives funded" v={-incentives} />}
                                                         {discount > 0 && <FR l="Less promo absorbed" v={-discount} />}
                                                         <FR l="Platform net" v={platformNet} b />
+                                                        {taxTotal > 0 && (
+                                                            <>
+                                                                <div className="border-t my-2" />
+                                                                <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Tax (pass-through)</p>
+                                                                <FR l="GST/PST collected" v={taxTotal} />
+                                                                <p className="text-[10px] text-muted-foreground">Collected from rider · remitted by driver — not platform income.</p>
+                                                            </>
+                                                        )}
                                                     </div>
                                                 </div>
                                             );

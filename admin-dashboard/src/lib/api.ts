@@ -300,6 +300,24 @@ export const getRideStats = () =>
         month_start: string;
         month_end: string;
     }>("/api/admin/rides/stats");
+export type RideFinancialsPeriod = "today" | "yesterday" | "week" | "month";
+export const getRideFinancials = (period: RideFinancialsPeriod = "today") =>
+    request<{
+        period: RideFinancialsPeriod;
+        label: string;
+        rides_count: number;
+        completed_count: number;
+        rider_paid: number;
+        gross_fare: number;
+        driver_revenue: number;
+        tips: number;
+        incentives: number;
+        gst_collected: number;
+        promo_applied: number;
+        area_fees: number;
+        platform_before_promo: number;
+        platform_after_promo: number;
+    }>(`/api/admin/rides/financials?period=${period}`);
 export const getRideLocationTrail = (rideId: string) =>
     request<any[]>(`/api/admin/rides/${rideId}/location-trail`);
 export const getLiveRideData = (rideId: string) =>

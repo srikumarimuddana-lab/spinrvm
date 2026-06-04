@@ -972,6 +972,101 @@ async def admin_get_ride_stats():
     }
 
 
+def _period_range(period: str, now: datetime) -> tuple[datetime, datetime, str]:
+    """Return (start, end, label) for a stats period pill."""
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if period == "yesterday":
+        start = today_start - timedelta(days=1)
+        return start, today_start, start.strftime("%b %d")
+    if period == "week":
+        start = today_start - timedelta(days=today_start.weekday())  # Monday
+        end = start + timedelta(days=7)
+        return start, min(end, now), f"{start.strftime('%b %d')} – {(end - timedelta(days=1)).strftime('%b %d')}"
+    if period == "month":
+        start = today_start.replace(day=1)
+        end = (start + timedelta(days=32)).replace(day=1)
+        return start, min(end, now), f"{start.strftime('%b %d')} – {(end - timedelta(days=1)).strftime('%b %d')}"
+    # default: today
+    return today_start, now, today_start.strftime("%b %d")
+
+
+@router.get("/rides/financials")
+async def admin_get_ride_financials(
+    period: str = Query("today", pattern="^(today|yesterday|week|month)$"),
+    admin: dict = Depends(get_admin_user),
+):
+    """Per-period financial rollup for the Rides dashboard pills.
+
+    Breaks the platform's books for the selected window into: rider sales
+    (actual, post-promo), gross fare, driver revenue, tips, incentives, GST
+    collected (pass-through), promo applied, and platform sales before/after
+    promotion. Counts use created_at; money uses completed rides by
+    ride_completed_at.
+    """
+    now = datetime.now(timezone.utc)
+    start, end, label = _period_range(period, now)
+
+    rides_count = await db_supabase.get_ride_count_by_date_range(start.isoformat(), end.isoformat())
+
+    completed = await db_supabase.get_rows(
+        "rides",
+        {"status": "completed", "ride_completed_at": {"$gte": start.isoformat(), "$lt": end.isoformat()}},
+        limit=10000,
+    )
+
+    def _s(rows, key):
+        return float(sum(Decimal(str(r.get(key) or 0)) for r in rows))
+
+    rider_paid = float(sum(Decimal(str(r.get("grand_total") or r.get("total_fare") or 0)) for r in completed))
+    gross_fare = _s(completed, "total_fare")
+    driver_revenue = float(
+        sum(
+            Decimal(str(r.get("base_fare") or 0))
+            + Decimal(str(r.get("distance_fare") or 0))
+            + Decimal(str(r.get("time_fare") or 0))
+            for r in completed
+        )
+    )
+    tips = _s(completed, "tip_amount")
+    gst_collected = _s(completed, "tax_amount")
+    promo_applied = _s(completed, "discount_amount")
+    area_fees = _s(completed, "area_fees_total")
+    booking_airport = _s(completed, "admin_earnings")
+
+    # Incentives paid out in the window (platform-funded; ride_incentive_claims
+    # is append-only, keyed by claimed_at).
+    incentives = 0.0
+    try:
+        claims = await db_supabase.get_rows(
+            "ride_incentive_claims",
+            {"claimed_at": {"$gte": start.isoformat(), "$lt": end.isoformat()}},
+            limit=10000,
+        )
+        incentives = float(sum(Decimal(str(c.get("bonus_amount") or 0)) for c in claims))
+    except Exception:
+        logger.warning("ride_incentive_claims rollup failed for financials", exc_info=True)
+
+    platform_before_promo = round(booking_airport + area_fees, 2)
+    platform_after_promo = round(platform_before_promo - incentives - promo_applied, 2)
+
+    return {
+        "period": period,
+        "label": label,
+        "rides_count": rides_count,
+        "completed_count": len(completed),
+        "rider_paid": round(rider_paid, 2),
+        "gross_fare": round(gross_fare, 2),
+        "driver_revenue": round(driver_revenue, 2),
+        "tips": round(tips, 2),
+        "incentives": round(incentives, 2),
+        "gst_collected": round(gst_collected, 2),
+        "promo_applied": round(promo_applied, 2),
+        "area_fees": round(area_fees, 2),
+        "platform_before_promo": platform_before_promo,
+        "platform_after_promo": platform_after_promo,
+    }
+
+
 @router.get("/rides/{ride_id}/details")
 async def admin_get_ride_details(ride_id: str):
     """Get detailed ride information with rider, driver, flags, complaints, lost items, location trail."""

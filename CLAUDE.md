@@ -116,7 +116,7 @@ python migrate.py --env production   # ordered SQL runner over backend/migration
 
 ```
 Rider App ──┐
-Driver App ─┤── REST + WebSocket ──► FastAPI (Railway)
+Driver App ─┤── REST + WebSocket ──► FastAPI (Fly.io primary / Railway standby)
 Admin ───────┘                            │
                              Supabase(Postgres+RLS)  Redis  Stripe
                              Firebase  Twilio  FCM
@@ -479,7 +479,7 @@ Production health is measured against these targets. Code that risks breaching t
 
 ## Deployment
 
-- **Backend**: Railway (auto-deploy from `main`; Render fallback)
+- **Backend**: deployed to **both** Railway (Canada) and Fly.io (`yyz`, Toronto) from `main` in parallel. Fly.io is the intended primary; Railway is the warm standby. Routing is a Cloudflare CNAME on `api.spinr.ca` — fail-over/fail-back is a single DNS change (no load balancer). Shared Redis sits behind a `redis.spinr.ca` DNS alias so the Redis backend can be repointed on fail-back. See `docs/runbooks/railway-fly-failover.md` and `docs/adr/007-fly-primary-railway-standby.md`.
 - **Frontend/Admin**: Vercel
 - **Mobile builds**: Expo EAS — only triggered when commit message contains `[build]`
 

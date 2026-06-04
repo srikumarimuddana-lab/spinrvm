@@ -3381,6 +3381,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     pickup_to_driver_km = 0.0
     route_polyline = []
     road_polyline: list = []
+    road_polyline_pickup: list = []
     gps_points_count = 0
     trip_points_count = 0
     rejected_segments = 0
@@ -3558,6 +3559,24 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                         f"{actual_distance_km_haversine}km — keeping haversine value"
                     )
 
+            # Road-snap the PICKUP leg (Phase 2, driver→pickup) too, so the admin
+            # map can draw a clean road-following line for the approach — not just
+            # the trip. Display-only (it does not feed billing), so unlike the trip
+            # leg above there is no sanity gate against a billing baseline; a failed
+            # snap simply leaves road_polyline_pickup empty and the admin falls back
+            # to the raw Phase 2 GPS breadcrumbs.
+            try:
+                pickup_road_result = await compute_road_route(
+                    all_breadcrumbs, phase="navigating_to_pickup"
+                )
+                if pickup_road_result is not None:
+                    road_polyline_pickup = pickup_road_result.get("polyline") or []
+            except Exception:
+                logger.warning(
+                    "[complete_ride] pickup-leg road-snap raised; leaving empty",
+                    exc_info=True,
+                )
+
             # Per-phase polylines for SGI / dispute tooling. Each phase is
             # downsampled to MAX_PER_PHASE points so a long trip's payload
             # stays bounded. Stored as [lat, lng, iso_ts] tuples so the
@@ -3635,6 +3654,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         "phase_durations": phase_durations,
         "phase_polylines": phase_polylines,
         "road_polyline": road_polyline,
+        "road_polyline_pickup": road_polyline_pickup,
         "gps_points_count": gps_points_count,
         "route_quality": route_quality,
         "save_status": "saved",

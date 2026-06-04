@@ -433,6 +433,7 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
     route = await run_sync(_get_route)
     if route:
         ride["road_polyline"] = route.get("road_polyline") or []
+        ride["road_polyline_pickup"] = route.get("road_polyline_pickup") or []
         for _k in ("phase_polylines", "phase_distances", "phase_durations", "route_quality"):
             if route.get(_k):
                 ride[_k] = route[_k]

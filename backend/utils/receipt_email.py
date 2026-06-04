@@ -1,7 +1,7 @@
 """
 Send ride receipt emails with Canadian GST/PST tax line items.
 
-Uses the SendGrid REST API via httpx (same pattern as features.send_email and
+Uses the Resend REST API via httpx (same pattern as features.send_email and
 utils.email_receipt.send_receipt_email). Settings are loaded from the
 app_settings Supabase table via settings_loader.get_app_settings().
 
@@ -126,12 +126,12 @@ async def send_ride_receipt_email(ride: dict, rider: dict) -> None:
             from settings_loader import get_app_settings
 
         settings = await get_app_settings()
-        sendgrid_key = settings.get("sendgrid_api_key", "")
-        from_email = settings.get("sendgrid_from_email") or settings.get("email_from") or "receipts@spinr.ca"
+        resend_key = settings.get("resend_api_key", "")
+        from_email = settings.get("resend_from_email") or settings.get("email_from") or "receipts@spinr.ca"
 
-        if not sendgrid_key:
+        if not resend_key:
             logger.warning(
-                "[receipt_email] sendgrid_api_key not configured — receipt not sent for rider %s",
+                "[receipt_email] resend_api_key not configured — receipt not sent for rider %s",
                 rider_id,
             )
             return
@@ -147,16 +147,16 @@ async def send_ride_receipt_email(ride: dict, rider: dict) -> None:
 
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(
-                "https://api.sendgrid.com/v3/mail/send",
+                "https://api.resend.com/emails",
                 headers={
-                    "Authorization": f"Bearer {sendgrid_key}",
+                    "Authorization": f"Bearer {resend_key}",
                     "Content-Type": "application/json",
                 },
                 json={
-                    "personalizations": [{"to": [{"email": email}]}],
-                    "from": {"email": from_email, "name": "Spinr"},
+                    "from": f"Spinr <{from_email}>",
+                    "to": [email],
                     "subject": subject,
-                    "content": [{"type": "text/plain", "value": plain_body}],
+                    "text": plain_body,
                 },
             )
 
@@ -168,7 +168,7 @@ async def send_ride_receipt_email(ride: dict, rider: dict) -> None:
             )
         else:
             logger.error(
-                "[receipt_email] SendGrid returned %s for rider %s — body: %s",
+                "[receipt_email] Resend returned %s for rider %s — body: %s",
                 response.status_code,
                 rider_id,
                 response.text[:200],

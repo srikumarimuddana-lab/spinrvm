@@ -18,10 +18,13 @@ name: Bootstrap Fly.io app (one-time / manual)
 #     ALLOWED_ORIGINS
 #
 # Notes:
-#   - FIREBASE_SERVICE_ACCOUNT_JSON must be single-line (base64-encode it if the
-#     raw JSON spans multiple lines) — `fly secrets import` parses line by line.
+#   - FIREBASE_SERVICE_ACCOUNT_JSON must be raw JSON minified to a SINGLE line
+#     (core/security.init_firebase() runs json.loads on it, so do NOT base64 it;
+#     `fly secrets import` parses line by line, so it must contain no newlines).
 #   - Redis URLs must keep credentials and use the alias host, e.g.
-#     rediss://:<password>@redis.spinr.ca:6379
+#     rediss://:<password>@redis.spinr.ca:6379. If using rediss:// with the alias,
+#     the Redis origin must present a TLS cert valid for redis.spinr.ca (provider
+#     custom domain) — otherwise use the provider's TLS hostname in the URL.
 #   - ADMIN_EMAIL must be a real address; the default admin@spinr.ca is rejected
 #     by the production config guard and the app will not boot.
 

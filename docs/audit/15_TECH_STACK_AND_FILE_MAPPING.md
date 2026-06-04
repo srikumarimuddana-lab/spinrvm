@@ -613,7 +613,7 @@ Rider books ride:
 |-------------|------------|-------------------|
 | Development | `http://localhost:8000` | `http://localhost:3000` |
 | Staging | `https://api-staging.spinr.ca` | `https://admin-staging.spinr.ca` |
-| Production | `https://api.spinr.ca` | `https://admin.spinr.ca` |
+| Production | `https://api-spinr.spinr.ca` | `https://admin.spinr.ca` |
 
 Set via `shared/config/spinr.config.ts` → read from `EXPO_PUBLIC_API_URL` (apps) or `NEXT_PUBLIC_API_URL` (admin).
 
@@ -793,7 +793,7 @@ backend/socket_manager.py
 
 ```
 Connection lifecycle:
-  connect() → wss://api.spinr.ca/ws/{user_id}?token=<jwt>
+  connect() → wss://api-spinr.spinr.ca/ws/{user_id}?token=<jwt>
   on message: dispatch to useDriverDashboard event handlers
   on close/error:
     attempt++ 

@@ -662,8 +662,14 @@ export const useRideStore = create<RideState>((set, get) => ({
     try {
       set({ isLoading: true });
       // Send the reason in the body (not the URL) so a free-text note doesn't
-      // leak into proxy/access logs.
-      await api.post(`/rides/${currentRide.id}/cancel`, reason && reason.trim() ? { reason: reason.trim() } : {});
+      // leak into proxy/access logs. Omit the body entirely when there's no
+      // reason so the call stays a plain single-arg POST.
+      const trimmed = reason?.trim();
+      if (trimmed) {
+        await api.post(`/rides/${currentRide.id}/cancel`, { reason: trimmed });
+      } else {
+        await api.post(`/rides/${currentRide.id}/cancel`);
+      }
       set({ currentRide: null, currentDriver: null, isLoading: false });
       AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
     } catch (error: unknown) {

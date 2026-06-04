@@ -627,8 +627,14 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     cancelRide: async (rideId: string, reason?: string) => {
         set({ isLoading: true, isCancellingRide: true, error: null });
         try {
-            // Reason goes in the body (not the URL) so it can't leak into logs.
-            await api.post(`/drivers/rides/${rideId}/cancel`, reason && reason.trim() ? { reason: reason.trim() } : {});
+            // Reason goes in the body (not the URL) so it can't leak into logs;
+            // omit the body when there's no reason (plain single-arg POST).
+            const trimmed = reason?.trim();
+            if (trimmed) {
+                await api.post(`/drivers/rides/${rideId}/cancel`, { reason: trimmed });
+            } else {
+                await api.post(`/drivers/rides/${rideId}/cancel`);
+            }
             set({
                 rideState: 'idle',
                 activeRide: null,

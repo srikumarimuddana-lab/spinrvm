@@ -677,6 +677,69 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                     </div>
                                 </Card>
 
+                                {/* Offer Funnel — who was offered this ride and what they did */}
+                                {Array.isArray(ride.offers) && ride.offers.length > 0 && (
+                                    <Card>
+                                        <CardHead title="Dispatch Offers" icon={Radio} />
+                                        <div className="p-4 space-y-2">
+                                            {(() => {
+                                                const OFFER_META: Record<string, { label: string; cls: string; Icon: React.ElementType }> = {
+                                                    accepted: { label: "Accepted", cls: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400", Icon: CheckCircle2 },
+                                                    declined: { label: "Declined", cls: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400", Icon: XCircle },
+                                                    expired:  { label: "Ignored",  cls: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400", Icon: Clock },
+                                                    pending:  { label: "Pending",  cls: "bg-muted text-muted-foreground", Icon: Radio },
+                                                };
+                                                const respSecs = (o: any) => {
+                                                    if (!o.offered_at || !o.responded_at) return null;
+                                                    const d = (new Date(o.responded_at).getTime() - new Date(o.offered_at).getTime()) / 1000;
+                                                    return Number.isFinite(d) && d >= 0 ? d : null;
+                                                };
+                                                const counts = ride.offers.reduce((acc: Record<string, number>, o: any) => {
+                                                    const k = o.status === "expired" ? "ignored" : (o.status || "pending");
+                                                    acc[k] = (acc[k] || 0) + 1; return acc;
+                                                }, {});
+                                                return (
+                                                    <>
+                                                        <div className="flex flex-wrap gap-2 mb-1">
+                                                            {[["accepted", "Accepted"], ["declined", "Declined"], ["ignored", "Ignored"], ["pending", "Pending"]].map(([k, lbl]) =>
+                                                                counts[k] ? (
+                                                                    <span key={k} className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-muted/60">
+                                                                        {lbl}: {counts[k]}
+                                                                    </span>
+                                                                ) : null
+                                                            )}
+                                                            <span className="text-[11px] text-muted-foreground px-2 py-0.5">{ride.offers.length} offer{ride.offers.length > 1 ? "s" : ""} total</span>
+                                                        </div>
+                                                        {ride.offers.map((o: any, i: number) => {
+                                                            const meta = OFFER_META[o.status] || OFFER_META.pending;
+                                                            const rs = respSecs(o);
+                                                            return (
+                                                                <div key={`${o.driver_id}-${i}`} className="flex items-center gap-2.5 bg-muted/40 rounded-lg p-2.5">
+                                                                    <meta.Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                                                    <span className="text-xs font-semibold truncate flex-1">{o.driver_name || o.driver_id?.slice(0, 12)}</span>
+                                                                    {o.driver_rating != null && (
+                                                                        <span className="flex items-center gap-0.5 text-[11px] text-muted-foreground">
+                                                                            <Star className="h-3 w-3 text-amber-400 fill-amber-400" />{Number(o.driver_rating).toFixed(1)}
+                                                                        </span>
+                                                                    )}
+                                                                    {typeof o.eta_seconds === "number" && (
+                                                                        <span className="text-[11px] text-muted-foreground tabular-nums">{Math.round(o.eta_seconds)}s ETA</span>
+                                                                    )}
+                                                                    {rs != null && (
+                                                                        <span className="text-[11px] text-muted-foreground tabular-nums">replied {rs < 60 ? `${Math.round(rs)}s` : `${Math.round(rs / 60)}m`}</span>
+                                                                    )}
+                                                                    <span className="text-[10px] text-muted-foreground tabular-nums">{fmtTime(o.offered_at)}</span>
+                                                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${meta.cls}`}>{meta.label}</span>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </>
+                                                );
+                                            })()}
+                                        </div>
+                                    </Card>
+                                )}
+
                                 {/* Lost & Found */}
                                 <Card>
                                     <div className="p-4">

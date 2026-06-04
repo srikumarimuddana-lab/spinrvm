@@ -2,25 +2,31 @@ name: Bootstrap Fly.io app (one-time / manual)
 
 # Manually-triggered, idempotent bootstrap so you never need flyctl locally:
 #   1. creates the Fly app (no-op if it already exists)
-#   2. sets all production secrets from GitHub Actions secrets
+#   2. verifies the required secrets already exist ON THE FLY APP
 #   3. (optional) deploys and scales to 2 machines in yyz, then probes /health
 #
-# Ongoing deploys are handled separately by deploy-fly.yml on every push to main.
-# Run this once to launch, or again whenever you rotate secrets.
+# Secrets are NOT managed here — set them directly in Fly (dashboard or
+# `fly secrets set ...`) so production values never live in GitHub. This job
+# only checks they are present before deploying. Ongoing deploys are handled by
+# deploy-fly.yml on every push to main.
 #
-# ── Required GitHub Actions secrets ──────────────────────────────────────────
-#   FLY_API_TOKEN  — must be ORG-scoped to create the app
-#                    (`fly tokens create org`), not a per-app deploy token.
-#   The production values, copied from Railway (same values, byte-identical):
-#     SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, JWT_SECRET, ADMIN_PASSWORD,
-#     ADMIN_EMAIL, FIREBASE_SERVICE_ACCOUNT_JSON, FIREBASE_DRIVER_APP_ID,
-#     FIREBASE_RIDER_APP_ID, REDIS_URL, RATE_LIMIT_REDIS_URL, WS_REDIS_URL,
-#     ALLOWED_ORIGINS
+# ── Required GitHub Actions secret ───────────────────────────────────────────
+#   FLY_API_TOKEN  — must have access to the org (to create the app). A personal
+#                    token (Fly dashboard → Account → Access Tokens) works; a
+#                    per-app deploy token does not have create permission.
 #
-# Notes:
-#   - FIREBASE_SERVICE_ACCOUNT_JSON must be raw JSON minified to a SINGLE line
-#     (core/security.init_firebase() runs json.loads on it, so do NOT base64 it;
-#     `fly secrets import` parses line by line, so it must contain no newlines).
+# ── Required Fly secrets (set in Fly, not GitHub) ────────────────────────────
+#   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, JWT_SECRET, ADMIN_PASSWORD,
+#   ADMIN_EMAIL, FIREBASE_SERVICE_ACCOUNT_JSON, FIREBASE_DRIVER_APP_ID,
+#   FIREBASE_RIDER_APP_ID, REDIS_URL, RATE_LIMIT_REDIS_URL, WS_REDIS_URL,
+#   ALLOWED_ORIGINS
+#
+# Notes (set these correctly in Fly):
+#   - FIREBASE_SERVICE_ACCOUNT_JSON must be raw JSON (core/security.init_firebase()
+#     runs json.loads on it — do NOT base64 it). It has embedded double quotes, so
+#     set it from a file: fly secrets set "FIREBASE_SERVICE_ACCOUNT_JSON=$(cat sa.json)"
+#   - ADMIN_EMAIL must be a real address; the default admin@spinr.ca is rejected
+#     by the production config guard and the app will not boot.
 #   - Redis URLs must keep credentials and use the alias host, e.g.
 #     rediss://:<password>@redis.spinr.ca:6379. If using rediss:// with the alias,
 #     the Redis origin must present a TLS cert valid for redis.spinr.ca (provider
@@ -76,50 +82,25 @@ jobs:
             flyctl apps create "${FLY_APP}" --org "${{ inputs.org }}"
           fi
 
-      # Pipe secrets over stdin so values never appear in the command line or
-      # process list. GitHub masks them in logs. This stages one release.
-      - name: Set Fly secrets
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          JWT_SECRET: ${{ secrets.JWT_SECRET }}
-          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
-          ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
-          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
-          FIREBASE_DRIVER_APP_ID: ${{ secrets.FIREBASE_DRIVER_APP_ID }}
-          FIREBASE_RIDER_APP_ID: ${{ secrets.FIREBASE_RIDER_APP_ID }}
-          REDIS_URL: ${{ secrets.REDIS_URL }}
-          RATE_LIMIT_REDIS_URL: ${{ secrets.RATE_LIMIT_REDIS_URL }}
-          WS_REDIS_URL: ${{ secrets.WS_REDIS_URL }}
-          ALLOWED_ORIGINS: ${{ secrets.ALLOWED_ORIGINS }}
+      # Secrets are set manually in Fly (not stored in GitHub). Verify the
+      # required ones are present on the app before deploying so a missing one
+      # fails fast here instead of crash-looping the Machines past /health.
+      - name: Verify required Fly secrets exist
+        if: ${{ inputs.deploy }}
         run: |
+          present="$(flyctl secrets list -a "${FLY_APP}" 2>/dev/null || true)"
           missing=0
-          for v in SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY JWT_SECRET \
+          for k in SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY JWT_SECRET \
                    ADMIN_PASSWORD ADMIN_EMAIL FIREBASE_SERVICE_ACCOUNT_JSON \
                    FIREBASE_DRIVER_APP_ID FIREBASE_RIDER_APP_ID REDIS_URL \
                    RATE_LIMIT_REDIS_URL WS_REDIS_URL ALLOWED_ORIGINS; do
-            if [ -z "${!v}" ]; then
-              echo "::error title=Missing secret::GitHub secret ${v} is not set."
+            if ! printf '%s\n' "$present" | grep -qw "$k"; then
+              echo "::error title=Missing Fly secret::${k} is not set on ${FLY_APP}. Set it with: fly secrets set ${k}=... -a ${FLY_APP}"
               missing=1
             fi
           done
-          [ "$missing" -eq 0 ] || exit 1
-
-          flyctl secrets import -a "${FLY_APP}" <<EOF
-          SUPABASE_URL=${SUPABASE_URL}
-          SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
-          JWT_SECRET=${JWT_SECRET}
-          ADMIN_PASSWORD=${ADMIN_PASSWORD}
-          ADMIN_EMAIL=${ADMIN_EMAIL}
-          FIREBASE_SERVICE_ACCOUNT_JSON=${FIREBASE_SERVICE_ACCOUNT_JSON}
-          FIREBASE_DRIVER_APP_ID=${FIREBASE_DRIVER_APP_ID}
-          FIREBASE_RIDER_APP_ID=${FIREBASE_RIDER_APP_ID}
-          REDIS_URL=${REDIS_URL}
-          RATE_LIMIT_REDIS_URL=${RATE_LIMIT_REDIS_URL}
-          WS_REDIS_URL=${WS_REDIS_URL}
-          ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
-          EOF
-          echo "Secrets staged."
+          [ "$missing" -eq 0 ] || { echo "Set the missing secrets in Fly, then re-run."; exit 1; }
+          echo "All required secrets present on ${FLY_APP}."
 
       # Build context must be backend/ (root Dockerfile COPYs a root
       # requirements.txt that does not exist — only backend/ has one).

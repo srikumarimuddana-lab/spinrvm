@@ -401,6 +401,17 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
         </View>
         )}
 
+        {/* ── Rider's note / meeting instructions (pickup phases) ─ */}
+        {!!(ride as any).rider_notes && (rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup') ? (
+          <View style={styles.noteBanner}>
+            <Ionicons name="chatbubble-ellipses-outline" size={16} color={colors.primary} style={{ marginTop: 1 }} />
+            <View style={{ flex: 1 }}>
+              <Text allowFontScaling={false} style={styles.noteLabel}>Rider note</Text>
+              <Text style={styles.noteText}>{(ride as any).rider_notes}</Text>
+            </View>
+          </View>
+        ) : null}
+
         {/* ── OTP section (arrived_at_pickup) ─────────────── */}
         {rideState === 'arrived_at_pickup' ? (
           <View style={styles.otpCard}>
@@ -660,6 +671,18 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'center',
     },
     riderName: { fontSize: 15, fontWeight: '700', color: colors.text },
+    noteBanner: {
+      flexDirection: 'row',
+      gap: 8,
+      alignItems: 'flex-start',
+      backgroundColor: colors.primary + '14',
+      borderRadius: 12,
+      paddingVertical: 10,
+      paddingHorizontal: 12,
+      marginTop: 12,
+    },
+    noteLabel: { fontSize: 11, fontWeight: '700', color: colors.primary, marginBottom: 2 },
+    noteText: { fontSize: 14, color: colors.text, lineHeight: 19 },
     ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2 },
     ratingText: { fontSize: 12, fontWeight: '600', color: colors.textDim },
     chatBtn: {

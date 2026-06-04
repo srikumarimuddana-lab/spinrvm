@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Platform,
+  TextInput,
   useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -40,7 +41,8 @@ export default function ConfirmPickupScreen() {
   const { sf } = useResponsive();
   const styles = useMemo(() => createStyles(colors, sf, insets), [colors, sf, insets]);
 
-  const { pickup, setPickup, dropoff } = useRideStore();
+  const { pickup, setPickup, dropoff, riderNotes, setRiderNotes } = useRideStore();
+  const [note, setNote] = useState(riderNotes ?? '');
   const mapRef = useRef<MapView>(null);
   const geocodeTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -84,6 +86,7 @@ export default function ConfirmPickupScreen() {
 
   const handleConfirm = () => {
     setPickup({ address, lat: region.latitude, lng: region.longitude });
+    setRiderNotes(note.trim());
     router.push('/ride-options');
   };
 
@@ -192,6 +195,18 @@ export default function ConfirmPickupScreen() {
             <Text style={styles.dropoffText} numberOfLines={1}>To: {dropoff.address}</Text>
           </View>
         )}
+
+        {/* Meeting instructions / note for driver — helps when the pin is a
+            big venue (mall, airport): "I'll be at the north entrance". */}
+        <TextInput
+          style={styles.noteInput}
+          placeholder="Note for driver (e.g. which mall entrance) — optional"
+          placeholderTextColor={colors.textDim}
+          value={note}
+          onChangeText={setNote}
+          maxLength={200}
+          multiline
+        />
 
         {/* Confirm button */}
         <TouchableOpacity
@@ -369,6 +384,20 @@ function createStyles(colors: ThemeColors, sf: (s: number) => number, insets: { 
       fontSize: sf(13),
       fontFamily: 'PlusJakartaSans_400Regular',
       color: colors.textDim,
+    },
+    noteInput: {
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 12,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      minHeight: 44,
+      maxHeight: 88,
+      fontSize: sf(14),
+      fontFamily: 'PlusJakartaSans_400Regular',
+      color: colors.text,
+      marginBottom: 14,
+      textAlignVertical: 'top',
     },
     confirmBtn: {
       flexDirection: 'row',

@@ -80,7 +80,7 @@ Any valid future expiry + any 3-digit CVC + any postal code works.
        - [ ] Ride row in DB has `payment_status="paid"`, `payment_intent_id=pi_...`
        - [ ] Stripe dashboard shows a **Succeeded** payment with matching metadata
              `ride_id`, `rider_id`, `source=ride_completion_charge`
-       - [ ] Receipt email delivered (if SendGrid is configured in staging)
+       - [ ] Receipt email delivered (if Resend is configured in staging)
 
 ### 3.2 Scenario B — Card declined (`4000 0000 0000 0002`)
 

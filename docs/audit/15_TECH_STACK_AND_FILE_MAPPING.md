@@ -303,7 +303,7 @@ spinr/
 | `backend/utils/audit_logger.py` | Structured security event logging | `log_security_event(event, **kwargs)`, `SecurityEvent` constants |
 | `backend/utils/analytics.py` | Ride + revenue analytics | Aggregation queries, time-series fare data |
 | `backend/utils/cloudinary.py` | Image upload + transform | `upload_document(file)`, `get_secure_url(public_id)` |
-| `backend/utils/email_receipt.py` | Post-trip email receipt | Jinja2 template render + SMTP/SendGrid send |
+| `backend/utils/email_receipt.py` | Post-trip email receipt | Jinja2 template render + Resend send |
 | `backend/utils/error_handling.py` | Global error handler | Sanitised error responses, Sentry breadcrumb logging |
 | `backend/utils/rate_limiter.py` | Custom Redis rate limiter | Sliding window, composite key (user_id + IP), `Retry-After` header |
 | `backend/utils/crypto.py` | Cryptographic helpers | `hash_otp(code)` SHA-256, `hash_token(raw)` |

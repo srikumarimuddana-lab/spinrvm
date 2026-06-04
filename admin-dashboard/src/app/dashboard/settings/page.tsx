@@ -195,10 +195,10 @@ export default function SettingsPage() {
                         </CardContent>
                     </Card>
 
-                    {/* Email / SendGrid */}
+                    {/* Email / Resend */}
                     <Card className="border-border/50">
                         <CardHeader>
-                            <CardTitle className="text-base">Email (SendGrid)</CardTitle>
+                            <CardTitle className="text-base">Email (Resend)</CardTitle>
                         </CardHeader>
                         <Separator />
                         <CardContent className="pt-4 space-y-4">
@@ -210,20 +210,20 @@ export default function SettingsPage() {
                                 <Label>API Key</Label>
                                 <Input
                                     type="password"
-                                    value={settings.sendgrid_api_key || ""}
+                                    value={settings.resend_api_key || ""}
                                     onChange={(e) =>
-                                        update("sendgrid_api_key", e.target.value)
+                                        update("resend_api_key", e.target.value)
                                     }
-                                    placeholder="SG...."
+                                    placeholder="re_...."
                                 />
                             </div>
                             <div className="space-y-2">
                                 <Label>From Email</Label>
                                 <Input
                                     type="email"
-                                    value={settings.sendgrid_from_email || ""}
+                                    value={settings.resend_from_email || ""}
                                     onChange={(e) =>
-                                        update("sendgrid_from_email", e.target.value)
+                                        update("resend_from_email", e.target.value)
                                     }
                                     placeholder="receipts@spinr.ca"
                                 />

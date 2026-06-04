@@ -1,7 +1,7 @@
 """Unit tests for send_ride_receipt_email.
 
 Covers:
-- Early return when sendgrid_api_key is missing (no HTTP call)
+- Early return when resend_api_key is missing (no HTTP call)
 - Decimal arithmetic for GST and grand_total
 - Surge line item hidden at 1.0x, shown above 1.0x
 - HTTP errors are swallowed (fire-and-forget contract)
@@ -83,8 +83,8 @@ def _make_async_client_mock(post_side_effect=None) -> MagicMock:
 
 
 @pytest.mark.anyio
-async def test_receipt_email_no_sendgrid_key():
-    """When sendgrid_api_key is absent, return without making any HTTP call."""
+async def test_receipt_email_no_resend_key():
+    """When resend_api_key is absent, return without making any HTTP call."""
     mock_client = _make_async_client_mock()
 
     with (
@@ -112,8 +112,8 @@ async def test_receipt_email_decimal_math():
             "settings_loader.get_app_settings",
             AsyncMock(
                 return_value={
-                    "sendgrid_api_key": "SG.test-key",
-                    "sendgrid_from_email": "receipts@spinr.ca",
+                    "resend_api_key": "re_test-key",
+                    "resend_from_email": "receipts@spinr.ca",
                 }
             ),
         ),
@@ -122,7 +122,7 @@ async def test_receipt_email_decimal_math():
         await send_ride_receipt_email(_BASE_RIDE, _BASE_RIDER)
 
     assert captured, "Expected an HTTP POST to be made"
-    content_value = captured["content"][0]["value"]
+    content_value = captured["text"]
 
     # subtotal = 11.00; GST = 11.00 * 0.05 = 0.55; PST = 11.00 * 0.06 = 0.66
     subtotal = Decimal("11.00")
@@ -153,8 +153,8 @@ async def test_receipt_email_surge_hidden_when_1x():
             "settings_loader.get_app_settings",
             AsyncMock(
                 return_value={
-                    "sendgrid_api_key": "SG.test-key",
-                    "sendgrid_from_email": "receipts@spinr.ca",
+                    "resend_api_key": "re_test-key",
+                    "resend_from_email": "receipts@spinr.ca",
                 }
             ),
         ),
@@ -163,7 +163,7 @@ async def test_receipt_email_surge_hidden_when_1x():
         await send_ride_receipt_email(ride, _BASE_RIDER)
 
     assert captured, "Expected an HTTP POST to be made"
-    content_value = captured["content"][0]["value"]
+    content_value = captured["text"]
     assert "Surge" not in content_value, "Surge line item must not appear when surge_multiplier is 1.0"
 
 
@@ -184,8 +184,8 @@ async def test_receipt_email_surge_shown_when_above_1x():
             "settings_loader.get_app_settings",
             AsyncMock(
                 return_value={
-                    "sendgrid_api_key": "SG.test-key",
-                    "sendgrid_from_email": "receipts@spinr.ca",
+                    "resend_api_key": "re_test-key",
+                    "resend_from_email": "receipts@spinr.ca",
                 }
             ),
         ),
@@ -194,7 +194,7 @@ async def test_receipt_email_surge_shown_when_above_1x():
         await send_ride_receipt_email(ride, _BASE_RIDER)
 
     assert captured, "Expected an HTTP POST to be made"
-    content_value = captured["content"][0]["value"]
+    content_value = captured["text"]
     assert "Surge" in content_value, "Surge line item must appear when surge_multiplier is above 1.0"
 
 
@@ -210,8 +210,8 @@ async def test_receipt_email_http_error_does_not_raise():
             "settings_loader.get_app_settings",
             AsyncMock(
                 return_value={
-                    "sendgrid_api_key": "SG.test-key",
-                    "sendgrid_from_email": "receipts@spinr.ca",
+                    "resend_api_key": "re_test-key",
+                    "resend_from_email": "receipts@spinr.ca",
                 }
             ),
         ),

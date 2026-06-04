@@ -1,6 +1,6 @@
 """
 Receipt generator for Spinr rides.
-Generates HTML receipt and sends via email (SendGrid when configured, logs otherwise).
+Generates HTML receipt and sends via email (Resend when configured, logs otherwise).
 
 Line items
 ----------
@@ -298,7 +298,7 @@ def _receipt_total(ride: dict, tip: float = 0) -> Decimal:
 
 
 async def send_receipt_email(ride: dict, rider: dict, driver: dict = None, tip: float = 0):
-    """Send receipt email. Uses SendGrid when configured, logs otherwise."""
+    """Send receipt email. Uses Resend when configured, logs otherwise."""
     email = rider.get("email", "")
     if not email:
         logger.warning(f"No email for rider {rider.get('id')} — skipping receipt")
@@ -307,33 +307,34 @@ async def send_receipt_email(ride: dict, rider: dict, driver: dict = None, tip: 
     html = generate_receipt_html(ride, rider, driver, tip)
     total = _receipt_total(ride, tip)
 
-    # Try SendGrid
+    # Try Resend
     try:
         from ..settings_loader import get_app_settings
 
         settings = await get_app_settings()
-        sendgrid_key = settings.get("sendgrid_api_key", "")
+        resend_key = settings.get("resend_api_key", "")
+        from_email = settings.get("resend_from_email") or "receipts@spinr.ca"
 
-        if sendgrid_key:
+        if resend_key:
             import httpx
 
             response = await httpx.AsyncClient().post(
-                "https://api.sendgrid.com/v3/mail/send",
-                headers={"Authorization": f"Bearer {sendgrid_key}", "Content-Type": "application/json"},
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
                 json={
-                    "personalizations": [{"to": [{"email": email}]}],
-                    "from": {"email": "receipts@spinr.ca", "name": "Spinr"},
+                    "from": f"Spinr <{from_email}>",
+                    "to": [email],
                     "subject": f"Your Spinr ride receipt — ${total:.2f}",
-                    "content": [{"type": "text/html", "value": html}],
+                    "html": html,
                 },
             )
-            logger.info(f"[EMAIL] SendGrid receipt sent to {redact_email(email)} (status: {response.status_code})")
+            logger.info(f"[EMAIL] Resend receipt sent to {redact_email(email)} (status: {response.status_code})")
             return response.status_code in (200, 201, 202)
     except ImportError:
         pass
     except Exception as e:
-        logger.warning(f"[EMAIL] SendGrid failed: {e}")
+        logger.warning(f"[EMAIL] Resend failed: {e}")
 
     # Fallback: log only (PII-safe: email + total amount redacted)
-    logger.info(f"[EMAIL] Receipt for ride {ride.get('id')} → {redact_email(email)} (SendGrid not configured)")
+    logger.info(f"[EMAIL] Receipt for ride {ride.get('id')} → {redact_email(email)} (Resend not configured)")
     return False

@@ -81,7 +81,7 @@ Each vendor row carries:
 
 | Vendor | Service | Data class | Region | DPA | Disclosed | DPIA | Criticality | Contract owner |
 |---|---|:-:|---|:-:|:-:|:-:|:-:|---|
-| **Email provider** (SendGrid / Postmark — TBD) | Transactional email | C3 (email addr) | US | ✅ on contract | Required | — | HIGH | backend |
+| **Email provider** (Resend) | Transactional email | C3 (email addr) | US | ✅ on contract | Required | — | HIGH | backend |
 | **Status page provider** (Statuspage / Atlassian — TBD) | Public status page | C1 | US | ✅ on contract | Partial | — | MEDIUM | devops |
 | **PagerDuty / OpsGenie — TBD** | On-call paging | C2 (internal IDs only) | US | ✅ on contract | — | — | HIGH | devops |
 

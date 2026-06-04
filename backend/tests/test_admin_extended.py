@@ -425,6 +425,86 @@ class TestAdminUpdateDriver:
                 )
         assert exc.value.status_code == 404
 
+    def test_email_routes_to_users_table_not_drivers(self):
+        """Regression: `email` lives on `users`, not `drivers`. Writing it to
+        `drivers` triggers PGRST204. It must be routed to the users row."""
+        from backend.routes.admin import drivers as admin_drivers
+
+        driver = _driver()
+        update_mock = AsyncMock(return_value=driver)
+
+        with (
+            patch("backend.routes.admin.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("backend.routes.admin.drivers.db_supabase.update_one", update_mock),
+            patch("backend.routes.admin.drivers._log_driver_activity", AsyncMock()),
+        ):
+            asyncio.run(
+                admin_drivers.admin_update_driver(
+                    driver_id=DRIVER_ID,
+                    updates={"email": "new@example.com", "gender": "Female"},
+                    admin=ADMIN_USER,
+                )
+            )
+
+        tables_written = {call.args[0]: call.args[2] for call in update_mock.call_args_list}
+        # email/gender must hit `users`, keyed by user_id — never `drivers`.
+        assert "users" in tables_written
+        assert tables_written["users"] == {"email": "new@example.com", "gender": "Female"}
+        users_call = next(c for c in update_mock.call_args_list if c.args[0] == "users")
+        assert users_call.args[1] == {"id": DRIVER_USER_ID}
+        if "drivers" in tables_written:
+            assert "email" not in tables_written["drivers"]
+            assert "gender" not in tables_written["drivers"]
+
+    def test_name_change_syncs_users_and_drivers(self):
+        """first_name/last_name are mirrored on both tables; the legacy
+        `drivers.name` atom must be recomputed."""
+        from backend.routes.admin import drivers as admin_drivers
+
+        driver = _driver(first_name="Old", last_name="Name")
+        update_mock = AsyncMock(return_value=driver)
+
+        with (
+            patch("backend.routes.admin.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("backend.routes.admin.drivers.db_supabase.update_one", update_mock),
+            patch("backend.routes.admin.drivers._log_driver_activity", AsyncMock()),
+        ):
+            asyncio.run(
+                admin_drivers.admin_update_driver(
+                    driver_id=DRIVER_ID,
+                    updates={"first_name": "New", "last_name": "Driver"},
+                    admin=ADMIN_USER,
+                )
+            )
+
+        writes = {call.args[0]: call.args[2] for call in update_mock.call_args_list}
+        assert writes["drivers"]["first_name"] == "New"
+        assert writes["drivers"]["name"] == "New Driver"
+        assert writes["users"]["first_name"] == "New"
+        assert writes["users"]["last_name"] == "Driver"
+
+    def test_409_when_user_field_but_no_linked_user(self):
+        from fastapi import HTTPException
+
+        from backend.routes.admin import drivers as admin_drivers
+
+        driver = _driver(user_id=None)
+
+        with (
+            patch("backend.routes.admin.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("backend.routes.admin.drivers.db_supabase.update_one", AsyncMock(return_value=driver)),
+            patch("backend.routes.admin.drivers._log_driver_activity", AsyncMock()),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(
+                    admin_drivers.admin_update_driver(
+                        driver_id=DRIVER_ID,
+                        updates={"email": "x@example.com"},
+                        admin=ADMIN_USER,
+                    )
+                )
+        assert exc.value.status_code == 409
+
 
 class TestAdminVerifyDriver:
     def test_approves_driver(self):

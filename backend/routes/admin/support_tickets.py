@@ -80,6 +80,7 @@ def _parse_zoho_time(value: str):
 
 class ZohoConfigUpdate(BaseModel):
     enabled: Optional[bool] = None
+    auto_sync_enabled: Optional[bool] = None
     data_center: Optional[str] = None
     org_id: Optional[str] = None
     default_department_id: Optional[str] = None
@@ -97,6 +98,7 @@ def _config_status(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "enabled": bool(cfg.get("enabled")),
+        "auto_sync_enabled": bool(cfg.get("auto_sync_enabled")),
         "data_center": cfg.get("data_center") or "ca",
         "org_id": cfg.get("org_id") or "",
         "default_department_id": cfg.get("default_department_id") or "",

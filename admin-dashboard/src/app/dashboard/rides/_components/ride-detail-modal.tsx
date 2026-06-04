@@ -486,8 +486,11 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                         <CardHead title="Driver & Platform Earnings" icon={TrendingUp} />
                                         {(() => {
                                             const n = (v: any) => parseFloat(String(v ?? 0)) || 0;
-                                            // 0% commission: driver keeps 100% of the ride fare components.
-                                            const rideFare = n(ride.base_fare) + n(ride.distance_fare) + n(ride.time_fare);
+                                            const isCancelled = ride.status === "cancelled";
+                                            // 0% commission: driver keeps 100% of the ride fare components — but a
+                                            // CANCELLED ride never ran, so the driver earns only the cancellation
+                                            // fee (the estimated fare components on the row are not earned).
+                                            const rideFare = isCancelled ? 0 : n(ride.base_fare) + n(ride.distance_fare) + n(ride.time_fare);
                                             const tip = n(ride.tip_amount);
                                             const incentives = n(ride.incentive_total);
                                             const claims = Array.isArray(ride.incentive_claims) ? ride.incentive_claims : [];
@@ -524,7 +527,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     </div>
                                                     <div className="border-t pt-3 space-y-1.5">
                                                         <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">Driver</p>
-                                                        <FR l="Ride fare (100%)" v={rideFare} />
+                                                        {!isCancelled && <FR l="Ride fare (100%)" v={rideFare} />}
                                                         {cancelFee > 0 && <FR l="Cancellation fee" v={cancelFee} />}
                                                         {tip > 0 && <FR l="Tip" v={tip} />}
                                                         {claims.length > 0

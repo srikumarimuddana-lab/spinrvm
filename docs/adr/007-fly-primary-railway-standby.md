@@ -29,7 +29,7 @@ Options considered for routing/failover:
 | Option | Rejected / chosen because |
 |--------|---------------------------|
 | Cloudflare **Load Balancer** (active-active, health-based pools) | More moving parts (monitors, pools, session affinity) to validate before launch; not needed for a "Fly primary, Railway just-in-case" posture. |
-| **Cloudflare CNAME cutover** (chosen) | One public hostname `api.spinr.ca` as a CNAME to the active backend; fail-over / fail-back is a single DNS change. Lowest complexity, no LB to operate. |
+| **Cloudflare CNAME cutover** (chosen) | One public hostname `api-spinr.spinr.ca` as a CNAME to the active backend; fail-over / fail-back is a single DNS change. Lowest complexity, no LB to operate. |
 | Keep Render fallback | Never implemented; no Canadian region; cold-start on free tier. |
 
 ---
@@ -45,10 +45,10 @@ Key implementation details:
   Railway). Both run the same `backend/Dockerfile`, so the two providers stay in
   lockstep. Fly uses a rolling strategy (`max_unavailable=1`); new machines must
   pass `/health` before old ones are replaced.
-- **CNAME routing, no load balancer.** `api.spinr.ca` is a Cloudflare CNAME to
-  the active backend. Cut over to Fly-primary by pointing the CNAME at the Fly
+- **CNAME routing, no load balancer.** `api-spinr.spinr.ca` is a Cloudflare CNAME
+  to the active backend. Cut over to Fly-primary by pointing the CNAME at the Fly
   app; fail back to Railway by pointing it back. Mobile and admin builds only
-  ever use `https://api.spinr.ca`, never a provider domain.
+  ever use `https://api-spinr.spinr.ca`, never a provider domain.
 - **Shared Redis behind a DNS alias.** Redis is provisioned on Fly and exposed via
   a stable alias (e.g. `redis.spinr.ca`). `REDIS_URL`, `RATE_LIMIT_REDIS_URL`, and
   `WS_REDIS_URL` point at the alias on **both** providers, so the Redis backend

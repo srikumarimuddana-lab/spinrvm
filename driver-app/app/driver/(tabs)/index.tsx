@@ -893,7 +893,7 @@ function DriverDashboard() {
             await uploadLocationBatch().catch(() => {});
             await completeRide(rideId);
           }}
-          onCancelRide={() => cancelRide(activeRide!.ride.id)}
+          onCancelRide={(reason) => cancelRide(activeRide!.ride.id, reason)}
           routeEtaMinutes={routeEtaMinutes}
           routeDistanceKm={routeDistanceKm}
           slideUpAnim={slideUpAnim}

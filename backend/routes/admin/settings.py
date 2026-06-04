@@ -48,6 +48,11 @@ _CREDENTIAL_FIELDS = frozenset(
         # Resend API key is a credential too — without masking it would
         # otherwise round-trip in plaintext on every settings GET.
         "resend_api_key",
+        # Legacy SendGrid key: no longer read for sending, but migration 110
+        # leaves the column in place, so a still-populated value would round-
+        # trip in plaintext on GET unless it stays masked here. Keeps the
+        # super-admin-only reveal flow as the only way to read it.
+        "sendgrid_api_key",
     }
 )
 

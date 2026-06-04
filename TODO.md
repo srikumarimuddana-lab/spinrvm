@@ -2,7 +2,7 @@
 
 _Last audited: 2026-04-27. Items marked ✅ were verified implemented in the codebase._
 
----
+--- 
 
 ## Critical Issues (Must Fix)
 

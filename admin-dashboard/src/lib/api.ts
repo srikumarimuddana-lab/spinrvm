@@ -310,6 +310,7 @@ export const getRideFinancials = (period: RideFinancialsPeriod = "today") =>
         rider_paid: number;
         gross_fare: number;
         driver_revenue: number;
+        driver_take: number;
         tips: number;
         incentives: number;
         gst_collected: number;

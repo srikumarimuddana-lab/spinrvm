@@ -1048,6 +1048,8 @@ async def admin_get_ride_financials(
 
     platform_before_promo = round(booking_airport + area_fees, 2)
     platform_after_promo = round(platform_before_promo - incentives - promo_applied, 2)
+    # Driver all-in take = ride fare (100%) + tips + platform-funded incentives.
+    driver_take = round(driver_revenue + tips + incentives, 2)
 
     return {
         "period": period,
@@ -1057,6 +1059,7 @@ async def admin_get_ride_financials(
         "rider_paid": round(rider_paid, 2),
         "gross_fare": round(gross_fare, 2),
         "driver_revenue": round(driver_revenue, 2),
+        "driver_take": driver_take,
         "tips": round(tips, 2),
         "incentives": round(incentives, 2),
         "gst_collected": round(gst_collected, 2),

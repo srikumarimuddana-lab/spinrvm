@@ -498,6 +498,7 @@ async def get_driver_offer_stats(
             "accepted": 0,
             "declined": 0,
             "ignored": 0,
+            "preempted": 0,
             "pending": 0,
             "_response_secs": [],
         }
@@ -514,7 +515,12 @@ async def get_driver_offer_stats(
         elif status == "declined":
             agg["declined"] += 1
         elif status == "expired":
+            # Genuine timeout — the driver received the offer and never responded.
             agg["ignored"] += 1
+        elif status == "preempted":
+            # Another driver accepted first — NOT an ignore; tracked separately
+            # and excluded from the decided-rate denominators below.
+            agg["preempted"] += 1
         elif status == "pending":
             agg["pending"] += 1
         # Response latency for the offers the driver actually answered.
@@ -578,6 +584,7 @@ async def get_driver_offer_stats(
                 "accepted": agg["accepted"],
                 "declined": agg["declined"],
                 "ignored": agg["ignored"],
+                "preempted": agg["preempted"],
                 "pending": agg["pending"],
                 "accept_rate": round(agg["accepted"] / decided * 100, 1) if decided else 0.0,
                 "decline_rate": round(agg["declined"] / decided * 100, 1) if decided else 0.0,
@@ -596,6 +603,7 @@ async def get_driver_offer_stats(
         "accepted": sum(r["accepted"] for r in result),
         "declined": sum(r["declined"] for r in result),
         "ignored": sum(r["ignored"] for r in result),
+        "preempted": sum(r["preempted"] for r in result),
         "pending": sum(r["pending"] for r in result),
     }
 

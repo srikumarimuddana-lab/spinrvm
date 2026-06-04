@@ -764,17 +764,25 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                     </div>
                                 </Card>
 
-                                {/* Offer Funnel — who was offered this ride and what they did */}
-                                {Array.isArray(ride.offers) && ride.offers.length > 0 && (
+                                {/* Offer Funnel — who was offered this ride and what they did.
+                                 *  Always rendered so the section is discoverable; shows an empty
+                                 *  state for rides with no recorded offers (e.g. admin-created or
+                                 *  pre-batch-dispatch rides). */}
+                                {(() => {
+                                    const offers: any[] = Array.isArray(ride.offers) ? ride.offers : [];
+                                    return (
                                     <Card>
-                                        <CardHead title={`Dispatch Offers · ${ride.offers.length} driver${ride.offers.length > 1 ? "s" : ""}`} icon={Radio} />
+                                        <CardHead title={`Dispatch Offers · ${offers.length} driver${offers.length === 1 ? "" : "s"}`} icon={Radio} />
                                         <div className="p-4 space-y-2">
-                                            {(() => {
+                                            {offers.length === 0 ? (
+                                                <p className="text-sm text-muted-foreground">No dispatch offers recorded for this ride. (Offers are logged for rides matched through the batch-dispatch engine.)</p>
+                                            ) : (() => {
                                                 const OFFER_META: Record<string, { label: string; cls: string; Icon: React.ElementType }> = {
-                                                    accepted: { label: "Accepted", cls: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400", Icon: CheckCircle2 },
-                                                    declined: { label: "Declined", cls: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400", Icon: XCircle },
-                                                    expired:  { label: "Ignored",  cls: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400", Icon: Clock },
-                                                    pending:  { label: "Pending",  cls: "bg-muted text-muted-foreground", Icon: Radio },
+                                                    accepted:  { label: "Accepted",  cls: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400", Icon: CheckCircle2 },
+                                                    declined:  { label: "Declined",  cls: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400", Icon: XCircle },
+                                                    expired:   { label: "Ignored",   cls: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400", Icon: Clock },
+                                                    preempted: { label: "Preempted", cls: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400", Icon: Radio },
+                                                    pending:   { label: "Pending",   cls: "bg-muted text-muted-foreground", Icon: Radio },
                                                 };
                                                 const respSecs = (o: any) => {
                                                     if (!o.offered_at || !o.responded_at) return null;
@@ -788,16 +796,16 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                 return (
                                                     <>
                                                         <div className="flex flex-wrap gap-2 mb-1">
-                                                            {[["accepted", "Accepted"], ["declined", "Declined"], ["ignored", "Ignored"], ["pending", "Pending"]].map(([k, lbl]) =>
+                                                            {[["accepted", "Accepted"], ["declined", "Declined"], ["ignored", "Ignored"], ["preempted", "Preempted"], ["pending", "Pending"]].map(([k, lbl]) =>
                                                                 counts[k] ? (
                                                                     <span key={k} className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-muted/60">
                                                                         {lbl}: {counts[k]}
                                                                     </span>
                                                                 ) : null
                                                             )}
-                                                            <span className="text-[11px] font-semibold text-foreground px-2 py-0.5 ml-auto">Offered to {ride.offers.length} driver{ride.offers.length > 1 ? "s" : ""}</span>
+                                                            <span className="text-[11px] font-semibold text-foreground px-2 py-0.5 ml-auto">Offered to {offers.length} driver{offers.length === 1 ? "" : "s"}</span>
                                                         </div>
-                                                        {ride.offers.map((o: any, i: number) => {
+                                                        {offers.map((o: any, i: number) => {
                                                             const meta = OFFER_META[o.status] || OFFER_META.pending;
                                                             const rs = respSecs(o);
                                                             return (
@@ -819,7 +827,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                                         <span>Offered {fmtTime(o.offered_at)}</span>
                                                                         {o.responded_at && (
                                                                             <span>
-                                                                                {o.status === "accepted" ? "Accepted" : o.status === "declined" ? "Declined" : "Closed"} {fmtTime(o.responded_at)}
+                                                                                {o.status === "accepted" ? "Accepted" : o.status === "declined" ? "Declined" : o.status === "preempted" ? "Preempted (another driver took it)" : "Closed"} {fmtTime(o.responded_at)}
                                                                                 {rs != null && ` (${rs < 60 ? `${Math.round(rs)}s` : `${Math.round(rs / 60)}m`})`}
                                                                             </span>
                                                                         )}
@@ -833,7 +841,8 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                             })()}
                                         </div>
                                     </Card>
-                                )}
+                                    );
+                                })()}
 
                                 {/* Lost & Found */}
                                 <Card>

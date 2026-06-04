@@ -19,7 +19,7 @@ const DATE_RANGES = [
   { value: "1y", label: "1 Year" },
 ];
 
-type SortKey = "offered" | "accepted" | "declined" | "ignored" | "accept_rate" | "ignore_rate";
+type SortKey = "offered" | "accepted" | "declined" | "ignored" | "preempted" | "accept_rate" | "ignore_rate";
 
 export default function DriverOffersPage() {
   const [dateRange, setDateRange] = useState("30d");
@@ -128,6 +128,7 @@ export default function DriverOffersPage() {
                   <SortHead k="accepted">Accepted</SortHead>
                   <SortHead k="declined">Declined</SortHead>
                   <SortHead k="ignored">Ignored</SortHead>
+                  <SortHead k="preempted">Preempted</SortHead>
                   <SortHead k="accept_rate">Accept %</SortHead>
                   <SortHead k="ignore_rate">Ignore %</SortHead>
                   <TableHead className="text-right">Avg Reply</TableHead>
@@ -146,6 +147,7 @@ export default function DriverOffersPage() {
                     <TableCell className="text-right tabular-nums text-emerald-600">{d.accepted}</TableCell>
                     <TableCell className="text-right tabular-nums text-red-600">{d.declined}</TableCell>
                     <TableCell className="text-right tabular-nums text-amber-600">{d.ignored}</TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">{d.preempted ?? 0}</TableCell>
                     <TableCell className="text-right tabular-nums font-semibold">{d.accept_rate}%</TableCell>
                     <TableCell className="text-right tabular-nums">{d.ignore_rate}%</TableCell>
                     <TableCell className="text-right tabular-nums text-muted-foreground">

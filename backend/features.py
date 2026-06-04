@@ -1444,11 +1444,11 @@ async def send_push_notification(
 
 
 async def send_email(*, to: str, subject: str, body: str) -> bool:
-    """Send a plain-text email via SendGrid when configured, log otherwise.
+    """Send a plain-text email via Resend when configured, log otherwise.
 
     Mirrors the fallback behaviour of utils.email_receipt.send_receipt_email —
-    in dev/test we don't require SendGrid credentials and the message is just
-    logged. Returns True if delivery was attempted against SendGrid and
+    in dev/test we don't require Resend credentials and the message is just
+    logged. Returns True if delivery was attempted against Resend and
     accepted (2xx), False otherwise.
     """
     if not to:
@@ -1458,28 +1458,29 @@ async def send_email(*, to: str, subject: str, body: str) -> bool:
         from settings_loader import get_app_settings
 
         settings = await get_app_settings()
-        sendgrid_key = settings.get("sendgrid_api_key", "")
+        resend_key = settings.get("resend_api_key", "")
+        from_email = settings.get("resend_from_email") or "noreply@spinr.ca"
 
-        if sendgrid_key:
+        if resend_key:
             import httpx
 
             response = await httpx.AsyncClient().post(
-                "https://api.sendgrid.com/v3/mail/send",
+                "https://api.resend.com/emails",
                 headers={
-                    "Authorization": f"Bearer {sendgrid_key}",
+                    "Authorization": f"Bearer {resend_key}",
                     "Content-Type": "application/json",
                 },
                 json={
-                    "personalizations": [{"to": [{"email": to}]}],
-                    "from": {"email": "noreply@spinr.ca", "name": "Spinr"},
+                    "from": f"Spinr <{from_email}>",
+                    "to": [to],
                     "subject": subject,
-                    "content": [{"type": "text/plain", "value": body}],
+                    "text": body,
                 },
             )
-            logger.info(f"[EMAIL] SendGrid sent subject={subject!r} status={response.status_code}")
+            logger.info(f"[EMAIL] Resend sent subject={subject!r} status={response.status_code}")
             return response.status_code in (200, 201, 202)
     except Exception as e:
-        logger.warning(f"[EMAIL] SendGrid failed: {e}")
+        logger.warning(f"[EMAIL] Resend failed: {e}")
 
     logger.info(f"[EMAIL] (fallback log) subject={subject!r}")
     return False
@@ -1508,7 +1509,7 @@ async def notify_safety_team(incident: dict) -> dict:
     reported_by = incident.get("reported_by_user_id")
 
     # Log at CRITICAL — on-call paging via log-aggregator alert rules
-    # works even before SendGrid is configured. Never include the raw
+    # works even before Resend is configured. Never include the raw
     # description here (may contain rider PII / addresses).
     logger.critical(
         f"[SAFETY] Incident opened id={incident_id} category={category} role={role} ride_id={ride_id or '-'}"

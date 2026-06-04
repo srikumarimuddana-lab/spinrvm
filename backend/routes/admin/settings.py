@@ -45,9 +45,9 @@ _CREDENTIAL_FIELDS = frozenset(
         "stripe_webhook_secret",
         "twilio_auth_token",
         "google_maps_api_key",
-        # SendGrid API key is a credential too — without masking it would
+        # Resend API key is a credential too — without masking it would
         # otherwise round-trip in plaintext on every settings GET.
-        "sendgrid_api_key",
+        "resend_api_key",
     }
 )
 
@@ -96,10 +96,10 @@ class SettingsUpdateRequest(BaseModel):
     # Twilio Proxy is what masks rider↔driver phone numbers during a ride;
     # SID lives in app_settings so it rotates without a redeploy.
     twilio_proxy_service_sid: Optional[str] = None
-    # SendGrid powers transactional email (receipts, T4A links, support).
+    # Resend powers transactional email (receipts, T4A links, support).
     # api_key is a credential (masked on GET); from_email is plain.
-    sendgrid_api_key: Optional[str] = None
-    sendgrid_from_email: Optional[str] = None
+    resend_api_key: Optional[str] = None
+    resend_from_email: Optional[str] = None
     # Company info shown on rider receipts + driver T4A slips + the
     # admin dashboard footer. Edited via the Settings page → Company tab.
     company_name: Optional[str] = None

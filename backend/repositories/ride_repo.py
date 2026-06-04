@@ -299,6 +299,19 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
             )
         )
 
+    async def _fetch_offers():
+        # The per-ride dispatch funnel: which drivers were offered this ride
+        # and what each did (accepted / declined / expired==ignored / pending).
+        return await run_sync(
+            lambda rid=ride_id: _rows_from_res(
+                supabase.table("ride_offers")
+                .select("driver_id,status,eta_seconds,offered_at,responded_at")
+                .eq("ride_id", rid)
+                .order("offered_at")
+                .execute()
+            )
+        )
+
     (
         rider,
         rider_area,
@@ -311,6 +324,7 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
         ride_complaints,
         ride_lost_items,
         ride_location_trail,
+        ride_offers,
     ) = await asyncio.gather(
         _fetch_rider(),
         _fetch_rider_area(),
@@ -323,6 +337,7 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
         _fetch_complaints(),
         _fetch_lost_items(),
         _fetch_location_trail(),
+        _fetch_offers(),
     )
 
     # --- Batch 2: lookups that depend on batch 1 results ---
@@ -421,6 +436,25 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
     ride["complaints"] = ride_complaints
     ride["lost_and_found"] = ride_lost_items
     ride["location_trail"] = ride_location_trail
+
+    # --- Offer funnel (which drivers were offered this ride and their reply) ---
+    if ride_offers:
+        offer_driver_ids = list({o.get("driver_id") for o in ride_offers if o.get("driver_id")})
+        offer_drivers = (
+            await run_sync(
+                lambda ids=offer_driver_ids: _rows_from_res(
+                    supabase.table("drivers").select("id,name,rating,user_id").in_("id", ids).execute()
+                )
+            )
+            if offer_driver_ids
+            else []
+        )
+        offer_driver_map = {d["id"]: d for d in offer_drivers if d.get("id")}
+        for o in ride_offers:
+            d = offer_driver_map.get(o.get("driver_id"))
+            o["driver_name"] = (d.get("name") if d else None) or (o.get("driver_id") or "")[:12]
+            o["driver_rating"] = d.get("rating") if d else None
+    ride["offers"] = ride_offers
 
     # --- Route geometry (ride_routes side-table; off the hot rides row) ---
     # New rides store phase_polylines + the OSRM road_polyline (and a copy of the

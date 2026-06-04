@@ -26,6 +26,7 @@ import { RideStatus } from '../constants/rideStatus';
 import api from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import ConfirmSheet from '../components/ConfirmSheet';
+import CancelReasonSheet from '../components/CancelReasonSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { SOSButton } from '@shared/components/SOSButton';
@@ -92,6 +93,7 @@ function DriverArrivingScreenContent() {
     variant: 'info' | 'warning' | 'danger' | 'success';
     buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
   }>({ visible: false, title: '', variant: 'info' });
+  const [reasonVisible, setReasonVisible] = useState(false);
 
   // Searching animation
   const pulseAnim = useRef(new Animated.Value(0)).current;
@@ -221,23 +223,26 @@ function DriverArrivingScreenContent() {
   }, [currentDriver?.lat, currentDriver?.lng, currentRide?.id]);
 
   // ── Cancel handler (fixed: errors are caught, user stays on page) ──
+  const performCancel = async (reason?: string) => {
+    cancelInitiatedRef.current = true;
+    setIsCancelling(true);
+    try {
+      await cancelRide(reason);
+      clearRide();
+      router.replace('/(tabs)' as any);
+    } catch {
+      cancelInitiatedRef.current = false;
+      setIsCancelling(false);
+      showToast('Cancel Failed', 'Could not cancel the ride. Please try again.', 'danger');
+    }
+  };
+
   const handleCancel = () => {
     const status = currentRide?.status;
     const fare = parseFloat((currentRide as any)?.grand_total || currentRide?.total_fare || '0');
 
-    const doCancel = async () => {
-      cancelInitiatedRef.current = true;
-      setIsCancelling(true);
-      try {
-        await cancelRide();
-        clearRide();
-        router.replace('/(tabs)' as any);
-      } catch {
-        cancelInitiatedRef.current = false;
-        setIsCancelling(false);
-        showToast('Cancel Failed', 'Could not cancel the ride. Please try again.', 'danger');
-      }
-    };
+    // A driver is involved → collect a reason first; plain search cancels skip it.
+    const doCancel = () => setReasonVisible(true);
 
     if (status === RideStatus.IN_PROGRESS) {
       setConfirmSheet({
@@ -275,7 +280,7 @@ function DriverArrivingScreenContent() {
         message: 'Stop looking for a driver? No charge.',
         variant: 'info',
         buttons: [
-          { text: 'Cancel', onPress: doCancel },
+          { text: 'Cancel', onPress: () => performCancel() },
           { text: 'Keep searching', style: 'cancel' },
         ],
       });
@@ -636,6 +641,11 @@ function DriverArrivingScreenContent() {
         visible={confirmSheet.visible} title={confirmSheet.title} message={confirmSheet.message}
         variant={confirmSheet.variant} buttons={confirmSheet.buttons || [{ text: 'OK', style: 'default' }]}
         onClose={() => setConfirmSheet(prev => ({ ...prev, visible: false }))} />
+      <CancelReasonSheet
+        visible={reasonVisible}
+        onConfirm={performCancel}
+        onClose={() => setReasonVisible(false)}
+      />
     </View>
   );
 }

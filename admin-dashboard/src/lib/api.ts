@@ -1925,6 +1925,15 @@ export const getDriverAcceptanceRates = (dateRange = "30d", serviceAreaId?: stri
 export const getDriverOfferStats = (dateRange = "30d", serviceAreaId?: string) =>
     request<any>(`/api/admin/analytics/driver-offer-stats?date_range=${dateRange}${serviceAreaId ? `&service_area_id=${serviceAreaId}` : ''}`);
 
+export const getDriverOfferTrends = (dateRange = "30d", opts?: { driverId?: string; serviceAreaId?: string }) => {
+    const sp = new URLSearchParams({ date_range: dateRange });
+    if (opts?.driverId) sp.set("driver_id", opts.driverId);
+    if (opts?.serviceAreaId) sp.set("service_area_id", opts.serviceAreaId);
+    return request<{ date_range: string; driver_id: string | null; daily_chart: { date: string; offered: number; accepted: number; declined: number; ignored: number; preempted: number }[] }>(
+        `/api/admin/analytics/driver-offer-trends?${sp.toString()}`,
+    );
+};
+
 export const getDemandForecast = (hoursAhead = 24, areaId?: string) =>
     request<any>(`/api/admin/analytics/demand-forecast?hours_ahead=${hoursAhead}${areaId ? `&area_id=${areaId}` : ''}`);
 

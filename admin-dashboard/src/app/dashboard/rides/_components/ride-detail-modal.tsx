@@ -425,6 +425,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                             const n = (v: any) => parseFloat(String(v ?? 0)) || 0;
                                             const areaFees = Array.isArray(ride.area_fees_breakdown) ? ride.area_fees_breakdown : [];
                                             const hasAreaFees = areaFees.some((f: any) => n(f.calculated_value) > 0);
+                                            const areaFeesTotal = n(ride.area_fees_total) || areaFees.reduce((s: number, f: any) => s + n(f.calculated_value), 0);
                                             // tax_breakdown: { "GST": {rate, amount}, "PST": {rate, amount} }
                                             const taxEntries: [string, number, number | null][] = ride.tax_breakdown && typeof ride.tax_breakdown === "object"
                                                 ? Object.entries(ride.tax_breakdown).map(([k, t]: any) => [
@@ -448,12 +449,14 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                         <p className="text-[11px] text-amber-600 dark:text-amber-400">Includes {ride.surge_multiplier}× surge</p>
                                                     )}
                                                     <FR l="Booking fee" v={ride.booking_fee} />
-                                                    {!hasAreaFees && n(ride.airport_fee) > 0 && <FR l="Airport fee" v={ride.airport_fee} />}
+                                                    {/* airport_fee is charged/persisted separately from dynamic
+                                                     *  area fees, so always render it when present. */}
+                                                    {n(ride.airport_fee) > 0 && <FR l="Airport fee" v={ride.airport_fee} />}
                                                     {hasAreaFees && areaFees.map((f: any, i: number) => (
                                                         n(f.calculated_value) > 0 ? <FR key={i} l={f.name || "Area fee"} v={n(f.calculated_value)} /> : null
                                                     ))}
                                                     <div className="border-t my-2" />
-                                                    <FR l="Subtotal" v={ride.subtotal_fare ?? ride.total_fare} b />
+                                                    <FR l="Subtotal (pre-tax)" v={n(ride.total_fare) + areaFeesTotal} b />
                                                     {discount > 0 && (
                                                         <div className="flex justify-between items-center">
                                                             <span className="flex items-center gap-2 text-sm"><Ticket className="h-4 w-4 text-violet-500" />Promo{ride.promo_code ? <b className="font-mono text-xs bg-violet-50 dark:bg-violet-900/20 px-1.5 py-0.5 rounded">{ride.promo_code}</b> : null}</span>
@@ -488,11 +491,21 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                             const tip = n(ride.tip_amount);
                                             const incentives = n(ride.incentive_total);
                                             const claims = Array.isArray(ride.incentive_claims) ? ride.incentive_claims : [];
-                                            const driverTotal = rideFare + tip + incentives;
-                                            const platformFees = n(ride.admin_earnings); // booking + airport
+                                            const cancelFee = n(ride.cancellation_fee_driver); // driver income on cancellations
+                                            const driverTotal = rideFare + tip + incentives + cancelFee;
+                                            // Platform revenue = booking + airport (admin_earnings) PLUS area fees
+                                            // (Platform/Insurance/City/Infra) — these are collected in grand_total
+                                            // but never written to admin_earnings, so add them here.
+                                            const areaFeesArr = Array.isArray(ride.area_fees_breakdown) ? ride.area_fees_breakdown : [];
+                                            const areaFeesTotal = n(ride.area_fees_total) || areaFeesArr.reduce((s: number, f: any) => s + n(f.calculated_value), 0);
+                                            const bookingAirport = n(ride.admin_earnings); // booking + airport
+                                            const platformGross = bookingAirport + areaFeesTotal;
                                             const discount = n(ride.discount_amount);
+                                            // GST/PST are pass-through: collected from the rider, remitted by the
+                                            // driver (the GST registrant) — NOT platform income.
+                                            const taxTotal = n(ride.tax_amount);
                                             // Platform funds incentives + absorbs promo discount (0% commission model).
-                                            const platformNet = platformFees - incentives - discount;
+                                            const platformNet = platformGross - incentives - discount;
                                             return (
                                                 <div className="p-4">
                                                     <div className="grid grid-cols-3 gap-2.5 mb-4">
@@ -512,6 +525,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     <div className="border-t pt-3 space-y-1.5">
                                                         <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">Driver</p>
                                                         <FR l="Ride fare (100%)" v={rideFare} />
+                                                        {cancelFee > 0 && <FR l="Cancellation fee" v={cancelFee} />}
                                                         {tip > 0 && <FR l="Tip" v={tip} />}
                                                         {claims.length > 0
                                                             ? claims.map((c: any, i: number) => (
@@ -521,10 +535,19 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                         <FR l="Driver total" v={driverTotal} b />
                                                         <div className="border-t my-2" />
                                                         <p className="text-[10px] font-bold uppercase tracking-wider text-violet-600 dark:text-violet-400">Platform</p>
-                                                        <FR l="Booking + airport fees" v={platformFees} />
+                                                        <FR l="Booking + airport fees" v={bookingAirport} />
+                                                        {areaFeesTotal > 0 && <FR l="Area fees (Platform/Insurance/City/Infra)" v={areaFeesTotal} />}
                                                         {incentives > 0 && <FR l="Less incentives funded" v={-incentives} />}
                                                         {discount > 0 && <FR l="Less promo absorbed" v={-discount} />}
                                                         <FR l="Platform net" v={platformNet} b />
+                                                        {taxTotal > 0 && (
+                                                            <>
+                                                                <div className="border-t my-2" />
+                                                                <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Tax (pass-through)</p>
+                                                                <FR l="GST/PST collected" v={taxTotal} />
+                                                                <p className="text-[10px] text-muted-foreground">Collected from rider · remitted by driver — not platform income.</p>
+                                                            </>
+                                                        )}
                                                     </div>
                                                 </div>
                                             );
@@ -741,17 +764,25 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                     </div>
                                 </Card>
 
-                                {/* Offer Funnel — who was offered this ride and what they did */}
-                                {Array.isArray(ride.offers) && ride.offers.length > 0 && (
+                                {/* Offer Funnel — who was offered this ride and what they did.
+                                 *  Always rendered so the section is discoverable; shows an empty
+                                 *  state for rides with no recorded offers (e.g. admin-created or
+                                 *  pre-batch-dispatch rides). */}
+                                {(() => {
+                                    const offers: any[] = Array.isArray(ride.offers) ? ride.offers : [];
+                                    return (
                                     <Card>
-                                        <CardHead title={`Dispatch Offers · ${ride.offers.length} driver${ride.offers.length > 1 ? "s" : ""}`} icon={Radio} />
+                                        <CardHead title={`Dispatch Offers · ${offers.length} driver${offers.length === 1 ? "" : "s"}`} icon={Radio} />
                                         <div className="p-4 space-y-2">
-                                            {(() => {
+                                            {offers.length === 0 ? (
+                                                <p className="text-sm text-muted-foreground">No dispatch offers recorded for this ride. (Offers are logged for rides matched through the batch-dispatch engine.)</p>
+                                            ) : (() => {
                                                 const OFFER_META: Record<string, { label: string; cls: string; Icon: React.ElementType }> = {
-                                                    accepted: { label: "Accepted", cls: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400", Icon: CheckCircle2 },
-                                                    declined: { label: "Declined", cls: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400", Icon: XCircle },
-                                                    expired:  { label: "Ignored",  cls: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400", Icon: Clock },
-                                                    pending:  { label: "Pending",  cls: "bg-muted text-muted-foreground", Icon: Radio },
+                                                    accepted:  { label: "Accepted",  cls: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400", Icon: CheckCircle2 },
+                                                    declined:  { label: "Declined",  cls: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400", Icon: XCircle },
+                                                    expired:   { label: "Ignored",   cls: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400", Icon: Clock },
+                                                    preempted: { label: "Preempted", cls: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400", Icon: Radio },
+                                                    pending:   { label: "Pending",   cls: "bg-muted text-muted-foreground", Icon: Radio },
                                                 };
                                                 const respSecs = (o: any) => {
                                                     if (!o.offered_at || !o.responded_at) return null;
@@ -765,16 +796,16 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                 return (
                                                     <>
                                                         <div className="flex flex-wrap gap-2 mb-1">
-                                                            {[["accepted", "Accepted"], ["declined", "Declined"], ["ignored", "Ignored"], ["pending", "Pending"]].map(([k, lbl]) =>
+                                                            {[["accepted", "Accepted"], ["declined", "Declined"], ["ignored", "Ignored"], ["preempted", "Preempted"], ["pending", "Pending"]].map(([k, lbl]) =>
                                                                 counts[k] ? (
                                                                     <span key={k} className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-muted/60">
                                                                         {lbl}: {counts[k]}
                                                                     </span>
                                                                 ) : null
                                                             )}
-                                                            <span className="text-[11px] font-semibold text-foreground px-2 py-0.5 ml-auto">Offered to {ride.offers.length} driver{ride.offers.length > 1 ? "s" : ""}</span>
+                                                            <span className="text-[11px] font-semibold text-foreground px-2 py-0.5 ml-auto">Offered to {offers.length} driver{offers.length === 1 ? "" : "s"}</span>
                                                         </div>
-                                                        {ride.offers.map((o: any, i: number) => {
+                                                        {offers.map((o: any, i: number) => {
                                                             const meta = OFFER_META[o.status] || OFFER_META.pending;
                                                             const rs = respSecs(o);
                                                             return (
@@ -796,7 +827,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                                         <span>Offered {fmtTime(o.offered_at)}</span>
                                                                         {o.responded_at && (
                                                                             <span>
-                                                                                {o.status === "accepted" ? "Accepted" : o.status === "declined" ? "Declined" : "Closed"} {fmtTime(o.responded_at)}
+                                                                                {o.status === "accepted" ? "Accepted" : o.status === "declined" ? "Declined" : o.status === "preempted" ? "Preempted (another driver took it)" : "Closed"} {fmtTime(o.responded_at)}
                                                                                 {rs != null && ` (${rs < 60 ? `${Math.round(rs)}s` : `${Math.round(rs / 60)}m`})`}
                                                                             </span>
                                                                         )}
@@ -810,7 +841,8 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                             })()}
                                         </div>
                                     </Card>
-                                )}
+                                    );
+                                })()}
 
                                 {/* Lost & Found */}
                                 <Card>

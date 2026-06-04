@@ -9,7 +9,7 @@ import {
     DollarSign, Receipt, Ticket, AlertTriangle, Flag, Radio,
     FileWarning, MapPinned, CalendarDays, Hash,
     Gauge, Shield, Users, MapPin, CheckCircle2, XCircle,
-    TrendingUp, CreditCard, Ban,
+    TrendingUp, CreditCard, Ban, MessageSquare,
 } from "lucide-react";
 import { Sec, FR, MStat, TL, getStatusBadge, fmtTime, isRideLive, computePhaseDistances } from "./ride-ui-helpers";
 import RideInvoice from "./ride-invoice";
@@ -228,6 +228,15 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     </div>
                                                 </div>
                                             </div>
+                                            {ride.rider_notes && (
+                                                <div className="mt-3 pt-3 border-t flex items-start gap-2">
+                                                    <MessageSquare className="h-3.5 w-3.5 text-muted-foreground mt-0.5 shrink-0" />
+                                                    <div>
+                                                        <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-0.5">Rider note / meeting instructions</p>
+                                                        <p className="text-sm">{ride.rider_notes}</p>
+                                                    </div>
+                                                </div>
+                                            )}
                                         </div>
                                     </Card>
 

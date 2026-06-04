@@ -227,8 +227,8 @@ async def _compute_via_google_roads(trip_points: list[dict], api_key: str) -> Op
     return round(total_km, 3), _cap_polyline(polyline, _MAX_ROAD_POLYLINE_POINTS)
 
 
-async def compute_road_route(breadcrumbs: list[dict]) -> Optional[dict]:
-    """Road-snap the trip and return {"distance_km": float, "polyline": [[lat,lng],...]}.
+async def compute_road_route(breadcrumbs: list[dict], phase: str = "trip_in_progress") -> Optional[dict]:
+    """Road-snap a single ride phase and return {"distance_km": float, "polyline": [[lat,lng],...]}.
 
     Prefers self-hosted OSRM /match when OSRM_URL (or the app_settings
     ``osrm_url`` override) is set; otherwise Google Roads snapToRoads. Returns
@@ -238,6 +238,9 @@ async def compute_road_route(breadcrumbs: list[dict]) -> Optional[dict]:
     Args:
       breadcrumbs: ordered list of {lat, lng, tracking_phase, ...} dicts from
                    driver_location_history for a single ride.
+      phase: which insurance/tracking phase to road-snap. Defaults to
+             ``trip_in_progress`` (Phase 3) for back-compat; pass
+             ``navigating_to_pickup`` to snap the driver→pickup leg (Phase 2).
     """
     if not breadcrumbs:
         return None
@@ -245,7 +248,7 @@ async def compute_road_route(breadcrumbs: list[dict]) -> Optional[dict]:
     trip_points = [
         b
         for b in breadcrumbs
-        if b.get("tracking_phase") == "trip_in_progress" and b.get("lat") is not None and b.get("lng") is not None
+        if b.get("tracking_phase") == phase and b.get("lat") is not None and b.get("lng") is not None
     ]
     if len(trip_points) < _MIN_POINTS:
         return None

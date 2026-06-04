@@ -185,15 +185,14 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                         </div>
                                     </div>
 
-                                    <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
-                                        {isRideLive(ride.status) && (
+                                    {isRideLive(ride.status) && (
+                                        <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end mr-8">
                                             <a href={`/dashboard/rides/live/${ride.id}`}
                                                 className="flex items-center gap-1.5 text-xs font-semibold bg-white/20 hover:bg-white/30 text-white px-3 py-1.5 rounded-lg transition-colors backdrop-blur-sm">
                                                 <Radio className="h-3 w-3 animate-pulse" /> Live Track
                                             </a>
-                                        )}
-                                        <RideInvoice rideId={ride.id} status={ride.status} />
-                                    </div>
+                                        </div>
+                                    )}
                                 </div>
 
                                 {/* UUID footer */}
@@ -422,57 +421,114 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                                     <Card>
                                         <CardHead title="Fare Breakdown" icon={Receipt} />
-                                        <div className="p-4 space-y-1">
-                                            <FR l="Base fare" v={ride.base_fare} />
-                                            <FR l={`Distance (${(ride.distance_km || 0).toFixed(1)} km)`} v={ride.distance_fare} />
-                                            <FR l={`Time (${ride.duration_minutes || 0} min)`} v={ride.time_fare} />
-                                            <FR l="Booking fee" v={ride.booking_fee} />
-                                            {(ride.airport_fee || 0) > 0 && <FR l="Airport fee" v={ride.airport_fee} />}
-                                            <div className="border-t my-2" />
-                                            <FR l="Subtotal" v={ride.total_fare} b />
-                                            {(parseFloat(String(ride.tip_amount ?? 0)) > 0 || ride.promo_code) && (
-                                                <>
+                                        {(() => {
+                                            const n = (v: any) => parseFloat(String(v ?? 0)) || 0;
+                                            const areaFees = Array.isArray(ride.area_fees_breakdown) ? ride.area_fees_breakdown : [];
+                                            const hasAreaFees = areaFees.some((f: any) => n(f.calculated_value) > 0);
+                                            // tax_breakdown: { "GST": {rate, amount}, "PST": {rate, amount} }
+                                            const taxEntries: [string, number, number | null][] = ride.tax_breakdown && typeof ride.tax_breakdown === "object"
+                                                ? Object.entries(ride.tax_breakdown).map(([k, t]: any) => [
+                                                    k,
+                                                    n(t?.amount ?? t),
+                                                    (t && typeof t === "object" && t.rate != null) ? Number(t.rate) : null,
+                                                ])
+                                                : [];
+                                            const taxTotal = ride.tax_amount != null ? n(ride.tax_amount) : taxEntries.reduce((s, [, a]) => s + a, 0);
+                                            const discount = n(ride.discount_amount);
+                                            const tip = n(ride.tip_amount);
+                                            const grand = ride.grand_total != null
+                                                ? n(ride.grand_total)
+                                                : n(ride.total_fare) + n(ride.area_fees_total) + taxTotal - discount;
+                                            return (
+                                                <div className="p-4 space-y-1">
+                                                    <FR l="Base fare" v={ride.base_fare} />
+                                                    <FR l={`Distance (${(ride.distance_km || 0).toFixed(1)} km)`} v={ride.distance_fare} />
+                                                    <FR l={`Time (${ride.duration_minutes || 0} min)`} v={ride.time_fare} />
+                                                    {(ride.surge_multiplier || 1) > 1 && (
+                                                        <p className="text-[11px] text-amber-600 dark:text-amber-400">Includes {ride.surge_multiplier}× surge</p>
+                                                    )}
+                                                    <FR l="Booking fee" v={ride.booking_fee} />
+                                                    {!hasAreaFees && n(ride.airport_fee) > 0 && <FR l="Airport fee" v={ride.airport_fee} />}
+                                                    {hasAreaFees && areaFees.map((f: any, i: number) => (
+                                                        n(f.calculated_value) > 0 ? <FR key={i} l={f.name || "Area fee"} v={n(f.calculated_value)} /> : null
+                                                    ))}
                                                     <div className="border-t my-2" />
-                                                    {ride.promo_code && (
+                                                    <FR l="Subtotal" v={ride.subtotal_fare ?? ride.total_fare} b />
+                                                    {discount > 0 && (
                                                         <div className="flex justify-between items-center">
-                                                            <span className="flex items-center gap-2 text-sm"><Ticket className="h-4 w-4 text-violet-500" />Promo: <b className="font-mono text-xs bg-violet-50 dark:bg-violet-900/20 px-1.5 py-0.5 rounded">{ride.promo_code}</b></span>
-                                                            <span className="text-sm font-semibold text-emerald-600">-{formatCurrency(ride.promo_discount || 0)}</span>
+                                                            <span className="flex items-center gap-2 text-sm"><Ticket className="h-4 w-4 text-violet-500" />Promo{ride.promo_code ? <b className="font-mono text-xs bg-violet-50 dark:bg-violet-900/20 px-1.5 py-0.5 rounded">{ride.promo_code}</b> : null}</span>
+                                                            <span className="text-sm font-semibold text-emerald-600">-{formatCurrency(discount)}</span>
                                                         </div>
                                                     )}
-                                                    {parseFloat(String(ride.tip_amount ?? 0)) > 0 && (
+                                                    {taxEntries.length > 0
+                                                        ? taxEntries.map(([name, amt, rate]) => (
+                                                            <FR key={name} l={`${name}${rate != null ? ` (${rate}%)` : ""}`} v={amt} />
+                                                        ))
+                                                        : taxTotal > 0 && <FR l="Tax" v={taxTotal} />}
+                                                    {tip > 0 && (
                                                         <div className="flex justify-between items-center">
                                                             <span className="flex items-center gap-2 text-sm"><DollarSign className="h-4 w-4 text-amber-500" />Tip</span>
-                                                            <span className="text-sm font-semibold text-amber-600">{formatCurrency(ride.tip_amount)}</span>
+                                                            <span className="text-sm font-semibold text-amber-600">{formatCurrency(tip)}</span>
                                                         </div>
                                                     )}
-                                                </>
-                                            )}
-                                        </div>
+                                                    <div className="border-t my-2" />
+                                                    <FR l="Grand total" v={grand} b />
+                                                    {tip > 0 && <FR l="Total charged (incl. tip)" v={grand + tip} b />}
+                                                </div>
+                                            );
+                                        })()}
                                     </Card>
 
                                     <Card>
-                                        <CardHead title="Revenue Split" icon={TrendingUp} />
-                                        <div className="p-4">
-                                            <div className="grid grid-cols-3 gap-2.5 mb-4">
-                                                <div className="bg-emerald-50 dark:bg-emerald-900/20 rounded-xl p-3.5 text-center">
-                                                    <p className="text-lg font-extrabold text-emerald-600 dark:text-emerald-400">{formatCurrency(ride.driver_earnings || 0)}</p>
-                                                    <p className="text-[11px] text-muted-foreground mt-1 font-medium">Driver</p>
+                                        <CardHead title="Driver & Platform Earnings" icon={TrendingUp} />
+                                        {(() => {
+                                            const n = (v: any) => parseFloat(String(v ?? 0)) || 0;
+                                            // 0% commission: driver keeps 100% of the ride fare components.
+                                            const rideFare = n(ride.base_fare) + n(ride.distance_fare) + n(ride.time_fare);
+                                            const tip = n(ride.tip_amount);
+                                            const incentives = n(ride.incentive_total);
+                                            const claims = Array.isArray(ride.incentive_claims) ? ride.incentive_claims : [];
+                                            const driverTotal = rideFare + tip + incentives;
+                                            const platformFees = n(ride.admin_earnings); // booking + airport
+                                            const discount = n(ride.discount_amount);
+                                            // Platform funds incentives + absorbs promo discount (0% commission model).
+                                            const platformNet = platformFees - incentives - discount;
+                                            return (
+                                                <div className="p-4">
+                                                    <div className="grid grid-cols-3 gap-2.5 mb-4">
+                                                        <div className="bg-emerald-50 dark:bg-emerald-900/20 rounded-xl p-3.5 text-center">
+                                                            <p className="text-lg font-extrabold text-emerald-600 dark:text-emerald-400">{formatCurrency(driverTotal)}</p>
+                                                            <p className="text-[11px] text-muted-foreground mt-1 font-medium">Driver receives</p>
+                                                        </div>
+                                                        <div className="bg-violet-50 dark:bg-violet-900/20 rounded-xl p-3.5 text-center">
+                                                            <p className="text-lg font-extrabold text-violet-600 dark:text-violet-400">{formatCurrency(platformNet)}</p>
+                                                            <p className="text-[11px] text-muted-foreground mt-1 font-medium">Platform net</p>
+                                                        </div>
+                                                        <div className="bg-amber-50 dark:bg-amber-900/20 rounded-xl p-3.5 text-center">
+                                                            <p className="text-lg font-extrabold text-amber-600 dark:text-amber-400">{formatCurrency(incentives)}</p>
+                                                            <p className="text-[11px] text-muted-foreground mt-1 font-medium">Incentives</p>
+                                                        </div>
+                                                    </div>
+                                                    <div className="border-t pt-3 space-y-1.5">
+                                                        <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">Driver</p>
+                                                        <FR l="Ride fare (100%)" v={rideFare} />
+                                                        {tip > 0 && <FR l="Tip" v={tip} />}
+                                                        {claims.length > 0
+                                                            ? claims.map((c: any, i: number) => (
+                                                                <FR key={i} l={`Incentive — ${c.name || "Bonus"}`} v={n(c.bonus_amount)} />
+                                                            ))
+                                                            : incentives > 0 && <FR l="Incentives" v={incentives} />}
+                                                        <FR l="Driver total" v={driverTotal} b />
+                                                        <div className="border-t my-2" />
+                                                        <p className="text-[10px] font-bold uppercase tracking-wider text-violet-600 dark:text-violet-400">Platform</p>
+                                                        <FR l="Booking + airport fees" v={platformFees} />
+                                                        {incentives > 0 && <FR l="Less incentives funded" v={-incentives} />}
+                                                        {discount > 0 && <FR l="Less promo absorbed" v={-discount} />}
+                                                        <FR l="Platform net" v={platformNet} b />
+                                                    </div>
                                                 </div>
-                                                <div className="bg-violet-50 dark:bg-violet-900/20 rounded-xl p-3.5 text-center">
-                                                    <p className="text-lg font-extrabold text-violet-600 dark:text-violet-400">{formatCurrency(ride.admin_earnings || 0)}</p>
-                                                    <p className="text-[11px] text-muted-foreground mt-1 font-medium">Platform</p>
-                                                </div>
-                                                <div className="bg-amber-50 dark:bg-amber-900/20 rounded-xl p-3.5 text-center">
-                                                    <p className="text-lg font-extrabold text-amber-600 dark:text-amber-400">{formatCurrency(ride.tip_amount || 0)}</p>
-                                                    <p className="text-[11px] text-muted-foreground mt-1 font-medium">Tip</p>
-                                                </div>
-                                            </div>
-                                            <div className="border-t pt-3 space-y-1.5">
-                                                <FR l="Rider paid" v={parseFloat(String(ride.total_fare ?? 0)) + parseFloat(String(ride.tip_amount ?? 0)) - parseFloat(String(ride.promo_discount ?? 0))} b />
-                                                <FR l="Driver gets" v={parseFloat(String(ride.driver_earnings ?? 0)) + parseFloat(String(ride.tip_amount ?? 0))} />
-                                                <FR l="Platform gets" v={ride.admin_earnings ?? 0} />
-                                            </div>
-                                        </div>
+                                            );
+                                        })()}
                                     </Card>
                                 </div>
 
@@ -495,6 +551,14 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                 {(ride.payment_status || "pending").replace(/_/g, " ").toUpperCase()}
                                             </span>
                                         </div>
+                                        {ride.status === "completed" && (
+                                            <div className="px-4 pb-4 -mt-1">
+                                                <div className="flex items-center justify-between gap-2 pt-3 border-t">
+                                                    <span className="text-[11px] font-medium text-muted-foreground">Receipt</span>
+                                                    <RideInvoice rideId={ride.id} status={ride.status} />
+                                                </div>
+                                            </div>
+                                        )}
                                     </Card>
 
                                     <Card>
@@ -562,7 +626,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     const cards: { key: CardKey; label: string; km: string; sub: string | null; colorCls: string; }[] = [
                                                         { key: "pickup",  label: "Pickup",       km: fmtKm(ride.phase_distances?.navigating_to_pickup), sub: fmtDur(ride.phase_durations?.navigating_to_pickup), colorCls: PHASE_COLORS.navigating_to_pickup },
                                                         { key: "actual",  label: "Actual Trip",  km: fmtKm(ride.phase_distances?.trip_in_progress ?? ride.actual_distance_km), sub: fmtDur(ride.phase_durations?.trip_in_progress), colorCls: PHASE_COLORS.trip_in_progress },
-                                                        { key: "planned", label: "Planned Trip", km: fmtKm(ride.planned_distance_km), sub: "Straight-line reference", colorCls: "bg-muted/60 text-foreground" },
+                                                        { key: "planned", label: "Planned Trip", km: fmtKm(ride.planned_distance_km), sub: (Array.isArray(ride.planned_route_polyline) && ride.planned_route_polyline.length > 1) ? "Planned route" : "Straight-line reference", colorCls: "bg-muted/60 text-foreground" },
                                                     ];
                                                     return cards.map(c => (
                                                         <button key={c.key} type="button" onClick={() => setSelectedPhase(c.key)}
@@ -585,15 +649,39 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                 ? pp.trip_in_progress.map((p: any) => ({ lat: p[0], lng: p[1], timestamp: p[2] })) : [];
 
                                             let pickupProp: typeof pickupPts | undefined;
+                                            let pickupApprox = false;
                                             let tripProp: typeof tripPts | undefined;
                                             let trailForMap: typeof tripPts | undefined;
+                                            let plannedProp: { lat: number; lng: number }[] | undefined;
                                             let label = "";
                                             let emptyHint: string | null = null;
 
                                             if (selectedPhase === "pickup") {
-                                                label = "Driver → Pickup (actual GPS)";
-                                                if (pickupPts.length > 1) pickupProp = pickupPts;
-                                                else emptyHint = "No Phase 2 GPS trail for this ride";
+                                                // Prefer the OSRM road-matched pickup leg, then raw Phase 2
+                                                // GPS, then a driver-start → pickup reference line so the
+                                                // card always shows the approach.
+                                                const pickupRoad = Array.isArray(ride.road_polyline_pickup) && ride.road_polyline_pickup.length > 1
+                                                    ? ride.road_polyline_pickup.map((p: any) => ({ lat: p[0], lng: p[1] })) : [];
+                                                if (pickupRoad.length > 1) {
+                                                    label = "Driver → Pickup (road-matched)";
+                                                    pickupProp = pickupRoad;
+                                                } else if (pickupPts.length > 1) {
+                                                    label = "Driver → Pickup (actual GPS)";
+                                                    pickupProp = pickupPts;
+                                                } else {
+                                                    // No GPS captured for the approach — draw a dashed
+                                                    // reference from the driver's start to the pickup.
+                                                    const dLat = ride.driver_initial_lat ?? ride.driver_lat;
+                                                    const dLng = ride.driver_initial_lng ?? ride.driver_lng;
+                                                    if (dLat != null && dLng != null && ride.pickup_lat != null && ride.pickup_lng != null) {
+                                                        label = "Driver → Pickup (approx — no GPS captured)";
+                                                        pickupProp = [{ lat: dLat, lng: dLng }, { lat: ride.pickup_lat, lng: ride.pickup_lng }];
+                                                        pickupApprox = true;
+                                                    } else {
+                                                        label = "Driver → Pickup";
+                                                        emptyHint = "No Phase 2 GPS trail for this ride";
+                                                    }
+                                                }
                                             } else if (selectedPhase === "actual") {
                                                 // Prefer the OSRM road-matched line (ride_routes.road_polyline) —
                                                 // the clean on-road route SGI / dispute review should see — then
@@ -614,7 +702,17 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     else emptyHint = "No trip GPS trail for this ride";
                                                 }
                                             } else {
-                                                label = "Planned Trip (straight-line reference)";
+                                                // Planned route: the road-following polyline captured from
+                                                // the Directions API at booking. Falls back to the dashed
+                                                // straight line (drawn by the map) when none was stored.
+                                                const plannedPts = Array.isArray(ride.planned_route_polyline) && ride.planned_route_polyline.length > 1
+                                                    ? ride.planned_route_polyline.map((p: any) => ({ lat: p[0], lng: p[1] })) : [];
+                                                if (plannedPts.length > 1) {
+                                                    label = "Planned Trip (road-following)";
+                                                    plannedProp = plannedPts;
+                                                } else {
+                                                    label = "Planned Trip (straight-line reference)";
+                                                }
                                             }
 
                                             return (
@@ -631,7 +729,9 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                             dropoffLat={ride.dropoff_lat}
                                                             dropoffLng={ride.dropoff_lng}
                                                             pickupTrail={pickupProp}
+                                                            pickupApprox={pickupApprox}
                                                             tripTrail={tripProp}
+                                                            plannedTrail={plannedProp}
                                                             locationTrail={trailForMap}
                                                         />
                                                     </div>
@@ -640,6 +740,77 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                         })()}
                                     </div>
                                 </Card>
+
+                                {/* Offer Funnel — who was offered this ride and what they did */}
+                                {Array.isArray(ride.offers) && ride.offers.length > 0 && (
+                                    <Card>
+                                        <CardHead title={`Dispatch Offers · ${ride.offers.length} driver${ride.offers.length > 1 ? "s" : ""}`} icon={Radio} />
+                                        <div className="p-4 space-y-2">
+                                            {(() => {
+                                                const OFFER_META: Record<string, { label: string; cls: string; Icon: React.ElementType }> = {
+                                                    accepted: { label: "Accepted", cls: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400", Icon: CheckCircle2 },
+                                                    declined: { label: "Declined", cls: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400", Icon: XCircle },
+                                                    expired:  { label: "Ignored",  cls: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400", Icon: Clock },
+                                                    pending:  { label: "Pending",  cls: "bg-muted text-muted-foreground", Icon: Radio },
+                                                };
+                                                const respSecs = (o: any) => {
+                                                    if (!o.offered_at || !o.responded_at) return null;
+                                                    const d = (new Date(o.responded_at).getTime() - new Date(o.offered_at).getTime()) / 1000;
+                                                    return Number.isFinite(d) && d >= 0 ? d : null;
+                                                };
+                                                const counts = ride.offers.reduce((acc: Record<string, number>, o: any) => {
+                                                    const k = o.status === "expired" ? "ignored" : (o.status || "pending");
+                                                    acc[k] = (acc[k] || 0) + 1; return acc;
+                                                }, {});
+                                                return (
+                                                    <>
+                                                        <div className="flex flex-wrap gap-2 mb-1">
+                                                            {[["accepted", "Accepted"], ["declined", "Declined"], ["ignored", "Ignored"], ["pending", "Pending"]].map(([k, lbl]) =>
+                                                                counts[k] ? (
+                                                                    <span key={k} className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-muted/60">
+                                                                        {lbl}: {counts[k]}
+                                                                    </span>
+                                                                ) : null
+                                                            )}
+                                                            <span className="text-[11px] font-semibold text-foreground px-2 py-0.5 ml-auto">Offered to {ride.offers.length} driver{ride.offers.length > 1 ? "s" : ""}</span>
+                                                        </div>
+                                                        {ride.offers.map((o: any, i: number) => {
+                                                            const meta = OFFER_META[o.status] || OFFER_META.pending;
+                                                            const rs = respSecs(o);
+                                                            return (
+                                                                <div key={`${o.driver_id}-${i}`} className="bg-muted/40 rounded-lg p-2.5">
+                                                                    <div className="flex items-center gap-2.5">
+                                                                        <meta.Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                                                        <span className="text-xs font-semibold truncate flex-1">{o.driver_name || o.driver_id?.slice(0, 12)}</span>
+                                                                        {o.driver_rating != null && (
+                                                                            <span className="flex items-center gap-0.5 text-[11px] text-muted-foreground">
+                                                                                <Star className="h-3 w-3 text-amber-400 fill-amber-400" />{Number(o.driver_rating).toFixed(1)}
+                                                                            </span>
+                                                                        )}
+                                                                        {typeof o.eta_seconds === "number" && (
+                                                                            <span className="text-[11px] text-muted-foreground tabular-nums">{Math.round(o.eta_seconds)}s ETA</span>
+                                                                        )}
+                                                                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${meta.cls}`}>{meta.label}</span>
+                                                                    </div>
+                                                                    <div className="flex items-center flex-wrap gap-x-3 gap-y-0.5 mt-1 pl-6 text-[10px] text-muted-foreground tabular-nums">
+                                                                        <span>Offered {fmtTime(o.offered_at)}</span>
+                                                                        {o.responded_at && (
+                                                                            <span>
+                                                                                {o.status === "accepted" ? "Accepted" : o.status === "declined" ? "Declined" : "Closed"} {fmtTime(o.responded_at)}
+                                                                                {rs != null && ` (${rs < 60 ? `${Math.round(rs)}s` : `${Math.round(rs / 60)}m`})`}
+                                                                            </span>
+                                                                        )}
+                                                                        {!o.responded_at && o.status === "expired" && <span>Timed out (no response)</span>}
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </>
+                                                );
+                                            })()}
+                                        </div>
+                                    </Card>
+                                )}
 
                                 {/* Lost & Found */}
                                 <Card>

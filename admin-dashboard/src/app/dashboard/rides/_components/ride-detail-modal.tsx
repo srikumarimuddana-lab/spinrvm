@@ -185,15 +185,14 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                         </div>
                                     </div>
 
-                                    <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
-                                        {isRideLive(ride.status) && (
+                                    {isRideLive(ride.status) && (
+                                        <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end mr-8">
                                             <a href={`/dashboard/rides/live/${ride.id}`}
                                                 className="flex items-center gap-1.5 text-xs font-semibold bg-white/20 hover:bg-white/30 text-white px-3 py-1.5 rounded-lg transition-colors backdrop-blur-sm">
                                                 <Radio className="h-3 w-3 animate-pulse" /> Live Track
                                             </a>
-                                        )}
-                                        <RideInvoice rideId={ride.id} status={ride.status} />
-                                    </div>
+                                        </div>
+                                    )}
                                 </div>
 
                                 {/* UUID footer */}
@@ -495,6 +494,14 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                 {(ride.payment_status || "pending").replace(/_/g, " ").toUpperCase()}
                                             </span>
                                         </div>
+                                        {ride.status === "completed" && (
+                                            <div className="px-4 pb-4 -mt-1">
+                                                <div className="flex items-center justify-between gap-2 pt-3 border-t">
+                                                    <span className="text-[11px] font-medium text-muted-foreground">Receipt</span>
+                                                    <RideInvoice rideId={ride.id} status={ride.status} />
+                                                </div>
+                                            </div>
+                                        )}
                                     </Card>
 
                                     <Card>

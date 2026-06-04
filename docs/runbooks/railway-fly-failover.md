@@ -10,8 +10,8 @@ See [ADR-007](../adr/007-fly-primary-railway-standby.md) for the decision and
 trade-offs.
 
 ```text
-api.spinr.ca                       redis.spinr.ca
-  -> Cloudflare CNAME                 -> Cloudflare CNAME
+api-spinr.spinr.ca                 redis.spinr.ca
+  -> Cloudflare CNAME (proxied)       -> Cloudflare CNAME (DNS-only / gray-cloud)
       -> Fly.io  (yyz)  PRIMARY           -> Redis on Fly  (primary)
       -> Railway (CA)   STANDBY           -> Redis on Railway (fail-back)
 ```
@@ -25,7 +25,7 @@ api.spinr.ca                       redis.spinr.ca
   `REDIS_URL`, `RATE_LIMIT_REDIS_URL`, and `WS_REDIS_URL`.
 - **Identical** backend secrets on Railway and Fly. Do not generate separate
   secrets per provider — a `JWT_SECRET` mismatch logs users out at random.
-- Cloudflare DNS for `api.spinr.ca` and `redis.spinr.ca`.
+- Cloudflare DNS for `api-spinr.spinr.ca` and `redis.spinr.ca`.
 
 ## One-time: deploy commands run automatically
 
@@ -45,9 +45,17 @@ fly auth login
 fly apps create spinr-backend-yyz --org <fly-org>
 ```
 
-Set Fly secrets to the exact same production values used by Railway. Point the
-Redis URLs at the alias, not the raw Fly Redis host, so they can be repointed
-later without a redeploy:
+Set Fly secrets to the exact same production values used by Railway. Two things
+to watch:
+
+- `ADMIN_EMAIL` **must** be copied from Railway. `backend/fly.toml` sets
+  `ENV=production`, and `core/middleware._validate_production_config()` refuses to
+  start when `ADMIN_EMAIL` is left at its `admin@spinr.ca` default — the Machines
+  would crash-loop before `/health` ever passes.
+- The Redis URLs must keep their credentials. Only swap the **host** for the
+  alias (e.g. `rediss://:<password>@redis.spinr.ca:6379`); a bare
+  `rediss://redis.spinr.ca:6379` connects unauthenticated and silently drops
+  shared rate-limit / OTP / WS / leader-lock state.
 
 ```powershell
 fly secrets set `
@@ -55,12 +63,13 @@ fly secrets set `
   SUPABASE_SERVICE_ROLE_KEY="<copy-from-railway>" `
   JWT_SECRET="<copy-from-railway>" `
   ADMIN_PASSWORD=<paste-same-value-as-railway> `
+  ADMIN_EMAIL="<copy-from-railway>" `
   FIREBASE_SERVICE_ACCOUNT_JSON="<copy-from-railway>" `
   FIREBASE_DRIVER_APP_ID="<copy-from-railway>" `
   FIREBASE_RIDER_APP_ID="<copy-from-railway>" `
-  REDIS_URL="rediss://redis.spinr.ca:6379" `
-  RATE_LIMIT_REDIS_URL="rediss://redis.spinr.ca:6379" `
-  WS_REDIS_URL="rediss://redis.spinr.ca:6379" `
+  REDIS_URL="rediss://:<password>@redis.spinr.ca:6379" `
+  RATE_LIMIT_REDIS_URL="rediss://:<password>@redis.spinr.ca:6379" `
+  WS_REDIS_URL="rediss://:<password>@redis.spinr.ca:6379" `
   ALLOWED_ORIGINS="<production-origins>"
 ```
 
@@ -98,49 +107,66 @@ locks all live in Redis. Both providers must use the **same** Redis or these
 degrade to per-machine behavior.
 
 1. Provision Redis on Fly (Upstash-on-Fly or a Fly Redis machine).
-2. Create a Cloudflare DNS record `redis.spinr.ca` → the Fly Redis host.
+2. Create a Cloudflare DNS record `redis.spinr.ca` → the Fly Redis host. **Set it
+   to DNS-only (gray cloud), not proxied.** Cloudflare's orange-cloud proxy only
+   handles HTTP/HTTPS; a proxied record on the Redis port (6379) routes clients to
+   the Cloudflare edge instead of the Redis origin and breaks shared rate limits,
+   OTP state, WebSocket pub/sub, and leader locks. (Proxying Redis would require
+   Cloudflare Spectrum, which we are not using.)
 3. Set `REDIS_URL` / `RATE_LIMIT_REDIS_URL` / `WS_REDIS_URL` to
-   `rediss://redis.spinr.ca:6379` on **both** Railway and Fly.
+   `rediss://:<password>@redis.spinr.ca:6379` on **both** Railway and Fly —
+   keep the credentials, only the host is the alias.
 
 > **Failure-domain caveat (read this).** If Redis lives only in Fly and the Fly
-> region is what failed, repointing `api.spinr.ca` to Railway is not enough —
-> Redis is down too. Provision a second Redis reachable from Railway and, during a
-> Fly-region fail-back, repoint the `redis.spinr.ca` alias to it. An unaliased
+> region is what failed, repointing `api-spinr.spinr.ca` to Railway is not enough
+> — Redis is down too. Provision a second Redis reachable from Railway and, during
+> a Fly-region fail-back, repoint the `redis.spinr.ca` alias to it. An unaliased
 > single Fly Redis makes fail-over hollow.
 
 ## Cut over to Fly-primary
 
 1. Confirm `https://spinr-backend-yyz.fly.dev/health` is green and `fly checks
    list` shows both machines passing.
-2. Confirm the `redis.spinr.ca` alias resolves and both providers connect to it.
-3. Point the `api.spinr.ca` **CNAME** at the Fly app.
-4. Validate through `https://api.spinr.ca`: auth, OTP issue/verify, ride search,
-   driver accept, live WebSocket updates to rider + driver, and a Stripe test
-   webhook (processes exactly once — idempotent).
-5. Watch Fly logs, Railway logs, Redis metrics, Supabase errors, and Sentry for at
+2. **Attach the custom hostname to Fly and provision TLS before touching DNS.**
+   Fly only serves and issues a certificate for hostnames added to the app, so a
+   green `.fly.dev` URL does not mean `api-spinr.spinr.ca` will work:
+   ```powershell
+   fly certs add api-spinr.spinr.ca -a spinr-backend-yyz
+   fly certs show api-spinr.spinr.ca -a spinr-backend-yyz   # add any DNS records it asks for
+   fly certs check api-spinr.spinr.ca -a spinr-backend-yyz  # wait until status is "Ready"
+   ```
+3. Confirm the `redis.spinr.ca` alias resolves and both providers connect to it.
+4. Point the `api-spinr.spinr.ca` **CNAME** at the Fly app.
+5. Validate through `https://api-spinr.spinr.ca`: auth, OTP issue/verify, ride
+   search, driver accept, live WebSocket updates to rider + driver, and a Stripe
+   test webhook (processes exactly once — idempotent).
+6. Watch Fly logs, Railway logs, Redis metrics, Supabase errors, and Sentry for at
    least one traffic peak.
 
 ## Fail back to Railway
 
-1. Point the `api.spinr.ca` CNAME back at the Railway backend domain.
+1. Point the `api-spinr.spinr.ca` CNAME back at the Railway backend domain.
 2. If the fail-back was caused by a Fly-region outage that also took Redis down,
    repoint the `redis.spinr.ca` alias to the Railway-side Redis.
-3. Confirm `/health` and one full ride flow through `api.spinr.ca`, then restore
-   Fly when it recovers.
+3. Confirm `/health` and one full ride flow through `api-spinr.spinr.ca`, then
+   restore Fly when it recovers.
 
 ## Safety checks
 
 - `JWT_SECRET` must be identical across providers or users are logged out at
   random depending on which origin served the request.
-- Redis must be shared (via the alias) across providers or OTP lockouts, rate
-  limits, driver presence, WebSocket pub/sub, and loop leader locks degrade.
+- `ADMIN_EMAIL` must be set to the real Railway value on Fly — the production
+  config guard rejects the `admin@spinr.ca` default and the app will not boot.
+- Redis must be shared (via the alias, **DNS-only**, credentials intact) across
+  providers or OTP lockouts, rate limits, driver presence, WebSocket pub/sub, and
+  loop leader locks degrade.
 - Background loops run on every backend process; with both providers live they run
   twice over. This is safe only because both share the same Supabase and aliased
   Redis (atomic DB claims, idempotency keys, Redis leader locks). Confirm the
   shared Redis alias is live on both before both take traffic.
-- Stripe webhook URLs must target `https://api.spinr.ca/...`, not a provider
+- Stripe webhook URLs must target `https://api-spinr.spinr.ca/...`, not a provider
   domain, so cutover needs no Stripe dashboard edits.
 - `SUPABASE_REGION=ca-central-1` must stay set on Fly (it is, in `fly.toml`) —
   production refuses to boot otherwise (PIPEDA).
 - Never put Railway or Fly provider URLs in mobile production builds. Use only the
-  `api.spinr.ca` hostname.
+  `api-spinr.spinr.ca` hostname.

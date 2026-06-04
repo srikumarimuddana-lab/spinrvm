@@ -868,13 +868,25 @@ async def admin_nudge_driver_expiry(
 
 @router.put("/drivers/{driver_id}")
 async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: dict = Depends(get_admin_user)):
-    """Update driver details from admin dashboard."""
-    allowed = {
+    """Update driver details from admin dashboard.
+
+    Editable identity fields are spread across two tables: account-level
+    fields (``email``, ``gender``) live ONLY on ``users``, vehicle/compliance
+    fields live ONLY on ``drivers``, and a few (``first_name``, ``last_name``,
+    ``phone``) are mirrored on both. The admin dashboard surfaces all of them
+    on a single driver row, so this handler must route each field to the table
+    it actually exists on — writing ``email`` to ``drivers`` raises
+    PGRST204 ("Could not find the 'email' column of 'drivers'") -> 500.
+    """
+    # Fields that live on the `users` account row.
+    user_fields = {"first_name", "last_name", "email", "phone", "gender"}
+    # Fields that live on the `drivers` row (`city` is drivers-only; the
+    # name/phone columns are mirrored from users for forward-compat — see
+    # migration 63_phase3b_field_alignment.sql).
+    driver_fields = {
         "first_name",
         "last_name",
-        "email",
         "phone",
-        "gender",
         "city",
         "service_area_id",
         "vehicle_type_id",
@@ -891,6 +903,7 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
         "background_check_expiry_date",
         "work_eligibility_expiry_date",
     }
+    allowed = user_fields | driver_fields
     filtered = {k: v for k, v in updates.items() if k in allowed}
     if not filtered:
         raise HTTPException(status_code=400, detail="No valid fields to update")
@@ -899,8 +912,32 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
     if not existing:
         raise HTTPException(status_code=404, detail=f"Driver {driver_id} not found")
 
+    user_updates = {k: v for k, v in filtered.items() if k in user_fields}
+    driver_updates = {k: v for k, v in filtered.items() if k in driver_fields}
+
+    # Keep the legacy `drivers.name` atom in sync when either name part changes,
+    # since enrichment falls back to it when there is no linked user row.
+    if "first_name" in driver_updates or "last_name" in driver_updates:
+        new_first = driver_updates.get("first_name", existing.get("first_name") or "")
+        new_last = driver_updates.get("last_name", existing.get("last_name") or "")
+        driver_updates["name"] = f"{new_first} {new_last}".strip()
+
+    user_id = existing.get("user_id")
+    # Account-level fields (email/gender) can only be persisted to a linked
+    # user row. Surface loudly rather than silently dropping the edit.
+    if user_updates and not user_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Driver has no linked user account; cannot update email/name/phone/gender.",
+        )
+
     try:
-        await db_supabase.update_one("drivers", {"id": driver_id}, filtered)
+        if driver_updates:
+            await db_supabase.update_one("drivers", {"id": driver_id}, driver_updates)
+        if user_updates and user_id:
+            await db_supabase.update_one("users", {"id": user_id}, user_updates)
+    except HTTPException:
+        raise
     except Exception as e:
         # B-P3-leak-cleanup: full traceback to logs, generic detail
         # to client. Supabase / postgrest errors carry table internals.

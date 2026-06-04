@@ -421,57 +421,114 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                                     <Card>
                                         <CardHead title="Fare Breakdown" icon={Receipt} />
-                                        <div className="p-4 space-y-1">
-                                            <FR l="Base fare" v={ride.base_fare} />
-                                            <FR l={`Distance (${(ride.distance_km || 0).toFixed(1)} km)`} v={ride.distance_fare} />
-                                            <FR l={`Time (${ride.duration_minutes || 0} min)`} v={ride.time_fare} />
-                                            <FR l="Booking fee" v={ride.booking_fee} />
-                                            {(ride.airport_fee || 0) > 0 && <FR l="Airport fee" v={ride.airport_fee} />}
-                                            <div className="border-t my-2" />
-                                            <FR l="Subtotal" v={ride.total_fare} b />
-                                            {(parseFloat(String(ride.tip_amount ?? 0)) > 0 || ride.promo_code) && (
-                                                <>
+                                        {(() => {
+                                            const n = (v: any) => parseFloat(String(v ?? 0)) || 0;
+                                            const areaFees = Array.isArray(ride.area_fees_breakdown) ? ride.area_fees_breakdown : [];
+                                            const hasAreaFees = areaFees.some((f: any) => n(f.calculated_value) > 0);
+                                            // tax_breakdown: { "GST": {rate, amount}, "PST": {rate, amount} }
+                                            const taxEntries: [string, number, number | null][] = ride.tax_breakdown && typeof ride.tax_breakdown === "object"
+                                                ? Object.entries(ride.tax_breakdown).map(([k, t]: any) => [
+                                                    k,
+                                                    n(t?.amount ?? t),
+                                                    (t && typeof t === "object" && t.rate != null) ? Number(t.rate) : null,
+                                                ])
+                                                : [];
+                                            const taxTotal = ride.tax_amount != null ? n(ride.tax_amount) : taxEntries.reduce((s, [, a]) => s + a, 0);
+                                            const discount = n(ride.discount_amount);
+                                            const tip = n(ride.tip_amount);
+                                            const grand = ride.grand_total != null
+                                                ? n(ride.grand_total)
+                                                : n(ride.total_fare) + n(ride.area_fees_total) + taxTotal - discount;
+                                            return (
+                                                <div className="p-4 space-y-1">
+                                                    <FR l="Base fare" v={ride.base_fare} />
+                                                    <FR l={`Distance (${(ride.distance_km || 0).toFixed(1)} km)`} v={ride.distance_fare} />
+                                                    <FR l={`Time (${ride.duration_minutes || 0} min)`} v={ride.time_fare} />
+                                                    {(ride.surge_multiplier || 1) > 1 && (
+                                                        <p className="text-[11px] text-amber-600 dark:text-amber-400">Includes {ride.surge_multiplier}× surge</p>
+                                                    )}
+                                                    <FR l="Booking fee" v={ride.booking_fee} />
+                                                    {!hasAreaFees && n(ride.airport_fee) > 0 && <FR l="Airport fee" v={ride.airport_fee} />}
+                                                    {hasAreaFees && areaFees.map((f: any, i: number) => (
+                                                        n(f.calculated_value) > 0 ? <FR key={i} l={f.name || "Area fee"} v={n(f.calculated_value)} /> : null
+                                                    ))}
                                                     <div className="border-t my-2" />
-                                                    {ride.promo_code && (
+                                                    <FR l="Subtotal" v={ride.subtotal_fare ?? ride.total_fare} b />
+                                                    {discount > 0 && (
                                                         <div className="flex justify-between items-center">
-                                                            <span className="flex items-center gap-2 text-sm"><Ticket className="h-4 w-4 text-violet-500" />Promo: <b className="font-mono text-xs bg-violet-50 dark:bg-violet-900/20 px-1.5 py-0.5 rounded">{ride.promo_code}</b></span>
-                                                            <span className="text-sm font-semibold text-emerald-600">-{formatCurrency(ride.promo_discount || 0)}</span>
+                                                            <span className="flex items-center gap-2 text-sm"><Ticket className="h-4 w-4 text-violet-500" />Promo{ride.promo_code ? <b className="font-mono text-xs bg-violet-50 dark:bg-violet-900/20 px-1.5 py-0.5 rounded">{ride.promo_code}</b> : null}</span>
+                                                            <span className="text-sm font-semibold text-emerald-600">-{formatCurrency(discount)}</span>
                                                         </div>
                                                     )}
-                                                    {parseFloat(String(ride.tip_amount ?? 0)) > 0 && (
+                                                    {taxEntries.length > 0
+                                                        ? taxEntries.map(([name, amt, rate]) => (
+                                                            <FR key={name} l={`${name}${rate != null ? ` (${rate}%)` : ""}`} v={amt} />
+                                                        ))
+                                                        : taxTotal > 0 && <FR l="Tax" v={taxTotal} />}
+                                                    {tip > 0 && (
                                                         <div className="flex justify-between items-center">
                                                             <span className="flex items-center gap-2 text-sm"><DollarSign className="h-4 w-4 text-amber-500" />Tip</span>
-                                                            <span className="text-sm font-semibold text-amber-600">{formatCurrency(ride.tip_amount)}</span>
+                                                            <span className="text-sm font-semibold text-amber-600">{formatCurrency(tip)}</span>
                                                         </div>
                                                     )}
-                                                </>
-                                            )}
-                                        </div>
+                                                    <div className="border-t my-2" />
+                                                    <FR l="Grand total" v={grand} b />
+                                                    {tip > 0 && <FR l="Total charged (incl. tip)" v={grand + tip} b />}
+                                                </div>
+                                            );
+                                        })()}
                                     </Card>
 
                                     <Card>
-                                        <CardHead title="Revenue Split" icon={TrendingUp} />
-                                        <div className="p-4">
-                                            <div className="grid grid-cols-3 gap-2.5 mb-4">
-                                                <div className="bg-emerald-50 dark:bg-emerald-900/20 rounded-xl p-3.5 text-center">
-                                                    <p className="text-lg font-extrabold text-emerald-600 dark:text-emerald-400">{formatCurrency(ride.driver_earnings || 0)}</p>
-                                                    <p className="text-[11px] text-muted-foreground mt-1 font-medium">Driver</p>
+                                        <CardHead title="Driver & Platform Earnings" icon={TrendingUp} />
+                                        {(() => {
+                                            const n = (v: any) => parseFloat(String(v ?? 0)) || 0;
+                                            // 0% commission: driver keeps 100% of the ride fare components.
+                                            const rideFare = n(ride.base_fare) + n(ride.distance_fare) + n(ride.time_fare);
+                                            const tip = n(ride.tip_amount);
+                                            const incentives = n(ride.incentive_total);
+                                            const claims = Array.isArray(ride.incentive_claims) ? ride.incentive_claims : [];
+                                            const driverTotal = rideFare + tip + incentives;
+                                            const platformFees = n(ride.admin_earnings); // booking + airport
+                                            const discount = n(ride.discount_amount);
+                                            // Platform funds incentives + absorbs promo discount (0% commission model).
+                                            const platformNet = platformFees - incentives - discount;
+                                            return (
+                                                <div className="p-4">
+                                                    <div className="grid grid-cols-3 gap-2.5 mb-4">
+                                                        <div className="bg-emerald-50 dark:bg-emerald-900/20 rounded-xl p-3.5 text-center">
+                                                            <p className="text-lg font-extrabold text-emerald-600 dark:text-emerald-400">{formatCurrency(driverTotal)}</p>
+                                                            <p className="text-[11px] text-muted-foreground mt-1 font-medium">Driver receives</p>
+                                                        </div>
+                                                        <div className="bg-violet-50 dark:bg-violet-900/20 rounded-xl p-3.5 text-center">
+                                                            <p className="text-lg font-extrabold text-violet-600 dark:text-violet-400">{formatCurrency(platformNet)}</p>
+                                                            <p className="text-[11px] text-muted-foreground mt-1 font-medium">Platform net</p>
+                                                        </div>
+                                                        <div className="bg-amber-50 dark:bg-amber-900/20 rounded-xl p-3.5 text-center">
+                                                            <p className="text-lg font-extrabold text-amber-600 dark:text-amber-400">{formatCurrency(incentives)}</p>
+                                                            <p className="text-[11px] text-muted-foreground mt-1 font-medium">Incentives</p>
+                                                        </div>
+                                                    </div>
+                                                    <div className="border-t pt-3 space-y-1.5">
+                                                        <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">Driver</p>
+                                                        <FR l="Ride fare (100%)" v={rideFare} />
+                                                        {tip > 0 && <FR l="Tip" v={tip} />}
+                                                        {claims.length > 0
+                                                            ? claims.map((c: any, i: number) => (
+                                                                <FR key={i} l={`Incentive — ${c.name || "Bonus"}`} v={n(c.bonus_amount)} />
+                                                            ))
+                                                            : incentives > 0 && <FR l="Incentives" v={incentives} />}
+                                                        <FR l="Driver total" v={driverTotal} b />
+                                                        <div className="border-t my-2" />
+                                                        <p className="text-[10px] font-bold uppercase tracking-wider text-violet-600 dark:text-violet-400">Platform</p>
+                                                        <FR l="Booking + airport fees" v={platformFees} />
+                                                        {incentives > 0 && <FR l="Less incentives funded" v={-incentives} />}
+                                                        {discount > 0 && <FR l="Less promo absorbed" v={-discount} />}
+                                                        <FR l="Platform net" v={platformNet} b />
+                                                    </div>
                                                 </div>
-                                                <div className="bg-violet-50 dark:bg-violet-900/20 rounded-xl p-3.5 text-center">
-                                                    <p className="text-lg font-extrabold text-violet-600 dark:text-violet-400">{formatCurrency(ride.admin_earnings || 0)}</p>
-                                                    <p className="text-[11px] text-muted-foreground mt-1 font-medium">Platform</p>
-                                                </div>
-                                                <div className="bg-amber-50 dark:bg-amber-900/20 rounded-xl p-3.5 text-center">
-                                                    <p className="text-lg font-extrabold text-amber-600 dark:text-amber-400">{formatCurrency(ride.tip_amount || 0)}</p>
-                                                    <p className="text-[11px] text-muted-foreground mt-1 font-medium">Tip</p>
-                                                </div>
-                                            </div>
-                                            <div className="border-t pt-3 space-y-1.5">
-                                                <FR l="Rider paid" v={parseFloat(String(ride.total_fare ?? 0)) + parseFloat(String(ride.tip_amount ?? 0)) - parseFloat(String(ride.promo_discount ?? 0))} b />
-                                                <FR l="Driver gets" v={parseFloat(String(ride.driver_earnings ?? 0)) + parseFloat(String(ride.tip_amount ?? 0))} />
-                                                <FR l="Platform gets" v={ride.admin_earnings ?? 0} />
-                                            </div>
-                                        </div>
+                                            );
+                                        })()}
                                     </Card>
                                 </div>
 

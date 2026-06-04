@@ -54,7 +54,7 @@ fly auth login
 fly apps create spinr-backend-yyz --org <fly-org>
 ```
 
-Set Fly secrets to the exact same production values used by Railway. Two things
+Set Fly secrets to the exact same production values used by Railway. Three things
 to watch:
 
 - `ADMIN_EMAIL` **must** be copied from Railway. `backend/fly.toml` sets
@@ -64,7 +64,13 @@ to watch:
 - The Redis URLs must keep their credentials. Only swap the **host** for the
   alias (e.g. `rediss://:<password>@redis.spinr.ca:6379`); a bare
   `rediss://redis.spinr.ca:6379` connects unauthenticated and silently drops
-  shared rate-limit / OTP / WS / leader-lock state.
+  shared rate-limit / OTP / WS / leader-lock state. (TLS caveat below.)
+- `FIREBASE_SERVICE_ACCOUNT_JSON` is raw JSON full of double quotes, so it must
+  **not** go in the double-quoted `fly secrets set KEY="..."` form — that breaks
+  the command or stores a truncated value (the backend then silently drops every
+  FCM push, while `/health` still passes). `core/security.init_firebase()` runs
+  `json.loads()` on it, so it must stay **JSON, not base64**. Set it separately
+  from a minified single-line value (see below).
 
 ```powershell
 fly secrets set `
@@ -73,7 +79,6 @@ fly secrets set `
   JWT_SECRET="<copy-from-railway>" `
   ADMIN_PASSWORD=<paste-same-value-as-railway> `
   ADMIN_EMAIL="<copy-from-railway>" `
-  FIREBASE_SERVICE_ACCOUNT_JSON="<copy-from-railway>" `
   FIREBASE_DRIVER_APP_ID="<copy-from-railway>" `
   FIREBASE_RIDER_APP_ID="<copy-from-railway>" `
   REDIS_URL="rediss://:<password>@redis.spinr.ca:6379" `
@@ -81,6 +86,20 @@ fly secrets set `
   WS_REDIS_URL="rediss://:<password>@redis.spinr.ca:6379" `
   ALLOWED_ORIGINS="<production-origins>"
 ```
+
+Set the Firebase service account separately. Save the Railway value to a file,
+then pipe the raw contents so no shell quoting touches the embedded `"`:
+
+```powershell
+# firebase-sa.json = the exact JSON from Railway (single object; minified is fine)
+fly secrets set "FIREBASE_SERVICE_ACCOUNT_JSON=$(Get-Content firebase-sa.json -Raw)" -a spinr-backend-yyz
+# bash/zsh equivalent:
+#   fly secrets set "FIREBASE_SERVICE_ACCOUNT_JSON=$(cat firebase-sa.json)" -a spinr-backend-yyz
+```
+
+(The `bootstrap-fly.yml` workflow handles this automatically via `fly secrets
+import` — just store the minified single-line JSON as the `FIREBASE_SERVICE_ACCOUNT_JSON`
+GitHub secret.)
 
 Create a deploy token for CI and store it as the `FLY_API_TOKEN` GitHub secret:
 
@@ -125,6 +144,22 @@ degrade to per-machine behavior.
 3. Set `REDIS_URL` / `RATE_LIMIT_REDIS_URL` / `WS_REDIS_URL` to
    `rediss://:<password>@redis.spinr.ca:6379` on **both** Railway and Fly —
    keep the credentials, only the host is the alias.
+
+> **TLS hostname caveat (read before using `rediss://` with the alias).** With
+> `rediss://`, the Python clients (`utils.rate_limiter`, `utils.redis_client`,
+> `utils.ws_pubsub`) verify the server certificate against the **hostname in the
+> URL** — `redis.spinr.ca`. A managed provider (Upstash / Fly Redis) normally
+> presents a cert for its *own* hostname, so a plain CNAME alias fails TLS
+> verification and every shared-Redis connection breaks even though the URL is
+> set. Pick one:
+> - **Keep the DNS-swap benefit:** add `redis.spinr.ca` as a *custom domain* on
+>   the Redis provider so the origin presents a cert valid for the alias. Then
+>   `rediss://...@redis.spinr.ca:6379` verifies cleanly and fail-back is a DNS
+>   change.
+> - **Simplest:** put the provider's real TLS hostname in the URL (cert matches
+>   out of the box). Fail-back then means editing the `REDIS_URL` secret on both
+>   providers, not just repointing DNS.
+> Do **not** disable certificate verification to paper over the mismatch.
 
 > **Failure-domain caveat (read this).** If Redis lives only in Fly and the Fly
 > region is what failed, repointing `api-spinr.spinr.ca` to Railway is not enough

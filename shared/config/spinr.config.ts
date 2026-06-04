@@ -7,7 +7,12 @@ import Constants from 'expo-constants';
 // falls through to http://localhost:8000 and breaks every request on a
 // real device. This constant ensures production builds always reach the
 // real backend even when the env chain is empty.
-const PRODUCTION_BACKEND_URL = 'https://spinr-backend-production.up.railway.app';
+//
+// Must be the load-balanced CNAME (api-spinr.spinr.ca), NOT a provider domain.
+// Pointing it at a provider host (e.g. *.up.railway.app) would make this
+// fallback bypass the CNAME, so Fly-primary cutover and fail-back drills would
+// never reach clients that hit the safety net. See ADR-007.
+const PRODUCTION_BACKEND_URL = 'https://api-spinr.spinr.ca';
 
 const getBackendUrl = () => {
   const getEnvVar = (key: string): string | undefined => {

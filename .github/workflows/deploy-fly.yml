@@ -1,0 +1,90 @@
+name: Deploy Backend to Fly.io
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'backend/**'
+      - 'backend/fly.toml'
+      - '.github/workflows/deploy-fly.yml'
+  workflow_dispatch:
+
+# Fly.io runs the backend in yyz (Toronto) alongside Railway. Both providers
+# deploy from main in parallel so the Fly app never drifts behind the primary.
+# See docs/runbooks/railway-fly-failover.md and docs/adr/007-fly-primary-railway-standby.md.
+#
+# Authentication setup (one-time):
+#   1. Install flyctl locally, then: fly tokens create deploy -a spinr-backend-yyz
+#      (a deploy-scoped token, NOT a personal/org-wide token).
+#   2. GitHub → repo → Settings → Secrets → Actions → FLY_API_TOKEN = <token>
+#
+# Optional: set FLY_HEALTH_URL (e.g. https://spinr-backend-yyz.fly.dev) to enable
+# the post-deploy health probe. Leave unset in forks to skip it.
+
+jobs:
+  deploy:
+    name: Deploy to Fly.io
+    runs-on: ubuntu-latest
+    # Hoisted to job env because the `secrets` context is not available in a step
+    # `if:` conditional — gate the health probe on `env.FLY_HEALTH_URL` instead.
+    env:
+      FLY_HEALTH_URL: ${{ secrets.FLY_HEALTH_URL }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Verify FLY_API_TOKEN is set
+        run: |
+          if [ -z "${{ secrets.FLY_API_TOKEN }}" ]; then
+            echo "::error title=Missing secret::FLY_API_TOKEN is not set."
+            echo ""
+            echo "Create one with: fly tokens create deploy -a spinr-backend-yyz"
+            echo "Then: GitHub → repo → Settings → Secrets → FLY_API_TOKEN"
+            exit 1
+          fi
+          echo "FLY_API_TOKEN is set (length=${#FLY_API_TOKEN})."
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Show flyctl version
+        run: flyctl version
+
+      # Rolling deploy (strategy=rolling, max_unavailable=1 in fly.toml). New
+      # machines must pass the /health check before old ones are replaced, so a
+      # bad deploy cannot take the app down — flyctl exits non-zero and the job
+      # fails with the previous release still serving.
+      #
+      # Run from backend/ so the Docker build context is backend/ — fly deploy
+      # uses the working directory as the build context, and the root Dockerfile
+      # COPYs a root requirements.txt that does not exist (only backend/ has one).
+      - name: Deploy to Fly.io
+        working-directory: backend
+        run: flyctl deploy --remote-only --config fly.toml
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      # Poll /health for up to 3 minutes (18 × 10 s) on the Fly app domain.
+      # Set FLY_HEALTH_URL to https://spinr-backend-yyz.fly.dev in repo secrets
+      # (or leave unset to skip the probe in forks/staging).
+      - name: Health check
+        id: health
+        if: ${{ env.FLY_HEALTH_URL != '' }}
+        run: |
+          echo "Polling ${FLY_HEALTH_URL}/health …"
+          for i in $(seq 1 18); do
+            STATUS=$(curl -sf --max-time 5 "${FLY_HEALTH_URL}/health" \
+              -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
+            echo "  attempt ${i}/18 → HTTP ${STATUS}"
+            if [ "$STATUS" = "200" ]; then
+              echo "Service is healthy."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::Health check timed out after 3 minutes."
+          echo "Fly keeps the previous release in traffic on a failed rolling deploy."
+          echo "Inspect with: flyctl status -a spinr-backend-yyz && flyctl logs -a spinr-backend-yyz"
+          exit 1

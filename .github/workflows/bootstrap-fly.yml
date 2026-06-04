@@ -1,0 +1,144 @@
+name: Bootstrap Fly.io app (one-time / manual)
+
+# Manually-triggered, idempotent bootstrap so you never need flyctl locally:
+#   1. creates the Fly app (no-op if it already exists)
+#   2. sets all production secrets from GitHub Actions secrets
+#   3. (optional) deploys and scales to 2 machines in yyz, then probes /health
+#
+# Ongoing deploys are handled separately by deploy-fly.yml on every push to main.
+# Run this once to launch, or again whenever you rotate secrets.
+#
+# ── Required GitHub Actions secrets ──────────────────────────────────────────
+#   FLY_API_TOKEN  — must be ORG-scoped to create the app
+#                    (`fly tokens create org`), not a per-app deploy token.
+#   The production values, copied from Railway (same values, byte-identical):
+#     SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, JWT_SECRET, ADMIN_PASSWORD,
+#     ADMIN_EMAIL, FIREBASE_SERVICE_ACCOUNT_JSON, FIREBASE_DRIVER_APP_ID,
+#     FIREBASE_RIDER_APP_ID, REDIS_URL, RATE_LIMIT_REDIS_URL, WS_REDIS_URL,
+#     ALLOWED_ORIGINS
+#
+# Notes:
+#   - FIREBASE_SERVICE_ACCOUNT_JSON must be raw JSON minified to a SINGLE line
+#     (core/security.init_firebase() runs json.loads on it, so do NOT base64 it;
+#     `fly secrets import` parses line by line, so it must contain no newlines).
+#   - Redis URLs must keep credentials and use the alias host, e.g.
+#     rediss://:<password>@redis.spinr.ca:6379. If using rediss:// with the alias,
+#     the Redis origin must present a TLS cert valid for redis.spinr.ca (provider
+#     custom domain) — otherwise use the provider's TLS hostname in the URL.
+#   - ADMIN_EMAIL must be a real address; the default admin@spinr.ca is rejected
+#     by the production config guard and the app will not boot.
+
+on:
+  workflow_dispatch:
+    inputs:
+      org:
+        description: 'Fly organization slug (for app creation)'
+        required: true
+        type: string
+      deploy:
+        description: 'Deploy + scale after setting secrets'
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  bootstrap:
+    name: Bootstrap spinr-backend-yyz
+    runs-on: ubuntu-latest
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      FLY_APP: spinr-backend-yyz
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Verify FLY_API_TOKEN is set
+        run: |
+          if [ -z "${FLY_API_TOKEN}" ]; then
+            echo "::error title=Missing secret::FLY_API_TOKEN is not set."
+            echo "Bootstrap needs an ORG-scoped token: fly tokens create org"
+            exit 1
+          fi
+          echo "FLY_API_TOKEN is set (length=${#FLY_API_TOKEN})."
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      # Idempotent: succeeds whether or not the app already exists.
+      - name: Create app if missing
+        run: |
+          if flyctl status -a "${FLY_APP}" >/dev/null 2>&1; then
+            echo "App ${FLY_APP} already exists — skipping create."
+          else
+            echo "Creating app ${FLY_APP} in org ${{ inputs.org }}…"
+            flyctl apps create "${FLY_APP}" --org "${{ inputs.org }}"
+          fi
+
+      # Pipe secrets over stdin so values never appear in the command line or
+      # process list. GitHub masks them in logs. This stages one release.
+      - name: Set Fly secrets
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          FIREBASE_DRIVER_APP_ID: ${{ secrets.FIREBASE_DRIVER_APP_ID }}
+          FIREBASE_RIDER_APP_ID: ${{ secrets.FIREBASE_RIDER_APP_ID }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          RATE_LIMIT_REDIS_URL: ${{ secrets.RATE_LIMIT_REDIS_URL }}
+          WS_REDIS_URL: ${{ secrets.WS_REDIS_URL }}
+          ALLOWED_ORIGINS: ${{ secrets.ALLOWED_ORIGINS }}
+        run: |
+          missing=0
+          for v in SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY JWT_SECRET \
+                   ADMIN_PASSWORD ADMIN_EMAIL FIREBASE_SERVICE_ACCOUNT_JSON \
+                   FIREBASE_DRIVER_APP_ID FIREBASE_RIDER_APP_ID REDIS_URL \
+                   RATE_LIMIT_REDIS_URL WS_REDIS_URL ALLOWED_ORIGINS; do
+            if [ -z "${!v}" ]; then
+              echo "::error title=Missing secret::GitHub secret ${v} is not set."
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
+
+          flyctl secrets import -a "${FLY_APP}" <<EOF
+          SUPABASE_URL=${SUPABASE_URL}
+          SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+          JWT_SECRET=${JWT_SECRET}
+          ADMIN_PASSWORD=${ADMIN_PASSWORD}
+          ADMIN_EMAIL=${ADMIN_EMAIL}
+          FIREBASE_SERVICE_ACCOUNT_JSON=${FIREBASE_SERVICE_ACCOUNT_JSON}
+          FIREBASE_DRIVER_APP_ID=${FIREBASE_DRIVER_APP_ID}
+          FIREBASE_RIDER_APP_ID=${FIREBASE_RIDER_APP_ID}
+          REDIS_URL=${REDIS_URL}
+          RATE_LIMIT_REDIS_URL=${RATE_LIMIT_REDIS_URL}
+          WS_REDIS_URL=${WS_REDIS_URL}
+          ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
+          EOF
+          echo "Secrets staged."
+
+      # Build context must be backend/ (root Dockerfile COPYs a root
+      # requirements.txt that does not exist — only backend/ has one).
+      - name: Deploy
+        if: ${{ inputs.deploy }}
+        working-directory: backend
+        run: flyctl deploy --remote-only --config fly.toml
+
+      - name: Scale to 2 machines in yyz
+        if: ${{ inputs.deploy }}
+        run: flyctl scale count 2 --region yyz -a "${FLY_APP}" --yes
+
+      - name: Smoke-test /health
+        if: ${{ inputs.deploy }}
+        run: |
+          URL="https://${FLY_APP}.fly.dev/health"
+          echo "Polling ${URL} …"
+          for i in $(seq 1 18); do
+            STATUS=$(curl -sf --max-time 5 "${URL}" -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
+            echo "  attempt ${i}/18 → HTTP ${STATUS}"
+            [ "$STATUS" = "200" ] && { echo "Healthy."; exit 0; }
+            sleep 10
+          done
+          echo "::error::Health check timed out. Inspect: flyctl logs -a ${FLY_APP}"
+          exit 1

@@ -880,6 +880,9 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
     """
     # Fields that live on the `users` account row.
     user_fields = {"first_name", "last_name", "email", "phone", "gender"}
+    # Subset that exists ONLY on `users` (no mirror on `drivers`): these
+    # require a linked account row to persist at all.
+    user_only_fields = {"email", "gender"}
     # Fields that live on the `drivers` row (`city` is drivers-only; the
     # name/phone columns are mirrored from users for forward-compat — see
     # migration 63_phase3b_field_alignment.sql).
@@ -917,25 +920,33 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
 
     # Keep the legacy `drivers.name` atom in sync when either name part changes,
     # since enrichment falls back to it when there is no linked user row.
+    # Coalesce explicit JSON nulls to "" so a cleared part never renders as the
+    # literal "None" in the rebuilt name.
     if "first_name" in driver_updates or "last_name" in driver_updates:
-        new_first = driver_updates.get("first_name", existing.get("first_name") or "")
-        new_last = driver_updates.get("last_name", existing.get("last_name") or "")
+        new_first = driver_updates.get("first_name", existing.get("first_name")) or ""
+        new_last = driver_updates.get("last_name", existing.get("last_name")) or ""
         driver_updates["name"] = f"{new_first} {new_last}".strip()
 
     user_id = existing.get("user_id")
-    # Account-level fields (email/gender) can only be persisted to a linked
-    # user row. Surface loudly rather than silently dropping the edit.
-    if user_updates and not user_id:
+    # email/gender exist ONLY on `users`, so they cannot be persisted without a
+    # linked account row — surface loudly rather than silently dropping them.
+    # Mirrored fields (first/last name, phone) also live on `drivers`, so an
+    # orphaned driver row can still be edited for those via the drivers write.
+    user_only_updates = {k: v for k, v in user_updates.items() if k in user_only_fields}
+    if user_only_updates and not user_id:
         raise HTTPException(
             status_code=409,
-            detail="Driver has no linked user account; cannot update email/name/phone/gender.",
+            detail="Driver has no linked user account; cannot update email/gender.",
         )
 
     try:
-        if driver_updates:
-            await db_supabase.update_one("drivers", {"id": driver_id}, driver_updates)
+        # Write the account row first: list/stats views prefer the user row
+        # over the driver mirror, so if the second write fails the surviving
+        # state is the canonical one, not a stale mirror.
         if user_updates and user_id:
             await db_supabase.update_one("users", {"id": user_id}, user_updates)
+        if driver_updates:
+            await db_supabase.update_one("drivers", {"id": driver_id}, driver_updates)
     except HTTPException:
         raise
     except Exception as e:

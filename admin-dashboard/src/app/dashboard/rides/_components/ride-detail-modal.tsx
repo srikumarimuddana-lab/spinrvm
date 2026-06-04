@@ -744,7 +744,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                 {/* Offer Funnel — who was offered this ride and what they did */}
                                 {Array.isArray(ride.offers) && ride.offers.length > 0 && (
                                     <Card>
-                                        <CardHead title="Dispatch Offers" icon={Radio} />
+                                        <CardHead title={`Dispatch Offers · ${ride.offers.length} driver${ride.offers.length > 1 ? "s" : ""}`} icon={Radio} />
                                         <div className="p-4 space-y-2">
                                             {(() => {
                                                 const OFFER_META: Record<string, { label: string; cls: string; Icon: React.ElementType }> = {
@@ -772,7 +772,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                                     </span>
                                                                 ) : null
                                                             )}
-                                                            <span className="text-[11px] text-muted-foreground px-2 py-0.5">{ride.offers.length} offer{ride.offers.length > 1 ? "s" : ""} total</span>
+                                                            <span className="text-[11px] font-semibold text-foreground px-2 py-0.5 ml-auto">Offered to {ride.offers.length} driver{ride.offers.length > 1 ? "s" : ""}</span>
                                                         </div>
                                                         {ride.offers.map((o: any, i: number) => {
                                                             const meta = OFFER_META[o.status] || OFFER_META.pending;

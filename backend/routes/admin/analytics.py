@@ -51,6 +51,21 @@ def _parse_iso(value) -> Optional[datetime]:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+async def _fetch_rows_in_chunks(table: str, ids: list, chunk_size: int = 200) -> list:
+    """Fetch rows by id in bounded `IN (...)` batches.
+
+    A single huge `IN` over thousands of distinct ids can blow past URL/query
+    limits and dominate latency. Chunking keeps each query bounded.
+    """
+    out: list = []
+    for i in range(0, len(ids), chunk_size):
+        batch = ids[i : i + chunk_size]
+        if not batch:
+            continue
+        out.extend(await db.get_rows(table, {"id": {"$in": batch}}, limit=len(batch)))
+    return out
+
+
 # ── Cancellation Reason Breakdown ────────────────────────────────────
 
 
@@ -483,6 +498,7 @@ async def get_driver_offer_stats(
             "accepted": 0,
             "declined": 0,
             "ignored": 0,
+            "preempted": 0,
             "pending": 0,
             "_response_secs": [],
         }
@@ -499,7 +515,12 @@ async def get_driver_offer_stats(
         elif status == "declined":
             agg["declined"] += 1
         elif status == "expired":
+            # Genuine timeout — the driver received the offer and never responded.
             agg["ignored"] += 1
+        elif status == "preempted":
+            # Another driver accepted first — NOT an ignore; tracked separately
+            # and excluded from the decided-rate denominators below.
+            agg["preempted"] += 1
         elif status == "pending":
             agg["pending"] += 1
         # Response latency for the offers the driver actually answered.
@@ -513,7 +534,7 @@ async def get_driver_offer_stats(
     drivers_list: list = []
     if driver_ids:
         try:
-            drivers_list = await db.get_rows("drivers", {"id": {"$in": driver_ids}}, limit=len(driver_ids))
+            drivers_list = await _fetch_rows_in_chunks("drivers", driver_ids)
         except Exception as e:
             logger.error(
                 f"Failed to fetch drivers for offer stats: {e}",
@@ -531,7 +552,7 @@ async def get_driver_offer_stats(
     users_list: list = []
     if user_ids:
         try:
-            users_list = await db.get_rows("users", {"id": {"$in": user_ids}}, limit=len(user_ids))
+            users_list = await _fetch_rows_in_chunks("users", user_ids)
         except Exception as e:
             logger.error(
                 f"Failed to fetch users for offer stats: {e}",
@@ -563,6 +584,7 @@ async def get_driver_offer_stats(
                 "accepted": agg["accepted"],
                 "declined": agg["declined"],
                 "ignored": agg["ignored"],
+                "preempted": agg["preempted"],
                 "pending": agg["pending"],
                 "accept_rate": round(agg["accepted"] / decided * 100, 1) if decided else 0.0,
                 "decline_rate": round(agg["declined"] / decided * 100, 1) if decided else 0.0,
@@ -581,6 +603,7 @@ async def get_driver_offer_stats(
         "accepted": sum(r["accepted"] for r in result),
         "declined": sum(r["declined"] for r in result),
         "ignored": sum(r["ignored"] for r in result),
+        "preempted": sum(r["preempted"] for r in result),
         "pending": sum(r["pending"] for r in result),
     }
 

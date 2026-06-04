@@ -351,6 +351,32 @@ async def _generate_and_store_ride_snapshot(
         logger.error(f"Ride snapshot pipeline failed for {ride_id}: {exc}", exc_info=True)
 
 
+async def _snap_pickup_leg_async(ride_id: str, breadcrumbs: list) -> None:
+    """Background task: road-snap the Phase 2 (driver→pickup) leg for the admin map.
+
+    Display-only — kept OFF the /complete hot path so a slow OSRM/Google Roads
+    provider can never delay a driver finishing a ride. Best-effort: backfills
+    ride_routes.road_polyline_pickup (idempotent single-column update) once the
+    snap returns; a failure simply leaves it empty and the admin map falls back
+    to the raw Phase 2 GPS breadcrumbs.
+    """
+    if not breadcrumbs:
+        return
+    try:
+        try:
+            from ..utils.route_distance import compute_road_route
+        except ImportError:
+            from utils.route_distance import compute_road_route  # type: ignore
+        result = await compute_road_route(breadcrumbs, phase="navigating_to_pickup")
+        poly = (result or {}).get("polyline") or []
+        if poly:
+            await db_supabase.update_one(
+                "ride_routes", {"ride_id": ride_id}, {"road_polyline_pickup": poly}, upsert=True
+            )
+    except Exception:
+        logger.warning("[complete_ride] pickup-leg road-snap backfill failed for ride %s", ride_id, exc_info=True)
+
+
 async def _validate_ride_route(ride_id: str, breadcrumbs: list, driver_id: str) -> None:
     """Background task: validate GPS trace against road network post-completion."""
     if not breadcrumbs or len(breadcrumbs) < 5:
@@ -2981,10 +3007,13 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
         )
         loser_ids = [r["driver_id"] for r in (losers.data or [])]
         if loser_ids:
+            # 'preempted' (not 'expired'): these drivers didn't ignore/time out —
+            # another driver simply accepted first. Analytics must not count this
+            # against their ignore rate.
             await db_supabase.run_sync(
                 lambda: (
                     db_supabase.supabase.table("ride_offers")
-                    .update({"status": "expired", "responded_at": now_iso})
+                    .update({"status": "preempted", "responded_at": now_iso})
                     .eq("ride_id", ride_id)
                     .eq("status", "pending")
                     .execute()
@@ -3559,23 +3588,11 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                         f"{actual_distance_km_haversine}km — keeping haversine value"
                     )
 
-            # Road-snap the PICKUP leg (Phase 2, driver→pickup) too, so the admin
-            # map can draw a clean road-following line for the approach — not just
-            # the trip. Display-only (it does not feed billing), so unlike the trip
-            # leg above there is no sanity gate against a billing baseline; a failed
-            # snap simply leaves road_polyline_pickup empty and the admin falls back
-            # to the raw Phase 2 GPS breadcrumbs.
-            try:
-                pickup_road_result = await compute_road_route(
-                    all_breadcrumbs, phase="navigating_to_pickup"
-                )
-                if pickup_road_result is not None:
-                    road_polyline_pickup = pickup_road_result.get("polyline") or []
-            except Exception:
-                logger.warning(
-                    "[complete_ride] pickup-leg road-snap raised; leaving empty",
-                    exc_info=True,
-                )
+            # The PICKUP-leg road-snap (Phase 2, driver→pickup) is display-only
+            # (admin map) and does NOT feed billing, so it must NOT add a second
+            # provider round-trip to the /complete hot path. It is backgrounded
+            # after settlement (see _snap_pickup_leg_async below); road_polyline_pickup
+            # stays empty here and the column is backfilled best-effort.
 
             # Per-phase polylines for SGI / dispute tooling. Each phase is
             # downsampled to MAX_PER_PHASE points so a long trip's payload
@@ -3996,6 +4013,9 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     # Flags spoofed trips for admin review without blocking completion.
     _breadcrumbs_for_validation = all_breadcrumbs if "all_breadcrumbs" in locals() else []
     asyncio.create_task(_validate_ride_route(ride_id, _breadcrumbs_for_validation, driver["id"]))
+    # Fire-and-forget: road-snap the pickup leg for the admin map (display-only;
+    # must not block completion on a provider round-trip).
+    asyncio.create_task(_snap_pickup_leg_async(ride_id, _breadcrumbs_for_validation))
 
     # Update driver stats. Setting is_available=True is safe here because the
     # ride has just transitioned to `completed`, and the driver's row already

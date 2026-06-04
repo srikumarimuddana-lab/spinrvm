@@ -37,17 +37,27 @@ function StatCard({ icon: I, color, bg, label, value, sub, tooltip }: {
     );
 }
 
-function RevenueCard({ icon: I, color, bg, label, value, tooltip }: {
+function RevenueCard({ icon: I, color, bg, label, value, tooltip, sub }: {
     icon: any; color: string; bg: string; label: string; value: string; tooltip: string;
+    sub?: { l: string; v: string }[];
 }) {
     return (
         <div className="bg-card border rounded-xl p-3.5 flex items-center gap-3 relative group cursor-default hover:shadow-sm transition-shadow">
             <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${bg}`}>
                 <I className={`h-4 w-4 ${color}`} />
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
                 <p className="text-lg font-bold leading-tight">{value}</p>
                 <p className="text-[11px] text-muted-foreground font-medium">{label}</p>
+                {sub && sub.length > 0 && (
+                    <div className="mt-1.5 pt-1.5 border-t border-border/60 space-y-0.5">
+                        {sub.map((s) => (
+                            <div key={s.l} className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground tabular-nums">
+                                <span>{s.l}</span><span className="font-semibold text-foreground/80">{s.v}</span>
+                            </div>
+                        ))}
+                    </div>
+                )}
             </div>
             <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-foreground text-background text-[11px] rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
                 {tooltip}
@@ -113,7 +123,12 @@ export default function RideStatsCards() {
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 <RevenueCard icon={Car} color="text-emerald-600 dark:text-emerald-400" bg="bg-emerald-100 dark:bg-emerald-900/30"
                     label="Driver Revenue (all-in)" value={formatCurrency(f.driver_take ?? 0)}
-                    tooltip={`Driver all-in take: ride fare ${formatCurrency(f.driver_revenue ?? 0)} + tips ${formatCurrency(f.tips ?? 0)} + incentives ${formatCurrency(f.incentives ?? 0)}`} />
+                    tooltip="Driver all-in take = ride fare + tips + incentives"
+                    sub={[
+                        { l: "Ride fare", v: formatCurrency(f.driver_revenue ?? 0) },
+                        { l: "Tips", v: formatCurrency(f.tips ?? 0) },
+                        { l: "Incentives", v: formatCurrency(f.incentives ?? 0) },
+                    ]} />
                 <RevenueCard icon={TrendingUp} color="text-amber-600 dark:text-amber-400" bg="bg-amber-100 dark:bg-amber-900/30"
                     label="Tips" value={formatCurrency(f.tips ?? 0)}
                     tooltip="Tips collected — 100% to drivers" />
@@ -140,7 +155,12 @@ export default function RideStatsCards() {
                     color={platformAfterNeg ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}
                     bg={platformAfterNeg ? "bg-red-100 dark:bg-red-900/30" : "bg-emerald-100 dark:bg-emerald-900/30"}
                     label="Platform Net (post-promo)" value={formatCurrency(f.platform_after_promo ?? 0)}
-                    tooltip="Platform sales after subtracting incentives funded and promo absorbed" />
+                    tooltip="Platform sales after subtracting incentives funded and promo absorbed"
+                    sub={[
+                        { l: "Pre-promo sales", v: formatCurrency(f.platform_before_promo ?? 0) },
+                        { l: "Less incentives", v: `-${formatCurrency(f.incentives ?? 0)}` },
+                        { l: "Less promo", v: `-${formatCurrency(f.promo_applied ?? 0)}` },
+                    ]} />
             </div>
         </div>
     );

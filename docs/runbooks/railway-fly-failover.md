@@ -32,11 +32,11 @@ api-spinr.spinr.ca                 redis.spinr.ca
 Two workflows mean you never need flyctl locally:
 
 - **`.github/workflows/bootstrap-fly.yml`** (manual `workflow_dispatch`) — creates
-  the app, sets all secrets from GitHub Actions secrets, then deploys and scales.
-  Run this once to launch (or again to rotate secrets). Needs an **org-scoped**
-  `FLY_API_TOKEN` (`fly tokens create org`) plus the production values stored as
-  GitHub secrets (`SUPABASE_URL`, `JWT_SECRET`, `ADMIN_EMAIL`, `REDIS_URL`, … —
-  see that workflow's header for the full list).
+  the app (idempotent), verifies the required secrets are present on the Fly app,
+  then deploys and scales. Needs a `FLY_API_TOKEN` with access to the org (a Fly
+  personal token works; a per-app deploy token can't create the app).
+  **Secrets are set directly in Fly, not GitHub** — set them with `fly secrets set`
+  (next section) before running with `deploy=true`.
 - **`.github/workflows/deploy-fly.yml`** — deploys Fly on every push to `main`, in
   parallel with `.github/workflows/deploy-backend.yml` for Railway.
 

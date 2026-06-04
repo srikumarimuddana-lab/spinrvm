@@ -562,7 +562,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     const cards: { key: CardKey; label: string; km: string; sub: string | null; colorCls: string; }[] = [
                                                         { key: "pickup",  label: "Pickup",       km: fmtKm(ride.phase_distances?.navigating_to_pickup), sub: fmtDur(ride.phase_durations?.navigating_to_pickup), colorCls: PHASE_COLORS.navigating_to_pickup },
                                                         { key: "actual",  label: "Actual Trip",  km: fmtKm(ride.phase_distances?.trip_in_progress ?? ride.actual_distance_km), sub: fmtDur(ride.phase_durations?.trip_in_progress), colorCls: PHASE_COLORS.trip_in_progress },
-                                                        { key: "planned", label: "Planned Trip", km: fmtKm(ride.planned_distance_km), sub: "Straight-line reference", colorCls: "bg-muted/60 text-foreground" },
+                                                        { key: "planned", label: "Planned Trip", km: fmtKm(ride.planned_distance_km), sub: (Array.isArray(ride.planned_route_polyline) && ride.planned_route_polyline.length > 1) ? "Planned route" : "Straight-line reference", colorCls: "bg-muted/60 text-foreground" },
                                                     ];
                                                     return cards.map(c => (
                                                         <button key={c.key} type="button" onClick={() => setSelectedPhase(c.key)}
@@ -585,15 +585,39 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                 ? pp.trip_in_progress.map((p: any) => ({ lat: p[0], lng: p[1], timestamp: p[2] })) : [];
 
                                             let pickupProp: typeof pickupPts | undefined;
+                                            let pickupApprox = false;
                                             let tripProp: typeof tripPts | undefined;
                                             let trailForMap: typeof tripPts | undefined;
+                                            let plannedProp: { lat: number; lng: number }[] | undefined;
                                             let label = "";
                                             let emptyHint: string | null = null;
 
                                             if (selectedPhase === "pickup") {
-                                                label = "Driver → Pickup (actual GPS)";
-                                                if (pickupPts.length > 1) pickupProp = pickupPts;
-                                                else emptyHint = "No Phase 2 GPS trail for this ride";
+                                                // Prefer the OSRM road-matched pickup leg, then raw Phase 2
+                                                // GPS, then a driver-start → pickup reference line so the
+                                                // card always shows the approach.
+                                                const pickupRoad = Array.isArray(ride.road_polyline_pickup) && ride.road_polyline_pickup.length > 1
+                                                    ? ride.road_polyline_pickup.map((p: any) => ({ lat: p[0], lng: p[1] })) : [];
+                                                if (pickupRoad.length > 1) {
+                                                    label = "Driver → Pickup (road-matched)";
+                                                    pickupProp = pickupRoad;
+                                                } else if (pickupPts.length > 1) {
+                                                    label = "Driver → Pickup (actual GPS)";
+                                                    pickupProp = pickupPts;
+                                                } else {
+                                                    // No GPS captured for the approach — draw a dashed
+                                                    // reference from the driver's start to the pickup.
+                                                    const dLat = ride.driver_initial_lat ?? ride.driver_lat;
+                                                    const dLng = ride.driver_initial_lng ?? ride.driver_lng;
+                                                    if (dLat != null && dLng != null && ride.pickup_lat != null && ride.pickup_lng != null) {
+                                                        label = "Driver → Pickup (approx — no GPS captured)";
+                                                        pickupProp = [{ lat: dLat, lng: dLng }, { lat: ride.pickup_lat, lng: ride.pickup_lng }];
+                                                        pickupApprox = true;
+                                                    } else {
+                                                        label = "Driver → Pickup";
+                                                        emptyHint = "No Phase 2 GPS trail for this ride";
+                                                    }
+                                                }
                                             } else if (selectedPhase === "actual") {
                                                 // Prefer the OSRM road-matched line (ride_routes.road_polyline) —
                                                 // the clean on-road route SGI / dispute review should see — then
@@ -614,7 +638,17 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     else emptyHint = "No trip GPS trail for this ride";
                                                 }
                                             } else {
-                                                label = "Planned Trip (straight-line reference)";
+                                                // Planned route: the road-following polyline captured from
+                                                // the Directions API at booking. Falls back to the dashed
+                                                // straight line (drawn by the map) when none was stored.
+                                                const plannedPts = Array.isArray(ride.planned_route_polyline) && ride.planned_route_polyline.length > 1
+                                                    ? ride.planned_route_polyline.map((p: any) => ({ lat: p[0], lng: p[1] })) : [];
+                                                if (plannedPts.length > 1) {
+                                                    label = "Planned Trip (road-following)";
+                                                    plannedProp = plannedPts;
+                                                } else {
+                                                    label = "Planned Trip (straight-line reference)";
+                                                }
                                             }
 
                                             return (
@@ -631,7 +665,9 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                             dropoffLat={ride.dropoff_lat}
                                                             dropoffLng={ride.dropoff_lng}
                                                             pickupTrail={pickupProp}
+                                                            pickupApprox={pickupApprox}
                                                             tripTrail={tripProp}
+                                                            plannedTrail={plannedProp}
                                                             locationTrail={trailForMap}
                                                         />
                                                     </div>

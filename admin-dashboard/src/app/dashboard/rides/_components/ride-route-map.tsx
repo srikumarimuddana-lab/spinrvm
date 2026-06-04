@@ -21,9 +21,17 @@ interface Props {
     /** Phase 2 (driver → pickup) GPS breadcrumbs. Rendered as a
      *  distinct amber road-following line. */
     pickupTrail?: { lat: number; lng: number; timestamp?: string }[];
+    /** When true the pickupTrail is an *approximation* (no GPS was
+     *  captured, e.g. a driver-start → pickup reference) — drawn dashed
+     *  and lighter so it can't be mistaken for an actual GPS trace. */
+    pickupApprox?: boolean;
     /** Phase 3 (pickup → dropoff) GPS breadcrumbs. Rendered as a
      *  distinct blue road-following line. */
     tripTrail?: { lat: number; lng: number; timestamp?: string }[];
+    /** Road-following planned route (rides.planned_route_polyline, from the
+     *  Directions API at booking). When present it replaces the dashed
+     *  straight-line reference with the real road geometry. */
+    plannedTrail?: { lat: number; lng: number }[];
 }
 
 const PLANNED_SOURCE_ID = "ride-planned-src";
@@ -42,7 +50,9 @@ export default function RideRouteMap({
     dropoffLng,
     locationTrail,
     pickupTrail,
+    pickupApprox,
     tripTrail,
+    plannedTrail,
 }: Props) {
     const containerRef = useRef<HTMLDivElement>(null);
     const mapRef = useRef<maplibregl.Map | null>(null);
@@ -52,7 +62,8 @@ export default function RideRouteMap({
 
         const hasPickupTrail = !!pickupTrail && pickupTrail.length > 1;
         const hasTripTrail = !!tripTrail && tripTrail.length > 1;
-        const hasPhaseTrails = hasPickupTrail || hasTripTrail;
+        const hasPlannedTrail = !!plannedTrail && plannedTrail.length > 1;
+        const hasPhaseTrails = hasPickupTrail || hasTripTrail || hasPlannedTrail;
 
         const map = new maplibregl.Map({
             container: containerRef.current,
@@ -82,10 +93,39 @@ export default function RideRouteMap({
                 .setPopup(new maplibregl.Popup({ closeButton: false, offset: 6 }).setText("Dropoff"))
                 .addTo(map);
 
+            // Road-following planned route (planned_route_polyline). Drawn
+            // as a gray dashed line — the "planned" reference, but real road
+            // geometry from the Directions API rather than a straight line.
+            if (hasPlannedTrail) {
+                map.addSource(PLANNED_SOURCE_ID, {
+                    type: "geojson",
+                    data: {
+                        type: "Feature",
+                        properties: {},
+                        geometry: {
+                            type: "LineString",
+                            coordinates: plannedTrail!.map((p) => [p.lng, p.lat]),
+                        },
+                    },
+                });
+                map.addLayer({
+                    id: PLANNED_LAYER_ID,
+                    type: "line",
+                    source: PLANNED_SOURCE_ID,
+                    layout: { "line-cap": "round", "line-join": "round" },
+                    paint: {
+                        "line-color": "#6b7280",
+                        "line-width": 3,
+                        "line-opacity": 0.7,
+                        "line-dasharray": ["literal", [2, 1.5]],
+                    },
+                });
+            }
+
             // Only draw the straight-line reference when we have no
-            // phase-specific GPS trail to render instead. When phase
-            // polylines are available the real road-following paths
-            // carry the visual; the dashed line would just be noise.
+            // phase-specific GPS trail (or planned route) to render instead.
+            // When real geometry is available it carries the visual; the
+            // dashed straight line would just be noise.
             if (!hasPhaseTrails) {
                 map.addSource(PLANNED_SOURCE_ID, {
                     type: "geojson",
@@ -133,7 +173,10 @@ export default function RideRouteMap({
                     paint: {
                         "line-color": "#f59e0b",
                         "line-width": 3,
-                        "line-opacity": 0.85,
+                        "line-opacity": pickupApprox ? 0.5 : 0.85,
+                        // Approximate (no GPS) → dashed so it reads as a
+                        // reference, not a recorded trace.
+                        ...(pickupApprox ? { "line-dasharray": ["literal", [2, 2]] } : {}),
                     },
                 });
             }
@@ -198,6 +241,7 @@ export default function RideRouteMap({
                 { lat: dropoffLat, lng: dropoffLng },
                 ...(pickupTrail ?? []).map((p) => ({ lat: p.lat, lng: p.lng })),
                 ...(tripTrail ?? []).map((p) => ({ lat: p.lat, lng: p.lng })),
+                ...(plannedTrail ?? []).map((p) => ({ lat: p.lat, lng: p.lng })),
                 ...(!hasPhaseTrails ? (locationTrail ?? []).map((p) => ({ lat: p.lat, lng: p.lng })) : []),
             ];
             fitBoundsToPoints(map, allPoints, 40);
@@ -207,7 +251,7 @@ export default function RideRouteMap({
             map.remove();
             mapRef.current = null;
         };
-    }, [pickupLat, pickupLng, dropoffLat, dropoffLng, locationTrail, pickupTrail, tripTrail]);
+    }, [pickupLat, pickupLng, dropoffLat, dropoffLng, locationTrail, pickupTrail, pickupApprox, tripTrail, plannedTrail]);
 
     return <div ref={containerRef} className="w-full h-[280px] rounded-xl overflow-hidden" />;
 }

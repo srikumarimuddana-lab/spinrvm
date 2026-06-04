@@ -1,0 +1,72 @@
+name: Fly TLS certificate (manual)
+
+# Manually attach + verify a TLS certificate for a custom hostname on the Fly
+# app, so api-spinr.spinr.ca serves HTTPS. Run this from the Actions tab after
+# the Cloudflare CNAME (-> spinr-backend-yyz.fly.dev, DNS-only) is in place.
+#
+# Requires the FLY_API_TOKEN GitHub secret (same one used by the other Fly
+# workflows). Idempotent — safe to re-run while the cert is still issuing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      hostname:
+        description: 'Custom hostname to add a cert for'
+        required: true
+        default: 'api-spinr.spinr.ca'
+        type: string
+
+jobs:
+  cert:
+    name: Add + verify Fly cert
+    runs-on: ubuntu-latest
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      FLY_APP: spinr-backend-yyz
+      HOST: ${{ inputs.hostname }}
+    steps:
+      - name: Verify FLY_API_TOKEN is set
+        run: |
+          if [ -z "${FLY_API_TOKEN}" ]; then
+            echo "::error title=Missing secret::FLY_API_TOKEN is not set."
+            exit 1
+          fi
+          echo "FLY_API_TOKEN is set."
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Add certificate (idempotent)
+        run: |
+          echo "Adding cert for ${HOST} on ${FLY_APP}…"
+          flyctl certs add "${HOST}" -a "${FLY_APP}" \
+            || echo "certs add returned non-zero (likely already exists) — continuing"
+
+      - name: Wait for issuance
+        run: |
+          for i in $(seq 1 20); do
+            echo "──────── attempt ${i}/20 ────────"
+            out="$(flyctl certs show "${HOST}" -a "${FLY_APP}" 2>&1 || true)"
+            echo "${out}"
+            if echo "${out}" | grep -qi "has been issued"; then
+              echo "✅ Certificate issued for ${HOST}."
+              exit 0
+            fi
+            echo "…not issued yet; waiting 15s"
+            sleep 15
+          done
+          echo "::error title=Cert not ready::No issuance after ~5 min."
+          echo "Check: CNAME ${HOST} -> ${FLY_APP}.fly.dev must be DNS-only (gray cloud)."
+          echo "Then re-run this workflow."
+          exit 1
+
+      - name: Probe HTTPS on the custom hostname
+        run: |
+          echo "Probing https://${HOST}/health …"
+          for i in $(seq 1 12); do
+            code="$(curl -sf --max-time 5 "https://${HOST}/health" -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")"
+            echo "  attempt ${i}/12 → HTTP ${code}"
+            [ "${code}" = "200" ] && { echo "✅ https://${HOST}/health is live."; exit 0; }
+            sleep 10
+          done
+          echo "::warning::Cert issued but HTTPS probe not 200 yet (edge propagation can lag a minute)."

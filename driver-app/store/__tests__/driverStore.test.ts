@@ -426,7 +426,8 @@ describe('driverStore — ride state machine', () => {
     expect(state.activeRide).toBeNull();
     expect(state.incomingRide).toBeNull();
     expect(mockApi.post).toHaveBeenCalledWith(
-      expect.stringContaining('ride-123/cancel')
+      expect.stringContaining('ride-123/cancel'),
+      { reason: 'Driver unavailable' }
     );
   });
 });

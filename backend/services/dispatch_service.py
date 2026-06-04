@@ -123,8 +123,12 @@ def filter_and_rank_drivers(
 
     No side effects. Safe to call from tests with hand-built dicts.
     """
-    pickup_lat = ride["pickup_lat"]
-    pickup_lng = ride["pickup_lng"]
+    # Match against the road-snapped pickup the driver will actually navigate to
+    # (pickup_nav_*) when present — for a pin dropped inside a mall/airport the
+    # reachable road point can be materially different, so ranking on the raw pin
+    # would filter out nearby drivers and produce wrong ETAs. Falls back to the pin.
+    pickup_lat = ride["pickup_nav_lat"] if ride.get("pickup_nav_lat") is not None else ride["pickup_lat"]
+    pickup_lng = ride["pickup_nav_lng"] if ride.get("pickup_nav_lng") is not None else ride["pickup_lng"]
     needs_rating = algorithm in ("rating_based", "combined")
 
     wav_required = bool(ride.get("requires_wav"))

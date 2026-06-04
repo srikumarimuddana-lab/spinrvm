@@ -3635,10 +3635,12 @@ async def rate_driver(
 @cancel_ride_limit
 async def cancel_ride_rider(
     ride_id: str,
+    reason: str = Query(""),
     request: Request = None,
     current_user: dict = Depends(get_current_user),
 ):
-    """Rider cancels the ride"""
+    """Rider cancels the ride. Optional `reason` is captured for the admin
+    Cancellation card (preset reason or free-text note from the rider app)."""
     try:
         from ..logging_utils import diag_logger  # type: ignore
     except ImportError:
@@ -3764,6 +3766,7 @@ async def cancel_ride_rider(
     # Migration 38 — attribution. Fall back to the legacy payload on
     # PGRST204 so the rider's cancel button never 503s if the column
     # isn't in prod yet.
+    _reason = (reason or "").strip() or None
     try:
         await db_supabase.update_ride(
             ride_id,
@@ -3771,6 +3774,7 @@ async def cancel_ride_rider(
                 **_base_update,
                 "cancelled_by": "rider",
                 "cancellation_type": "rider_cancel",
+                "cancellation_reason": _reason,
             },
         )
     except Exception as _col_exc:

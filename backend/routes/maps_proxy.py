@@ -31,6 +31,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 try:
     from ..dependencies import get_current_user
     from ..settings_loader import get_app_settings
+    from .. import db_supabase
     from ..utils.google_places_new import (
         PLACES_NEW_AUTOCOMPLETE_FIELD_MASK,
         PLACES_NEW_AUTOCOMPLETE_URL,
@@ -47,6 +48,7 @@ try:
 except ImportError:  # pragma: no cover - dual import path
     from dependencies import get_current_user  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
+    import db_supabase  # type: ignore
     from utils.google_places_new import (  # type: ignore
         PLACES_NEW_AUTOCOMPLETE_FIELD_MASK,
         PLACES_NEW_AUTOCOMPLETE_URL,
@@ -254,3 +256,57 @@ async def reverse_geocode(
         )
 
     return {"formatted_address": formatted, "cached": False}
+
+
+def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Great-circle distance in metres."""
+    import math
+
+    r = 6_371_000.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlmb = math.radians(lng2 - lng1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlmb / 2) ** 2
+    return r * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+@api_router.get("/pickup-points")
+@limiter.limit("120/minute")
+async def pickup_points(
+    request: Request,
+    lat: float = Query(..., ge=-90, le=90),
+    lng: float = Query(..., ge=-180, le=180),
+    current_user: dict = Depends(get_current_user),
+):
+    """Curated meeting points for a venue containing (lat,lng).
+
+    If the dropped pickup pin falls within an active venue's detection radius,
+    return that venue's named, driver-reachable pickup points so the rider can
+    pick where to meet (vs a pin a car can't reach, e.g. inside a mall).
+    Returns ``{"venue": null, "pickup_points": []}`` when no venue matches.
+    """
+    try:
+        venues = await db_supabase.get_rows("venues", {"is_active": True}, limit=2000)
+    except Exception as e:
+        logger.warning("[maps_proxy] pickup-points venue lookup failed: %s", e)
+        return {"venue": None, "pickup_points": []}
+
+    best = None
+    best_d = None
+    for v in venues or []:
+        clat, clng = v.get("center_lat"), v.get("center_lng")
+        if clat is None or clng is None:
+            continue
+        d = _haversine_m(lat, lng, float(clat), float(clng))
+        if d <= float(v.get("radius_m") or 150) and (best_d is None or d < best_d):
+            best, best_d = v, d
+
+    if not best:
+        return {"venue": None, "pickup_points": []}
+
+    pts = [
+        {"name": p.get("name"), "lat": p.get("lat"), "lng": p.get("lng")}
+        for p in (best.get("pickup_points") or [])
+        if p.get("lat") is not None and p.get("lng") is not None
+    ]
+    return {"venue": {"id": best.get("id"), "name": best.get("name")}, "pickup_points": pts}

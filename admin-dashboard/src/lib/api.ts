@@ -749,6 +749,27 @@ export const updateSettings = (data: any) =>
 /* ── Service Areas ────────────────────────── */
 export const getServiceAreas = () =>
     request<any[]>("/api/admin/service-areas");
+
+/* ── Pickup Venues ───────────────────────────── */
+export interface VenuePickupPoint { name: string; lat: number; lng: number; }
+export interface Venue {
+    id: string;
+    name: string;
+    center_lat: number;
+    center_lng: number;
+    radius_m: number;
+    pickup_points: VenuePickupPoint[];
+    service_area_id?: string | null;
+    is_active: boolean;
+}
+export type VenueUpsert = Omit<Venue, "id">;
+export const getVenues = () => request<{ venues: Venue[] }>("/api/admin/venues");
+export const createVenue = (body: VenueUpsert) =>
+    request<Venue>("/api/admin/venues", { method: "POST", body: JSON.stringify(body) });
+export const updateVenue = (id: string, body: VenueUpsert) =>
+    request<Venue>(`/api/admin/venues/${id}`, { method: "PUT", body: JSON.stringify(body) });
+export const deleteVenue = (id: string) =>
+    request<{ success: boolean }>(`/api/admin/venues/${id}`, { method: "DELETE" });
 export const createServiceArea = (data: any) =>
     request<any>("/api/admin/service-areas", {
         method: "POST",
@@ -1925,6 +1946,15 @@ export const getDriverAcceptanceRates = (dateRange = "30d", serviceAreaId?: stri
 export const getDriverOfferStats = (dateRange = "30d", serviceAreaId?: string) =>
     request<any>(`/api/admin/analytics/driver-offer-stats?date_range=${dateRange}${serviceAreaId ? `&service_area_id=${serviceAreaId}` : ''}`);
 
+export const getDriverOfferTrends = (dateRange = "30d", opts?: { driverId?: string; serviceAreaId?: string }) => {
+    const sp = new URLSearchParams({ date_range: dateRange });
+    if (opts?.driverId) sp.set("driver_id", opts.driverId);
+    if (opts?.serviceAreaId) sp.set("service_area_id", opts.serviceAreaId);
+    return request<{ date_range: string; driver_id: string | null; daily_chart: { date: string; offered: number; accepted: number; declined: number; ignored: number; preempted: number }[] }>(
+        `/api/admin/analytics/driver-offer-trends?${sp.toString()}`,
+    );
+};
+
 export const getDemandForecast = (hoursAhead = 24, areaId?: string) =>
     request<any>(`/api/admin/analytics/demand-forecast?hours_ahead=${hoursAhead}${areaId ? `&area_id=${areaId}` : ''}`);
 
@@ -2308,6 +2338,7 @@ export const bulkRetryPayouts = (body: BulkRetryPayoutsRequest) =>
  */
 export interface ZohoConfigStatus {
     enabled: boolean;
+    auto_sync_enabled?: boolean;
     data_center: string;
     org_id: string;
     default_department_id: string;
@@ -2322,6 +2353,7 @@ export interface ZohoConfigStatus {
 }
 export interface ZohoConfigUpdate {
     enabled?: boolean;
+    auto_sync_enabled?: boolean;
     data_center?: string;
     org_id?: string;
     default_department_id?: string;

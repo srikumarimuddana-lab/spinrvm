@@ -58,6 +58,11 @@ _MIN_POINTS = 5  # below this, snap-to-road isn't reliable
 
 # Google Roads snapToRoads
 _SNAP_TO_ROAD_URL = "https://roads.googleapis.com/v1/snapToRoads"
+# Google Roads nearestRoads — single-point snap for pickup coordinates.
+_NEAREST_ROADS_URL = "https://roads.googleapis.com/v1/nearestRoads"
+# If the nearest road is farther than this from the dropped pin, the snap is
+# probably wrong (huge lot, bad geocode) — keep the original coordinate.
+_MAX_SNAP_MOVE_M = 500.0
 _GOOGLE_MAX_POINTS = 100  # Google's hard limit
 
 # OSRM /match — default server max-matching-size is 100 coordinates/request.
@@ -337,6 +342,56 @@ async def compute_route(from_lat: float, from_lng: float, to_lat: float, to_lng:
         "eta_seconds": int(round(_num_or_zero(r0.get("duration")))),
         "distance_km": round(_num_or_zero(r0.get("distance")) / 1000.0, 3),
     }
+
+
+async def snap_to_road(lat: float, lng: float) -> Optional[Tuple[float, float]]:
+    """Snap a single (lat,lng) to the nearest drivable road point.
+
+    Riders sometimes drop the pickup pin inside a building/mall where no car can
+    stop. This returns a coordinate on the road network the driver can actually
+    reach. OSRM /nearest first (self-hosted, free), Google Roads nearestRoads
+    fallback. Returns (lat, lng) or None to keep the original (no provider
+    configured, the nearest road is implausibly far, or an error).
+    """
+    app_settings = await get_app_settings() or {}
+
+    # 1) OSRM /nearest — single-point snap, very fast on self-hosted infra.
+    osrm_url = (app_settings.get("osrm_url") or settings.OSRM_URL or "").strip()
+    if osrm_url:
+        try:
+            url = f"{osrm_url.rstrip('/')}/nearest/v1/driving/{lng},{lat}"  # OSRM is lng,lat
+            async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
+                resp = await client.get(url, params={"number": 1})
+            if resp.status_code == 200:
+                data = resp.json()
+                wps = data.get("waypoints") or []
+                if data.get("code") == "Ok" and wps:
+                    loc = wps[0].get("location") or []
+                    moved_m = _num_or_zero(wps[0].get("distance"))
+                    if len(loc) == 2 and moved_m <= _MAX_SNAP_MOVE_M:
+                        return round(float(loc[1]), 6), round(float(loc[0]), 6)
+        except Exception as e:
+            logger.warning("[route_distance] OSRM /nearest failed: %s", e)
+
+    # 2) Google Roads nearestRoads fallback.
+    api_key = (app_settings.get("google_maps_api_key") or "").strip()
+    if api_key:
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
+                resp = await client.get(_NEAREST_ROADS_URL, params={"points": f"{lat},{lng}", "key": api_key})
+            if resp.status_code == 200:
+                pts = (resp.json() or {}).get("snappedPoints") or []
+                if pts:
+                    loc = pts[0].get("location") or {}
+                    slat, slng = loc.get("latitude"), loc.get("longitude")
+                    if slat is not None and slng is not None:
+                        moved_m = _haversine_km(lat, lng, float(slat), float(slng)) * 1000.0
+                        if moved_m <= _MAX_SNAP_MOVE_M:
+                            return round(float(slat), 6), round(float(slng), 6)
+        except Exception as e:
+            logger.warning("[route_distance] Google nearestRoads failed: %s", e)
+
+    return None
 
 
 def _num_or_zero(v: Any) -> float:

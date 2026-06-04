@@ -213,7 +213,7 @@ interface RideState {
   selectVehicle: (vehicle: VehicleType) => void;
   createRide: (paymentMethod: string, corporateAccountId?: string | null, paymentMethodId?: string) => Promise<Ride>;
   fetchRide: (rideId: string) => Promise<void>;
-  cancelRide: () => Promise<void>;
+  cancelRide: (reason?: string) => Promise<void>;
   simulateDriverArrival: () => Promise<void>;
   fetchSavedAddresses: () => Promise<void>;
   addSavedAddress: (address: Omit<SavedAddress, 'id' | 'user_id'>) => Promise<void>;
@@ -655,13 +655,14 @@ export const useRideStore = create<RideState>((set, get) => ({
     }
   },
 
-  cancelRide: async () => {
+  cancelRide: async (reason?: string) => {
     const { currentRide } = get();
     if (!currentRide) return;
 
     try {
       set({ isLoading: true });
-      await api.post(`/rides/${currentRide.id}/cancel`);
+      const qs = reason && reason.trim() ? `?reason=${encodeURIComponent(reason.trim())}` : '';
+      await api.post(`/rides/${currentRide.id}/cancel${qs}`);
       set({ currentRide: null, currentDriver: null, isLoading: false });
       AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
     } catch (error: unknown) {

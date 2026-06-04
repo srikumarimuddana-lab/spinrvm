@@ -19,6 +19,7 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useLanguageStore } from '../../store/languageStore';
 import { showAlert } from '../AlertDialog';
+import CancelReasonSheet from '../CancelReasonSheet';
 
 interface Rider {
   first_name?: string;
@@ -61,7 +62,7 @@ interface ActiveRidePanelProps {
   onArriveAtPickup: () => void;
   onStartRide: () => void;
   onCompleteRide: () => void;
-  onCancelRide: () => void;
+  onCancelRide: (reason?: string) => void;
   routeEtaMinutes?: number | null;
   routeDistanceKm?: number | null;
   slideUpAnim: Animated.Value;
@@ -105,6 +106,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   const { colors } = useTheme();
   const { t } = useLanguageStore();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const [reasonVisible, setReasonVisible] = useState(false);
   const [waitSeconds, setWaitSeconds] = useState(0);
   const waitTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -180,7 +182,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           t('activeRide.cancelRideWarning'),
           [
             { text: t('activeRide.keepRide'), style: 'cancel' },
-            { text: t('activeRide.yesCancel'), style: 'destructive', onPress: onCancelRide },
+            { text: t('activeRide.yesCancel'), style: 'destructive', onPress: () => setReasonVisible(true) },
           ],
         );
       }
@@ -546,7 +548,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
               t('activeRide.cancelRideWarning'),
               [
                 { text: t('activeRide.keepRide'), style: 'cancel' },
-                { text: t('activeRide.yesCancel'), style: 'destructive', onPress: onCancelRide },
+                { text: t('activeRide.yesCancel'), style: 'destructive', onPress: () => setReasonVisible(true) },
               ],
             )}
           >
@@ -556,6 +558,12 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
       </View>
         </ScrollView>
 
+      <CancelReasonSheet
+        visible={reasonVisible}
+        message={t('activeRide.cancelRideWarning')}
+        onConfirm={(reason) => onCancelRide(reason)}
+        onClose={() => setReasonVisible(false)}
+      />
     </Animated.View>
   );
 };

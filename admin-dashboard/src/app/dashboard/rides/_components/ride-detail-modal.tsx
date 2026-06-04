@@ -449,7 +449,9 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                         <p className="text-[11px] text-amber-600 dark:text-amber-400">Includes {ride.surge_multiplier}× surge</p>
                                                     )}
                                                     <FR l="Booking fee" v={ride.booking_fee} />
-                                                    {!hasAreaFees && n(ride.airport_fee) > 0 && <FR l="Airport fee" v={ride.airport_fee} />}
+                                                    {/* airport_fee is charged/persisted separately from dynamic
+                                                     *  area fees, so always render it when present. */}
+                                                    {n(ride.airport_fee) > 0 && <FR l="Airport fee" v={ride.airport_fee} />}
                                                     {hasAreaFees && areaFees.map((f: any, i: number) => (
                                                         n(f.calculated_value) > 0 ? <FR key={i} l={f.name || "Area fee"} v={n(f.calculated_value)} /> : null
                                                     ))}
@@ -489,7 +491,8 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                             const tip = n(ride.tip_amount);
                                             const incentives = n(ride.incentive_total);
                                             const claims = Array.isArray(ride.incentive_claims) ? ride.incentive_claims : [];
-                                            const driverTotal = rideFare + tip + incentives;
+                                            const cancelFee = n(ride.cancellation_fee_driver); // driver income on cancellations
+                                            const driverTotal = rideFare + tip + incentives + cancelFee;
                                             // Platform revenue = booking + airport (admin_earnings) PLUS area fees
                                             // (Platform/Insurance/City/Infra) — these are collected in grand_total
                                             // but never written to admin_earnings, so add them here.
@@ -522,6 +525,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     <div className="border-t pt-3 space-y-1.5">
                                                         <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">Driver</p>
                                                         <FR l="Ride fare (100%)" v={rideFare} />
+                                                        {cancelFee > 0 && <FR l="Cancellation fee" v={cancelFee} />}
                                                         {tip > 0 && <FR l="Tip" v={tip} />}
                                                         {claims.length > 0
                                                             ? claims.map((c: any, i: number) => (

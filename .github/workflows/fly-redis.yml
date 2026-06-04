@@ -1,0 +1,88 @@
+name: Create Fly Redis + wire app (manual)
+
+# Creates a Fly-managed Upstash Redis and sets REDIS_URL / RATE_LIMIT_REDIS_URL /
+# WS_REDIS_URL on spinr-backend-yyz to its connection string (which restarts the
+# Machines so they pick it up). Run from the Actions tab.
+#
+# NOTE: Fly Upstash Redis is reachable only from Fly apps in this org — Railway
+# cannot use it. Keep Railway stopped while Fly is primary; Railway uses its own
+# Redis when it is the active failover. See docs/runbooks/railway-fly-failover.md.
+#
+# Requires the FLY_API_TOKEN GitHub secret. The connection string (with its
+# password) is captured in-job, masked in logs, and never written to outputs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      name:
+        description: 'Upstash Redis database name'
+        required: true
+        default: 'spinr-redis'
+        type: string
+      region:
+        description: 'Primary region'
+        required: true
+        default: 'yyz'
+        type: string
+
+jobs:
+  redis:
+    name: Create Redis + set secrets
+    runs-on: ubuntu-latest
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      FLY_APP: spinr-backend-yyz
+      FLY_ORG: spinr_backend
+      NAME: ${{ inputs.name }}
+      REGION: ${{ inputs.region }}
+    steps:
+      - name: Verify FLY_API_TOKEN is set
+        run: |
+          if [ -z "${FLY_API_TOKEN}" ]; then
+            echo "::error title=Missing secret::FLY_API_TOKEN is not set."
+            exit 1
+          fi
+          echo "FLY_API_TOKEN is set."
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Create Redis and wire secrets onto the app
+        run: |
+          echo "Creating Upstash Redis '${NAME}' in ${REGION} (org ${FLY_ORG})…"
+          # </dev/null so any interactive prompt fails fast instead of hanging.
+          out="$(flyctl redis create \
+                  --org "${FLY_ORG}" \
+                  --name "${NAME}" \
+                  --region "${REGION}" \
+                  --no-replicas \
+                  --enable-eviction </dev/null 2>&1 || true)"
+
+          # Capture + mask the connection string before printing anything.
+          url="$(printf '%s\n' "$out" | grep -oE 'redis(s)?://[^[:space:]]+' | head -n1)"
+          [ -n "$url" ] && echo "::add-mask::$url"
+          printf '%s\n' "$out" | sed -E 's#redis(s)?://[^[:space:]]+#redis://<masked>#g'
+
+          if [ -z "$url" ]; then
+            echo "::error title=No connection URL::Could not capture a redis:// URL."
+            echo "If the DB already exists, the URL is only shown at creation — recreate"
+            echo "with a new name, or run 'flyctl redis create' once locally and set the"
+            echo "three secrets manually. If a plan prompt appeared, create it in the Fly"
+            echo "dashboard, then set the secrets."
+            exit 1
+          fi
+
+          echo "Setting REDIS_URL / RATE_LIMIT_REDIS_URL / WS_REDIS_URL on ${FLY_APP}…"
+          flyctl secrets set \
+            REDIS_URL="$url" \
+            RATE_LIMIT_REDIS_URL="$url" \
+            WS_REDIS_URL="$url" \
+            -a "${FLY_APP}"
+          echo "✅ Redis created and wired. Machines will restart to pick it up."
+
+      - name: Confirm Redis connected
+        run: |
+          echo "Waiting for restart, then checking WS pub/sub in logs…"
+          sleep 25
+          flyctl logs -a "${FLY_APP}" --no-tail 2>/dev/null | grep -iE "pub/sub|redis" | tail -n 15 || true
+          echo "Look for: 'WS pub/sub started (backend=redis://…)'  → connected."

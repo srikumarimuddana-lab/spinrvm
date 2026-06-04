@@ -3217,17 +3217,24 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
-    # Geofence check - verify driver is within 200m of pickup location
+    # Geofence check - verify driver is within 200m of pickup location.
+    # Accept arrival within radius of EITHER the rider's exact pin OR the
+    # road-snapped nav point we actually navigated the driver to — for a pin
+    # dropped inside a mall/airport these can differ by more than the radius, and
+    # a driver who followed our navigation must not be rejected as too far.
     ARRIVAL_RADIUS_KM = 0.2  # 200 meters
     driver_lat = driver.get("lat", 0)
     driver_lng = driver.get("lng", 0)
-    pickup_lat = ride.get("pickup_lat", 0)
-    pickup_lng = ride.get("pickup_lng", 0)
+    targets = []
+    if ride.get("pickup_lat") and ride.get("pickup_lng"):
+        targets.append((ride["pickup_lat"], ride["pickup_lng"]))
+    if ride.get("pickup_nav_lat") is not None and ride.get("pickup_nav_lng") is not None:
+        targets.append((ride["pickup_nav_lat"], ride["pickup_nav_lng"]))
 
-    if driver_lat and driver_lng and pickup_lat and pickup_lng:
-        distance_to_pickup = calculate_distance(driver_lat, driver_lng, pickup_lat, pickup_lng)
-        if distance_to_pickup > ARRIVAL_RADIUS_KM:
-            distance_m = int(distance_to_pickup * 1000)
+    if driver_lat and driver_lng and targets:
+        nearest_km = min(calculate_distance(driver_lat, driver_lng, t[0], t[1]) for t in targets)
+        if nearest_km > ARRIVAL_RADIUS_KM:
+            distance_m = int(nearest_km * 1000)
             raise HTTPException(
                 status_code=400,
                 detail=f"You are {distance_m}m away from the pickup. "
@@ -4071,8 +4078,21 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
 async def cancel_ride(
     ride_id: str,
     reason: str = Query(""),
+    request: Request = None,
     current_user: dict = Depends(get_current_user),
 ):
+    # Prefer the reason from the JSON body so a free-text note never rides in the
+    # URL (proxy/access logs leak query strings). Fall back to legacy ?reason=.
+    _body_reason = None
+    if request is not None:
+        try:
+            _b = await request.json()
+            if isinstance(_b, dict):
+                _body_reason = _b.get("reason")
+        except Exception:
+            _body_reason = None
+    reason = (str(_body_reason).strip() if _body_reason else "") or reason
+
     driver = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
     )

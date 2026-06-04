@@ -661,8 +661,9 @@ export const useRideStore = create<RideState>((set, get) => ({
 
     try {
       set({ isLoading: true });
-      const qs = reason && reason.trim() ? `?reason=${encodeURIComponent(reason.trim())}` : '';
-      await api.post(`/rides/${currentRide.id}/cancel${qs}`);
+      // Send the reason in the body (not the URL) so a free-text note doesn't
+      // leak into proxy/access logs.
+      await api.post(`/rides/${currentRide.id}/cancel`, reason && reason.trim() ? { reason: reason.trim() } : {});
       set({ currentRide: null, currentDriver: null, isLoading: false });
       AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
     } catch (error: unknown) {

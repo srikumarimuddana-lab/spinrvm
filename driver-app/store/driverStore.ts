@@ -627,7 +627,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     cancelRide: async (rideId: string, reason?: string) => {
         set({ isLoading: true, isCancellingRide: true, error: null });
         try {
-            await api.post(`/drivers/rides/${rideId}/cancel?reason=${encodeURIComponent(reason || '')}`);
+            // Reason goes in the body (not the URL) so it can't leak into logs.
+            await api.post(`/drivers/rides/${rideId}/cancel`, reason && reason.trim() ? { reason: reason.trim() } : {});
             set({
                 rideState: 'idle',
                 activeRide: null,

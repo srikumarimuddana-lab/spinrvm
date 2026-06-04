@@ -709,8 +709,9 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             maps_key = app_settings.get("google_maps_api_key", "")
             eta_map = await batch_get_etas(
                 [d for d, _ in pre_filtered],
-                ride["pickup_lat"],
-                ride["pickup_lng"],
+                # ETA to the road-snapped pickup the driver actually drives to.
+                ride["pickup_nav_lat"] if ride.get("pickup_nav_lat") is not None else ride["pickup_lat"],
+                ride["pickup_nav_lng"] if ride.get("pickup_nav_lng") is not None else ride["pickup_lng"],
                 maps_key,
             )
             ranked = rank_by_eta_with_acceptance([(d, eta_map.get(d["id"], 9999)) for d, _ in pre_filtered])
@@ -3664,6 +3665,19 @@ async def cancel_ride_rider(
         from logging_utils import diag_logger  # type: ignore
 
     diag_logger.info(f"[CANCEL] called ride_id={ride_id} user_id={current_user.get('id')}")
+
+    # Prefer the reason from the JSON body — free-text notes must not ride in the
+    # URL query string (proxy/access logs, crash breadcrumbs leak it). Fall back
+    # to the legacy ?reason= for older app builds.
+    _body_reason = None
+    if request is not None:
+        try:
+            _b = await request.json()
+            if isinstance(_b, dict):
+                _body_reason = _b.get("reason")
+        except Exception:
+            _body_reason = None
+    reason = (str(_body_reason).strip() if _body_reason else "") or reason
 
     _cancellable_states = (
         "requested",

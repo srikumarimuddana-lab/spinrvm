@@ -175,7 +175,7 @@ describe('driverStore', () => {
 
       await useDriverStore.getState().cancelRide('ride-1', 'Rider not found');
 
-      expect(api.post).toHaveBeenCalledWith('/drivers/rides/ride-1/cancel?reason=Rider%20not%20found');
+      expect(api.post).toHaveBeenCalledWith('/drivers/rides/ride-1/cancel', { reason: 'Rider not found' });
       expect(useDriverStore.getState().rideState).toBe('idle');
       expect(useDriverStore.getState().activeRide).toBeNull();
     });

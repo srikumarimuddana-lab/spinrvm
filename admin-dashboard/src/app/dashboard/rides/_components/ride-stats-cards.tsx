@@ -1,13 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { getRideStats } from "@/lib/api";
+import { useEffect, useState, useCallback } from "react";
+import { getRideStats, getRideFinancials, type RideFinancialsPeriod } from "@/lib/api";
 import { formatCurrency } from "@/lib/utils";
 import {
-    CalendarCheck, CalendarMinus, CalendarRange, Calendar,
-    DollarSign, TrendingUp, CheckCircle, BarChart3,
+    Car, CheckCircle, DollarSign, BarChart3,
+    Banknote, Gift, Receipt, Ticket, Landmark, TrendingUp, TrendingDown, Coins,
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+
+const PERIODS: { value: RideFinancialsPeriod; label: string }[] = [
+    { value: "today", label: "Today" },
+    { value: "yesterday", label: "Yesterday" },
+    { value: "week", label: "This Week" },
+    { value: "month", label: "This Month" },
+];
 
 function StatCard({ icon: I, color, bg, label, value, sub, tooltip }: {
     icon: any; color: string; bg: string; label: string; value: string | number; sub?: string; tooltip: string;
@@ -51,82 +58,89 @@ function RevenueCard({ icon: I, color, bg, label, value, tooltip }: {
 }
 
 export default function RideStatsCards() {
-    const [stats, setStats] = useState<any>(null);
+    const [period, setPeriod] = useState<RideFinancialsPeriod>("today");
+    const [fin, setFin] = useState<any>(null);
+    const [loading, setLoading] = useState(true);
 
-    useEffect(() => {
-        getRideStats().then(setStats).catch(() => {});
+    const load = useCallback(async (p: RideFinancialsPeriod) => {
+        setLoading(true);
+        try {
+            setFin(await getRideFinancials(p));
+        } catch { /* keep previous */ } finally {
+            setLoading(false);
+        }
     }, []);
 
-    if (!stats) return (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            {Array.from({ length: 4 }).map((_, i) => (
-                <div key={i} className="bg-card border rounded-xl p-4 h-[76px] animate-pulse">
-                    <div className="flex items-center gap-3.5">
-                        <div className="w-11 h-11 rounded-xl bg-muted" />
-                        <div className="space-y-2 flex-1">
-                            <div className="h-5 w-12 rounded bg-muted" />
-                            <div className="h-3 w-16 rounded bg-muted" />
-                        </div>
-                    </div>
-                </div>
-            ))}
-        </div>
-    );
+    useEffect(() => { load(period); }, [period, load]);
+
+    const f = fin || {};
+    const platformAfterNeg = (f.platform_after_promo ?? 0) < 0;
 
     return (
         <div className="space-y-3">
-            {/* Ride Count Stats */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                <StatCard icon={CalendarCheck}
-                    color="text-blue-600 dark:text-blue-400"
-                    bg="bg-blue-100 dark:bg-blue-900/30"
-                    label="Today's Rides" value={stats.today_count}
-                    tooltip={`${stats.today_count} ride${stats.today_count !== 1 ? "s" : ""} created today so far`} />
-                <StatCard icon={CalendarMinus}
-                    color="text-amber-600 dark:text-amber-400"
-                    bg="bg-amber-100 dark:bg-amber-900/30"
-                    label="Yesterday" value={stats.yesterday_count}
-                    tooltip={`${stats.yesterday_count} ride${stats.yesterday_count !== 1 ? "s" : ""} created yesterday`} />
-                <StatCard icon={CalendarRange}
-                    color="text-emerald-600 dark:text-emerald-400"
-                    bg="bg-emerald-100 dark:bg-emerald-900/30"
-                    label="This Week" value={stats.this_week_count}
-                    sub={`${stats.week_start} – ${stats.week_end}`}
-                    tooltip={`${stats.this_week_count} rides from ${stats.week_start} to ${stats.week_end} (Mon–Sun)`} />
-                <StatCard icon={Calendar}
-                    color="text-violet-600 dark:text-violet-400"
-                    bg="bg-violet-100 dark:bg-violet-900/30"
-                    label="This Month" value={stats.this_month_count}
-                    sub={`${stats.month_start} – ${stats.month_end}`}
-                    tooltip={`${stats.this_month_count} rides from ${stats.month_start} to ${stats.month_end}`} />
+            {/* Period pills */}
+            <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="inline-flex rounded-lg border border-border bg-card p-0.5">
+                    {PERIODS.map((opt) => (
+                        <button key={opt.value} type="button" onClick={() => setPeriod(opt.value)}
+                            className={`px-3 py-1.5 text-xs font-semibold rounded transition-colors ${
+                                period === opt.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                            }`}>
+                            {opt.label}
+                        </button>
+                    ))}
+                </div>
+                {f.label && <p className="text-xs text-muted-foreground">{f.label}{loading ? " · updating…" : ""}</p>}
             </div>
 
-            {/* Revenue & Performance Stats */}
+            {/* Operations */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                <RevenueCard icon={DollarSign}
-                    color="text-emerald-600 dark:text-emerald-400"
-                    bg="bg-emerald-100 dark:bg-emerald-900/30"
-                    label="Today Revenue"
-                    value={formatCurrency(stats.today_revenue || 0)}
-                    tooltip={`Total fare from ${stats.today_completed} completed ride${stats.today_completed !== 1 ? "s" : ""} today`} />
-                <RevenueCard icon={TrendingUp}
-                    color="text-amber-600 dark:text-amber-400"
-                    bg="bg-amber-100 dark:bg-amber-900/30"
-                    label="Today Tips"
-                    value={formatCurrency(stats.today_tips || 0)}
-                    tooltip="Total tips collected from completed rides today" />
-                <RevenueCard icon={CheckCircle}
-                    color="text-blue-600 dark:text-blue-400"
-                    bg="bg-blue-100 dark:bg-blue-900/30"
-                    label="Completed Today"
-                    value={String(stats.today_completed || 0)}
-                    tooltip={`${stats.today_completed} ride${stats.today_completed !== 1 ? "s" : ""} successfully completed today`} />
-                <RevenueCard icon={DollarSign}
-                    color="text-violet-600 dark:text-violet-400"
-                    bg="bg-violet-100 dark:bg-violet-900/30"
-                    label="Month Revenue"
-                    value={formatCurrency(stats.month_revenue || 0)}
-                    tooltip={`Revenue from all completed rides this month (${stats.month_start} – ${stats.month_end})`} />
+                <StatCard icon={Car} color="text-blue-600 dark:text-blue-400" bg="bg-blue-100 dark:bg-blue-900/30"
+                    label="Rides" value={f.rides_count ?? 0}
+                    tooltip={`${f.rides_count ?? 0} rides created in this period`} />
+                <StatCard icon={CheckCircle} color="text-emerald-600 dark:text-emerald-400" bg="bg-emerald-100 dark:bg-emerald-900/30"
+                    label="Completed" value={f.completed_count ?? 0}
+                    tooltip={`${f.completed_count ?? 0} rides completed in this period`} />
+                <StatCard icon={Banknote} color="text-emerald-600 dark:text-emerald-400" bg="bg-emerald-100 dark:bg-emerald-900/30"
+                    label="Actual Sale (rider paid)" value={formatCurrency(f.rider_paid ?? 0)}
+                    tooltip="What riders were actually charged (grand total, after promo)" />
+                <StatCard icon={DollarSign} color="text-teal-600 dark:text-teal-400" bg="bg-teal-100 dark:bg-teal-900/30"
+                    label="Gross Fare" value={formatCurrency(f.gross_fare ?? 0)}
+                    tooltip="Ride fare subtotal before area fees, tax and promo" />
+            </div>
+
+            {/* Where the money goes */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <RevenueCard icon={Car} color="text-emerald-600 dark:text-emerald-400" bg="bg-emerald-100 dark:bg-emerald-900/30"
+                    label="Driver Revenue" value={formatCurrency(f.driver_revenue ?? 0)}
+                    tooltip="Ride fare paid to drivers (100% — base + distance + time)" />
+                <RevenueCard icon={TrendingUp} color="text-amber-600 dark:text-amber-400" bg="bg-amber-100 dark:bg-amber-900/30"
+                    label="Tips" value={formatCurrency(f.tips ?? 0)}
+                    tooltip="Tips collected — 100% to drivers" />
+                <RevenueCard icon={Gift} color="text-pink-600 dark:text-pink-400" bg="bg-pink-100 dark:bg-pink-900/30"
+                    label="Incentives" value={formatCurrency(f.incentives ?? 0)}
+                    tooltip="Platform-funded driver bonuses paid in this period" />
+                <RevenueCard icon={Receipt} color="text-slate-600 dark:text-slate-400" bg="bg-slate-100 dark:bg-slate-800/50"
+                    label="GST Collected" value={formatCurrency(f.gst_collected ?? 0)}
+                    tooltip="Tax collected from riders — pass-through, remitted by drivers" />
+            </div>
+
+            {/* Platform books */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <RevenueCard icon={Ticket} color="text-violet-600 dark:text-violet-400" bg="bg-violet-100 dark:bg-violet-900/30"
+                    label="Promo Applied" value={formatCurrency(f.promo_applied ?? 0)}
+                    tooltip="Total promo discount absorbed by the platform" />
+                <RevenueCard icon={Coins} color="text-indigo-600 dark:text-indigo-400" bg="bg-indigo-100 dark:bg-indigo-900/30"
+                    label="Area Fees" value={formatCurrency(f.area_fees ?? 0)}
+                    tooltip="Platform / Insurance / City / Infrastructure fees collected" />
+                <RevenueCard icon={Landmark} color="text-blue-600 dark:text-blue-400" bg="bg-blue-100 dark:bg-blue-900/30"
+                    label="Platform Sales (pre-promo)" value={formatCurrency(f.platform_before_promo ?? 0)}
+                    tooltip="Booking + airport + area fees, before incentives/promo" />
+                <RevenueCard icon={platformAfterNeg ? TrendingDown : TrendingUp}
+                    color={platformAfterNeg ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}
+                    bg={platformAfterNeg ? "bg-red-100 dark:bg-red-900/30" : "bg-emerald-100 dark:bg-emerald-900/30"}
+                    label="Platform Net (post-promo)" value={formatCurrency(f.platform_after_promo ?? 0)}
+                    tooltip="Platform sales after subtracting incentives funded and promo absorbed" />
             </div>
         </div>
     );

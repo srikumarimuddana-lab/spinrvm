@@ -112,8 +112,8 @@ export default function RideStatsCards() {
             {/* Where the money goes */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 <RevenueCard icon={Car} color="text-emerald-600 dark:text-emerald-400" bg="bg-emerald-100 dark:bg-emerald-900/30"
-                    label="Driver Revenue" value={formatCurrency(f.driver_revenue ?? 0)}
-                    tooltip="Ride fare paid to drivers (100% — base + distance + time)" />
+                    label="Driver Revenue (all-in)" value={formatCurrency(f.driver_take ?? 0)}
+                    tooltip={`Driver all-in take: ride fare ${formatCurrency(f.driver_revenue ?? 0)} + tips ${formatCurrency(f.tips ?? 0)} + incentives ${formatCurrency(f.incentives ?? 0)}`} />
                 <RevenueCard icon={TrendingUp} color="text-amber-600 dark:text-amber-400" bg="bg-amber-100 dark:bg-amber-900/30"
                     label="Tips" value={formatCurrency(f.tips ?? 0)}
                     tooltip="Tips collected — 100% to drivers" />

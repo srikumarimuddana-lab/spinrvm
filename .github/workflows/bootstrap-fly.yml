@@ -66,10 +66,13 @@ jobs:
       # Idempotent: succeeds whether or not the app already exists.
       - name: Create app if missing
         run: |
+          echo "── Orgs visible to this FLY_API_TOKEN (use one of these slugs) ──"
+          flyctl orgs list || echo "(could not list orgs — token may be app/deploy-scoped)"
+          echo "────────────────────────────────────────────────────────────────"
           if flyctl status -a "${FLY_APP}" >/dev/null 2>&1; then
             echo "App ${FLY_APP} already exists — skipping create."
           else
-            echo "Creating app ${FLY_APP} in org ${{ inputs.org }}…"
+            echo "Creating app ${FLY_APP} in org '${{ inputs.org }}'…"
             flyctl apps create "${FLY_APP}" --org "${{ inputs.org }}"
           fi
 

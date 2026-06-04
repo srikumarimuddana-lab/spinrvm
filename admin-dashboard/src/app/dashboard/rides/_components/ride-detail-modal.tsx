@@ -792,21 +792,26 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     const d = (new Date(o.responded_at).getTime() - new Date(o.offered_at).getTime()) / 1000;
                                                     return Number.isFinite(d) && d >= 0 ? d : null;
                                                 };
-                                                const counts = ride.offers.reduce((acc: Record<string, number>, o: any) => {
+                                                const counts = offers.reduce((acc: Record<string, number>, o: any) => {
                                                     const k = o.status === "expired" ? "ignored" : (o.status || "pending");
                                                     acc[k] = (acc[k] || 0) + 1; return acc;
                                                 }, {});
+                                                const summary = [
+                                                    { k: "received", lbl: "Received", v: offers.length, cls: "text-foreground" },
+                                                    { k: "accepted", lbl: "Accepted", v: counts.accepted || 0, cls: "text-emerald-600 dark:text-emerald-400" },
+                                                    { k: "declined", lbl: "Rejected", v: counts.declined || 0, cls: "text-red-600 dark:text-red-400" },
+                                                    { k: "ignored", lbl: "Ignored", v: counts.ignored || 0, cls: "text-amber-600 dark:text-amber-400" },
+                                                    { k: "preempted", lbl: "Preempted", v: counts.preempted || 0, cls: "text-blue-600 dark:text-blue-400" },
+                                                ];
                                                 return (
                                                     <>
-                                                        <div className="flex flex-wrap gap-2 mb-1">
-                                                            {[["accepted", "Accepted"], ["declined", "Declined"], ["ignored", "Ignored"], ["preempted", "Preempted"], ["pending", "Pending"]].map(([k, lbl]) =>
-                                                                counts[k] ? (
-                                                                    <span key={k} className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-muted/60">
-                                                                        {lbl}: {counts[k]}
-                                                                    </span>
-                                                                ) : null
-                                                            )}
-                                                            <span className="text-[11px] font-semibold text-foreground px-2 py-0.5 ml-auto">Offered to {offers.length} driver{offers.length === 1 ? "" : "s"}</span>
+                                                        <div className="grid grid-cols-5 gap-2 mb-2">
+                                                            {summary.map((s) => (
+                                                                <div key={s.k} className="rounded-lg bg-muted/50 px-2 py-2 text-center">
+                                                                    <p className={`text-lg font-extrabold tabular-nums leading-none ${s.cls}`}>{s.v}</p>
+                                                                    <p className="text-[10px] text-muted-foreground mt-1">{s.lbl}</p>
+                                                                </div>
+                                                            ))}
                                                         </div>
                                                         {offers.map((o: any, i: number) => {
                                                             const meta = OFFER_META[o.status] || OFFER_META.pending;

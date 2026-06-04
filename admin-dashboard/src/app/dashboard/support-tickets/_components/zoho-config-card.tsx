@@ -43,6 +43,7 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
     const [testing, setTesting] = useState(false);
 
     const [enabled, setEnabled] = useState(false);
+    const [autoSync, setAutoSync] = useState(false);
     const [dataCenter, setDataCenter] = useState("ca");
     const [orgId, setOrgId] = useState("");
     const [departmentId, setDepartmentId] = useState("");
@@ -56,6 +57,7 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
             const s = await getZohoConfig();
             setStatus(s);
             setEnabled(s.enabled);
+            setAutoSync(!!s.auto_sync_enabled);
             setDataCenter(s.data_center || "ca");
             setOrgId(s.org_id || "");
             setDepartmentId(s.default_department_id || "");
@@ -77,6 +79,7 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
         try {
             const body: Record<string, unknown> = {
                 enabled,
+                auto_sync_enabled: autoSync,
                 data_center: dataCenter,
                 org_id: orgId,
                 default_department_id: departmentId,
@@ -140,6 +143,16 @@ export function ZohoConfigCard({ onSaved }: { onSaved?: (s: ZohoConfigStatus) =>
                         <p className="text-sm text-muted-foreground">Turn the Help Desk on for staff.</p>
                     </div>
                     <Switch checked={enabled} onCheckedChange={setEnabled} />
+                </div>
+
+                <div className="flex items-center justify-between rounded-lg border p-3">
+                    <div>
+                        <p className="font-medium">Auto-sync from Zoho</p>
+                        <p className="text-sm text-muted-foreground">
+                            When off, tickets sync only when you press “Sync now”. Leave off to avoid frequent background pulls.
+                        </p>
+                    </div>
+                    <Switch checked={autoSync} onCheckedChange={setAutoSync} disabled={!enabled} />
                 </div>
 
                 <div className="grid gap-4 sm:grid-cols-2">

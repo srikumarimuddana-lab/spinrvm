@@ -178,10 +178,17 @@ async def run_sync() -> Dict[str, Any]:
 
 
 async def zoho_desk_sync_loop() -> None:
-    """Background loop: sync every SYNC_INTERVAL_SECONDS. Replay-safe (upsert)."""
+    """Background loop: sync every SYNC_INTERVAL_SECONDS. Replay-safe (upsert).
+
+    Gated on zoho_desk_config.auto_sync_enabled (default false). Manual "Sync
+    now" (run_sync via the admin endpoint) is unaffected — only this periodic
+    pull is opt-in.
+    """
     while True:
         try:
-            await run_sync()
+            cfg = await db_supabase.find_one(_CONFIG_TABLE, {"id": _CONFIG_ID})
+            if cfg and cfg.get("enabled") and cfg.get("auto_sync_enabled"):
+                await run_sync()
         except ZohoDeskError as e:
             # Integration not configured / scope issue — warn, keep looping.
             logger.warning("Zoho Desk sync skipped: %s", e.message)

@@ -2317,6 +2317,7 @@ export const bulkRetryPayouts = (body: BulkRetryPayoutsRequest) =>
  */
 export interface ZohoConfigStatus {
     enabled: boolean;
+    auto_sync_enabled?: boolean;
     data_center: string;
     org_id: string;
     default_department_id: string;
@@ -2331,6 +2332,7 @@ export interface ZohoConfigStatus {
 }
 export interface ZohoConfigUpdate {
     enabled?: boolean;
+    auto_sync_enabled?: boolean;
     data_center?: string;
     org_id?: string;
     default_department_id?: string;

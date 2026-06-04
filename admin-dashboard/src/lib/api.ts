@@ -749,6 +749,27 @@ export const updateSettings = (data: any) =>
 /* ── Service Areas ────────────────────────── */
 export const getServiceAreas = () =>
     request<any[]>("/api/admin/service-areas");
+
+/* ── Pickup Venues ───────────────────────────── */
+export interface VenuePickupPoint { name: string; lat: number; lng: number; }
+export interface Venue {
+    id: string;
+    name: string;
+    center_lat: number;
+    center_lng: number;
+    radius_m: number;
+    pickup_points: VenuePickupPoint[];
+    service_area_id?: string | null;
+    is_active: boolean;
+}
+export type VenueUpsert = Omit<Venue, "id">;
+export const getVenues = () => request<{ venues: Venue[] }>("/api/admin/venues");
+export const createVenue = (body: VenueUpsert) =>
+    request<Venue>("/api/admin/venues", { method: "POST", body: JSON.stringify(body) });
+export const updateVenue = (id: string, body: VenueUpsert) =>
+    request<Venue>(`/api/admin/venues/${id}`, { method: "PUT", body: JSON.stringify(body) });
+export const deleteVenue = (id: string) =>
+    request<{ success: boolean }>(`/api/admin/venues/${id}`, { method: "DELETE" });
 export const createServiceArea = (data: any) =>
     request<any>("/api/admin/service-areas", {
         method: "POST",

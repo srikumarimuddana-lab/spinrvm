@@ -321,6 +321,33 @@ class TestAdminSettingsValidation:
             )
         assert resp.status_code in (200, 422, 500)  # 422/500 acceptable from deep deps
 
+    def test_email_api_keys_masked_on_get(self):
+        """Both the Resend key and the legacy SendGrid key must be masked.
+
+        Migration 110 leaves the sendgrid_api_key column in place, and
+        get_app_settings() merges every DB column into the GET response, so a
+        still-populated legacy key would round-trip in plaintext unless it
+        stays in the credential mask set. Regression guard for PR #1573.
+        """
+        try:
+            from routes.admin.settings import _mask_credentials
+        except ImportError:
+            from backend.routes.admin.settings import _mask_credentials
+
+        masked = _mask_credentials(
+            {
+                "resend_api_key": "re_live_supersecretvalue",
+                "sendgrid_api_key": "SG.legacysupersecretvalue",
+                "company_name": "Spinr",
+            }
+        )
+        assert masked["resend_api_key"].endswith("*****")
+        assert "supersecret" not in masked["resend_api_key"]
+        assert masked["sendgrid_api_key"].endswith("*****")
+        assert "supersecret" not in masked["sendgrid_api_key"]
+        # Non-credential fields pass through untouched.
+        assert masked["company_name"] == "Spinr"
+
 
 # ---------------------------------------------------------------------------
 # Service area surge cap (A-P2-4 regression)

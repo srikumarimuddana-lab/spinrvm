@@ -1,3 +1,16 @@
+# Fly.io backend (Toronto/yyz). Deploys in parallel with Railway from main via
+# .github/workflows/deploy-fly.yml. Failover/cutover is a Cloudflare CNAME swap —
+# see docs/runbooks/railway-fly-failover.md and docs/adr/007-fly-primary-railway-standby.md.
+#
+# Secrets (SUPABASE_*, JWT_SECRET, ADMIN_PASSWORD, FIREBASE_*, REDIS_URL,
+# RATE_LIMIT_REDIS_URL, WS_REDIS_URL, ALLOWED_ORIGINS) are NOT set here — they
+# come from `fly secrets set` and must be byte-identical to Railway. The Redis
+# URLs point at a stable DNS alias (e.g. redis.spinr.ca) so the backend can be
+# repointed without a redeploy. Only non-secret config lives in [env] below.
+#
+# UVICORN_WORKERS stays at 2: 4 workers on shared-cpu-1x/1gb is memory-tight, and
+# worker count is a capacity knob only — the 16 background loops are replay-safe
+# per process (atomic DB claims / idempotency keys / Redis leader locks).
 app = "spinr-backend-yyz"
 primary_region = "yyz"
 kill_signal = "SIGINT"

@@ -372,13 +372,15 @@ export default function RideInvoice({ rideId, status }: Props) {
     };
 
     return (
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+            {/* Rendered on the colored gradient hero — use solid/translucent
+             *  white pills so the actions stay legible on any status color. */}
             <button onClick={handleSend} disabled={sending}
-                className="flex items-center gap-1 text-xs font-semibold text-primary hover:bg-primary/10 px-2.5 py-1.5 rounded-lg disabled:opacity-50">
+                className="flex items-center gap-1.5 text-xs font-semibold bg-white/20 hover:bg-white/30 text-white px-3 py-1.5 rounded-lg transition-colors backdrop-blur-sm disabled:opacity-50 disabled:cursor-not-allowed">
                 <Send className="h-3.5 w-3.5" /> {sending ? "Sending..." : "Send Invoice"}
             </button>
             <button onClick={handleDownload} disabled={downloading}
-                className="flex items-center gap-1 text-xs font-semibold text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 px-2.5 py-1.5 rounded-lg disabled:opacity-50">
+                className="flex items-center gap-1.5 text-xs font-semibold bg-white text-emerald-700 hover:bg-white/90 px-3 py-1.5 rounded-lg shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
                 <Download className="h-3.5 w-3.5" /> {downloading ? "Generating..." : "Download PDF"}
             </button>
         </div>

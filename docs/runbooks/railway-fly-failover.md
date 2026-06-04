@@ -29,9 +29,18 @@ api-spinr.spinr.ca                 redis.spinr.ca
 
 ## One-time: deploy commands run automatically
 
-`.github/workflows/deploy-fly.yml` deploys Fly on every push to `main`, in
-parallel with `.github/workflows/deploy-backend.yml` for Railway. You only run
-the commands below for the first bring-up or a manual drill.
+Two workflows mean you never need flyctl locally:
+
+- **`.github/workflows/bootstrap-fly.yml`** (manual `workflow_dispatch`) — creates
+  the app, sets all secrets from GitHub Actions secrets, then deploys and scales.
+  Run this once to launch (or again to rotate secrets). Needs an **org-scoped**
+  `FLY_API_TOKEN` (`fly tokens create org`) plus the production values stored as
+  GitHub secrets (`SUPABASE_URL`, `JWT_SECRET`, `ADMIN_EMAIL`, `REDIS_URL`, … —
+  see that workflow's header for the full list).
+- **`.github/workflows/deploy-fly.yml`** — deploys Fly on every push to `main`, in
+  parallel with `.github/workflows/deploy-backend.yml` for Railway.
+
+The manual flyctl commands below are equivalent, for a local bring-up or a drill.
 
 ## Fly.io app setup
 

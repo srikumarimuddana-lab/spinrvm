@@ -470,7 +470,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           <View style={styles.actions}>
             <TouchableOpacity
               style={[styles.actionPrimary, { backgroundColor: colors.primary }]}
-              onPress={() => openMapsNavigation(ride.pickup_lat, ride.pickup_lng, 'Pickup')}
+              onPress={() => openMapsNavigation((ride as any).pickup_nav_lat ?? ride.pickup_lat, (ride as any).pickup_nav_lng ?? ride.pickup_lng, 'Pickup')}
               accessibilityRole="button"
               accessibilityLabel={t('activeRide.navigateToPickup')}
             >

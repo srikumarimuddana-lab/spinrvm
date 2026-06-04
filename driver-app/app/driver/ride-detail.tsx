@@ -53,6 +53,10 @@ export default function RideDetailScreen() {
 
     const hasPickup = ride?.pickup_lat && ride?.pickup_lng;
     const hasDropoff = ride?.dropoff_lat && ride?.dropoff_lng;
+    // Drive to the road-snapped pickup when present (rider may have pinned a
+    // spot inside a mall a car can't reach); fall back to the rider's pin.
+    const navPickupLat = (ride as any)?.pickup_nav_lat ?? ride?.pickup_lat;
+    const navPickupLng = (ride as any)?.pickup_nav_lng ?? ride?.pickup_lng;
 
     const mapRegion = useMemo(() => {
         if (!ride) return { latitude: 52.1332, longitude: -106.67, latitudeDelta: 0.03, longitudeDelta: 0.03 };
@@ -168,7 +172,7 @@ export default function RideDetailScreen() {
                             >
                                 {savedPolyline.length < 2 && GOOGLE_MAPS_API_KEY && (
                                     <MapViewDirections
-                                        origin={{ latitude: ride.pickup_lat, longitude: ride.pickup_lng }}
+                                        origin={{ latitude: navPickupLat, longitude: navPickupLng }}
                                         destination={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }}
                                         apikey={GOOGLE_MAPS_API_KEY}
                                         strokeWidth={0}
@@ -206,7 +210,7 @@ export default function RideDetailScreen() {
                                         />
                                     ));
                                 })()}
-                                <Marker coordinate={{ latitude: ride.pickup_lat, longitude: ride.pickup_lng }} anchor={{ x: 0.5, y: 0.5 }}>
+                                <Marker coordinate={{ latitude: navPickupLat, longitude: navPickupLng }} anchor={{ x: 0.5, y: 0.5 }}>
                                     <View style={[styles.markerDot, { backgroundColor: '#10B981' }]}>
                                         <Ionicons name="location" size={14} color="#fff" />
                                     </View>

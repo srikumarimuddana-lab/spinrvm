@@ -874,6 +874,9 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             "dropoff_address": ride.get("dropoff_address"),
             "pickup_lat": ride.get("pickup_lat"),
             "pickup_lng": ride.get("pickup_lng"),
+            # Road-snapped pickup for driver navigation (falls back to pickup_*).
+            "pickup_nav_lat": ride.get("pickup_nav_lat"),
+            "pickup_nav_lng": ride.get("pickup_nav_lng"),
             "dropoff_lat": ride.get("dropoff_lat"),
             "dropoff_lng": ride.get("dropoff_lng"),
             "fare": ride.get("driver_earnings"),
@@ -2100,6 +2103,20 @@ async def create_ride(
     )
 
     ride_data = ride.dict()
+    # Snap the pickup to the nearest drivable road so the driver can always reach
+    # it — the rider may have dropped the pin inside a mall/building. Best-effort:
+    # the rider's exact pin (pickup_lat/lng) is untouched; on failure pickup_nav
+    # stays NULL and readers fall back to pickup_lat/lng.
+    try:
+        try:
+            from ..utils.route_distance import snap_to_road
+        except ImportError:
+            from utils.route_distance import snap_to_road  # type: ignore
+        _snapped = await snap_to_road(body.pickup_lat, body.pickup_lng)
+        if _snapped:
+            ride_data["pickup_nav_lat"], ride_data["pickup_nav_lng"] = _snapped
+    except Exception:
+        logger.warning("pickup snap_to_road failed; using original pin", exc_info=True)
     if body.corporate_account_id:
         ride_data["corporate_account_id"] = body.corporate_account_id
     if _corp_member_id:

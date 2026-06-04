@@ -279,8 +279,8 @@ jobs:
       - name: Build admin dashboard
         working-directory: admin-dashboard
         env:
-          BACKEND_URL: https://api.spinr.ca
-          NEXT_PUBLIC_API_URL: https://api.spinr.ca
+          BACKEND_URL: https://api-spinr.spinr.ca
+          NEXT_PUBLIC_API_URL: https://api-spinr.spinr.ca
         run: npm run build
 
   # E2E Tests — blocking on main, non-blocking on PRs while the suite stabilises ([17-1])

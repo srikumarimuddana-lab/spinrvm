@@ -199,7 +199,7 @@ full checklist with driver-specific emphasis:
 - [ ] iOS `PrivacyInfo.xcprivacy` declares location + file-timestamp + user-defaults use
 - [ ] Crash-free user rate > 99.5% for past 14 days
 - [ ] App Check enforced; unattested requests rejected by backend
-- [ ] TLS pinning to `api.spinr.ca` configured; backup pin present
+- [ ] TLS pinning to `api-spinr.spinr.ca` configured; backup pin present
 - [ ] SBOM generated for current release → `reports/sbom/driver-vX.Y.Z.cdx.json`
 
 ---

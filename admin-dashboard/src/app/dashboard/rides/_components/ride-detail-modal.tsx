@@ -778,22 +778,30 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                             const meta = OFFER_META[o.status] || OFFER_META.pending;
                                                             const rs = respSecs(o);
                                                             return (
-                                                                <div key={`${o.driver_id}-${i}`} className="flex items-center gap-2.5 bg-muted/40 rounded-lg p-2.5">
-                                                                    <meta.Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                                                                    <span className="text-xs font-semibold truncate flex-1">{o.driver_name || o.driver_id?.slice(0, 12)}</span>
-                                                                    {o.driver_rating != null && (
-                                                                        <span className="flex items-center gap-0.5 text-[11px] text-muted-foreground">
-                                                                            <Star className="h-3 w-3 text-amber-400 fill-amber-400" />{Number(o.driver_rating).toFixed(1)}
-                                                                        </span>
-                                                                    )}
-                                                                    {typeof o.eta_seconds === "number" && (
-                                                                        <span className="text-[11px] text-muted-foreground tabular-nums">{Math.round(o.eta_seconds)}s ETA</span>
-                                                                    )}
-                                                                    {rs != null && (
-                                                                        <span className="text-[11px] text-muted-foreground tabular-nums">replied {rs < 60 ? `${Math.round(rs)}s` : `${Math.round(rs / 60)}m`}</span>
-                                                                    )}
-                                                                    <span className="text-[10px] text-muted-foreground tabular-nums">{fmtTime(o.offered_at)}</span>
-                                                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${meta.cls}`}>{meta.label}</span>
+                                                                <div key={`${o.driver_id}-${i}`} className="bg-muted/40 rounded-lg p-2.5">
+                                                                    <div className="flex items-center gap-2.5">
+                                                                        <meta.Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                                                        <span className="text-xs font-semibold truncate flex-1">{o.driver_name || o.driver_id?.slice(0, 12)}</span>
+                                                                        {o.driver_rating != null && (
+                                                                            <span className="flex items-center gap-0.5 text-[11px] text-muted-foreground">
+                                                                                <Star className="h-3 w-3 text-amber-400 fill-amber-400" />{Number(o.driver_rating).toFixed(1)}
+                                                                            </span>
+                                                                        )}
+                                                                        {typeof o.eta_seconds === "number" && (
+                                                                            <span className="text-[11px] text-muted-foreground tabular-nums">{Math.round(o.eta_seconds)}s ETA</span>
+                                                                        )}
+                                                                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${meta.cls}`}>{meta.label}</span>
+                                                                    </div>
+                                                                    <div className="flex items-center flex-wrap gap-x-3 gap-y-0.5 mt-1 pl-6 text-[10px] text-muted-foreground tabular-nums">
+                                                                        <span>Offered {fmtTime(o.offered_at)}</span>
+                                                                        {o.responded_at && (
+                                                                            <span>
+                                                                                {o.status === "accepted" ? "Accepted" : o.status === "declined" ? "Declined" : "Closed"} {fmtTime(o.responded_at)}
+                                                                                {rs != null && ` (${rs < 60 ? `${Math.round(rs)}s` : `${Math.round(rs / 60)}m`})`}
+                                                                            </span>
+                                                                        )}
+                                                                        {!o.responded_at && o.status === "expired" && <span>Timed out (no response)</span>}
+                                                                    </div>
                                                                 </div>
                                                             );
                                                         })}

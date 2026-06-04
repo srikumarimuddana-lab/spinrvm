@@ -7,6 +7,8 @@ import {
   ActivityIndicator,
   Platform,
   TextInput,
+  Modal,
+  ScrollView,
   useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -58,6 +60,8 @@ export default function ConfirmPickupScreen() {
   const [address, setAddress] = useState(pickup?.address ?? '');
   const [geocoding, setGeocoding] = useState(false);
   const [distanceM, setDistanceM] = useState(0);
+  const [checking, setChecking] = useState(false);
+  const [chooser, setChooser] = useState<{ venue: string; points: { name: string; lat: number; lng: number }[] } | null>(null);
 
   const isTooFar = distanceM > PICKUP_RADIUS_M;
 
@@ -84,10 +88,30 @@ export default function ConfirmPickupScreen() {
     geocodeTimeout.current = setTimeout(() => reverseGeocode(r.latitude, r.longitude), 400);
   }, [reverseGeocode]);
 
-  const handleConfirm = () => {
-    setPickup({ address, lat: region.latitude, lng: region.longitude });
-    setRiderNotes(note.trim());
+  const proceed = (lat: number, lng: number, addr: string, noteValue: string) => {
+    setPickup({ address: addr, lat, lng });
+    setRiderNotes(noteValue.trim());
     router.push('/ride-options');
+  };
+
+  const handleConfirm = async () => {
+    // If the pin is inside a known venue (mall/airport), let the rider pick a
+    // curated, driver-reachable meeting point instead of an unreachable pin.
+    setChecking(true);
+    try {
+      const { data } = await api.get<{ venue: { name: string } | null; pickup_points: { name: string; lat: number; lng: number }[] }>(
+        `/maps/pickup-points?lat=${region.latitude}&lng=${region.longitude}`,
+      );
+      if (data?.venue && Array.isArray(data.pickup_points) && data.pickup_points.length > 0) {
+        setChooser({ venue: data.venue.name, points: data.pickup_points });
+        setChecking(false);
+        return;
+      }
+    } catch {
+      // No venue match / lookup failed → fall through to the plain pin.
+    }
+    setChecking(false);
+    proceed(region.latitude, region.longitude, address, note);
   };
 
   const handleRecenter = () => {
@@ -210,17 +234,53 @@ export default function ConfirmPickupScreen() {
 
         {/* Confirm button */}
         <TouchableOpacity
-          style={[styles.confirmBtn, geocoding && styles.confirmBtnDisabled]}
+          style={[styles.confirmBtn, (geocoding || checking) && styles.confirmBtnDisabled]}
           onPress={handleConfirm}
-          disabled={geocoding}
+          disabled={geocoding || checking}
           activeOpacity={0.8}
           accessibilityRole="button"
           accessibilityLabel="Confirm pickup location"
         >
-          <Text style={styles.confirmBtnText}>Confirm pickup</Text>
-          <Ionicons name="arrow-forward" size={20} color="#FFF" />
+          <Text style={styles.confirmBtnText}>{checking ? 'Checking…' : 'Confirm pickup'}</Text>
+          {!checking && <Ionicons name="arrow-forward" size={20} color="#FFF" />}
         </TouchableOpacity>
       </View>
+
+      {/* Curated venue pickup-point chooser */}
+      <Modal visible={!!chooser} transparent animationType="slide" onRequestClose={() => setChooser(null)}>
+        <TouchableOpacity style={styles.chooserBackdrop} activeOpacity={1} onPress={() => setChooser(null)} />
+        <View style={styles.chooserSheet}>
+          <View style={styles.chooserHandle} />
+          <Text style={styles.chooserTitle}>{chooser?.venue}</Text>
+          <Text style={styles.chooserSubtitle}>Pick where to meet your driver — these are spots a car can reach.</Text>
+          <ScrollView style={{ maxHeight: 320 }}>
+            {(chooser?.points ?? []).map((p, i) => (
+              <TouchableOpacity
+                key={`${p.name}-${i}`}
+                style={styles.chooserRow}
+                activeOpacity={0.7}
+                onPress={() => {
+                  const label = `${chooser?.venue} — ${p.name}`;
+                  setChooser(null);
+                  proceed(p.lat, p.lng, label, note.trim() || p.name);
+                }}
+              >
+                <Ionicons name="location-outline" size={20} color={colors.primary} />
+                <Text style={styles.chooserRowText}>{p.name}</Text>
+                <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity
+              style={[styles.chooserRow, { opacity: 0.8 }]}
+              activeOpacity={0.7}
+              onPress={() => { setChooser(null); proceed(region.latitude, region.longitude, address, note); }}
+            >
+              <Ionicons name="pin-outline" size={20} color={colors.textDim} />
+              <Text style={[styles.chooserRowText, { color: colors.textDim }]}>Use my exact pin instead</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -385,6 +445,33 @@ function createStyles(colors: ThemeColors, sf: (s: number) => number, insets: { 
       fontFamily: 'PlusJakartaSans_400Regular',
       color: colors.textDim,
     },
+    chooserBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)' },
+    chooserSheet: {
+      position: 'absolute',
+      bottom: 0,
+      left: 0,
+      right: 0,
+      backgroundColor: colors.surface,
+      borderTopLeftRadius: 24,
+      borderTopRightRadius: 24,
+      paddingHorizontal: 20,
+      paddingTop: 10,
+      paddingBottom: Math.max(insets.bottom, 16) + 8,
+    },
+    chooserHandle: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border, marginBottom: 12 },
+    chooserTitle: { fontSize: sf(18), fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text },
+    chooserSubtitle: { fontSize: sf(13), fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim, marginTop: 2, marginBottom: 12 },
+    chooserRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      paddingVertical: 14,
+      paddingHorizontal: 12,
+      borderRadius: 12,
+      backgroundColor: colors.surfaceLight,
+      marginBottom: 8,
+    },
+    chooserRowText: { flex: 1, fontSize: sf(15), fontFamily: 'PlusJakartaSans_500Medium', color: colors.text },
     noteInput: {
       borderWidth: 1,
       borderColor: colors.border,

@@ -483,7 +483,7 @@ class TestAdminUpdateDriver:
         assert writes["users"]["first_name"] == "New"
         assert writes["users"]["last_name"] == "Driver"
 
-    def test_409_when_user_field_but_no_linked_user(self):
+    def test_409_when_user_only_field_but_no_linked_user(self):
         from fastapi import HTTPException
 
         from backend.routes.admin import drivers as admin_drivers
@@ -504,6 +504,83 @@ class TestAdminUpdateDriver:
                     )
                 )
         assert exc.value.status_code == 409
+
+    def test_orphaned_driver_can_edit_mirrored_fields(self):
+        """An orphaned driver (no user_id) must still be editable for fields
+        mirrored on `drivers` (name/phone); only email/gender 409."""
+        from backend.routes.admin import drivers as admin_drivers
+
+        driver = _driver(user_id=None)
+        update_mock = AsyncMock(return_value=driver)
+
+        with (
+            patch("backend.routes.admin.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("backend.routes.admin.drivers.db_supabase.update_one", update_mock),
+            patch("backend.routes.admin.drivers._log_driver_activity", AsyncMock()),
+        ):
+            asyncio.run(
+                admin_drivers.admin_update_driver(
+                    driver_id=DRIVER_ID,
+                    updates={"first_name": "Jane", "city": "Regina"},
+                    admin=ADMIN_USER,
+                )
+            )
+
+        writes = {call.args[0]: call.args[2] for call in update_mock.call_args_list}
+        # No users row to touch; drivers gets the mirrored + driver-only fields.
+        assert "users" not in writes
+        assert writes["drivers"]["first_name"] == "Jane"
+        assert writes["drivers"]["city"] == "Regina"
+
+    def test_null_name_part_not_rendered_as_literal_none(self):
+        from backend.routes.admin import drivers as admin_drivers
+
+        driver = _driver(first_name="Alice", last_name="Smith")
+        update_mock = AsyncMock(return_value=driver)
+
+        with (
+            patch("backend.routes.admin.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("backend.routes.admin.drivers.db_supabase.update_one", update_mock),
+            patch("backend.routes.admin.drivers._log_driver_activity", AsyncMock()),
+        ):
+            asyncio.run(
+                admin_drivers.admin_update_driver(
+                    driver_id=DRIVER_ID,
+                    updates={"last_name": None},
+                    admin=ADMIN_USER,
+                )
+            )
+
+        writes = {call.args[0]: call.args[2] for call in update_mock.call_args_list}
+        assert writes["drivers"]["name"] == "Alice"
+        assert "None" not in writes["drivers"]["name"]
+
+    def test_account_row_written_before_driver_row(self):
+        """Ordering guard: the canonical users row is written before the
+        drivers mirror, so a failed second write leaves the preferred state."""
+        from backend.routes.admin import drivers as admin_drivers
+
+        driver = _driver()
+        order = []
+
+        async def _record(table, _filters, _payload):
+            order.append(table)
+            return driver
+
+        with (
+            patch("backend.routes.admin.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("backend.routes.admin.drivers.db_supabase.update_one", _record),
+            patch("backend.routes.admin.drivers._log_driver_activity", AsyncMock()),
+        ):
+            asyncio.run(
+                admin_drivers.admin_update_driver(
+                    driver_id=DRIVER_ID,
+                    updates={"email": "new@example.com", "city": "Regina"},
+                    admin=ADMIN_USER,
+                )
+            )
+
+        assert order == ["users", "drivers"]
 
 
 class TestAdminVerifyDriver:

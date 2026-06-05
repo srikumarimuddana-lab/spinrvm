@@ -157,8 +157,28 @@ async def _verify_admin_payload(payload: dict) -> "dict | None":
         return None
     user_id = payload["user_id"]
     jti = payload.get("jti")
-    if jti and await redis_get(f"admin:revoked:{jti}"):
-        raise HTTPException(status_code=401, detail="ERR_TOKEN_REVOKED")
+    if jti:
+        # Per-JTI revocation denylist is a Redis FAST-PATH for single-session
+        # logout. When Redis (Upstash) is unreachable we fail OPEN on this one
+        # check rather than locking every admin out of the live dashboard on a
+        # cache blip — the industry-standard "degrade auth on cache-dependency
+        # failure, keep the authoritative control" pattern (Uber/Lyft/Netflix).
+        # It's safe because the AUTHORITATIVE revocation for staff —
+        # /auth/logout-all — bumps admin_staff.token_version, verified below
+        # against the DB (no Redis). Every cryptographic / audience / expiry /
+        # account-active check also still runs. Worst case during an outage: a
+        # single explicitly-revoked token stays usable until it expires. Logged
+        # loudly so the degraded decision is auditable.
+        try:
+            _jti_revoked = await redis_get(f"admin:revoked:{jti}")
+        except Exception as _revoke_err:
+            logger.error(
+                "[auth] admin revocation denylist unreachable (Redis down) — "
+                f"failing OPEN for jti={jti}; DB token_version still enforced: {_revoke_err}"
+            )
+            _jti_revoked = None
+        if _jti_revoked:
+            raise HTTPException(status_code=401, detail="ERR_TOKEN_REVOKED")
     if user_id != "admin-001":
         staff_rows = await db_supabase.get_rows("admin_staff", {"id": user_id}, limit=1)
         staff = staff_rows[0] if staff_rows else None

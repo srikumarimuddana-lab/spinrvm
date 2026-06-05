@@ -786,10 +786,14 @@ async def websocket_endpoint(
                             mocked=last_pt.get("mocked"),
                         )
                         if trusted:
-                            await manager.update_driver_location(driver_id, _lat, _lng)
+                            # Authoritative DB write first; the ephemeral Redis
+                            # cache is best-effort and must not gate it (mirrors
+                            # the single-ping handler — a Redis blip on the cache
+                            # previously skipped persistence and hid the marker).
                             await db_supabase.update_driver_location(
                                 driver_id, _lat, _lng, heading=last_pt.get("heading")
                             )
+                            await manager.update_driver_location(driver_id, _lat, _lng)
                             await mark_present(driver_id)
 
                             # Fan-out latest batch position to riders — the single-ping

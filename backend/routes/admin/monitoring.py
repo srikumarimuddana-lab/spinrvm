@@ -315,10 +315,29 @@ async def get_redis_health(
     ]
     prefixes_with_meta.sort(key=lambda x: x["count"], reverse=True)
 
-    # Live connectivity probe — PING + pub/sub round-trip on every configured
-    # Redis URL. This is what tells you "Redis up but pub/sub broken" (the
-    # failure mode that breaks cross-replica admin live-monitoring on Upstash),
-    # which get_redis_stats's INFO snapshot can't see. Best-effort.
+    return {
+        "stats": stats,
+        "prefix_counts": prefixes_with_meta,
+        "flushable_prefixes": sorted(_FLUSHABLE_PREFIXES),
+    }
+
+
+@router.get("/redis/connectivity")
+async def get_redis_connectivity(
+    current_admin: dict = Depends(get_admin_user),
+) -> Dict[str, Any]:
+    """Live connectivity probe — PING + pub/sub round-trip on every configured
+    Redis URL. This is what tells you "Redis up but pub/sub broken" (the
+    failure mode that breaks cross-replica admin live-monitoring on Upstash),
+    which get_redis_stats's INFO snapshot can't see.
+
+    Deliberately a SEPARATE endpoint from `/redis`: each probe opens Redis
+    clients and runs SUBSCRIBE/PUBLISH/receive per URL, which costs
+    connection/request quota (and can hang when pub/sub is slow — exactly the
+    Upstash failure being debugged). The dashboard polls `/redis` every ~10s
+    but only calls this on page load + manual refresh, so the expensive probe
+    is never on the poll loop. Best-effort.
+    """
     connectivity: List[Dict[str, Any]] = []
     try:
         try:
@@ -340,12 +359,7 @@ async def get_redis_health(
     except Exception as exc:
         connectivity = [{"label": "probe", "status": "error", "error": str(exc)}]
 
-    return {
-        "stats": stats,
-        "prefix_counts": prefixes_with_meta,
-        "flushable_prefixes": sorted(_FLUSHABLE_PREFIXES),
-        "connectivity": connectivity,
-    }
+    return {"connectivity": connectivity}
 
 
 class FlushPrefixRequest(BaseModel):

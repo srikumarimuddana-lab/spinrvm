@@ -91,7 +91,7 @@ Ruff replaces `flake8` + `black` + `isort` in a single tool, 10–100× faster. 
 New `smoke-test` job appended to `ci.yml`:
 - `needs: [deploy-backend]`
 - `if: false` — disabled until deploys are re-activated (mirrors existing deploy job pattern)
-- Three curl steps hitting both `$RAILWAY_PUBLIC_URL` and `spinr-api.onrender.com` fallback:
+- Three curl steps hitting both `$RAILWAY_PUBLIC_URL` and `api-spinr.spinr.ca`:
   1. `GET /health`
   2. `GET /api/v1/settings`
   3. `GET /api/v1/vehicle-types`

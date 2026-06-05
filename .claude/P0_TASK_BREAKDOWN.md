@@ -28,7 +28,7 @@
 - **Steps**:
   1. GitHub Action should auto-trigger on main merge
   2. Monitor Railway dashboard for deployment status
-  3. Verify backend is live: `curl https://spinr-api.railway.app/health`
+  3. Verify backend is live: `curl https://api-spinr.spinr.ca/health`
 
 ### P1-4: Smoke Test All Three Surfaces
 - **Owner**: QA
@@ -42,7 +42,7 @@
 **Verification**:
 ```bash
 # Backend health
-curl https://spinr-api.railway.app/health
+curl https://api-spinr.spinr.ca/health
 # Should return 200 { "status": "ok" }
 ```
 

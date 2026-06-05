@@ -592,7 +592,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     env:
       BASE: ${{ secrets.RAILWAY_PUBLIC_URL }}
-      FALLBACK: https://spinr-api.onrender.com
+      FALLBACK: https://api-spinr.spinr.ca
     steps:
       - name: Resolve live base URL
         id: resolve

@@ -77,7 +77,7 @@ Look for:
 
 Verify the driver app is pointing at the correct backend URL. The Expo env var is
 `EXPO_PUBLIC_BACKEND_URL`. In production this must be the deployed API base URL (e.g.
-`https://spinr-api.up.railway.app`).
+`https://api-spinr.spinr.ca`).
 
 ### Step 3 — Check FCM token validity
 

@@ -1,6 +1,6 @@
 # Spinr API Reference
 
-**Base URL:** `https://spinr-api.railway.app` (production) · `http://localhost:8000` (dev)
+**Base URL:** `https://api-spinr.spinr.ca` (production) · `http://localhost:8000` (dev)
 
 **Interactive docs:** `GET /docs` (Swagger UI) · `GET /redoc` (ReDoc) · `GET /openapi.json` (raw spec)
 

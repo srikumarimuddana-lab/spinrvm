@@ -63,11 +63,35 @@ class _WSPubSub:
         self._task: Optional[asyncio.Task] = None
         self._manager: Any = None
         self._url: str = ""
+        # Last connect/subscribe failure reason, surfaced to the admin
+        # WS-health card so "fan-out is local-only" comes with a why.
+        # Never holds the URL (which carries the password).
+        self._last_error: Optional[str] = None
 
     @property
     def active(self) -> bool:
         """True iff we have a live Redis connection and a running consumer."""
         return self._redis is not None and self._task is not None and not self._task.done()
+
+    def status(self) -> dict:
+        """Snapshot of cross-replica fan-out health on THIS replica.
+
+        ``active`` True means this process holds a live Redis subscription and
+        a running consumer, so broadcasts published by *other* replicas reach
+        the admin sockets connected here. False means local-only delivery —
+        the admin live map only sees clients on this same worker, which is the
+        failure mode when Redis is unreachable. ``configured`` distinguishes
+        "no Redis URL set (single-machine by design)" from "URL set but the
+        connection failed" (see ``last_error``).
+        """
+        scheme = self._url.split("://", 1)[0] if self._url else ""
+        return {
+            "active": self.active,
+            "channel": CHANNEL,
+            "backend_scheme": scheme,
+            "configured": bool(self._url),
+            "last_error": self._last_error,
+        }
 
     async def start(self, manager: Any, redis_url: str) -> bool:
         """Connect to Redis, subscribe to the channel, spawn the consumer.
@@ -92,6 +116,7 @@ class _WSPubSub:
             await client.ping()
         except Exception as e:
             # Never log the URL; it contains the password.
+            self._last_error = f"connect: {type(e).__name__}"
             logger.error(f"WS pub/sub: could not connect to Redis ({type(e).__name__}) — falling back to local-only")
             return False
 
@@ -103,11 +128,13 @@ class _WSPubSub:
             self._pubsub = client.pubsub()
             await self._pubsub.subscribe(CHANNEL)
         except Exception as e:
+            self._last_error = f"subscribe: {type(e).__name__}"
             logger.error(f"WS pub/sub: subscribe failed: {e}")
             await self._safe_close_pubsub()
             await self._safe_close_redis()
             return False
 
+        self._last_error = None
         self._task = asyncio.create_task(self._consumer(), name="ws_pubsub_consumer")
         scheme = redis_url.split("://", 1)[0]
         logger.info(f"WS pub/sub started (backend={scheme}://…, channel={CHANNEL})")

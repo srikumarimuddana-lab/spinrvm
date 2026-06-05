@@ -96,6 +96,25 @@ class ConnectionManager:
         if not self._has_sockets_for_user(user_id):
             self._user_msg_timestamps.pop(user_id, None)
 
+    def connection_stats(self) -> Dict[str, int]:
+        """Count active sockets on THIS replica, bucketed by client type.
+
+        Keys are ``{client_type}_{user_id}`` (see routes/websocket.py), so we
+        bucket on the prefix. With multiple uvicorn workers each process holds
+        its own ``active_connections`` dict, so these counts are per-replica,
+        not fleet-wide — the admin WS-health card labels them that way.
+        """
+        counts = {"total": 0, "admins": 0, "drivers": 0, "riders": 0}
+        for key in self.active_connections:
+            counts["total"] += 1
+            if key.startswith("admin_"):
+                counts["admins"] += 1
+            elif key.startswith("driver_"):
+                counts["drivers"] += 1
+            elif key.startswith("rider_"):
+                counts["riders"] += 1
+        return counts
+
     def note_user_message(
         self,
         user_id: str,

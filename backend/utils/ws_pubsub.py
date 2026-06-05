@@ -70,8 +70,17 @@ class _WSPubSub:
 
     @property
     def active(self) -> bool:
-        """True iff we have a live Redis connection and a running consumer."""
-        return self._redis is not None and self._task is not None and not self._task.done()
+        """True iff we have a live Redis connection, a live subscription, and
+        a running consumer.
+
+        ``_pubsub`` is included deliberately: after a runtime Redis drop a
+        failed ``_reconnect()`` nulls ``_pubsub`` but leaves the consumer task
+        looping in backoff, so checking only ``_redis``/``_task`` would report
+        "Live" while this replica is no longer subscribed to the fan-out
+        channel. Tying ``active`` to the subscription keeps the health endpoint
+        honest during a reconnect-failure window.
+        """
+        return self._redis is not None and self._pubsub is not None and self._task is not None and not self._task.done()
 
     def status(self) -> dict:
         """Snapshot of cross-replica fan-out health on THIS replica.
@@ -111,6 +120,13 @@ class _WSPubSub:
             logger.warning("WS pub/sub: redis package not installed; single-machine mode")
             return False
 
+        # Record that fan-out is *configured* before we attempt the connection,
+        # so status() reports configured=True (and the right scheme) even when
+        # the connect/subscribe below fails. Otherwise a Redis-unreachable
+        # backend would mislabel itself "single-machine" and suppress the
+        # degraded banner — the exact state we built this to surface.
+        self._url = redis_url
+
         try:
             client = redis_asyncio.from_url(redis_url, decode_responses=True)
             await client.ping()
@@ -122,7 +138,6 @@ class _WSPubSub:
 
         self._redis = client
         self._manager = manager
-        self._url = redis_url
 
         try:
             self._pubsub = client.pubsub()

@@ -78,3 +78,49 @@ def test_status_configured_but_disconnected_reports_reason():
     assert s["last_error"] == "connect: TimeoutError"
     # The snapshot must never leak the password-bearing URL.
     assert "secretpassword" not in str(s)
+
+
+def test_active_requires_live_subscription():
+    """Regression for the Codex finding: after a failed reconnect drops the
+    subscription, `_pubsub` is None but the consumer task keeps looping in
+    backoff. `active` must be False (degraded), not True ("Live")."""
+    ps = _WSPubSub()
+    ps._redis = MagicMock()
+    task = MagicMock()
+    task.done.return_value = False
+    ps._task = task
+
+    ps._pubsub = None  # reconnect closed the subscription, consumer still looping
+    assert ps.active is False
+
+    ps._pubsub = MagicMock()  # resubscribed
+    assert ps.active is True
+
+
+@pytest.mark.anyio
+async def test_start_reports_configured_when_connect_fails(monkeypatch):
+    """Regression for the Codex finding: a configured-but-unreachable Redis
+    must report configured=True (so the degraded banner shows), not be
+    mislabelled single-machine because `_url` was only set on success."""
+
+    async def _bad_ping():
+        raise OSError("redis unreachable")
+
+    bad_client = MagicMock()
+    bad_client.ping = _bad_ping
+
+    fake_asyncio = MagicMock()
+    fake_asyncio.from_url = MagicMock(return_value=bad_client)
+    monkeypatch.setitem(sys.modules, "redis", MagicMock())
+    monkeypatch.setitem(sys.modules, "redis.asyncio", fake_asyncio)
+
+    ps = _WSPubSub()
+    ok = await ps.start(MagicMock(), "rediss://default:secretpassword@redis.example.com:6379")
+
+    assert ok is False
+    s = ps.status()
+    assert s["configured"] is True
+    assert s["active"] is False
+    assert s["backend_scheme"] == "rediss"
+    assert s["last_error"].startswith("connect:")
+    assert "secretpassword" not in str(s)

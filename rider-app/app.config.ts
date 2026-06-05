@@ -13,7 +13,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     icon: './assets/images/icon.png',
     scheme: SCHEME,
     userInterfaceStyle: 'automatic',
-    newArchEnabled: false, // disabled: pre-launch stability over perf; re-enable post go-live as a planned migration
+    newArchEnabled: true, // REQUIRED: react-native-reanimated 4 / react-native-worklets only run on the New Architecture (old arch crashed on first animated screen)
     updates: {
         url: 'https://u.expo.dev/63b5d645-e787-4f47-8289-d879ca6c51a4',
     },
@@ -21,7 +21,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // 'fingerprint'/'appVersion' rejected by EAS CLI). Bump manually when
     // shipping native changes that break JS-bundle compatibility. Pre-launch
     // with no production users, OTA compatibility risk is zero.
-    runtimeVersion: '1.0.0',
+    runtimeVersion: '2.0.0', // bumped from 1.0.0: New Architecture is a native/JS-bundle break — old-arch installs must not pull this OTA
     splash: {
         image: './assets/images/spinr-logo.png',
         resizeMode: 'contain',

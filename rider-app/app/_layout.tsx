@@ -157,6 +157,14 @@ export default function RootLayout() {
     const t = setTimeout(() => setMinSplashElapsed(true), SPLASH_MIN_DISPLAY_MS);
     return () => clearTimeout(t);
   }, []);
+  // True once the loading gate below has cleared and <Stack> is actually mounted,
+  // so router navigation targets a live navigator. The cold-start
+  // notification-routing and ride-resume effects must wait for this: the branded
+  // splash hold keeps <Stack> unmounted for up to SPLASH_MIN_DISPLAY_MS even
+  // after auth/location finish, so pushing on isAuthInitialized alone would fire
+  // before the navigator exists and the navigation would be silently dropped.
+  const navReady =
+    fontsLoaded && !fontError && isAuthInitialized && isLocationInitialized && minSplashElapsed;
   const [stripePublishableKey, setStripePublishableKey] = useState<string | null>(null);
   const [trackBaseUrl, setTrackBaseUrl] = useState<string | null>(null);
   const fcmRegisteredRef = useRef(false);
@@ -412,9 +420,10 @@ export default function RootLayout() {
     };
   }, [isAuthInitialized]);
 
-  // Killed-state notification tap routing
+  // Killed-state notification tap routing — gated on navReady so the push lands
+  // after <Stack> has mounted (the branded-splash hold delays mount up to 3s).
   useEffect(() => {
-    if (!isAuthInitialized || !canUseNotifications || !Notifications) return;
+    if (!navReady || !canUseNotifications || !Notifications) return;
     let timer: ReturnType<typeof setTimeout>;
     (async () => {
       try {
@@ -430,11 +439,12 @@ export default function RootLayout() {
       }
     })();
     return () => clearTimeout(timer);
-  }, [isAuthInitialized]);
+  }, [navReady]);
 
-  // Cold-start ride resume
+  // Cold-start ride resume — gated on navReady so the push targets a mounted
+  // navigator (the 3s branded-splash hold delays <Stack> mount past auth/location).
   useEffect(() => {
-    if (!isAuthInitialized || !isLocationInitialized) return;
+    if (!navReady) return;
     const timer = setTimeout(() => {
       const ride = useRideStore.getState().currentRide;
       if (!ride?.id) return;
@@ -452,7 +462,7 @@ export default function RootLayout() {
       }
     }, 200);
     return () => clearTimeout(timer);
-  }, [isAuthInitialized, isLocationInitialized]);
+  }, [navReady]);
 
   // Foreground resume: track background duration + re-check active ride
   useEffect(() => {

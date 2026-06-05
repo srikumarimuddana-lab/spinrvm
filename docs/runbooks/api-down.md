@@ -18,7 +18,7 @@ unreachable or returning 5xx errors to clients.
 
 - Rider or driver app shows "Cannot connect" / network error
 - Admin dashboard returns blank or 502/503
-- Health endpoint returns non-200: `GET https://spinr-api.up.railway.app/health`
+- Health endpoint returns non-200: `GET https://api-spinr.spinr.ca/health`
 - Sentry shows a sudden spike in unhandled exceptions
 
 ---
@@ -40,10 +40,10 @@ unreachable or returning 5xx errors to clients.
 
 ```bash
 # Railway primary
-curl -f https://spinr-api.up.railway.app/health
+curl -f https://api-spinr.spinr.ca/health
 
 # Render fallback
-curl -f https://spinr-api.onrender.com/health
+curl -f https://api-spinr.spinr.ca/health
 ```
 
 Expected response: `{"status": "ok"}` with HTTP 200.
@@ -158,13 +158,13 @@ Dashboard → spinr-backend → Environment → add/update the variable → Save
 
 ```bash
 # 1. Health check
-curl -f https://spinr-api.up.railway.app/health
+curl -f https://api-spinr.spinr.ca/health
 
 # 2. Settings endpoint (verifies DB connection)
-curl -f https://spinr-api.up.railway.app/api/v1/settings
+curl -f https://api-spinr.spinr.ca/api/v1/settings
 
 # 3. Vehicle types (lightweight read query)
-curl -f https://spinr-api.up.railway.app/api/v1/vehicle-types
+curl -f https://api-spinr.spinr.ca/api/v1/vehicle-types
 ```
 
 All three should return 200 before closing the incident.

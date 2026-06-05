@@ -73,7 +73,7 @@ Set them in `rider-app/.env` (local) or as EAS build secrets for production buil
 | Variable | Required | Default | Description | How to obtain |
 |----------|----------|---------|-------------|---------------|
 | `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` | Required | none | Google Maps API key for in-app maps, search, and directions. Restrict this key to your app's bundle ID in Google Cloud Console. | Google Cloud Console → APIs & Services → Credentials → Create API key |
-| `EXPO_PUBLIC_BACKEND_URL` | Optional (prod) | Auto-detected in dev | Base URL of the FastAPI backend (e.g. `https://spinr-api.up.railway.app`). Must be set for production / EAS builds; Expo dev client auto-detects the local server. | Your deployment URL (Railway or Render) |
+| `EXPO_PUBLIC_BACKEND_URL` | Optional (prod) | Auto-detected in dev | Base URL of the FastAPI backend (e.g. `https://api-spinr.spinr.ca`). Must be set for production / EAS builds; Expo dev client auto-detects the local server. | Your deployment URL |
 | `EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY` | Optional | none | Stripe publishable key for client-side payment sheet initialisation. Starts with `pk_`. Required if payments are enabled. | Stripe Dashboard → Developers → API keys → Publishable key |
 
 ### Rider App — EAS / CI secrets
@@ -105,7 +105,7 @@ The admin dashboard does not have a committed `.env.example`. Variables are set 
 
 | Variable | Required | Default | Description | How to obtain |
 |----------|----------|---------|-------------|---------------|
-| `NEXT_PUBLIC_API_URL` | Required | none | Base URL of the FastAPI backend used for all admin API calls (e.g. `https://spinr-api.up.railway.app`). | Your deployment URL |
+| `NEXT_PUBLIC_API_URL` | Required | none | Base URL of the FastAPI backend used for all admin API calls (e.g. `https://api-spinr.spinr.ca`). | Your deployment URL |
 | `NEXT_PUBLIC_SUPABASE_URL` | Optional | none | Supabase project URL — used if the dashboard reads from Supabase directly (realtime, auth). | Supabase Dashboard → Settings → API → Project URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Optional | none | Supabase anon/public key for client-side Supabase queries. Safe to expose publicly; RLS protects data. | Supabase Dashboard → Settings → API → `anon` key |
 

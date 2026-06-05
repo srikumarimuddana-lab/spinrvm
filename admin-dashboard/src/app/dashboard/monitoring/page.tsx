@@ -35,6 +35,7 @@ import type {
 } from "./types";
 
 const POLL_INTERVAL_MS = 60_000;
+const DEGRADED_POLL_INTERVAL_MS = 5_000;
 
 export default function MonitoringPage() {
   const { allowed } = useRequireModule("rides");
@@ -393,12 +394,15 @@ export default function MonitoringPage() {
     mapHandlesRef.current?.fitArea(filters.serviceAreaId);
   }, [filters.serviceAreaId, serviceAreas]);
 
-  // Poll data
+  // Poll data. When the WebSocket is down, temporarily increase polling so
+  // dispatch still sees near-live data while the socket reconnects. This is a
+  // degraded fallback, not a replacement for the live stream.
   useEffect(() => {
+    const intervalMs = wsStatus === "connected" ? POLL_INTERVAL_MS : DEGRADED_POLL_INTERVAL_MS;
     loadData();
-    const interval = setInterval(loadData, POLL_INTERVAL_MS);
+    const interval = setInterval(loadData, intervalMs);
     return () => clearInterval(interval);
-  }, [loadData]);
+  }, [loadData, wsStatus]);
 
   // Re-apply filters when they change
   useEffect(() => {

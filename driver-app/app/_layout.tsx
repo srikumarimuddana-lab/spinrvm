@@ -106,10 +106,11 @@ if (canUseNotifications) {
 // Override per build with EXPO_PUBLIC_ENABLE_LOGROCKET ('true'/'false'); leave
 // unset for the safe default (iOS on, Android off). Re-enable Android once
 // LogRocket ships an Android-16-safe SDK.
+// Only the literal strings 'true'/'false' override; any other inlined value
+// (undefined / '' when unset) falls through to the platform default.
+const lrFlag = process.env.EXPO_PUBLIC_ENABLE_LOGROCKET;
 const LOGROCKET_ENABLED =
-  process.env.EXPO_PUBLIC_ENABLE_LOGROCKET != null
-    ? process.env.EXPO_PUBLIC_ENABLE_LOGROCKET === 'true'
-    : Platform.OS === 'ios';
+  lrFlag === 'true' ? true : lrFlag === 'false' ? false : Platform.OS === 'ios';
 let LogRocket: any = null;
 if (!isExpoGo && Platform.OS !== 'web' && LOGROCKET_ENABLED) {
   try {

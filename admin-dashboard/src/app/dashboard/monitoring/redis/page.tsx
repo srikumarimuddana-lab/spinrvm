@@ -37,9 +37,11 @@ import { useToast } from "@/components/ui/use-toast";
 import {
     flushRedisPrefix,
     getInfrastructureStats,
+    getRedisConnectivity,
     getRedisHealth,
     getWebsocketHealth,
     type InfrastructureStats,
+    type RedisConnectivityProbe,
     type RedisHealthResponse,
     type RedisPrefixCount,
     type WebsocketHealth,
@@ -81,6 +83,32 @@ function memoryColor(percent: number | null | undefined): string {
     return "bg-emerald-500";
 }
 
+function connectivityBadge(status: "ok" | "degraded" | "error" | "unset") {
+    if (status === "ok")
+        return (
+            <Badge variant="default" className="gap-1">
+                <CheckCircle2 className="h-3 w-3" /> OK
+            </Badge>
+        );
+    if (status === "degraded")
+        return (
+            <Badge variant="secondary" className="gap-1">
+                <AlertTriangle className="h-3 w-3" /> Pub/sub broken
+            </Badge>
+        );
+    if (status === "error")
+        return (
+            <Badge variant="destructive" className="gap-1">
+                <ShieldAlert className="h-3 w-3" /> Error
+            </Badge>
+        );
+    return (
+        <Badge variant="secondary" className="gap-1">
+            <CircleSlash className="h-3 w-3" /> Unset
+        </Badge>
+    );
+}
+
 function circuitBadgeVariant(
     state: "closed" | "open" | "half_open",
 ): { variant: "default" | "destructive" | "secondary"; label: string; icon: React.ElementType } {
@@ -95,6 +123,7 @@ export default function RedisMonitoringPage() {
     const [redis, setRedis] = useState<RedisHealthResponse | null>(null);
     const [infra, setInfra] = useState<InfrastructureStats | null>(null);
     const [ws, setWs] = useState<WebsocketHealth | null>(null);
+    const [connectivity, setConnectivity] = useState<RedisConnectivityProbe[] | null>(null);
     const [loading, setLoading] = useState(true);
     const [scanRefreshing, setScanRefreshing] = useState(false);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -132,10 +161,23 @@ export default function RedisMonitoringPage() {
         }
     }, []);
 
+    // Expensive (PING + pub/sub round-trip per URL) — load + manual refresh
+    // only, never on the poll loop, to avoid burning Redis/Upstash quota.
+    const fetchConnectivity = useCallback(async () => {
+        try {
+            const res = await getRedisConnectivity();
+            setConnectivity(res.connectivity);
+        } catch (err: any) {
+            console.error("[monitoring] connectivity probe failed", err);
+        }
+    }, []);
+
     // Initial load
     useEffect(() => {
-        Promise.all([fetchRedis(), fetchInfra(), fetchWs()]).finally(() => setLoading(false));
-    }, [fetchRedis, fetchInfra, fetchWs]);
+        Promise.all([fetchRedis(), fetchInfra(), fetchWs(), fetchConnectivity()]).finally(() =>
+            setLoading(false),
+        );
+    }, [fetchRedis, fetchInfra, fetchWs, fetchConnectivity]);
 
     // Stats polling (O(1) — safe on an interval)
     useEffect(() => {
@@ -156,7 +198,7 @@ export default function RedisMonitoringPage() {
     const handleManualRefresh = async () => {
         setScanRefreshing(true);
         try {
-            await Promise.all([fetchRedis(), fetchInfra(), fetchWs()]);
+            await Promise.all([fetchRedis(), fetchInfra(), fetchWs(), fetchConnectivity()]);
             toast({ title: "Refreshed", description: "Redis + infra stats updated" });
         } finally {
             setScanRefreshing(false);
@@ -354,6 +396,60 @@ export default function RedisMonitoringPage() {
                     </CardContent>
                 </Card>
             </div>
+
+            {/* Redis connectivity (PING + pub/sub round-trip) — off the poll loop */}
+            <Card>
+                <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                        <Activity className="h-5 w-5" />
+                        Redis Connectivity
+                    </CardTitle>
+                    <p className="text-xs text-muted-foreground">
+                        Live PING + pub/sub round-trip per configured URL — the only check that
+                        distinguishes &quot;up&quot; from &quot;up but pub/sub broken&quot;. Runs on
+                        load and manual refresh only (it costs connection quota), so use Refresh to
+                        re-probe.
+                    </p>
+                </CardHeader>
+                <CardContent>
+                    {!connectivity ? (
+                        <p className="py-4 text-center text-sm text-muted-foreground">
+                            Probing…
+                        </p>
+                    ) : (
+                        <div className="flex flex-col gap-2">
+                            {connectivity.map((p) => (
+                                <div
+                                    key={p.label}
+                                    className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-muted/30 px-3 py-2"
+                                >
+                                    <div className="min-w-0">
+                                        <div className="flex items-center gap-2">
+                                            <code className="text-xs font-medium">{p.label}</code>
+                                            {p.same_as ? (
+                                                <span className="text-xs text-muted-foreground">
+                                                    (same as {p.same_as})
+                                                </span>
+                                            ) : null}
+                                        </div>
+                                        <p className="truncate text-xs text-muted-foreground">
+                                            {p.endpoint ?? "not configured"}
+                                            {p.ping_ms != null ? ` · ping ${p.ping_ms}ms` : ""}
+                                            {p.pubsub ? ` · pub/sub ${p.pubsub.ok ? "ok" : "FAILED"}` : ""}
+                                        </p>
+                                        {(p.error || p.warning || p.pubsub?.error) && (
+                                            <p className="text-xs text-red-600 dark:text-red-400">
+                                                {p.error || p.pubsub?.error || p.warning}
+                                            </p>
+                                        )}
+                                    </div>
+                                    {connectivityBadge(p.status)}
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </CardContent>
+            </Card>
 
             {/* WebSocket fan-out degraded banner — the live-map failure mode */}
             {ws && ws.fanout.configured && !ws.fanout.active && (

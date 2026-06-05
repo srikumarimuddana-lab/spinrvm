@@ -13,27 +13,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StripeProvider } from '@stripe/stripe-react-native';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import * as SplashScreen from 'expo-splash-screen';
 import * as Updates from 'expo-updates';
-
-SplashScreen.preventAutoHideAsync().catch(() => {});
-
-// Failsafe watchdog: a non-critical startup hang must never leave the rider
-// staring at a frozen native splash forever. (A bad analytics SDK on a new
-// Android release once hung the UI thread here and bricked cold start.) If our
-// React splash hasn't taken over within this window, force-hide the native
-// splash so BrandSplash (the in-app loading UI) shows, and report the stall so
-// the root cause gets fixed rather than silently masked. Cleared in
-// onLoadingLayout on the normal boot path.
-const SPLASH_WATCHDOG_MS = 10_000;
-let splashWatchdog: ReturnType<typeof setTimeout> | null = setTimeout(() => {
-  splashWatchdog = null;
-  SplashScreen.hideAsync().catch(() => {});
-  captureMessage(
-    'rider splash watchdog fired — startup stalled, native splash force-hidden',
-    'warning',
-  );
-}, SPLASH_WATCHDOG_MS);
 
 // Minimum time the branded splash (logo + tagline) stays on screen, even when
 // auth/location init finishes sooner — otherwise the tagline animation (which
@@ -557,13 +537,7 @@ export default function RootLayout() {
     return unsubscribe;
   }, [isAuthInitialized, isOffline]);
 
-  const onLoadingLayout = useCallback(() => {
-    if (splashWatchdog) {
-      clearTimeout(splashWatchdog);
-      splashWatchdog = null;
-    }
-    SplashScreen.hideAsync().catch(() => {});
-  }, []);
+  const onLoadingLayout = useCallback(() => {}, []);
 
   if (!fontsLoaded || fontError || !isAuthInitialized || !isLocationInitialized || !minSplashElapsed) {
     return (

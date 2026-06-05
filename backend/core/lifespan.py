@@ -387,6 +387,26 @@ async def lifespan(app: FastAPI):
         ws_redis_url = resolve_ws_redis_url(settings.WS_REDIS_URL, settings.RATE_LIMIT_REDIS_URL)
         ws_started = await ws_pubsub.start(ws_manager, ws_redis_url)
         app.state.ws_pubsub = ws_pubsub
+
+        # Connectivity diagnosis — probe every Redis URL (PING + pub/sub
+        # round-trip) and print a password-free banner so operators can tell
+        # "down" from "up but pub/sub broken" from "wrong URL kind" straight
+        # from the Fly logs. Best-effort; never blocks boot.
+        try:
+            from utils.redis_diag import diagnose_redis, log_diagnosis
+
+            _diag = await diagnose_redis(
+                {
+                    "REDIS_URL": settings.REDIS_URL,
+                    "RATE_LIMIT_REDIS_URL": settings.RATE_LIMIT_REDIS_URL,
+                    "WS_REDIS_URL (effective)": ws_redis_url,
+                }
+            )
+            log_diagnosis(_diag)
+            app.state.redis_diagnosis = _diag
+        except Exception as _diag_err:
+            logger.warning(f"Redis diagnosis failed: {_diag_err}")
+
         if not ws_started and settings.ENV.lower() == "production":
             # Production without distributed WS is a correctness
             # hazard, but not a boot-blocker — a single-machine prod

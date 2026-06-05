@@ -402,10 +402,12 @@ async def get_websocket_health(
         clients connected to the *same* uvicorn worker — the exact failure
         behind a frozen map when Redis is unreachable. ``last_error`` says
         why (e.g. ``connect: TimeoutError``).
-      - ``connections``: active socket counts on THIS replica, bucketed by
-        client type. With multiple uvicorn workers each process holds its
-        own registry, so these are per-replica, not fleet-wide
-        (``workers_hint`` surfaces the configured worker count).
+      - ``connections``: active socket counts for the uvicorn worker that
+        answered this request, bucketed by client type. Each worker process
+        holds its own in-process registry, so these are **per-worker**, not
+        per-host — with ``workers_hint`` workers on a host the true host
+        total is spread across that many processes, and a given request only
+        sees one. ``worker_pid`` identifies which process answered.
     """
     import platform
 
@@ -423,8 +425,9 @@ async def get_websocket_health(
         "fanout": pubsub.status(),
         "connections": manager.connection_stats(),
         "replica_hostname": platform.node(),
+        "worker_pid": os.getpid(),
         "workers_hint": workers_hint,
-        "per_replica": True,
+        "per_worker": True,
     }
 
 

@@ -2274,8 +2274,9 @@ export type WebsocketHealth = {
     };
     connections: { total: number; admins: number; drivers: number; riders: number };
     replica_hostname: string;
+    worker_pid: number;
     workers_hint: number | null;
-    per_replica: boolean;
+    per_worker: boolean;
 };
 
 export const getWebsocketHealth = () =>

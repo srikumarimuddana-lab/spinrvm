@@ -25,9 +25,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     runtimeVersion: '1.0.0',
     splash: {
         backgroundColor: '#FFFFFF',
-        resizeMode: 'contain',
-        image: './assets/images/spinr-logo.png',
-        imageWidth: 200,
     },
     ios: ({
         supportsTablet: true,
@@ -192,9 +189,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         [
             'expo-splash-screen',
             {
-                image: './assets/images/splash-mark.png',
-                imageWidth: 140,
-                resizeMode: 'contain',
                 backgroundColor: '#FFFFFF'
             }
         ],

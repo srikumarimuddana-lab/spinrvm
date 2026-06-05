@@ -35,6 +35,7 @@ import type {
 } from "./types";
 
 const POLL_INTERVAL_MS = 60_000;
+const DEGRADED_POLL_INTERVAL_MS = 5_000;
 
 export default function MonitoringPage() {
   const { allowed } = useRequireModule("rides");
@@ -229,7 +230,11 @@ export default function MonitoringPage() {
     }
   }, [applyDriver, applyRide, followMode, pushAlert, refreshCounts, selected]);
 
-  const { status: wsStatus, requestSnapshots } = useMonitoringSocket({ token, onEvent: handleWsEvent });
+  const {
+    status: wsStatus,
+    requestSnapshots,
+    lastError: wsError,
+  } = useMonitoringSocket({ token, onEvent: handleWsEvent });
 
   // ── Initial data load + polling ─────────────────────────────────────
   const loadData = useCallback(async () => {
@@ -389,12 +394,15 @@ export default function MonitoringPage() {
     mapHandlesRef.current?.fitArea(filters.serviceAreaId);
   }, [filters.serviceAreaId, serviceAreas]);
 
-  // Poll data
+  // Poll data. When the WebSocket is down, temporarily increase polling so
+  // dispatch still sees near-live data while the socket reconnects. This is a
+  // degraded fallback, not a replacement for the live stream.
   useEffect(() => {
+    const intervalMs = wsStatus === "connected" ? POLL_INTERVAL_MS : DEGRADED_POLL_INTERVAL_MS;
     loadData();
-    const interval = setInterval(loadData, POLL_INTERVAL_MS);
+    const interval = setInterval(loadData, intervalMs);
     return () => clearInterval(interval);
-  }, [loadData]);
+  }, [loadData, wsStatus]);
 
   // Re-apply filters when they change
   useEffect(() => {
@@ -508,7 +516,7 @@ export default function MonitoringPage() {
         <div className="flex items-center gap-2 bg-yellow-50 border-b border-yellow-200 px-4 py-2 text-sm text-yellow-800 dark:bg-yellow-900/20 dark:border-yellow-800 dark:text-yellow-300">
           <span className="font-medium">Live data paused</span>
           <span className="text-yellow-700 dark:text-yellow-400">
-            — map and ride list may be stale ({wsStatus === "connecting" ? "reconnecting…" : "connection lost"})
+            — realtime stream interrupted; polling fallback is active ({wsStatus === "connecting" ? "reconnecting…" : wsError || "connection lost"})
           </span>
         </div>
       )}

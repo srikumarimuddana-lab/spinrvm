@@ -13,10 +13,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StripeProvider } from '@stripe/stripe-react-native';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import * as SplashScreen from 'expo-splash-screen';
 import * as Updates from 'expo-updates';
-
-SplashScreen.preventAutoHideAsync().catch(() => {});
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import NetInfo from '@react-native-community/netinfo';
 import api from '@shared/api/client';
@@ -514,9 +511,7 @@ export default function RootLayout() {
     return unsubscribe;
   }, [isAuthInitialized, isOffline]);
 
-  const onLoadingLayout = useCallback(() => {
-    SplashScreen.hideAsync().catch(() => {});
-  }, []);
+  const onLoadingLayout = useCallback(() => {}, []);
 
   if (!fontsLoaded || fontError || !isAuthInitialized || !isLocationInitialized) {
     return (

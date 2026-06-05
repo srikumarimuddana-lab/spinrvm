@@ -9,10 +9,12 @@ import {
     Database,
     Gauge,
     HardDrive,
+    Radio,
     RefreshCw,
     Server,
     ShieldAlert,
     Trash2,
+    WifiOff,
     Zap,
 } from "lucide-react";
 
@@ -36,9 +38,11 @@ import {
     flushRedisPrefix,
     getInfrastructureStats,
     getRedisHealth,
+    getWebsocketHealth,
     type InfrastructureStats,
     type RedisHealthResponse,
     type RedisPrefixCount,
+    type WebsocketHealth,
 } from "@/lib/api";
 
 // Poll interval for the lightweight (O(1)) stats call. The SCAN-based
@@ -90,6 +94,7 @@ export default function RedisMonitoringPage() {
 
     const [redis, setRedis] = useState<RedisHealthResponse | null>(null);
     const [infra, setInfra] = useState<InfrastructureStats | null>(null);
+    const [ws, setWs] = useState<WebsocketHealth | null>(null);
     const [loading, setLoading] = useState(true);
     const [scanRefreshing, setScanRefreshing] = useState(false);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -117,10 +122,20 @@ export default function RedisMonitoringPage() {
         }
     }, []);
 
+    const fetchWs = useCallback(async () => {
+        try {
+            const res = await getWebsocketHealth();
+            setWs(res);
+        } catch (err: any) {
+            // non-fatal — leave previous state
+            console.error("[monitoring] ws health fetch failed", err);
+        }
+    }, []);
+
     // Initial load
     useEffect(() => {
-        Promise.all([fetchRedis(), fetchInfra()]).finally(() => setLoading(false));
-    }, [fetchRedis, fetchInfra]);
+        Promise.all([fetchRedis(), fetchInfra(), fetchWs()]).finally(() => setLoading(false));
+    }, [fetchRedis, fetchInfra, fetchWs]);
 
     // Stats polling (O(1) — safe on an interval)
     useEffect(() => {
@@ -133,10 +148,15 @@ export default function RedisMonitoringPage() {
         return () => clearInterval(id);
     }, [fetchInfra]);
 
+    useEffect(() => {
+        const id = setInterval(fetchWs, INFRA_POLL_MS);
+        return () => clearInterval(id);
+    }, [fetchWs]);
+
     const handleManualRefresh = async () => {
         setScanRefreshing(true);
         try {
-            await Promise.all([fetchRedis(), fetchInfra()]);
+            await Promise.all([fetchRedis(), fetchInfra(), fetchWs()]);
             toast({ title: "Refreshed", description: "Redis + infra stats updated" });
         } finally {
             setScanRefreshing(false);
@@ -334,6 +354,75 @@ export default function RedisMonitoringPage() {
                     </CardContent>
                 </Card>
             </div>
+
+            {/* WebSocket fan-out degraded banner — the live-map failure mode */}
+            {ws && ws.fanout.configured && !ws.fanout.active && (
+                <Card className="border-red-500/50">
+                    <CardContent className="pt-6 flex items-start gap-2 text-red-600 dark:text-red-400">
+                        <WifiOff className="mt-0.5 h-5 w-5 shrink-0" />
+                        <div>
+                            <p className="font-medium">
+                                WebSocket fan-out is LOCAL-ONLY on this replica — live monitoring is degraded.
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                                The cross-replica pub/sub channel <code>{ws.fanout.channel}</code> is not
+                                connected{ws.fanout.last_error ? <> (<code>{ws.fanout.last_error}</code>)</> : null},
+                                so the admin map only sees clients on the same worker. Fix Redis connectivity
+                                (see the connectivity probe above) and restart the backend — pub/sub does not
+                                self-heal after a boot-time failure.
+                            </p>
+                        </div>
+                    </CardContent>
+                </Card>
+            )}
+
+            {/* WebSocket health */}
+            <Card>
+                <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                        <Radio className="h-5 w-5" />
+                        WebSocket Health
+                    </CardTitle>
+                    <p className="text-xs text-muted-foreground">
+                        Cross-replica fan-out status and live socket counts for the replica that
+                        served this request. Counts are <strong>per-replica</strong>, not fleet-wide
+                        {ws?.workers_hint ? <> (this backend runs {ws.workers_hint} uvicorn workers)</> : null}.
+                    </p>
+                </CardHeader>
+                <CardContent>
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-5">
+                        {/* Fan-out status */}
+                        <div className="rounded-md border bg-muted/30 px-3 py-2 lg:col-span-1">
+                            <p className="text-xs text-muted-foreground">Fan-out</p>
+                            {!ws ? (
+                                <p className="font-semibold">–</p>
+                            ) : ws.fanout.active ? (
+                                <Badge variant="default" className="mt-1 gap-1">
+                                    <CheckCircle2 className="h-3 w-3" /> Live
+                                </Badge>
+                            ) : ws.fanout.configured ? (
+                                <Badge variant="destructive" className="mt-1 gap-1">
+                                    <WifiOff className="h-3 w-3" /> Local-only
+                                </Badge>
+                            ) : (
+                                <Badge variant="secondary" className="mt-1 gap-1">
+                                    <CircleSlash className="h-3 w-3" /> Single-machine
+                                </Badge>
+                            )}
+                        </div>
+                        <InfraStat label="Total sockets" value={formatNumber(ws?.connections.total)} />
+                        <InfraStat label="Admins" value={formatNumber(ws?.connections.admins)} />
+                        <InfraStat label="Drivers" value={formatNumber(ws?.connections.drivers)} />
+                        <InfraStat label="Riders" value={formatNumber(ws?.connections.riders)} />
+                    </div>
+                    <p className="mt-3 text-xs text-muted-foreground">
+                        Channel <code>{ws?.fanout.channel ?? "–"}</code>
+                        {ws?.fanout.backend_scheme ? <> · backend <code>{ws.fanout.backend_scheme}://</code></> : null}
+                        {ws?.replica_hostname ? <> · replica <code>{ws.replica_hostname}</code></> : null}
+                        {ws?.fanout.last_error ? <> · last error <code>{ws.fanout.last_error}</code></> : null}
+                    </p>
+                </CardContent>
+            </Card>
 
             {/* Prefix breakdown */}
             <Card>

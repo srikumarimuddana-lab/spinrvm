@@ -2264,6 +2264,23 @@ export type InfrastructureStats = {
 export const getRedisHealth = () =>
     request<RedisHealthResponse>("/api/admin/monitoring/redis");
 
+export type WebsocketHealth = {
+    fanout: {
+        active: boolean;
+        channel: string;
+        backend_scheme: string;
+        configured: boolean;
+        last_error: string | null;
+    };
+    connections: { total: number; admins: number; drivers: number; riders: number };
+    replica_hostname: string;
+    workers_hint: number | null;
+    per_replica: boolean;
+};
+
+export const getWebsocketHealth = () =>
+    request<WebsocketHealth>("/api/admin/monitoring/websockets");
+
 export const getInfrastructureStats = () =>
     request<InfrastructureStats>("/api/admin/monitoring/infrastructure");
 

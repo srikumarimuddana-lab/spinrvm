@@ -12,6 +12,11 @@ export default function TabLayout() {
       initialRouteName="index"
       screenOptions={{
         headerShown: false,
+        // Mount tab screens as soon as the tab navigator is ready instead of
+        // waiting for the first tap. This moves JS/module work and first data
+        // prefetch off the tap path so Activity/Account feel instant like
+        // mature ride-share apps.
+        lazy: false,
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textDim,
         tabBarStyle: {

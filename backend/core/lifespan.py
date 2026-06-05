@@ -391,21 +391,33 @@ async def lifespan(app: FastAPI):
         # Connectivity diagnosis — probe every Redis URL (PING + pub/sub
         # round-trip) and print a password-free banner so operators can tell
         # "down" from "up but pub/sub broken" from "wrong URL kind" straight
-        # from the Fly logs. Best-effort; never blocks boot.
-        try:
-            from utils.redis_diag import diagnose_redis, log_diagnosis
+        # from the Fly logs. Run it in the BACKGROUND: diagnose_redis awaits a
+        # pub/sub round-trip serially across three URLs, so a diagnostic-only
+        # Redis stall would otherwise add tens of seconds to boot and risk
+        # tripping the deploy health check. Best-effort; never blocks boot.
+        app.state.redis_diagnosis = None
 
-            _diag = await diagnose_redis(
-                {
-                    "REDIS_URL": settings.REDIS_URL,
-                    "RATE_LIMIT_REDIS_URL": settings.RATE_LIMIT_REDIS_URL,
-                    "WS_REDIS_URL (effective)": ws_redis_url,
-                }
-            )
-            log_diagnosis(_diag)
-            app.state.redis_diagnosis = _diag
-        except Exception as _diag_err:
-            logger.warning(f"Redis diagnosis failed: {_diag_err}")
+        async def _run_redis_diagnosis() -> None:
+            try:
+                from utils.redis_diag import diagnose_redis, log_diagnosis
+
+                _diag = await asyncio.wait_for(
+                    diagnose_redis(
+                        {
+                            "REDIS_URL": settings.REDIS_URL,
+                            "RATE_LIMIT_REDIS_URL": settings.RATE_LIMIT_REDIS_URL,
+                            "WS_REDIS_URL (effective)": ws_redis_url,
+                        }
+                    ),
+                    timeout=20.0,
+                )
+                log_diagnosis(_diag)
+                app.state.redis_diagnosis = _diag
+            except Exception as _diag_err:
+                logger.warning(f"Redis diagnosis failed: {_diag_err}")
+
+        # Keep a reference so the task isn't garbage-collected mid-flight.
+        app.state.redis_diag_task = asyncio.create_task(_run_redis_diagnosis(), name="redis_startup_diagnosis")
 
         if not ws_started and settings.ENV.lower() == "production":
             # Production without distributed WS is a correctness

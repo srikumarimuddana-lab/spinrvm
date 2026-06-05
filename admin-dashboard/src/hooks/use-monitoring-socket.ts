@@ -229,11 +229,9 @@ export function useMonitoringSocket({ token, onEvent }: UseMonitoringSocketOptio
                 const reason =
                     typeof event?.reason === "string" && event.reason ? ` (${event.reason})` : "";
                 setLastError(
-                    code === 1006
-                        ? "WebSocket abnormal close (1006): the handshake or transport was dropped; reconnecting…"
-                        : code
-                            ? `WebSocket closed with code ${code}${reason}; reconnecting…`
-                            : "WebSocket closed; reconnecting…",
+                    code
+                        ? `WebSocket closed with code ${code}${reason}; reconnecting…`
+                        : "WebSocket closed; reconnecting…",
                 );
                 const delay = reconnectDelayWithJitter(retryCountRef.current);
                 retryCountRef.current += 1;

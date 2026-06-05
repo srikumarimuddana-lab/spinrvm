@@ -516,7 +516,7 @@ export default function MonitoringPage() {
         <div className="flex items-center gap-2 bg-yellow-50 border-b border-yellow-200 px-4 py-2 text-sm text-yellow-800 dark:bg-yellow-900/20 dark:border-yellow-800 dark:text-yellow-300">
           <span className="font-medium">Live data paused</span>
           <span className="text-yellow-700 dark:text-yellow-400">
-            — realtime stream interrupted; polling fallback is active ({wsStatus === "connecting" ? "reconnecting…" : wsError || "connection lost"})
+            — map and ride list may be stale ({wsStatus === "connecting" ? "reconnecting…" : wsError || "connection lost"})
           </span>
         </div>
       )}

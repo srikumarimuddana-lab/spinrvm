@@ -2264,6 +2264,48 @@ export type InfrastructureStats = {
 export const getRedisHealth = () =>
     request<RedisHealthResponse>("/api/admin/monitoring/redis");
 
+export type WebsocketHealth = {
+    fanout: {
+        active: boolean;
+        channel: string;
+        backend_scheme: string;
+        configured: boolean;
+        last_error: string | null;
+    };
+    connections: { total: number; admins: number; drivers: number; riders: number };
+    replica_hostname: string;
+    worker_pid: number;
+    workers_hint: number | null;
+    per_worker: boolean;
+};
+
+export const getWebsocketHealth = () =>
+    request<WebsocketHealth>("/api/admin/monitoring/websockets");
+
+export type RedisConnectivityProbe = {
+    label: string;
+    configured: boolean;
+    status: "ok" | "degraded" | "error" | "unset";
+    endpoint?: string;
+    scheme?: string;
+    host?: string;
+    port?: number | null;
+    tls?: boolean;
+    ping_ms?: number;
+    pubsub?: { ok: boolean; error?: string };
+    error?: string;
+    warning?: string;
+    same_as?: string;
+};
+
+// Separate from getRedisHealth on purpose: this opens Redis clients and runs a
+// pub/sub round-trip per URL, so it's called only on load + manual refresh,
+// never on the 10s poll loop.
+export const getRedisConnectivity = () =>
+    request<{ connectivity: RedisConnectivityProbe[] }>(
+        "/api/admin/monitoring/redis/connectivity",
+    );
+
 export const getInfrastructureStats = () =>
     request<InfrastructureStats>("/api/admin/monitoring/infrastructure");
 

@@ -14,6 +14,11 @@ import { StripeProvider } from '@stripe/stripe-react-native';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as Updates from 'expo-updates';
+
+// Minimum time the branded splash (logo + tagline) stays on screen, even when
+// auth/location init finishes sooner — otherwise the tagline animation (which
+// only starts ~400ms in) is cut off and the rider barely sees the branding.
+const SPLASH_MIN_DISPLAY_MS = 3000;
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import NetInfo from '@react-native-community/netinfo';
 import api from '@shared/api/client';
@@ -93,8 +98,21 @@ if (canUseNotifications) {
   }
 }
 
+// Android is DISABLED by default: LogRocket's session-replay view serializer
+// reflects into hidden framework fields (e.g. PorterDuffColorFilter.mColor)
+// that Android 16 / targetSdk 36 blocks ("hiddenapi ... denied"). On Android 16
+// devices (e.g. Samsung S26) that denial hung the UI thread during startup, so
+// the first React frame never rendered and the app stuck on the native splash.
+// Override per build with EXPO_PUBLIC_ENABLE_LOGROCKET ('true'/'false'); leave
+// unset for the safe default (iOS on, Android off). Re-enable Android once
+// LogRocket ships an Android-16-safe SDK.
+// Only the literal strings 'true'/'false' override; any other inlined value
+// (undefined / '' when unset) falls through to the platform default.
+const lrFlag = process.env.EXPO_PUBLIC_ENABLE_LOGROCKET;
+const LOGROCKET_ENABLED =
+  lrFlag === 'true' ? true : lrFlag === 'false' ? false : Platform.OS === 'ios';
 let LogRocket: any = null;
-if (!isExpoGo && Platform.OS !== 'web') {
+if (!isExpoGo && Platform.OS !== 'web' && LOGROCKET_ENABLED) {
   try {
     LogRocket = require('@logrocket/react-native').default ?? require('@logrocket/react-native');
   } catch (e) {
@@ -131,6 +149,14 @@ export default function RootLayout() {
   const { initialize: initializeLocation, isInitialized: isLocationInitialized } = useLocationStore();
   const hydrateWorkProfile = useWorkProfileStore(s => s.hydrate);
   const [isOffline, setIsOffline] = useState(false);
+  // Hold the branded splash for a minimum duration so the logo + tagline are
+  // actually seen — auth/location init can finish in <400ms, cutting off the
+  // tagline before it animates in. The loading gate below waits on this too.
+  const [minSplashElapsed, setMinSplashElapsed] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setMinSplashElapsed(true), SPLASH_MIN_DISPLAY_MS);
+    return () => clearTimeout(t);
+  }, []);
   const [stripePublishableKey, setStripePublishableKey] = useState<string | null>(null);
   const [trackBaseUrl, setTrackBaseUrl] = useState<string | null>(null);
   const fcmRegisteredRef = useRef(false);
@@ -513,7 +539,7 @@ export default function RootLayout() {
 
   const onLoadingLayout = useCallback(() => {}, []);
 
-  if (!fontsLoaded || fontError || !isAuthInitialized || !isLocationInitialized) {
+  if (!fontsLoaded || fontError || !isAuthInitialized || !isLocationInitialized || !minSplashElapsed) {
     return (
       <ErrorBoundary>
         <BrandSplash onLayout={onLoadingLayout} />

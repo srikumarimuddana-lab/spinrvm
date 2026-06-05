@@ -34,6 +34,11 @@ let splashWatchdog: ReturnType<typeof setTimeout> | null = setTimeout(() => {
     'warning',
   );
 }, SPLASH_WATCHDOG_MS);
+
+// Minimum time the branded splash (logo + tagline) stays on screen, even when
+// auth/location init finishes sooner — otherwise the tagline animation (which
+// only starts ~400ms in) is cut off and the rider barely sees the branding.
+const SPLASH_MIN_DISPLAY_MS = 3000;
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import NetInfo from '@react-native-community/netinfo';
 import api from '@shared/api/client';
@@ -164,6 +169,14 @@ export default function RootLayout() {
   const { initialize: initializeLocation, isInitialized: isLocationInitialized } = useLocationStore();
   const hydrateWorkProfile = useWorkProfileStore(s => s.hydrate);
   const [isOffline, setIsOffline] = useState(false);
+  // Hold the branded splash for a minimum duration so the logo + tagline are
+  // actually seen — auth/location init can finish in <400ms, cutting off the
+  // tagline before it animates in. The loading gate below waits on this too.
+  const [minSplashElapsed, setMinSplashElapsed] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setMinSplashElapsed(true), SPLASH_MIN_DISPLAY_MS);
+    return () => clearTimeout(t);
+  }, []);
   const [stripePublishableKey, setStripePublishableKey] = useState<string | null>(null);
   const [trackBaseUrl, setTrackBaseUrl] = useState<string | null>(null);
   const fcmRegisteredRef = useRef(false);
@@ -552,7 +565,7 @@ export default function RootLayout() {
     SplashScreen.hideAsync().catch(() => {});
   }, []);
 
-  if (!fontsLoaded || fontError || !isAuthInitialized || !isLocationInitialized) {
+  if (!fontsLoaded || fontError || !isAuthInitialized || !isLocationInitialized || !minSplashElapsed) {
     return (
       <ErrorBoundary>
         <BrandSplash onLayout={onLoadingLayout} />

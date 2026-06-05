@@ -38,6 +38,11 @@ let splashWatchdog: ReturnType<typeof setTimeout> | null = setTimeout(() => {
     'warning',
   );
 }, SPLASH_WATCHDOG_MS);
+
+// Minimum time the branded splash (logo + tagline) stays on screen, even when
+// auth/location init finishes sooner — otherwise the tagline animation (which
+// only starts ~400ms in) is cut off and the driver barely sees the branding.
+const SPLASH_MIN_DISPLAY_MS = 3000;
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
@@ -360,6 +365,14 @@ export default function RootLayout() {
   const { initialize: initializeAuth, isInitialized: isAuthInitialized, token: authToken } = useAuthStore();
   const { initialize: initializeLocation, isInitialized: isLocationInitialized } = useLocationStore();
   const [isOffline, setIsOffline] = useState(false);
+  // Hold the branded splash for a minimum duration so the logo + tagline are
+  // actually seen — auth/location init can finish in <400ms, cutting off the
+  // tagline before it animates in. The loading gate below waits on this too.
+  const [minSplashElapsed, setMinSplashElapsed] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setMinSplashElapsed(true), SPLASH_MIN_DISPLAY_MS);
+    return () => clearTimeout(t);
+  }, []);
   // Guard so we only register the FCM token once per auth session.
   const fcmRegisteredRef = useRef(false);
   const prevAuthTokenRef = useRef(authToken);
@@ -563,7 +576,7 @@ export default function RootLayout() {
     SplashScreen.hideAsync().catch(() => {});
   }, []);
 
-  if (!fontsLoaded || fontError || !isAuthInitialized || !isLocationInitialized) {
+  if (!fontsLoaded || fontError || !isAuthInitialized || !isLocationInitialized || !minSplashElapsed) {
     return (
       <QueryClientProvider client={queryClient}>
         <ErrorBoundary>

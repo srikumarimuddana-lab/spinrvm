@@ -130,14 +130,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         'expo-image',
         'expo-secure-store',
         'expo-web-browser',
-        [
-            'expo-splash-screen',
-            {
-                image: './assets/images/spinr-logo.png',
-                resizeMode: 'contain',
-                backgroundColor: '#FFFFFF'
-            }
-        ],
+        'expo-splash-screen',
         '@react-native-firebase/app',
         '@react-native-firebase/messaging',
         '@react-native-firebase/crashlytics',

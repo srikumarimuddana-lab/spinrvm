@@ -15,12 +15,6 @@ import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJa
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Toast from 'react-native-toast-message';
 import { AlertDialog } from '../components/AlertDialog';
-import * as SplashScreen from 'expo-splash-screen';
-
-// Keep the native splash up until our React-rendered splash is mounted,
-// otherwise the driver home (which contains the SOSButton) momentarily
-// flashes through during the boot transition.
-SplashScreen.preventAutoHideAsync().catch(() => {});
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
@@ -524,9 +518,7 @@ export default function RootLayout() {
     };
   }, [isAuthInitialized, authToken]);
 
-  const onLoadingLayout = useCallback(() => {
-    SplashScreen.hideAsync().catch(() => {});
-  }, []);
+  const onLoadingLayout = useCallback(() => {}, []);
 
   if (!fontsLoaded || fontError || !isAuthInitialized || !isLocationInitialized) {
     return (

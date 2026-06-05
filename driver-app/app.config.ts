@@ -188,14 +188,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             isAndroidBackgroundLocationEnabled: true,
             isIosBackgroundLocationEnabled: true,
         }],
-        [
-            'expo-splash-screen',
-            {
-                image: './assets/images/spinr-logo.png',
-                resizeMode: 'contain',
-                backgroundColor: '#FFFFFF'
-            }
-        ],
+        'expo-splash-screen',
         'expo-font',
         'expo-secure-store',
         '@react-native-firebase/app',

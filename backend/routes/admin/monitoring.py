@@ -315,10 +315,29 @@ async def get_redis_health(
     ]
     prefixes_with_meta.sort(key=lambda x: x["count"], reverse=True)
 
-    # Live connectivity probe — PING + pub/sub round-trip on every configured
-    # Redis URL. This is what tells you "Redis up but pub/sub broken" (the
-    # failure mode that breaks cross-replica admin live-monitoring on Upstash),
-    # which get_redis_stats's INFO snapshot can't see. Best-effort.
+    return {
+        "stats": stats,
+        "prefix_counts": prefixes_with_meta,
+        "flushable_prefixes": sorted(_FLUSHABLE_PREFIXES),
+    }
+
+
+@router.get("/redis/connectivity")
+async def get_redis_connectivity(
+    current_admin: dict = Depends(get_admin_user),
+) -> Dict[str, Any]:
+    """Live connectivity probe — PING + pub/sub round-trip on every configured
+    Redis URL. This is what tells you "Redis up but pub/sub broken" (the
+    failure mode that breaks cross-replica admin live-monitoring on Upstash),
+    which get_redis_stats's INFO snapshot can't see.
+
+    Deliberately a SEPARATE endpoint from `/redis`: each probe opens Redis
+    clients and runs SUBSCRIBE/PUBLISH/receive per URL, which costs
+    connection/request quota (and can hang when pub/sub is slow — exactly the
+    Upstash failure being debugged). The dashboard polls `/redis` every ~10s
+    but only calls this on page load + manual refresh, so the expensive probe
+    is never on the poll loop. Best-effort.
+    """
     connectivity: List[Dict[str, Any]] = []
     try:
         try:
@@ -340,12 +359,7 @@ async def get_redis_health(
     except Exception as exc:
         connectivity = [{"label": "probe", "status": "error", "error": str(exc)}]
 
-    return {
-        "stats": stats,
-        "prefix_counts": prefixes_with_meta,
-        "flushable_prefixes": sorted(_FLUSHABLE_PREFIXES),
-        "connectivity": connectivity,
-    }
+    return {"connectivity": connectivity}
 
 
 class FlushPrefixRequest(BaseModel):
@@ -387,6 +401,47 @@ async def flush_redis_prefix(
         "prefix": prefix,
         "deleted_keys": deleted,
         "admin_id": current_admin.get("id"),
+    }
+
+
+@router.get("/websockets")
+async def get_websocket_health(
+    current_admin: dict = Depends(get_admin_user),
+) -> Dict[str, Any]:
+    """WebSocket health for the backend replica that served this request.
+
+    Two parts:
+      - ``fanout``: cross-replica pub/sub status (``ws_pubsub.status()``).
+        When ``active`` is False the admin live-monitoring map only sees
+        clients connected to the *same* uvicorn worker — the exact failure
+        behind a frozen map when Redis is unreachable. ``last_error`` says
+        why (e.g. ``connect: TimeoutError``).
+      - ``connections``: active socket counts for the uvicorn worker that
+        answered this request, bucketed by client type. Each worker process
+        holds its own in-process registry, so these are **per-worker**, not
+        per-host — with ``workers_hint`` workers on a host the true host
+        total is spread across that many processes, and a given request only
+        sees one. ``worker_pid`` identifies which process answered.
+    """
+    import platform
+
+    try:
+        from ...socket_manager import manager
+        from ...utils.ws_pubsub import pubsub
+    except ImportError:
+        from socket_manager import manager  # type: ignore
+        from utils.ws_pubsub import pubsub  # type: ignore
+
+    workers_env = os.environ.get("UVICORN_WORKERS")
+    workers_hint = int(workers_env) if workers_env and workers_env.isdigit() else None
+
+    return {
+        "fanout": pubsub.status(),
+        "connections": manager.connection_stats(),
+        "replica_hostname": platform.node(),
+        "worker_pid": os.getpid(),
+        "workers_hint": workers_hint,
+        "per_worker": True,
     }
 
 

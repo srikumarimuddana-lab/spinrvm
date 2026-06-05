@@ -63,11 +63,44 @@ class _WSPubSub:
         self._task: Optional[asyncio.Task] = None
         self._manager: Any = None
         self._url: str = ""
+        # Last connect/subscribe failure reason, surfaced to the admin
+        # WS-health card so "fan-out is local-only" comes with a why.
+        # Never holds the URL (which carries the password).
+        self._last_error: Optional[str] = None
 
     @property
     def active(self) -> bool:
-        """True iff we have a live Redis connection and a running consumer."""
-        return self._redis is not None and self._task is not None and not self._task.done()
+        """True iff we have a live Redis connection, a live subscription, and
+        a running consumer.
+
+        ``_pubsub`` is included deliberately: after a runtime Redis drop a
+        failed ``_reconnect()`` nulls ``_pubsub`` but leaves the consumer task
+        looping in backoff, so checking only ``_redis``/``_task`` would report
+        "Live" while this replica is no longer subscribed to the fan-out
+        channel. Tying ``active`` to the subscription keeps the health endpoint
+        honest during a reconnect-failure window.
+        """
+        return self._redis is not None and self._pubsub is not None and self._task is not None and not self._task.done()
+
+    def status(self) -> dict:
+        """Snapshot of cross-replica fan-out health on THIS replica.
+
+        ``active`` True means this process holds a live Redis subscription and
+        a running consumer, so broadcasts published by *other* replicas reach
+        the admin sockets connected here. False means local-only delivery —
+        the admin live map only sees clients on this same worker, which is the
+        failure mode when Redis is unreachable. ``configured`` distinguishes
+        "no Redis URL set (single-machine by design)" from "URL set but the
+        connection failed" (see ``last_error``).
+        """
+        scheme = self._url.split("://", 1)[0] if self._url else ""
+        return {
+            "active": self.active,
+            "channel": CHANNEL,
+            "backend_scheme": scheme,
+            "configured": bool(self._url),
+            "last_error": self._last_error,
+        }
 
     async def start(self, manager: Any, redis_url: str) -> bool:
         """Connect to Redis, subscribe to the channel, spawn the consumer.
@@ -87,27 +120,36 @@ class _WSPubSub:
             logger.warning("WS pub/sub: redis package not installed; single-machine mode")
             return False
 
+        # Record that fan-out is *configured* before we attempt the connection,
+        # so status() reports configured=True (and the right scheme) even when
+        # the connect/subscribe below fails. Otherwise a Redis-unreachable
+        # backend would mislabel itself "single-machine" and suppress the
+        # degraded banner — the exact state we built this to surface.
+        self._url = redis_url
+
         try:
             client = redis_asyncio.from_url(redis_url, decode_responses=True)
             await client.ping()
         except Exception as e:
             # Never log the URL; it contains the password.
+            self._last_error = f"connect: {type(e).__name__}"
             logger.error(f"WS pub/sub: could not connect to Redis ({type(e).__name__}) — falling back to local-only")
             return False
 
         self._redis = client
         self._manager = manager
-        self._url = redis_url
 
         try:
             self._pubsub = client.pubsub()
             await self._pubsub.subscribe(CHANNEL)
         except Exception as e:
+            self._last_error = f"subscribe: {type(e).__name__}"
             logger.error(f"WS pub/sub: subscribe failed: {e}")
             await self._safe_close_pubsub()
             await self._safe_close_redis()
             return False
 
+        self._last_error = None
         self._task = asyncio.create_task(self._consumer(), name="ws_pubsub_consumer")
         scheme = redis_url.split("://", 1)[0]
         logger.info(f"WS pub/sub started (backend={scheme}://…, channel={CHANNEL})")

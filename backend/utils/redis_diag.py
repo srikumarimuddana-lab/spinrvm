@@ -100,8 +100,17 @@ async def probe_redis_url(label: str, url: str, *, timeout: float = 5.0) -> Dict
         )
         return info
     if parsed.scheme == "redis":
-        # Not fatal (some self-hosted Redis is plaintext), but Upstash is TLS-only.
-        info["warning"] = "plaintext redis:// — Upstash requires rediss:// (TLS); will fail if this is Upstash."
+        # Plaintext is correct over a PRIVATE network (Fly 6PN, Railway
+        # internal) — Fly-managed Upstash and Railway Redis both use redis://
+        # there by design. It's only a problem on a PUBLIC endpoint, where the
+        # password + traffic are exposed; public Upstash (upstash.com) is
+        # TLS-only and needs rediss://.
+        info["warning"] = (
+            "plaintext redis:// — OK over a private network (Fly 6PN / Railway "
+            "internal, where Fly-managed Upstash and Railway Redis use it by "
+            "design); on a PUBLIC endpoint it exposes the password + traffic, and "
+            "public Upstash (upstash.com) needs rediss:// (TLS)."
+        )
 
     try:
         import redis.asyncio as redis_asyncio  # type: ignore

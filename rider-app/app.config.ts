@@ -23,6 +23,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // with no production users, OTA compatibility risk is zero.
     runtimeVersion: '1.0.0',
     splash: {
+        image: './assets/images/spinr-logo.png',
+        resizeMode: 'contain',
         backgroundColor: '#FFFFFF',
     },
     ios: {
@@ -131,6 +133,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         [
             'expo-splash-screen',
             {
+                image: './assets/images/spinr-logo.png',
+                resizeMode: 'contain',
                 backgroundColor: '#FFFFFF'
             }
         ],

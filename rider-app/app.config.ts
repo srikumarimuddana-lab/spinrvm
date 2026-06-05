@@ -15,7 +15,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     userInterfaceStyle: 'automatic',
     newArchEnabled: true, // REQUIRED: react-native-reanimated 4 / react-native-worklets only run on the New Architecture (old arch crashed on first animated screen)
     updates: {
-        url: 'https://u.expo.dev/63b5d645-e787-4f47-8289-d879ca6c51a4',
+        url: 'https://u.expo.dev/14e2200c-dc0a-48a1-90cf-bbbb8f798efc',
     },
     // Bare workflow requires a literal string runtimeVersion (policies like
     // 'fingerprint'/'appVersion' rejected by EAS CLI). Bump manually when
@@ -167,7 +167,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     },
     extra: {
         eas: {
-            projectId: "63b5d645-e787-4f47-8289-d879ca6c51a4"
+            projectId: "14e2200c-dc0a-48a1-90cf-bbbb8f798efc"
         },
         EXPO_PUBLIC_BACKEND_URL: process.env.EXPO_PUBLIC_BACKEND_URL,
         backendUrl: process.env.EXPO_PUBLIC_BACKEND_URL,

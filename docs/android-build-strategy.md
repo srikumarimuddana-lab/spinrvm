@@ -196,3 +196,50 @@ The pattern that should have triggered earlier strategic review: each fix unbloc
 build phase but introduced the next blocker. By failure #3 (the Stripe metadata error), it
 was clear we were spiraling. The right move was to step back, audit the dependency chain,
 and pick a coherent end-state — which is what this doc captures.
+
+---
+
+## Runtime: Android 16 hidden-API enforcement (LogRocket splash hang)
+
+This doc is mostly about BUILD breaks. This entry is a RUNTIME break — the build
+succeeds but the app hangs on first launch on a specific Android version.
+
+**Symptom:** On Android 16 devices (e.g. Samsung S26) the app cold-starts, shows the
+native splash, and never advances to the React UI. No crash / tombstone — a hang, not a
+crash. The same APK works fine on older Android phones.
+
+**Smoking gun in logcat:**
+
+```
+E om.spinr.driver: hiddenapi: Accessing hidden field
+Landroid/graphics/PorterDuffColorFilter;->mColor:I (api=max-target-o)
+from Lcom/logrocket/core/util/ReflectionUtils; (TargetSdkVersion=36)
+using reflection: denied
+```
+
+…followed (~30s later) by `ActivityTaskManager: Activity transferring splash screen
+timeout`.
+
+**Why:** Android gates hidden-API access by `targetSdkVersion`, and enforcement tightens
+with each OS release. `@logrocket/react-native`'s session-replay view serializer reflects
+into framework-internal fields (here `PorterDuffColorFilter.mColor`) to record colors. On
+Android 16 / targetSdk 36 that field is on the `max-target-o` blocklist, so the reflection
+is denied on the UI thread during view serialization. That wedges startup: React never
+renders its first frame, so `SplashScreen.hideAsync()` (called from `BrandSplash`'s
+`onLayout`) never runs and the native splash stays up forever.
+
+**Fix (shipped):** LogRocket is gated OFF on Android by default in both apps'
+`app/_layout.tsx`. Override per build with `EXPO_PUBLIC_ENABLE_LOGROCKET` (`'true'` /
+`'false'`); unset = iOS on, Android off. A 10s splash watchdog in `_layout.tsx` is the
+backstop — it force-hides the native splash and reports the stall (Sentry warning) so a
+future non-critical init can't silently brick cold start.
+
+**Re-enable Android when:** LogRocket ships a release that no longer reflects into blocked
+hidden APIs at the targetSdk we ship. Verify on a physical Android 16+ device (the hang is
+device-OS-specific and won't reproduce on older emulators), then set
+`EXPO_PUBLIC_ENABLE_LOGROCKET=true`.
+
+**General lesson:** any dependency that reflects on framework internals (session replay,
+screenshotting, view-tree analytics) is a latent runtime bomb that detonates on a future
+Android release, not at build time. Re-test those SDKs on a current-gen device before each
+targetSdk bump.

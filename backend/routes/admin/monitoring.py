@@ -390,6 +390,44 @@ async def flush_redis_prefix(
     }
 
 
+@router.get("/websockets")
+async def get_websocket_health(
+    current_admin: dict = Depends(get_admin_user),
+) -> Dict[str, Any]:
+    """WebSocket health for the backend replica that served this request.
+
+    Two parts:
+      - ``fanout``: cross-replica pub/sub status (``ws_pubsub.status()``).
+        When ``active`` is False the admin live-monitoring map only sees
+        clients connected to the *same* uvicorn worker — the exact failure
+        behind a frozen map when Redis is unreachable. ``last_error`` says
+        why (e.g. ``connect: TimeoutError``).
+      - ``connections``: active socket counts on THIS replica, bucketed by
+        client type. With multiple uvicorn workers each process holds its
+        own registry, so these are per-replica, not fleet-wide
+        (``workers_hint`` surfaces the configured worker count).
+    """
+    import platform
+
+    try:
+        from ...socket_manager import manager
+        from ...utils.ws_pubsub import pubsub
+    except ImportError:
+        from socket_manager import manager  # type: ignore
+        from utils.ws_pubsub import pubsub  # type: ignore
+
+    workers_env = os.environ.get("UVICORN_WORKERS")
+    workers_hint = int(workers_env) if workers_env and workers_env.isdigit() else None
+
+    return {
+        "fanout": pubsub.status(),
+        "connections": manager.connection_stats(),
+        "replica_hostname": platform.node(),
+        "workers_hint": workers_hint,
+        "per_replica": True,
+    }
+
+
 # ── Infrastructure utilization ────────────────────────────────────────
 #
 # Process-level resource usage for the backend replica answering this

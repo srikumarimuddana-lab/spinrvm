@@ -315,10 +315,36 @@ async def get_redis_health(
     ]
     prefixes_with_meta.sort(key=lambda x: x["count"], reverse=True)
 
+    # Live connectivity probe — PING + pub/sub round-trip on every configured
+    # Redis URL. This is what tells you "Redis up but pub/sub broken" (the
+    # failure mode that breaks cross-replica admin live-monitoring on Upstash),
+    # which get_redis_stats's INFO snapshot can't see. Best-effort.
+    connectivity: List[Dict[str, Any]] = []
+    try:
+        try:
+            from ...core.config import settings
+            from ...utils.redis_diag import diagnose_redis
+            from ...utils.ws_pubsub import resolve_ws_redis_url
+        except ImportError:
+            from core.config import settings  # type: ignore
+            from utils.redis_diag import diagnose_redis  # type: ignore
+            from utils.ws_pubsub import resolve_ws_redis_url  # type: ignore
+
+        connectivity = await diagnose_redis(
+            {
+                "REDIS_URL": settings.REDIS_URL,
+                "RATE_LIMIT_REDIS_URL": settings.RATE_LIMIT_REDIS_URL,
+                "WS_REDIS_URL (effective)": resolve_ws_redis_url(settings.WS_REDIS_URL, settings.RATE_LIMIT_REDIS_URL),
+            }
+        )
+    except Exception as exc:
+        connectivity = [{"label": "probe", "status": "error", "error": str(exc)}]
+
     return {
         "stats": stats,
         "prefix_counts": prefixes_with_meta,
         "flushable_prefixes": sorted(_FLUSHABLE_PREFIXES),
+        "connectivity": connectivity,
     }
 
 

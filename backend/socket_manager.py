@@ -390,7 +390,17 @@ class ConnectionManager:
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
         )
-        await redis_set(f"spinr:driver:location:{driver_id}", payload, ttl=60)
+        # This is an ephemeral 60 s cache (rider-map fast path); the
+        # authoritative location lives in the drivers table. A Redis outage
+        # here is degraded-but-recovered — log a warning and move on rather
+        # than letting redis_set's re-raise propagate. Letting it raise once
+        # blocked the caller's downstream DB write of the same coordinates,
+        # so a Redis blip left drivers with no persisted position and the
+        # admin live-monitoring map drew no car marker for an online driver.
+        try:
+            await redis_set(f"spinr:driver:location:{driver_id}", payload, ttl=60)
+        except Exception as e:
+            logger.warning(f"driver location cache write failed (driver={driver_id}): {e}")
 
     async def get_driver_location(self, driver_id: str) -> Optional[Dict]:
         try:

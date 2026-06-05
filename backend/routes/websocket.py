@@ -20,7 +20,7 @@ try:
     from ..dependencies import _verify_admin_payload, verify_jwt_token
     from ..settings_loader import get_app_settings
     from ..socket_manager import manager
-    from ..utils.driver_presence import clear_presence, mark_present
+    from ..utils.driver_presence import mark_present
     from ..utils.maps_eta import get_ride_eta_seconds
     from ..utils.redis_client import redis_expire, redis_incr
 except ImportError:
@@ -28,7 +28,7 @@ except ImportError:
     from core.config import settings
     from dependencies import _verify_admin_payload, verify_jwt_token
     from socket_manager import manager
-    from utils.driver_presence import clear_presence, mark_present
+    from utils.driver_presence import mark_present
 
 db = db_supabase  # legacy alias
 
@@ -1022,8 +1022,14 @@ async def websocket_endpoint(
             # was always tripping on the current socket and the offline flip never
             # ran on a clean disconnect.
             manager.disconnect(connection_key)
-            if current_driver_id:
-                await clear_presence(current_driver_id)
+            # Do NOT clear presence here. A socket drop is almost always a
+            # backgrounded app (close 1006/1001), a tower hand-off, or a tunnel —
+            # not the driver tapping Stop. The whole intent-vs-reachability design
+            # relies on presence EXPIRING via its TTL so the grace window can be
+            # refreshed by the background location batch (which calls mark_present)
+            # or the WS reconnect on foreground. Clearing it here nuked that window
+            # and dropped backgrounded drivers off the map / out of dispatch
+            # instantly. Explicit Go Offline still clears it (routes/drivers.py).
             await _handle_driver_ws_disconnect(connection_key, user)
     except Exception as e:
         logger.exception(
@@ -1032,8 +1038,8 @@ async def websocket_endpoint(
         )
         if connection_key and manager.active_connections.get(connection_key) is websocket:
             manager.disconnect(connection_key)
-            if current_driver_id:
-                await clear_presence(current_driver_id)
+            # Same as the clean-disconnect branch: let presence expire via TTL
+            # rather than clearing it on a transient socket error.
             await _handle_driver_ws_disconnect(connection_key, user)
         try:
             await websocket.close()

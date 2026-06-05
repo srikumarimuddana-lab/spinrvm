@@ -146,11 +146,21 @@ export default function ActivityScreen() {
     }
   }, [loadingMore, nextCursor, loadMoreError, fetchPage]);
 
-  // Re-fetch stats whenever period pill changes
-  useEffect(() => { fetchStats(period); }, [period, fetchStats]);
-
   const lastFetchedAt = useRef<number>(0);
+  const lastStatsFetchedAt = useRef<number>(0);
   const ACTIVITY_TTL_MS = 30 * 1000;
+
+  const refreshStats = useCallback((p: Period, force = false) => {
+    const now = Date.now();
+    if (!force && now - lastStatsFetchedAt.current <= ACTIVITY_TTL_MS) return;
+    lastStatsFetchedAt.current = now;
+    fetchStats(p);
+  }, [fetchStats]);
+
+  // Re-fetch stats whenever period pill changes without duplicating the initial
+  // focus fetch. Duplicate stats calls make the tab feel like it stops/starts on
+  // slower phones or cellular networks.
+  useEffect(() => { refreshStats(period, true); }, [period, refreshStats]);
 
   useFocusEffect(
     useCallback(() => {
@@ -158,16 +168,16 @@ export default function ActivityScreen() {
       if (now - lastFetchedAt.current > ACTIVITY_TTL_MS) {
         lastFetchedAt.current = now;
         fetchData();
-        fetchStats(period);
+        refreshStats(period);
         fetchScheduledRides();
       }
-    }, [fetchData, fetchStats, fetchScheduledRides, period])
+    }, [fetchData, refreshStats, fetchScheduledRides, period])
   );
 
   const onRefresh = () => {
     setRefreshing(true);
     fetchData();
-    fetchStats(period);
+    refreshStats(period, true);
     fetchScheduledRides();
   };
 

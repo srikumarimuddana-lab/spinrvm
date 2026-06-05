@@ -384,9 +384,14 @@ export default function RedisMonitoringPage() {
                         WebSocket Health
                     </CardTitle>
                     <p className="text-xs text-muted-foreground">
-                        Cross-replica fan-out status and live socket counts for the replica that
-                        served this request. Counts are <strong>per-replica</strong>, not fleet-wide
-                        {ws?.workers_hint ? <> (this backend runs {ws.workers_hint} uvicorn workers)</> : null}.
+                        Cross-replica fan-out status and live socket counts for the uvicorn worker
+                        that served this request. Counts are <strong>per-worker</strong>, not
+                        host-wide
+                        {ws?.workers_hint ? (
+                            <> — this backend runs {ws.workers_hint} workers, so the host total is
+                            spread across them and each refresh may hit a different one</>
+                        ) : null}
+                        .
                     </p>
                 </CardHeader>
                 <CardContent>
@@ -418,7 +423,8 @@ export default function RedisMonitoringPage() {
                     <p className="mt-3 text-xs text-muted-foreground">
                         Channel <code>{ws?.fanout.channel ?? "–"}</code>
                         {ws?.fanout.backend_scheme ? <> · backend <code>{ws.fanout.backend_scheme}://</code></> : null}
-                        {ws?.replica_hostname ? <> · replica <code>{ws.replica_hostname}</code></> : null}
+                        {ws?.replica_hostname ? <> · host <code>{ws.replica_hostname}</code></> : null}
+                        {ws?.worker_pid ? <> · worker pid <code>{ws.worker_pid}</code></> : null}
                         {ws?.fanout.last_error ? <> · last error <code>{ws.fanout.last_error}</code></> : null}
                     </p>
                 </CardContent>

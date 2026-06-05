@@ -286,7 +286,12 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     # Fallback: existing JWT behavior
     try:
         payload = verify_jwt_token(token)
+    except HTTPException:
+        # verify_jwt_token raises HTTPException for expired/invalid tokens —
+        # that's expected client behaviour, not a server error. Let it bubble.
+        raise
     except Exception as e:
+        # Unexpected library error (e.g. corrupted key, algorithm mismatch).
         # Never log the signing secret, even partially — it's a credential.
         logger.error(f"JWT verification failed: {e}")
         raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}") from e

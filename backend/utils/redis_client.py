@@ -85,7 +85,15 @@ async def _get_redis():
     try:
         import redis.asyncio as aioredis  # type: ignore
 
-        _redis = aioredis.from_url(url, encoding="utf-8", decode_responses=True)
+        _redis = aioredis.from_url(
+            url,
+            encoding="utf-8",
+            decode_responses=True,
+            socket_keepalive=True,
+            socket_timeout=5,
+            socket_connect_timeout=5,
+            retry_on_timeout=True,
+        )
         _redis_url = url
         logger.info(f"Redis connected: {url[:30]}...")
         return _redis

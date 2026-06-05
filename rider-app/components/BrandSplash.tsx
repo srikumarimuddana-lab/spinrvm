@@ -6,40 +6,44 @@ const LOGO = require('../assets/images/spinr-logo.png');
 type Props = { onLayout?: (e: LayoutChangeEvent) => void };
 
 export default function BrandSplash({ onLayout }: Props) {
+  const logoOpacity = useRef(new Animated.Value(0)).current;
   const tagOpacity = useRef(new Animated.Value(0)).current;
-  const tagY       = useRef(new Animated.Value(8)).current;
+  const tagY = useRef(new Animated.Value(8)).current;
 
   useEffect(() => {
-    // Logo is visible immediately — no fade-in — so the moment the native
-    // splash cross-fades out, the Spinr logo is already there underneath.
-    // Only the tagline animates in after a brief pause.
-    Animated.parallel([
-      Animated.timing(tagOpacity, {
+    Animated.sequence([
+      Animated.timing(logoOpacity, {
         toValue: 1,
-        duration: 500,
-        delay: 300,
+        duration: 400,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }),
-      Animated.timing(tagY, {
-        toValue: 0,
-        duration: 500,
-        delay: 300,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
+      Animated.parallel([
+        Animated.timing(tagOpacity, {
+          toValue: 1,
+          duration: 500,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(tagY, {
+          toValue: 0,
+          duration: 500,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+      ]),
     ]).start();
-  }, [tagOpacity, tagY]);
+  }, [logoOpacity, tagOpacity, tagY]);
 
   return (
     <View style={styles.root} onLayout={onLayout}>
       <Animated.Image
         source={LOGO}
-        style={styles.logo}
+        style={[styles.logo, { opacity: logoOpacity }]}
         resizeMode="contain"
       />
       <Animated.Text
-        style={[styles.tagline, { opacity: tagOpacity, transform: [{ translateY: tagY }] }]}
+        style={[styles.subtitle, { opacity: tagOpacity, transform: [{ translateY: tagY }] }]}
         allowFontScaling={false}
       >
         Ride Local · Support Local
@@ -59,7 +63,7 @@ const styles = StyleSheet.create({
     width: 220,
     height: 80,
   },
-  tagline: {
+  subtitle: {
     marginTop: 18,
     fontSize: 13,
     letterSpacing: 1.2,

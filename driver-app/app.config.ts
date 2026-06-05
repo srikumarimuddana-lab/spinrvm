@@ -2,7 +2,7 @@ import { ExpoConfig, ConfigContext } from 'expo/config';
 
 const APP_NAME = 'Spinr Driver';
 const BUNDLE_ID = 'com.spinr.driver'; // driver-only ID — rider app uses com.spinr.user (no clash)
-const SCHEME = 'spinr-driver';
+const SCHEME = 'spinrdriver';
 
 export default ({ config }: ConfigContext): ExpoConfig => ({
     ...config,
@@ -16,7 +16,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // @ts-expect-error newArchEnabled is valid Expo config but not yet typed in ExpoConfig
     newArchEnabled: true, // REQUIRED: react-native-reanimated 4 / react-native-worklets only run on the New Architecture (old arch crashed on first animated screen)
     updates: {
-        url: 'https://u.expo.dev/9fb3b288-3036-442c-98aa-d18987008cef',
+        url: 'https://u.expo.dev/ddcf21cd-edb9-4edd-bd8c-bced1702dd09',
     },
     // Bare workflow requires a literal string runtimeVersion (policies like
     // 'fingerprint'/'appVersion' rejected by EAS CLI). Bump manually when
@@ -244,7 +244,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     },
     extra: {
         eas: {
-            projectId: "9fb3b288-3036-442c-98aa-d18987008cef"
+            projectId: "ddcf21cd-edb9-4edd-bd8c-bced1702dd09"
         },
         EXPO_PUBLIC_BACKEND_URL: process.env.EXPO_PUBLIC_BACKEND_URL,
         backendUrl: process.env.EXPO_PUBLIC_BACKEND_URL,

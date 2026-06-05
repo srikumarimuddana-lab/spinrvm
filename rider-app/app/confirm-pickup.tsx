@@ -62,6 +62,10 @@ export default function ConfirmPickupScreen() {
   const [distanceM, setDistanceM] = useState(0);
   const [checking, setChecking] = useState(false);
   const [chooser, setChooser] = useState<{ venue: string; points: { name: string; lat: number; lng: number }[] } | null>(null);
+  // Measured bottom-card height so the recenter button floats just above it
+  // instead of overlapping — the card grows with the too-far warning, the
+  // dropoff row, and the multiline note. Falls back to a default until first layout.
+  const [cardHeight, setCardHeight] = useState(0);
 
   const isTooFar = distanceM > PICKUP_RADIUS_M;
 
@@ -176,12 +180,20 @@ export default function ConfirmPickupScreen() {
       </View>
 
       {/* ═══ Recenter button ═══ */}
-      <TouchableOpacity style={styles.recenterBtn} onPress={handleRecenter}>
+      <TouchableOpacity
+        style={[styles.recenterBtn, { bottom: (cardHeight || 240) + 12 }]}
+        onPress={handleRecenter}
+        accessibilityRole="button"
+        accessibilityLabel="Recenter map on your location"
+      >
         <Ionicons name="locate" size={22} color={colors.text} />
       </TouchableOpacity>
 
       {/* ═══ Bottom card ═══ */}
-      <View style={[styles.bottomCard, { paddingBottom: Math.max(insets.bottom, 16) + 8 }]}>
+      <View
+        style={[styles.bottomCard, { paddingBottom: Math.max(insets.bottom, 16) + 8 }]}
+        onLayout={(e) => setCardHeight(e.nativeEvent.layout.height)}
+      >
         {/* Instruction */}
         <Text style={styles.instruction}>
           Move the map to set your exact pickup spot
@@ -352,7 +364,6 @@ function createStyles(colors: ThemeColors, sf: (s: number) => number, insets: { 
     recenterBtn: {
       position: 'absolute',
       right: 16,
-      bottom: 220,
       width: 48,
       height: 48,
       borderRadius: 24,

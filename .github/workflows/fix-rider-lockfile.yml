@@ -1,0 +1,46 @@
+name: Fix rider lockfile
+
+# Helper workflow: the dev sandbox can't reach the npm registry, so this runs
+# `yarn install` on a CI runner to regenerate rider-app/yarn.lock after
+# react/react-dom were bumped to 19.2.3, then commits the refreshed lockfile
+# back to the branch. Triggers when this file or rider-app/package.json changes
+# on the feature branch (and on manual dispatch). The commit carries [skip ci]
+# so it does not retrigger this workflow.
+on:
+  push:
+    branches: [claude/sharp-sagan-kdSBh]
+    paths:
+      - rider-app/package.json
+      - .github/workflows/fix-rider-lockfile.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: claude/sharp-sagan-kdSBh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Regenerate rider-app/yarn.lock
+        working-directory: rider-app
+        run: yarn install --ignore-scripts --non-interactive
+
+      - name: Commit refreshed lockfile (if changed)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- rider-app/yarn.lock; then
+            echo "rider-app/yarn.lock already current — nothing to commit."
+          else
+            git add rider-app/yarn.lock
+            git commit -m "chore(rider-app): refresh yarn.lock for react 19.2.3 [skip ci]"
+            git push origin HEAD:refs/heads/claude/sharp-sagan-kdSBh
+          fi

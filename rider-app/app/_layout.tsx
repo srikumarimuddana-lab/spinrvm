@@ -17,6 +17,23 @@ import * as SplashScreen from 'expo-splash-screen';
 import * as Updates from 'expo-updates';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
+
+// Failsafe watchdog: a non-critical startup hang must never leave the rider
+// staring at a frozen native splash forever. (A bad analytics SDK on a new
+// Android release once hung the UI thread here and bricked cold start.) If our
+// React splash hasn't taken over within this window, force-hide the native
+// splash so BrandSplash (the in-app loading UI) shows, and report the stall so
+// the root cause gets fixed rather than silently masked. Cleared in
+// onLoadingLayout on the normal boot path.
+const SPLASH_WATCHDOG_MS = 10_000;
+let splashWatchdog: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+  splashWatchdog = null;
+  SplashScreen.hideAsync().catch(() => {});
+  captureMessage(
+    'rider splash watchdog fired — startup stalled, native splash force-hidden',
+    'warning',
+  );
+}, SPLASH_WATCHDOG_MS);
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import NetInfo from '@react-native-community/netinfo';
 import api from '@shared/api/client';
@@ -96,8 +113,20 @@ if (canUseNotifications) {
   }
 }
 
+// Android is DISABLED by default: LogRocket's session-replay view serializer
+// reflects into hidden framework fields (e.g. PorterDuffColorFilter.mColor)
+// that Android 16 / targetSdk 36 blocks ("hiddenapi ... denied"). On Android 16
+// devices (e.g. Samsung S26) that denial hung the UI thread during startup, so
+// the first React frame never rendered and the app stuck on the native splash.
+// Override per build with EXPO_PUBLIC_ENABLE_LOGROCKET ('true'/'false'); leave
+// unset for the safe default (iOS on, Android off). Re-enable Android once
+// LogRocket ships an Android-16-safe SDK.
+const LOGROCKET_ENABLED =
+  process.env.EXPO_PUBLIC_ENABLE_LOGROCKET != null
+    ? process.env.EXPO_PUBLIC_ENABLE_LOGROCKET === 'true'
+    : Platform.OS === 'ios';
 let LogRocket: any = null;
-if (!isExpoGo && Platform.OS !== 'web') {
+if (!isExpoGo && Platform.OS !== 'web' && LOGROCKET_ENABLED) {
   try {
     LogRocket = require('@logrocket/react-native').default ?? require('@logrocket/react-native');
   } catch (e) {
@@ -515,6 +544,10 @@ export default function RootLayout() {
   }, [isAuthInitialized, isOffline]);
 
   const onLoadingLayout = useCallback(() => {
+    if (splashWatchdog) {
+      clearTimeout(splashWatchdog);
+      splashWatchdog = null;
+    }
     SplashScreen.hideAsync().catch(() => {});
   }, []);
 

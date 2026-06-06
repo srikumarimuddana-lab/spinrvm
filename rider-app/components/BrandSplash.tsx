@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import {
   ActivityIndicator,
   Animated,
+  Dimensions,
   Easing,
   LayoutChangeEvent,
   StyleSheet,
@@ -10,11 +11,13 @@ import {
 
 const LOGO = require('../assets/images/spinr-logo.png');
 
-// The logo asset is 384×156 (≈2.46:1). Keep the render box on that exact ratio
-// so `resizeMode="contain"` fills it with no letterboxing and the full mark is
-// always shown — never cropped, never squished.
-const LOGO_WIDTH = 260;
-const LOGO_HEIGHT = Math.round((LOGO_WIDTH * 156) / 384); // 106
+// Scale logo to 68% of screen width, capped at 260dp so it never looks
+// oversized on large phones and never overflows on small ones (320dp → 218dp).
+const SCREEN_W = Dimensions.get('window').width;
+const LOGO_WIDTH = Math.min(260, Math.round(SCREEN_W * 0.68));
+const LOGO_HEIGHT = Math.round((LOGO_WIDTH * 156) / 384);
+// Tagline font scales with screen width: 12dp min on 320dp, 14dp on 390dp+.
+const TAGLINE_SIZE = Math.min(14, Math.max(12, Math.round(SCREEN_W * 0.036)));
 
 type Props = { onLayout?: (e: LayoutChangeEvent) => void };
 
@@ -116,7 +119,7 @@ const styles = StyleSheet.create({
   },
   tagline: {
     marginTop: 20,
-    fontSize: 13,
+    fontSize: TAGLINE_SIZE,
     letterSpacing: 0.8,
     color: '#8A8F98',
     fontFamily: 'PlusJakartaSans_600SemiBold',

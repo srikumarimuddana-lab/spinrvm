@@ -24,8 +24,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // with no production users, OTA compatibility risk is zero.
     runtimeVersion: '2.0.0', // bumped from 1.0.0: New Architecture is a native/JS-bundle break — old-arch installs must not pull this OTA
     splash: {
-        image: './assets/images/splash-mark.png',
-        resizeMode: 'contain',
         backgroundColor: '#FFFFFF',
     },
     ios: ({
@@ -189,9 +187,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             isIosBackgroundLocationEnabled: true,
         }],
         ['expo-splash-screen', {
-            image: './assets/images/splash-mark.png',
-            imageWidth: 200,
-            resizeMode: 'contain',
             backgroundColor: '#FFFFFF',
         }],
         'expo-font',

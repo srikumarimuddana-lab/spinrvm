@@ -23,7 +23,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // with no production users, OTA compatibility risk is zero.
     runtimeVersion: '2.0.0', // bumped from 1.0.0: New Architecture is a native/JS-bundle break — old-arch installs must not pull this OTA
     splash: {
-        image: './assets/images/spinr-logo.png',
+        image: './assets/images/splash-wordmark.png',
         resizeMode: 'contain',
         backgroundColor: '#FFFFFF',
     },
@@ -131,8 +131,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         'expo-secure-store',
         'expo-web-browser',
         ['expo-splash-screen', {
-            image: './assets/images/spinr-logo.png',
-            imageWidth: 240,
+            image: './assets/images/splash-wordmark.png',
+            imageWidth: 280,
             resizeMode: 'contain',
             backgroundColor: '#FFFFFF',
         }],

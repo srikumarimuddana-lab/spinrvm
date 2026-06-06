@@ -113,19 +113,26 @@ A clean Canadian project; the US test data is discarded.
 - [ ] Confirm `pgsodium` and `pgcrypto` are enabled (Database → Extensions). pgsodium
       is on by default for projects created after 2023-06.
 
-### 2. Schema + RPCs + PII key
-- [ ] Set the connection via env vars and run the ordered migrations. The runner reads
-      `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` from the environment (or `backend/.env`)
-      and takes **no `--env` flag** — its only argument is `--dry-run`:
+### 2. Base schema → migrations → PII key
+- [ ] **Apply the base schema first.** The numbered migrations are *deltas* that assume
+      the core tables (`users`, `drivers`, `rides`, `settings`, …) already exist —
+      `backend/supabase_schema.sql` creates them. Running `migrate.py` against an empty
+      database fails at `01` with `relation "drivers" does not exist`.
+- [ ] Then run the delta migrations. The runner reads a full DSN from `PG_CONNECTION_STRING`
+      (preferred — point it at the IPv4 **Session pooler**; the direct
+      `db.<ref>.supabase.co` host is IPv6-only and won't resolve on many networks), or
+      falls back to `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY`. Its only flag is `--dry-run`:
       ```bash
       cd backend
-      export SUPABASE_URL=https://<new-project-ref>.supabase.co
-      export SUPABASE_SERVICE_ROLE_KEY=<service-role-key>   # Settings → API → service_role
+      # DSN = the project's Session-pooler string (user postgres.<ref> @ the pooler host)
+      export PG_CONNECTION_STRING="host=aws-N-ca-central-1.pooler.supabase.com port=5432 dbname=postgres user=postgres.<ref> password=<db-password> sslmode=require"
+
+      # 1) base tables, then 2) the delta migrations
+      python -c "import os,psycopg2; c=psycopg2.connect(os.environ['PG_CONNECTION_STRING']); c.autocommit=True; c.cursor().execute(open('supabase_schema.sql',encoding='utf-8').read())"
       python scripts/migrate.py --dry-run    # preview
       python scripts/migrate.py              # apply, in filename order
       ```
-      This creates `schema_migrations`, applies every migration in order, and — via
-      migration `32` — creates the `drivers_pii_key` pgsodium key and the
+      Migration `32` creates the `drivers_pii_key` pgsodium key and the
       `encrypt_driver_pii` / `decrypt_driver_pii` RPCs.
 
 ### 3. Storage buckets

@@ -117,7 +117,7 @@ const styles = StyleSheet.create({
   tagline: {
     marginTop: 20,
     fontSize: 13,
-    letterSpacing: 1.4,
+    letterSpacing: 0.8,
     color: '#8A8F98',
     fontFamily: 'PlusJakartaSans_600SemiBold',
     textAlign: 'center',

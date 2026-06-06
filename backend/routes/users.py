@@ -274,12 +274,16 @@ async def upload_profile_image(file: UploadFile = File(...), current_user: dict 
     # Store as data URI
     data_uri = f"data:{file.content_type};base64,{base64_image}"
 
+    # Riders' profile photos are visible immediately; only driver photos
+    # go to the admin review queue (identity/safety check before going online).
+    image_status = "pending_review" if current_user.get("role") == "driver" else "approved"
+
     await db_supabase.update_one(
         "users",
         {"id": current_user["id"]},
         {
             "profile_image": data_uri,
-            "profile_image_status": "pending_review",
+            "profile_image_status": image_status,
         },
     )
     updated_user = await db_supabase.get_user_by_id(current_user["id"])

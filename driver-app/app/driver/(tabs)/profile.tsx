@@ -504,7 +504,7 @@ export default function ProfileScreen() {
                         <View style={styles.cardInfo}>
                         <Text style={styles.cardLabel}>{req.name}</Text>
                         <View style={{flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2}}>
-                            {expiry && (
+                            {expiry && docStatus === 'approved' && (
                                 <Text style={styles.cardValue}>{new Date(expiry).toLocaleDateString()}</Text>
                             )}
                             <View style={[styles.docStatusBadge, {backgroundColor: badgeColor}]}>

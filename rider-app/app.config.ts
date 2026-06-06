@@ -23,6 +23,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // with no production users, OTA compatibility risk is zero.
     runtimeVersion: '2.0.0', // bumped from 1.0.0: New Architecture is a native/JS-bundle break — old-arch installs must not pull this OTA
     splash: {
+        image: './assets/images/spinr-logo.png',
+        resizeMode: 'contain',
         backgroundColor: '#FFFFFF',
     },
     ios: {
@@ -129,6 +131,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         'expo-secure-store',
         'expo-web-browser',
         ['expo-splash-screen', {
+            image: './assets/images/spinr-logo.png',
+            resizeMode: 'contain',
             backgroundColor: '#FFFFFF',
         }],
         '@react-native-firebase/app',

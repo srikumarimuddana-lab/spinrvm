@@ -121,6 +121,7 @@ const styles = StyleSheet.create({
     color: '#8A8F98',
     fontFamily: 'PlusJakartaSans_600SemiBold',
     textAlign: 'center',
+    alignSelf: 'stretch',
   },
   footer: {
     position: 'absolute',

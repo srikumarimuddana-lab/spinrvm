@@ -31,7 +31,7 @@ export default function BrandSplash({ onLayout }: Props) {
   const logoOpacity = useRef(new Animated.Value(0)).current;
   const logoScale = useRef(new Animated.Value(0.92)).current;
   const tagOpacity = useRef(new Animated.Value(0)).current;
-  const tagY = useRef(new Animated.Value(10)).current;
+  const tagY = useRef(new Animated.Value(-8)).current;
   const footerOpacity = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -119,6 +119,7 @@ const styles = StyleSheet.create({
   },
   tagline: {
     marginTop: 20,
+    paddingBottom: 6,
     fontSize: TAGLINE_SIZE,
     letterSpacing: 0.8,
     color: '#8A8F98',

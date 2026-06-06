@@ -46,8 +46,8 @@ Do not assume "the database" is the whole job.
 
 | Component | Moves how |
 |---|---|
-| Postgres schema + data — incl. `app_settings` (Stripe/Twilio/Maps keys), `stripe_events`, `schema_migrations`, all `SECURITY DEFINER` RPCs | Path A: re-run migrations fresh. Path B: `pg_dump`/`supabase db dump` → restore, or logical replication |
-| ⚠️ **Encrypted driver PII** — `drivers.license_number`, `vehicles.vin` → `vault.secrets` UUIDs under pgsodium key `drivers_pii_key` | **Never via `pg_dump`.** See landmine #1 |
+| Postgres schema + data — incl. the `settings` table's `app_settings` row (Stripe/Twilio/Maps keys), `stripe_events`, `schema_migrations`, all `SECURITY DEFINER` RPCs | Path A: re-run migrations fresh. Path B: `pg_dump`/`supabase db dump` → restore, or logical replication |
+| ⚠️ **Encrypted driver PII** — `drivers.license_number`, `drivers.vehicle_vin` → `vault.secrets` UUIDs under pgsodium key `drivers_pii_key` | **Never via `pg_dump`.** See landmine #1 |
 | Extensions: `pgsodium`, `pgcrypto` | Enable on the target **before** restore / first migration |
 | Storage buckets: `driver-documents`, `kyb-documents` (private), `ride-snapshots` (public) | Recreate bucket + RLS; Path B also copies objects (`backend/docs/STORAGE_BUCKETS.md`) |
 | Realtime (rider/driver apps subscribe directly with the anon key) | Recreate; new anon key → landmine #3 |
@@ -60,16 +60,17 @@ Do not assume "the database" is the whole job.
 ## Landmines (read before touching anything)
 
 **1. A naïve `pg_dump` destroys encrypted driver PII.** `backend/migrations/32_encrypt_sensitive_fields.sql`
-stores `license_number` / `vin` as `vault.secrets` UUIDs encrypted by **pgsodium**
-under the project-scoped key `drivers_pii_key`. The pgsodium **root key is held
-per-project by Supabase and is not in a normal dump.** Restore the ciphertext into a
+stores `drivers.license_number` / `drivers.vehicle_vin` as `vault.secrets` UUIDs encrypted
+by **pgsodium** under the project-scoped key `drivers_pii_key`. The pgsodium **root key is
+held per-project by Supabase and is not in a normal dump.** Restore the ciphertext into a
 new project and `vault.decrypted_secrets` returns garbage — PII is permanently lost.
 The migration is effectively a **cross-project key rotation**: decrypt on the source
 via `decrypt_driver_pii()`, move plaintext over a secure backend channel, re-encrypt
 on the target via `encrypt_driver_pii()` (mints fresh `vault.secrets` under the *new*
-project's `drivers_pii_key`). Reuse the logic in `backend/scripts/rotate_pii_key.py`
-(see `docs/runbooks/pii-key-rotation.md`), pointed at two projects instead of one.
-*(Path A skips this entirely — there is no PII to preserve.)*
+project's `drivers_pii_key`). Use the decrypt-old → encrypt-new batching described in
+`docs/runbooks/pii-key-rotation.md` — note the `backend/scripts/rotate_pii_key.py` helper
+it references **does not exist yet** and must be written (pointed at two projects instead
+of one) before a real run. *(Path A skips this entirely — there is no PII to preserve.)*
 
 **2. New project = new keys → update them in every place, identically.** New
 `SUPABASE_URL`, service-role key, and anon key. Per `docs/runbooks/railway-fly-failover.md`
@@ -88,10 +89,14 @@ no installed builds in the wild — non-issue.)*
 `backend/scripts/migrate.py` (full-filename idempotency key, highest is `135`) won't
 re-run every migration. Preserve it.
 
-**5. `ride-snapshots` URLs are absolute (Path B).** `rides.route_snapshot_url` and
-already-sent receipt emails hold full URLs at the *old* project's public bucket host.
-Decommission the US project and those images 404. Keep the old public bucket alive
-read-only, or rewrite stored URLs to the new host.
+**5. `ride-snapshots` URLs are absolute *and* are route-PII (Path B).** `rides.route_snapshot_url`
+and already-sent receipt emails hold full URLs at the *old* project's public bucket host, and
+those public PNGs embed pickup/dropoff markers and route overlays — i.e. PII. So they **cannot
+be left in the US**: copy the objects to the Canadian `ride-snapshots` bucket **and** rewrite
+`rides.route_snapshot_url` to the new host *before* decommissioning. Keeping the old bucket
+alive is not an option — it 404s the images once the project is deleted and, until then, leaves
+route-PII offshore (defeating the migration). Old receipt emails will still point at dead URLs;
+accept that or re-host the images if needed.
 
 **6. Stripe needs no dashboard change.** Webhooks target `api-spinr.spinr.ca`, not
 Supabase, and `stripe_events` carries the dedupe table — so idempotency survives.
@@ -109,12 +114,17 @@ A clean Canadian project; the US test data is discarded.
       is on by default for projects created after 2023-06.
 
 ### 2. Schema + RPCs + PII key
-- [ ] Point `PG_CONNECTION_STRING` / `SUPABASE_*` at the **new** project.
-- [ ] Run the ordered migrations from repo root:
+- [ ] Set the connection via env vars and run the ordered migrations. The runner reads
+      `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` from the environment (or `backend/.env`)
+      and takes **no `--env` flag** — its only argument is `--dry-run`:
       ```bash
-      cd backend && python scripts/migrate.py --env production
+      cd backend
+      export SUPABASE_URL=https://<new-project-ref>.supabase.co
+      export SUPABASE_SERVICE_ROLE_KEY=<service-role-key>   # Settings → API → service_role
+      python scripts/migrate.py --dry-run    # preview
+      python scripts/migrate.py              # apply, in filename order
       ```
-      This creates `schema_migrations`, applies `00 … 135` in order, and — via
+      This creates `schema_migrations`, applies every migration in order, and — via
       migration `32` — creates the `drivers_pii_key` pgsodium key and the
       `encrypt_driver_pii` / `decrypt_driver_pii` RPCs.
 
@@ -123,8 +133,8 @@ A clean Canadian project; the US test data is discarded.
       `driver-documents` (private), `kyb-documents` (private), `ride-snapshots` (**public**).
 
 ### 4. App settings
-- [ ] Re-enter Stripe / Twilio / Google Maps keys in the admin dashboard (they live in
-      the `app_settings` table, which starts empty on a fresh project).
+- [ ] Re-enter Stripe / Twilio / Google Maps keys in the admin dashboard (they live in the
+      `settings` table's single `app_settings` row, which starts empty on a fresh project).
 
 ### 5. Cut over env (see matrix) → smoke test → decommission
 - [ ] Flip the env vars in the matrix below, redeploy, run the verification checklist,
@@ -138,6 +148,13 @@ Use a maintenance window (dump/restore) or logical replication for near-zero dow
 
 ### 1. Provision + extensions
 - [ ] New `ca-central-1` project; enable `pgsodium`, `pgcrypto` **before** restore.
+- [ ] **Create the `drivers_pii_key` on the target.** Step 2 preserves `schema_migrations`,
+      so `migrate.py` will **not** re-run migration 32's key-creation block — and pgsodium
+      keys are project-scoped, so `pg_dump` doesn't carry them. Without this, `encrypt_driver_pii()`
+      in step 3 raises `drivers_pii_key not found`. Run migration 32's key block (or
+      `SELECT pgsodium.create_key(name => 'drivers_pii_key');`). The `encrypt_driver_pii` /
+      `decrypt_driver_pii` functions themselves arrive with the schema dump — only the key
+      must be created here.
 
 ### 2. Schema + data (everything except encrypted PII)
 - [ ] `supabase db dump` (or `pg_dump`) the source; restore into the target. For large
@@ -146,19 +163,22 @@ Use a maintenance window (dump/restore) or logical replication for near-zero dow
 - [ ] Null out / skip the encrypted columns in this pass — they are handled in step 3.
 
 ### 3. Re-encrypt PII across projects (the landmine)
+- [ ] Confirm the target `drivers_pii_key` exists (step 1) before any `encrypt_driver_pii()` call.
 - [ ] Snapshot `pgsodium.valid_key` on **both** projects to
       `reports/compliance/key-rotation/YYYY-MM-DD-region-migration.csv`.
-- [ ] For each driver/vehicle row: `decrypt_driver_pii(old_uuid)` on the **source**,
-      carry plaintext over a secure backend channel (TLS, ephemeral, audit-logged),
-      `encrypt_driver_pii(plaintext)` on the **target**, store the new UUID. Reuse
-      `backend/scripts/rotate_pii_key.py` batching; dry-run against staging first.
+- [ ] For each driver row (`drivers.license_number`, `drivers.vehicle_vin`):
+      `decrypt_driver_pii(old_uuid)` on the **source**, carry plaintext over a secure backend
+      channel (TLS, ephemeral, audit-logged), `encrypt_driver_pii(plaintext)` on the **target**,
+      store the new UUID. The batching/dry-run helper (`backend/scripts/rotate_pii_key.py`) does
+      not exist yet — write it first (see `pii-key-rotation.md`); dry-run against staging.
 - [ ] Confirm row counts match and no row stays unreadable.
 
 ### 4. Storage objects
 - [ ] Copy every object in `driver-documents`, `kyb-documents`, `ride-snapshots` to the
       new buckets (Supabase CLI / Storage API / `rclone`). Recreate bucket RLS.
-- [ ] Decide `ride-snapshots` strategy (landmine #5): keep old bucket read-only, or
-      rewrite `rides.route_snapshot_url`.
+- [ ] `ride-snapshots` is route-PII (landmine #5): copy its objects to the new bucket **and**
+      rewrite `rides.route_snapshot_url` to the new host **before** decommission. Do not leave
+      the old bucket alive.
 
 ### 5. Cut over env → verify → decommission
 - [ ] Freeze writes, do a final delta sync, flip env (matrix below), run verification,
@@ -191,7 +211,7 @@ Every surface that holds Supabase credentials gets the **new** project's values.
       to both rider and driver.
 - [ ] Driver doc upload writes to `driver-documents` and a signed URL renders.
 - [ ] A completed ride uploads to `ride-snapshots` and the receipt email image loads.
-- [ ] Driver PII (`license_number`, `vin`) decrypts correctly (Path B only).
+- [ ] Driver PII (`drivers.license_number`, `drivers.vehicle_vin`) decrypts correctly (Path B only).
 - [ ] A Stripe **test** webhook processes exactly once (idempotent).
 - [ ] Realtime subscription in the apps works, or the WS fallback fully covers it.
 
@@ -213,8 +233,9 @@ Every surface that holds Supabase credentials gets the **new** project's values.
 
 - `SUPABASE_REGION=ca-central-1` set on **both** backends or production refuses to boot.
 - Railway and Fly Supabase secrets are **identical** — a mismatch is split-brain.
-- pgsodium `drivers_pii_key` exists on the target **before** any encrypt/decrypt call
-  (migration 32 creates it).
+- pgsodium `drivers_pii_key` exists on the target **before** any encrypt/decrypt call.
+  Path A: migration 32 creates it. Path B: create it manually (step 1) — the preserved
+  `schema_migrations` means migration 32 does **not** re-run.
 - Never `pg_dump` `vault.secrets` and expect it to decrypt in the new project.
 - Only one project processes Stripe webhooks at a time during any dual-run window.
 
@@ -233,7 +254,9 @@ Every surface that holds Supabase credentials gets the **new** project's values.
 ## Verify current state (if unsure whether real PII exists)
 
 - [ ] Supabase dashboard → Settings → General → **Region** (confirms US vs `ca-central-1`).
-- [ ] `SELECT count(*) FROM drivers WHERE license_number IS NOT NULL;` and the same for
-      `vehicles.vin` — non-trivial counts of real drivers mean Path B + `compliance`.
-- [ ] Check whether `app_settings` holds **live** Stripe keys (`sk_live_…`) vs test
-      keys (`sk_test_…`) — live keys imply real traffic.
+- [ ] `SELECT count(*) FROM drivers WHERE license_number IS NOT NULL OR vehicle_vin IS NOT NULL;`
+      — non-trivial counts of real drivers mean Path B + `compliance`. (VIN is `drivers.vehicle_vin`;
+      there is no `vehicles` table.)
+- [ ] Check whether the `settings` table's `app_settings` row holds **live** Stripe keys
+      (`sk_live_…`) vs test (`sk_test_…`) — e.g. inspect `SELECT * FROM settings WHERE id = 'app_settings';`
+      (or call `settings_loader.get_app_settings()`). Live keys imply real traffic.

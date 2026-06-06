@@ -465,35 +465,33 @@ export default function ProfileScreen() {
                 const isExpiringSoon = expiresIn !== null && expiresIn > 0 && expiresIn < 30;
 
                 const badgeColor =
-                    isExpired ? '#EF4444' :
-                    isExpiringSoon ? '#F59E0B' :
-                    isValid ? '#10B981' :
-                    docStatus === 'approved' ? '#10B981' :
                     docStatus === 'pending' ? '#F59E0B' :
                     docStatus === 'rejected' ? '#EF4444' :
+                    isExpired ? '#EF4444' :
+                    isExpiringSoon ? '#F59E0B' :
+                    (isValid || docStatus === 'approved') ? '#10B981' :
                     '#EF4444'; // upload required
 
                 const badgeLabel =
-                    isExpired ? 'EXPIRED' :
-                    isExpiringSoon ? `Exp in ${expiresIn}d` :
-                    isValid ? 'VALID' :
-                    docStatus === 'approved' ? 'APPROVED' :
                     docStatus === 'pending' ? 'PENDING REVIEW' :
                     docStatus === 'rejected' ? 'REJECTED' :
+                    isExpired ? 'EXPIRED' :
+                    isExpiringSoon ? `Exp in ${expiresIn}d` :
+                    (isValid || docStatus === 'approved') ? 'VALID' :
                     'UPLOAD REQUIRED';
 
                 const iconColor =
-                    isExpired ? '#EF4444' :
-                    (isValid || docStatus === 'approved') ? '#10B981' :
                     docStatus === 'pending' ? '#F59E0B' :
                     docStatus === 'rejected' ? '#EF4444' :
+                    isExpired ? '#EF4444' :
+                    (isValid || docStatus === 'approved') ? '#10B981' :
                     colors.textDim;
 
                 const iconBg =
-                    isExpired ? 'rgba(239, 68, 68, 0.1)' :
-                    (isValid || docStatus === 'approved') ? 'rgba(16, 185, 129, 0.1)' :
                     docStatus === 'pending' ? 'rgba(245, 158, 11, 0.1)' :
                     docStatus === 'rejected' ? 'rgba(239, 68, 68, 0.1)' :
+                    isExpired ? 'rgba(239, 68, 68, 0.1)' :
+                    (isValid || docStatus === 'approved') ? 'rgba(16, 185, 129, 0.1)' :
                     '#F9FAFB';
 
                 return (

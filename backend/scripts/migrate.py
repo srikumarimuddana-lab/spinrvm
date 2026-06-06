@@ -13,6 +13,12 @@ Environment variables required:
     SUPABASE_SERVICE_ROLE_KEY — Supabase service role key (not anon key)
 
 Optional:
+    PG_CONNECTION_STRING / DATABASE_URL — full Postgres DSN. When set, it is used
+        verbatim and the direct db.<ref>.supabase.co host is NOT derived. That
+        direct host is IPv6-only on current Supabase projects and fails to resolve
+        on many IPv4-only networks; point this at the Session pooler instead
+        (user postgres.<ref> @ aws-N-<region>.pooler.supabase.com:5432). Takes
+        precedence over SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY.
     MIGRATIONS_DIR — path to migration files (default: backend/migrations)
 """
 
@@ -58,6 +64,24 @@ def get_db_connection():
         sys.exit(1)
 
     load_dotenv()
+
+    # Direct DSN override. When PG_CONNECTION_STRING (or DATABASE_URL) is set we
+    # use it verbatim and skip deriving the `db.<ref>.supabase.co` host — that
+    # host is IPv6-only on current Supabase projects and fails to resolve on many
+    # IPv4-only networks. Point this at the Session pooler
+    # (user postgres.<ref> @ aws-N-<region>.pooler.supabase.com:5432) for IPv4.
+    # The value contains a password, so it is never logged.
+    pg_dsn = os.environ.get("PG_CONNECTION_STRING") or os.environ.get("DATABASE_URL")
+    if pg_dsn:
+        try:
+            conn = psycopg2.connect(pg_dsn)
+            conn.autocommit = False
+            logger.info("Connected via PG_CONNECTION_STRING/DATABASE_URL override.")
+            return conn
+        except Exception as e:
+            logger.error(f"Database connection failed: {e}")
+            sys.exit(1)
+
     supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
     service_role_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 

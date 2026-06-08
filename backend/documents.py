@@ -1,4 +1,5 @@
 import os
+import re as _re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -256,6 +257,42 @@ def _extract_signed_url(res: Any) -> str:
     if not url:
         raise RuntimeError(f"create_signed_url missing URL field: {res!r}")
     return url
+
+
+
+_STORAGE_KEY_RE = _re.compile(r"/storage/v1/object/(?:sign|public)/driver-documents/([^?#]+)")
+
+
+def _extract_storage_key(stored_url: str) -> Optional[str]:
+    """Extract the bare storage-object key from a Supabase Storage URL.
+
+    Handles both signed and public URL shapes, regardless of which Supabase
+    project host they were originally generated for.
+    """
+    m = _STORAGE_KEY_RE.search(stored_url or "")
+    return m.group(1) if m else None
+
+
+def regenerate_signed_url(stored_url: str, expires_in: int = 3600) -> str:
+    """Return a fresh signed URL for a driver-document object.
+
+    If the stored URL comes from the old Supabase project (or if the
+    signature has expired), the current Supabase client generates a new one
+    pointing at the currently-configured project. Falls back to the stored
+    URL if the storage key cannot be extracted or the Supabase client is
+    unavailable.
+    """
+    if not supabase:
+        return stored_url
+    storage_key = _extract_storage_key(stored_url)
+    if not storage_key:
+        return stored_url
+    try:
+        res = supabase.storage.from_("driver-documents").create_signed_url(storage_key, expires_in)
+        return _extract_signed_url(res)
+    except Exception as exc:
+        logger.warning("regenerate_signed_url failed for key=%s: %s", storage_key, exc)
+        return stored_url
 
 
 async def save_upload(file: UploadFile) -> str:

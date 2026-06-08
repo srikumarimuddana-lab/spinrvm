@@ -8,11 +8,13 @@ from pydantic import BaseModel
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
+    from ...documents import regenerate_signed_url
     from ...features import send_push_notification
     from ...utils.audit_logger import log_admin_action
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user  # noqa: F401
+    from documents import regenerate_signed_url  # noqa: F401
     from features import send_push_notification  # noqa: F401
     from utils.audit_logger import log_admin_action  # noqa: F401
 
@@ -146,6 +148,10 @@ async def admin_get_pending_documents(
     )
     has_more = len(docs) > limit
     items = docs[:limit]
+    for doc in items:
+        for field in ("document_url", "file_url"):
+            if doc.get(field):
+                doc[field] = regenerate_signed_url(doc[field])
     return {
         "items": items,
         "next_cursor": items[-1]["id"] if items and has_more else None,
@@ -165,6 +171,10 @@ async def admin_get_driver_documents(driver_id: str):
         desc=True,
         limit=100,
     )
+    for doc in documents or []:
+        for field in ("document_url", "file_url"):
+            if doc.get(field):
+                doc[field] = regenerate_signed_url(doc[field])
     return documents or []
 
 

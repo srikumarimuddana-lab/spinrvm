@@ -69,7 +69,7 @@ packaging==26.2           # via black, deprecation, limits, pytest
 pandas==3.0.2             # via -r requirements.in
 pathspec==1.1.1           # via black
 pillow==12.2.0            # via -r requirements.in, staticmap
-platformdirs==4.9.6       # via black
+platformdirs==4.10.0       # via black
 pluggy==1.6.0             # via pytest, pytest-cov
 postgrest==2.29.0         # via -r requirements.in, supabase
 propcache==0.4.1          # via aiohttp, yarl

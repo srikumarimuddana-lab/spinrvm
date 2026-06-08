@@ -192,7 +192,7 @@ export default function KybQueuePage() {
                                             {c.kyb_document_url ? (
                                                 <a
                                                     className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline"
-                                                    href={c.kyb_document_url}
+                                                    href={`/api/admin/corporate-accounts/${c.id}/kyb/view`}
                                                     target="_blank"
                                                     rel="noreferrer"
                                                 >

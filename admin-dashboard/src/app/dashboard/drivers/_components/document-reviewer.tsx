@@ -237,10 +237,10 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
                     <div className="bg-muted/30 flex items-center justify-center p-6 overflow-auto relative">
                         {current.document_url ? (
                             isPdf(current.document_url) ? (
-                                <embed src={`/api/admin/documents/${current.id}/view`} type="application/pdf" className="w-full h-full rounded-lg shadow-md bg-white" />
+                                <embed src={current.document_url} type="application/pdf" className="w-full h-full rounded-lg shadow-md bg-white" />
                             ) : (
                                 // eslint-disable-next-line @next/next/no-img-element
-                                <img src={`/api/admin/documents/${current.id}/view`} alt={current.document_type || "Document"} className="max-w-full max-h-full object-contain rounded-lg shadow-md" />
+                                <img src={current.document_url} alt={current.document_type || "Document"} className="max-w-full max-h-full object-contain rounded-lg shadow-md" />
                             )
                         ) : (
                             <div className="text-center text-muted-foreground">
@@ -249,7 +249,7 @@ export function DocumentReviewer({ open, driverId, driverName, onClose, onAfterA
                             </div>
                         )}
                         {current.document_url && (
-                            <a href={`/api/admin/documents/${current.id}/view`} target="_blank" rel="noreferrer" className="absolute top-3 right-3 bg-card/90 hover:bg-card border border-border rounded-lg px-2 py-1 text-xs font-medium flex items-center gap-1.5">
+                            <a href={current.document_url} target="_blank" rel="noreferrer" className="absolute top-3 right-3 bg-card/90 hover:bg-card border border-border rounded-lg px-2 py-1 text-xs font-medium flex items-center gap-1.5">
                                 <ExternalLink className="h-3.5 w-3.5" /> Open original
                             </a>
                         )}

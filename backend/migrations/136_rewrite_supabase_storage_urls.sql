@@ -30,7 +30,7 @@ BEGIN
     new_host := regexp_replace(raw_url, '^https?://', '');
     new_host := split_part(new_host, '/', 1);  -- drop any path component
 
-    IF new_host = '' OR new_host = old_host THEN
+    IF new_host IS NULL OR new_host = '' OR new_host = old_host THEN
         RAISE EXCEPTION
             'app.supabase_url is missing or still points to the old project (%). '
             'Set SUPABASE_URL to the new project URL before running this migration.',

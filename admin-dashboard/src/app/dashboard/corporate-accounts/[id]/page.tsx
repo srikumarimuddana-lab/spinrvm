@@ -368,7 +368,7 @@ export default function CompanyDetailPage() {
                             <div className="md:col-span-2">
                                 <a
                                     className="inline-flex items-center gap-1 text-blue-600 hover:underline"
-                                    href={`/api/admin/corporate-accounts/${company.id}/kyb/view`}
+                                    href={company.kyb_document_url}
                                     target="_blank"
                                     rel="noreferrer"
                                 >

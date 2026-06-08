@@ -168,6 +168,7 @@ async def admin_get_pending_documents(
     limit: int = Query(50, ge=1, le=100),
     cursor: Optional[str] = None,
     status: str = Query("pending"),
+    admin: dict = Depends(get_admin_user),
 ):
     """Paginated list of driver documents awaiting review.
 
@@ -202,7 +203,7 @@ async def admin_get_pending_documents(
 
 
 @router.get("/documents/drivers/{driver_id}")
-async def admin_get_driver_documents(driver_id: str):
+async def admin_get_driver_documents(driver_id: str, admin: dict = Depends(get_admin_user)):
     """Get all documents for a specific driver."""
     documents = await db_supabase.get_rows(
         "driver_documents",

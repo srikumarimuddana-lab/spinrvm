@@ -1,25 +1,31 @@
 import logging
+import mimetypes
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
+    from ...documents import _extract_storage_key, regenerate_signed_url
     from ...features import send_push_notification
+    from ...supabase_client import supabase
     from ...utils.audit_logger import log_admin_action
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user  # noqa: F401
+    from documents import _extract_storage_key, regenerate_signed_url  # noqa: F401
     from features import send_push_notification  # noqa: F401
+    from supabase_client import supabase  # noqa: F401
     from utils.audit_logger import log_admin_action  # noqa: F401
 
 from .drivers import _log_driver_activity
 
 # Templated push copy for document rejections. Keys match the dropdown in
-# the admin reviewer UI; "other" falls back to the free-text reason.
+# the admin reviewer ui; "other" falls back to the free-text reason.
 _REJECT_TEMPLATES: Dict[str, tuple[str, str]] = {
     "blurry_image": (
         "Document needs re-upload",
@@ -42,6 +48,42 @@ _REJECT_TEMPLATES: Dict[str, tuple[str, str]] = {
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# ---------- Document file proxy ----------
+
+
+@router.get("/documents/{document_id}/view")
+async def admin_view_driver_document(
+    document_id: str,
+    admin: dict = Depends(get_admin_user),
+):
+    """Stream a driver document through the backend — browser never touches storage directly.
+
+    Uses the service-role key server-side, so no public bucket policy is needed
+    and no signed URL is ever exposed to the client.
+    """
+    rows = await db_supabase.get_rows("driver_documents", {"id": document_id}, limit=1)
+    if not rows:
+        raise HTTPException(status_code=404, detail="Document not found")
+    doc = rows[0]
+
+    stored_url = doc.get("document_url") or doc.get("file_url") or ""
+    storage_key = _extract_storage_key(stored_url)
+    if not storage_key:
+        raise HTTPException(status_code=404, detail="Document has no resolvable storage key")
+
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Storage client not configured")
+
+    try:
+        data: bytes = supabase.storage.from_("driver-documents").download(storage_key)
+    except Exception as exc:
+        logger.error("Storage download failed key=%s doc=%s: %s", storage_key, document_id, exc)
+        raise HTTPException(status_code=502, detail="Could not fetch document from storage") from exc
+
+    content_type, _ = mimetypes.guess_type(storage_key)
+    return Response(content=data, media_type=content_type or "application/octet-stream")
 
 
 # ---------- Document Requirements ----------
@@ -126,6 +168,7 @@ async def admin_get_pending_documents(
     limit: int = Query(50, ge=1, le=100),
     cursor: Optional[str] = None,
     status: str = Query("pending"),
+    admin: dict = Depends(get_admin_user),
 ):
     """Paginated list of driver documents awaiting review.
 
@@ -146,6 +189,10 @@ async def admin_get_pending_documents(
     )
     has_more = len(docs) > limit
     items = docs[:limit]
+    for doc in items:
+        for field in ("document_url", "file_url"):
+            if doc.get(field):
+                doc[field] = regenerate_signed_url(doc[field])
     return {
         "items": items,
         "next_cursor": items[-1]["id"] if items and has_more else None,
@@ -156,7 +203,7 @@ async def admin_get_pending_documents(
 
 
 @router.get("/documents/drivers/{driver_id}")
-async def admin_get_driver_documents(driver_id: str):
+async def admin_get_driver_documents(driver_id: str, admin: dict = Depends(get_admin_user)):
     """Get all documents for a specific driver."""
     documents = await db_supabase.get_rows(
         "driver_documents",
@@ -165,6 +212,10 @@ async def admin_get_driver_documents(driver_id: str):
         desc=True,
         limit=100,
     )
+    for doc in documents or []:
+        for field in ("document_url", "file_url"):
+            if doc.get(field):
+                doc[field] = regenerate_signed_url(doc[field])
     return documents or []
 
 

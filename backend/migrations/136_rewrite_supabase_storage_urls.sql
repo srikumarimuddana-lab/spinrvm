@@ -39,24 +39,14 @@ BEGIN
 
     RAISE NOTICE 'Rewriting storage URLs: % → %', old_host, new_host;
 
-    -- ── 1. driver_documents.document_url ─────────────────────────────────────
-    -- Stored as signed URLs: .../object/sign/driver-documents/<key>?token=...
-    -- Tokens are project-specific and have already expired (1-hour TTL).
-    -- Convert to public-path format so the backend proxy can extract the key
-    -- and the URL is usable once the bucket is made public if needed.
-    UPDATE driver_documents
-    SET document_url = 'https://' || new_host
-        || '/storage/v1/object/public/'
-        || regexp_replace(
-               document_url,
-               '^.*/storage/v1/object/(?:sign|public)/(.+?)(\?.*)?$',
-               '\1'
-           )
-    WHERE document_url LIKE '%' || old_host || '%';
-    GET DIAGNOSTICS n = ROW_COUNT;
-    RAISE NOTICE 'driver_documents.document_url: % rows rewritten', n;
+    -- ── NOTE: driver_documents.document_url is intentionally NOT rewritten ───
+    -- These are signed URLs for a private bucket. Converting them to public-path
+    -- format would make them unreachable for any code path that doesn't go
+    -- through regenerate_signed_url(). regenerate_signed_url() already extracts
+    -- the storage key from old-host signed URLs and issues a fresh signed URL
+    -- via the current Supabase client — no migration rewrite needed.
 
-    -- ── 2. rides.route_snapshot_url ──────────────────────────────────────────
+    -- ── 1. rides.route_snapshot_url ──────────────────────────────────────────
     UPDATE rides
     SET route_snapshot_url = replace(route_snapshot_url, old_host, new_host)
     WHERE route_snapshot_url LIKE '%' || old_host || '%';

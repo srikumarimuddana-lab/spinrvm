@@ -274,7 +274,7 @@ async def admin_view_kyb_document(
     from supabase_client import supabase as _supabase
 
     _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
-    rows = await db_supabase.get_rows("corporate_accounts", {"id": normalized_id}, limit=1)
+    rows = await get_rows("corporate_accounts", {"id": normalized_id}, limit=1)
     if not rows:
         raise HTTPException(status_code=404, detail="Corporate account not found")
 

@@ -68,14 +68,10 @@ router = APIRouter(prefix="/admin/corporate-accounts", tags=["Corporate Accounts
 # Pydantic models for request/response validation
 class CorporateAccountBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=200, description="Company name")
-    contact_name: Optional[str] = Field(
-        None, max_length=100, description="Primary contact person"
-    )
+    contact_name: Optional[str] = Field(None, max_length=100, description="Primary contact person")
     contact_email: Optional[str] = Field(None, description="Contact email address")
     contact_phone: Optional[str] = Field(None, description="Contact phone number")
-    credit_limit: Decimal = Field(
-        Decimal("0"), ge=0, description="Credit limit for corporate billing"
-    )
+    credit_limit: Decimal = Field(Decimal("0"), ge=0, description="Credit limit for corporate billing")
     is_active: bool = Field(True, description="Whether the account is active")
 
 
@@ -146,9 +142,7 @@ async def get_corporate_accounts(
             total = await count_documents("corporate_accounts")
             response.headers["X-Total-Count"] = str(total)
         except Exception:
-            logger.warning(
-                "Failed to compute corporate_accounts total count", exc_info=True
-            )
+            logger.warning("Failed to compute corporate_accounts total count", exc_info=True)
         response.headers["X-Limit"] = str(capped_limit)
         return rows
     except Exception as e:
@@ -171,9 +165,7 @@ _ALLOWED_KYB_CONTENT = {"application/pdf", "image/png", "image/jpeg"}
 class KYBUploadURLRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    content_type: str = Field(
-        ..., description="MIME type of the KYB document to upload"
-    )
+    content_type: str = Field(..., description="MIME type of the KYB document to upload")
 
 
 @router.post("/{company_id}/kyb-upload-url")
@@ -187,18 +179,14 @@ async def kyb_upload_url(
     The caller uploads the document directly to Supabase Storage using the
     returned URL; the backend never streams binary data.
     """
-    _valid, normalized_id = validate_id(
-        company_id, "Corporate Account ID", raise_exception=True
-    )
+    _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
 
     if body.content_type not in _ALLOWED_KYB_CONTENT:
         raise HTTPException(status_code=400, detail="Unsupported content type for KYB")
 
     from db_supabase import create_kyb_upload_url
 
-    return await create_kyb_upload_url(
-        company_id=normalized_id, content_type=body.content_type
-    )
+    return await create_kyb_upload_url(company_id=normalized_id, content_type=body.content_type)
 
 
 @router.post("/{company_id}/kyb-review", response_model=CorporateAccountDetailResponse)
@@ -213,9 +201,7 @@ async def kyb_review(
     Approve → status='active'. Reject → status='suspended' so the company
     can re-upload and be re-reviewed from the queue.
     """
-    _valid, normalized_id = validate_id(
-        company_id, "Corporate Account ID", raise_exception=True
-    )
+    _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
 
     from db_supabase import record_kyb_decision
 
@@ -232,9 +218,7 @@ async def kyb_review(
         try:
             await ensure_corporate_wallet(company_id=normalized_id)
         except Exception as wallet_err:
-            logger.error(
-                f"[KYB] Wallet creation failed for company {normalized_id}: {wallet_err}"
-            )
+            logger.error(f"[KYB] Wallet creation failed for company {normalized_id}: {wallet_err}")
             raise HTTPException(
                 status_code=503,
                 detail="KYB approved but wallet provisioning failed — please retry",
@@ -252,9 +236,7 @@ async def kyb_review(
                     api_key=stripe_secret,
                     idempotency_key=f"cus-create-corp-{normalized_id}",
                 )
-                await update_corporate_stripe_customer_id(
-                    company_id=normalized_id, stripe_customer_id=customer.id
-                )
+                await update_corporate_stripe_customer_id(company_id=normalized_id, stripe_customer_id=customer.id)
 
     try:
         await log_admin_action(
@@ -277,9 +259,47 @@ async def kyb_review(
     return row
 
 
-@router.post(
-    "", response_model=CorporateAccountResponse, status_code=status.HTTP_201_CREATED
-)
+@router.get("/{company_id}/kyb/view")
+async def admin_view_kyb_document(
+    company_id: str,
+    current_admin: dict = Depends(get_current_admin),
+):
+    """Stream the KYB document for a corporate account through the backend.
+
+    Uses the service-role key server-side — no public bucket policy needed,
+    bucket stays private, browser never receives a Supabase Storage URL.
+    """
+    import mimetypes
+
+    from supabase_client import supabase as _supabase
+
+    _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
+    rows = await db_supabase.get_rows("corporate_accounts", {"id": normalized_id}, limit=1)
+    if not rows:
+        raise HTTPException(status_code=404, detail="Corporate account not found")
+
+    stored_url = rows[0].get("kyb_document_url") or ""
+    import re as _re
+
+    m = _re.search(r"/storage/v1/object/(?:sign|public)/kyb-documents/([^?#]+)", stored_url)
+    storage_key = m.group(1) if m else None
+
+    if not storage_key:
+        raise HTTPException(status_code=404, detail="No KYB document on file")
+    if not _supabase:
+        raise HTTPException(status_code=503, detail="Storage client not configured")
+
+    try:
+        data: bytes = _supabase.storage.from_("kyb-documents").download(storage_key)
+    except Exception as exc:
+        logger.error("KYB storage download failed company=%s key=%s: %s", normalized_id, storage_key, exc)
+        raise HTTPException(status_code=502, detail="Could not fetch KYB document from storage") from exc
+
+    content_type, _ = mimetypes.guess_type(storage_key)
+    return Response(content=data, media_type=content_type or "application/octet-stream")
+
+
+@router.post("", response_model=CorporateAccountResponse, status_code=status.HTTP_201_CREATED)
 async def create_corporate_account(
     request: Request,
     account: CorporateAccountCreate,
@@ -294,26 +314,18 @@ async def create_corporate_account(
     """
     # Validate inputs
     if account.contact_email:
-        valid, normalized_email = validate_email(
-            account.contact_email, raise_exception=True
-        )
+        valid, normalized_email = validate_email(account.contact_email, raise_exception=True)
         account.contact_email = normalized_email
 
     if account.contact_phone:
-        valid, normalized_phone = validate_phone(
-            account.contact_phone, raise_exception=True
-        )
+        valid, normalized_phone = validate_phone(account.contact_phone, raise_exception=True)
         account.contact_phone = normalized_phone
 
     if account.name:
-        account.name = sanitize_string(
-            account.name, max_length=200, raise_exception=True
-        )
+        account.name = sanitize_string(account.name, max_length=200, raise_exception=True)
 
     if account.contact_name:
-        account.contact_name = sanitize_string(
-            account.contact_name, max_length=100, raise_exception=True
-        )
+        account.contact_name = sanitize_string(account.contact_name, max_length=100, raise_exception=True)
 
     try:
         created_account = await insert_corporate_account(account.model_dump())
@@ -342,9 +354,7 @@ async def create_corporate_account(
 
 
 @router.get("/{account_id}", response_model=CorporateAccountResponse)
-async def get_corporate_account(
-    account_id: str, current_admin: dict = Depends(get_current_admin)
-):
+async def get_corporate_account(account_id: str, current_admin: dict = Depends(get_current_admin)):
     """
     Get a specific corporate account by ID.
 
@@ -353,9 +363,7 @@ async def get_corporate_account(
         current_admin: Authenticated admin user
     """
     # Validate account ID
-    valid, normalized_id = validate_id(
-        account_id, "Corporate Account ID", raise_exception=True
-    )
+    valid, normalized_id = validate_id(account_id, "Corporate Account ID", raise_exception=True)
 
     try:
         account = await get_corporate_account_by_id(validated_id=normalized_id)
@@ -390,16 +398,12 @@ async def update_corporate_account(
         current_admin: Authenticated admin user
     """
     # Validate account ID
-    valid, normalized_id = validate_id(
-        account_id, "Corporate Account ID", raise_exception=True
-    )
+    valid, normalized_id = validate_id(account_id, "Corporate Account ID", raise_exception=True)
 
     # Check if account exists
     existing_account = await get_corporate_account_by_id(validated_id=normalized_id)
     if not existing_account:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Corporate account not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Corporate account not found")
 
     # Prepare update data
     update_data = {}
@@ -412,13 +416,9 @@ async def update_corporate_account(
                 valid, normalized_phone = validate_phone(value, raise_exception=True)
                 update_data[field] = normalized_phone
             elif field == "name" and value:
-                update_data[field] = sanitize_string(
-                    value, max_length=200, raise_exception=True
-                )
+                update_data[field] = sanitize_string(value, max_length=200, raise_exception=True)
             elif field == "contact_name" and value:
-                update_data[field] = sanitize_string(
-                    value, max_length=100, raise_exception=True
-                )
+                update_data[field] = sanitize_string(value, max_length=100, raise_exception=True)
             else:
                 update_data[field] = value
 
@@ -439,11 +439,7 @@ async def update_corporate_account(
             resource_id=str(normalized_id),
             details={
                 "changed_fields": list(update_data.keys()),
-                **{
-                    k: v
-                    for k, v in update_data.items()
-                    if k not in ("contact_email", "contact_phone")
-                },
+                **{k: v for k, v in update_data.items() if k not in ("contact_email", "contact_phone")},
             },
         )
     except Exception as _ae:
@@ -456,9 +452,7 @@ async def update_corporate_account(
 
 
 @router.delete("/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_corporate_account(
-    account_id: str, current_admin: dict = Depends(get_current_admin)
-):
+async def delete_corporate_account(account_id: str, current_admin: dict = Depends(get_current_admin)):
     """
     Delete a corporate account.
 
@@ -467,16 +461,12 @@ async def delete_corporate_account(
         current_admin: Authenticated admin user
     """
     # Validate account ID
-    valid, normalized_id = validate_id(
-        account_id, "Corporate Account ID", raise_exception=True
-    )
+    valid, normalized_id = validate_id(account_id, "Corporate Account ID", raise_exception=True)
 
     # Check if account exists
     existing_account = await get_corporate_account_by_id(validated_id=normalized_id)
     if not existing_account:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Corporate account not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Corporate account not found")
 
     try:
         await db_delete_corporate_account(normalized_id)
@@ -513,9 +503,7 @@ async def change_company_status(
     transition: CompanyStatusTransition,
     current_admin: dict = Depends(get_current_admin),
 ):
-    _valid, normalized_id = validate_id(
-        company_id, "Corporate Account ID", raise_exception=True
-    )
+    _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
 
     current = await get_corporate_account_by_id(validated_id=normalized_id)
     if not current:
@@ -549,9 +537,7 @@ async def change_company_status(
     if transition.status in (CompanyStatus.SUSPENDED, CompanyStatus.CLOSED):
         wallet = await get_corporate_wallet_by_company(normalized_id)
         if wallet and wallet.get("auto_topup_enabled"):
-            await update_corporate_wallet_config(
-                wallet_id=wallet["id"], patch={"auto_topup_enabled": False}
-            )
+            await update_corporate_wallet_config(wallet_id=wallet["id"], patch={"auto_topup_enabled": False})
 
     try:
         await log_admin_action(

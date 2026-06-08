@@ -111,6 +111,25 @@ def get_db_connection():
         sys.exit(1)
 
 
+def _inject_session_variables(conn) -> None:
+    """Set PostgreSQL session variables that migrations can read via current_setting().
+
+    Currently injects:
+      app.supabase_url — full value of SUPABASE_URL env var, e.g. https://xxxx.supabase.co
+    """
+    supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    if not supabase_url:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SET app.supabase_url = %s", (supabase_url,))
+        conn.commit()
+        logger.debug("Injected app.supabase_url session variable")
+    except Exception as exc:
+        logger.warning("Could not inject session variables: %s", exc)
+        conn.rollback()
+
+
 def get_migration_files(migrations_dir: Path) -> list:
     """Return sorted list of .sql files in the migrations directory."""
     pattern = str(migrations_dir / "*.sql")
@@ -222,6 +241,7 @@ def main():
         logger.info("DRY-RUN mode — no changes will be made.\n")
 
     conn = get_db_connection()
+    _inject_session_variables(conn)
     applied = get_applied_versions(conn)
 
     pending = [(Path(f).name, f) for f in files if Path(f).name not in applied]

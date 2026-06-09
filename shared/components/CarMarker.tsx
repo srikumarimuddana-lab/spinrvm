@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { View, Image } from 'react-native';
-import { Marker } from 'react-native-maps';
+import React, { useEffect, useRef, useState } from 'react';
+import { View, Image, Platform } from 'react-native';
+import { AnimatedRegion, Marker } from 'react-native-maps';
 
 interface CarMarkerProps {
     coordinate: {
@@ -11,6 +11,38 @@ interface CarMarkerProps {
     size?: number;
     zIndex?: number;
     identifier?: string;
+}
+
+// Position updates arrive every ~3-10 s (WS pings / GPS watch). Glide the car
+// between fixes over the observed gap so it moves like Uber/Lyft instead of
+// teleporting, but clamp so a delayed ping doesn't produce a minutes-long crawl.
+const MIN_ANIM_MS = 300;
+const MAX_ANIM_MS = 3000;
+// Beyond this jump (stale fix after backgrounding, ride handoff) snap instantly —
+// gliding across half the city looks worse than a jump.
+const SNAP_DISTANCE_M = 500;
+// Ignore sub-3m jitter when deriving the fallback bearing from movement.
+const MIN_BEARING_MOVE_M = 3;
+
+function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+    const R = 6371000;
+    const toRad = (d: number) => (d * Math.PI) / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLng = toRad(lng2 - lng1);
+    const a =
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+function bearingDegrees(lat1: number, lng1: number, lat2: number, lng2: number): number {
+    const toRad = (d: number) => (d * Math.PI) / 180;
+    const dLng = toRad(lng2 - lng1);
+    const y = Math.sin(dLng) * Math.cos(toRad(lat2));
+    const x =
+        Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+        Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLng);
+    return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
 }
 
 /**
@@ -24,8 +56,17 @@ interface CarMarkerProps {
  * itself) to kill the default Android callout-style bubble that
  * react-native-maps otherwise draws around custom child views.
  *
- * `tracksViewChanges` starts `true` so the native view catches the image
- * after it loads, then flips to `false` to avoid per-frame re-snapshots.
+ * Snapshot lifecycle: `tracksViewChanges` stays true until the car PNG has
+ * actually decoded (Image onLoad) plus a short settle delay, then flips false
+ * for perf. The previous fixed 800 ms timer raced slow image decodes (cold
+ * start, low-end Android, map remounts) and could permanently snapshot an
+ * empty view — an invisible car. A hard cap stops per-frame re-snapshots if
+ * onLoad never fires; a late onLoad re-arms one final snapshot.
+ *
+ * Movement: position changes animate (AnimatedRegion timing on iOS,
+ * animateMarkerToCoordinate on Android) so the car glides between GPS fixes.
+ * When `heading` is missing/invalid (expo-location reports -1 standing still)
+ * the car keeps its last bearing derived from the direction of travel.
  */
 const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     coordinate,
@@ -34,21 +75,94 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     zIndex = 1,
     identifier,
 }) => {
-    // See driver-app CarMarker for why we keep tracking briefly instead of
-    // flipping on Image.onLoad: flipping too fast races the Android
-    // Marker snapshot and leaves an invisible marker.
-    const [tracksViewChanges, setTracksViewChanges] = useState(true);
+    const markerRef = useRef<any>(null);
+    const animatedRegion = useRef(
+        new AnimatedRegion({
+            latitude: coordinate.latitude,
+            longitude: coordinate.longitude,
+            latitudeDelta: 0,
+            longitudeDelta: 0,
+        }),
+    ).current;
+    const prevCoordRef = useRef(coordinate);
+    const lastFixTsRef = useRef(Date.now());
+
+    // Last known direction of travel — used when the GPS heading is absent.
+    const [travelBearing, setTravelBearing] = useState(0);
+
     useEffect(() => {
-        const t = setTimeout(() => setTracksViewChanges(false), 800);
-        return () => clearTimeout(t);
+        const prev = prevCoordRef.current;
+        if (
+            prev.latitude === coordinate.latitude &&
+            prev.longitude === coordinate.longitude
+        ) {
+            return;
+        }
+        const now = Date.now();
+        const movedM = distanceMeters(
+            prev.latitude, prev.longitude,
+            coordinate.latitude, coordinate.longitude,
+        );
+        const duration =
+            movedM > SNAP_DISTANCE_M
+                ? 1
+                : Math.min(Math.max(now - lastFixTsRef.current, MIN_ANIM_MS), MAX_ANIM_MS);
+        prevCoordRef.current = coordinate;
+        lastFixTsRef.current = now;
+
+        if (movedM >= MIN_BEARING_MOVE_M) {
+            setTravelBearing(
+                bearingDegrees(prev.latitude, prev.longitude, coordinate.latitude, coordinate.longitude),
+            );
+        }
+
+        if (Platform.OS === 'android') {
+            const node = markerRef.current?.getNode?.() ?? markerRef.current;
+            node?.animateMarkerToCoordinate?.(coordinate, duration);
+        } else {
+            animatedRegion
+                .timing({
+                    latitude: coordinate.latitude,
+                    longitude: coordinate.longitude,
+                    duration,
+                    useNativeDriver: false,
+                } as any)
+                .start();
+        }
+        // animatedRegion is a stable ref.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [coordinate.latitude, coordinate.longitude]);
+
+    // expo-location uses -1 for "heading unknown"; treat any negative or null
+    // value as missing and fall back to the direction of travel.
+    const rotation =
+        heading != null && Number.isFinite(heading) && heading >= 0 ? heading : travelBearing;
+
+    const [tracksViewChanges, setTracksViewChanges] = useState(true);
+    const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    useEffect(() => {
+        // Hard cap: never re-snapshot indefinitely even if onLoad is lost.
+        const cap = setTimeout(() => setTracksViewChanges(false), 5000);
+        return () => {
+            clearTimeout(cap);
+            if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+        };
     }, []);
+    const handleImageLoaded = () => {
+        // Image bitmap is decoded — keep tracking through one more frame so the
+        // native Marker snapshot contains the car, then stop for perf.
+        setTracksViewChanges(true);
+        if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+        settleTimerRef.current = setTimeout(() => setTracksViewChanges(false), 350);
+    };
 
     return (
-        <Marker
-            coordinate={coordinate}
+        <Marker.Animated
+            ref={markerRef}
+            coordinate={animatedRegion as any}
             anchor={{ x: 0.5, y: 0.5 }}
             flat
-            rotation={heading ?? 0}
+            rotation={rotation}
             tracksViewChanges={tracksViewChanges}
             zIndex={zIndex}
             identifier={identifier}
@@ -65,6 +179,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
             >
                 <Image
                     source={require('../assets/car_marker.png')}
+                    onLoad={handleImageLoaded}
                     style={{
                         width: size,
                         height: size,
@@ -73,7 +188,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                     }}
                 />
             </View>
-        </Marker>
+        </Marker.Animated>
     );
 };
 

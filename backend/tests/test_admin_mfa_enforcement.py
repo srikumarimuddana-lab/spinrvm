@@ -330,3 +330,78 @@ async def test_enroll_token_dies_once_mfa_is_enabled():
     with patch.object(admin_auth.db, "find_one", AsyncMock(return_value=enrolled_row)):
         staff = await admin_auth._require_staff_from_token(f"Bearer {session}", allow_enroll_token=True)
     assert staff["id"] == STAFF_ID
+
+
+# ── Codex PR #1724 round-3 regressions ───────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_challenge_token_bound_to_token_version():
+    """Codex round 3 (P2): a challenge token minted before a logout-all /
+    MFA reset must not exchange for a session after the version bump."""
+    secret = pyotp.random_base32()
+    stale = admin_auth._mint_mfa_challenge_token(STAFF_ID, token_version=0)
+    enrolled = _staff_row(mfa_enabled=True, mfa_secret=secret, token_version=1)
+
+    class _Body:
+        mfa_token = stale
+        totp_code = pyotp.TOTP(secret).now()
+
+    with patch.object(admin_auth.db, "find_one", AsyncMock(return_value=enrolled)):
+        with pytest.raises(HTTPException) as exc_info:
+            await admin_auth.admin_mfa_challenge(request=_make_request(), body=_Body())
+    assert exc_info.value.status_code == 401
+
+    # Same-version challenge still works end-to-end.
+    fresh = admin_auth._mint_mfa_challenge_token(STAFF_ID, token_version=1)
+
+    class _FreshBody:
+        mfa_token = fresh
+        totp_code = pyotp.TOTP(secret).now()
+
+    with (
+        patch.object(admin_auth.db, "find_one", AsyncMock(return_value=enrolled)),
+        patch.object(
+            admin_auth,
+            "issue_refresh_token",
+            AsyncMock(return_value=("rt", "h", admin_auth.datetime.now(admin_auth.timezone.utc))),
+        ),
+        patch.object(admin_auth, "get_remote_address", MagicMock(return_value="127.0.0.1")),
+    ):
+        result = await admin_auth.admin_mfa_challenge(request=_make_request(), body=_FreshBody())
+    assert result["token"]
+
+
+@pytest.mark.anyio
+async def test_mfa_disable_blocked_under_enforcement():
+    """Codex round 3 (P2): self-service disable would let staff opt out of
+    mandatory MFA and keep their 1-hour session. 403 under enforcement;
+    recovery is the super-admin reset path."""
+    secret = pyotp.random_base32()
+    enrolled = _staff_row(mfa_enabled=True, mfa_secret=secret, password_hash="bcrypt$x")
+    header = "Bearer " + admin_auth._mint_admin_access_token(
+        user_id=STAFF_ID, email=EMAIL, role="operations", modules=["dashboard"], phone=EMAIL, token_version=0
+    )[0]
+
+    class _Body:
+        totp_code = pyotp.TOTP(secret).now()
+        password = "x" * 24
+
+    with (
+        patch.object(admin_auth.db, "find_one", AsyncMock(return_value=enrolled)),
+        patch.object(settings, "ADMIN_MFA_ENFORCED", True),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await admin_auth.admin_mfa_disable(request=_make_request(), body=_Body(), authorization=header)
+    assert exc_info.value.status_code == 403
+
+    # Enforcement off → the password+TOTP disable flow still works.
+    with (
+        patch.object(admin_auth.db, "find_one", AsyncMock(return_value=enrolled)),
+        patch.object(settings, "ADMIN_MFA_ENFORCED", False),
+        patch.object(admin_auth, "verify_password", MagicMock(return_value=(True, False))),
+        patch.object(admin_auth.db_supabase, "update_one", AsyncMock()),
+        patch.object(admin_auth, "log_admin_action", AsyncMock()),
+    ):
+        result = await admin_auth.admin_mfa_disable(request=_make_request(), body=_Body(), authorization=header)
+    assert result == {"success": True}

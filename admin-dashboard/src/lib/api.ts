@@ -68,7 +68,12 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
         ...(isFormData ? {} : { "Content-Type": "application/json" }),
         ...(options.headers as Record<string, string>),
     };
-    if (token) headers["Authorization"] = `Bearer ${token}`;
+    // An explicit Authorization header from the caller wins over the store
+    // token. The forced-enrollment flow passes the enrollment-scoped token
+    // while a previous account's session may still sit in the Zustand store
+    // (account switching on /login) — overwriting it would enroll MFA on the
+    // wrong account.
+    if (token && !headers["Authorization"]) headers["Authorization"] = `Bearer ${token}`;
     const method = (options.method ?? "GET").toUpperCase();
     if (!["GET", "HEAD", "OPTIONS"].includes(method) && store.csrfToken) {
         headers["X-CSRF-Token"] = store.csrfToken;
@@ -233,7 +238,7 @@ export const mfaChallenge = (mfa_token: string, totp_code: string) =>
     });
 
 export const mfaStatus = () =>
-    request<{ mfa_enabled: boolean; available: boolean }>("/api/admin/auth/mfa/status");
+    request<{ mfa_enabled: boolean; available: boolean; enforced?: boolean }>("/api/admin/auth/mfa/status");
 
 // Confirm also returns full session tokens so first-login enrollment
 // (no session yet, only the enrollment-scoped token) lands in the dashboard.

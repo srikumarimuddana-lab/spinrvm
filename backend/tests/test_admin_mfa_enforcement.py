@@ -405,3 +405,33 @@ async def test_mfa_disable_blocked_under_enforcement():
     ):
         result = await admin_auth.admin_mfa_disable(request=_make_request(), body=_Body(), authorization=header)
     assert result == {"success": True}
+
+
+# ── Codex PR #1724 round-4 regressions ───────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_jti_revoked_admin_token_rejected_by_mfa_helper():
+    """Codex round 4 (P2): /admin/auth/logout blacklists a single token's JTI
+    without bumping token_version; the MFA helper must honor the denylist so
+    a logged-out token can't start/confirm enrollment or disable MFA."""
+    token = admin_auth._mint_admin_access_token(
+        user_id=STAFF_ID, email=EMAIL, role="operations", modules=["dashboard"], phone=EMAIL, token_version=0
+    )[0]
+    with (
+        patch.object(admin_auth, "redis_get", AsyncMock(return_value="1")),  # jti revoked
+        patch.object(admin_auth.db, "find_one", AsyncMock(return_value=_staff_row())),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await admin_auth._require_staff_from_token(f"Bearer {token}")
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Invalid token"
+
+    # Redis outage fails OPEN (token_version gate still authoritative),
+    # matching _verify_admin_payload.
+    with (
+        patch.object(admin_auth, "redis_get", AsyncMock(side_effect=ConnectionError("redis down"))),
+        patch.object(admin_auth.db, "find_one", AsyncMock(return_value=_staff_row())),
+    ):
+        staff = await admin_auth._require_staff_from_token(f"Bearer {token}")
+    assert staff["id"] == STAFF_ID

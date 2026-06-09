@@ -798,6 +798,25 @@ async def _require_staff_from_token(
             status_code=400,
             detail="MFA is not available for the super admin env account. Use a staff account.",
         )
+    # Mirror _verify_admin_payload's per-JTI denylist: /admin/auth/logout
+    # revokes a single access token by writing admin:revoked:{jti} WITHOUT
+    # bumping token_version, so the version gate below doesn't catch it. A
+    # logged-out (or stolen-then-revoked) admin token must not be able to
+    # start/confirm MFA enrollment or disable MFA. Fail OPEN on Redis
+    # outage for the same reason as _verify_admin_payload — the
+    # authoritative logout-all/token_version control still runs below.
+    jti = payload.get("jti")
+    if jti:
+        try:
+            _jti_revoked = await redis_get(f"admin:revoked:{jti}")
+        except Exception as _revoke_err:
+            logger.error(
+                "[auth] admin revocation denylist unreachable (Redis down) — "
+                f"failing OPEN for jti={jti} on MFA helper; token_version still enforced: {_revoke_err}"
+            )
+            _jti_revoked = None
+        if _jti_revoked:
+            raise HTTPException(status_code=401, detail="Invalid token")
     staff = await db.find_one("admin_staff", {"id": user_id})
     if not staff:
         raise HTTPException(status_code=404, detail="Staff member not found")

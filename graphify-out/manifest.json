@@ -1280,8 +1280,8 @@
     "semantic_hash": ""
   },
   "backend/routes/admin/staff.py": {
-    "mtime": 1780622912.5730238,
-    "ast_hash": "8dfbc557ec1e25a4ba364fd4fb27ec01",
+    "mtime": 1781031067.020873,
+    "ast_hash": "135de8ee2b5bc9ae5c0291e0b55871f9",
     "semantic_hash": ""
   },
   "backend/routes/admin/auth.py": {
@@ -1775,8 +1775,8 @@
     "semantic_hash": ""
   },
   "admin-dashboard/src/app/dashboard/staff/page.tsx": {
-    "mtime": 1780622912.4890237,
-    "ast_hash": "c51bee09f7589ea08f3f3c68e3ccc8c9",
+    "mtime": 1781031048.668873,
+    "ast_hash": "ce433cabc53a2a462ff58f56a49ffe46",
     "semantic_hash": ""
   },
   "admin-dashboard/src/app/dashboard/support/page.tsx": {
@@ -1955,8 +1955,8 @@
     "semantic_hash": ""
   },
   "admin-dashboard/src/lib/api.ts": {
-    "mtime": 1781026731.6992383,
-    "ast_hash": "a18657eda3d246b36313776542551429",
+    "mtime": 1781031015.3568728,
+    "ast_hash": "e2ec22ae8d399593c554fbc97683cf88",
     "semantic_hash": ""
   },
   "admin-dashboard/src/lib/export-csv.ts": {
@@ -9737,6 +9737,11 @@
   "rider-app/assets/images/splash-wordmark.png": {
     "mtime": 1781026732.5832384,
     "ast_hash": "fdaae2733336d430c0bd94d14ff97902",
+    "semantic_hash": ""
+  },
+  "backend/tests/test_admin_staff_mfa_reset.py": {
+    "mtime": 1781031080.0768733,
+    "ast_hash": "c4cfd92a1048eb43e33da791ef846aec",
     "semantic_hash": ""
   }
 }

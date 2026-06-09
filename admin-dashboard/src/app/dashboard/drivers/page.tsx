@@ -228,6 +228,31 @@ export default function DriversPage() {
             })
             .catch(() => {});
     }, []);
+
+    // Only show vehicle types that are configured for the selected service area
+    // (or for any area when no area is selected). Reuses the vehicleTypesByArea
+    // map already built from fare_configs + service_areas.vehicle_pricing above.
+    const availableVehicleTypes = useMemo(() => {
+        if (serviceAreaId) {
+            const allowed = vehicleTypesByArea[serviceAreaId];
+            return vehicleTypes.filter(v => allowed?.has(v.id));
+        }
+        const allConfigured = new Set(
+            Object.values(vehicleTypesByArea).flatMap(s => [...s])
+        );
+        return allConfigured.size > 0
+            ? vehicleTypes.filter(v => allConfigured.has(v.id))
+            : vehicleTypes;
+    }, [vehicleTypes, vehicleTypesByArea, serviceAreaId]);
+
+    // Clear the vehicle type filter if the selected type drops out of scope
+    // (e.g. admin picks a service area that doesn't offer that type).
+    useEffect(() => {
+        if (vehicleTypeFilter && !availableVehicleTypes.some(v => v.id === vehicleTypeFilter)) {
+            setVehicleTypeFilter("");
+        }
+    }, [availableVehicleTypes, vehicleTypeFilter]);
+
     useEffect(() => { if (!selected?.id) { setDriverDocs([]); return; } setDocsLoading(true); getDriverDocuments(selected.id).then((d) => setDriverDocs(Array.isArray(d) ? d : [])).catch(() => setDriverDocs([])).finally(() => setDocsLoading(false)); }, [selected?.id]);
     useEffect(() => { setEditing(false); setEditForm({}); }, [selected?.id]);
     useEffect(() => {
@@ -456,7 +481,7 @@ export default function DriversPage() {
                             <SelectTrigger className="h-9 text-xs w-[160px]" aria-label="Filter by vehicle type"><SelectValue placeholder="All Vehicle Types" /></SelectTrigger>
                             <SelectContent>
                                 <SelectItem value="all">All Vehicle Types</SelectItem>
-                                {vehicleTypes.map(v => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}
+                                {availableVehicleTypes.map(v => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}
                             </SelectContent>
                         </Select>
                     </div>

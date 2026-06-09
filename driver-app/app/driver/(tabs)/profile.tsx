@@ -430,12 +430,7 @@ export default function ProfileScreen() {
                     <Text style={[styles.cardValueDim, { marginLeft: 8 }]}>No document requirements found</Text>
                 </View>
                 ) : docRequirements.map((req, i) => {
-                const n = req.name.toLowerCase();
-                const icon: any =
-                    n.includes('licen') ? 'id-card-outline' :
-                    n.includes('insurance') ? 'shield-checkmark-outline' :
-                    n.includes('background') ? 'document-text-outline' :
-                    n.includes('inspection') ? 'car-sport-outline' : 'document-outline';
+                const icon: any = 'document-outline';
 
                 // Collect ALL non-superseded documents for this requirement.
                 // Using all matches (not just the first) ensures a pending re-upload

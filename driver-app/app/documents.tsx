@@ -296,11 +296,12 @@ export default function DocumentsScreen() {
         return <View style={[styles.badge, { backgroundColor: '#F3F4F6' }]}><Text style={[styles.badgeText, { color: colors.textDim }]}>Missing</Text></View>;
     };
 
-    // ── Derive document expiry status from driver data ──
-    const getExpiryInfo = (key: string) => {
-        const expiry = driver?.[key as keyof typeof driver];
-        if (!expiry) return { status: 'none', label: '', expiresIn: null };
-        const expiryDate = new Date(expiry as string);
+    // Derive expiry status from a date string on the document record itself.
+    // Requirements are service-area-specific and admin-named, so we never
+    // keyword-match requirement names to driver-profile fields.
+    const getExpiryInfo = (expiryDateStr: string | null | undefined) => {
+        if (!expiryDateStr) return { status: 'none', label: '', date: '', expiresIn: null };
+        const expiryDate = new Date(expiryDateStr);
         const now = new Date();
         const daysLeft = Math.ceil((expiryDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
         const isExpired = daysLeft < 0;
@@ -311,19 +312,6 @@ export default function DocumentsScreen() {
             date: expiryDate.toLocaleDateString(),
             expiresIn: daysLeft,
         };
-    };
-
-    // Map requirement name → driver expiry date key using keyword matching
-    // (requirement names are set by the admin and may vary)
-    const getExpiryKey = (reqName: string): string => {
-        const n = reqName.toLowerCase();
-        if (n.includes('licen'))     return 'license_expiry_date';
-        if (n.includes('insurance')) return 'insurance_expiry_date';
-        if (n.includes('background'))return 'background_check_expiry_date';
-        if (n.includes('inspection'))return 'vehicle_inspection_expiry_date';
-        if (n.includes('vehicle') && !n.includes('inspection')) return 'vehicle_inspection_expiry_date';
-        if (n.includes('eligib') || n.includes('work permit')) return 'work_eligibility_expiry_date';
-        return '';
     };
 
     if (loading) {
@@ -354,13 +342,16 @@ export default function DocumentsScreen() {
                 </View>
 
                 {requirements.map((req) => {
-                    // Find the matching expiry key for this requirement
-                    const expiryKey = getExpiryKey(req.name);
-                    const expiryInfo = expiryKey ? getExpiryInfo(expiryKey) : null;
-
                     // Get the overall document upload status
                     const frontDoc = getDocStatus(req.id, 'front');
                     const frontStatus = frontDoc === 'missing' ? 'missing' : frontDoc.status;
+
+                    // Expiry comes from the document record (set by admin on approval).
+                    // No keyword matching on requirement names — requirements are
+                    // service-area-specific and admin-defined.
+                    const expiryInfo = frontDoc !== 'missing'
+                        ? getExpiryInfo((frontDoc as any).expiry_date)
+                        : null;
 
                     // Determine card border color based on overall state
                     const cardBorderColor = frontStatus === 'approved' && expiryInfo?.status === 'valid'
@@ -435,8 +426,8 @@ export default function DocumentsScreen() {
                                     );
                                 })()}
 
-                                {/* Expiry badge — only meaningful once the document is approved */}
-                                {expiryInfo && expiryInfo.status !== 'none' && frontStatus === 'approved' && (
+                                {/* Expiry badge — only renders when document record has an expiry_date set */}
+                                {expiryInfo && expiryInfo.status !== 'none' && (
                                     <View style={[styles.statusBadge, {
                                         backgroundColor: expiryInfo.status === 'expired' ? '#FEF2F2'
                                             : expiryInfo.status === 'expiring_soon' ? '#FFFBEB'

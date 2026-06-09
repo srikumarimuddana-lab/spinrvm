@@ -303,6 +303,20 @@ export const getRides = (
         `/api/admin/rides?${params.toString()}`,
     );
 };
+export const exportRides = (opts?: RideListOpts) => {
+    const params = new URLSearchParams();
+    if (opts?.isScheduled !== undefined) params.set("is_scheduled", String(opts.isScheduled));
+    if (opts?.status) params.set("status", opts.status);
+    if (opts?.search) params.set("search", opts.search);
+    if (opts?.dateFrom) params.set("date_from", opts.dateFrom);
+    if (opts?.dateTo) params.set("date_to", opts.dateTo);
+    if (opts?.serviceAreaId) params.set("service_area_id", opts.serviceAreaId);
+    if (opts?.sortBy) params.set("sort_by", opts.sortBy);
+    if (opts?.sortDir) params.set("sort_dir", opts.sortDir);
+    return request<{ rides: any[]; total_count: number }>(
+        `/api/admin/rides/export?${params.toString()}`,
+    );
+};
 export const getRideDetails = (id: string) =>
     request<any>(`/api/admin/rides/${id}/details`);
 export const getRideTrend = (days = 14) =>

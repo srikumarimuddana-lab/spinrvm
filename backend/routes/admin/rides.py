@@ -105,26 +105,14 @@ async def _resolve_name_search(search: str) -> tuple[list[str], list[str]]:
     return rider_ids, driver_ids
 
 
-@router.get("/rides")
-async def admin_get_rides(
-    limit: int = Query(default=25, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
+async def _build_rides_filters(
     status: Optional[str] = None,
     is_scheduled: Optional[bool] = None,
-    search: Optional[str] = Query(default=None, max_length=200),
+    search: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     service_area_id: Optional[str] = None,
-    sort_by: Optional[str] = None,
-    sort_dir: Optional[str] = Query(default=None, pattern="^(asc|desc)$"),
-):
-    """Get rides with server-side search, filters, and pagination.
-
-    ``is_scheduled=true`` returns rider-requested scheduled rides (future pickup).
-    These live alongside regular rides with ``status="searching"`` until the
-    dispatcher picks them up at scheduled_time, so an explicit filter is the
-    only way to see the upcoming queue.
-    """
+) -> Dict[str, Any]:
     filters: Dict[str, Any] = {}
     if status:
         filters["status"] = status
@@ -138,7 +126,6 @@ async def admin_get_rides(
     if date_to:
         iso = date_to if "T" in date_to else f"{date_to}T23:59:59+00:00"
         filters.setdefault("created_at", {})["$lte"] = iso
-
     if search and search.strip():
         q = search.strip()
         pattern = {"$regex": q, "$options": "i"}
@@ -149,20 +136,10 @@ async def admin_get_rides(
         if driver_ids_match:
             or_clauses.append({"driver_id": {"$in": driver_ids_match}})
         filters["$or"] = or_clauses
+    return filters
 
-    total_count = await db_supabase.count_documents("rides", filters)
 
-    if sort_by and sort_by in _VALID_SORT_COLUMNS:
-        order_col = sort_by
-        order_desc = sort_dir == "desc" if sort_dir else True
-    elif is_scheduled:
-        order_col = "scheduled_time"
-        order_desc = False
-    else:
-        order_col = "created_at"
-        order_desc = True
-
-    rides = await db_supabase.get_rows("rides", filters, order=order_col, desc=order_desc, limit=limit, offset=offset)
+async def _enrich_rides(rides: list) -> list:
     rider_ids = list({r.get("rider_id") for r in rides if r.get("rider_id")})
     driver_ids = list({r.get("driver_id") for r in rides if r.get("driver_id")})
     drivers_map, users_map = await _batch_fetch_drivers_and_users(rider_ids, driver_ids)
@@ -180,7 +157,73 @@ async def admin_get_rides(
                 ),
             }
         )
+    return out
+
+
+@router.get("/rides")
+async def admin_get_rides(
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    status: Optional[str] = None,
+    is_scheduled: Optional[bool] = None,
+    search: Optional[str] = Query(default=None, max_length=200),
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    service_area_id: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_dir: Optional[str] = Query(default=None, pattern="^(asc|desc)$"),
+):
+    """Get rides with server-side search, filters, and pagination."""
+    filters = await _build_rides_filters(status, is_scheduled, search, date_from, date_to, service_area_id)
+
+    total_count = await db_supabase.count_documents("rides", filters)
+
+    if sort_by and sort_by in _VALID_SORT_COLUMNS:
+        order_col = sort_by
+        order_desc = sort_dir == "desc" if sort_dir else True
+    elif is_scheduled:
+        order_col = "scheduled_time"
+        order_desc = False
+    else:
+        order_col = "created_at"
+        order_desc = True
+
+    rides = await db_supabase.get_rows("rides", filters, order=order_col, desc=order_desc, limit=limit, offset=offset)
+    out = await _enrich_rides(rides)
     return {"rides": out, "total_count": total_count, "limit": limit, "offset": offset}
+
+
+_EXPORT_MAX_ROWS = 10_000
+
+
+@router.get("/rides/export")
+async def admin_export_filtered_rides(
+    status: Optional[str] = None,
+    is_scheduled: Optional[bool] = None,
+    search: Optional[str] = Query(default=None, max_length=200),
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    service_area_id: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_dir: Optional[str] = Query(default=None, pattern="^(asc|desc)$"),
+    _: dict = Depends(get_admin_user),
+):
+    """Return all rides matching the active filters for CSV export (no pagination, max 10k rows)."""
+    filters = await _build_rides_filters(status, is_scheduled, search, date_from, date_to, service_area_id)
+
+    if sort_by and sort_by in _VALID_SORT_COLUMNS:
+        order_col = sort_by
+        order_desc = sort_dir == "desc" if sort_dir else True
+    elif is_scheduled:
+        order_col = "scheduled_time"
+        order_desc = False
+    else:
+        order_col = "created_at"
+        order_desc = True
+
+    rides = await db_supabase.get_rows("rides", filters, order=order_col, desc=order_desc, limit=_EXPORT_MAX_ROWS)
+    out = await _enrich_rides(rides)
+    return {"rides": out, "total_count": len(out)}
 
 
 # ---------- Active Rides (Live Monitoring) ----------
@@ -1952,9 +1995,6 @@ async def admin_get_earnings_overview(
 
 
 # ---------- Exports ----------
-
-
-_EXPORT_MAX_ROWS = 10_000
 
 
 @router.get("/export/rides")

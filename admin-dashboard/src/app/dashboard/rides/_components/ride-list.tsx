@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { formatCurrency } from "@/lib/utils";
 import { Car, Search, Clock, CheckCircle, XCircle, MapPin, Loader, Download, ChevronRight, ChevronLeft, User, SlidersHorizontal, ArrowUpDown, ArrowUp, ArrowDown, CalendarRange, X, CalendarClock, UserX } from "lucide-react";
@@ -46,6 +46,7 @@ interface RideListProps {
     sortBy: string;
     sortDir: "asc" | "desc";
     onSortChange: (key: string, dir: "asc" | "desc") => void;
+    onExport: () => Promise<any[]>;
 }
 
 export default function RideList({
@@ -53,8 +54,40 @@ export default function RideList({
     search, onSearchChange, statusFilter, onStatusChange,
     areaFilter, onAreaChange, dateFrom, onDateFromChange, dateTo, onDateToChange,
     onSelect, page, pageSize, pageSizes, onPageSizeChange, totalPages, onPageChange,
-    sortBy, sortDir, onSortChange,
+    sortBy, sortDir, onSortChange, onExport,
 }: RideListProps) {
+    const [exporting, setExporting] = useState(false);
+
+    const handleExportClick = async () => {
+        setExporting(true);
+        try {
+            const allRides = await onExport();
+            exportToCsv("rides", allRides, [
+                { key: "ride_code", label: "Ride Code" },
+                { key: "id", label: "UUID" },
+                { key: "pickup_address", label: "Pickup" },
+                { key: "dropoff_address", label: "Dropoff" },
+                { key: "status", label: "Status" },
+                { key: "total_fare", label: "Fare" },
+                { key: "tip_amount", label: "Tip" },
+                { label: "To Pickup km", value: (r) => fmtKm(rideDistances(r).toPickupKm) },
+                { label: "Trip km", value: (r) => fmtKm(rideDistances(r).tripKm) },
+                { label: "Total km", value: (r) => fmtKm(rideDistances(r).totalKm) },
+                { key: "planned_distance_km", label: "Planned km" },
+                { key: "duration_minutes", label: "Min" },
+                { key: "driver_name", label: "Driver" },
+                { key: "driver_id", label: "Driver ID" },
+                { key: "rider_name", label: "Rider" },
+                { key: "created_at", label: "Requested At" },
+                { key: "ride_completed_at", label: "Completed At" },
+            ]);
+        } catch {
+            // export failed silently
+        } finally {
+            setExporting(false);
+        }
+    };
+
     const handleSort = (key: SortKey) => {
         if (sortBy === key) {
             onSortChange(key, sortDir === "asc" ? "desc" : "asc");
@@ -95,28 +128,11 @@ export default function RideList({
                             </select>
                         </div>
                         <button
-                            onClick={() => exportToCsv("rides", rides, [
-                                { key: "ride_code", label: "Ride Code" },
-                                { key: "id", label: "UUID" },
-                                { key: "pickup_address", label: "Pickup" },
-                                { key: "dropoff_address", label: "Dropoff" },
-                                { key: "status", label: "Status" },
-                                { key: "total_fare", label: "Fare" },
-                                { key: "tip_amount", label: "Tip" },
-                                { label: "To Pickup km", value: (r) => fmtKm(rideDistances(r).toPickupKm) },
-                                { label: "Trip km", value: (r) => fmtKm(rideDistances(r).tripKm) },
-                                { label: "Total km", value: (r) => fmtKm(rideDistances(r).totalKm) },
-                                { key: "planned_distance_km", label: "Planned km" },
-                                { key: "duration_minutes", label: "Min" },
-                                { key: "driver_name", label: "Driver" },
-                                { key: "driver_id", label: "Driver ID" },
-                                { key: "rider_name", label: "Rider" },
-                                { key: "created_at", label: "Requested At" },
-                                { key: "ride_completed_at", label: "Completed At" },
-                            ])}
-                            className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground px-3 py-1.5 rounded-lg border hover:bg-muted transition"
+                            onClick={handleExportClick}
+                            disabled={exporting}
+                            className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground px-3 py-1.5 rounded-lg border hover:bg-muted transition disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                            <Download className="h-3.5 w-3.5" /> Export
+                            <Download className="h-3.5 w-3.5" /> {exporting ? "Exporting..." : "Export"}
                         </button>
                     </div>
                 </div>

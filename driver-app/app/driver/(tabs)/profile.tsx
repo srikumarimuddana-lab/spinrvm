@@ -444,15 +444,25 @@ export default function ProfileScreen() {
                     n.includes('background') ? 'document-text-outline' :
                     n.includes('inspection') ? 'car-sport-outline' : 'document-outline';
 
-                // Find the most recent non-superseded document for this requirement
-                const matchedDoc = driverDocs
+                // Collect ALL non-superseded documents for this requirement.
+                // Using all matches (not just the first) ensures a pending re-upload
+                // wins over an older approved record regardless of sort order.
+                const matchingDocs = driverDocs
                     .filter(d => d.status !== 'superseded')
-                    .find(d =>
+                    .filter(d =>
                         d.requirement_key === req.id ||
                         d.requirement_id === req.id ||
                         (d.document_type || '').toLowerCase() === req.name.toLowerCase()
                     );
-                const docStatus = matchedDoc?.status; // 'pending' | 'approved' | 'rejected' | undefined
+                const matchedDoc = matchingDocs[0]; // newest first (API orders by uploaded_at DESC)
+
+                // If any copy of this document is pending/rejected, surface that status
+                // so a re-upload always shows as pending until admin approves it.
+                const docStatus: string | undefined =
+                    matchingDocs.some(d => d.status === 'pending') ? 'pending' :
+                    matchingDocs.some(d => d.status === 'rejected') ? 'rejected' :
+                    matchingDocs.some(d => d.status === 'approved') ? 'approved' :
+                    undefined;
 
                 // Use top-level driver field first; fall back to expiry_date on the document record itself
                 const expiry: string | null =

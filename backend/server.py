@@ -380,6 +380,16 @@ if sentry_dsn:
 
     logger.add(_loguru_sentry_sink, level="ERROR")
     logger.info("Sentry SDK initialized for error monitoring")
+elif getattr(settings, "ENV", "development") == "production":
+    # Same precedent as the Redis-missing check (L-P1-1): observability
+    # degradation must not take the API down, but it must be impossible to
+    # miss. A production replica without Sentry means payment/dispatch/auth
+    # errors go nowhere — set the SENTRY_DSN secret (Fly: Sentry extension
+    # "Deploy Secrets", or `fly secrets set SENTRY_DSN=...`).
+    logger.error(
+        "SENTRY_DSN is not set in production — backend errors are NOT being "
+        "reported to Sentry. Deploy the SENTRY_DSN secret to restore error tracking."
+    )
 
 if __name__ == "__main__":
     import uvicorn

@@ -657,11 +657,18 @@ class MfaChallengeRequest(BaseModel):
 # ── MFA helpers ──────────────────────────────────────────────────────────────
 
 
+# Dedicated audience for the short-lived MFA challenge token. Distinct from
+# JWT_AUD_ADMIN on purpose: a challenge token is proof of password only, not
+# an admin session, and must never be accepted where either is expected.
+JWT_AUD_MFA_CHALLENGE = "spinr:admin:mfa-challenge"
+
+
 def _mint_mfa_challenge_token(user_id: str) -> str:
     now = datetime.now(timezone.utc)
     return jwt.encode(
         {
             "type": "mfa_challenge",
+            "aud": JWT_AUD_MFA_CHALLENGE,
             "user_id": user_id,
             "exp": now + timedelta(minutes=5),
         },
@@ -706,7 +713,15 @@ async def _require_staff_from_token(authorization: str | None) -> dict:
             audience=JWT_AUD_ADMIN,
         )
     except (ValueError, jwt.InvalidTokenError) as e:
-        raise HTTPException(status_code=401, detail=f"Invalid token: {e}") from e
+        # Static detail — PyJWT error strings reveal which exact claim
+        # failed (alg, aud, exp), letting an attacker fingerprint the
+        # token validation by probing with crafted tokens.
+        logger.error(
+            "Admin auth rejected malformed token",
+            exc_info=True,
+            extra={"domain": "admin"},
+        )
+        raise HTTPException(status_code=401, detail="Invalid token") from e
     user_id = payload.get("user_id")
     if not user_id or user_id == "admin-001":
         raise HTTPException(
@@ -743,7 +758,15 @@ async def admin_mfa_status(authorization: Optional[str] = Header(None)):
             audience=JWT_AUD_ADMIN,
         )
     except (ValueError, jwt.InvalidTokenError) as e:
-        raise HTTPException(status_code=401, detail=f"Invalid token: {e}") from e
+        # Static detail — PyJWT error strings reveal which exact claim
+        # failed (alg, aud, exp), letting an attacker fingerprint the
+        # token validation by probing with crafted tokens.
+        logger.error(
+            "Admin auth rejected malformed token",
+            exc_info=True,
+            extra={"domain": "admin"},
+        )
+        raise HTTPException(status_code=401, detail="Invalid token") from e
     user_id = payload.get("user_id")
     if not user_id or user_id == "admin-001":
         return {"mfa_enabled": False, "available": False}
@@ -823,9 +846,25 @@ async def admin_mfa_disable(
 async def admin_mfa_challenge(request: Request, body: MfaChallengeRequest):
     """Exchange an MFA challenge token + TOTP (or backup code) for full admin tokens."""
     try:
-        payload = jwt.decode(body.mfa_token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM])
+        # audience pin: only tokens minted by _mint_mfa_challenge_token pass.
+        # Rollout note: challenge tokens live 5 minutes, so requiring the aud
+        # here in the same deploy that adds it at mint is safe — a pre-deploy
+        # token at worst forces one fresh login.
+        payload = jwt.decode(
+            body.mfa_token,
+            settings.JWT_SECRET,
+            algorithms=[settings.ALGORITHM],
+            audience=JWT_AUD_MFA_CHALLENGE,
+        )
     except jwt.InvalidTokenError as e:
-        raise HTTPException(status_code=401, detail=f"Invalid MFA token: {e}") from e
+        # Static detail — see _require_staff_from_token; PyJWT messages
+        # fingerprint which claim failed.
+        logger.error(
+            "MFA challenge rejected malformed token",
+            exc_info=True,
+            extra={"domain": "admin"},
+        )
+        raise HTTPException(status_code=401, detail="Invalid MFA token") from e
     if payload.get("type") != "mfa_challenge":
         raise HTTPException(status_code=401, detail="Invalid token type")
     user_id = payload.get("user_id")

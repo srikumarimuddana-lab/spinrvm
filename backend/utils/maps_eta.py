@@ -1,8 +1,14 @@
-"""Google Maps Distance Matrix ETA helper.
+"""Road-network ETA helper (OSRM-first, Google Distance Matrix fallback).
 
 Computes the road-network ETA from a driver's current location to a destination
 (pickup point only — NOT dropoff). Results are cached in Redis for 15 seconds so
-the hot GPS-ping loop triggers at most ~4 Maps API calls per minute per active ride.
+the hot GPS-ping loop triggers at most ~4 routing calls per minute per active ride.
+
+Provider order: OSRM /route (self-hosted or the public fallback configured in
+core/config.py — zero metered cost) → Google Distance Matrix (traffic-aware,
+metered) → haversine at 30 km/h. OSRM lacks live-traffic awareness, which is an
+acceptable trade for Saskatchewan-scale cities in exchange for eliminating the
+per-ping Distance Matrix spend.
 
 IMPORTANT — call scope:
   This helper must only be called during the pre-pickup phases:
@@ -64,6 +70,47 @@ def _haversine_eta_seconds(lat1: float, lng1: float, lat2: float, lng2: float) -
     return max(60, int(km / _FALLBACK_SPEED_KMH * 3600))
 
 
+async def _osrm_eta_seconds(driver_lat: float, driver_lng: float, dest_lat: float, dest_lng: float) -> int | None:
+    """ETA via OSRM /route (overview=false — no geometry, just duration).
+
+    Returns None when no OSRM URL resolves (self-hosted + public fallback both
+    unset) or on any error, letting the caller fall through to Google.
+    """
+    try:
+        from ..settings_loader import get_app_settings
+        from .route_distance import _live_osrm_url
+    except ImportError:
+        from settings_loader import get_app_settings  # type: ignore
+        from utils.route_distance import _live_osrm_url  # type: ignore
+
+    try:
+        app_settings = await get_app_settings() or {}
+    except Exception:
+        app_settings = {}
+    osrm_url = _live_osrm_url(app_settings)
+    if not osrm_url:
+        return None
+
+    url = f"{osrm_url.rstrip('/')}/route/v1/driving/{driver_lng},{driver_lat};{dest_lng},{dest_lat}"
+    try:
+        async with httpx.AsyncClient(timeout=_MAPS_TIMEOUT) as client:
+            resp = await client.get(url, params={"overview": "false", "alternatives": "false", "steps": "false"})
+            if resp.status_code != 200:
+                logger.warning("[ETA] OSRM /route returned %d — trying Google fallback", resp.status_code)
+                return None
+            data = resp.json()
+    except Exception:
+        logger.warning("[ETA] OSRM /route call failed — trying Google fallback", exc_info=False)
+        return None
+
+    if data.get("code") != "Ok" or not data.get("routes"):
+        return None
+    try:
+        return int(round(float(data["routes"][0]["duration"])))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 async def get_ride_eta_seconds(
     driver_lat: float,
     driver_lng: float,
@@ -76,7 +123,8 @@ async def get_ride_eta_seconds(
     """Return ETA in seconds from driver to destination, or None on total failure.
 
     Uses Redis to cache the result for _ETA_CACHE_TTL seconds so back-to-back
-    GPS pings from the same driver/ride pair don't re-hit the Maps API.
+    GPS pings from the same driver/ride pair don't re-hit the routing provider.
+    Provider order: OSRM /route (free) → Google Distance Matrix → haversine.
     """
     cache_key = f"eta:{driver_id}:{ride_id}"
 
@@ -86,9 +134,18 @@ async def get_ride_eta_seconds(
         if cached is not None:
             return int(cached)
     except Exception:
-        logger.warning("[ETA] Redis get failed — cache miss, will call Maps", exc_info=False)
+        logger.warning("[ETA] Redis get failed — cache miss, will call routing provider", exc_info=False)
 
-    # ── Maps API call ──────────────────────────────────────────────────────
+    # ── OSRM first (no metered cost) ────────────────────────────────────────
+    eta_seconds = await _osrm_eta_seconds(driver_lat, driver_lng, dest_lat, dest_lng)
+    if eta_seconds is not None:
+        try:
+            await redis_set(cache_key, str(eta_seconds), ttl=_ETA_CACHE_TTL)
+        except Exception:
+            logger.warning("[ETA] Redis set failed — ETA won't be cached", exc_info=False)
+        return eta_seconds
+
+    # ── Google Distance Matrix fallback ─────────────────────────────────────
     if maps_api_key:
         try:
             params = {

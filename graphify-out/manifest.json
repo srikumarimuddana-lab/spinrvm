@@ -10975,8 +10975,8 @@
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\core\\lifespan.py": {
-    "mtime": 1780718823.439718,
-    "ast_hash": "66a74f13317389d8c961d799d9b68911",
+    "mtime": 1781005753.8602018,
+    "ast_hash": "c8d1cd72cec2be1c8656e86f40e3cd07",
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\core\\middleware.py": {
@@ -19367,6 +19367,26 @@
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\migrations\\137_fix_pii_encrypt_pgsodium_perms.sql": {
     "mtime": 1781003463.7440329,
     "ast_hash": "ea7fc3e8b79793be6b8b948d04185775",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\migrations\\139_driver_onboarding_reminder_log.sql": {
+    "mtime": 1781005180.4886472,
+    "ast_hash": "8c936a558201d819e7e42f3d4dd56607",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\tests\\test_driver_onboarding_reminders.py": {
+    "mtime": 1781005846.094041,
+    "ast_hash": "032239d467acb77718e3f5a96953d8d7",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\utils\\driver_onboarding_reminders.py": {
+    "mtime": 1781005696.281043,
+    "ast_hash": "7850324eeaf6948c47f34678b5dd7e8f",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\utils\\driver_onboarding_reminder_rules.py": {
+    "mtime": 1781005578.4381156,
+    "ast_hash": "0e9095b52d2798dbbfb109701d821d4c",
     "semantic_hash": ""
   }
 }

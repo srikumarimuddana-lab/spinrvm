@@ -208,7 +208,13 @@ async def admin_export_filtered_rides(
     sort_dir: Optional[str] = Query(default=None, pattern="^(asc|desc)$"),
     _: dict = Depends(get_admin_user),
 ):
-    """Return all rides matching the active filters for CSV export (no pagination, max 10k rows)."""
+    """Return all rides matching the active filters for CSV export (no pagination, max 10k rows).
+
+    When no date range is provided, defaults to the last 2 days to avoid
+    accidentally dumping the entire rides table.
+    """
+    if not date_from and not date_to:
+        date_from = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
     filters = await _build_rides_filters(status, is_scheduled, search, date_from, date_to, service_area_id)
 
     if sort_by and sort_by in _VALID_SORT_COLUMNS:

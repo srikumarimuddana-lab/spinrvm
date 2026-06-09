@@ -380,6 +380,12 @@ if sentry_dsn:
 
     logger.add(_loguru_sentry_sink, level="ERROR")
     logger.info("Sentry SDK initialized for error monitoring")
+    # One low-volume boot event per process: positively confirms the
+    # DSN→Sentry pipeline works (and completes the Fly Sentry extension's
+    # "waiting for first event" setup check) instead of waiting for the
+    # first real production error to find out the integration is broken.
+    if getattr(settings, "ENV", "development") == "production":
+        sentry_sdk.capture_message("spinr backend started — Sentry pipeline verified", level="info")
 elif getattr(settings, "ENV", "development") == "production":
     # Same precedent as the Redis-missing check (L-P1-1): observability
     # degradation must not take the API down, but it must be impossible to

@@ -89,7 +89,15 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
         if (res.status === 401) {
             // For the login endpoint, fall through to the !res.ok handler so
             // "Invalid credentials" is shown to the user rather than "Unauthorized".
-            if (path !== "/api/admin/auth/login") {
+            // Same for calls that supplied their own Authorization header (the
+            // forced-MFA-enrollment flow): silently refreshing would swap in the
+            // store session's token — acting as the previously signed-in account
+            // in the account-switch case — and the logout()+redirect below would
+            // destroy the enrollment flow. Those callers must see the real 401.
+            const callerProvidedAuth = Boolean(
+                (options.headers as Record<string, string> | undefined)?.["Authorization"],
+            );
+            if (path !== "/api/admin/auth/login" && !callerProvidedAuth) {
                 // Attempt one silent refresh before giving up. The HttpOnly
                 // refresh cookie is sent automatically — no need to check for
                 // a token in JS state.

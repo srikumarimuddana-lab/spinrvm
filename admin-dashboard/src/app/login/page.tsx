@@ -3,6 +3,7 @@
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { loginAdminSession, mfaChallenge } from "@/lib/api";
+import { MfaEnrollDialog } from "@/components/mfa-enroll-dialog";
 import { useAuthStore } from "@/store/authStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,6 +35,10 @@ function LoginForm() {
     const [mfaRequired, setMfaRequired] = useState(false);
     const [mfaToken, setMfaToken] = useState("");
     const [totpCode, setTotpCode] = useState("");
+    // ADMIN_MFA_ENFORCED: account has no MFA yet — enrollToken is scoped to
+    // the enroll/confirm endpoints only and expires in 15 minutes.
+    const [enrollRequired, setEnrollRequired] = useState(false);
+    const [enrollToken, setEnrollToken] = useState("");
 
     const _storeSessionAndRedirect = async (data: any) => {
         setToken(data.token);
@@ -89,6 +94,12 @@ function LoginForm() {
                 return;
             }
 
+            if ("mfa_enrollment_required" in data && data.mfa_enrollment_required) {
+                setEnrollToken(data.mfa_token);
+                setEnrollRequired(true);
+                return;
+            }
+
             await _storeSessionAndRedirect(data);
         } catch (e: any) {
             if (process.env.NODE_ENV === "development") {
@@ -124,7 +135,39 @@ function LoginForm() {
                         </div>
                     )}
 
-                    {mfaRequired ? (
+                    {enrollRequired ? (
+                        <>
+                            <p className="text-sm text-muted-foreground">
+                                Two-factor authentication is required for all staff accounts.
+                                Set up your authenticator app to finish signing in.
+                            </p>
+                            <MfaEnrollDialog
+                                open={enrollRequired}
+                                onOpenChange={(open) => {
+                                    if (!open) {
+                                        // Dialog dismissed without finishing — drop the
+                                        // enrollment token and return to the login form.
+                                        setEnrollRequired(false);
+                                        setEnrollToken("");
+                                    }
+                                }}
+                                onEnrolled={() => {}}
+                                authToken={enrollToken}
+                                onSession={(data) => {
+                                    _storeSessionAndRedirect(data).catch((e: any) =>
+                                        setError(e.message || "Enrollment succeeded but sign-in failed. Please log in again.")
+                                    );
+                                }}
+                            />
+                            <button
+                                type="button"
+                                className="w-full text-sm text-muted-foreground hover:text-foreground"
+                                onClick={() => { setEnrollRequired(false); setEnrollToken(""); setError(""); }}
+                            >
+                                Back to login
+                            </button>
+                        </>
+                    ) : mfaRequired ? (
                         <>
                             <p className="text-sm text-muted-foreground">
                                 Enter the 6-digit code from your authenticator app, or a backup code.

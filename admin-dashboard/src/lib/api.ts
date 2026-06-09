@@ -1918,6 +1918,11 @@ export const updateStaff = (id: string, data: any) =>
 export const deleteStaff = (id: string) =>
     request<any>(`/api/admin/staff/${id}`, { method: "DELETE" });
 
+// Lost-phone recovery: super_admin clears a staff member's MFA so they can
+// re-enroll. Backend revokes the target's sessions and audit-logs the action.
+export const resetStaffMfa = (id: string) =>
+    request<{ success: boolean }>(`/api/admin/staff/${id}/mfa-reset`, { method: "POST" });
+
 export const getStaffModules = () =>
     request<{ modules: string[]; role_presets: Record<string, string[]> }>("/api/admin/staff/modules/list");
 

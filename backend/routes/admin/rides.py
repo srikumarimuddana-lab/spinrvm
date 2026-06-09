@@ -60,14 +60,65 @@ router = APIRouter()
 # ---------- Rides ----------
 
 
+_RIDES_SEARCH_COLUMNS = [
+    "id",
+    "ride_code",
+    "pickup_address",
+    "dropoff_address",
+    "rider_id",
+    "driver_id",
+]
+
+_VALID_SORT_COLUMNS = {
+    "created_at",
+    "total_fare",
+    "status",
+    "pickup_address",
+    "scheduled_time",
+    "ride_completed_at",
+}
+
+
+async def _resolve_name_search(search: str) -> tuple[list[str], list[str]]:
+    """Look up rider/driver IDs whose display name matches the search term.
+
+    Returns (matching_rider_ids, matching_driver_ids).
+    """
+    pattern = {"$regex": search, "$options": "i"}
+
+    matching_users = await db_supabase.get_rows(
+        "users",
+        {"$or": [{"first_name": pattern}, {"last_name": pattern}]},
+        columns="id",
+        limit=200,
+    )
+    rider_ids = [u["id"] for u in matching_users if u.get("id")]
+
+    matching_drivers = await db_supabase.get_rows(
+        "drivers",
+        {"name": pattern},
+        columns="id",
+        limit=200,
+    )
+    driver_ids = [d["id"] for d in matching_drivers if d.get("id")]
+
+    return rider_ids, driver_ids
+
+
 @router.get("/rides")
 async def admin_get_rides(
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     status: Optional[str] = None,
     is_scheduled: Optional[bool] = None,
+    search: Optional[str] = Query(default=None, max_length=200),
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    service_area_id: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_dir: Optional[str] = Query(default=None, pattern="^(asc|desc)$"),
 ):
-    """Get all rides with filters, enriched with rider_name and driver_name. Returns paginated.
+    """Get rides with server-side search, filters, and pagination.
 
     ``is_scheduled=true`` returns rider-requested scheduled rides (future pickup).
     These live alongside regular rides with ``status="searching"`` until the
@@ -79,14 +130,38 @@ async def admin_get_rides(
         filters["status"] = status
     if is_scheduled is not None:
         filters["is_scheduled"] = is_scheduled
+    if service_area_id:
+        filters["service_area_id"] = service_area_id
+    if date_from:
+        iso = date_from if "T" in date_from else f"{date_from}T00:00:00+00:00"
+        filters.setdefault("created_at", {})["$gte"] = iso
+    if date_to:
+        iso = date_to if "T" in date_to else f"{date_to}T23:59:59+00:00"
+        filters.setdefault("created_at", {})["$lte"] = iso
 
-    # Get total count for pagination
+    if search and search.strip():
+        q = search.strip()
+        pattern = {"$regex": q, "$options": "i"}
+        or_clauses: list[Dict[str, Any]] = [{col: pattern} for col in _RIDES_SEARCH_COLUMNS]
+        rider_ids_match, driver_ids_match = await _resolve_name_search(q)
+        if rider_ids_match:
+            or_clauses.append({"rider_id": {"$in": rider_ids_match}})
+        if driver_ids_match:
+            or_clauses.append({"driver_id": {"$in": driver_ids_match}})
+        filters["$or"] = or_clauses
+
     total_count = await db_supabase.count_documents("rides", filters)
 
-    # Scheduled rides sort naturally by scheduled_time (earliest pickup first);
-    # regular rides keep the created_at-desc feed.
-    order_col = "scheduled_time" if is_scheduled else "created_at"
-    order_desc = not is_scheduled
+    if sort_by and sort_by in _VALID_SORT_COLUMNS:
+        order_col = sort_by
+        order_desc = sort_dir == "desc" if sort_dir else True
+    elif is_scheduled:
+        order_col = "scheduled_time"
+        order_desc = False
+    else:
+        order_col = "created_at"
+        order_desc = True
+
     rides = await db_supabase.get_rows("rides", filters, order=order_col, desc=order_desc, limit=limit, offset=offset)
     rider_ids = list({r.get("rider_id") for r in rides if r.get("rider_id")})
     driver_ids = list({r.get("driver_id") for r in rides if r.get("driver_id")})
@@ -970,6 +1045,51 @@ async def admin_get_ride_stats():
         "month_revenue": round(month_revenue, 2),
         "daily_chart": daily_chart,
     }
+
+
+@router.get("/rides/trend")
+async def admin_get_ride_trend(
+    days: int = Query(default=14, ge=1, le=90),
+):
+    """Daily ride counts for the trend chart.
+
+    Single DB round-trip: fetches only the created_at column for rides in the
+    window, then buckets in Python. Replaces the 14-sequential-query pattern
+    in /rides/stats daily_chart.
+    """
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    window_start = today_start - timedelta(days=days - 1)
+
+    rows = await db_supabase.get_rows(
+        "rides",
+        {"created_at": {"$gte": window_start.isoformat()}},
+        columns="created_at",
+        limit=50000,
+    )
+
+    buckets: Dict[str, int] = {}
+    for i in range(days):
+        d = (window_start + timedelta(days=i)).strftime("%Y-%m-%d")
+        buckets[d] = 0
+    for r in rows:
+        ca = r.get("created_at")
+        if not ca:
+            continue
+        day_key = ca[:10]
+        if day_key in buckets:
+            buckets[day_key] += 1
+
+    daily_chart = [
+        {
+            "date": (window_start + timedelta(days=i)).strftime("%b %d"),
+            "date_iso": (window_start + timedelta(days=i)).strftime("%Y-%m-%d"),
+            "rides": buckets.get((window_start + timedelta(days=i)).strftime("%Y-%m-%d"), 0),
+        }
+        for i in range(days)
+    ]
+
+    return {"daily_chart": daily_chart, "days": days}
 
 
 def _period_range(period: str, now: datetime) -> tuple[datetime, datetime, str]:

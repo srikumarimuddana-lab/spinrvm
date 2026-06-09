@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { getRides, getServiceAreas } from "@/lib/api";
+import { useEffect, useState, useCallback, useRef } from "react";
+import { getRides, getServiceAreas, type RideListOpts } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { PlusCircle } from "lucide-react";
 import RideStatsCards, { RidesChart } from "./_components/ride-stats-cards";
@@ -10,13 +10,15 @@ import RideDetailModal from "./_components/ride-detail-modal";
 import { CreateRideModal } from "./_components/create-ride-modal";
 import { useRequireModule } from "@/hooks/useRequireModule";
 
-const PAGE_SIZE = 50;
+const PAGE_SIZES = [25, 50, 100] as const;
+type PageSize = (typeof PAGE_SIZES)[number];
 
 export default function RidesPage() {
     const { allowed } = useRequireModule("rides");
     const [rides, setRides] = useState<any[]>([]);
     const [totalCount, setTotalCount] = useState(0);
     const [page, setPage] = useState(0);
+    const [pageSize, setPageSize] = useState<PageSize>(25);
     const [areas, setAreas] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState(false);
@@ -25,20 +27,43 @@ export default function RidesPage() {
     const [areaFilter, setAreaFilter] = useState("all");
     const [dateFrom, setDateFrom] = useState("");
     const [dateTo, setDateTo] = useState("");
+    const [sortBy, setSortBy] = useState<string>("created_at");
+    const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
     const [selectedRideId, setSelectedRideId] = useState<string | null>(null);
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
 
-    // Scheduled rides live as status="searching" + is_scheduled=true until
-    // their scheduled_time, so they are not on the default feed — re-query
-    // the backend when the operator picks the Scheduled tab. Every other
-    // tab keeps the original client-side status filter (so per-tab counts
-    // work from a single loaded batch).
-    const loadRides = useCallback(async (p: number, tab: string) => {
+    const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const loadRides = useCallback(async (
+        p: number,
+        size: number,
+        opts: {
+            tab: string;
+            search?: string;
+            dateFrom?: string;
+            dateTo?: string;
+            areaFilter?: string;
+            sortBy?: string;
+            sortDir?: "asc" | "desc";
+        },
+    ) => {
         setLoading(true);
         setLoadError(false);
         try {
-            const opts = tab === "scheduled" ? { isScheduled: true } : undefined;
-            const res = await getRides(PAGE_SIZE, p * PAGE_SIZE, opts);
+            const apiOpts: RideListOpts = {};
+            if (opts.tab === "scheduled") {
+                apiOpts.isScheduled = true;
+            } else if (opts.tab !== "all" && opts.tab !== "no_driver_found") {
+                apiOpts.status = opts.tab;
+            }
+            if (opts.search) apiOpts.search = opts.search;
+            if (opts.dateFrom) apiOpts.dateFrom = opts.dateFrom;
+            if (opts.dateTo) apiOpts.dateTo = opts.dateTo;
+            if (opts.areaFilter && opts.areaFilter !== "all") apiOpts.serviceAreaId = opts.areaFilter;
+            if (opts.sortBy) apiOpts.sortBy = opts.sortBy;
+            if (opts.sortDir) apiOpts.sortDir = opts.sortDir;
+
+            const res = await getRides(size, p * size, apiOpts);
             setRides(res.rides);
             setTotalCount(res.total_count);
         } catch {
@@ -48,66 +73,99 @@ export default function RidesPage() {
         }
     }, []);
 
+    const currentOpts = useCallback(() => ({
+        tab: statusFilter,
+        search,
+        dateFrom,
+        dateTo,
+        areaFilter,
+        sortBy,
+        sortDir,
+    }), [statusFilter, search, dateFrom, dateTo, areaFilter, sortBy, sortDir]);
+
     useEffect(() => {
-        Promise.all([loadRides(0, statusFilter), getServiceAreas().catch(() => [])])
+        Promise.all([
+            loadRides(0, pageSize, currentOpts()),
+            getServiceAreas().catch(() => []),
+        ])
             .then(([, a]) => { if (a) setAreas(a as any); })
             .catch(() => {});
-    }, [loadRides, statusFilter]);
+        // Only run on mount
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    const reload = useCallback((p: number, size: number) => {
+        loadRides(p, size, {
+            tab: statusFilter,
+            search,
+            dateFrom,
+            dateTo,
+            areaFilter,
+            sortBy,
+            sortDir,
+        });
+    }, [loadRides, statusFilter, search, dateFrom, dateTo, areaFilter, sortBy, sortDir]);
 
     const handlePageChange = (newPage: number) => {
         setPage(newPage);
-        loadRides(newPage, statusFilter);
+        reload(newPage, pageSize);
+    };
+
+    const handlePageSizeChange = (newSize: PageSize) => {
+        setPageSize(newSize);
+        setPage(0);
+        reload(0, newSize);
     };
 
     const handleStatusChange = (tab: string) => {
         setStatusFilter(tab);
         setPage(0);
+        loadRides(0, pageSize, { tab, search, dateFrom, dateTo, areaFilter, sortBy, sortDir });
     };
 
-    const filtered = rides.filter(r => {
-        const q = search.toLowerCase();
-        const matchSearch = !search ||
-            r.pickup_address?.toLowerCase().includes(q) ||
-            r.dropoff_address?.toLowerCase().includes(q) ||
-            r.id?.toLowerCase().includes(q) ||
-            r.ride_code?.toLowerCase().includes(q) ||
-            r.rider_name?.toLowerCase().includes(q) ||
-            r.rider_phone?.toLowerCase().includes(q) ||
-            r.driver_name?.toLowerCase().includes(q) ||
-            r.driver_phone?.toLowerCase().includes(q) ||
-            r.rider_id?.toLowerCase().includes(q) ||
-            r.driver_id?.toLowerCase().includes(q);
-        // "scheduled" narrows to rides the rider explicitly scheduled
-        // (is_scheduled=true). Even though the backend is also called
-        // with is_scheduled=true for this tab, we narrow client-side too
-        // so a stale feed or an older row with is_scheduled=null never
-        // leaks a non-scheduled ride into the Scheduled tab.
-        //
-        // "no_driver_found" is backed by status=cancelled on the wire;
-        // narrow client-side to the ones auto-cancelled by the
-        // dispatcher timeout (cancellation_type or legacy reason text).
-        const matchStatus =
-            statusFilter === "all" ||
-            (statusFilter === "scheduled" && r.is_scheduled === true) ||
-            (statusFilter === "no_driver_found" &&
-                r.status === "cancelled" &&
-                (r.cancellation_type === "no_drivers_found" ||
-                    (r.cancellation_reason || "").toLowerCase().includes("no nearby drivers"))) ||
-            (statusFilter !== "scheduled" &&
-                statusFilter !== "no_driver_found" &&
-                statusFilter !== "all" &&
-                r.status === statusFilter);
-        const matchArea = areaFilter === "all" || r.service_area_id === areaFilter;
-        let matchDate = true;
-        if (dateFrom || dateTo) {
-            const d = r.created_at ? new Date(r.created_at).toISOString().split("T")[0] : "";
-            if (dateFrom && d < dateFrom) matchDate = false;
-            if (dateTo && d > dateTo) matchDate = false;
-        }
-        return matchSearch && matchStatus && matchArea && matchDate;
-    });
+    const handleSearchChange = (value: string) => {
+        setSearch(value);
+        if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+        searchTimerRef.current = setTimeout(() => {
+            setPage(0);
+            loadRides(0, pageSize, {
+                tab: statusFilter,
+                search: value,
+                dateFrom,
+                dateTo,
+                areaFilter,
+                sortBy,
+                sortDir,
+            });
+        }, 400);
+    };
 
-    const totalPages = Math.ceil(totalCount / PAGE_SIZE);
+    const handleAreaChange = (value: string) => {
+        setAreaFilter(value);
+        setPage(0);
+        loadRides(0, pageSize, { tab: statusFilter, search, dateFrom, dateTo, areaFilter: value, sortBy, sortDir });
+    };
+
+    const handleDateFromChange = (value: string) => {
+        setDateFrom(value);
+        setPage(0);
+        loadRides(0, pageSize, { tab: statusFilter, search, dateFrom: value, dateTo, areaFilter, sortBy, sortDir });
+    };
+
+    const handleDateToChange = (value: string) => {
+        setDateTo(value);
+        setPage(0);
+        loadRides(0, pageSize, { tab: statusFilter, search, dateFrom, dateTo: value, areaFilter, sortBy, sortDir });
+    };
+
+    const handleSortChange = (key: string, dir: "asc" | "desc") => {
+        setSortBy(key);
+        setSortDir(dir);
+        setPage(0);
+        loadRides(0, pageSize, { tab: statusFilter, search, dateFrom, dateTo, areaFilter, sortBy: key, sortDir: dir });
+    };
+
+    const totalPages = Math.ceil(totalCount / pageSize);
 
     if (!allowed) return null;
 
@@ -135,7 +193,7 @@ export default function RidesPage() {
                 <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 flex items-center justify-between">
                     <span>Failed to load rides — check backend health.</span>
                     <button
-                        onClick={() => loadRides(page, statusFilter)}
+                        onClick={() => reload(page, pageSize)}
                         className="ml-4 text-red-700 underline hover:no-underline text-sm"
                     >
                         Retry
@@ -145,26 +203,31 @@ export default function RidesPage() {
 
             {/* Rides Table */}
             <RideList
-                rides={filtered}
-                allRides={rides}
+                rides={rides}
                 totalCount={totalCount}
                 areas={areas}
                 loading={loading}
                 selectedId={selectedRideId || undefined}
                 search={search}
-                onSearchChange={setSearch}
+                onSearchChange={handleSearchChange}
                 statusFilter={statusFilter}
                 onStatusChange={handleStatusChange}
                 areaFilter={areaFilter}
-                onAreaChange={setAreaFilter}
+                onAreaChange={handleAreaChange}
                 dateFrom={dateFrom}
-                onDateFromChange={setDateFrom}
+                onDateFromChange={handleDateFromChange}
                 dateTo={dateTo}
-                onDateToChange={setDateTo}
+                onDateToChange={handleDateToChange}
                 onSelect={(ride) => setSelectedRideId(ride.id)}
                 page={page}
+                pageSize={pageSize}
+                pageSizes={PAGE_SIZES}
+                onPageSizeChange={handlePageSizeChange}
                 totalPages={totalPages}
                 onPageChange={handlePageChange}
+                sortBy={sortBy}
+                sortDir={sortDir}
+                onSortChange={handleSortChange}
             />
 
             {/* Trends Chart */}
@@ -179,7 +242,7 @@ export default function RidesPage() {
             <CreateRideModal
                 open={isCreateModalOpen}
                 onClose={() => setIsCreateModalOpen(false)}
-                onSuccess={() => loadRides(0, statusFilter)}
+                onSuccess={() => reload(0, pageSize)}
             />
         </div>
     );

@@ -1,19 +1,12 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useMemo } from "react";
 import { Input } from "@/components/ui/input";
 import { formatCurrency } from "@/lib/utils";
 import { Car, Search, Clock, CheckCircle, XCircle, MapPin, Loader, Download, ChevronRight, ChevronLeft, User, SlidersHorizontal, ArrowUpDown, ArrowUp, ArrowDown, CalendarRange, X, CalendarClock, UserX } from "lucide-react";
 import { getStatusBadge, fmtTime, fmtKm, rideDistances } from "./ride-ui-helpers";
 import { exportToCsv } from "@/lib/export-csv";
 
-// Synthetic status values not present on the rides row itself:
-//   - "scheduled"       — is_scheduled=true AND not yet dispatched
-//   - "no_driver_found" — status=cancelled AND cancellation_type=no_drivers_found
-//                         (auto-cancelled after the 5-min search timeout)
-// These are materialised in the filter function below; the backend is
-// queried with is_scheduled=true for "scheduled" so the queue is sorted
-// by scheduled_time and paginated correctly.
 const STATUS_TABS = [
     { value: "all", label: "All", icon: Car },
     { value: "scheduled", label: "Scheduled", icon: CalendarClock },
@@ -25,12 +18,10 @@ const STATUS_TABS = [
     { value: "no_driver_found", label: "No Driver Found", icon: UserX },
 ];
 
-type SortKey = "status" | "pickup_address" | "rider_name" | "driver_name" | "total_fare" | "created_at";
-type SortDir = "asc" | "desc";
+type SortKey = "status" | "pickup_address" | "total_fare" | "created_at";
 
 interface RideListProps {
     rides: any[];
-    allRides: any[];
     totalCount: number;
     areas: any[];
     loading: boolean;
@@ -47,107 +38,38 @@ interface RideListProps {
     onDateToChange: (v: string) => void;
     onSelect: (ride: any) => void;
     page: number;
+    pageSize: number;
+    pageSizes: readonly number[];
+    onPageSizeChange: (size: any) => void;
     totalPages: number;
     onPageChange: (p: number) => void;
+    sortBy: string;
+    sortDir: "asc" | "desc";
+    onSortChange: (key: string, dir: "asc" | "desc") => void;
 }
 
 export default function RideList({
-    rides, allRides, totalCount, areas, loading, selectedId,
+    rides, totalCount, areas, loading, selectedId,
     search, onSearchChange, statusFilter, onStatusChange,
     areaFilter, onAreaChange, dateFrom, onDateFromChange, dateTo, onDateToChange,
-    onSelect, page, totalPages, onPageChange,
+    onSelect, page, pageSize, pageSizes, onPageSizeChange, totalPages, onPageChange,
+    sortBy, sortDir, onSortChange,
 }: RideListProps) {
-    const [sortKey, setSortKey] = useState<SortKey>("created_at");
-    const [sortDir, setSortDir] = useState<SortDir>("desc");
-
-    // Column filters
-    const [fareFilter, setFareFilter] = useState<"all" | "under10" | "10to25" | "25to50" | "over50">("all");
-    const [riderFilter, setRiderFilter] = useState("");
-    const [driverFilter, setDriverFilter] = useState("");
-
-    // Tab counts. `allRides` holds whatever the current backend query
-    // returned. On the Scheduled tab that's scheduled rides only; on
-    // every other tab it's the default feed. We always count
-    // client-side against `allRides` so the badge matches what the
-    // operator actually sees (and never double-reports if the backend
-    // filter lags a deploy). Tabs we can't compute from the current
-    // feed return null and render no badge.
-    const onScheduledTab = statusFilter === "scheduled";
-    const statusCounts = (s: string): number | null => {
-        if (s === "scheduled") {
-            return allRides.filter(r => r.is_scheduled === true).length;
-        }
-        if (onScheduledTab) return null;
-        if (s === "all") return allRides.length;
-        if (s === "no_driver_found") {
-            return allRides.filter(
-                r =>
-                    r.status === "cancelled" &&
-                    (r.cancellation_type === "no_drivers_found" ||
-                        (r.cancellation_reason || "")
-                            .toLowerCase()
-                            .includes("no nearby drivers")),
-            ).length;
-        }
-        return allRides.filter(r => r.status === s).length;
-    };
-
     const handleSort = (key: SortKey) => {
-        if (sortKey === key) {
-            setSortDir(d => d === "asc" ? "desc" : "asc");
+        if (sortBy === key) {
+            onSortChange(key, sortDir === "asc" ? "desc" : "asc");
         } else {
-            setSortKey(key);
-            setSortDir(key === "created_at" || key === "total_fare" ? "desc" : "asc");
+            onSortChange(key, key === "created_at" || key === "total_fare" ? "desc" : "asc");
         }
     };
 
     const SortIcon = ({ col }: { col: SortKey }) => {
-        if (sortKey !== col) return <ArrowUpDown className="h-3 w-3 opacity-30" />;
+        if (sortBy !== col) return <ArrowUpDown className="h-3 w-3 opacity-30" />;
         return sortDir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />;
     };
 
-    // Apply column filters + sorting
-    const sortedRides = useMemo(() => {
-        let data = [...rides];
-
-        // Column filters
-        if (fareFilter !== "all") {
-            data = data.filter(r => {
-                const f = parseFloat(String(r.total_fare ?? 0));
-                if (fareFilter === "under10") return f < 10;
-                if (fareFilter === "10to25") return f >= 10 && f < 25;
-                if (fareFilter === "25to50") return f >= 25 && f < 50;
-                if (fareFilter === "over50") return f >= 50;
-                return true;
-            });
-        }
-        if (riderFilter) {
-            const q = riderFilter.toLowerCase();
-            data = data.filter(r => r.rider_name?.toLowerCase().includes(q));
-        }
-        if (driverFilter) {
-            const q = driverFilter.toLowerCase();
-            data = data.filter(r => r.driver_name?.toLowerCase().includes(q));
-        }
-
-        // Sort
-        data.sort((a, b) => {
-            let av: any, bv: any;
-            if (sortKey === "total_fare") {
-                av = parseFloat(String(a.total_fare ?? 0)); bv = parseFloat(String(b.total_fare ?? 0));
-            } else if (sortKey === "created_at") {
-                av = a.created_at || ""; bv = b.created_at || "";
-            } else {
-                av = (a[sortKey] || "").toLowerCase(); bv = (b[sortKey] || "").toLowerCase();
-            }
-            if (av < bv) return sortDir === "asc" ? -1 : 1;
-            if (av > bv) return sortDir === "asc" ? 1 : -1;
-            return 0;
-        });
-        return data;
-    }, [rides, sortKey, sortDir, fareFilter, riderFilter, driverFilter]);
-
-    const hasColumnFilters = fareFilter !== "all" || riderFilter || driverFilter;
+    const startItem = page * pageSize + 1;
+    const endItem = Math.min((page + 1) * pageSize, totalCount);
 
     return (
         <div className="bg-card border rounded-xl overflow-hidden">
@@ -157,7 +79,9 @@ export default function RideList({
                     <div>
                         <h2 className="text-lg font-semibold">All Rides</h2>
                         <p className="text-sm text-muted-foreground mt-0.5">
-                            Showing {sortedRides.length} of {totalCount} rides
+                            {totalCount > 0
+                                ? `Showing ${startItem}–${endItem} of ${totalCount} rides`
+                                : "No rides found"}
                             {totalPages > 1 && <span className="ml-1 text-muted-foreground/70">&middot; Page {page + 1} of {totalPages}</span>}
                         </p>
                     </div>
@@ -171,7 +95,7 @@ export default function RideList({
                             </select>
                         </div>
                         <button
-                            onClick={() => exportToCsv("rides", sortedRides, [
+                            onClick={() => exportToCsv("rides", rides, [
                                 { key: "ride_code", label: "Ride Code" },
                                 { key: "id", label: "UUID" },
                                 { key: "pickup_address", label: "Pickup" },
@@ -179,10 +103,6 @@ export default function RideList({
                                 { key: "status", label: "Status" },
                                 { key: "total_fare", label: "Fare" },
                                 { key: "tip_amount", label: "Tip" },
-                                // Per-phase km for SGI / insurance reporting.
-                                // rideDistances() prefers the GPS-tracked
-                                // phase_distances JSONB and falls back to
-                                // scalar columns on older rides.
                                 { label: "To Pickup km", value: (r) => fmtKm(rideDistances(r).toPickupKm) },
                                 { label: "Trip km", value: (r) => fmtKm(rideDistances(r).tripKm) },
                                 { label: "Total km", value: (r) => fmtKm(rideDistances(r).totalKm) },
@@ -203,27 +123,17 @@ export default function RideList({
 
                 {/* Status Tabs */}
                 <div className="flex gap-1.5 overflow-x-auto pb-0.5">
-                    {STATUS_TABS.map(tab => {
-                        const count = statusCounts(tab.value);
-                        return (
-                            <button key={tab.value} onClick={() => onStatusChange(tab.value)}
-                                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
-                                    statusFilter === tab.value
-                                        ? "bg-primary text-white shadow-sm"
-                                        : "bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground"
-                                }`}>
-                                <tab.icon className="h-3.5 w-3.5" />
-                                {tab.label}
-                                {count !== null && (
-                                    <span className={`ml-0.5 px-1.5 py-0.5 rounded-md text-[10px] font-bold ${
-                                        statusFilter === tab.value ? "bg-white/20" : "bg-background text-muted-foreground"
-                                    }`}>
-                                        {count}
-                                    </span>
-                                )}
-                            </button>
-                        );
-                    })}
+                    {STATUS_TABS.map(tab => (
+                        <button key={tab.value} onClick={() => onStatusChange(tab.value)}
+                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
+                                statusFilter === tab.value
+                                    ? "bg-primary text-white shadow-sm"
+                                    : "bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground"
+                            }`}>
+                            <tab.icon className="h-3.5 w-3.5" />
+                            {tab.label}
+                        </button>
+                    ))}
                 </div>
 
                 {/* Search + Date Filter */}
@@ -247,33 +157,6 @@ export default function RideList({
                         )}
                     </div>
                 </div>
-
-                {/* Active column filters indicator */}
-                {hasColumnFilters && (
-                    <div className="flex items-center gap-2 mt-2">
-                        <span className="text-[10px] text-muted-foreground font-semibold uppercase">Column filters:</span>
-                        {fareFilter !== "all" && (
-                            <span className="flex items-center gap-1 bg-primary/10 text-primary text-[10px] font-semibold px-2 py-0.5 rounded-md">
-                                Fare: {fareFilter.replace("under", "<$").replace("over", ">$").replace("to", "-$")}
-                                <button onClick={() => setFareFilter("all")}><X className="h-2.5 w-2.5" /></button>
-                            </span>
-                        )}
-                        {riderFilter && (
-                            <span className="flex items-center gap-1 bg-blue-500/10 text-blue-600 text-[10px] font-semibold px-2 py-0.5 rounded-md">
-                                Rider: {riderFilter}
-                                <button onClick={() => setRiderFilter("")}><X className="h-2.5 w-2.5" /></button>
-                            </span>
-                        )}
-                        {driverFilter && (
-                            <span className="flex items-center gap-1 bg-emerald-500/10 text-emerald-600 text-[10px] font-semibold px-2 py-0.5 rounded-md">
-                                Driver: {driverFilter}
-                                <button onClick={() => setDriverFilter("")}><X className="h-2.5 w-2.5" /></button>
-                            </span>
-                        )}
-                        <button onClick={() => { setFareFilter("all"); setRiderFilter(""); setDriverFilter(""); }}
-                            className="text-[10px] text-muted-foreground hover:text-foreground underline">Clear all</button>
-                    </div>
-                )}
             </div>
 
             {/* Table */}
@@ -284,7 +167,7 @@ export default function RideList({
                         <p className="text-sm text-muted-foreground">Loading rides...</p>
                     </div>
                 </div>
-            ) : sortedRides.length === 0 ? (
+            ) : rides.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
                     <div className="w-16 h-16 rounded-2xl bg-muted/50 flex items-center justify-center mb-4">
                         <Car className="h-8 w-8 opacity-30" />
@@ -308,37 +191,19 @@ export default function RideList({
                                     </button>
                                 </th>
                                 <th className="text-left py-2 px-4 hidden lg:table-cell">
-                                    <div>
-                                        <button onClick={() => handleSort("rider_name")} className="flex items-center gap-1 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider hover:text-foreground transition">
-                                            Rider <SortIcon col="rider_name" />
-                                        </button>
-                                        <input type="text" value={riderFilter} onChange={e => setRiderFilter(e.target.value)}
-                                            placeholder="Filter..." className="mt-1 w-full text-[10px] border rounded px-1.5 py-0.5 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/30" />
-                                    </div>
+                                    <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                                        Rider
+                                    </span>
                                 </th>
                                 <th className="text-left py-2 px-4 hidden lg:table-cell">
-                                    <div>
-                                        <button onClick={() => handleSort("driver_name")} className="flex items-center gap-1 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider hover:text-foreground transition">
-                                            Driver <SortIcon col="driver_name" />
-                                        </button>
-                                        <input type="text" value={driverFilter} onChange={e => setDriverFilter(e.target.value)}
-                                            placeholder="Filter..." className="mt-1 w-full text-[10px] border rounded px-1.5 py-0.5 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary/30" />
-                                    </div>
+                                    <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                                        Driver
+                                    </span>
                                 </th>
                                 <th className="text-right py-2 px-4">
-                                    <div className="flex flex-col items-end">
-                                        <button onClick={() => handleSort("total_fare")} className="flex items-center gap-1 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider hover:text-foreground transition">
-                                            Fare <SortIcon col="total_fare" />
-                                        </button>
-                                        <select value={fareFilter} onChange={e => setFareFilter(e.target.value as any)}
-                                            className="mt-1 text-[10px] border rounded px-1 py-0.5 bg-background text-foreground focus:outline-none">
-                                            <option value="all">All</option>
-                                            <option value="under10">&lt; $10</option>
-                                            <option value="10to25">$10 - $25</option>
-                                            <option value="25to50">$25 - $50</option>
-                                            <option value="over50">&gt; $50</option>
-                                        </select>
-                                    </div>
+                                    <button onClick={() => handleSort("total_fare")} className="flex items-center gap-1 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider hover:text-foreground transition ml-auto">
+                                        Fare <SortIcon col="total_fare" />
+                                    </button>
                                 </th>
                                 <th className="text-right py-2 px-4 hidden md:table-cell">
                                     <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
@@ -354,7 +219,7 @@ export default function RideList({
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-border">
-                            {sortedRides.map(ride => (
+                            {rides.map(ride => (
                                 <tr key={ride.id} onClick={() => onSelect(ride)}
                                     className={`cursor-pointer transition-colors group ${
                                         selectedId === ride.id ? "bg-primary/5 hover:bg-primary/8" : "hover:bg-muted/40"
@@ -456,35 +321,52 @@ export default function RideList({
             )}
 
             {/* Pagination */}
-            {totalPages > 1 && (
-                <div className="flex items-center justify-between px-5 py-3.5 border-t bg-muted/20">
+            <div className="flex items-center justify-between px-5 py-3.5 border-t bg-muted/20">
+                <div className="flex items-center gap-3">
                     <button onClick={() => onPageChange(page - 1)} disabled={page === 0}
                         className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border bg-background hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed transition">
                         <ChevronLeft className="h-3.5 w-3.5" /> Previous
                     </button>
-                    <div className="flex items-center gap-1">
-                        {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
-                            let pageNum: number;
-                            if (totalPages <= 7) { pageNum = i; }
-                            else if (page < 3) { pageNum = i; }
-                            else if (page > totalPages - 4) { pageNum = totalPages - 7 + i; }
-                            else { pageNum = page - 3 + i; }
-                            return (
-                                <button key={pageNum} onClick={() => onPageChange(pageNum)}
-                                    className={`w-8 h-8 rounded-lg text-xs font-semibold transition ${
-                                        page === pageNum ? "bg-primary text-white shadow-sm" : "hover:bg-muted text-muted-foreground"
-                                    }`}>
-                                    {pageNum + 1}
-                                </button>
-                            );
-                        })}
-                    </div>
+                    {totalPages > 1 && (
+                        <div className="flex items-center gap-1">
+                            {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+                                let pageNum: number;
+                                if (totalPages <= 7) { pageNum = i; }
+                                else if (page < 3) { pageNum = i; }
+                                else if (page > totalPages - 4) { pageNum = totalPages - 7 + i; }
+                                else { pageNum = page - 3 + i; }
+                                return (
+                                    <button key={pageNum} onClick={() => onPageChange(pageNum)}
+                                        className={`w-8 h-8 rounded-lg text-xs font-semibold transition ${
+                                            page === pageNum ? "bg-primary text-white shadow-sm" : "hover:bg-muted text-muted-foreground"
+                                        }`}>
+                                        {pageNum + 1}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    )}
                     <button onClick={() => onPageChange(page + 1)} disabled={page >= totalPages - 1}
                         className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border bg-background hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed transition">
                         Next <ChevronRight className="h-3.5 w-3.5" />
                     </button>
                 </div>
-            )}
+
+                {/* Page Size Dropdown */}
+                <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">Show</span>
+                    <select
+                        value={pageSize}
+                        onChange={e => onPageSizeChange(Number(e.target.value))}
+                        className="text-xs font-semibold border rounded-lg px-2 py-1.5 bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 transition"
+                    >
+                        {pageSizes.map(s => (
+                            <option key={s} value={s}>{s}</option>
+                        ))}
+                    </select>
+                    <span className="text-xs text-muted-foreground">per page</span>
+                </div>
+            </div>
         </div>
     );
 }

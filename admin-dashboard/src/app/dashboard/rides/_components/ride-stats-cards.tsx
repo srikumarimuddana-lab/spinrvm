@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { getRideStats, getRideFinancials, type RideFinancialsPeriod } from "@/lib/api";
+import { getRideTrend, getRideFinancials, type RideFinancialsPeriod } from "@/lib/api";
 import { formatCurrency } from "@/lib/utils";
 import {
     Car, CheckCircle, DollarSign, BarChart3,
@@ -170,7 +170,7 @@ export function RidesChart() {
     const [stats, setStats] = useState<any>(null);
 
     useEffect(() => {
-        getRideStats().then(setStats).catch(() => {});
+        getRideTrend(14).then(setStats).catch(() => {});
     }, []);
 
     if (!stats?.daily_chart?.length) return null;

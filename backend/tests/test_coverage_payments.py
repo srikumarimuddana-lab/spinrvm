@@ -184,7 +184,8 @@ async def test_create_payment_intent_success_with_client_key():
     mock_req = MagicMock()
     mock_req.headers = {}
 
-    fake_ride = {"id": "ride-123", "total_fare": "15.00"}
+    # rider_id must match: _authoritative_ride_charge 403s on non-owners.
+    fake_ride = {"id": "ride-123", "total_fare": "15.00", "rider_id": _USER["id"]}
     mock_intent = MagicMock()
     mock_intent.client_secret = "pi_secret"
     mock_intent.id = "pi_001"
@@ -709,7 +710,11 @@ async def test_delete_card_no_stripe_key_skips_detach():
 
 @pytest.mark.anyio
 async def test_payment_sheet_ride_idempotency_key():
-    """ride_id branch sets idempotency key as ps-{ride_id}-{user_id}."""
+    """ride_id branch sets idempotency key as ps-{ride_id}-{user_id}-{amount_cents}.
+
+    The amount-cents suffix is deliberate: a changed-tip retry must get a
+    distinct key (fresh PaymentIntent) instead of a Stripe IdempotencyError;
+    same amount → same key → still idempotent."""
     from backend.routes.payments import PaymentSheetRequest, create_payment_sheet
 
     mock_intent = MagicMock()
@@ -736,7 +741,7 @@ async def test_payment_sheet_ride_idempotency_key():
         )
 
     called_kwargs = create_spy.call_args[1]
-    assert called_kwargs["idempotency_key"] == f"ps-ride-ps-{_USER['id']}"
+    assert called_kwargs["idempotency_key"] == f"ps-ride-ps-{_USER['id']}-1200"
     assert result["paymentIntent"] == "pi_secret_ps"
 
 

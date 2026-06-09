@@ -108,18 +108,15 @@ if (Platform.OS === 'android' || Platform.OS === 'ios') {
   }
 }
 
-// Surface the heads-up / lock-screen Notifee card for an incoming offer when
-// the app is NOT foreground-active. While online the foreground service keeps
-// the WebSocket (and the foreground-FCM handler) alive in the background, so
-// the offer is processed in-JS while the in-app panel is hidden — nothing else
-// raises a system notification and the driver only feels the vibration. The FCM
-// background handler in _layout.tsx covers the fully-killed case; Notifee
-// dedupes by notification id, so calling this too never yields a duplicate.
+// Surface the heads-up / lock-screen Notifee card for every incoming offer.
+// Even when the app is foreground-active, drivers expect the OS alert to appear
+// at the same moment as the in-app offer panel. The FCM background handler in
+// _layout.tsx covers the fully-killed case; Notifee dedupes by notification id,
+// so calling this too never yields a duplicate.
 // Dismissal is handled by the rideState effect inside the hook.
 function _surfaceOfferNotification(data: any): void {
   const display = _displayRideOfferNotification;
   if (!display) return;
-  if (AppState.currentState === 'active') return; // in-app panel handles foreground
   const _num = (v: unknown): number | undefined => {
     if (v === null || v === undefined || v === '' || v === 'None') return undefined;
     const n = typeof v === 'number' ? v : parseFloat(String(v));
@@ -136,6 +133,8 @@ function _surfaceOfferNotification(data: any): void {
     duration_minutes: _num(data.duration_minutes),
     surge_multiplier: _num(data.surge_multiplier),
     rider_name: data.rider_name || undefined,
+    countdown_seconds: _num(data.countdown_seconds),
+    offer_expires_at: data.offer_expires_at || undefined,
   }).catch((e: any) => console.warn('[Offer] Notifee surface failed:', e));
 }
 const PENDING_ACTION_KEY = 'spinr_pending_notifee_action';

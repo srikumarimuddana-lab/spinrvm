@@ -209,6 +209,8 @@ setBackgroundMessageHandler(async (remoteMessage: any) => {
           surge_multiplier: surgeMultiplier,
           rider_name: data.rider_name,
           incentives_count: Array.isArray(incentives) ? incentives.length : 0,
+          countdown_seconds: toNum(data.countdown_seconds),
+          offer_expires_at: data.offer_expires_at || undefined,
         });
       } catch (e) {
         console.warn('[Notifee] displayRideOfferNotification failed:', e);

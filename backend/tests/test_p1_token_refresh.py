@@ -108,9 +108,11 @@ class TestRefreshAccessToken:
                 body=_Body(),
             )
 
-        # P3: tokens are set as HTTP-only cookies, not returned in body
-        assert result.token == ""
-        assert result.refresh_token == ""
+        # Tokens are returned in BOTH the JSON body AND HTTP-only cookies:
+        # web clients use the cookies; React Native clients read the body
+        # because RN's fetch has no browser cookie jar (see refresh_access_token).
+        assert result.token == "new-access-token-abc"
+        assert result.refresh_token == new_raw_token
         assert result.access_expires_at is not None
 
     async def test_invalid_refresh_token_returns_401(self):

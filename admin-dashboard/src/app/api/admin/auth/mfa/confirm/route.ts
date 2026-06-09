@@ -71,11 +71,16 @@ export async function POST(req: NextRequest) {
       path: "/api/admin/auth",
       maxAge: SESSION_MAX_AGE,
     });
+    // Path "/" (not "/api/admin/auth"): authStore.initAuth() restores the
+    // in-memory CSRF token by reading this cookie from document.cookie on
+    // dashboard pages after a hard refresh / new tab. Path-scoping it away
+    // from /dashboard would make the next /refresh omit X-CSRF-Token, 403,
+    // and clear an otherwise-valid session.
     res.cookies.set(CSRF_COOKIE, csrfToken, {
       httpOnly: false,
       sameSite: "strict",
       secure: isProduction,
-      path: "/api/admin/auth",
+      path: "/",
       maxAge: SESSION_MAX_AGE,
     });
     // Backend CSRF middleware reads cookie name `csrf_token` (see

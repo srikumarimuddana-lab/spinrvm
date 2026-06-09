@@ -805,6 +805,13 @@ async def _require_staff_from_token(
     # forced logout is silently undone.
     if int(payload.get("token_version") or 0) < int(staff.get("token_version") or 0):
         raise HTTPException(status_code=401, detail="Invalid token")
+    # An enrollment token is single-purpose: get a not-yet-enrolled account
+    # through first enrollment. Once mfa_enabled is set it must die —
+    # otherwise an intercepted enroll token could be replayed within its
+    # 15-minute life to re-run /mfa/enroll, overwrite the freshly bound
+    # secret, and mint another session, replacing the victim's MFA.
+    if payload.get("aud") == JWT_AUD_MFA_ENROLL and staff.get("mfa_enabled"):
+        raise HTTPException(status_code=401, detail="Invalid token")
     if return_payload:
         return staff, payload
     return staff

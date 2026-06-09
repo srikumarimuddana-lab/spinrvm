@@ -309,3 +309,24 @@ async def test_admin_refresh_allows_enrolled_staff():
     ):
         result = await admin_auth.admin_refresh(request=_make_request(), body=_Body())
     assert result["token"]
+
+
+@pytest.mark.anyio
+async def test_enroll_token_dies_once_mfa_is_enabled():
+    """Codex #1724 round 2 (P1): an intercepted enrollment token must not be
+    replayable after the legitimate first enrollment completes — it could
+    re-run /mfa/enroll, overwrite the fresh secret, and mint a session."""
+    token = admin_auth._mint_mfa_enroll_token(STAFF_ID, token_version=0)
+    enrolled_row = _staff_row(mfa_enabled=True, mfa_secret="BOUND", token_version=0)
+    with patch.object(admin_auth.db, "find_one", AsyncMock(return_value=enrolled_row)):
+        with pytest.raises(HTTPException) as exc_info:
+            await admin_auth._require_staff_from_token(f"Bearer {token}", allow_enroll_token=True)
+    assert exc_info.value.status_code == 401
+    # A full admin session token is still fine on the same endpoints
+    # (Settings flow for an enrolled account, e.g. /mfa/disable).
+    session = admin_auth._mint_admin_access_token(
+        user_id=STAFF_ID, email=EMAIL, role="operations", modules=["dashboard"], phone=EMAIL, token_version=0
+    )[0]
+    with patch.object(admin_auth.db, "find_one", AsyncMock(return_value=enrolled_row)):
+        staff = await admin_auth._require_staff_from_token(f"Bearer {session}", allow_enroll_token=True)
+    assert staff["id"] == STAFF_ID

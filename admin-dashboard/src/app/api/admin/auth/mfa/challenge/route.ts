@@ -63,11 +63,24 @@ export async function POST(req: NextRequest) {
       path: "/api/admin/auth",
       maxAge: SESSION_MAX_AGE,
     });
+    // Path "/" — same class of bug Codex flagged on the confirm route:
+    // authStore.initAuth() reads this cookie from document.cookie on
+    // dashboard pages; scoping it to /api/admin/auth makes the post-refresh
+    // /refresh call omit X-CSRF-Token and drop a valid session.
     res.cookies.set(CSRF_COOKIE, csrfToken, {
       httpOnly: false,
       sameSite: "strict",
       secure: isProduction,
-      path: "/api/admin/auth",
+      path: "/",
+      maxAge: SESSION_MAX_AGE,
+    });
+    // Backend CSRF middleware reads cookie name `csrf_token` (see
+    // backend/core/middleware.py); without it admin PUT/POST/DELETE get 403.
+    res.cookies.set("csrf_token", csrfToken, {
+      httpOnly: false,
+      sameSite: "strict",
+      secure: isProduction,
+      path: "/",
       maxAge: SESSION_MAX_AGE,
     });
     return res;

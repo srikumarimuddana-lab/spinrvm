@@ -27,8 +27,7 @@ Run a full health check on the spinr codebase and report status.
    find . -name ".env*" -not -path "*/.git/*" 2>/dev/null
 
 7. Outstanding work
-   cat TODO.md 2>/dev/null | head -40
-   cat GAP_ANALYSIS.md 2>/dev/null | head -30
+   cat ACTION_ITEMS.md 2>/dev/null | head -60
 
 ## Output Format
 
@@ -63,9 +62,9 @@ STALE FILES
   JSON reports in root:  [count — should be moved to test_reports/]
 
 TOP PRIORITIES
-  1. [from TODO.md / GAP_ANALYSIS.md]
-  2. [from TODO.md / GAP_ANALYSIS.md]
-  3. [from TODO.md / GAP_ANALYSIS.md]
+  1. [from ACTION_ITEMS.md]
+  2. [from ACTION_ITEMS.md]
+  3. [from ACTION_ITEMS.md]
 
 RECOMMENDATION
   [Single most important next action for spinr today]

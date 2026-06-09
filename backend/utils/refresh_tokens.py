@@ -6,7 +6,7 @@ are the only durable proof a client can present for "I was already
 logged in". This split means:
 
   • A leaked access token is limited by its TTL (see
-    core.config.ACCESS_TOKEN_TTL_DAYS / ADMIN_ACCESS_TOKEN_TTL_HOURS).
+    core.config.ACCESS_TOKEN_EXPIRE_MINUTES / ADMIN_ACCESS_TOKEN_TTL_HOURS).
   • A leaked refresh token can be revoked at will — we stamp
     revoked_at in refresh_tokens and every subsequent /auth/refresh
     call sees it.

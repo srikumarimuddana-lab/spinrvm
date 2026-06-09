@@ -49,8 +49,6 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     # Rider/driver access-token TTL in minutes. Short-lived for security (P0-S3).
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
-    # Legacy days TTL — preserved for mobile clients that haven't adopted rotation yet.
-    ACCESS_TOKEN_TTL_DAYS: int = 30
     # Admin-console access-token TTL in hours. 1h forces frequent rotation via
     # the refresh token flow; reduces the blast radius of a captured token.
     ADMIN_ACCESS_TOKEN_TTL_HOURS: int = 1

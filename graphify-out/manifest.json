@@ -11955,8 +11955,8 @@
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\routes\\fares.py": {
-    "mtime": 1780361389.8137827,
-    "ast_hash": "af1d434ecc83909b54e1339a1080e42e",
+    "mtime": 1781003842.4553585,
+    "ast_hash": "6c2bd612b769450656a4ca13db1e3a9a",
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\routes\\fare_split.py": {
@@ -12025,8 +12025,8 @@
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\routes\\service_areas.py": {
-    "mtime": 1780112686.8046334,
-    "ast_hash": "6436e70cd3b86d6e76cf06c70f4f1059",
+    "mtime": 1781002930.5422084,
+    "ast_hash": "35ee0b32c335b371635fb8829f79215b",
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\routes\\settings.py": {
@@ -13625,8 +13625,8 @@
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\driver-app\\app\\become-driver.tsx": {
-    "mtime": 1778195734.6264062,
-    "ast_hash": "05cc400649f7f10117a6b0f461ca2810",
+    "mtime": 1781003003.2336905,
+    "ast_hash": "6b7d2669d6e852cb35b6e502dc5e92c5",
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\driver-app\\app\\documents.tsx": {
@@ -13665,8 +13665,8 @@
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\driver-app\\app\\vehicle-info.tsx": {
-    "mtime": 1779341332.127185,
-    "ast_hash": "4f5cf84da7a3d8236e3917eba8065114",
+    "mtime": 1781003018.6555676,
+    "ast_hash": "8388961fbe217a274b8e08e2d988bca5",
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\driver-app\\app\\_layout.tsx": {
@@ -19362,6 +19362,11 @@
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\driver-app\\assets\\sounds\\ride-offer.mp3": {
     "mtime": 1778639525.3238666,
     "ast_hash": "8b14ed6b49ef71583f7fb82a100c9ed1",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\migrations\\137_fix_pii_encrypt_pgsodium_perms.sql": {
+    "mtime": 1781003463.7440329,
+    "ast_hash": "ea7fc3e8b79793be6b8b948d04185775",
     "semantic_hash": ""
   }
 }

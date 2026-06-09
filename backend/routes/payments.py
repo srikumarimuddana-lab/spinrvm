@@ -89,6 +89,20 @@ class PaymentIntentRequest(BaseModel):
     payment_method_id: Optional[str] = None
 
 
+class ConfirmPaymentRequest(BaseModel):
+    """Request body for POST /payments/confirm.
+
+    Typed (not a raw dict) so the pi_mock_* production guard and the
+    ownership checks below operate on validated, length-bounded strings —
+    unknown keys are rejected instead of silently carried along.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    payment_intent_id: Optional[str] = Field(None, min_length=1, max_length=255)
+    ride_id: Optional[str] = Field(None, min_length=1, max_length=64)
+
+
 class PaymentSheetRequest(BaseModel):
     """Request body for POST /payments/payment-sheet."""
 
@@ -283,13 +297,13 @@ async def create_payment_intent(
 @payment_action_limit
 @idempotent_endpoint(scope="payment_confirm")
 async def confirm_payment(
-    body: Dict[str, Any],
+    body: ConfirmPaymentRequest,
     request: Request = None,
     current_user: dict = Depends(get_current_user),
 ):
     """Confirm payment was successful"""
-    payment_intent_id = body.get("payment_intent_id")
-    ride_id = body.get("ride_id")
+    payment_intent_id = body.payment_intent_id
+    ride_id = body.ride_id
 
     # Mock-payment shortcut is allowed only outside production, OR for an
     # allow-listed app-store reviewer account (so a reviewer can reach a "paid"

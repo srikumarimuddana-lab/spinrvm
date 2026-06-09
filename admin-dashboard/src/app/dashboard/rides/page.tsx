@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { getRides, getServiceAreas, type RideListOpts } from "@/lib/api";
+import { getRides, exportRides, getServiceAreas, type RideListOpts } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { PlusCircle } from "lucide-react";
 import RideStatsCards, { RidesChart } from "./_components/ride-stats-cards";
@@ -165,6 +165,23 @@ export default function RidesPage() {
         loadRides(0, pageSize, { tab: statusFilter, search, dateFrom, dateTo, areaFilter, sortBy: key, sortDir: dir });
     };
 
+    const handleExport = async (): Promise<any[]> => {
+        const opts: RideListOpts = {};
+        if (statusFilter === "scheduled") {
+            opts.isScheduled = true;
+        } else if (statusFilter !== "all" && statusFilter !== "no_driver_found") {
+            opts.status = statusFilter;
+        }
+        if (search) opts.search = search;
+        if (dateFrom) opts.dateFrom = dateFrom;
+        if (dateTo) opts.dateTo = dateTo;
+        if (areaFilter && areaFilter !== "all") opts.serviceAreaId = areaFilter;
+        if (sortBy) opts.sortBy = sortBy;
+        if (sortDir) opts.sortDir = sortDir;
+        const res = await exportRides(opts);
+        return res.rides;
+    };
+
     const totalPages = Math.ceil(totalCount / pageSize);
 
     if (!allowed) return null;
@@ -227,6 +244,7 @@ export default function RidesPage() {
                 onPageChange={handlePageChange}
                 sortBy={sortBy}
                 sortDir={sortDir}
+                onExport={handleExport}
                 onSortChange={handleSortChange}
             />
 

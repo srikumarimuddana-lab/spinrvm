@@ -1285,8 +1285,8 @@
     "semantic_hash": ""
   },
   "backend/routes/admin/auth.py": {
-    "mtime": 1781030104.0008674,
-    "ast_hash": "065f68ee0e7503db67d13c0fa970c745",
+    "mtime": 1781032529.299725,
+    "ast_hash": "d9729d7c0ddd94317a838405b17003a1",
     "semantic_hash": ""
   },
   "backend/routes/admin/maintenance.py": {
@@ -1370,8 +1370,8 @@
     "semantic_hash": ""
   },
   "backend/core/config.py": {
-    "mtime": 1781028512.5488575,
-    "ast_hash": "a4260073187056f030c76e4236fe2647",
+    "mtime": 1781032480.4197247,
+    "ast_hash": "91ba92e9bcfb4e820ee15a4121290972",
     "semantic_hash": ""
   },
   "backend/core/lifespan.py": {
@@ -1935,8 +1935,8 @@
     "semantic_hash": ""
   },
   "admin-dashboard/src/app/login/page.tsx": {
-    "mtime": 1780622912.4970238,
-    "ast_hash": "4892d0f21fb367b4e30ffb39cb597266",
+    "mtime": 1781032771.9237266,
+    "ast_hash": "4a5f429800385b4d3f5bb96a310f5980",
     "semantic_hash": ""
   },
   "admin-dashboard/src/hooks/use-monitoring-socket.ts": {
@@ -1955,8 +1955,8 @@
     "semantic_hash": ""
   },
   "admin-dashboard/src/lib/api.ts": {
-    "mtime": 1781031015.3568728,
-    "ast_hash": "e2ec22ae8d399593c554fbc97683cf88",
+    "mtime": 1781032687.575726,
+    "ast_hash": "256f985dac7fa037e2d540030d8c9179",
     "semantic_hash": ""
   },
   "admin-dashboard/src/lib/export-csv.ts": {
@@ -3785,8 +3785,8 @@
     "semantic_hash": ""
   },
   "admin-dashboard/src/components/mfa-enroll-dialog.tsx": {
-    "mtime": 1780622912.5018175,
-    "ast_hash": "034be91ed4238a49bcacfa13d5973f33",
+    "mtime": 1781032745.4597263,
+    "ast_hash": "e1294d94a99ae1a11168168e4d857cd5",
     "semantic_hash": ""
   },
   "admin-dashboard/src/components/ui/pagination.tsx": {
@@ -9742,6 +9742,11 @@
   "backend/tests/test_admin_staff_mfa_reset.py": {
     "mtime": 1781031080.0768733,
     "ast_hash": "c4cfd92a1048eb43e33da791ef846aec",
+    "semantic_hash": ""
+  },
+  "backend/tests/test_admin_mfa_enforcement.py": {
+    "mtime": 1781032634.1477256,
+    "ast_hash": "b1131ccf2371f33dbd0d3b9bba74d654",
     "semantic_hash": ""
   }
 }

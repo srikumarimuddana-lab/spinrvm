@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEZONE = "America/Regina"
 LOCAL_SEND_HOUR = 8
+VEHICLE_DETAILS = "vehicle_details"
+VEHICLE_DOCUMENTS = "vehicle_documents"
 
 
 def as_utc(now: datetime | None) -> datetime:
@@ -39,6 +41,29 @@ def local_date_for_send_window(
 ) -> str | None:
     local_now = now.astimezone(_zone(driver_timezone(driver, areas)))
     return local_now.date().isoformat() if local_now.hour == LOCAL_SEND_HOUR else None
+
+
+def should_skip_driver(driver: dict[str, Any]) -> bool:
+    return bool(
+        not driver.get("id")
+        or not driver.get("user_id")
+        or driver.get("deleted_at")
+        or driver.get("status") == "banned"
+    )
+
+
+def reminder_message(driver_id: str, kind: str) -> tuple[str, str, dict[str, str]]:
+    if kind == VEHICLE_DETAILS:
+        return (
+            "Add your vehicle details",
+            "Finish your vehicle info so we can review your driver account.",
+            {"type": "driver_vehicle_details_reminder", "driver_id": driver_id, "deeplink": "/vehicle-info"},
+        )
+    return (
+        "Upload your vehicle documents",
+        "Upload the required vehicle documents to complete your driver verification.",
+        {"type": "driver_vehicle_documents_reminder", "driver_id": driver_id, "deeplink": "/documents"},
+    )
 
 
 def _load_list(value: Any) -> list[Any]:

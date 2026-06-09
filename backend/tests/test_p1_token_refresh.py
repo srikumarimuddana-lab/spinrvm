@@ -180,6 +180,43 @@ class TestRefreshAccessToken:
 
         assert exc_info.value.status_code == 401
 
+    async def test_access_expires_at_uses_minutes_ttl_not_legacy_days(self):
+        """Regression: /auth/refresh reported access_expires_at 30 days out
+        (legacy ACCESS_TOKEN_TTL_DAYS) while the JWT itself expired in
+        ACCESS_TOKEN_EXPIRE_MINUTES. Clients trusted the field and never
+        scheduled a proactive refresh, so every session degraded to
+        reactive 401-retry. The field must match the real token TTL."""
+        from backend.core.config import settings
+        from backend.routes import auth as auth_mod
+
+        with (
+            patch.object(auth_mod, "lookup_refresh_token", AsyncMock(return_value=_refresh_row())),
+            patch.object(auth_mod.db, "find_one", AsyncMock(return_value=_user_row())),
+            patch.object(
+                auth_mod,
+                "issue_refresh_token",
+                AsyncMock(return_value=("new-raw", "hashed", datetime.now(timezone.utc) + timedelta(days=30))),
+            ),
+            patch.object(auth_mod, "create_jwt_token", return_value="access-tok"),
+            patch.object(auth_mod, "get_remote_address", return_value="127.0.0.1"),
+        ):
+
+            class _Body:
+                refresh_token = "old-raw"
+
+            before = datetime.now(timezone.utc)
+            result = await auth_mod.refresh_access_token(
+                request=_make_request(user_agent="UA", refresh_token="old-raw"), response=MagicMock(), body=_Body()
+            )
+            after = datetime.now(timezone.utc)
+
+        expected_low = before + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        expected_high = after + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        assert expected_low <= result.access_expires_at <= expected_high, (
+            f"access_expires_at {result.access_expires_at} must equal now + "
+            f"{settings.ACCESS_TOKEN_EXPIRE_MINUTES} min (the real JWT exp), not a legacy days TTL"
+        )
+
     async def test_new_token_is_minted_with_replaces_reference(self):
         """The new refresh token must reference the old row (replaces=) so the
         old token is revoked on rotation and replay attacks are blocked."""

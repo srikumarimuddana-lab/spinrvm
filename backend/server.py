@@ -380,6 +380,7 @@ if sentry_dsn:
 
     logger.add(_loguru_sentry_sink, level="ERROR")
     logger.info("Sentry SDK initialized for error monitoring")
+    sentry_sdk.capture_message("Sentry connected – spinr-backend startup", level="info")
 
 if __name__ == "__main__":
     import uvicorn

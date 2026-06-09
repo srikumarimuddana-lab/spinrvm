@@ -58,10 +58,14 @@ def _project_public(r: dict) -> dict:
 
 @api_router.get("/service-areas")
 async def get_service_areas():
-    """List active service areas available for driver registration and ride booking."""
+    """List active top-level service areas for driver registration and ride booking.
+
+    Child/sub-areas (e.g. airport zones) are excluded — they are used
+    internally for fare calculation but should never appear in a picker.
+    """
     rows = await db_supabase.get_rows(
         "service_areas",
-        {"is_active": True},
+        {"is_active": True, "parent_service_area_id": None},
         order="name",
         limit=200,
     )

@@ -102,10 +102,18 @@ export default function BecomeDriverScreen() {
   const [datePickerTarget, setDatePickerTarget] = useState<string | null>(null); // reqId
 
   useEffect(() => {
-    fetchVehicleTypes();
     fetchRequirements();
     loadDraft();
   }, []);
+
+  useEffect(() => {
+    if (serviceAreaId) {
+      fetchVehicleTypes(serviceAreaId);
+      setVehicleType('');
+    } else {
+      setVehicleTypes([]);
+    }
+  }, [serviceAreaId]);
 
   const onDateChange = (event: any, selectedDate?: Date) => {
     setShowDatePicker(Platform.OS === 'ios'); // Keep open on iOS, close on Android
@@ -199,11 +207,16 @@ export default function BecomeDriverScreen() {
     }
   };
 
-  const fetchVehicleTypes = async () => {
+  const fetchVehicleTypes = async (areaId?: string) => {
+    const area = areaId || serviceAreaId;
+    if (!area) {
+      setVehicleTypes([]);
+      return;
+    }
     setLoadingTypes(true);
-    console.log('Fetching vehicle types from:', `${SpinrConfig.backendUrl}/api/v1/vehicle-types`);
     try {
-      const response = await fetch(`${SpinrConfig.backendUrl}/api/v1/vehicle-types`);
+      const url = `${SpinrConfig.backendUrl}/api/v1/vehicle-types?service_area_id=${area}`;
+      const response = await fetch(url);
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
@@ -211,7 +224,7 @@ export default function BecomeDriverScreen() {
       setVehicleTypes(data);
     } catch (e: any) {
       console.log('Error fetching vehicle types:', e);
-      Alert.alert('Connection Error', `Failed to load vehicle types from ${SpinrConfig.backendUrl}. Please check your internet connection or server status. Error: ${e.message}`);
+      Alert.alert('Connection Error', 'Failed to load vehicle types. Please check your internet connection.');
     } finally {
       setLoadingTypes(false);
     }
@@ -578,7 +591,11 @@ export default function BecomeDriverScreen() {
               {renderInput('VIN', vehicleVin, setVehicleVin, '1G1...')}
 
               <Text style={styles.label}>Vehicle Type</Text>
-              {loadingTypes ? <ActivityIndicator /> : (
+              {!serviceAreaId ? (
+                <Text style={styles.serviceAreaHint}>Please select a service area in Step 1 first. Contact support if you need help.</Text>
+              ) : loadingTypes ? <ActivityIndicator /> : vehicleTypes.length === 0 ? (
+                <Text style={styles.serviceAreaHint}>No vehicle types available for your service area. Please contact support.</Text>
+              ) : (
                 <View style={styles.typeContainer}>
                   {vehicleTypes.map(vt => (
                     <TouchableOpacity

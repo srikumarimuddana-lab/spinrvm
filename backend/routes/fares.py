@@ -77,11 +77,26 @@ async def invalidate_fare_cache() -> int:
 
 
 @api_router.get("/vehicle-types")
-async def get_vehicle_types():
+async def get_vehicle_types(service_area_id: Optional[str] = None):
+    """Return active vehicle types, optionally filtered to those configured for a service area.
+
+    When ``service_area_id`` is provided, only vehicle types that have an
+    active fare_config row for that area are returned. This prevents
+    drivers from picking a vehicle type that has no fare set up for their
+    area (which would fail at ride creation).
+    """
     types = await db_supabase.get_rows("vehicle_types", {"is_active": True}, limit=100)
-    # Rider/driver apps key the car illustration off `image_url`, but the DB
-    # column added in migration 83 is `illustration_url`. Surface both keys
-    # so neither side has to care which name "won".
+
+    if service_area_id:
+        configs = await db_supabase.get_rows(
+            "fare_configs",
+            {"service_area_id": service_area_id, "is_active": True},
+            columns="vehicle_type_id",
+            limit=100,
+        )
+        allowed_ids = {c["vehicle_type_id"] for c in (configs or []) if c.get("vehicle_type_id")}
+        types = [vt for vt in (types or []) if vt.get("id") in allowed_ids]
+
     for vt in types or []:
         if isinstance(vt, dict) and vt.get("illustration_url") and not vt.get("image_url"):
             vt["image_url"] = vt["illustration_url"]

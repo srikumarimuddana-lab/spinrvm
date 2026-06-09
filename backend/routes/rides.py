@@ -5077,13 +5077,15 @@ async def safety_checkin_response(
 
 @api_router.get("/{ride_id}/live-route")
 async def get_live_route(ride_id: str, current_user: dict = Depends(get_current_user)):
-    """OSRM-routed line + ETA from the driver's live position to the active
-    destination (pickup pre-trip, dropoff in-trip) for the live share map.
+    """Road-routed line + ETA from the driver's live position to the active
+    destination (pickup pre-trip, dropoff in-trip) for the live trip map.
 
-    Returns an empty polyline (eta_seconds=None) when there's no active route,
-    no live driver position, or OSRM is unavailable — the client then falls back
-    to its own straight-line rendering. Keeps OSRM internal (the apps draw this
-    line on the Google map canvas)."""
+    Routing provider chain lives in utils.route_distance.compute_route: self-
+    hosted OSRM first, Google Directions fallback (budget-gated) when OSRM is
+    unconfigured or failing. Returns an empty polyline (eta_seconds=None) when
+    there's no active route, no live driver position, or every provider failed
+    — the client then keeps its saved planned line. Keeps the routing engine
+    internal (the apps draw this line on the Google map canvas)."""
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise RideNotFoundException(ride_id=ride_id, message_key=ErrorKeys.RIDE_NOT_FOUND)

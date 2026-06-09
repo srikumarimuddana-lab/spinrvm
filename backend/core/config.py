@@ -52,6 +52,13 @@ class Settings(BaseSettings):
     # Admin-console access-token TTL in hours. 1h forces frequent rotation via
     # the refresh token flow; reduces the blast radius of a captured token.
     ADMIN_ACCESS_TOKEN_TTL_HOURS: int = 1
+    # Require TOTP MFA for every admin_staff login. Staff without MFA get an
+    # enrollment-scoped token at login instead of a session and must finish
+    # enrolling before the dashboard issues real tokens. The admin-001 env
+    # break-glass account is exempt (it has no admin_staff row to hold a
+    # secret); its password strength is enforced at startup instead.
+    # Set false only in local dev where repeated logins make TOTP painful.
+    ADMIN_MFA_ENFORCED: bool = True
     # Refresh-token TTL in days (30 days "remember this device").
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 

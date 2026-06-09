@@ -384,6 +384,77 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     return user
 
 
+# Safety-critical grace window: an SOS tap mid-trip must not bounce off a
+# 401 because the 15-minute access token lapsed before the client's
+# reactive refresh ran. 24h comfortably covers any plausible trip length
+# while still bounding how long a stale token stays usable on this path.
+SOS_EXPIRED_TOKEN_GRACE_SECONDS = 24 * 3600
+
+
+async def get_current_user_allow_expired(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> dict:
+    """Resolve the current user for safety-critical endpoints (SOS only).
+
+    Identical to ``get_current_user`` except that a Spinr *mobile* access
+    token whose ONLY defect is expiry — signature still valid, expired less
+    than ``SOS_EXPIRED_TOKEN_GRACE_SECONDS`` ago — is accepted, per the
+    safety rule that SOS is never gated behind an auth refresh.
+
+    No grace is granted to: forged/garbled tokens, admin-audience tokens,
+    tokens revoked via ``users.token_version`` (force-logout-all means
+    suspected compromise), Firebase ID tokens (their client SDK refreshes
+    transparently), or 401s whose cause is anything other than expiry
+    (session mismatch, revocation). Endpoint-level ownership checks —
+    caller must be the ride's rider or driver — still apply unchanged.
+    """
+    try:
+        return await get_current_user(credentials)
+    except HTTPException as exc:
+        if exc.status_code != 401 or not credentials:
+            raise
+        original = exc
+
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(
+            token,
+            settings.JWT_SECRET,
+            algorithms=[JWT_ALGORITHM],
+            options={"verify_aud": False, "verify_exp": False},
+        )
+    except jwt.InvalidTokenError:
+        raise original from None
+
+    if payload.get("aud") not in (None, JWT_AUD_MOBILE):
+        raise original
+    exp = payload.get("exp")
+    now_ts = datetime.now(timezone.utc).timestamp()
+    if not exp or float(exp) > now_ts:
+        # Token isn't actually expired — the 401 came from a session or
+        # revocation check, which the grace path must not override.
+        raise original
+    if now_ts - float(exp) > SOS_EXPIRED_TOKEN_GRACE_SECONDS:
+        raise original
+    user_id = payload.get("user_id")
+    if not user_id:
+        raise original
+
+    # DB errors propagate as 503 (client retries) per error conventions.
+    user = await db_supabase.get_user_by_id(user_id)
+    if not user:
+        raise original
+    if _token_version_mismatch(payload, user):
+        raise original
+    driver = await db_supabase.get_driver_by_user_id_cached(user["id"])
+    user["is_driver"] = True if driver else False
+    logger.warning(
+        f"[auth] expired-token grace used on safety endpoint by user {user_id} "
+        f"(token expired {int(now_ts - float(exp))}s ago)"
+    )
+    return user
+
+
 async def get_admin_user(current_user: dict = Depends(get_current_user)) -> dict:
     """Require the caller to be an authenticated admin."""
     role = current_user.get("role", "")

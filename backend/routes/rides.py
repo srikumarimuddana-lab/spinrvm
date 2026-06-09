@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 try:
     from .. import db_supabase
-    from ..dependencies import generate_pickup_otp, get_current_user
+    from ..dependencies import generate_pickup_otp, get_current_user, get_current_user_allow_expired
     from ..features import (
         calculate_airport_fee,
         calculate_all_fees,
@@ -57,7 +57,7 @@ try:
     from ..validators import validate_ride_location
 except ImportError:
     import db_supabase
-    from dependencies import generate_pickup_otp, get_current_user
+    from dependencies import generate_pickup_otp, get_current_user, get_current_user_allow_expired
     from features import (
         calculate_airport_fee,
         calculate_all_fees,
@@ -4145,7 +4145,10 @@ async def trigger_emergency(
     ride_id: str,
     body: EmergencyRequest,
     request: Request = None,
-    current_user: dict = Depends(get_current_user),
+    # SOS is never gated behind an auth refresh: a signature-valid token
+    # that merely expired mid-trip still identifies the caller. Ride
+    # membership is enforced below regardless.
+    current_user: dict = Depends(get_current_user_allow_expired),
 ):
     """Trigger an emergency alert for a live ride"""
     ride = await db_supabase.get_ride(ride_id)

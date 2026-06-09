@@ -118,6 +118,22 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
     const hasBonus = totalBonus > 0;
     const quest = incomingRide.quest_hint;
 
+    const vibrateForActionTap = () => {
+        if (Platform.OS !== 'web') {
+            Vibration.vibrate(35);
+        }
+    };
+
+    const handleDecline = () => {
+        vibrateForActionTap();
+        onDecline();
+    };
+
+    const handleAccept = () => {
+        vibrateForActionTap();
+        onAccept();
+    };
+
     const timerPct = countdownSeconds / maxCountdown;
     const timerColor = timerPct > 0.6 ? ACCENT : timerPct > 0.3 ? '#F59E0B' : '#EF4444';
 
@@ -322,7 +338,7 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                     <View style={styles.actionBar}>
                         <TouchableOpacity
                             style={styles.declineBtn}
-                            onPress={onDecline}
+                            onPress={handleDecline}
                             activeOpacity={0.7}
                             accessibilityLabel="Decline ride"
                             disabled={isLoading}
@@ -332,7 +348,7 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
 
                         <TouchableOpacity
                             style={styles.acceptBtn}
-                            onPress={onAccept}
+                            onPress={handleAccept}
                             disabled={isLoading}
                             activeOpacity={0.85}
                             accessibilityLabel="Accept ride"

@@ -446,6 +446,20 @@ async def get_current_user_allow_expired(
         raise original
     if _token_version_mismatch(payload, user):
         raise original
+    # Single-device login still applies on the grace path. An expired token
+    # from a superseded session (the user logged in elsewhere, rotating
+    # current_session_id) must not trigger SOS for the account — mirror the
+    # Redis fast-path + DB comparison get_current_user does. A stolen old
+    # handset should not be able to fire emergency alerts after the owner
+    # has re-logged-in on a new device.
+    token_session = payload.get("session_id")
+    if token_session:
+        redis_session = await redis_get(f"session:{user['id']}")
+        if redis_session is not None and redis_session != token_session:
+            raise original
+        db_session = user.get("current_session_id")
+        if db_session and token_session != db_session:
+            raise original
     driver = await db_supabase.get_driver_by_user_id_cached(user["id"])
     user["is_driver"] = True if driver else False
     logger.warning(

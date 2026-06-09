@@ -435,8 +435,8 @@ export default function DocumentsScreen() {
                                     );
                                 })()}
 
-                                {/* Expiry badge */}
-                                {expiryInfo && expiryInfo.status !== 'none' && (
+                                {/* Expiry badge — only meaningful once the document is approved */}
+                                {expiryInfo && expiryInfo.status !== 'none' && frontStatus === 'approved' && (
                                     <View style={[styles.statusBadge, {
                                         backgroundColor: expiryInfo.status === 'expired' ? '#FEF2F2'
                                             : expiryInfo.status === 'expiring_soon' ? '#FFFBEB'

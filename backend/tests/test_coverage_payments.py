@@ -275,7 +275,7 @@ async def test_create_payment_intent_with_payment_method_id():
 
 @pytest.mark.anyio
 async def test_confirm_payment_mock():
-    from backend.routes.payments import confirm_payment
+    from backend.routes.payments import ConfirmPaymentRequest, confirm_payment
 
     with patch("backend.routes.payments.db_supabase") as mock_db:
         mock_db.update_ride = AsyncMock()
@@ -284,7 +284,7 @@ async def test_confirm_payment_mock():
         )
         mock_db.claim_ride_payment_processing = AsyncMock(return_value=True)
         result = await confirm_payment(
-            body={"payment_intent_id": "pi_mock_test", "ride_id": "ride-1"},
+            body=ConfirmPaymentRequest(**{"payment_intent_id": "pi_mock_test", "ride_id": "ride-1"}),
             current_user=_USER,
         )
 
@@ -294,10 +294,10 @@ async def test_confirm_payment_mock():
 
 @pytest.mark.anyio
 async def test_confirm_payment_mock_no_ride_id():
-    from backend.routes.payments import confirm_payment
+    from backend.routes.payments import ConfirmPaymentRequest, confirm_payment
 
     result = await confirm_payment(
-        body={"payment_intent_id": "pi_mock_xyz"},
+        body=ConfirmPaymentRequest(**{"payment_intent_id": "pi_mock_xyz"}),
         current_user=_USER,
     )
     assert result["status"] == "succeeded"
@@ -305,11 +305,11 @@ async def test_confirm_payment_mock_no_ride_id():
 
 @pytest.mark.anyio
 async def test_confirm_payment_no_stripe_key():
-    from backend.routes.payments import confirm_payment
+    from backend.routes.payments import ConfirmPaymentRequest, confirm_payment
 
     with patch("backend.routes.payments.get_app_settings", new_callable=AsyncMock, return_value=_settings(False)):
         result = await confirm_payment(
-            body={"payment_intent_id": "pi_real_001"},
+            body=ConfirmPaymentRequest(**{"payment_intent_id": "pi_real_001"}),
             current_user=_USER,
         )
     assert result["status"] == "unknown"
@@ -318,7 +318,7 @@ async def test_confirm_payment_no_stripe_key():
 
 @pytest.mark.anyio
 async def test_confirm_payment_real_stripe():
-    from backend.routes.payments import confirm_payment
+    from backend.routes.payments import ConfirmPaymentRequest, confirm_payment
 
     mock_intent = MagicMock()
     mock_intent.status = "succeeded"
@@ -335,7 +335,7 @@ async def test_confirm_payment_real_stripe():
         )
         mock_db.claim_ride_payment_processing = AsyncMock(return_value=True)
         result = await confirm_payment(
-            body={"payment_intent_id": "pi_real_001", "ride_id": "ride-1"},
+            body=ConfirmPaymentRequest(**{"payment_intent_id": "pi_real_001", "ride_id": "ride-1"}),
             current_user=_USER,
         )
 
@@ -806,7 +806,7 @@ async def test_confirm_payment_stripe_error():
     """Stripe error during confirm_payment surfaces as 500."""
     from fastapi import HTTPException
 
-    from backend.routes.payments import confirm_payment
+    from backend.routes.payments import ConfirmPaymentRequest, confirm_payment
 
     with (
         patch("backend.routes.payments.get_app_settings", new_callable=AsyncMock, return_value=_settings()),
@@ -817,7 +817,7 @@ async def test_confirm_payment_stripe_error():
     ):
         with pytest.raises(HTTPException) as exc:
             await confirm_payment(
-                body={"payment_intent_id": "pi_real_err"},
+                body=ConfirmPaymentRequest(**{"payment_intent_id": "pi_real_err"}),
                 current_user=_USER,
             )
     assert exc.value.status_code == 500

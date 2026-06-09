@@ -120,3 +120,25 @@ async def test_route_dependency_requires_super_admin():
     with pytest.raises(HTTPException) as exc_info:
         await dep(admin={"id": "staff-ops", "role": "operations"})
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_staff_list_and_get_never_leak_totp_secrets():
+    """mfa_secret / pending secret / backup-code hashes are credentials —
+    a TOTP secret mints valid codes. list_staff is readable by every staff
+    role, so these must be stripped alongside password_hash."""
+    from unittest.mock import MagicMock
+
+    row = _staff_row(password_hash="bcrypt$x", mfa_secret_pending="PENDING")
+    with (
+        patch.object(staff_mod.db_supabase, "get_rows", AsyncMock(return_value=[dict(row)])),
+        patch.object(staff_mod.db_supabase, "count_documents", AsyncMock(return_value=1)),
+    ):
+        listed = await staff_mod.list_staff(response=MagicMock(headers={}), admin=SUPER, limit=500, offset=0)
+    with patch.object(staff_mod.db_supabase, "get_rows", AsyncMock(return_value=[dict(row)])):
+        single = await staff_mod.get_staff(TARGET_ID)
+
+    for payload in (listed[0], single):
+        for cred in ("password_hash", "password", "mfa_secret", "mfa_secret_pending", "mfa_backup_codes"):
+            assert cred not in payload, f"{cred} must never reach the dashboard"
+        assert payload["mfa_enabled"] is True  # the boolean flag is the only MFA field exposed

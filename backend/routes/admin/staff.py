@@ -121,10 +121,12 @@ async def list_staff(
     """
     staff = await db_supabase.get_rows("admin_staff", limit=limit, offset=offset)
     total = await db_supabase.count_documents("admin_staff")
-    # Remove passwords from response
+    # Strip credentials from the response. The TOTP secret is as sensitive as
+    # a password — anyone holding it can mint valid 6-digit codes — and this
+    # endpoint is readable by every staff role, not just super_admin.
     for s in staff:
-        s.pop("password_hash", None)
-        s.pop("password", None)
+        for _cred in ("password_hash", "password", "mfa_secret", "mfa_secret_pending", "mfa_backup_codes"):
+            s.pop(_cred, None)
     response.headers["X-Total-Count"] = str(total)
     response.headers["X-Limit"] = str(limit)
     return staff
@@ -208,8 +210,9 @@ async def get_staff(staff_id: str):
     s = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("admin_staff", {"id": staff_id}, limit=1))
     if not s:
         raise HTTPException(status_code=404, detail="Staff member not found")
-    s.pop("password_hash", None)
-    s.pop("password", None)
+    # Same credential-stripping as list_staff — see comment there.
+    for _cred in ("password_hash", "password", "mfa_secret", "mfa_secret_pending", "mfa_backup_codes"):
+        s.pop(_cred, None)
     return s
 
 

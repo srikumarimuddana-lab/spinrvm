@@ -430,19 +430,7 @@ export default function ProfileScreen() {
                     <Text style={[styles.cardValueDim, { marginLeft: 8 }]}>No document requirements found</Text>
                 </View>
                 ) : docRequirements.map((req, i) => {
-                const n = req.name.toLowerCase();
-                const expiryKey =
-                    n.includes('licen') ? 'license_expiry_date' :
-                    n.includes('insurance') ? 'insurance_expiry_date' :
-                    n.includes('background') ? 'background_check_expiry_date' :
-                    n.includes('inspection') ? 'vehicle_inspection_expiry_date' :
-                    n.includes('eligib') || n.includes('work permit') ? 'work_eligibility_expiry_date' : '';
-
-                const icon: any =
-                    n.includes('licen') ? 'id-card-outline' :
-                    n.includes('insurance') ? 'shield-checkmark-outline' :
-                    n.includes('background') ? 'document-text-outline' :
-                    n.includes('inspection') ? 'car-sport-outline' : 'document-outline';
+                const icon: any = 'document-outline';
 
                 // Collect ALL non-superseded documents for this requirement.
                 // Using all matches (not just the first) ensures a pending re-upload
@@ -464,11 +452,11 @@ export default function ProfileScreen() {
                     matchingDocs.some(d => d.status === 'approved') ? 'approved' :
                     undefined;
 
-                // Use top-level driver field first; fall back to expiry_date on the document record itself
-                const expiry: string | null =
-                    (expiryKey ? (driverData?.[expiryKey] as string | null | undefined) : null)
-                    ?? (matchedDoc?.expiry_date as string | null | undefined)
-                    ?? null;
+                // Expiry comes only from the document record (set by admin on approval).
+                // Do NOT read from driver-profile fields (license_expiry_date etc.) —
+                // those stay set even after a re-upload, causing the old date to bleed
+                // through while the new document is still pending review.
+                const expiry: string | null = (matchedDoc?.expiry_date as string | null | undefined) ?? null;
                 const isExpired = expiry ? new Date(expiry) < new Date() : false;
                 const expiresIn = expiry ? Math.ceil((new Date(expiry).getTime() - Date.now()) / (1000 * 60 * 60 * 24)) : null;
                 const isValid = expiry && !isExpired;

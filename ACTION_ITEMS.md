@@ -7,7 +7,7 @@
 > *Done* column. Do not re-litigate `[x]` items. Companion document with full
 > context: `docs/PRODUCTION_READINESS.md`.
 
-_Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb`)._
+_Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb`). Sections: A=launch-gating, B=pre-launch fixes, C=operational, D=post-launch, E=industry-parity._
 
 ---
 
@@ -121,6 +121,60 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   (`routes/admin/analytics.py:72`), drops dashboard DB load ~98%.
 - [ ] **D8. Payment-retry admin alert via WS broadcast** — replace per-admin push loop
   (`utils/payment_retry.py:80`) with one `broadcast_to_admins`.
+
+## P4 — Industry-parity good-to-haves (verified missing 2026-06-09)
+
+_Not launch-gating, but every mature platform at this stage has them. Ordered by
+how much they de-risk a public launch._
+
+- [ ] **E1. Staging environment** — deploys currently go `main` → production
+  (Fly + Railway) with no intermediate environment. Stand up a staging Fly app +
+  throwaway Supabase project with synthetic data; point a `staging` branch or
+  manual workflow at it. Prereq for E2, E4, and safe migration rehearsal.
+- [ ] **E2. Marketplace load/simulation testing** — `perf_baseline.py` is
+  micro-benchmarks only; there is no k6/Locust harness and no rider/driver bot
+  simulator. For a dispatch marketplace this is the industry-standard way to find
+  the breaking point of matching, WS fan-out, and surge under load *before* a
+  Saturday night does. Build: bot harness creating N concurrent ride requests +
+  M online drivers against staging; assert the SLA table in CLAUDE.md holds.
+- [ ] **E3. Forced-upgrade gate for mobile apps** — no minimum-supported-version
+  check exists. Old app binaries in the wild will eventually hit removed/changed
+  APIs. Add `min_supported_version` to `app_settings`, a version header from the
+  apps, a 426-style backend response, and an "update required" screen in both apps.
+  Cheap now, impossible to retrofit onto clients that are already old.
+- [ ] **E4. Synthetic monitoring + SLO alerting** — nothing external probes the
+  platform; a total outage is currently discovered by users. Add an external
+  monitor (Checkly/UptimeRobot/Grafana synthetic) hitting `/health`, auth, and
+  fare-estimate every minute from outside, alerting to PagerDuty. Tie alert
+  thresholds to the CLAUDE.md SLA table (SLO + error budget).
+- [ ] **E5. Kill switches / feature flags** — `app_settings` covers config, but
+  there are no documented kill switches for the risky subsystems (surge engine,
+  scheduled dispatch, promo redemption, corporate billing). Add boolean flags
+  checked at the top of each loop/path + admin UI toggles, so a misbehaving
+  subsystem can be disabled in seconds without a deploy.
+- [ ] **E6. Pre-launch DAST + third-party pentest** — SAST/Semgrep run in CI, but
+  nothing exercises the running app (OWASP ZAP baseline scan against staging on a
+  schedule), and a payments+PII platform should have one external penetration
+  test before public launch. Budget item; book it.
+- [ ] **E7. Backup-restore drill** — `docs/runbooks/pitr-restore.md` exists but
+  (like the failover runbook) has never been exercised. Restore a Supabase PITR
+  snapshot into a scratch project, verify row counts + a sample ride lifecycle,
+  record actual RTO in the runbook. A backup is only real after a restore.
+- [ ] **E8. CODEOWNERS + review routing** — no `.github/CODEOWNERS`. Route
+  `backend/routes/payments*`/`services/fare*`/`migrations/` to designated
+  reviewers so money/schema changes can't merge on a drive-by approval.
+- [ ] **E9. Blameless postmortem template** — `data-breach.md` has one for
+  breaches; generalize to `docs/templates/postmortem.md` (timeline, impact,
+  5-whys, action items with owners) and link it from the incident runbooks.
+- [ ] **E10. License compliance scan** — dependency *vulnerability* audit exists;
+  add license checking (`pip-licenses` + `license-checker` in CI, fail on
+  GPL/AGPL in shipped surfaces). Matters for SOC 2 and any future diligence.
+- [ ] **E11. a11y checks in CI** — WCAG 2.1 AA is a stated regulatory mandate and
+  axe is already in admin-dashboard devDeps, but nothing runs it in CI. Wire
+  axe into the Playwright E2E suite for the customer-facing surfaces.
+- [ ] **E12. On-call & escalation policy doc** — PagerDuty is referenced by
+  alerts, but there is no rotation/escalation/severity-matrix document. One page:
+  who is paged, when P0 vs P1, response-time expectations (support SLA says <2h P1).
 
 ## Recently completed (do not redo)
 

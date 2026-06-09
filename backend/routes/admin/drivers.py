@@ -448,7 +448,11 @@ async def admin_get_driver_stats(
             "daily_earnings": earnings_chart,
         },
         "drivers": enriched_drivers,
-        "service_areas": [{"id": a["id"], "name": a.get("name", "Unknown")} for a in service_areas],
+        "service_areas": [
+            {"id": a["id"], "name": a.get("name", "Unknown")}
+            for a in service_areas
+            if not a.get("parent_service_area_id")
+        ],
     }
 
 

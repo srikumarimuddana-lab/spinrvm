@@ -1422,6 +1422,31 @@ async def estimate_ride(
                     },
                 )
 
+    # Kick off the Directions polyline fetch NOW so its round-trip overlaps
+    # the driver/fare work below instead of stacking on top of it (the fare
+    # estimate budget is <300ms P95; Directions alone can take seconds).
+    # Placed after the geofence gates so rejected requests never spend a
+    # Maps API call. Never raises — resolves to None on any failure.
+    async def _polyline_fetch() -> Optional[list]:
+        try:
+            _ps = await get_app_settings()
+            _maps_key = (_ps or {}).get("google_maps_api_key", "")
+            if not _maps_key:
+                return None
+            return await _fetch_directions_polyline(
+                body.pickup_lat,
+                body.pickup_lng,
+                body.dropoff_lat,
+                body.dropoff_lng,
+                _maps_key,
+                waypoints=body.stops or [],
+            )
+        except Exception as _poly_err:
+            logger.warning("[estimate] polyline fetch failed (non-fatal): %s", _poly_err)
+            return None
+
+    polyline_task = asyncio.create_task(_polyline_fetch())
+
     # Fetch nearby online+available drivers once. Order by went_online_at DESC
     # so recently-toggled-online drivers fill the 200-row page first. Ghost
     # drivers (is_available=True in DB but heartbeat expired) tend to carry
@@ -1607,25 +1632,19 @@ async def estimate_ride(
             }
         )
 
-    # Fetch the road-following route polyline from Google Directions API.
-    # Same for all vehicle types, so called once. Returned as [[lat, lng], ...]
-    # so the rider app can render the gradient route line without a client-side
-    # Directions call (which requires the rider's own Google Maps API key).
+    # Collect the road-following polyline started before the driver/fare
+    # work. Same for all vehicle types, so fetched once; the rider app uses
+    # it to render the gradient route line without a client-side Directions
+    # call. Only a short top-up wait is granted here — a slow Directions API
+    # must not drag the estimate past its latency budget. On timeout the
+    # task is cancelled and the app falls back to straight-line rendering.
     route_polyline = None
     try:
-        _settings = await get_app_settings()
-        _maps_key = (_settings or {}).get("google_maps_api_key", "")
-        if _maps_key:
-            route_polyline = await _fetch_directions_polyline(
-                body.pickup_lat,
-                body.pickup_lng,
-                body.dropoff_lat,
-                body.dropoff_lng,
-                _maps_key,
-                waypoints=body.stops or [],
-            )
-    except Exception as _poly_err:
-        logger.warning("[estimate] polyline fetch failed (non-fatal): %s", _poly_err)
+        route_polyline = await asyncio.wait_for(polyline_task, timeout=0.5)
+    except asyncio.TimeoutError:
+        logger.info("[estimate] polyline not ready within budget — returning without it (non-fatal)")
+    except Exception as _poly_err:  # defensive — _polyline_fetch traps its own errors
+        logger.warning("[estimate] polyline await failed (non-fatal): %s", _poly_err)
 
     logger.info(
         "[estimate] returning %d estimates (polyline=%d pts): %s",

@@ -332,7 +332,7 @@ async def admin_login(request: Request, response: Response, body: LoginRequest):
                 # dashboard routes this into the QR enrollment flow;
                 # /mfa/confirm issues the real tokens once the first code
                 # verifies.
-                enroll_token = _mint_mfa_enroll_token(staff["id"])
+                enroll_token = _mint_mfa_enroll_token(staff["id"], token_version=int(staff.get("token_version") or 0))
                 await _clear_login_failures(body.email)
                 return {"mfa_enrollment_required": True, "mfa_token": enroll_token}
             modules = staff.get("modules", ["dashboard"])
@@ -413,6 +413,13 @@ async def admin_refresh(request: Request, body: RefreshRequest):
         staff = await db.find_one("admin_staff", {"id": user_id})
         if not staff or not staff.get("is_active", True):
             raise HTTPException(status_code=401, detail="Invalid refresh token")
+        # MFA enforcement must hold on the refresh path too. A staff account
+        # holding a pre-enforcement (or pre-reset) refresh token would
+        # otherwise keep silently minting full admin sessions without ever
+        # enrolling, bypassing ADMIN_MFA_ENFORCED until the 30-day token
+        # expires. 401 forces them back through /login → enrollment.
+        if settings.ADMIN_MFA_ENFORCED and not staff.get("mfa_enabled"):
+            raise HTTPException(status_code=401, detail="MFA enrollment required")
         email = staff["email"]
         role = staff.get("role", "custom")
         modules = staff.get("modules", ["dashboard"])
@@ -692,13 +699,18 @@ def _mint_mfa_challenge_token(user_id: str) -> str:
     )
 
 
-def _mint_mfa_enroll_token(user_id: str) -> str:
+def _mint_mfa_enroll_token(user_id: str, token_version: int = 0) -> str:
     now = datetime.now(timezone.utc)
     return jwt.encode(
         {
             "type": "mfa_enroll",
             "aud": JWT_AUD_MFA_ENROLL,
             "user_id": user_id,
+            # Bound to the staff row's token_version at mint time so a
+            # force-logout-all or MFA reset (both bump token_version)
+            # invalidates an in-flight enrollment token — it can no longer
+            # be exchanged for a session via /mfa/confirm.
+            "token_version": int(token_version or 0),
             # 15 min: enough to install an authenticator app, scan the QR and
             # type the first code; short enough that an intercepted token is
             # near-useless (it still can't read or mutate anything).
@@ -731,13 +743,23 @@ def _consume_backup_code(code: str, stored: list[dict]) -> tuple[bool, list[dict
     return False, stored
 
 
-async def _require_staff_from_token(authorization: str | None, *, allow_enroll_token: bool = False) -> dict:
+async def _require_staff_from_token(
+    authorization: str | None,
+    *,
+    allow_enroll_token: bool = False,
+    return_payload: bool = False,
+) -> dict:
     """Resolve the admin_staff row from a Bearer token.
 
     Accepts a full admin access token. With ``allow_enroll_token=True``
     (only the /mfa/enroll and /mfa/confirm endpoints) it additionally
     accepts the enrollment-scoped token minted at login under
     ADMIN_MFA_ENFORCED — that token must never unlock anything else.
+
+    With ``return_payload=True`` returns ``(staff, payload)`` so the caller
+    can tell which audience authenticated (e.g. /mfa/confirm only mints a
+    new session for the enroll-token / forced-login flow, not for a
+    Settings-page re-enrollment that already holds a session).
     """
     if not authorization:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -775,6 +797,16 @@ async def _require_staff_from_token(authorization: str | None, *, allow_enroll_t
         raise HTTPException(status_code=404, detail="Staff member not found")
     if not staff.get("is_active", True):
         raise HTTPException(status_code=401, detail="Account not found or inactive")
+    # Revocation gate. Both audiences carry token_version (admin access tokens
+    # from _mint_admin_access_token, enrollment tokens from
+    # _mint_mfa_enroll_token). A force-logout-all or MFA reset bumps
+    # admin_staff.token_version; any token minted before that is stale and must
+    # not be exchangeable for a fresh session via /mfa/confirm — otherwise the
+    # forced logout is silently undone.
+    if int(payload.get("token_version") or 0) < int(staff.get("token_version") or 0):
+        raise HTTPException(status_code=401, detail="Invalid token")
+    if return_payload:
+        return staff, payload
     return staff
 
 
@@ -840,13 +872,15 @@ async def admin_mfa_confirm(
 ):
     """Confirm TOTP enrollment by verifying the first code. Activates MFA and issues backup codes.
 
-    Also returns full session tokens: under ADMIN_MFA_ENFORCED the caller
-    only holds an enrollment-scoped token (no session yet), and confirming
-    the first TOTP code is at least as strong a proof as /mfa/challenge —
+    For the forced-enrollment flow (caller holds an enrollment-scoped token,
+    no session yet) this also returns full session tokens: confirming the
+    first TOTP code is at least as strong a proof as /mfa/challenge —
     password (at login) + possession of the freshly bound authenticator.
-    Already-logged-in callers enrolling from Settings can ignore them.
+    Settings-page re-enrollment (caller already holds a session) gets
+    backup_codes only, so its existing session and CSRF cookies are
+    untouched.
     """
-    staff = await _require_staff_from_token(authorization, allow_enroll_token=True)
+    staff, payload = await _require_staff_from_token(authorization, allow_enroll_token=True, return_payload=True)
     pending = staff.get("mfa_secret_pending")
     if not pending:
         raise HTTPException(status_code=400, detail="No pending MFA enrollment. Call /mfa/enroll first.")
@@ -864,6 +898,14 @@ async def admin_mfa_confirm(
         },
     )
     await log_admin_action(staff, "mfa_enabled", "admin_staff", staff["id"], {})
+
+    # Only the forced-login flow (authenticated via the enrollment token) gets
+    # a fresh session here. A Settings re-enrollment already holds one; minting
+    # a new refresh token would silently rotate it out from under the live
+    # session and desync the CSRF cookie.
+    if payload.get("aud") != JWT_AUD_MFA_ENROLL:
+        return {"backup_codes": plaintext_codes}
+
     user_agent = request.headers.get("user-agent", "")
     client_ip = get_remote_address(request)
     modules = staff.get("modules", ["dashboard"])

@@ -210,3 +210,102 @@ async def test_confirm_with_enroll_token_issues_session_tokens():
         audience="spinr:admin",
     )
     assert session_payload["user_id"] == STAFF_ID
+
+
+# ── Codex PR #1724 regressions ───────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_enroll_token_bound_to_token_version_rejected_after_bump():
+    """Codex #1724 (P1): an enrollment token minted before a logout-all /
+    MFA reset (which bump token_version) must not still complete /mfa/confirm."""
+    stale = admin_auth._mint_mfa_enroll_token(STAFF_ID, token_version=0)
+    # admin_staff.token_version was bumped to 1 by the revocation.
+    with patch.object(admin_auth.db, "find_one", AsyncMock(return_value=_staff_row(token_version=1))):
+        with pytest.raises(HTTPException) as exc_info:
+            await admin_auth._require_staff_from_token(f"Bearer {stale}", allow_enroll_token=True)
+    assert exc_info.value.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_admin_access_token_rejected_after_token_version_bump():
+    """Codex #1724 (P1): a revoked admin access token must not pass
+    _require_staff_from_token and mint a fresh session via confirm."""
+    stale = admin_auth._mint_admin_access_token(
+        user_id=STAFF_ID, email=EMAIL, role="operations", modules=["dashboard"], phone=EMAIL, token_version=0
+    )[0]
+    with patch.object(admin_auth.db, "find_one", AsyncMock(return_value=_staff_row(token_version=1))):
+        with pytest.raises(HTTPException) as exc_info:
+            await admin_auth._require_staff_from_token(f"Bearer {stale}")
+    assert exc_info.value.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_settings_reenrollment_does_not_mint_new_session():
+    """Codex #1724 (P1): confirm via a full admin access token (Settings flow)
+    returns backup_codes only — no refresh_token to desync the live session."""
+    secret = pyotp.random_base32()
+    staff = _staff_row(mfa_secret_pending=secret)
+    session_header = "Bearer " + admin_auth._mint_admin_access_token(
+        user_id=STAFF_ID, email=EMAIL, role="operations", modules=["dashboard"], phone=EMAIL, token_version=0
+    )[0]
+
+    class _Body:
+        totp_code = pyotp.TOTP(secret).now()
+
+    with (
+        patch.object(admin_auth.db, "find_one", AsyncMock(return_value=staff)),
+        patch.object(admin_auth.db_supabase, "update_one", AsyncMock()),
+        patch.object(admin_auth, "log_admin_action", AsyncMock()),
+        patch.object(admin_auth, "issue_refresh_token", AsyncMock()) as issue,
+        patch.object(admin_auth, "get_remote_address", MagicMock(return_value="127.0.0.1")),
+    ):
+        result = await admin_auth.admin_mfa_confirm(
+            request=_make_request(), body=_Body(), authorization=session_header
+        )
+
+    assert result == {"backup_codes": result["backup_codes"]}
+    assert "refresh_token" not in result and "token" not in result
+    issue.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_admin_refresh_blocks_unenrolled_staff_when_enforced():
+    """Codex #1724 (P1): a pre-enforcement admin refresh token must not keep
+    minting sessions for a staff member who never enrolled in MFA."""
+    row = {"user_id": STAFF_ID, "audience": "admin"}
+
+    class _Body:
+        refresh_token = "pre-enforcement-rt"
+
+    with (
+        patch.object(admin_auth, "lookup_refresh_token", AsyncMock(return_value=row)),
+        patch.object(admin_auth.db, "find_one", AsyncMock(return_value=_staff_row(mfa_enabled=False))),
+        patch.object(settings, "ADMIN_MFA_ENFORCED", True),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await admin_auth.admin_refresh(request=_make_request(), body=_Body())
+    assert exc_info.value.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_admin_refresh_allows_enrolled_staff():
+    """Sanity: an enrolled staff member still refreshes normally under enforcement."""
+    row = {"user_id": STAFF_ID, "audience": "admin", "id": "rt-row"}
+
+    class _Body:
+        refresh_token = "good-rt"
+
+    with (
+        patch.object(admin_auth, "lookup_refresh_token", AsyncMock(return_value=row)),
+        patch.object(admin_auth.db, "find_one", AsyncMock(return_value=_staff_row(mfa_enabled=True, mfa_secret="S"))),
+        patch.object(settings, "ADMIN_MFA_ENFORCED", True),
+        patch.object(
+            admin_auth,
+            "issue_refresh_token",
+            AsyncMock(return_value=("new-rt", "h", admin_auth.datetime.now(admin_auth.timezone.utc))),
+        ),
+        patch.object(admin_auth, "get_remote_address", MagicMock(return_value="127.0.0.1")),
+    ):
+        result = await admin_auth.admin_refresh(request=_make_request(), body=_Body())
+    assert result["token"]

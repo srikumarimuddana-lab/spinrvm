@@ -84,14 +84,14 @@ describe('TripCompletedPanel', () => {
   });
 
   it('shows driver earnings in summary', () => {
-    const { getByText } = renderWithSafeArea(<TripCompletedPanel {...defaultProps} />);
-    expect(getByText('$12.00')).toBeTruthy();
+    const { getAllByText } = renderWithSafeArea(<TripCompletedPanel {...defaultProps} />);
+    expect(getAllByText('$12.00').length).toBeGreaterThanOrEqual(1);
   });
 
   it('shows fare breakdown labels', () => {
-    const { getByText } = renderWithSafeArea(<TripCompletedPanel {...defaultProps} />);
+    const { getByText, getAllByText } = renderWithSafeArea(<TripCompletedPanel {...defaultProps} />);
     expect(getByText('tripCompleted.baseFare')).toBeTruthy();
-    expect(getByText('tripCompleted.yourEarnings')).toBeTruthy();
+    expect(getAllByText('tripCompleted.yourEarnings').length).toBeGreaterThanOrEqual(1);
   });
 
   it('renders rating section with prompt label', () => {

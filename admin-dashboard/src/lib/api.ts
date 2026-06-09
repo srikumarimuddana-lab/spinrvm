@@ -205,7 +205,14 @@ export interface AdminMfaRequired {
     mfa_token: string;
 }
 
-export type AdminLoginResult = AdminLoginResponse | AdminMfaRequired;
+// ADMIN_MFA_ENFORCED: password was correct but the account has no MFA yet.
+// mfa_token is enrollment-scoped — only /mfa/enroll and /mfa/confirm accept it.
+export interface AdminMfaEnrollmentRequired {
+    mfa_enrollment_required: true;
+    mfa_token: string;
+}
+
+export type AdminLoginResult = AdminLoginResponse | AdminMfaRequired | AdminMfaEnrollmentRequired;
 
 export const loginAdmin = (phone: string, code: string) =>
     request<AuthResponse>("/api/auth/verify-otp", {
@@ -228,13 +235,28 @@ export const mfaChallenge = (mfa_token: string, totp_code: string) =>
 export const mfaStatus = () =>
     request<{ mfa_enabled: boolean; available: boolean }>("/api/admin/auth/mfa/status");
 
-export const mfaEnroll = () =>
-    request<{ secret: string; otpauth_uri: string }>("/api/admin/auth/mfa/enroll", { method: "POST" });
+// Confirm also returns full session tokens so first-login enrollment
+// (no session yet, only the enrollment-scoped token) lands in the dashboard.
+// Settings-flow callers already have a session and can ignore them.
+export interface MfaConfirmResponse extends AdminLoginResponse {
+    backup_codes: string[];
+    refresh_expires_at?: string;
+}
 
-export const mfaConfirm = (totp_code: string) =>
-    request<{ backup_codes: string[] }>("/api/admin/auth/mfa/confirm", {
+// `authToken` carries the enrollment-scoped token during forced first-login
+// enrollment; omitted, the session token from the store is used (Settings flow).
+// The store token is null in the forced flow, so this header is not overwritten.
+export const mfaEnroll = (authToken?: string) =>
+    request<{ secret: string; otpauth_uri: string }>("/api/admin/auth/mfa/enroll", {
+        method: "POST",
+        ...(authToken ? { headers: { Authorization: `Bearer ${authToken}` } } : {}),
+    });
+
+export const mfaConfirm = (totp_code: string, authToken?: string) =>
+    request<MfaConfirmResponse>("/api/admin/auth/mfa/confirm", {
         method: "POST",
         body: JSON.stringify({ totp_code }),
+        ...(authToken ? { headers: { Authorization: `Bearer ${authToken}` } } : {}),
     });
 
 export const mfaDisable = (totp_code: string, password: string) =>

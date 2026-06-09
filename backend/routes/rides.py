@@ -151,6 +151,26 @@ db = db_supabase  # legacy alias
 import httpx as _httpx  # noqa: E402 — late import to avoid circular at module load
 
 
+def _push_in_background(*args, _ctx: str = "", **kwargs) -> None:
+    """Fire an informational push without blocking the request path.
+
+    FCM/Expo round-trips run 100–300 ms; awaiting them inline adds that
+    straight onto user-facing latency for pushes that are best-effort by
+    design (tip received, rating received, trip shared). Failures are
+    logged with ``_ctx`` — never re-raised into the caller. Time-critical
+    pushes (dispatch/safety) must NOT use this: they have their own
+    retry-queue fallback inside send_push_notification.
+    """
+
+    async def _send() -> None:
+        try:
+            await send_push_notification(*args, **kwargs)
+        except Exception:
+            logger.error(f"background push failed ({_ctx})", exc_info=True)
+
+    asyncio.create_task(_send())
+
+
 def _decode_polyline(encoded: str) -> list:
     """Decode a Google encoded polyline string to [[lat, lng], ...] list."""
     coords: list = []
@@ -3095,22 +3115,17 @@ async def add_tip(
             await manager.send_personal_message(payload, f"driver_{driver_user_id}")
         except Exception as exc:
             logger.warning(f"[TIP] WS notify driver {driver_user_id} failed: {exc}")
-        try:
-            await send_push_notification(
-                driver_user_id,
-                "You got a tip! 💸",
-                f"{rider_name} tipped you ${tip_amount:.2f}",
-                data={
-                    "type": "tip_received",
-                    "ride_id": str(ride_id),
-                    "amount": f"{tip_amount:.2f}",
-                },
-            )
-        except Exception as exc:
-            logger.error(
-                f"[TIP] Push notify driver {driver_user_id} failed: {exc}",
-                exc_info=True,
-            )
+        _push_in_background(
+            driver_user_id,
+            "You got a tip! 💸",
+            f"{rider_name} tipped you ${tip_amount:.2f}",
+            data={
+                "type": "tip_received",
+                "ride_id": str(ride_id),
+                "amount": f"{tip_amount:.2f}",
+            },
+            _ctx=f"[TIP] driver {driver_user_id}",
+        )
 
     return {"success": True, "tip_amount": _money_str(new_tip)}
 
@@ -3428,22 +3443,17 @@ async def share_trip_with_contact(
     if contact_user:
         rider = await db.find_one("users", {"id": current_user["id"]})
         rider_name = f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip() if rider else "Someone"
-        try:
-            await send_push_notification(
-                contact_user["id"],
-                f"{rider_name} is sharing their ride with you",
-                f"Track their live location: {ride.get('pickup_address', '')} → {ride.get('dropoff_address', '')}",
-                data={
-                    "type": "trip_shared",
-                    "share_token": share_token,
-                    "ride_id": ride_id,
-                },
-            )
-        except Exception as _push_exc:
-            logger.error(
-                f"[SHARE] push to contact {contact_user['id']} failed: {_push_exc}",
-                exc_info=True,
-            )
+        _push_in_background(
+            contact_user["id"],
+            f"{rider_name} is sharing their ride with you",
+            f"Track their live location: {ride.get('pickup_address', '')} → {ride.get('dropoff_address', '')}",
+            data={
+                "type": "trip_shared",
+                "share_token": share_token,
+                "ride_id": ride_id,
+            },
+            _ctx=f"[SHARE] contact {contact_user['id']}",
+        )
 
     return {
         "success": True,
@@ -3623,19 +3633,17 @@ async def rate_driver(
     if driver and driver.get("user_id") and rating_data.rating:
         stars = "⭐" * int(rating_data.rating)
         tip_note = f" + ${rating_data.tip_amount:.2f} tip!" if rating_data.tip_amount > 0 else ""
-        try:
-            await send_push_notification(
-                driver["user_id"],
-                f"New Rating: {stars}",
-                f"A rider rated you {rating_data.rating}/5{tip_note}",
-                {
-                    "type": "rating_received",
-                    "rating": str(rating_data.rating),
-                    "ride_id": ride_id,
-                },
-            )
-        except Exception as push_err:
-            logger.info("[RATING] Push failed (non-fatal)", exc_info=push_err)
+        _push_in_background(
+            driver["user_id"],
+            f"New Rating: {stars}",
+            f"A rider rated you {rating_data.rating}/5{tip_note}",
+            {
+                "type": "rating_received",
+                "rating": str(rating_data.rating),
+                "ride_id": ride_id,
+            },
+            _ctx=f"[RATING] driver {driver['user_id']}",
+        )
 
     asyncio.create_task(
         log_user_action(

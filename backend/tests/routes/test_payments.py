@@ -120,3 +120,27 @@ async def test_confirm_payment_body_rejects_unknown_keys():
 
     with pytest.raises(ValidationError):
         ConfirmPaymentRequest(payment_intent_id="x" * 256)
+
+
+@pytest.mark.anyio
+async def test_create_intent_non_owner_gets_403_not_500():
+    """Ownership 403 from _authoritative_ride_charge must pass through the
+    generic exception handler, not be masked as an opaque 500."""
+    from fastapi import HTTPException
+
+    from backend.routes.payments import PaymentIntentRequest, create_payment_intent
+
+    with (
+        patch("backend.routes.payments.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test_x"})),
+        patch("backend.routes.payments.db_supabase") as mock_db,
+    ):
+        mock_db.get_ride = AsyncMock(return_value=_RIDE_OWNED)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await create_payment_intent(
+                body=PaymentIntentRequest(amount="15.00", ride_id=_RIDE_ID),
+                request=None,
+                current_user=_OTHER_USER,
+            )
+
+    assert exc_info.value.status_code == 403

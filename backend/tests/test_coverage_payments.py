@@ -146,10 +146,11 @@ async def test_create_payment_intent_ride_not_found():
 
 
 @pytest.mark.anyio
-async def test_create_payment_intent_fare_mismatch():
-    """Amount mismatch raises PaymentException(400) which gets wrapped to 500 by the
-    generic handler in create_payment_intent. Verify the ride fare lookup ran and an
-    HTTPException is raised."""
+async def test_create_payment_intent_ride_not_owned_403():
+    """A ride whose rider_id doesn't match the caller is rejected with the
+    ownership 403 from _authoritative_ride_charge — surfaced as-is, no longer
+    masked as a generic 500. (The advisory `amount` is ignored for ride
+    payments, so there is no separate fare-mismatch error path.)"""
     from fastapi import HTTPException
 
     from backend.routes.payments import PaymentIntentRequest, create_payment_intent
@@ -172,8 +173,7 @@ async def test_create_payment_intent_fare_mismatch():
                 request=mock_req,
                 current_user=_USER,
             )
-    # PaymentException(400) is re-raised as 500 by the generic except block
-    assert exc.value.status_code in (400, 500)
+    assert exc.value.status_code == 403
     mock_db.get_ride.assert_called_once_with("ride-123")
 
 

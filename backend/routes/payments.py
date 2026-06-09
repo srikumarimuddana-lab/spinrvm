@@ -288,6 +288,10 @@ async def create_payment_intent(
     except stripe.error.StripeError as e:
         logger.error(f"Stripe API error on create-intent: {e}", exc_info=True)
         raise HTTPException(status_code=502, detail="Payment service unavailable. Please try again.") from e
+    except HTTPException:
+        # Intentional 4xx (ownership 403, validation 400) from helpers like
+        # _authoritative_ride_charge must reach the client, not become a 500.
+        raise
     except Exception as e:
         logger.error(f"Unexpected error on create-intent: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
@@ -394,6 +398,9 @@ async def confirm_payment(
                 )
 
             return {"status": intent.status, "mock": False}
+        except HTTPException:
+            # Ownership 403s above must reach the client, not become a 500.
+            raise
         except Exception as e:
             logger.error(f"Stripe error: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
@@ -432,6 +439,9 @@ async def create_setup_intent(request: Request = None, current_user: dict = Depe
             "customer_id": customer_id,
             "mock": False,
         }
+    except HTTPException:
+        # The 400 for a missing Stripe customer must reach the client.
+        raise
     except Exception as e:
         logger.error(f"Stripe error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
@@ -834,6 +844,10 @@ async def create_payment_sheet(
     except stripe.error.StripeError as e:
         logger.error("Stripe payment-sheet error", exc_info=True)
         raise HTTPException(status_code=502, detail="Payment provider error. Please try again.") from e
+    except HTTPException:
+        # Intentional 4xx (ownership 403 from _authoritative_ride_charge)
+        # must reach the client, not become a 500.
+        raise
     except Exception as e:
         logger.error("payment-sheet unexpected error", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e

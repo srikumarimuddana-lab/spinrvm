@@ -18,6 +18,9 @@ on:
 #   1. Install flyctl locally, then: fly tokens create deploy -a spinr-backend-yyz
 #      (a deploy-scoped token, NOT a personal/org-wide token).
 #   2. GitHub → repo → Settings → Secrets → Actions → FLY_API_TOKEN = <token>
+#   3. GitHub → repo → Settings → Secrets → Actions → SENTRY_DSN = <Sentry DSN>
+#      (important: DSN, not DNS). The workflow stages it into Fly secrets before
+#      deploying so the backend can initialize Sentry at startup.
 #
 # Optional: set FLY_HEALTH_URL (e.g. https://spinr-backend-yyz.fly.dev) to enable
 # the post-deploy health probe. Leave unset in forks to skip it.
@@ -29,6 +32,7 @@ jobs:
     # Hoisted to job env because the `secrets` context is not available in a step
     # `if:` conditional — gate the health probe on `env.FLY_HEALTH_URL` instead.
     env:
+      FLY_APP: spinr-backend-yyz
       FLY_HEALTH_URL: ${{ secrets.FLY_HEALTH_URL }}
     steps:
       - uses: actions/checkout@v6
@@ -51,6 +55,29 @@ jobs:
 
       - name: Show flyctl version
         run: flyctl version
+
+      - name: Verify SENTRY_DSN is set
+        run: |
+          if [ -z "${SENTRY_DSN}" ]; then
+            echo "::error title=Missing secret::SENTRY_DSN is not set."
+            echo ""
+            echo "Create it in GitHub with the Sentry project DSN:"
+            echo "GitHub → repo → Settings → Secrets and variables → Actions → New repository secret"
+            echo "Name: SENTRY_DSN (not SENTRY_DNS)"
+            exit 1
+          fi
+          echo "SENTRY_DSN is set (length=${#SENTRY_DSN})."
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+
+      # Keep the Sentry DSN out of git and fly.toml. Stage it as a Fly runtime
+      # secret immediately before deploy; `flyctl deploy` will create the release
+      # that exposes SENTRY_DSN to the backend process.
+      - name: Stage Sentry DSN in Fly secrets
+        run: flyctl secrets set SENTRY_DSN="${SENTRY_DSN}" --stage -a "${FLY_APP}"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
 
       # Rolling deploy (strategy=rolling, max_unavailable=1 in fly.toml). New
       # machines must pass the /health check before old ones are replaced, so a

@@ -326,6 +326,15 @@ async def admin_login(request: Request, response: Response, body: LoginRequest):
                 mfa_token = _mint_mfa_challenge_token(staff["id"])
                 await _clear_login_failures(body.email)
                 return {"mfa_required": True, "mfa_token": mfa_token}
+            if settings.ADMIN_MFA_ENFORCED:
+                # MFA is mandatory for every staff account: a correct password
+                # buys an enrollment-scoped token, never a session. The
+                # dashboard routes this into the QR enrollment flow;
+                # /mfa/confirm issues the real tokens once the first code
+                # verifies.
+                enroll_token = _mint_mfa_enroll_token(staff["id"])
+                await _clear_login_failures(body.email)
+                return {"mfa_enrollment_required": True, "mfa_token": enroll_token}
             modules = staff.get("modules", ["dashboard"])
             token, access_expires_at = _mint_admin_access_token(
                 user_id=staff["id"],
@@ -662,6 +671,12 @@ class MfaChallengeRequest(BaseModel):
 # an admin session, and must never be accepted where either is expected.
 JWT_AUD_MFA_CHALLENGE = "spinr:admin:mfa-challenge"
 
+# Enrollment-scoped audience: handed out at login when ADMIN_MFA_ENFORCED is
+# on and the staff member hasn't enrolled yet. Accepted ONLY by /mfa/enroll
+# and /mfa/confirm — it is proof of password, not a session, and must never
+# unlock any other admin surface.
+JWT_AUD_MFA_ENROLL = "spinr:admin:mfa-enroll"
+
 
 def _mint_mfa_challenge_token(user_id: str) -> str:
     now = datetime.now(timezone.utc)
@@ -671,6 +686,23 @@ def _mint_mfa_challenge_token(user_id: str) -> str:
             "aud": JWT_AUD_MFA_CHALLENGE,
             "user_id": user_id,
             "exp": now + timedelta(minutes=5),
+        },
+        settings.JWT_SECRET,
+        algorithm=settings.ALGORITHM,
+    )
+
+
+def _mint_mfa_enroll_token(user_id: str) -> str:
+    now = datetime.now(timezone.utc)
+    return jwt.encode(
+        {
+            "type": "mfa_enroll",
+            "aud": JWT_AUD_MFA_ENROLL,
+            "user_id": user_id,
+            # 15 min: enough to install an authenticator app, scan the QR and
+            # type the first code; short enough that an intercepted token is
+            # near-useless (it still can't read or mutate anything).
+            "exp": now + timedelta(minutes=15),
         },
         settings.JWT_SECRET,
         algorithm=settings.ALGORITHM,
@@ -699,9 +731,17 @@ def _consume_backup_code(code: str, stored: list[dict]) -> tuple[bool, list[dict
     return False, stored
 
 
-async def _require_staff_from_token(authorization: str | None) -> dict:
+async def _require_staff_from_token(authorization: str | None, *, allow_enroll_token: bool = False) -> dict:
+    """Resolve the admin_staff row from a Bearer token.
+
+    Accepts a full admin access token. With ``allow_enroll_token=True``
+    (only the /mfa/enroll and /mfa/confirm endpoints) it additionally
+    accepts the enrollment-scoped token minted at login under
+    ADMIN_MFA_ENFORCED — that token must never unlock anything else.
+    """
     if not authorization:
         raise HTTPException(status_code=401, detail="Not authenticated")
+    audiences = [JWT_AUD_ADMIN] + ([JWT_AUD_MFA_ENROLL] if allow_enroll_token else [])
     try:
         scheme, token = authorization.split()
         if scheme.lower() != "bearer":
@@ -710,7 +750,7 @@ async def _require_staff_from_token(authorization: str | None) -> dict:
             token,
             settings.JWT_SECRET,
             algorithms=[settings.ALGORITHM],
-            audience=JWT_AUD_ADMIN,
+            audience=audiences,
         )
     except (ValueError, jwt.InvalidTokenError) as e:
         # Static detail — PyJWT error strings reveal which exact claim
@@ -722,6 +762,8 @@ async def _require_staff_from_token(authorization: str | None) -> dict:
             extra={"domain": "admin"},
         )
         raise HTTPException(status_code=401, detail="Invalid token") from e
+    if payload.get("aud") == JWT_AUD_MFA_ENROLL and payload.get("type") != "mfa_enroll":
+        raise HTTPException(status_code=401, detail="Invalid token")
     user_id = payload.get("user_id")
     if not user_id or user_id == "admin-001":
         raise HTTPException(
@@ -731,6 +773,8 @@ async def _require_staff_from_token(authorization: str | None) -> dict:
     staff = await db.find_one("admin_staff", {"id": user_id})
     if not staff:
         raise HTTPException(status_code=404, detail="Staff member not found")
+    if not staff.get("is_active", True):
+        raise HTTPException(status_code=401, detail="Account not found or inactive")
     return staff
 
 
@@ -780,7 +824,7 @@ async def admin_mfa_status(authorization: Optional[str] = Header(None)):
 @limiter.limit("5/minute")
 async def admin_mfa_enroll(request: Request, authorization: Optional[str] = Header(None)):
     """Begin TOTP enrollment. Returns secret + otpauth URI; confirm with /mfa/confirm."""
-    staff = await _require_staff_from_token(authorization)
+    staff = await _require_staff_from_token(authorization, allow_enroll_token=True)
     secret = pyotp.random_base32()
     uri = pyotp.TOTP(secret).provisioning_uri(name=staff["email"], issuer_name="Spinr Admin")
     await db_supabase.update_one("admin_staff", {"id": staff["id"]}, {"mfa_secret_pending": secret})
@@ -794,8 +838,15 @@ async def admin_mfa_confirm(
     body: MfaConfirmRequest,
     authorization: Optional[str] = Header(None),
 ):
-    """Confirm TOTP enrollment by verifying the first code. Activates MFA and issues backup codes."""
-    staff = await _require_staff_from_token(authorization)
+    """Confirm TOTP enrollment by verifying the first code. Activates MFA and issues backup codes.
+
+    Also returns full session tokens: under ADMIN_MFA_ENFORCED the caller
+    only holds an enrollment-scoped token (no session yet), and confirming
+    the first TOTP code is at least as strong a proof as /mfa/challenge —
+    password (at login) + possession of the freshly bound authenticator.
+    Already-logged-in callers enrolling from Settings can ignore them.
+    """
+    staff = await _require_staff_from_token(authorization, allow_enroll_token=True)
     pending = staff.get("mfa_secret_pending")
     if not pending:
         raise HTTPException(status_code=400, detail="No pending MFA enrollment. Call /mfa/enroll first.")
@@ -813,7 +864,35 @@ async def admin_mfa_confirm(
         },
     )
     await log_admin_action(staff, "mfa_enabled", "admin_staff", staff["id"], {})
-    return {"backup_codes": plaintext_codes}
+    user_agent = request.headers.get("user-agent", "")
+    client_ip = get_remote_address(request)
+    modules = staff.get("modules", ["dashboard"])
+    token, access_expires_at = _mint_admin_access_token(
+        user_id=staff["id"],
+        email=staff["email"],
+        role=staff.get("role", "custom"),
+        modules=modules,
+        phone=staff["email"],
+        token_version=int(staff.get("token_version") or 0),
+    )
+    refresh_raw, _, refresh_expires_at = await issue_refresh_token(
+        staff["id"], audience="admin", user_agent=user_agent, ip=client_ip
+    )
+    return {
+        "backup_codes": plaintext_codes,
+        "user": {
+            "id": staff["id"],
+            "email": staff["email"],
+            "role": staff.get("role", "custom"),
+            "first_name": staff.get("first_name", ""),
+            "last_name": staff.get("last_name", ""),
+            "modules": modules,
+        },
+        "token": token,
+        "refresh_token": refresh_raw,
+        "access_expires_at": access_expires_at.isoformat(),
+        "refresh_expires_at": refresh_expires_at.isoformat(),
+    }
 
 
 @admin_auth_router.post("/mfa/disable")

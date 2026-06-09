@@ -323,7 +323,7 @@ async def admin_login(request: Request, response: Response, body: LoginRequest):
                 )
             await db_supabase.update_one("admin_staff", {"id": staff["id"]}, updates)
             if staff.get("mfa_enabled"):
-                mfa_token = _mint_mfa_challenge_token(staff["id"])
+                mfa_token = _mint_mfa_challenge_token(staff["id"], token_version=int(staff.get("token_version") or 0))
                 await _clear_login_failures(body.email)
                 return {"mfa_required": True, "mfa_token": mfa_token}
             if settings.ADMIN_MFA_ENFORCED:
@@ -685,13 +685,19 @@ JWT_AUD_MFA_CHALLENGE = "spinr:admin:mfa-challenge"
 JWT_AUD_MFA_ENROLL = "spinr:admin:mfa-enroll"
 
 
-def _mint_mfa_challenge_token(user_id: str) -> str:
+def _mint_mfa_challenge_token(user_id: str, token_version: int = 0) -> str:
     now = datetime.now(timezone.utc)
     return jwt.encode(
         {
             "type": "mfa_challenge",
             "aud": JWT_AUD_MFA_CHALLENGE,
             "user_id": user_id,
+            # Bound to the staff row's token_version at mint time (same
+            # rationale as the enrollment token): a logout-all / MFA reset
+            # during the 5-minute challenge window must invalidate the
+            # in-flight challenge, not let it exchange for a fresh session
+            # stamped with the new version.
+            "token_version": int(token_version or 0),
             "exp": now + timedelta(minutes=5),
         },
         settings.JWT_SECRET,
@@ -852,11 +858,13 @@ async def admin_mfa_status(authorization: Optional[str] = Header(None)):
         raise HTTPException(status_code=401, detail="Invalid token") from e
     user_id = payload.get("user_id")
     if not user_id or user_id == "admin-001":
-        return {"mfa_enabled": False, "available": False}
+        return {"mfa_enabled": False, "available": False, "enforced": settings.ADMIN_MFA_ENFORCED}
     staff = await db.find_one("admin_staff", {"id": user_id})
     if not staff:
         raise HTTPException(status_code=404, detail="Staff member not found")
-    return {"mfa_enabled": bool(staff.get("mfa_enabled")), "available": True}
+    # `enforced` lets the Settings UI hide the Disable button (the backend
+    # rejects disable with 403 under enforcement regardless).
+    return {"mfa_enabled": bool(staff.get("mfa_enabled")), "available": True, "enforced": settings.ADMIN_MFA_ENFORCED}
 
 
 @admin_auth_router.post("/mfa/enroll")
@@ -951,8 +959,21 @@ async def admin_mfa_disable(
     body: MfaDisableRequest,
     authorization: Optional[str] = Header(None),
 ):
-    """Disable MFA. Requires current password + valid TOTP code."""
+    """Disable MFA. Requires current password + valid TOTP code.
+
+    Blocked entirely while ADMIN_MFA_ENFORCED is on: self-service disable
+    would let any staff member opt out of mandatory MFA and keep their
+    1-hour session. Lost-authenticator recovery goes through the
+    super-admin reset (which revokes all sessions and forces re-enrollment
+    at next login), not through disable.
+    """
     staff = await _require_staff_from_token(authorization)
+    if settings.ADMIN_MFA_ENFORCED:
+        raise HTTPException(
+            status_code=403,
+            detail="MFA is mandatory for all staff accounts. Ask a super admin "
+            "to reset your MFA if you lost your authenticator.",
+        )
     if not staff.get("mfa_enabled"):
         raise HTTPException(status_code=400, detail="MFA is not enabled on this account")
     ok, _ = verify_password(body.password, staff.get("password_hash", ""))
@@ -1001,6 +1022,10 @@ async def admin_mfa_challenge(request: Request, body: MfaChallengeRequest):
     staff = await db.find_one("admin_staff", {"id": user_id})
     if not staff or not staff.get("is_active", True):
         raise HTTPException(status_code=401, detail="Account not found or inactive")
+    # Revocation gate — a challenge token minted before a logout-all /
+    # MFA reset (token_version bump) must not exchange for a session.
+    if int(payload.get("token_version") or 0) < int(staff.get("token_version") or 0):
+        raise HTTPException(status_code=401, detail="Invalid MFA token")
     if not staff.get("mfa_enabled") or not staff.get("mfa_secret"):
         raise HTTPException(status_code=400, detail="MFA not configured for this account")
     totp_valid = pyotp.TOTP(staff["mfa_secret"]).verify(body.totp_code, valid_window=1)

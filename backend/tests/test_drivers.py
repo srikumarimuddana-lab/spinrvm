@@ -380,3 +380,99 @@ class TestDriverVehicle:
         result = await get_rows("vehicle_types")
 
         assert len(result) == 3
+
+
+class TestNearbyDriversVehicleTypeName:
+    """The rider map needs vehicle type NAMES (marker art), not just UUIDs."""
+
+    @pytest.mark.asyncio
+    async def test_nearby_payload_includes_vehicle_type_name(self, monkeypatch):
+        """/drivers/nearby resolves vehicle_type_id -> vehicle_types.name."""
+        from unittest.mock import AsyncMock
+
+        from backend.routes import drivers as drivers_route
+
+        driver_row = {
+            "id": "driver-1",
+            "user_id": "user-1",
+            "lat": 52.1333,
+            "lng": -106.6667,
+            "heading": 90,
+            "is_online": True,
+            "vehicle_type_id": "vt-suv",
+            "vehicle_make": "Toyota",
+            "vehicle_model": "Highlander",
+        }
+
+        async def fake_get_rows(table, *args, **kwargs):
+            if table == "drivers":
+                return [driver_row]
+            if table == "vehicle_types":
+                return [
+                    {"id": "vt-suv", "name": "SUV"},
+                    {"id": "vt-sedan", "name": "Sedan"},
+                ]
+            raise AssertionError(f"unexpected table {table}")
+
+        monkeypatch.setattr(drivers_route.db_supabase, "get_rows", fake_get_rows)
+        monkeypatch.setattr(
+            drivers_route,
+            "present_driver_ids_checked",
+            AsyncMock(return_value=({"driver-1"}, True)),
+        )
+
+        result = await drivers_route.get_nearby_drivers_public(
+            lat=52.1333,
+            lng=-106.6667,
+            radius=5.0,
+            vehicle_type=None,
+            current_user={"id": "rider-1", "role": "rider"},
+        )
+
+        assert len(result) == 1
+        assert result[0]["vehicle_type_id"] == "vt-suv"
+        assert result[0]["vehicle_type_name"] == "SUV"
+        # Privacy contract unchanged: no PII fields leak alongside the name.
+        assert "phone" not in result[0]
+        assert "first_name" not in result[0]
+
+    @pytest.mark.asyncio
+    async def test_nearby_tolerates_unknown_vehicle_type_id(self, monkeypatch):
+        """An unmapped/missing vehicle_type_id yields name=None, not an error."""
+        from unittest.mock import AsyncMock
+
+        from backend.routes import drivers as drivers_route
+
+        driver_row = {
+            "id": "driver-2",
+            "user_id": "user-2",
+            "lat": 52.1333,
+            "lng": -106.6667,
+            "is_online": True,
+            "vehicle_type_id": "vt-deleted",
+        }
+
+        async def fake_get_rows(table, *args, **kwargs):
+            if table == "drivers":
+                return [driver_row]
+            if table == "vehicle_types":
+                return [{"id": "vt-sedan", "name": "Sedan"}]
+            raise AssertionError(f"unexpected table {table}")
+
+        monkeypatch.setattr(drivers_route.db_supabase, "get_rows", fake_get_rows)
+        monkeypatch.setattr(
+            drivers_route,
+            "present_driver_ids_checked",
+            AsyncMock(return_value=({"driver-2"}, True)),
+        )
+
+        result = await drivers_route.get_nearby_drivers_public(
+            lat=52.1333,
+            lng=-106.6667,
+            radius=5.0,
+            vehicle_type=None,
+            current_user={"id": "rider-1", "role": "rider"},
+        )
+
+        assert len(result) == 1
+        assert result[0]["vehicle_type_name"] is None

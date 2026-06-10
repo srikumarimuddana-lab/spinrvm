@@ -1629,6 +1629,14 @@ async def get_nearby_drivers_public(
     except Exception as exc:
         logger.warning(f"/drivers/nearby presence filter failed, using DB state: {exc}")
 
+    # Vehicle type NAMES let the apps pick the right map marker art (sedan /
+    # SUV / lux) — the raw vehicle_type_id is an opaque UUID to the client.
+    # One batched lookup; vehicle_types is a handful of admin-defined rows.
+    vt_name_by_id = {}
+    if any(d.get("vehicle_type_id") for d in drivers):
+        vt_rows = await db_supabase.get_rows("vehicle_types", {}, limit=100)
+        vt_name_by_id = {r["id"]: r.get("name") for r in (vt_rows or []) if r.get("id")}
+
     # Manual filtering by distance
     nearby = []
     for d in drivers:
@@ -1658,6 +1666,7 @@ async def get_nearby_drivers_public(
                     "lng": d_lng,
                     "heading": d.get("heading"),
                     "vehicle_type_id": d.get("vehicle_type_id"),
+                    "vehicle_type_name": vt_name_by_id.get(d.get("vehicle_type_id")),
                     "vehicle_make": d.get("vehicle_make"),
                     "vehicle_model": d.get("vehicle_model"),
                 }

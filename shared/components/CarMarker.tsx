@@ -49,6 +49,11 @@ interface CarMarkerProps {
     zIndex?: number;
     identifier?: string;
     variant?: CarMarkerVariant;
+    // Admin-uploaded custom marker (vehicle_types.marker_image_url),
+    // prefetched into the native image cache by vehicleTypeStore. Takes
+    // precedence over `variant`; on load failure the bundled variant
+    // image is rendered instead.
+    imageUri?: string | null;
 }
 
 // Position updates arrive every ~3-10 s (WS pings / GPS watch). Glide the car
@@ -113,6 +118,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     zIndex = 1,
     identifier,
     variant = 'standard',
+    imageUri,
 }) => {
     const markerRef = useRef<any>(null);
     const animatedRegion = useRef(
@@ -195,6 +201,13 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         settleTimerRef.current = setTimeout(() => setTracksViewChanges(false), 350);
     };
 
+    // Custom marker failed to load (offline + cold cache, dead URL) — fall
+    // back to the bundled variant. Reset when the URL changes so a fixed
+    // upload is retried.
+    const [imageFailed, setImageFailed] = useState(false);
+    useEffect(() => setImageFailed(false), [imageUri]);
+    const useCustomImage = !!imageUri && !imageFailed;
+
     return (
         <Marker.Animated
             ref={markerRef}
@@ -217,7 +230,8 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                 }}
             >
                 <Image
-                    source={CAR_IMAGES[variant]}
+                    source={useCustomImage ? { uri: imageUri as string } : CAR_IMAGES[variant]}
+                    onError={() => { setImageFailed(true); setTracksViewChanges(true); }}
                     onLoad={handleImageLoaded}
                     style={{
                         width: size,
@@ -239,7 +253,8 @@ function _propsAreEqual(prev: CarMarkerProps, next: CarMarkerProps): boolean {
         prev.size === next.size &&
         prev.zIndex === next.zIndex &&
         prev.identifier === next.identifier &&
-        prev.variant === next.variant
+        prev.variant === next.variant &&
+        prev.imageUri === next.imageUri
     );
 }
 

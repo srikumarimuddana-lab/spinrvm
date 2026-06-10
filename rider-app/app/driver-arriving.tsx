@@ -7,7 +7,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   Share,
-  Linking,
   Platform,
   ActivityIndicator,
   BackHandler,
@@ -293,12 +292,9 @@ function DriverArrivingScreenContent() {
   }, [currentRide?.status]);
 
   // ── Handlers ──
+  // No call handler: rider↔driver contact is chat-only — phone numbers are
+  // never shared between parties (backend /call endpoint removed).
   const handleMessage = () => router.push({ pathname: '/chat-driver', params: { rideId } });
-
-  const handleCall = () => {
-    const phone = (currentDriver as any)?.phone;
-    if (phone) Linking.openURL(`tel:${phone}`);
-  };
 
   const handleShareTrip = async () => {
     // Fail loud if ops hasn't configured a tracking URL yet — silently
@@ -556,15 +552,11 @@ function DriverArrivingScreenContent() {
                 </View>
               )}
 
-              {/* Action buttons — Message, Call, Share */}
+              {/* Action buttons — Message, Share (no Call: chat-only contact) */}
               <View style={styles.actionRow}>
                 <TouchableOpacity style={styles.actionBtnPrimary} onPress={handleMessage}>
                   <Ionicons name="chatbubble" size={18} color="#FFF" />
                   <Text style={styles.actionBtnPrimaryText}>Message</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity style={styles.actionBtnOutline} onPress={handleCall}>
-                  <Ionicons name="call" size={20} color={colors.text} />
                 </TouchableOpacity>
 
                 <TouchableOpacity style={styles.actionBtnOutline} onPress={handleShareTrip}>

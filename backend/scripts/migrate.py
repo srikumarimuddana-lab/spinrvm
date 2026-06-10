@@ -194,12 +194,21 @@ def _apply_migration_autocommit(conn, version: str, sql: str) -> bool:
     try:
         conn.autocommit = True
         with conn.cursor() as cur:
-            # Split on semicolons; skip blank/comment-only chunks.
+            # Split on semicolons, then strip leading `--` comment lines from
+            # each chunk BEFORE deciding whether to skip it. The previous
+            # `stmt.startswith("--")` check threw away any chunk whose first
+            # line was a comment — which is every migration that opens with
+            # the conventional header/rollback comment block — silently
+            # skipping the CREATE INDEX CONCURRENTLY it was written to run.
             statements = [s.strip() for s in sql.split(";") if s.strip()]
             for stmt in statements:
-                if stmt.upper().startswith("--") or not stmt:
+                lines = stmt.splitlines()
+                while lines and (not lines[0].strip() or lines[0].strip().startswith("--")):
+                    lines.pop(0)
+                executable = "\n".join(lines).strip()
+                if not executable:
                     continue
-                cur.execute(stmt)
+                cur.execute(executable)
             cur.execute(
                 "INSERT INTO schema_migrations (version) VALUES (%s) ON CONFLICT (version) DO NOTHING;", (version,)
             )

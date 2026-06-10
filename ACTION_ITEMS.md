@@ -45,7 +45,9 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
 ## P1 — Fix before launch (code)
 
 ### B1. `track_driver_online` accepts raw GPS for third-party analytics
-- [ ] **Status:** open (latent PIPEDA violation — no production callsite yet)
+- [x] **Status:** done — geohash-string-only signature; lat/lng dict raises
+  TypeError, non-geohash string raises ValueError; contract pinned in
+  `backend/tests/test_analytics_geohash.py`
 - **Files:** `backend/utils/analytics.py:346`
 - **Approach:** change the signature to accept a geohash string only; never accept
   or forward a lat/lng dict to Mixpanel/Amplitude. Add a test pinning the contract.

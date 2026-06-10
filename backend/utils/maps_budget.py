@@ -35,17 +35,20 @@ except ImportError:  # pragma: no cover - dual import path
 
 logger = logging.getLogger(__name__)
 
-Sku = Literal["autocomplete", "autocomplete_session", "details", "geocode"]
+Sku = Literal["autocomplete", "autocomplete_session", "details", "geocode", "directions"]
 
 # USD per call. Source: Google Maps Platform pricing 2026.
 # Places API (New) charges autocomplete requests separately for sessions that
 # terminate in Place Details Essentials; `autocomplete_session` remains for
 # historical counters that may still exist in today's Redis bucket.
+# `directions` is Routes/Directions Essentials (no traffic) — used only as the
+# live-route fallback when self-hosted OSRM is down.
 _PRICE_USD: dict[Sku, float] = {
     "autocomplete": 0.00283,
     "autocomplete_session": 0.017,
     "details": 0.005,
     "geocode": 0.005,
+    "directions": 0.005,
 }
 
 _BUCKET_TTL_SECONDS = 26 * 3600

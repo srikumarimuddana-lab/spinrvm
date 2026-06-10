@@ -330,6 +330,38 @@ class TestClaimQuestReward:
         assert "already claimed" in resp.json()["detail"].lower()
         mock_db.wallet_increment_balance.assert_not_awaited()
 
+    def test_ledger_failure_reverses_credit_and_releases_claim(self, client):
+        """If the wallet_transactions ledger write fails AFTER a successful
+        credit, the credit must be reversed (compensating debit) and the claim
+        released only after the reversal succeeds — never leave money paid
+        with no ledger row, and never release a claim while the credit stands
+        (double-pay)."""
+        from decimal import Decimal
+
+        wallet = {"id": "wallet_1", "user_id": "user_123", "balance": 0.0, "is_active": True}
+        claimed_row = {**SAMPLE_PROGRESS, "status": "claimed"}
+        mock_db = make_mock_db()
+        mock_db.drivers.find_one = AsyncMock(return_value=SAMPLE_DRIVER)
+        mock_db.quest_progress.find_one = AsyncMock(return_value=SAMPLE_PROGRESS)
+        mock_db.quest_progress.update_one = AsyncMock(side_effect=[claimed_row, SAMPLE_PROGRESS])
+        mock_db.quests.find_one = AsyncMock(return_value=SAMPLE_QUEST)
+        mock_db.wallets.find_one = AsyncMock(return_value=wallet)
+        mock_db.wallet_transactions.insert_one = AsyncMock(side_effect=RuntimeError("ledger down"))
+
+        with patch("routes.quests.db", mock_db), patch("routes.wallet.db", mock_db):
+            resp = client.post("/api/v1/quests/progress/progress_1/claim")
+
+        assert resp.status_code == 503
+        # Credit, then compensating debit of the same amount.
+        credit_calls = mock_db.wallet_increment_balance.await_args_list
+        assert credit_calls[0].args == ("wallet_1", Decimal("25.00"))
+        assert credit_calls[1].args == ("wallet_1", Decimal("-25.00"))
+        # Claim released (back to completed) only after the reversal succeeded.
+        assert mock_db.quest_progress.update_one.await_count == 2
+        release_filters, release_update = mock_db.quest_progress.update_one.await_args_list[1].args[:2]
+        assert release_filters == {"id": "progress_1", "status": "claimed"}
+        assert release_update["$set"]["status"] == "completed"
+
     def test_wallet_credit_failure_releases_claim_and_returns_503(self, client):
         """If the wallet RPC fails after the claim, the claim must be released
         (status back to completed) so the driver can retry, and no transaction

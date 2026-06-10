@@ -332,15 +332,48 @@ async def claim_quest_reward(progress_id: str, current_user: dict = Depends(get_
                 )
             raise HTTPException(status_code=503, detail="Reward payout failed — please retry") from credit_err
 
-        await _record_transaction(
-            wallet_id=wallet["id"],
-            user_id=current_user["id"],
-            txn_type="quest_reward",
-            amount=_f(reward_amount),
-            balance_after=_f(new_balance),
-            reference_id=quest["id"],
-            description=f"Quest reward: {quest['title']}",
-        )
+        try:
+            await _record_transaction(
+                wallet_id=wallet["id"],
+                user_id=current_user["id"],
+                txn_type="quest_reward",
+                amount=_f(reward_amount),
+                balance_after=_f(new_balance),
+                reference_id=quest["id"],
+                description=f"Quest reward: {quest['title']}",
+            )
+        except Exception as ledger_err:
+            # Money moved but the ledger write failed. Compensate (reverse the
+            # credit), and only release the claim once the reversal succeeded —
+            # releasing with the credit still applied would allow a double pay.
+            logger.error(
+                f"Quest reward ledger write failed for progress {progress_id}; reversing credit: {ledger_err}",
+                exc_info=True,
+            )
+            reversed_ok = False
+            try:
+                await db.wallet_increment_balance(wallet["id"], -reward_amount)
+                reversed_ok = True
+            except Exception:
+                logger.error(
+                    f"Compensating debit failed for progress {progress_id} — claim stays claimed with an "
+                    "unrecorded credit; manual reconciliation required",
+                    exc_info=True,
+                )
+            if reversed_ok:
+                try:
+                    await db.update_one(
+                        "quest_progress",
+                        {"id": progress_id, "status": "claimed"},
+                        {"$set": {"status": "completed", "updated_at": datetime.now(timezone.utc).isoformat()}},
+                    )
+                except Exception:
+                    logger.error(
+                        f"Quest claim release failed for progress {progress_id} — reward reversed but row "
+                        "stays claimed; manual fix required",
+                        exc_info=True,
+                    )
+            raise HTTPException(status_code=503, detail="Reward payout failed — please retry") from ledger_err
 
     return {
         "status": "claimed",

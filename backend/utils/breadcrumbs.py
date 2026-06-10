@@ -48,6 +48,7 @@ try:
     from .redis_client import redis_get, redis_set
 except ImportError:
     from utils.datetime_utils import parse_iso_utc  # type: ignore
+    from utils.redis_client import redis_get, redis_set  # type: ignore
 
 logger = logging.getLogger(__name__)
 

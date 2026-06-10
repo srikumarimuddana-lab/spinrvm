@@ -26,6 +26,7 @@ compat shim and the metric names are already Prometheus-idiomatic
 
 from __future__ import annotations
 
+import functools
 import threading
 import time
 from contextlib import contextmanager
@@ -105,6 +106,24 @@ def time_ms(name: str, labels: Dict[str, str] | None = None) -> Iterator[None]:
         yield
     finally:
         observe(name, (time.monotonic() - t0) * 1000.0, labels)
+
+
+def timed(name: str, labels: Dict[str, str] | None = None):
+    """Decorator form of time_ms for async functions (e.g. route handlers).
+
+    functools.wraps preserves the signature so FastAPI dependency
+    injection keeps working on decorated endpoints.
+    """
+
+    def deco(fn):
+        @functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            with time_ms(name, labels):
+                return await fn(*args, **kwargs)
+
+        return wrapper
+
+    return deco
 
 
 def snapshot() -> Dict[str, Dict[Tuple[Tuple[str, str], ...], float]]:

@@ -64,6 +64,31 @@ class TestTimeMs:
         assert cell["count"] == 1
 
 
+class TestTimedDecorator:
+    @pytest.mark.anyio
+    async def test_async_function_observed_and_signature_preserved(self):
+        @metrics.timed("test_dec_ms")
+        async def handler(x: int) -> int:
+            return x + 1
+
+        assert await handler(1) == 2
+        cell = metrics.snapshot()["histograms"]["test_dec_ms"][()]
+        assert cell["count"] == 1
+        # FastAPI resolves dependencies via the original signature.
+        assert handler.__wrapped__.__name__ == "handler"
+
+    @pytest.mark.anyio
+    async def test_records_when_handler_raises(self):
+        @metrics.timed("test_dec_exc_ms")
+        async def handler():
+            raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError):
+            await handler()
+        cell = metrics.snapshot()["histograms"]["test_dec_exc_ms"][()]
+        assert cell["count"] == 1
+
+
 class TestExposition:
     def test_render_histogram_lines(self):
         metrics.observe("test_r_ms", 30.0, {"path": "fare"}, buckets=(10, 100))

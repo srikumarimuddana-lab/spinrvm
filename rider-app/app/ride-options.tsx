@@ -29,7 +29,7 @@ import { showToast } from '../store/toastStore';
 import ConfirmSheet from '../components/ConfirmSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import { CarMarker } from '@shared/components/CarMarker';
+import { CarMarker, variantForVehicleType } from '@shared/components/CarMarker';
 import SchedulePicker from '../components/SchedulePicker';
 import SkeletonBox from '../components/SkeletonBox';
 import { useResponsive } from '@shared/utils/responsive';
@@ -520,7 +520,9 @@ function RideOptionsScreenContent() {
           ).map((driver) => (
             <CarMarker key={driver.id} identifier={driver.id}
               coordinate={{ latitude: driver.lat, longitude: driver.lng }}
-              heading={(driver as any).heading ?? Math.random() * 360} size={36} zIndex={101} />
+              heading={(driver as any).heading ?? Math.random() * 360}
+              variant={variantForVehicleType(driver.vehicle_type_name)}
+              size={36} zIndex={101} />
           ))}
           {serviceAreaPolygons.map((coords, idx) => (
             <Polygon

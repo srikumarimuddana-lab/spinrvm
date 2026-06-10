@@ -21,7 +21,7 @@ import { useAuthStore } from '@shared/store/authStore';
 import api from '@shared/api/client';
 import { useRideStore } from '../../store/rideStore';
 import AppMap from '@shared/components/AppMap';
-import CarMarker from '@shared/components/CarMarker';
+import CarMarker, { variantForVehicleType } from '@shared/components/CarMarker';
 import { showToast } from '../../store/toastStore';
 import { SOSButton } from '@shared/components/SOSButton';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -38,7 +38,7 @@ export default function HomeScreen() {
   const [location, setLocation] = useState<any>(null);
   const [region, setRegion] = useState<any>(null);
   const [temperature, setTemperature] = useState<number | null>(null);
-  const [nearbyDrivers, setNearbyDrivers] = useState<{ id: string; lat: number; lng: number; heading?: number }[]>([]);
+  const [nearbyDrivers, setNearbyDrivers] = useState<{ id: string; lat: number; lng: number; heading?: number; vehicle_type_name?: string }[]>([]);
 
   const mapRef = useRef<any>(null);
   const bottomSheetRef = useRef<BottomSheet>(null);
@@ -187,6 +187,7 @@ export default function HomeScreen() {
             lat: d.lat,
             lng: d.lng,
             heading: d.heading ?? undefined,
+            vehicle_type_name: d.vehicle_type_name ?? undefined,
           }));
           setNearbyDrivers(drivers);
         })
@@ -213,7 +214,7 @@ export default function HomeScreen() {
       const g = groups.get(key);
       if (g) g.push(d); else groups.set(key, [d]);
     }
-    const out: { id: string; lat: number; lng: number; heading: number }[] = [];
+    const out: { id: string; lat: number; lng: number; heading: number; vehicle_type_name?: string }[] = [];
     for (const group of groups.values()) {
       group.forEach((d, i) => {
         let { lat, lng } = d;
@@ -225,7 +226,7 @@ export default function HomeScreen() {
           lng += dLng;
         }
         const heading = d.heading ?? (group.length > 1 ? (360 / group.length) * i : 0);
-        out.push({ id: d.id, lat, lng, heading });
+        out.push({ id: d.id, lat, lng, heading, vehicle_type_name: d.vehicle_type_name });
       });
     }
     return out;
@@ -365,6 +366,7 @@ export default function HomeScreen() {
                 identifier={`nearby-${driver.id}`}
                 coordinate={{ latitude: driver.lat, longitude: driver.lng }}
                 heading={driver.heading}
+                variant={variantForVehicleType(driver.vehicle_type_name)}
                 size={32}
               />
             ))}

@@ -76,6 +76,10 @@ export interface NearbyDriver {
   lat: number;
   lng: number;
   vehicle_type_id: string;
+  // Resolved server-side from vehicle_types.name (Economy / Premium / Van /
+  // XL) so the map can pick the matching CarMarker variant. Optional because
+  // older backends may not return it.
+  vehicle_type_name?: string;
   vehicle_make?: string;
   vehicle_model?: string;
 }

@@ -2,6 +2,26 @@ import React, { useEffect, useRef, useState } from 'react';
 import { View, Image, Platform } from 'react-native';
 import { AnimatedRegion, Marker } from 'react-native-maps';
 
+const CAR_IMAGES = {
+    standard: require('../assets/car_marker.png'),
+    xl: require('../assets/car_marker_xl.png'),
+    premium: require('../assets/car_marker_premium.png'),
+} as const;
+
+export type CarMarkerVariant = keyof typeof CAR_IMAGES;
+
+/**
+ * Map a backend vehicle type name (vehicle_types.name: Economy / Premium /
+ * Van / XL) to a marker variant. Unknown or missing names fall back to the
+ * standard sedan so the map never breaks on new types.
+ */
+export function variantForVehicleType(name?: string | null): CarMarkerVariant {
+    const n = (name ?? '').toLowerCase();
+    if (n.includes('xl') || n.includes('van')) return 'xl';
+    if (n.includes('premium') || n.includes('lux')) return 'premium';
+    return 'standard';
+}
+
 interface CarMarkerProps {
     coordinate: {
         latitude: number;
@@ -11,6 +31,7 @@ interface CarMarkerProps {
     size?: number;
     zIndex?: number;
     identifier?: string;
+    variant?: CarMarkerVariant;
 }
 
 // Position updates arrive every ~3-10 s (WS pings / GPS watch). Glide the car
@@ -74,6 +95,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     size = 40,
     zIndex = 1,
     identifier,
+    variant = 'standard',
 }) => {
     const markerRef = useRef<any>(null);
     const animatedRegion = useRef(
@@ -178,7 +200,7 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                 }}
             >
                 <Image
-                    source={require('../assets/car_marker.png')}
+                    source={CAR_IMAGES[variant]}
                     onLoad={handleImageLoaded}
                     style={{
                         width: size,
@@ -199,7 +221,8 @@ function _propsAreEqual(prev: CarMarkerProps, next: CarMarkerProps): boolean {
         prev.heading === next.heading &&
         prev.size === next.size &&
         prev.zIndex === next.zIndex &&
-        prev.identifier === next.identifier
+        prev.identifier === next.identifier &&
+        prev.variant === next.variant
     );
 }
 

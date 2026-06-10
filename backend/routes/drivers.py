@@ -30,6 +30,7 @@ try:
     from ..schemas import Driver, RideRatingRequest
     from ..services.fare_service import recalculate_fare_for_distance
     from ..socket_manager import manager
+    from ..utils.breadcrumb_buffer import flush_driver_breadcrumbs
     from ..utils.datetime_utils import parse_iso_utc
     from ..utils.driver_online import intent_online
     from ..utils.driver_presence import (
@@ -61,6 +62,7 @@ except ImportError:
     from schemas import Driver, RideRatingRequest
     from services.fare_service import recalculate_fare_for_distance
     from socket_manager import manager
+    from utils.breadcrumb_buffer import flush_driver_breadcrumbs  # type: ignore
     from utils.datetime_utils import parse_iso_utc
     from utils.driver_online import intent_online  # type: ignore
     from utils.driver_presence import (
@@ -3421,6 +3423,17 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
 
     if ride.get("status") not in COMPLETE_FROM_STATES:
         raise RideStateError(f"Cannot complete ride from state '{ride.get('status')}'; ride must be in_progress")
+
+    # B3.3: drain this driver's WS breadcrumb buffer before aggregating —
+    # otherwise the last ~10s of the trip would miss the settled distance
+    # and the SGI trail read below. Only meaningful when the driver's WS is
+    # on THIS replica (which it is for the driver calling this endpoint via
+    # the same affinity-LB'd session); a failed flush must not block
+    # completion — the buffer's disconnect flush still covers the points.
+    try:
+        await flush_driver_breadcrumbs(driver["id"])
+    except Exception:
+        logger.error("[complete_ride] breadcrumb flush failed for driver %s", driver["id"], exc_info=True)
 
     # ── Aggregate all GPS breadcrumbs for this ride ──
     # On completion we compute everything once and store it on the ride row.

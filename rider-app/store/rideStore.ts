@@ -80,6 +80,9 @@ export interface NearbyDriver {
   // XL) so the map can pick the matching CarMarker variant. Optional because
   // older backends may not return it.
   vehicle_type_name?: string;
+  // Admin-configured marker (vehicle_types.marker_variant): standard | xl |
+  // premium. Preferred over name matching when present.
+  marker_variant?: string;
   vehicle_make?: string;
   vehicle_model?: string;
 }

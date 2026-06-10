@@ -22,6 +22,23 @@ export function variantForVehicleType(name?: string | null): CarMarkerVariant {
     return 'standard';
 }
 
+/**
+ * Resolve the marker for a driver. Prefers the admin-configured
+ * vehicle_types.marker_variant (passed through the API, e.g.
+ * /drivers/nearby); falls back to vehicle type name matching for older
+ * backends that don't send it. Unknown values fall back too, so a future
+ * server-side variant can never crash an old client.
+ */
+export function resolveMarkerVariant(
+    markerVariant?: string | null,
+    vehicleTypeName?: string | null,
+): CarMarkerVariant {
+    if (markerVariant && markerVariant in CAR_IMAGES) {
+        return markerVariant as CarMarkerVariant;
+    }
+    return variantForVehicleType(vehicleTypeName);
+}
+
 interface CarMarkerProps {
     coordinate: {
         latitude: number;

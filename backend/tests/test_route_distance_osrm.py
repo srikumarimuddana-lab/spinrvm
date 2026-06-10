@@ -289,9 +289,73 @@ async def test_compute_route_returns_polyline_eta_distance():
 
 
 @pytest.mark.asyncio
-async def test_compute_route_none_when_osrm_unset():
-    with patch.object(rd, "get_app_settings", _empty_settings), patch.object(rd.settings, "OSRM_URL", ""):
+async def test_compute_route_none_when_osrm_unset_and_fallback_disabled():
+    with (
+        patch.object(rd, "get_app_settings", _empty_settings),
+        patch.object(rd.settings, "OSRM_URL", ""),
+        patch.object(rd.settings, "OSRM_FALLBACK_URL", "", create=True),
+    ):
         assert await rd.compute_route(50.45, -104.62, 50.44, -104.63) is None
+
+
+@pytest.mark.asyncio
+async def test_compute_route_uses_public_fallback_when_unconfigured():
+    """No self-hosted OSRM → light live-routing calls use OSRM_FALLBACK_URL.
+
+    This was the 'route line never updates' bug: an unset OSRM_URL made
+    /rides/{id}/live-route always return an empty polyline, so both apps kept
+    drawing the static booking-time planned_route_polyline.
+    """
+    payload = {
+        "code": "Ok",
+        "routes": [
+            {
+                "distance": 900.0,
+                "duration": 120.0,
+                "geometry": {"coordinates": [[-104.62, 50.45], [-104.63, 50.44]]},
+            }
+        ],
+    }
+    cap = {}
+    with (
+        patch.object(rd, "get_app_settings", _empty_settings),
+        patch.object(rd.settings, "OSRM_URL", ""),
+        patch.object(rd.settings, "OSRM_FALLBACK_URL", "https://fallback.example", create=True),
+        patch.object(rd.httpx, "AsyncClient", _client_factory(resp=_FakeResp(payload=payload), capture=cap)),
+    ):
+        out = await rd.compute_route(50.45, -104.62, 50.44, -104.63)
+
+    assert out is not None
+    assert out["eta_seconds"] == 120
+    assert cap["url"].startswith("https://fallback.example/route/v1/driving/")
+
+
+@pytest.mark.asyncio
+async def test_match_billing_path_ignores_public_fallback():
+    """/match (billable distance) must NOT silently use the demo server."""
+    called = {"osrm": False, "google": False}
+
+    async def _fake_osrm(points, url):
+        called["osrm"] = True
+        return (1.0, [])
+
+    async def _fake_google(points, key):
+        called["google"] = True
+        return (1.0, [])
+
+    with (
+        patch.object(rd, "get_app_settings", _empty_settings),
+        patch.object(rd.settings, "OSRM_URL", ""),
+        patch.object(rd.settings, "OSRM_FALLBACK_URL", "https://fallback.example", create=True),
+        patch.object(rd, "_compute_via_osrm", _fake_osrm),
+        patch.object(rd, "_compute_via_google_roads", _fake_google),
+    ):
+        # No google key in settings either → None, but the assertion that
+        # matters is that the OSRM matcher was never invoked via the fallback.
+        result = await rd.compute_road_route(_trip(6))
+
+    assert called["osrm"] is False
+    assert result is None
 
 
 @pytest.mark.asyncio

@@ -118,6 +118,17 @@ class Settings(BaseSettings):
     # A DB override `osrm_url` in app_settings, if present, takes precedence.
     OSRM_URL: str = ""
 
+    # Public OSRM used for the LIGHT live-routing calls only (live-route line,
+    # ETA, single-point road snap) when no self-hosted OSRM is configured.
+    # Without this fallback an unset OSRM_URL silently disabled the live route
+    # line in both apps (the planned booking-time polyline never updated).
+    # The project-osrm demo server has no SLA and a fair-use policy — fine for
+    # a Saskatchewan-scale pilot at ~1 call/20s per active ride, but self-host
+    # OSRM (a Saskatchewan extract is tiny) before scaling. Set to "" to
+    # disable the fallback entirely. The heavy billing path (/match over full
+    # GPS traces) intentionally still requires an explicit OSRM_URL.
+    OSRM_FALLBACK_URL: str = "https://router.project-osrm.org"
+
     # OTP brute-force lockout (SEC-008)
     OTP_MAX_FAILURES: int = 5  # attempts before lockout
     OTP_FAILURE_WINDOW_SECONDS: int = 3600  # sliding window (1 hr)

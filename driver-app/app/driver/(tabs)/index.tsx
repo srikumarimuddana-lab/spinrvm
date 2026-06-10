@@ -15,7 +15,7 @@ import {
 } from '../../../components/dashboard';
 import { RideOfferPanel } from '../../../components/panels/RideOfferPanel';
 import { useDriverDashboard } from '../../../hooks/useDriverDashboard';
-import { CarMarker } from '../../../components/CarMarker';
+import { CarMarker, resolveMarkerVariant, type CarMarkerVariant } from '../../../components/CarMarker';
 import { SOSButton } from '@shared/components/SOSButton';
 import { useLanguageStore } from '../../../store/languageStore';
 import { showToast } from '../../../hooks/useToast';
@@ -77,6 +77,24 @@ function DriverDashboard() {
   } = useDriverStore();
 
   const isCancellingRide = useDriverStore((s) => s.isCancellingRide);
+
+  // Own-car marker icon, admin-configured per vehicle type (vehicle_types.
+  // marker_variant). GET /vehicle-types is cached client-side (cachedClient),
+  // so this is a cheap lookup on dashboard load. Cosmetic — failures keep
+  // the standard sedan.
+  const [markerVariant, setMarkerVariant] = useState<CarMarkerVariant>('standard');
+  const driverVehicleTypeId = driverData?.vehicle_type_id;
+  useEffect(() => {
+    if (!driverVehicleTypeId) return;
+    let cancelled = false;
+    api.get('/vehicle-types')
+      .then((res: any) => {
+        const vt = (res.data || []).find((t: any) => t.id === driverVehicleTypeId);
+        if (!cancelled && vt) setMarkerVariant(resolveMarkerVariant(vt.marker_variant, vt.name));
+      })
+      .catch(() => { /* cosmetic only — keep default marker */ });
+    return () => { cancelled = true; };
+  }, [driverVehicleTypeId]);
 
   const { t } = useLanguageStore();
 
@@ -661,6 +679,7 @@ function DriverDashboard() {
             }}
             heading={location.coords.heading}
             isOnline={isOnline}
+            variant={markerVariant}
           />
         )}
         {mapMarkers}

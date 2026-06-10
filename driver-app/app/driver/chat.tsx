@@ -210,23 +210,8 @@ export default function ChatScreen() {
                             {rideId ? 'Active Ride' : 'No active ride'}
                         </Text>
                     </View>
-                    <TouchableOpacity
-                        style={styles.callBtn}
-                        onPress={async () => {
-                            if (!rideId) return;
-                            try {
-                                const res = await api.get<{ phone?: string }>(`/rides/${rideId}/call`);
-                                if (res.data?.phone) {
-                                    const { Linking } = require('react-native');
-                                    Linking.openURL(`tel:${res.data.phone}`);
-                                }
-                            } catch (e: any) {
-                                console.log('[Chat] Call failed:', e?.response?.data?.detail || e.message);
-                            }
-                        }}
-                    >
-                        <Ionicons name="call" size={20} color={colors.primary} />
-                    </TouchableOpacity>
+                    {/* No call button: driver↔rider contact is chat-only — phone
+                        numbers are never shared (backend /call endpoint removed). */}
                 </View>
             </LinearGradient>
 
@@ -341,14 +326,6 @@ function createStyles(colors: ThemeColors) {
         headerInfo: { flex: 1 },
         headerName: { color: colors.text, fontSize: 17, fontWeight: '700' },
         headerSub: { color: colors.textDim, fontSize: 12, marginTop: 1 },
-        callBtn: {
-            width: 40,
-            height: 40,
-            borderRadius: 20,
-            backgroundColor: `${colors.primary}1A`,
-            justifyContent: 'center',
-            alignItems: 'center',
-        },
         messageList: {
             paddingHorizontal: 16,
             paddingTop: 16,

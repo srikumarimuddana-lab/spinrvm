@@ -351,7 +351,7 @@ if sentry_dsn:
 
     integrations = [
         FastApiIntegration(transaction_style="url"),
-        LoggingIntegration(event_level="ERROR", breadcrumb_level="WARNING"),
+        LoggingIntegration(event_level="ERROR", level="WARNING"),
     ]
     if _StarletteMiddleware is not None:
         integrations.append(_StarletteMiddleware())

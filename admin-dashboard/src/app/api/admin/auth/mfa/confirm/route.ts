@@ -21,14 +21,25 @@ const RT_COOKIE = "spinr_admin_rt";
 const CSRF_COOKIE = "spinr_admin_csrf";
 const SESSION_MAX_AGE = 30 * 24 * 60 * 60;
 
+// /mfa/confirm completes forced first-login enrollment: the backend now
+// returns full session tokens alongside backup_codes. Like /login and
+// /mfa/challenge, the refresh_token must be stripped from the JSON body and
+// stored in the HttpOnly cookie so it never reaches browser JS, and the CSRF
+// cookies must be installed so subsequent admin mutations pass the backend's
+// double-submit check. The Authorization header (the enrollment-scoped token,
+// or a session token for Settings-flow re-enrollment) is forwarded upstream.
 export async function POST(req: NextRequest) {
   const body = await req.json();
+  const auth = req.headers.get("authorization");
 
   let upstream: Response;
   try {
-    upstream = await fetch(`${BACKEND_URL}/api/admin/auth/mfa/challenge`, {
+    upstream = await fetch(`${BACKEND_URL}/api/admin/auth/mfa/confirm`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(auth ? { Authorization: auth } : {}),
+      },
       body: JSON.stringify(body),
     });
   } catch {
@@ -42,14 +53,11 @@ export async function POST(req: NextRequest) {
   }
 
   // Strip the refresh token — must never reach the browser's JS context.
+  // backup_codes stay in clientData so the dialog can show them once.
   const { refresh_token, refresh_expires_at: _ignored, ...clientData } = data;
 
   const isProduction = process.env.NODE_ENV === "production";
 
-  // Only issue cookies when a real session was created (refresh_token present).
-  // If the backend returns 200 without a refresh_token the protocol contract
-  // is violated — return the response without a CSRF token so the client
-  // cannot receive a csrf_token value that has no matching HttpOnly cookie.
   if (refresh_token) {
     const csrfToken = randomBytes(32).toString("hex");
     const res = NextResponse.json(
@@ -63,10 +71,11 @@ export async function POST(req: NextRequest) {
       path: "/api/admin/auth",
       maxAge: SESSION_MAX_AGE,
     });
-    // Path "/" — same class of bug Codex flagged on the confirm route:
-    // authStore.initAuth() reads this cookie from document.cookie on
-    // dashboard pages; scoping it to /api/admin/auth makes the post-refresh
-    // /refresh call omit X-CSRF-Token and drop a valid session.
+    // Path "/" (not "/api/admin/auth"): authStore.initAuth() restores the
+    // in-memory CSRF token by reading this cookie from document.cookie on
+    // dashboard pages after a hard refresh / new tab. Path-scoping it away
+    // from /dashboard would make the next /refresh omit X-CSRF-Token, 403,
+    // and clear an otherwise-valid session.
     res.cookies.set(CSRF_COOKIE, csrfToken, {
       httpOnly: false,
       sameSite: "strict",
@@ -86,5 +95,7 @@ export async function POST(req: NextRequest) {
     return res;
   }
 
+  // No refresh token (Settings-flow re-enrollment by an already-logged-in
+  // admin returns backup_codes only) — pass the body through unchanged.
   return NextResponse.json(clientData, { status: 200 });
 }

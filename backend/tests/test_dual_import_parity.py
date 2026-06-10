@@ -21,6 +21,7 @@ GUARDED_MODULES = [
     "routes/rides.py",
     "routes/drivers.py",
     "routes/websocket.py",
+    "services/dispatch_service.py",
     "socket_manager.py",
     "utils/breadcrumbs.py",
     "utils/breadcrumb_buffer.py",

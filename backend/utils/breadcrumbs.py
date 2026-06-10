@@ -45,10 +45,10 @@ except ImportError:
 
 try:
     from .datetime_utils import parse_iso_utc
-    from .redis_client import redis_get, redis_set
+    from .redis_client import redis_delete, redis_get, redis_set
 except ImportError:
     from utils.datetime_utils import parse_iso_utc  # type: ignore
-    from utils.redis_client import redis_get, redis_set  # type: ignore
+    from utils.redis_client import redis_delete, redis_get, redis_set  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +111,24 @@ async def resolve_active_ride(driver_id: str) -> Optional[Dict[str, Any]]:
     """Return the driver's current active ride row, or None."""
     active_rides = await resolve_active_rides_cached(driver_id)
     return active_rides[0] if active_rides else None
+
+
+async def invalidate_active_rides_cache(driver_id: Optional[str]) -> None:
+    """Drop the cached active-rides list for a driver.
+
+    Must be called when a ride becomes attached to a driver (assignment /
+    acceptance): a cached empty list would otherwise keep the WS hot path
+    blind to the new ride for up to the TTL — pings right at trip start
+    would be persisted as online_idle and riders would miss live-location
+    fan-out. Best-effort: Redis being down means the cache is also down,
+    so there is nothing stale to serve.
+    """
+    if not driver_id:
+        return
+    try:
+        await redis_delete(_active_rides_cache_key(driver_id))
+    except Exception:
+        logger.debug("active-rides cache invalidation failed for %s", driver_id, exc_info=True)
 
 
 def _phase_for_timestamp(ride: Dict[str, Any], ts: Optional[datetime], current_phase: str) -> str:

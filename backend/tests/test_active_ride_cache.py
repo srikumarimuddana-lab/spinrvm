@@ -67,6 +67,35 @@ async def test_redis_failure_degrades_to_db_query():
 
 
 @pytest.mark.anyio
+async def test_invalidation_busts_a_cached_empty_list():
+    """Codex P2 (PR #1758): an idle driver's cached [] must not survive ride
+    assignment — assignment/acceptance invalidate so the first post-accept
+    pings attach to the ride and reach the rider."""
+    driver_id = "drv-cache-invalidate"
+    get_rows = AsyncMock(side_effect=[[], [_ride(driver_id, status="driver_accepted")]])
+    with patch.object(breadcrumbs.db_supabase, "get_rows", get_rows):
+        assert await breadcrumbs.resolve_active_rides_cached(driver_id) == []
+        await breadcrumbs.invalidate_active_rides_cache(driver_id)
+        rides = await breadcrumbs.resolve_active_rides_cached(driver_id)
+
+    assert rides and rides[0]["status"] == "driver_accepted"
+    assert get_rows.await_count == 2
+
+
+@pytest.mark.anyio
+async def test_dispatch_assignment_invalidates_the_cache():
+    from backend.services.dispatch_service import DispatchService
+
+    db = AsyncMock()
+    invalidate = AsyncMock()
+    with patch("backend.services.dispatch_service.invalidate_active_rides_cache", invalidate):
+        await DispatchService(db).assign_driver_to_ride("ride-1", "drv-1", now="2026-06-10T12:00:00+00:00")
+
+    db.update_one.assert_awaited_once()
+    invalidate.assert_awaited_once_with("drv-1")
+
+
+@pytest.mark.anyio
 async def test_resolve_active_ride_returns_first_row():
     driver_id = "drv-cache-single"
     rows = [_ride(driver_id), _ride(driver_id, status="driver_arrived")]

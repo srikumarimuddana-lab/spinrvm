@@ -15,7 +15,7 @@ import {
 } from '../../../components/dashboard';
 import { RideOfferPanel } from '../../../components/panels/RideOfferPanel';
 import { useDriverDashboard } from '../../../hooks/useDriverDashboard';
-import { CarMarker } from '../../../components/CarMarker';
+import { CarMarker } from '@shared/components/CarMarker';
 import { SOSButton } from '@shared/components/SOSButton';
 import { useLanguageStore } from '../../../store/languageStore';
 import { showToast } from '../../../hooks/useToast';
@@ -660,7 +660,7 @@ function DriverDashboard() {
               longitude: location.coords.longitude,
             }}
             heading={location.coords.heading}
-            isOnline={isOnline}
+            vehicleType={activeRide?.vehicle_type?.name}
           />
         )}
         {mapMarkers}

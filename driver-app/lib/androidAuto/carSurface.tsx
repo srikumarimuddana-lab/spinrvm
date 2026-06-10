@@ -60,7 +60,7 @@ export function CarMapSurface(): React.ReactElement | null {
   }> | null = null;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    CarMarker = require('../../components/CarMarker').CarMarker;
+    CarMarker = require('@shared/components/CarMarker').CarMarker;
   } catch {
     CarMarker = null;
   }

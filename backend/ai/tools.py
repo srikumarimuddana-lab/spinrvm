@@ -61,7 +61,7 @@ def register(spec: ToolSpec) -> ToolSpec:
 
 # Domain handler modules that self-register on import. Extended as handler
 # modules land (tools_rides, tools_money, tools_support, tools_booking).
-_DOMAIN_MODULES: tuple = ("tools_rides", "tools_account")
+_DOMAIN_MODULES: tuple = ("tools_rides", "tools_account", "tools_support")
 
 _registry_loaded = False
 
@@ -172,8 +172,12 @@ async def execute_tool(
     if errors:
         return {"error": "; ".join(errors)}, False
 
+    # Audience-aware handlers (e.g. FAQ search) read it from the user dict;
+    # it stays server-decided either way.
+    handler_user = {**user, "ai_audience": audience}
+
     try:
-        result = await asyncio.wait_for(spec.handler(user, **(args or {})), timeout=TOOL_TIMEOUT_SECONDS)
+        result = await asyncio.wait_for(spec.handler(handler_user, **(args or {})), timeout=TOOL_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
         logger.error("ai tool timed out", extra={"tool": name, "user_id": user.get("id")})
         return {"error": "the lookup took too long — try again"}, False

@@ -259,29 +259,34 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   };
 
   // ── Status config ───────────────────────────────────────────
-  // Build the status label with live ETA when available.
-  // During navigating_to_pickup: "~X min to pickup (Y km)"
-  // During trip_in_progress: "~X min to dropoff (Y km)"
-  // During arrived_at_pickup: "Waiting · Xm XXs" (no ETA, driver is stationary)
-  const etaSuffix =
+  // Status renders as a two-line header: bold phase label on top, live
+  // detail underneath (ETA/distance, wait timer, or traveled distance).
+  // Live route ETA wins; the booking estimate is the fallback so the line
+  // is never empty.
+  const etaLine =
     routeEtaMinutes != null && routeDistanceKm != null
-      ? ` · ~${routeEtaMinutes} min (${routeDistanceKm} km)`
-      : '';
+      ? `~${routeEtaMinutes} min · ${routeDistanceKm} km`
+      : `~${durMin} min · ${distKm.toFixed(1)} km`;
 
   const statusMap = {
     navigating_to_pickup: {
       icon: 'navigate-circle' as const,
-      label: `${t('activeRide.enRouteToPickup')}${etaSuffix}`,
-      color: colors.primary,
+      label: t('activeRide.enRouteToPickup'),
+      sub: etaLine,
+      color: colors.info,
     },
     arrived_at_pickup: {
       icon: 'time' as const,
-      label: `${t('activeRide.waiting')} · ${formatWait(waitSeconds)}`,
+      label: t('activeRide.waiting'),
+      sub: formatWait(waitSeconds),
       color: colors.warning,
     },
     trip_in_progress: {
       icon: 'car-sport' as const,
-      label: `${t('activeRide.tripInProgress')}${etaSuffix}`,
+      label: t('activeRide.tripInProgress'),
+      sub: hasLiveData
+        ? `${etaLine} · ${liveDistanceKm.toFixed(1)} km ${t('activeRide.traveled').toLowerCase()}`
+        : etaLine,
       color: colors.success,
     },
   };
@@ -313,93 +318,92 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           showsVerticalScrollIndicator={false}
           contentContainerStyle={{ paddingBottom: insets.bottom + 16 }}
         >
-      {/* ── Status pill (floating) ──────────────────────────── */}
-      <View style={styles.statusPill} accessibilityRole="text" accessibilityLabel={`${status.label}, earnings $${earnings.toFixed(2)}`}>
-        <View style={[styles.statusIconBg, { backgroundColor: `${status.color}15` }]}>
-          <Ionicons name={status.icon} size={16} color={status.color} />
-        </View>
-        <Text allowFontScaling={false} style={[styles.statusText, { color: status.color }]}>{status.label}</Text>
-        <View style={{ flex: 1 }} />
-        <Text style={styles.statusFare}>${earnings.toFixed(2)}</Text>
-      </View>
-
       {/* ── Main card ───────────────────────────────────────── */}
       <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 12) + 10 }]}>
 
-        {/* ── Trip info row: earnings, distance, time. Hidden while the PIN
-            keypad is up so verification is the focus. ────── */}
-        {rideState !== 'arrived_at_pickup' && (
-        <View style={styles.tripInfoRow}>
-          <View style={styles.tripInfoItem}>
-            <Text style={styles.tripInfoValue}>${earnings.toFixed(2)}</Text>
-            <Text allowFontScaling={false} style={styles.tripInfoLabel}>{t('activeRide.yourEarnings')}</Text>
-          </View>
-          <View style={styles.tripInfoDivider} />
-          <View style={styles.tripInfoItem}>
-            <Text style={styles.tripInfoValue}>
-              {rideState === 'trip_in_progress' && hasLiveData
-                ? `${liveDistanceKm.toFixed(1)} km`
-                : `${distKm.toFixed(1)} km`}
-            </Text>
-            <Text allowFontScaling={false} style={styles.tripInfoLabel}>
-              {rideState === 'trip_in_progress' && hasLiveData ? t('activeRide.traveled') : t('activeRide.distance')}
-            </Text>
-          </View>
-          <View style={styles.tripInfoDivider} />
-          <View style={styles.tripInfoItem}>
-            <Text style={styles.tripInfoValue}>{durMin} min</Text>
-            <Text allowFontScaling={false} style={styles.tripInfoLabel}>{t('activeRide.estTime')}</Text>
-          </View>
-        </View>
-        )}
-
-        {/* ── Rider info ─────────────────────────────────── */}
-        <View style={styles.riderRow}>
-          <View style={styles.riderAvatar}>
-            <Ionicons name="person" size={20} color={colors.textDim} />
+        {/* ── Header: phase status + live detail on the left, earnings on
+            the right. One row replaces the old floating pill + the
+            earnings/distance/time stat card (earnings was shown twice). ── */}
+        <View
+          style={styles.headerRow}
+          accessibilityRole="text"
+          accessibilityLabel={`${status.label}, ${status.sub}, earnings $${earnings.toFixed(2)}`}
+        >
+          <View style={[styles.statusIconBg, { backgroundColor: `${status.color}18` }]}>
+            <Ionicons name={status.icon} size={20} color={status.color} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.riderName}>{riderName}</Text>
-            {rider?.rating ? (
-              <View style={styles.ratingRow}>
-                <Ionicons name="star" size={11} color={colors.warning} />
-                <Text style={styles.ratingText}>{Number(rider.rating).toFixed(1)}</Text>
-              </View>
-            ) : null}
+            <Text allowFontScaling={false} style={[styles.statusText, { color: status.color }]}>{status.label}</Text>
+            <Text allowFontScaling={false} style={styles.statusSub}>{status.sub}</Text>
           </View>
-          <TouchableOpacity
-            style={styles.chatBtn}
-            accessibilityRole="button"
-            accessibilityLabel={`Message ${riderName}`}
-            onPress={() => router.push(`/driver/chat?rideId=${ride.id}` as any)}
-          >
-            <Ionicons name="chatbubble-ellipses" size={18} color={colors.primary} />
-          </TouchableOpacity>
+          <View style={styles.earningsBox}>
+            <Text style={styles.earningsValue}>${earnings.toFixed(2)}</Text>
+            <Text allowFontScaling={false} style={styles.earningsLabel}>{t('activeRide.yourEarnings')}</Text>
+          </View>
         </View>
 
-        {/* ── Route addresses. Hidden during PIN entry to keep the keypad
-            the hero; the full route returns once the trip starts. ────── */}
-        {rideState !== 'arrived_at_pickup' && (
-        <View style={styles.routeCard}>
-          <View style={styles.routeRow}>
-            <View style={[styles.dot, { backgroundColor: colors.primary }]} />
-            <View style={{ flex: 1 }}>
-              <Text allowFontScaling={false} style={styles.routeLabel}>{t('rideOffer.pickup')}</Text>
-              <Text style={styles.routeAddress} numberOfLines={2}>{ride.pickup_address}</Text>
+        {/* ── Trip card: rider + route in one card so the sheet reads as a
+            single unit instead of stacked fragments. Route is hidden during
+            PIN entry to keep the keypad the hero. ─────────── */}
+        <View style={styles.tripCard}>
+          <View style={styles.riderRow}>
+            <View style={styles.riderAvatar}>
+              <Text allowFontScaling={false} style={styles.riderAvatarText}>
+                {riderName.charAt(0).toUpperCase()}
+              </Text>
             </View>
-          </View>
-          <View style={styles.routeLineContainer}>
-            <View style={styles.routeLine} />
-          </View>
-          <View style={styles.routeRow}>
-            <View style={[styles.dot, { backgroundColor: colors.success }]} />
             <View style={{ flex: 1 }}>
-              <Text allowFontScaling={false} style={styles.routeLabel}>{t('rideOffer.dropoff')}</Text>
-              <Text style={styles.routeAddress} numberOfLines={2}>{ride.dropoff_address}</Text>
+              <Text style={styles.riderName}>{riderName}</Text>
+              {rider?.rating ? (
+                <View style={styles.ratingRow}>
+                  <Ionicons name="star" size={11} color={colors.gold} />
+                  <Text style={styles.ratingText}>{Number(rider.rating).toFixed(1)}</Text>
+                </View>
+              ) : null}
             </View>
+            {rider?.phone ? (
+              <TouchableOpacity
+                style={[styles.contactBtn, { backgroundColor: colors.successBg }]}
+                accessibilityRole="button"
+                accessibilityLabel={`Call ${riderName}`}
+                onPress={() => Linking.openURL(`tel:${rider.phone}`)}
+              >
+                <Ionicons name="call" size={18} color={colors.success} />
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity
+              style={[styles.contactBtn, { backgroundColor: colors.infoBg }]}
+              accessibilityRole="button"
+              accessibilityLabel={`Message ${riderName}`}
+              onPress={() => router.push(`/driver/chat?rideId=${ride.id}` as any)}
+            >
+              <Ionicons name="chatbubble-ellipses" size={18} color={colors.info} />
+            </TouchableOpacity>
           </View>
+
+          {rideState !== 'arrived_at_pickup' && (
+          <>
+            <View style={styles.cardDivider} />
+            <View style={styles.routeRow}>
+              <View style={[styles.dot, { backgroundColor: colors.info }]} />
+              <View style={{ flex: 1 }}>
+                <Text allowFontScaling={false} style={styles.routeLabel}>{t('rideOffer.pickup')}</Text>
+                <Text style={styles.routeAddress} numberOfLines={2}>{ride.pickup_address}</Text>
+              </View>
+            </View>
+            <View style={styles.routeLineContainer}>
+              <View style={styles.routeLine} />
+            </View>
+            <View style={styles.routeRow}>
+              <View style={[styles.dot, { backgroundColor: colors.success }]} />
+              <View style={{ flex: 1 }}>
+                <Text allowFontScaling={false} style={styles.routeLabel}>{t('rideOffer.dropoff')}</Text>
+                <Text style={styles.routeAddress} numberOfLines={2}>{ride.dropoff_address}</Text>
+              </View>
+            </View>
+          </>
+          )}
         </View>
-        )}
 
         {/* ── Rider's note / meeting instructions (pickup phases) ─ */}
         {!!(ride as any).rider_notes && (rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup') ? (
@@ -476,11 +480,13 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           </View>
         ) : null}
 
-        {/* ── Action buttons ──────────────────────────────── */}
+        {/* ── Action buttons. Consistent color language across all phases:
+            blue (info) = open navigation, green (success) = advance the
+            trip, red = cancel link only. ──────────────────── */}
         {rideState === 'navigating_to_pickup' ? (
           <View style={styles.actions}>
             <TouchableOpacity
-              style={[styles.actionPrimary, { backgroundColor: colors.primary }]}
+              style={[styles.actionPrimary, { backgroundColor: colors.info }]}
               onPress={() => openMapsNavigation((ride as any).pickup_nav_lat ?? ride.pickup_lat, (ride as any).pickup_nav_lng ?? ride.pickup_lng, 'Pickup')}
               accessibilityRole="button"
               accessibilityLabel={t('activeRide.navigateToPickup')}
@@ -492,17 +498,24 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
               const atPickup = distanceToPickup === null || distanceToPickup === undefined || distanceToPickup <= 150;
               return (
                 <TouchableOpacity
-                  style={[styles.actionSecondary, !atPickup && styles.actionSecondaryDisabled]}
+                  style={atPickup
+                    ? [styles.actionPrimary, { backgroundColor: colors.success }]
+                    : [styles.actionSecondary, styles.actionSecondaryDisabled]}
                   onPress={onArriveAtPickup}
                   disabled={isLoading || !atPickup}
                   accessibilityRole="button"
                   accessibilityLabel={t('activeRide.arrivedAtPickup')}
                 >
-                  {isLoading ? <ActivityIndicator color={colors.primary} /> : (
+                  {isLoading ? <ActivityIndicator color={atPickup ? '#fff' : colors.textDim} /> : (
                     <>
-                      <Ionicons name="flag" size={18} color={colors.primary} />
-                      <Text allowFontScaling={false} style={[styles.actionSecondaryText, { color: colors.primary }]}>
-                        {distanceToPickup !== null && distanceToPickup !== undefined && distanceToPickup > 150 ? `${distanceToPickup}m` : t('activeRide.arrivedAtPickup')}
+                      <Ionicons name="flag" size={18} color={atPickup ? '#fff' : colors.textDim} />
+                      <Text
+                        allowFontScaling={false}
+                        style={atPickup ? styles.actionPrimaryText : [styles.actionSecondaryText, { color: colors.textDim }]}
+                      >
+                        {!atPickup && distanceToPickup !== null && distanceToPickup !== undefined
+                          ? `${t('activeRide.arrivedAtPickup')} · ${distanceToPickup}m`
+                          : t('activeRide.arrivedAtPickup')}
                       </Text>
                     </>
                   )}
@@ -603,38 +616,31 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.border,
     },
 
-    statusPill: {
+    headerRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: colors.surface,
-      paddingHorizontal: 14,
-      paddingVertical: 10,
-      borderRadius: 20,
-      marginHorizontal: 16,
-      marginBottom: 8,
-      gap: 8,
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.1,
-      shadowRadius: 8,
-      elevation: 6,
+      gap: 10,
+      marginBottom: 12,
     },
     statusIconBg: {
-      width: 30,
-      height: 30,
-      borderRadius: 15,
+      width: 38,
+      height: 38,
+      borderRadius: 19,
       justifyContent: 'center',
       alignItems: 'center',
     },
-    statusText: { fontSize: 13, fontWeight: '700' },
-    statusFare: { fontSize: 18, fontWeight: '900', color: colors.success },
+    statusText: { fontSize: 15, fontWeight: '800' },
+    statusSub: { fontSize: 12, fontWeight: '600', color: colors.textDim, marginTop: 1, fontVariant: ['tabular-nums'] },
+    earningsBox: { alignItems: 'flex-end' },
+    earningsValue: { fontSize: 22, fontWeight: '900', color: colors.success, fontVariant: ['tabular-nums'] },
+    earningsLabel: { fontSize: 10, fontWeight: '600', color: colors.textDim, letterSpacing: 0.3 },
 
     sheet: {
       backgroundColor: colors.surface,
       borderTopLeftRadius: 24,
       borderTopRightRadius: 24,
       paddingHorizontal: 16,
-      paddingTop: 16,
+      paddingTop: 12,
       shadowColor: '#000',
       shadowOffset: { width: 0, height: -3 },
       shadowOpacity: 0.08,
@@ -642,34 +648,32 @@ function createStyles(colors: ThemeColors) {
       elevation: 10,
     },
 
-    tripInfoRow: {
-      flexDirection: 'row',
+    tripCard: {
       backgroundColor: colors.surfaceLight,
-      borderRadius: 14,
-      paddingVertical: 14,
-      paddingHorizontal: 10,
-      marginBottom: 14,
-      alignItems: 'center',
+      borderRadius: 16,
+      padding: 14,
+      marginBottom: 12,
     },
-    tripInfoItem: { flex: 1, alignItems: 'center' },
-    tripInfoValue: { fontSize: 17, fontWeight: '800', color: colors.text, marginBottom: 2 },
-    tripInfoLabel: { fontSize: 10, fontWeight: '600', color: colors.textDim, letterSpacing: 0.3 },
-    tripInfoDivider: { width: 1, height: 28, backgroundColor: colors.border },
+    cardDivider: {
+      height: 1,
+      backgroundColor: colors.border,
+      marginVertical: 12,
+    },
 
     riderRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      marginBottom: 14,
-      gap: 12,
+      gap: 10,
     },
     riderAvatar: {
-      width: 40,
-      height: 40,
-      borderRadius: 20,
-      backgroundColor: colors.surfaceLight,
+      width: 42,
+      height: 42,
+      borderRadius: 21,
+      backgroundColor: `${colors.primary}15`,
       justifyContent: 'center',
       alignItems: 'center',
     },
+    riderAvatarText: { fontSize: 18, fontWeight: '800', color: colors.primary },
     riderName: { fontSize: 15, fontWeight: '700', color: colors.text },
     noteBanner: {
       flexDirection: 'row',
@@ -679,28 +683,20 @@ function createStyles(colors: ThemeColors) {
       borderRadius: 12,
       paddingVertical: 10,
       paddingHorizontal: 12,
-      marginTop: 12,
+      marginBottom: 12,
     },
     noteLabel: { fontSize: 11, fontWeight: '700', color: colors.primary, marginBottom: 2 },
     noteText: { fontSize: 14, color: colors.text, lineHeight: 19 },
     ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2 },
     ratingText: { fontSize: 12, fontWeight: '600', color: colors.textDim },
-    chatBtn: {
-      width: 38,
-      height: 38,
-      borderRadius: 19,
-      borderWidth: 1.5,
-      borderColor: colors.border,
+    contactBtn: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
       justifyContent: 'center',
       alignItems: 'center',
     },
 
-    routeCard: {
-      backgroundColor: colors.surfaceLight,
-      borderRadius: 14,
-      padding: 14,
-      marginBottom: 14,
-    },
     routeRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
     dot: { width: 10, height: 10, borderRadius: 5, marginTop: 4 },
     routeLabel: { fontSize: 9, fontWeight: '800', color: colors.textDim, letterSpacing: 0.8, marginBottom: 2 },

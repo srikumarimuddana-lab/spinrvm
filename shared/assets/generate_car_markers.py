@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Generate the top-down car marker PNGs used on the live maps.
 
-Three variants, one per vehicle class — Lyft-style top-down cars (smooth
-white body, very rounded hood, dark glass with a glowing brand accent bar,
-no wheel/grille detail), nose pointing up, transparent background:
+Three variants, one per vehicle class — clean modern-EV top view (smooth
+white body, very rounded hood, dark glass, full-width tail light blade
+flush with the body, no wheel/grille detail), nose pointing up,
+transparent background:
 
-  - sedan : white sedan                     -> car_marker_sedan.png
-  - suv   : white long-roof SUV             -> car_marker_suv.png
-  - lux   : black luxury sedan, gold glow   -> car_marker_lux.png
+  - sedan : white sedan             -> car_marker_sedan.png
+  - suv   : white long-roof SUV     -> car_marker_suv.png
+  - lux   : black luxury sedan      -> car_marker_lux.png
 
 Canvas is 120x220 for every variant so `CarMarker`'s `size` prop scales
 them identically; the SUV reads bigger via a wider body and a long flat
@@ -44,10 +45,6 @@ def _expand_hex8(svg: str) -> str:
 
 SVG_HEADER = """<svg xmlns='http://www.w3.org/2000/svg' width='120' height='220' viewBox='0 0 120 220'>"""
 
-# Spinr brand teal — plays the role of Lyft's magenta "glow" on the glass.
-GLOW = "#2BE8C8"
-GLOW_DIM = "#0E4D44"
-
 
 def _shadow_defs(prefix: str) -> str:
     """Soft radial drop shadow (cairosvg has no feGaussianBlur)."""
@@ -68,11 +65,10 @@ def _white_body_defs(prefix: str) -> str:
       <stop offset='82%' stop-color='#F6F6F8'/>
       <stop offset='100%' stop-color='#E4E4E8'/>
     </linearGradient>
-    <radialGradient id='{prefix}ws' cx='0.5' cy='0.28' r='0.95'>
-      <stop offset='0%' stop-color='{GLOW_DIM}'/>
-      <stop offset='45%' stop-color='#142A28'/>
-      <stop offset='100%' stop-color='#121217'/>
-    </radialGradient>"""
+    <linearGradient id='{prefix}ws' x1='0' y1='0' x2='0' y2='1'>
+      <stop offset='0%' stop-color='#23232B'/>
+      <stop offset='100%' stop-color='#101016'/>
+    </linearGradient>"""
 
 
 SEDAN_SVG = (
@@ -105,11 +101,7 @@ SEDAN_SVG = (
   <!-- Hood seam -->
   <path d='M 36 33 Q 60 28 84 33' fill='none' stroke='#E6E6EA' stroke-width='1.1'/>
 
-  <!-- Taillights: small slivers peeking at the rear corners -->
-  <rect x='27' y='201' width='15' height='4.5' rx='2.25' fill='#E8483F' transform='rotate(16 34.5 203)'/>
-  <rect x='78' y='201' width='15' height='4.5' rx='2.25' fill='#E8483F' transform='rotate(-16 85.5 203)'/>
-
-  <!-- Windshield: dark glass with brand glow -->
+  <!-- Windshield: dark glass -->
   <path d='M 38 52
            C 46 50 74 50 82 52
            C 87 53 88.6 55.5 89 60
@@ -120,13 +112,6 @@ SEDAN_SVG = (
            L 31 60
            C 31.4 55.5 33 53 38 52 Z'
         fill='url(#sws)'/>
-  <!-- Glow halo + bar (Lyft-amp style, Spinr teal) -->
-  <rect x='44' y='58' width='32' height='13' rx='6.5' fill='"""
-    + GLOW
-    + """' fill-opacity='0.22'/>
-  <rect x='48' y='61' width='24' height='7' rx='3.5' fill='"""
-    + GLOW
-    + """'/>
 
   <!-- Side window slivers -->
   <path d='M 28.5 103 Q 26.8 126 28.5 149 Q 30.5 152 32.5 149 Q 31.2 126 32.5 103 Q 30.5 100 28.5 103 Z' fill='#111116'/>
@@ -150,6 +135,9 @@ SEDAN_SVG = (
 
   <!-- Trunk seam -->
   <path d='M 36 192 Q 60 196 84 192' fill='none' stroke='#E6E6EA' stroke-width='1.1'/>
+
+  <!-- Full-width tail light blade (Tesla/Polestar style), flush with body -->
+  <path d='M 33 202 Q 60 207.5 87 202' fill='none' stroke='#E0473D' stroke-width='3.4' stroke-linecap='round'/>
 </svg>"""
 )
 
@@ -186,10 +174,6 @@ SUV_SVG = (
   <!-- Hood seam (short hood) -->
   <path d='M 32 30 Q 60 25 88 30' fill='none' stroke='#E6E6EA' stroke-width='1.1'/>
 
-  <!-- Taillights: slivers wrapping the rear corners -->
-  <rect x='21' y='200' width='17' height='4.5' rx='2.25' fill='#E8483F' transform='rotate(14 29.5 202)'/>
-  <rect x='82' y='200' width='17' height='4.5' rx='2.25' fill='#E8483F' transform='rotate(-14 90.5 202)'/>
-
   <!-- Windshield: upright, wide -->
   <path d='M 34 46
            C 43 44 77 44 86 46
@@ -201,12 +185,6 @@ SUV_SVG = (
            L 27 54
            C 27.4 49.5 29 47 34 46 Z'
         fill='url(#uws)'/>
-  <rect x='42' y='52' width='36' height='13' rx='6.5' fill='"""
-    + GLOW
-    + """' fill-opacity='0.22'/>
-  <rect x='46' y='55' width='28' height='7' rx='3.5' fill='"""
-    + GLOW
-    + """'/>
 
   <!-- Side window slivers: run the full long cabin -->
   <path d='M 23.5 98 Q 21.6 132 23.5 166 Q 25.5 169 27.5 166 Q 26 132 27.5 98 Q 25.5 95 23.5 98 Z' fill='#111116'/>
@@ -232,12 +210,15 @@ SUV_SVG = (
 
   <!-- Tailgate seam -->
   <path d='M 31 196 Q 60 200 89 196' fill='none' stroke='#E6E6EA' stroke-width='1.1'/>
+
+  <!-- Full-width tail light blade, flush with the tailgate -->
+  <path d='M 28 203 Q 60 208.5 92 203' fill='none' stroke='#E0473D' stroke-width='3.6' stroke-linecap='round'/>
 </svg>"""
 )
 
 
-# Lux: same Lyft shape language as the sedan, black body, warm gold glow,
-# light outline so it stays readable on dark map styles.
+# Lux: same body language as the sedan, black paint, light outline so it
+# stays readable on dark map styles.
 LUX_SVG = (
     SVG_HEADER
     + "<defs>"
@@ -250,11 +231,10 @@ LUX_SVG = (
       <stop offset='82%' stop-color='#26262C'/>
       <stop offset='100%' stop-color='#17171B'/>
     </linearGradient>
-    <radialGradient id='lws' cx='0.5' cy='0.28' r='0.95'>
-      <stop offset='0%' stop-color='#4A3A14'/>
-      <stop offset='45%' stop-color='#1E1A10'/>
-      <stop offset='100%' stop-color='#0C0C10'/>
-    </radialGradient>
+    <linearGradient id='lws' x1='0' y1='0' x2='0' y2='1'>
+      <stop offset='0%' stop-color='#15151B'/>
+      <stop offset='100%' stop-color='#0A0A0F'/>
+    </linearGradient>
   </defs>
 
   <!-- Soft ground shadow -->
@@ -279,11 +259,7 @@ LUX_SVG = (
   <!-- Hood seam -->
   <path d='M 36 33 Q 60 28 84 33' fill='none' stroke='#46464E' stroke-width='1.1'/>
 
-  <!-- Taillights -->
-  <rect x='27' y='201' width='15' height='4.5' rx='2.25' fill='#F0524A' transform='rotate(16 34.5 203)'/>
-  <rect x='78' y='201' width='15' height='4.5' rx='2.25' fill='#F0524A' transform='rotate(-16 85.5 203)'/>
-
-  <!-- Windshield: black glass with warm gold glow -->
+  <!-- Windshield: black glass -->
   <path d='M 38 52
            C 46 50 74 50 82 52
            C 87 53 88.6 55.5 89 60
@@ -294,8 +270,6 @@ LUX_SVG = (
            L 31 60
            C 31.4 55.5 33 53 38 52 Z'
         fill='url(#lws)'/>
-  <rect x='44' y='58' width='32' height='13' rx='6.5' fill='#F5C453' fill-opacity='0.25'/>
-  <rect x='48' y='61' width='24' height='7' rx='3.5' fill='#F5C453'/>
 
   <!-- Side window slivers -->
   <path d='M 28.5 103 Q 26.8 126 28.5 149 Q 30.5 152 32.5 149 Q 31.2 126 32.5 103 Q 30.5 100 28.5 103 Z' fill='#08080B'/>
@@ -317,9 +291,11 @@ LUX_SVG = (
            Q 32 155 37 155 Z'
         fill='#0A0A0E'/>
 
-  <!-- Trunk seam + chrome strip -->
+  <!-- Trunk seam -->
   <path d='M 36 192 Q 60 196 84 192' fill='none' stroke='#46464E' stroke-width='1.1'/>
-  <rect x='42' y='197' width='36' height='2.2' rx='1.1' fill='#C9CBD4'/>
+
+  <!-- Full-width tail light blade, flush with body -->
+  <path d='M 33 202 Q 60 207.5 87 202' fill='none' stroke='#F0524A' stroke-width='3.4' stroke-linecap='round'/>
 </svg>"""
 )
 

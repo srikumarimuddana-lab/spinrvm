@@ -25,14 +25,14 @@ async def test_confirm_payment_ownership_check_rejects_non_owner():
     """S-1: a rider who does not own the ride receives 403."""
     from fastapi import HTTPException
 
-    from backend.routes.payments import confirm_payment
+    from backend.routes.payments import ConfirmPaymentRequest, confirm_payment
 
     with patch("backend.routes.payments.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=_RIDE_OWNED)
 
         with pytest.raises(HTTPException) as exc_info:
             await confirm_payment(
-                body={"payment_intent_id": "pi_123", "ride_id": _RIDE_ID},
+                body=ConfirmPaymentRequest(**{"payment_intent_id": "pi_123", "ride_id": _RIDE_ID}),
                 request=None,
                 current_user=_OTHER_USER,
             )
@@ -44,7 +44,7 @@ async def test_confirm_payment_ownership_check_rejects_non_owner():
 @pytest.mark.anyio
 async def test_confirm_payment_ownership_check_allows_owner():
     """S-1: the ride owner passes the ownership check and proceeds normally."""
-    from backend.routes.payments import confirm_payment
+    from backend.routes.payments import ConfirmPaymentRequest, confirm_payment
 
     with (
         patch("backend.routes.payments.db_supabase") as mock_db,
@@ -55,7 +55,7 @@ async def test_confirm_payment_ownership_check_allows_owner():
         mock_db.update_ride = AsyncMock()
 
         result = await confirm_payment(
-            body={"payment_intent_id": "pi_mock_abc", "ride_id": _RIDE_ID},
+            body=ConfirmPaymentRequest(**{"payment_intent_id": "pi_mock_abc", "ride_id": _RIDE_ID}),
             request=None,
             current_user=_OWNER_USER,
         )
@@ -69,14 +69,14 @@ async def test_confirm_payment_returns_404_when_ride_missing():
     """S-1: non-existent ride_id raises 404 before ownership or Stripe call."""
     from fastapi import HTTPException
 
-    from backend.routes.payments import confirm_payment
+    from backend.routes.payments import ConfirmPaymentRequest, confirm_payment
 
     with patch("backend.routes.payments.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=None)
 
         with pytest.raises(HTTPException) as exc_info:
             await confirm_payment(
-                body={"payment_intent_id": "pi_123", "ride_id": "nonexistent"},
+                body=ConfirmPaymentRequest(**{"payment_intent_id": "pi_123", "ride_id": "nonexistent"}),
                 request=None,
                 current_user=_OWNER_USER,
             )
@@ -89,7 +89,7 @@ async def test_confirm_payment_race_guard_returns_409():
     """R-1: a concurrent second request loses the atomic claim and gets 409."""
     from fastapi import HTTPException
 
-    from backend.routes.payments import confirm_payment
+    from backend.routes.payments import ConfirmPaymentRequest, confirm_payment
 
     with patch("backend.routes.payments.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=_RIDE_OWNED)
@@ -97,10 +97,50 @@ async def test_confirm_payment_race_guard_returns_409():
 
         with pytest.raises(HTTPException) as exc_info:
             await confirm_payment(
-                body={"payment_intent_id": "pi_123", "ride_id": _RIDE_ID},
+                body=ConfirmPaymentRequest(**{"payment_intent_id": "pi_123", "ride_id": _RIDE_ID}),
                 request=None,
                 current_user=_OWNER_USER,
             )
 
     assert exc_info.value.status_code == 409
     assert exc_info.value.detail == "payment_already_processing"
+
+
+@pytest.mark.anyio
+async def test_confirm_payment_body_rejects_unknown_keys():
+    """The /payments/confirm body is a typed model (extra='forbid') so
+    attacker-supplied extra keys are rejected at validation instead of
+    being silently carried through the mock/Stripe branches."""
+    from pydantic import ValidationError
+
+    from backend.routes.payments import ConfirmPaymentRequest
+
+    with pytest.raises(ValidationError):
+        ConfirmPaymentRequest(payment_intent_id="pi_123", ride_id=_RIDE_ID, is_admin=True)
+
+    with pytest.raises(ValidationError):
+        ConfirmPaymentRequest(payment_intent_id="x" * 256)
+
+
+@pytest.mark.anyio
+async def test_create_intent_non_owner_gets_403_not_500():
+    """Ownership 403 from _authoritative_ride_charge must pass through the
+    generic exception handler, not be masked as an opaque 500."""
+    from fastapi import HTTPException
+
+    from backend.routes.payments import PaymentIntentRequest, create_payment_intent
+
+    with (
+        patch("backend.routes.payments.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test_x"})),
+        patch("backend.routes.payments.db_supabase") as mock_db,
+    ):
+        mock_db.get_ride = AsyncMock(return_value=_RIDE_OWNED)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await create_payment_intent(
+                body=PaymentIntentRequest(amount="15.00", ride_id=_RIDE_ID),
+                request=None,
+                current_user=_OTHER_USER,
+            )
+
+    assert exc_info.value.status_code == 403

@@ -204,6 +204,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to import document expiry checker: {e}", exc_info=True)
 
+    # Driver onboarding reminders — daily 08:00 local-time pushes for drivers
+    # who registered from the driver app but still need vehicle info or docs.
+    # Idempotent per driver/reminder/local-date via DB claim log.
+    try:
+        from utils.driver_onboarding_reminders import driver_onboarding_reminder_loop
+
+        _spawn("driver_onboarding_reminders (15min)", driver_onboarding_reminder_loop)
+    except Exception as e:
+        logger.error(f"Failed to import driver onboarding reminder loop: {e}", exc_info=True)
+
     # Corporate wallet auto-top-up — kicks off off-session Stripe charges
     # every 10 minutes for wallets that have dropped below their threshold.
     try:
@@ -336,6 +346,7 @@ async def lifespan(app: FastAPI):
             "scheduled_dispatcher (60s)",
             "payment_retry (5min)",
             "document_expiry (12h)",
+            "driver_onboarding_reminders (15min)",
             "corporate_autotopup (10min)",
             "corporate_low_balance (1h)",
             "allowance_reset (1h)",

@@ -49,11 +49,16 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     # Rider/driver access-token TTL in minutes. Short-lived for security (P0-S3).
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
-    # Legacy days TTL — preserved for mobile clients that haven't adopted rotation yet.
-    ACCESS_TOKEN_TTL_DAYS: int = 30
     # Admin-console access-token TTL in hours. 1h forces frequent rotation via
     # the refresh token flow; reduces the blast radius of a captured token.
     ADMIN_ACCESS_TOKEN_TTL_HOURS: int = 1
+    # Require TOTP MFA for every admin_staff login. Staff without MFA get an
+    # enrollment-scoped token at login instead of a session and must finish
+    # enrolling before the dashboard issues real tokens. The admin-001 env
+    # break-glass account is exempt (it has no admin_staff row to hold a
+    # secret); its password strength is enforced at startup instead.
+    # Set false only in local dev where repeated logins make TOTP painful.
+    ADMIN_MFA_ENFORCED: bool = True
     # Refresh-token TTL in days (30 days "remember this device").
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
@@ -112,6 +117,17 @@ class Settings(BaseSettings):
     # empty disables OSRM and falls back to Google (and then haversine).
     # A DB override `osrm_url` in app_settings, if present, takes precedence.
     OSRM_URL: str = ""
+
+    # Public OSRM used for the LIGHT live-routing calls only (live-route line,
+    # ETA, single-point road snap) when no self-hosted OSRM is configured.
+    # Without this fallback an unset OSRM_URL silently disabled the live route
+    # line in both apps (the planned booking-time polyline never updated).
+    # The project-osrm demo server has no SLA and a fair-use policy — fine for
+    # a Saskatchewan-scale pilot at ~1 call/20s per active ride, but self-host
+    # OSRM (a Saskatchewan extract is tiny) before scaling. Set to "" to
+    # disable the fallback entirely. The heavy billing path (/match over full
+    # GPS traces) intentionally still requires an explicit OSRM_URL.
+    OSRM_FALLBACK_URL: str = "https://router.project-osrm.org"
 
     # OTP brute-force lockout (SEC-008)
     OTP_MAX_FAILURES: int = 5  # attempts before lockout

@@ -36,6 +36,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Sprint-scoped and domain-deep context is loaded on demand, not baked into this file. Reference these when the task enters the relevant area:
 
+- `@ACTION_ITEMS.md` — prioritized production-readiness backlog: pick open `[ ]` items from here; full context in `docs/PRODUCTION_READINESS.md`
 - `@.claude/context/sprint-current.md` — active sprint goal, in-flight tickets, blockers
 - `@.claude/context/domain-dispatch.md` — dispatch algorithm, driver matching, offer timeout
 - `@.claude/context/domain-payments.md` — fare calc, surge, Stripe flows, corporate billing

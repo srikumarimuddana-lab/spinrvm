@@ -185,9 +185,21 @@ function DriverDashboard() {
   // ride_offered and trip_in_progress use the saved planned_route_polyline
   // instead — zero Directions API calls for those phases.
   const [directionsKey, setDirectionsKey] = useState(0);
+
+  // True while the backend's OSRM live-route poll is delivering routes. When
+  // OSRM is healthy we suppress Google Directions entirely (render + 60s
+  // refresh ticker) — OSRM already redraws driver → destination every 20s at
+  // zero metered cost. Flips back false if a live-route fetch fails so Google
+  // resumes as the fallback. Mirrored in a ref so the interval callback sees
+  // the current value without re-subscribing.
+  const [osrmRouteActive, setOsrmRouteActive] = useState(false);
+  const osrmRouteActiveRef = useRef(false);
+  useEffect(() => { osrmRouteActiveRef.current = osrmRouteActive; }, [osrmRouteActive]);
+
   useEffect(() => {
     if (rideState !== 'navigating_to_pickup') return;
     const interval = setInterval(() => {
+      if (osrmRouteActiveRef.current) return;
       const now = Date.now();
       const last = lastDirectionsFetchRef.current;
       const cur = currentLocationRef.current;
@@ -292,6 +304,7 @@ function DriverDashboard() {
     setRouteEtaMinutes(null);
     setRouteDistanceKm(null);
     setDirectionsKey(0);
+    setOsrmRouteActive(false);
 
     const savedPoly = (ride as any)?.planned_route_polyline || (ride as any)?.route_polyline;
     const canUseSaved = Array.isArray(savedPoly) && savedPoly.length >= 2;
@@ -352,6 +365,7 @@ function DriverDashboard() {
         if (cancelled || !data) return;
         if (Array.isArray(data.polyline) && data.polyline.length > 1) {
           setRouteCoords(data.polyline.map((p) => ({ latitude: p[0], longitude: p[1] })));
+          setOsrmRouteActive(true);
         }
         if (typeof data.eta_seconds === 'number' && data.eta_seconds > 0) {
           setRouteEtaMinutes(Math.max(1, Math.ceil(data.eta_seconds / 60)));
@@ -360,7 +374,9 @@ function DriverDashboard() {
           setRouteDistanceKm(data.distance_km);
         }
       } catch {
-        // OSRM unavailable — keep the saved-polyline route + existing ETA.
+        // OSRM unavailable — keep the saved-polyline route + existing ETA and
+        // let Google Directions resume as the live-route fallback.
+        if (!cancelled) setOsrmRouteActive(false);
       }
     };
     fetchLiveRoute();
@@ -660,7 +676,7 @@ function DriverDashboard() {
           const savedPoly = (ride as any)?.planned_route_polyline || (ride as any)?.route_polyline;
           const hasSavedRoute = Array.isArray(savedPoly) && savedPoly.length >= 2;
           const useSavedRoute = hasSavedRoute;
-          const needsDirections = GOOGLE_MAPS_API_KEY && !useSavedRoute;
+          const needsDirections = GOOGLE_MAPS_API_KEY && !useSavedRoute && !osrmRouteActive;
 
           const driverLat = location?.coords?.latitude != null ? Math.round(location.coords.latitude * 1000) / 1000 : null;
           const driverLng = location?.coords?.longitude != null ? Math.round(location.coords.longitude * 1000) / 1000 : null;

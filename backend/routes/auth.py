@@ -1008,7 +1008,7 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
 
     session_id = user.get("current_session_id") or row.get("user_agent") or ""
     token_version = int(user.get("token_version") or 0)
-    access_expires_at = datetime.now(timezone.utc) + timedelta(days=settings.ACCESS_TOKEN_TTL_DAYS)
+    access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_jwt_token(
         user_id,
         user.get("phone", ""),

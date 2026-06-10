@@ -39,6 +39,16 @@ logger = logging.getLogger(__name__)
 # without hammering the Maps API on every GPS ping.
 _ETA_CACHE_TTL = 15
 
+# B3.2 movement gate: when the 15 s cache has expired but the driver has moved
+# less than this since the last routing calc, the remaining travel time is
+# unchanged — reuse the last ETA instead of re-calling the provider. A driver
+# idling at a red light or waiting at pickup stops costing routing calls.
+_ETA_MOVE_THRESHOLD_M = 100
+
+# Upper bound on reuse: even a stationary driver gets a fresh provider calc
+# this often (traffic conditions drift).
+_LAST_ETA_LOC_TTL = 120
+
 # Assumed average speed for haversine fallback (km/h).  30 km/h accounts
 # for urban driving with turns and traffic lights.
 _FALLBACK_SPEED_KMH = 30
@@ -111,6 +121,42 @@ async def _osrm_eta_seconds(driver_lat: float, driver_lng: float, dest_lat: floa
         return None
 
 
+def _last_eta_loc_key(driver_id: str) -> str:
+    return f"driver:{driver_id}:last_eta_loc"
+
+
+async def _reusable_last_eta(driver_id: str, ride_id: str, driver_lat: float, driver_lng: float) -> int | None:
+    """Last computed ETA if the driver hasn't moved past the gate, else None.
+
+    Scoped to the ride: a new ride means a new destination, so the stored
+    value must never carry over even when the driver hasn't moved.
+    """
+    try:
+        raw = await redis_get(_last_eta_loc_key(driver_id))
+        if not raw:
+            return None
+        stored_ride_id, last_lat, last_lng, last_eta = str(raw).split("|")
+        if stored_ride_id != ride_id:
+            return None
+        moved_m = _haversine_km(float(last_lat), float(last_lng), driver_lat, driver_lng) * 1000.0
+        if moved_m < _ETA_MOVE_THRESHOLD_M:
+            return int(float(last_eta))
+    except Exception:
+        logger.debug("[ETA] last_eta_loc read failed — recomputing", exc_info=False)
+    return None
+
+
+async def _store_last_eta_loc(driver_id: str, ride_id: str, lat: float, lng: float, eta_seconds: int) -> None:
+    try:
+        await redis_set(
+            _last_eta_loc_key(driver_id),
+            f"{ride_id}|{lat}|{lng}|{eta_seconds}",
+            ttl=_LAST_ETA_LOC_TTL,
+        )
+    except Exception:
+        logger.debug("[ETA] last_eta_loc write failed", exc_info=False)
+
+
 async def get_ride_eta_seconds(
     driver_lat: float,
     driver_lng: float,
@@ -123,7 +169,9 @@ async def get_ride_eta_seconds(
     """Return ETA in seconds from driver to destination, or None on total failure.
 
     Uses Redis to cache the result for _ETA_CACHE_TTL seconds so back-to-back
-    GPS pings from the same driver/ride pair don't re-hit the routing provider.
+    GPS pings from the same driver/ride pair don't re-hit the routing provider,
+    plus a movement gate (B3.2): a cache-expired ping from a driver who moved
+    < _ETA_MOVE_THRESHOLD_M since the last calc reuses that ETA.
     Provider order: OSRM /route (free) → Google Distance Matrix → haversine.
     """
     cache_key = f"eta:{driver_id}:{ride_id}"
@@ -136,6 +184,15 @@ async def get_ride_eta_seconds(
     except Exception:
         logger.warning("[ETA] Redis get failed — cache miss, will call routing provider", exc_info=False)
 
+    # ── Movement gate (B3.2) ────────────────────────────────────────────────
+    reused = await _reusable_last_eta(driver_id, ride_id, driver_lat, driver_lng)
+    if reused is not None:
+        try:
+            await redis_set(cache_key, str(reused), ttl=_ETA_CACHE_TTL)
+        except Exception:
+            logger.warning("[ETA] Redis set failed — ETA won't be cached", exc_info=False)
+        return reused
+
     # ── OSRM first (no metered cost) ────────────────────────────────────────
     eta_seconds = await _osrm_eta_seconds(driver_lat, driver_lng, dest_lat, dest_lng)
     if eta_seconds is not None:
@@ -143,6 +200,7 @@ async def get_ride_eta_seconds(
             await redis_set(cache_key, str(eta_seconds), ttl=_ETA_CACHE_TTL)
         except Exception:
             logger.warning("[ETA] Redis set failed — ETA won't be cached", exc_info=False)
+        await _store_last_eta_loc(driver_id, ride_id, driver_lat, driver_lng, eta_seconds)
         return eta_seconds
 
     # ── Google Distance Matrix fallback ─────────────────────────────────────
@@ -181,6 +239,7 @@ async def get_ride_eta_seconds(
         await redis_set(cache_key, str(eta_seconds), ttl=_ETA_CACHE_TTL)
     except Exception:
         logger.warning("[ETA] Redis set failed — ETA won't be cached", exc_info=False)
+    await _store_last_eta_loc(driver_id, ride_id, driver_lat, driver_lng, eta_seconds)
 
     return eta_seconds
 

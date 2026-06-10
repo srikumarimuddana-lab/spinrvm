@@ -1,6 +1,7 @@
 import asyncio
 import json
 import secrets
+import time as _time_mod
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
@@ -61,6 +62,7 @@ except ImportError:
     from features import (
         calculate_airport_fee,
         calculate_all_fees,
+        notify_safety_team,
         send_push_notification,
     )
     from geo_utils import calculate_distance, get_service_area_polygon, point_in_polygon
@@ -102,10 +104,16 @@ from .fares import _fares_for_location_impl, get_fares_for_location
 try:
     from ..utils.datetime_utils import parse_iso_utc
     from ..utils.insurance_periods import record_period_transition
+    from ..utils.metrics import inc as _metric_inc
+    from ..utils.metrics import observe as _metric_observe
+    from ..utils.metrics import timed as _metric_timed
     from ..utils.ride_code import generate_ride_code
 except ImportError:
     from utils.datetime_utils import parse_iso_utc
     from utils.insurance_periods import record_period_transition  # type: ignore[assignment]
+    from utils.metrics import inc as _metric_inc  # type: ignore
+    from utils.metrics import observe as _metric_observe  # type: ignore
+    from utils.metrics import timed as _metric_timed  # type: ignore
     from utils.ride_code import generate_ride_code
 
 try:
@@ -787,6 +795,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
         for d, _ in claimed_drivers:
             await db_supabase.set_driver_available(d["id"], True)
         return
+    _metric_inc("spinr_dispatch_offer_sent_total", by=len(offer_rows))
 
     # ── Parallel enrichment (shared across all drivers) ───────────
     async def _fetch_rider() -> dict | None:
@@ -1328,6 +1337,7 @@ async def _filter_reachable_drivers(all_drivers: list) -> list:
 
 @api_router.post("/estimate")
 @api_rate_limit
+@_metric_timed("spinr_fare_calc_duration_ms")
 async def estimate_ride(
     body: RideEstimateRequest,
     request: Request = None,
@@ -3153,6 +3163,19 @@ class ProcessPaymentRequest(BaseModel):
     tip_amount: Decimal = Field(default=Decimal("0"), ge=0, le=500)
 
 
+def _record_settlement_metrics(payment_method: str, result, duration_ms: float) -> None:
+    """KPI: spinr_payment_settlement_total{method,outcome} + duration histogram.
+
+    Outcome mapping: already_paid is split out from success because no money
+    moved (idempotent replay) — counting it as success would mask retry storms
+    behind a healthy-looking settlement rate.
+    """
+    method = {"wallet": "wallet", "company_allowance": "corporate"}.get(payment_method, "card")
+    outcome = "already_paid" if result.already_paid else ("success" if result.success else "failed")
+    _metric_inc("spinr_payment_settlement_total", {"method": method, "outcome": outcome})
+    _metric_observe("spinr_payment_settlement_duration_ms", duration_ms, {"method": method})
+
+
 @api_router.post("/{ride_id}/process-payment")
 @payment_action_limit
 async def process_payment(
@@ -3308,6 +3331,7 @@ async def process_payment(
     _snap = ride.get("fare_breakdown_snapshot")
     _snap_lines = (_snap.get("lines") if isinstance(_snap, dict) else None) if _snap else None
 
+    _settle_started = _time_mod.monotonic()
     if payment_method == "wallet":
         result = await settle_wallet(
             ride,
@@ -3321,6 +3345,8 @@ async def process_payment(
         result = await settle_corporate(ride, ride_id, total_charge, tip_rounded)
     else:
         result = await settle_card(ride, ride_id, current_user["id"], total_charge, tip_rounded)
+
+    _record_settlement_metrics(payment_method, result, (_time_mod.monotonic() - _settle_started) * 1000.0)
 
     if not result.success:
         detail = result.error or "Payment failed"

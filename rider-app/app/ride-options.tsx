@@ -313,6 +313,34 @@ function RideOptionsScreenContent() {
         return;
       }
     }
+    // Surge transparency: surge must be explicitly acknowledged before
+    // booking, never discovered on the receipt. The badge on the estimate
+    // card is passive — this sheet forces an active confirm at >1.0×.
+    const surge = selectedEstimate.surge_multiplier ?? 1;
+    if (surge > 1.0) {
+      setConfirmSheet({
+        visible: true,
+        title: `${surge}× surge pricing is in effect`,
+        message: `Demand is higher than usual right now, so a ${surge}× surge multiplier is included in your fare. Your total is $${totalFare.toFixed(2)}.`,
+        variant: 'warning',
+        buttons: [
+          // Deliberately NOT awaited: ConfirmSheet.handlePress awaits onPress
+          // and then always calls onClose() in its finally. Awaiting the whole
+          // booking here would let that onClose() fire AFTER proceedWithBooking
+          // sets a follow-up sheet (e.g. the 402 "Unpaid Ride" prompt) and
+          // silently close it. Returning immediately closes the surge sheet
+          // first; booking continues and any follow-up sheet survives.
+          { text: `Book at $${totalFare.toFixed(2)}`, onPress: () => { void proceedWithBooking(); } },
+          { text: 'Cancel', style: 'cancel' },
+        ],
+      });
+      return;
+    }
+    await proceedWithBooking();
+  };
+
+  const proceedWithBooking = async () => {
+    if (isBooking) return;
     setIsBooking(true);
     try {
       const corpId = useCorporate && selectedCorporateId ? selectedCorporateId : null;

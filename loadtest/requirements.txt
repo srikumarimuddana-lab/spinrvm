@@ -1,0 +1,3 @@
+# Marketplace load-simulation harness (ACTION_ITEMS E2)
+locust>=2.32
+websocket-client>=1.8

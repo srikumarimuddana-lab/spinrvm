@@ -24,9 +24,14 @@ try:
     import httpx as _httpx
 
     _HTTPX_TIMEOUT_EXC = _httpx.TimeoutException
+    # NetworkError covers ConnectError/ReadError/WriteError/CloseError — transient
+    # transport failures (incl. SSL "EOF occurred in violation of protocol") that
+    # are safe to retry under read/idempotent_write policies.
+    _HTTPX_NETWORK_EXC = _httpx.NetworkError
 except ImportError:  # pragma: no cover
     _httpx = None  # type: ignore
     _HTTPX_TIMEOUT_EXC = None  # type: ignore
+    _HTTPX_NETWORK_EXC = None  # type: ignore
 
 try:
     from ..supabase_client import supabase  # type: ignore
@@ -122,12 +127,14 @@ _breaker = _CircuitBreaker()
 
 
 # ── DB thread pool ──────────────────────────────────────────────────
+# Single executor for all run_sync work. DB_THREAD_POOL_SIZE is the one
+# knob; DB_THREAD_POOL_MAX is honoured as a legacy fallback (it used to
+# size a second, never-used executor that only fed the thread gauge —
+# making both the gauge and the env var lie about real capacity, which
+# was capped at 32 while ops believed 64).
 
-_DB_THREAD_POOL_SIZE = int(_os.environ.get("DB_THREAD_POOL_SIZE", "32"))
+_DB_THREAD_POOL_SIZE = int(_os.environ.get("DB_THREAD_POOL_SIZE") or _os.environ.get("DB_THREAD_POOL_MAX") or "64")
 _DB_EXECUTOR = _ThreadPoolExecutor(max_workers=_DB_THREAD_POOL_SIZE, thread_name_prefix="spinr-db")
-
-_DB_POOL_MAX = int(_os.environ.get("DB_THREAD_POOL_MAX", "64"))
-_db_executor = _ThreadPoolExecutor(max_workers=_DB_POOL_MAX, thread_name_prefix="spinr-db")
 
 
 # ── Retry policy ────────────────────────────────────────────────────
@@ -189,7 +196,8 @@ async def run_sync(
             result = await loop.run_in_executor(_DB_EXECUTOR, func)  # type: ignore
             _breaker.record_success()
             _metric_gauge("spinr_db_circuit_state", 0, {"state": "closed"})
-            _metric_gauge("spinr_db_thread_pool_threads", len(_db_executor._threads))
+            _metric_gauge("spinr_db_thread_pool_threads", len(_DB_EXECUTOR._threads))
+            _metric_gauge("spinr_db_thread_pool_max_workers", _DB_EXECUTOR._max_workers)
             return result
         except Exception as exc:
             if isinstance(exc, ValueError):
@@ -203,7 +211,13 @@ async def run_sync(
             )
             is_timeout = _HTTPX_TIMEOUT_EXC is not None and isinstance(exc, _HTTPX_TIMEOUT_EXC)
             is_h2_stream_race = isinstance(exc, KeyError) and "http2" in traceback.format_exc().lower()
-            is_transient = is_conn_terminated or is_remote_disconnect or is_timeout or is_h2_stream_race
+            # httpx NetworkError family: ConnectError/ReadError/WriteError/CloseError.
+            # Covers SSL "EOF occurred in violation of protocol" (WriteError) seen when
+            # a pooled TLS connection is reused after the server closed it (e.g. cold start).
+            is_network_error = _HTTPX_NETWORK_EXC is not None and isinstance(exc, _HTTPX_NETWORK_EXC)
+            is_transient = (
+                is_conn_terminated or is_remote_disconnect or is_timeout or is_h2_stream_race or is_network_error
+            )
 
             if not is_transient:
                 break

@@ -156,7 +156,6 @@ Dispatch + lifecycle:
 | `get_chat_status(...)` — L1555 | GET `/rides/{id}/chat-status`. |
 | `get_ride_messages(...)` — L1649 | GET `/rides/{id}/messages`. |
 | `send_ride_message(...)` — L1688 | POST `/rides/{id}/messages`. |
-| `get_call_info(...)` — L1587 | GET `/rides/{id}/call`. |
 | `get_scheduled_rides(...)` — L1754 | GET `/rides/scheduled`. |
 | `cancel_scheduled_ride(...)` — L1762 | DELETE `/rides/scheduled/{id}`. |
 | `simulate_driver_arrival(...)` — L1787 | Dev test endpoint. |

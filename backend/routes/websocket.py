@@ -8,10 +8,10 @@ from firebase_admin import auth as firebase_auth
 from loguru import logger
 
 try:
-    from ..utils.breadcrumbs import persist_ride_breadcrumbs
+    from ..utils.breadcrumbs import persist_ride_breadcrumbs, resolve_active_rides_cached
     from ..utils.location_integrity import check_location_integrity
 except ImportError:
-    from utils.breadcrumbs import persist_ride_breadcrumbs  # type: ignore
+    from utils.breadcrumbs import persist_ride_breadcrumbs, resolve_active_rides_cached  # type: ignore
     from utils.location_integrity import check_location_integrity  # type: ignore
 
 try:
@@ -607,25 +607,13 @@ async def websocket_endpoint(
                     # foregrounded, not just that TCP is open.
                     await mark_present(driver_id)
 
-                    # Resolve active rides for rider fan-out. The shared
-                    # breadcrumb writer below independently derives ride_id and
-                    # phase from server milestones so single pings and buffered
-                    # batches follow the same billing/dispute rules.
-                    active_rides = await db_supabase.get_rows(
-                        "rides",
-                        {
-                            "driver_id": driver_id,
-                            "status": {
-                                "$in": [
-                                    "driver_assigned",
-                                    "driver_accepted",
-                                    "driver_arrived",
-                                    "in_progress",
-                                ]
-                            },
-                        },
-                        limit=10,
-                    )
+                    # Resolve active rides for rider fan-out. B3.1: served from
+                    # a 5 s Redis cache — this runs on EVERY GPS ping and used
+                    # to be a per-ping rides query. The shared breadcrumb writer
+                    # below independently derives ride_id and phase from server
+                    # milestones so single pings and buffered batches follow
+                    # the same billing/dispute rules.
+                    active_rides = await resolve_active_rides_cached(driver_id)
                     active_ride = active_rides[0] if active_rides else None
                     ride_id = active_ride["id"] if active_ride else None
 

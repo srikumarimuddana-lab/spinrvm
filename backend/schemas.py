@@ -154,6 +154,34 @@ class AppSettings(BaseModel):
     # Distribution list for safety-incident transactional emails. See
     # migration 95 + the _notify_safety_team helper in features.py.
     safety_alert_emails: str = ""
+    # ── AI assistant (rider AI mode, backend/ai/) ────────────────────────
+    # Master kill switch. Defaults OFF: the feature ships dark and is enabled
+    # from the admin dashboard once a provider key is set. Effective within
+    # the 60s settings TTL — no redeploy.
+    ai_assistant_enabled: bool = False
+    # Mounts the /mcp streamable-HTTP server for external agent clients.
+    # The in-app chat does NOT depend on this — tools run in-process.
+    ai_mcp_enabled: bool = False
+    # Active provider + model, swappable at runtime. Supported providers:
+    # anthropic | openai | gemini | openrouter (see backend/ai/providers/).
+    ai_provider: str = "anthropic"
+    ai_model: str = "claude-haiku-4-5"
+    # One key per provider; the admin UI shows a single field bound to the
+    # selected provider. Masked in admin GET like the Stripe/Twilio keys.
+    ai_api_key_anthropic: str = ""
+    ai_api_key_openai: str = ""
+    ai_api_key_gemini: str = ""
+    ai_api_key_openrouter: str = ""
+    # Spend guardrails (per chat turn / per user).
+    ai_max_output_tokens: int = 1024
+    ai_max_tool_iterations: int = 6
+    ai_daily_message_cap: int = 50
+    ai_history_max_messages: int = 12
+    # When true, escalate_to_support creates a Zoho ticket. Default is a
+    # deep-link handoff only — the AI triggers no server-side side effects.
+    ai_escalation_creates_ticket: bool = False
+    # Shown under the chat input in both apps; also returned by /ai/config.
+    ai_disclaimer: str = "AI answers can be inaccurate. For emergencies, call 911 or use the SOS button."
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

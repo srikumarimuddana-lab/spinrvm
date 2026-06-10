@@ -89,7 +89,7 @@ jobs:
       - name: Upload coverage to Codecov
         if: always()
         continue-on-error: true
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           file: ./backend/coverage.xml
           flags: backend
@@ -137,7 +137,7 @@ jobs:
 
       - name: Upload coverage
         if: always()
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           file: ./frontend/coverage/coverage-final.json
           flags: frontend
@@ -188,7 +188,7 @@ jobs:
 
       - name: Upload coverage
         if: always()
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           file: ./driver-app/coverage/coverage-final.json
           flags: driver-app
@@ -237,7 +237,7 @@ jobs:
 
       - name: Upload coverage
         if: always()
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           file: ./rider-app/coverage/coverage-final.json
           flags: rider-app

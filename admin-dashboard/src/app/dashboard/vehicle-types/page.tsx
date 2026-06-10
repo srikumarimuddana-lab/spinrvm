@@ -7,6 +7,7 @@ import {
     updateVehicleType,
     deleteVehicleType,
     adminUploadVehicleIllustration,
+    adminUploadVehicleMarker,
 } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -43,6 +44,9 @@ interface VehicleType {
     // Which bundled map marker the rider app renders for drivers of this
     // type. Must be one of MARKER_VARIANTS; defaults to standard.
     marker_variant?: string;
+    // Admin-uploaded custom marker image (transparent PNG/WebP). Takes
+    // precedence over marker_variant in the apps; "" clears it.
+    marker_image_url?: string;
     created_at?: string;
 }
 
@@ -63,6 +67,7 @@ const EMPTY_FORM: Omit<VehicleType, "id" | "created_at"> = {
     image_url: "",
     is_active: true,
     marker_variant: "standard",
+    marker_image_url: "",
 };
 
 export default function VehicleTypesPage() {
@@ -76,6 +81,33 @@ export default function VehicleTypesPage() {
     const [form, setForm] = useState(EMPTY_FORM);
     const [saving, setSaving] = useState(false);
     const [uploading, setUploading] = useState(false);
+    const [uploadingMarker, setUploadingMarker] = useState(false);
+
+    const handleUploadMarker = async (file: File) => {
+        if (!editingId) {
+            toast({
+                title: "Save the type first",
+                description: "Create the vehicle type before uploading a custom marker so we can key the file by id.",
+                variant: "destructive",
+            });
+            return;
+        }
+        if (file.size > 500 * 1024) {
+            toast({ title: "File too large", description: "Max 500 KB.", variant: "destructive" });
+            return;
+        }
+        setUploadingMarker(true);
+        try {
+            const { marker_image_url } = await adminUploadVehicleMarker(editingId, file);
+            setForm({ ...form, marker_image_url });
+            toast({ title: "Custom marker uploaded" });
+        } catch (err) {
+            console.error(err);
+            toast({ title: "Upload failed", description: String((err as Error).message || err), variant: "destructive" });
+        } finally {
+            setUploadingMarker(false);
+        }
+    };
 
     const handleUploadIllustration = async (file: File) => {
         if (!editingId) {
@@ -135,6 +167,7 @@ export default function VehicleTypesPage() {
             image_url: vt.image_url || (vt as { illustration_url?: string }).illustration_url || "",
             is_active: vt.is_active,
             marker_variant: vt.marker_variant || "standard",
+            marker_image_url: vt.marker_image_url || "",
         });
         setDialogOpen(true);
     };
@@ -279,11 +312,11 @@ export default function VehicleTypesPage() {
                                     </span>
                                     <span className="flex items-center gap-1" title="Map marker">
                                         <img
-                                            src={`/markers/${vt.marker_variant || "standard"}.png`}
-                                            alt={`${vt.marker_variant || "standard"} marker`}
+                                            src={vt.marker_image_url || `/markers/${vt.marker_variant || "standard"}.png`}
+                                            alt="Map marker"
                                             className="h-5 object-contain"
                                         />
-                                        {vt.marker_variant || "standard"}
+                                        {vt.marker_image_url ? "custom" : (vt.marker_variant || "standard")}
                                     </span>
                                 </div>
 
@@ -427,15 +460,16 @@ export default function VehicleTypesPage() {
                             <Label>Map marker</Label>
                             <p className="text-xs text-muted-foreground">
                                 The car icon riders see on the map for drivers of this type.
+                                Pick a built-in marker, or upload a custom one below.
                             </p>
-                            <div className="grid grid-cols-3 gap-2">
+                            <div className={`grid grid-cols-3 gap-2 ${form.marker_image_url ? "opacity-50" : ""}`}>
                                 {MARKER_VARIANTS.map((m) => (
                                     <button
                                         key={m.value}
                                         type="button"
                                         onClick={() => setForm({ ...form, marker_variant: m.value })}
                                         className={`flex flex-col items-center gap-1 rounded-lg border p-3 transition-colors ${
-                                            (form.marker_variant || "standard") === m.value
+                                            !form.marker_image_url && (form.marker_variant || "standard") === m.value
                                                 ? "border-primary bg-primary/5 ring-1 ring-primary"
                                                 : "border-input hover:bg-muted"
                                         }`}
@@ -450,6 +484,47 @@ export default function VehicleTypesPage() {
                                     </button>
                                 ))}
                             </div>
+                            {form.marker_image_url ? (
+                                <div className="flex items-center gap-3 rounded-lg border border-primary bg-primary/5 p-3">
+                                    <img
+                                        src={form.marker_image_url}
+                                        alt="Custom marker"
+                                        className="h-12 object-contain"
+                                    />
+                                    <div className="flex-1">
+                                        <p className="text-xs font-medium">Custom marker (overrides selection above)</p>
+                                    </div>
+                                    <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => setForm({ ...form, marker_image_url: "" })}
+                                    >
+                                        Remove
+                                    </Button>
+                                </div>
+                            ) : (
+                                <div className="space-y-1">
+                                    <Input
+                                        type="file"
+                                        accept="image/png,image/webp"
+                                        disabled={uploadingMarker || !editingId}
+                                        onChange={(e) => {
+                                            const f = e.target.files?.[0];
+                                            if (f) void handleUploadMarker(f);
+                                            e.target.value = "";
+                                        }}
+                                    />
+                                    <p className="text-[10px] text-muted-foreground">
+                                        Custom marker: transparent PNG/WebP, car seen from above facing up
+                                        (north), tight portrait crop, ≤ 500 KB.
+                                        {!editingId && " Save the type first, then re-open to upload."}
+                                    </p>
+                                    {uploadingMarker && (
+                                        <span className="text-xs text-muted-foreground">Uploading…</span>
+                                    )}
+                                </div>
+                            )}
                         </div>
 
                         <div className="flex items-center justify-between">

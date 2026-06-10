@@ -1568,61 +1568,18 @@ async def test_get_chat_status_completed_recent():
     assert result["post_trip"] is True
 
 
-# ── get_call_info ─────────────────────────────────────────────────────────────
+# ── call endpoint removed (chat-only contact) ─────────────────────────────────
+# Privacy decision (2026-06): rider↔driver contact is in-app chat only. The
+# GET /{ride_id}/call endpoint exposed real phone numbers and was removed.
+# This pin keeps it from coming back without a deliberate decision.
 
 
-@pytest.mark.anyio
-async def test_get_call_info_not_found():
-    from fastapi import HTTPException
+def test_call_endpoint_removed():
+    from backend.routes import rides
 
-    from backend.routes.rides import get_call_info
-
-    with patch("backend.routes.rides.db") as mock_db:
-        mock_db.find_one = AsyncMock(return_value=None)
-        with pytest.raises(HTTPException) as exc:
-            await get_call_info(ride_id=_RIDE_ID, current_user=_USER)
-    assert exc.value.status_code == 404
-
-
-@pytest.mark.anyio
-async def test_get_call_info_completed_ride():
-    from fastapi import HTTPException
-
-    from backend.routes.rides import get_call_info
-
-    with patch("backend.routes.rides.db") as mock_db:
-        mock_db.find_one = AsyncMock(return_value=_ride(status="completed"))
-        with pytest.raises(HTTPException) as exc:
-            await get_call_info(ride_id=_RIDE_ID, current_user=_USER)
-    assert exc.value.status_code == 400
-
-
-@pytest.mark.anyio
-async def test_get_call_info_not_authorized():
-    from fastapi import HTTPException
-
-    from backend.routes.rides import get_call_info
-
-    ride = _ride(status="in_progress", rider_id="other-rider")
-    with patch("backend.routes.rides.db") as mock_db:
-        mock_db.find_one = AsyncMock(side_effect=[ride, None])  # ride, then no driver
-        with pytest.raises(HTTPException) as exc:
-            await get_call_info(ride_id=_RIDE_ID, current_user=_USER)
-    assert exc.value.status_code == 403
-
-
-@pytest.mark.anyio
-async def test_get_call_info_rider_calls_driver():
-    from backend.routes.rides import get_call_info
-
-    ride = _ride(status="in_progress", rider_id=_RIDER_ID, driver_id=_DRIVER_ID)
-    target_driver = {"id": _DRIVER_ID, "user_id": "drv-user"}
-    target_user = {"first_name": "Jane", "last_name": "Doe", "phone": "+13065550000"}
-    with patch("backend.routes.rides.db") as mock_db:
-        # find_one calls: ride, current user's driver (None = is_rider), target driver, target user
-        mock_db.find_one = AsyncMock(side_effect=[ride, None, target_driver, target_user])
-        result = await get_call_info(ride_id=_RIDE_ID, current_user=_USER)
-    assert result["phone"] == "+13065550000"
+    assert not hasattr(rides, "get_call_info")
+    route_paths = [getattr(r, "path", "") for r in rides.api_router.routes]
+    assert not any(p.endswith("/call") for p in route_paths)
 
 
 # ── get_ride_messages ─────────────────────────────────────────────────────────

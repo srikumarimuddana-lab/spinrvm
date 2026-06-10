@@ -43,6 +43,16 @@ email-validator>=2.3.0
 
 # Google/AI
 google-generativeai>=0.8.6
+# AI assistant (backend/ai/): provider adapters + MCP server.
+# anthropic = default provider (Claude Haiku); openai also serves OpenRouter via
+# base_url override; mcp powers the optional /mcp streamable-HTTP mount.
+# All three are imported lazily (backend/ai/providers/, backend/ai/mcp_server.py)
+# so the server boots and tests pass when they are absent — the AI assistant
+# ships dark behind app_settings.ai_assistant_enabled until the lockfile is
+# regenerated per docs/runbooks/dependency-update.md.
+anthropic>=0.40.0
+openai>=1.60.0
+mcp>=1.9.0
 google-api-python-client>=2.194.0
 google-cloud-storage>=3.4.1
 google-cloud-firestore>=2.27.0

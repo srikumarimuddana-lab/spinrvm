@@ -12,11 +12,14 @@ one replica, so an in-process buffer cannot split a driver's trail across
 replicas. The REST location-batch path bypasses the buffer entirely (it is
 already batched on-device).
 
-Loss semantics: a flush failure loses at most one buffer (≤ _MAX_POINTS
-points) and raises — same contract as the old per-ping write, which dropped
-the point and killed the socket; the driver app's on-device buffer re-uploads
-via REST batch after reconnect. Callers in disconnect cleanup must wrap
-flush_driver_breadcrumbs themselves so cleanup is never masked.
+Loss semantics: a failed persist NEVER drops points silently — the batch is
+stashed under the ride context it was captured on and retried at the next
+flush for that driver, before newer points, so trail order is preserved.
+The stash is capped at _MAX_PENDING_BATCHES per driver; beyond that the
+oldest batch is dropped with an ERROR log (the driver app's on-device
+buffer + REST re-upload is the backstop for prolonged DB outages). Flush
+failures still raise so callers see them; disconnect cleanup must wrap
+flush_driver_breadcrumbs itself so cleanup is never masked.
 """
 
 from __future__ import annotations
@@ -46,6 +49,32 @@ class _DriverBuffer:
 
 
 _buffers: Dict[str, _DriverBuffer] = {}
+
+# Batches whose persist failed, retried oldest-first at the next flush, each
+# under the ride context it was captured on (a batch from ride X must never
+# be re-attributed to a later context).
+_pending_retry: Dict[str, List[_DriverBuffer]] = {}
+_MAX_PENDING_BATCHES = 5
+
+# Drivers with a flush in flight. A concurrent flush no-ops — same outcome
+# as the previous pop-first design, without the double-persist it allowed.
+_flushing: set = set()
+
+
+def _stash_failed_batch(driver_id: str, buf: _DriverBuffer) -> None:
+    stash = _pending_retry.setdefault(driver_id, [])
+    stash.append(buf)
+    overflow = len(stash) - _MAX_PENDING_BATCHES
+    if overflow > 0:
+        lost = stash[:overflow]
+        del stash[:overflow]
+        logger.error(
+            "breadcrumb retry stash overflow for driver %s: dropped %d batch(es) / %d point(s); "
+            "on-device REST re-upload is the remaining backstop",
+            driver_id,
+            overflow,
+            sum(len(b.points) for b in lost),
+        )
 
 
 async def buffer_ride_breadcrumb(
@@ -88,16 +117,35 @@ async def buffer_ride_breadcrumb(
 async def flush_driver_breadcrumbs(driver_id: str) -> int:
     """Persist and clear the driver's buffered points. No-op when empty.
 
-    Call sites: threshold flushes (above), WS disconnect cleanup, and the
-    ride-completion path — settlement computes trip distance from the trail,
-    so the tail of the trip must be on disk before it runs.
+    Retries previously failed batches first (oldest-first, own ride context),
+    then the live buffer. On persist failure the points are stashed for the
+    next flush and the exception propagates. Call sites: threshold flushes
+    (above), WS disconnect cleanup, and the ride-completion path —
+    settlement computes trip distance from the trail, so the tail of the
+    trip must be on disk before it runs.
     """
-    buf = _buffers.pop(driver_id, None)
-    if buf is None or not buf.points:
+    if driver_id in _flushing:
         return 0
-    return await persist_ride_breadcrumbs(
-        driver_id,
-        buf.points,
-        persist_idle=True,
-        active_ride=buf.ride,
-    )
+    _flushing.add(driver_id)
+    try:
+        inserted = 0
+        pending = _pending_retry.get(driver_id)
+        while pending:
+            batch = pending[0]
+            inserted += await persist_ride_breadcrumbs(
+                driver_id, batch.points, persist_idle=True, active_ride=batch.ride
+            )
+            pending.pop(0)
+        _pending_retry.pop(driver_id, None)
+
+        buf = _buffers.pop(driver_id, None)
+        if buf is None or not buf.points:
+            return inserted
+        try:
+            inserted += await persist_ride_breadcrumbs(driver_id, buf.points, persist_idle=True, active_ride=buf.ride)
+        except Exception:
+            _stash_failed_batch(driver_id, buf)
+            raise
+        return inserted
+    finally:
+        _flushing.discard(driver_id)

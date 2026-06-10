@@ -306,13 +306,17 @@ class DriverBot(HttpUser):
 @events.test_stop.add_listener
 def assert_slas(environment, **kwargs):
     stats = environment.stats
+    # The request method must be looked up explicitly: stats.get() CREATES an
+    # empty (truthy) entry for a missing (name, method) pair, so a
+    # `get(name, "POST") or get(name, "MARKET")` chain never reaches the
+    # MARKET entry and the dispatch gate would be silently skipped.
     gates = [
-        ("rides:estimate", 0.95, 300, "fare estimate P95 < 300ms"),
-        ("market:offer-to-accept", 0.95, 2000, "dispatch offer→accept P95 < 2s"),
+        ("rides:estimate", "POST", 0.95, 300, "fare estimate P95 < 300ms"),
+        ("market:offer-to-accept", "MARKET", 0.95, 2000, "dispatch offer→accept P95 < 2s"),
     ]
     failed = []
-    for name, pct, limit_ms, label in gates:
-        entry = stats.get(name, "POST") or stats.get(name, "MARKET")
+    for name, method, pct, limit_ms, label in gates:
+        entry = stats.get(name, method)
         if entry is None or entry.num_requests == 0:
             continue
         observed = entry.get_response_time_percentile(pct)

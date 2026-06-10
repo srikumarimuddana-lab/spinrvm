@@ -19,11 +19,15 @@ try:
     from ..services.zoho_desk_integration import create_ticket_for_dispute
     from ..settings_loader import get_app_settings
     from ..utils.audit_logger import log_admin_action
+    from ..utils.money import dollars_to_cents
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user, get_current_user
+    from features import send_push_notification
     from services.zoho_desk_integration import create_ticket_for_dispute
     from settings_loader import get_app_settings
+    from utils.audit_logger import log_admin_action
+    from utils.money import dollars_to_cents  # noqa: F401
 
 db = db_supabase  # legacy alias
 get_current_admin = get_admin_user
@@ -60,9 +64,7 @@ async def create_dispute(
         raise HTTPException(status_code=403, detail="Not authorized for this ride")
 
     if ride.get("status") not in ("completed", "cancelled"):
-        raise HTTPException(
-            status_code=400, detail="Can only dispute completed or cancelled rides"
-        )
+        raise HTTPException(status_code=400, detail="Can only dispute completed or cancelled rides")
 
     # Check for existing open dispute on same ride
     existing = (lambda _r: _r[0] if _r else None)(
@@ -73,9 +75,7 @@ async def create_dispute(
         )
     )
     if existing:
-        raise HTTPException(
-            status_code=400, detail="A dispute is already open for this ride"
-        )
+        raise HTTPException(status_code=400, detail="A dispute is already open for this ride")
 
     dispute = {
         "id": str(uuid.uuid4()),
@@ -127,9 +127,7 @@ async def get_user_disputes(current_user: dict = Depends(get_current_user)):
 @api_router.get("/{dispute_id}")
 async def get_dispute(dispute_id: str, current_user: dict = Depends(get_current_user)):
     """Get a specific dispute by ID."""
-    dispute = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("disputes", {"id": dispute_id}, limit=1)
-    )
+    dispute = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("disputes", {"id": dispute_id}, limit=1))
     if not dispute:
         raise HTTPException(status_code=404, detail="Dispute not found")
     if dispute.get("user_id") != current_user["id"]:
@@ -161,20 +159,8 @@ async def admin_get_disputes(
     # user_phone intentionally omitted from response — P1-9 (PIPEDA: no PII in bulk list).
     user_ids = list({d["user_id"] for d in disputes if d.get("user_id")})
     ride_ids = list({d["ride_id"] for d in disputes if d.get("ride_id")})
-    users = (
-        await db_supabase.get_rows(
-            "users", {"id": {"$in": user_ids}}, limit=len(user_ids)
-        )
-        if user_ids
-        else []
-    )
-    rides = (
-        await db_supabase.get_rows(
-            "rides", {"id": {"$in": ride_ids}}, limit=len(ride_ids)
-        )
-        if ride_ids
-        else []
-    )
+    users = await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=len(user_ids)) if user_ids else []
+    rides = await db_supabase.get_rows("rides", {"id": {"$in": ride_ids}}, limit=len(ride_ids)) if ride_ids else []
     users_by_id = {u["id"]: u for u in (users or [])}
     rides_by_id = {r["id"]: r for r in (rides or [])}
 
@@ -186,9 +172,7 @@ async def admin_get_disputes(
             {
                 **d,
                 "user_name": (
-                    f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
-                    if user
-                    else "Unknown"
+                    f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "Unknown"
                 ),
                 "ride_status": ride.get("status") if ride else None,
                 "ride_fare": ride.get("total_fare") if ride else None,
@@ -204,9 +188,7 @@ async def admin_resolve_dispute(
     current_admin: dict = Depends(get_current_admin),
 ):
     """Resolve a dispute (approve/reject refund)."""
-    dispute = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("disputes", {"id": dispute_id}, limit=1)
-    )
+    dispute = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("disputes", {"id": dispute_id}, limit=1))
     if not dispute:
         raise HTTPException(status_code=404, detail="Dispute not found")
 
@@ -224,11 +206,11 @@ async def admin_resolve_dispute(
 
     refund_result: Dict[str, Any] = {}
     if req.resolution in ("approved", "partial_refund") and req.refund_amount:
-        refund_amount_cents = int(req.refund_amount * Decimal("100"))
+        # HALF_UP cents conversion — int() truncation shaved sub-cent refund
+        # amounts (e.g. 10.005 → 1000 cents instead of 1001).
+        refund_amount_cents = dollars_to_cents(req.refund_amount)
         ride = await db_supabase.get_ride(dispute.get("ride_id"))
-        payment_intent_id = (ride or {}).get("stripe_charge_id") or (ride or {}).get(
-            "payment_intent_id"
-        )
+        payment_intent_id = (ride or {}).get("stripe_charge_id") or (ride or {}).get("payment_intent_id")
 
         if not payment_intent_id:
             logger.warning(
@@ -263,9 +245,7 @@ async def admin_resolve_dispute(
                     f"${req.refund_amount} for dispute {dispute_id}"
                 )
             except Exception as refund_err:
-                logger.error(
-                    f"[REFUND] Stripe refund failed for dispute {dispute_id}: {refund_err}"
-                )
+                logger.error(f"[REFUND] Stripe refund failed for dispute {dispute_id}: {refund_err}")
                 raise HTTPException(
                     status_code=502,
                     detail="Stripe refund failed — retry to reuse idempotency key",

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import secrets
+import time as _time_mod
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
@@ -104,11 +105,17 @@ try:
     from ..utils.datetime_utils import parse_iso_utc
     from ..utils.earnings_snapshot import build_earnings_snapshot
     from ..utils.insurance_periods import record_period_transition
+    from ..utils.metrics import inc as _metric_inc
+    from ..utils.metrics import observe as _metric_observe
+    from ..utils.metrics import timed as _metric_timed
     from ..utils.ride_code import generate_ride_code
 except ImportError:
     from utils.datetime_utils import parse_iso_utc
     from utils.earnings_snapshot import build_earnings_snapshot  # noqa: F401
     from utils.insurance_periods import record_period_transition  # type: ignore[assignment]
+    from utils.metrics import inc as _metric_inc  # type: ignore
+    from utils.metrics import observe as _metric_observe  # type: ignore
+    from utils.metrics import timed as _metric_timed  # type: ignore
     from utils.ride_code import generate_ride_code
 
 try:
@@ -792,6 +799,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
         for d, _ in claimed_drivers:
             await db_supabase.set_driver_available(d["id"], True)
         return
+    _metric_inc("spinr_dispatch_offer_sent_total", by=len(offer_rows))
 
     # ── Parallel enrichment (shared across all drivers) ───────────
     async def _fetch_rider() -> dict | None:
@@ -1333,6 +1341,7 @@ async def _filter_reachable_drivers(all_drivers: list) -> list:
 
 @api_router.post("/estimate")
 @api_rate_limit
+@_metric_timed("spinr_fare_calc_duration_ms")
 async def estimate_ride(
     body: RideEstimateRequest,
     request: Request = None,
@@ -3155,6 +3164,19 @@ class ProcessPaymentRequest(BaseModel):
     tip_amount: Decimal = Field(default=Decimal("0"), ge=0, le=500)
 
 
+def _record_settlement_metrics(payment_method: str, result, duration_ms: float) -> None:
+    """KPI: spinr_payment_settlement_total{method,outcome} + duration histogram.
+
+    Outcome mapping: already_paid is split out from success because no money
+    moved (idempotent replay) — counting it as success would mask retry storms
+    behind a healthy-looking settlement rate.
+    """
+    method = {"wallet": "wallet", "company_allowance": "corporate"}.get(payment_method, "card")
+    outcome = "already_paid" if result.already_paid else ("success" if result.success else "failed")
+    _metric_inc("spinr_payment_settlement_total", {"method": method, "outcome": outcome})
+    _metric_observe("spinr_payment_settlement_duration_ms", duration_ms, {"method": method})
+
+
 @api_router.post("/{ride_id}/process-payment")
 @payment_action_limit
 async def process_payment(
@@ -3310,6 +3332,7 @@ async def process_payment(
     _snap = ride.get("fare_breakdown_snapshot")
     _snap_lines = (_snap.get("lines") if isinstance(_snap, dict) else None) if _snap else None
 
+    _settle_started = _time_mod.monotonic()
     if payment_method == "wallet":
         result = await settle_wallet(
             ride,
@@ -3323,6 +3346,8 @@ async def process_payment(
         result = await settle_corporate(ride, ride_id, total_charge, tip_rounded)
     else:
         result = await settle_card(ride, ride_id, current_user["id"], total_charge, tip_rounded)
+
+    _record_settlement_metrics(payment_method, result, (_time_mod.monotonic() - _settle_started) * 1000.0)
 
     if not result.success:
         detail = result.error or "Payment failed"
@@ -4314,66 +4339,9 @@ async def get_chat_status(ride_id: str, current_user: dict = Depends(get_current
     return {"available": True, "post_trip": False}
 
 
-@api_router.get("/{ride_id}/call")
-async def get_call_info(ride_id: str, current_user: dict = Depends(get_current_user)):
-    """Get masked phone number for calling the other party during an active ride.
-
-    Returns a proxy number or the real number depending on Twilio config.
-    In production, this would create a Twilio Proxy session to mask both
-    parties' real numbers. For now, it returns the other party's phone
-    directly so the call button works immediately.
-    """
-    ride = await db.find_one("rides", {"id": ride_id})
-    if not ride:
-        raise HTTPException(status_code=404, detail="Ride not found")
-
-    if ride.get("status") in RideStatus.terminal_statuses():
-        raise HTTPException(status_code=400, detail="Cannot call on a completed or cancelled ride")
-
-    is_rider = ride.get("rider_id") == current_user["id"]
-    driver = await db.find_one("drivers", {"user_id": current_user["id"]})
-    is_driver = driver and ride.get("driver_id") == driver["id"]
-
-    if not (is_rider or is_driver):
-        raise HTTPException(status_code=403, detail="Not part of this ride")
-
-    if is_rider:
-        # Rider wants to call the driver
-        if not ride.get("driver_id"):
-            raise HTTPException(status_code=400, detail="No driver assigned yet")
-        target_driver = await db.find_one("drivers", {"id": ride["driver_id"]})
-        if not target_driver:
-            raise HTTPException(status_code=404, detail="Driver not found")
-        target_user = await db.find_one("users", {"id": target_driver.get("user_id")})
-        phone = target_user.get("phone") if target_user else None
-        name = (
-            f"{target_user.get('first_name', '')} {target_user.get('last_name', '')}".strip()
-            if target_user
-            else "Driver"
-        )
-    else:
-        # Driver wants to call the rider
-        target_user = await db.find_one("users", {"id": ride["rider_id"]})
-        phone = target_user.get("phone") if target_user else None
-        name = (
-            f"{target_user.get('first_name', '')} {target_user.get('last_name', '')}".strip()
-            if target_user
-            else "Rider"
-        )
-
-    if not phone:
-        raise HTTPException(status_code=404, detail="Phone number not available")
-
-    # In production: create Twilio Proxy session here and return proxy number
-    # For now, return the real number with a masked display
-    masked = f"({'*' * (len(phone) - 4)}{phone[-4:]})" if len(phone) > 4 else phone
-
-    return {
-        "phone": phone,
-        "masked": masked,
-        "name": name,
-        "proxy": False,  # Set to True when Twilio Proxy is configured
-    }
+# NOTE: there is deliberately no GET /{ride_id}/call endpoint. Rider↔driver
+# contact is in-app chat only — real phone numbers are never exposed to the
+# other party (privacy decision, 2026-06). test_coverage_rides.py pins this.
 
 
 @api_router.get("/{ride_id}/messages")

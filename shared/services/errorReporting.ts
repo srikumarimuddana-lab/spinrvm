@@ -1,21 +1,81 @@
 /**
- * Error Reporting — unified crash/error reporting facade (SPR-03/3b).
+ * Error Reporting — unified crash/error reporting facade (SPR-03/3b, SPR-04).
  *
  * Implementation strategy by platform:
- *   Native (iOS/Android EAS build) → Firebase Crashlytics
- *                                     (@react-native-firebase/crashlytics, already installed)
- *   Web                             → console.error (no Crashlytics on web)
- *   Expo Go / test                  → console.error only (Crashlytics native module absent)
+ *   Native + EXPO_PUBLIC_SENTRY_DSN  → @sentry/react-native (primary; one
+ *                                      incident = one dashboard with backend)
+ *   Native without DSN               → Firebase Crashlytics fallback
+ *                                      (@react-native-firebase/crashlytics)
+ *   Web                              → console.error
+ *   Expo Go / test                   → console.error only (native modules absent)
  *
- * Upgrade path for SPR-04:
- *   Replace Crashlytics calls with @sentry/react-native once the EAS
- *   production build pipeline is active. All call sites in ErrorBoundary,
- *   stores, and screens use this module — swapping the implementation
- *   requires changes only here.
- *
- * Interface is intentionally Sentry-compatible so the upgrade is mechanical.
+ * Apps opt in by calling initErrorReporting() once at startup (see each
+ * app's _layout.tsx). All call sites in ErrorBoundary, stores, and screens
+ * go through this module, so the backend's Sentry conventions are enforced
+ * in one place:
+ *   - tags: surface (rider-app/driver-app), env — set at init
+ *   - PIPEDA: no PII in events. sendDefaultPii stays false, user is id-only,
+ *     console breadcrumbs are dropped (they routinely contain GPS coords).
  */
 import { Platform, NativeModules } from 'react-native';
+
+// Lazy singleton for the Sentry SDK. Set on successful init; stays null in
+// Expo Go/web/test or when the app never provides a DSN.
+let _sentry: any = null;
+
+export interface ErrorReportingConfig {
+  dsn?: string;
+  /** CLAUDE.md Sentry tag: rider-app | driver-app */
+  surface: 'rider-app' | 'driver-app';
+  environment?: string;
+}
+
+/**
+ * Initialise Sentry as the primary reporter. Safe to call unconditionally:
+ * without a DSN (or when the native module is unavailable, e.g. Expo Go)
+ * the facade keeps its Crashlytics/console behaviour.
+ */
+export function initErrorReporting(config: ErrorReportingConfig): void {
+  if (!config.dsn || Platform.OS === 'web') return;
+  try {
+    const Sentry = require('@sentry/react-native');
+    Sentry.init({
+      dsn: config.dsn,
+      environment: config.environment ?? (__DEV__ ? 'development' : 'production'),
+      // PIPEDA: never attach IP/device-owner PII, screenshots, or view trees.
+      sendDefaultPii: false,
+      attachScreenshot: false,
+      attachViewHierarchy: false,
+      tracesSampleRate: 0.2,
+      initialScope: { tags: { surface: config.surface } },
+      // Console breadcrumbs routinely carry GPS coordinates and ride
+      // payloads from debug logging — drop the whole category.
+      beforeBreadcrumb(breadcrumb: any) {
+        return breadcrumb?.category === 'console' ? null : breadcrumb;
+      },
+      // Defence in depth: events may only carry the user id.
+      beforeSend(event: any) {
+        if (event?.user) event.user = { id: event.user.id };
+        return event;
+      },
+    });
+    _sentry = Sentry;
+  } catch (e) {
+    // Expo Go / missing native module: fall back to Crashlytics/console.
+    if (__DEV__) console.log('[ErrorReporting] Sentry unavailable, using fallback:', e);
+  }
+}
+
+/** Test seam: report whether Sentry is the active backend. */
+export function isSentryActive(): boolean {
+  return _sentry !== null;
+}
+
+/** Test seam: reset module state between tests. */
+export function _resetForTests(): void {
+  _sentry = null;
+  _crashlytics = null;
+}
 
 // Lazy-load the native Crashlytics module so web builds succeed and Expo Go
 // doesn't crash trying to resolve a native module.
@@ -37,19 +97,23 @@ function crashlytics() {
 }
 
 /**
- * Record an exception. In production this goes to Firebase Crashlytics.
+ * Record an exception. Goes to Sentry when initialised, else Crashlytics.
  * `context` values are attached as custom attributes before recording.
  */
 export function captureException(error: Error, context?: Record<string, unknown>): void {
   try {
-    const c = crashlytics();
-    if (c) {
-      if (context) {
-        Object.entries(context).forEach(([k, v]) => {
-          try { c.setAttribute(k, String(v)); } catch {}
-        });
+    if (_sentry) {
+      _sentry.captureException(error, context ? { extra: context } : undefined);
+    } else {
+      const c = crashlytics();
+      if (c) {
+        if (context) {
+          Object.entries(context).forEach(([k, v]) => {
+            try { c.setAttribute(k, String(v)); } catch {}
+          });
+        }
+        c.recordError(error);
       }
-      c.recordError(error);
     }
   } catch {
     // The error reporter must never crash the app.
@@ -60,14 +124,18 @@ export function captureException(error: Error, context?: Record<string, unknown>
 }
 
 /**
- * Log a non-fatal message. Appears in Crashlytics log trail.
+ * Log a non-fatal message. Appears in the Sentry/Crashlytics log trail.
  */
 export function captureMessage(
   message: string,
   level: 'log' | 'warning' | 'error' = 'log'
 ): void {
   try {
-    crashlytics()?.log(message);
+    if (_sentry) {
+      _sentry.captureMessage(message, level === 'log' ? 'info' : level);
+    } else {
+      crashlytics()?.log(message);
+    }
   } catch {}
   if (__DEV__) {
     const fn =
@@ -79,9 +147,14 @@ export function captureMessage(
 /**
  * Associate subsequent events with a user identity.
  * Call after successful login; call with empty string on logout.
+ * PIPEDA: id only — never set name/email/phone attributes here.
  */
 export function setUser(userId: string, attributes?: Record<string, string>): void {
   try {
+    if (_sentry) {
+      _sentry.setUser(userId ? { id: userId } : null);
+      return;
+    }
     const c = crashlytics();
     if (c) {
       c.setUserId(userId);
@@ -95,11 +168,15 @@ export function setUser(userId: string, attributes?: Record<string, string>): vo
 }
 
 /**
- * Add a breadcrumb to the Crashlytics log trail. Useful for tracing the
- * steps leading up to a crash without full event logging.
+ * Add a breadcrumb to the Sentry/Crashlytics log trail. Useful for tracing
+ * the steps leading up to a crash without full event logging.
  */
 export function addBreadcrumb(message: string): void {
   try {
+    if (_sentry) {
+      _sentry.addBreadcrumb({ message, level: 'info' });
+      return;
+    }
     crashlytics()?.log(message);
   } catch {}
 }

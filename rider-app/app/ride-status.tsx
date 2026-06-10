@@ -265,9 +265,7 @@ export default function RideStatusScreen() {
               <Text style={styles.tripsText}>• {currentDriver?.total_rides} trips</Text>
             </View>
           </View>
-          <TouchableOpacity style={styles.callButton}>
-            <Ionicons name="call" size={22} color={colors.primary} />
-          </TouchableOpacity>
+          {/* No call button: rider↔driver contact is chat-only. */}
         </View>
 
         <View style={styles.vehicleCard}>
@@ -365,9 +363,7 @@ export default function RideStatusScreen() {
               <Ionicons name="checkmark-circle" size={14} color="#10B981" /> Arrived at pickup
             </Text>
           </View>
-          <TouchableOpacity style={styles.callButton}>
-            <Ionicons name="call" size={22} color={colors.primary} />
-          </TouchableOpacity>
+          {/* No call button: rider↔driver contact is chat-only. */}
         </View>
 
         <View style={styles.vehicleCard}>
@@ -714,14 +710,6 @@ function createStyles(colors: ThemeColors) {
       fontFamily: 'PlusJakartaSans_400Regular',
       color: colors.textDim,
       marginLeft: 8,
-    },
-    callButton: {
-      width: 48,
-      height: 48,
-      borderRadius: 24,
-      backgroundColor: '#FFF0F0',
-      justifyContent: 'center',
-      alignItems: 'center',
     },
     vehicleCard: {
       flexDirection: 'row',

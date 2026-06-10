@@ -31,7 +31,7 @@ import BrandSplash from '../components/BrandSplash';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
 import { ThemeProvider, useTheme } from '@shared/theme/ThemeContext';
-import { captureMessage, setUser } from '@shared/services/errorReporting';
+import { captureMessage, setUser, initErrorReporting } from '@shared/services/errorReporting';
 import Analytics from '@shared/analytics';
 import {
   initFirebaseServices,
@@ -86,6 +86,14 @@ function routeFromNotificationData(data: Record<string, string> | undefined) {
       break;
   }
 }
+
+// Crash/error reporting (Sentry primary, Crashlytics fallback) — initialised
+// at module scope so errors during the first render are captured. No-ops
+// when EXPO_PUBLIC_SENTRY_DSN is unset (dev/Expo Go) or on web.
+initErrorReporting({
+  dsn: process.env.EXPO_PUBLIC_SENTRY_DSN,
+  surface: 'rider-app',
+});
 
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 const canUseNotifications = !isExpoGo && Platform.OS !== 'web';

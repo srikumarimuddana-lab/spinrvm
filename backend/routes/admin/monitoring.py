@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 try:
+    from ...db_supabase import _DB_EXECUTOR as _db_executor_pool
     from ...db_supabase import _breaker as _db_breaker
     from ...db_supabase import _rows_from_res, run_sync
     from ...dependencies import get_admin_user
@@ -22,6 +23,7 @@ try:
         redis_delete_pattern,
     )
 except ImportError:
+    from db_supabase import _DB_EXECUTOR as _db_executor_pool  # type: ignore
     from db_supabase import _breaker as _db_breaker  # type: ignore
     from db_supabase import _rows_from_res, run_sync
     from dependencies import get_admin_user
@@ -488,17 +490,13 @@ async def get_infrastructure_stats(
         cpu_user_seconds = None
         cpu_system_seconds = None
 
-    # Thread pool stats (the executor handling run_sync for Supabase).
-    # The default executor doesn't expose active/idle counts — we can
-    # at least report the configured max worker count so ops knows the
-    # ceiling. Use getattr because uvloop's Loop (and some partially
-    # initialised stdlib loops) don't carry `_default_executor` at all,
-    # and a raw attribute access would raise AttributeError.
-    import asyncio as _asyncio
-
-    loop = _asyncio.get_running_loop()
-    executor = getattr(loop, "_default_executor", None)
-    max_workers = getattr(executor, "_max_workers", None) if executor is not None else None
+    # Thread pool stats for the spinr-db executor that actually handles
+    # run_sync Supabase calls. This previously inspected the asyncio loop's
+    # *default* executor, which never runs DB work — ops saw the wrong pool.
+    max_workers = getattr(_db_executor_pool, "_max_workers", None)
+    spawned_threads = len(getattr(_db_executor_pool, "_threads", ()) or ())
+    queue = getattr(_db_executor_pool, "_work_queue", None)
+    queued_calls = queue.qsize() if queue is not None else None
 
     # DB circuit breaker snapshot
     db_circuit = {
@@ -532,7 +530,8 @@ async def get_infrastructure_stats(
         },
         "thread_pool": {
             "max_workers": max_workers,
-            "note": "Active/idle counts not exposed by Python's default executor",
+            "spawned_threads": spawned_threads,
+            "queued_calls": queued_calls,
         },
         "db_circuit_breaker": db_circuit,
         "redis": {

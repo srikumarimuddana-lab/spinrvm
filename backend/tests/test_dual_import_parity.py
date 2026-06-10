@@ -1,6 +1,6 @@
 """Dual-import branch parity — fallback branches must mirror the try branch.
 
-Every backend route module uses the intentional dual import pattern
+Every backend module uses the intentional dual import pattern
 (CLAUDE.md § Critical Conventions):
 
     try:
@@ -8,19 +8,22 @@ Every backend route module uses the intentional dual import pattern
     except ImportError:
         from utils.foo import bar       # top-level import mode
 
-A name imported only in the ``try`` branch is a latent NameError in the
-import mode that takes the fallback. This is exactly how the Codex P1s on
-PR #1757 happened: a formatter stripped ``build_earnings_snapshot`` and
-``dollars_to_cents`` from the fallback branches, leaving the tip/rating/
-completion and dispute-refund paths broken in top-level import mode.
+A name bound only in the ``try`` branch is a latent NameError in the import
+mode that takes the fallback. Two independent regressions proved the class:
+a formatter stripped ``build_earnings_snapshot`` / ``dollars_to_cents`` from
+fallback branches (PR #1757 Codex P1s), and a settlement metrics call could
+500 a successful payment (PR #1758 Codex finding).
 
-This test parses every module under ``backend/routes/`` and asserts each
+This file unifies both PRs' guards: it parses every module under
+``backend/routes/`` plus the observability-touched modules, and asserts each
 module-level ``try/except ImportError`` block binds the same names in both
-branches (imports, function defs, or assignments all count as bindings).
+branches. Imports, function/class defs, assignments, and nested try/except
+fallbacks (websocket.py falls back to stub ``async def``s) all count as
+bindings.
 
-``KNOWN_LEGACY_VIOLATIONS`` is a ratchet baseline of pre-existing gaps in
-files outside PR #1757's scope. Do not add to it — fix the fallback branch
-instead. Remove entries as the gaps are fixed.
+``KNOWN_LEGACY_VIOLATIONS`` is a ratchet baseline of pre-existing gaps.
+Do not add to it — fix the fallback branch instead. Remove entries as the
+gaps are fixed (the stale-baseline test enforces removal).
 """
 
 from __future__ import annotations
@@ -35,34 +38,43 @@ pytestmark = pytest.mark.unit
 
 _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# Non-routes modules guarded since PR #1758's observability work.
+EXTRA_GUARDED_MODULES = [
+    "services/dispatch_service.py",
+    "socket_manager.py",
+    "utils/breadcrumbs.py",
+    "utils/breadcrumb_buffer.py",
+]
+
 # Pre-existing fallback gaps (file → names missing from the except branch).
-# These predate the parity check; each is a latent NameError in top-level
-# import mode and should be fixed in its own scoped change.
+# Each is a latent NameError in top-level import mode; fix in scoped changes.
 KNOWN_LEGACY_VIOLATIONS = {
     "routes/admin/maintenance.py": {"_run_sync", "_supabase_client"},
     "routes/safety.py": {"notify_safety_team"},
-    "routes/websocket.py": {
-        "get_app_settings",
-        "get_ride_eta_seconds",
-        "redis_expire",
-        "redis_incr",
-    },
 }
 
 
-def _bound_names(stmts: list[ast.stmt]) -> set[str]:
-    """Names a statement list binds at module level (imports, defs, assigns)."""
-    out: set[str] = set()
-    for s in stmts:
-        if isinstance(s, ast.ImportFrom):
-            out |= {a.asname or a.name for a in s.names}
-        elif isinstance(s, ast.Import):
-            out |= {(a.asname or a.name).split(".")[0] for a in s.names}
-        elif isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            out.add(s.name)
-        elif isinstance(s, ast.Assign):
-            out |= {t.id for t in s.targets if isinstance(t, ast.Name)}
-    return out
+def _bound_names(stmts) -> set[str]:
+    """Names a statement list binds: imports, defs, assigns, and nested
+    try/except fallbacks (stub defs count as bindings)."""
+    names: set[str] = set()
+    for node in stmts:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                names.add(alias.asname or alias.name.split(".")[0])
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names.add(node.target.id)
+        elif isinstance(node, ast.Try):
+            names |= _bound_names(node.body)
+            for h in node.handlers:
+                names |= _bound_names(h.body)
+    return names
 
 
 def _catches_import_error(handler: ast.ExceptHandler) -> bool:
@@ -90,21 +102,29 @@ def _violations(path: str) -> set[str]:
     return missing
 
 
-def _route_files() -> list[str]:
-    return sorted(glob.glob(os.path.join(_BACKEND_DIR, "routes", "**", "*.py"), recursive=True))
+def _guarded_files() -> list[str]:
+    routes = sorted(glob.glob(os.path.join(_BACKEND_DIR, "routes", "**", "*.py"), recursive=True))
+    extras = [os.path.join(_BACKEND_DIR, rel) for rel in EXTRA_GUARDED_MODULES]
+    return routes + [p for p in extras if os.path.exists(p)]
 
 
 def test_fallback_import_branches_mirror_try_branches():
     failures = {}
-    for path in _route_files():
+    for path in _guarded_files():
         rel = os.path.relpath(path, _BACKEND_DIR).replace(os.sep, "/")
         missing = _violations(path) - KNOWN_LEGACY_VIOLATIONS.get(rel, set())
         if missing:
             failures[rel] = sorted(missing)
     assert not failures, (
-        "Names imported in the try branch but missing from the except ImportError "
+        "Names bound in the try branch but missing from the except ImportError "
         f"fallback (latent NameError in top-level import mode): {failures}"
     )
+
+
+def test_extra_guarded_modules_exist():
+    """If an observability module is renamed, move the guard with it."""
+    gone = [rel for rel in EXTRA_GUARDED_MODULES if not os.path.exists(os.path.join(_BACKEND_DIR, rel))]
+    assert not gone, f"Guarded modules missing — update EXTRA_GUARDED_MODULES: {gone}"
 
 
 def test_legacy_baseline_is_not_stale():

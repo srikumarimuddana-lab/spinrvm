@@ -23,10 +23,12 @@ logger = logging.getLogger(__name__)
 try:
     from ..geo_utils import calculate_distance
     from ..settings_loader import get_app_settings
+    from ..utils.breadcrumbs import invalidate_active_rides_cache
     from ..utils.driver_presence import present_driver_ids
 except ImportError:  # pragma: no cover - allow direct module imports in tests
     from geo_utils import calculate_distance
     from settings_loader import get_app_settings
+    from utils.breadcrumbs import invalidate_active_rides_cache  # type: ignore
     from utils.driver_presence import present_driver_ids
 
 
@@ -322,6 +324,9 @@ class DispatchService:
                 }
             },
         )
+        # The WS location hot path caches the driver's active rides for 5s
+        # (B3.1) — drop it so pings right after assignment see the new ride.
+        await invalidate_active_rides_cache(driver_id)
 
     async def last_assigned_driver_id(self) -> Optional[str]:
         """

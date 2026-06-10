@@ -115,19 +115,6 @@ export default function ChatDriverScreen() {
     router.back();
   };
 
-  const handleCall = async () => {
-    if (!rideId) return;
-    try {
-      const res = await api.get<{ phone?: string }>(`/rides/${rideId}/call`);
-      if (res.data?.phone) {
-        const { Linking } = require('react-native');
-        Linking.openURL(`tel:${res.data.phone}`);
-      }
-    } catch (e: any) {
-      console.log('[Chat] Call failed:', e?.response?.data?.detail || e.message);
-    }
-  };
-
   const sendMessage = async (text: string) => {
     if (!text.trim() || !rideId || sending) return;
     const trimmed = text.trim();
@@ -193,10 +180,8 @@ export default function ChatDriverScreen() {
           </View>
         </View>
 
-        <TouchableOpacity style={styles.callButton} onPress={handleCall}>
-          <Ionicons name="call" size={22} color={colors.primary} />
-        </TouchableOpacity>
-
+        {/* No call button: rider↔driver contact is chat-only — phone numbers
+            are never shared between parties (backend /call endpoint removed). */}
         <View style={styles.toggleContainer}>
           <View style={styles.toggleDot} />
         </View>
@@ -347,15 +332,6 @@ function createStyles(colors: ThemeColors) {
       fontSize: 13,
       fontFamily: 'PlusJakartaSans_400Regular',
       color: colors.textDim,
-    },
-    callButton: {
-      width: 44,
-      height: 44,
-      borderRadius: 22,
-      backgroundColor: '#FFF0F0',
-      justifyContent: 'center',
-      alignItems: 'center',
-      marginRight: 8,
     },
     toggleContainer: {
       width: 36,

@@ -31,6 +31,7 @@ Why map-matching (OSRM /match) and not routing (OSRM /route or Directions)?
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from typing import Any, List, Optional, Tuple
@@ -46,6 +47,13 @@ try:
     from ..core.config import settings
 except ImportError:
     from core.config import settings  # type: ignore
+
+try:
+    from .maps_budget import check_budget, record_call
+    from .redis_client import redis_get, redis_set
+except ImportError:
+    from utils.maps_budget import check_budget, record_call  # type: ignore
+    from utils.redis_client import redis_get, redis_set  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -299,21 +307,37 @@ async def compute_road_distance_km(breadcrumbs: list[dict]) -> Optional[float]:
 
 
 async def compute_route(from_lat: float, from_lng: float, to_lat: float, to_lng: float) -> Optional[dict]:
-    """Live driver→destination route via OSRM /route (NOT /match).
+    """Live driver→destination route: OSRM /route first, Google Directions fallback.
 
-    For the live share map: returns the optimal road route + ETA between the
-    driver's current position and the destination (pickup or dropoff). Returns
-    ``{"polyline": [[lat,lng],...], "eta_seconds": int, "distance_km": float}``
-    or None when OSRM is unavailable (caller can fall back to a straight line /
-    Google). This is /route (point-to-point optimal path), distinct from /match
-    (snap a driven trace) used for billing. Uses the public-OSRM fallback when
-    no self-hosted instance is configured (see _live_osrm_url).
+    For the live trip map: returns the optimal road route + ETA between the
+    driver's current position and the destination (pickup or dropoff) as
+    ``{"polyline": [[lat,lng],...], "eta_seconds": int, "distance_km": float}``.
+    Provider chain: OSRM via _live_osrm_url (self-hosted, then the public demo
+    fallback when none is configured); if OSRM is unavailable or fails, the
+    Google Directions API (budget-gated + cached) so the rider's route line
+    keeps following the driver instead of freezing on the planned polyline.
+    Returns None only when every provider fails — the client then keeps its
+    saved line. This is /route (point-to-point optimal path), distinct from
+    /match (snap a driven trace) used for billing.
     """
     app_settings = await get_app_settings() or {}
     osrm_url = _live_osrm_url(app_settings)
-    if not osrm_url:
-        return None
+    if osrm_url:
+        result = await _compute_route_via_osrm(from_lat, from_lng, to_lat, to_lng, osrm_url)
+        if result is not None:
+            return result
+        logger.info("[route_distance] OSRM /route produced no value; trying Google Directions fallback")
 
+    api_key = (app_settings.get("google_maps_api_key") or "").strip()
+    if not api_key:
+        return None
+    return await _compute_route_via_google(from_lat, from_lng, to_lat, to_lng, api_key)
+
+
+async def _compute_route_via_osrm(
+    from_lat: float, from_lng: float, to_lat: float, to_lng: float, osrm_url: str
+) -> Optional[dict]:
+    """Point-to-point route via OSRM /route. None on any failure."""
     coords = f"{from_lng},{from_lat};{to_lng},{to_lat}"  # OSRM is lng,lat
     url = f"{osrm_url.rstrip('/')}/route/v1/driving/{coords}"
     params = {"overview": "full", "geometries": "geojson", "steps": "false", "alternatives": "false"}
@@ -343,6 +367,106 @@ async def compute_route(from_lat: float, from_lng: float, to_lat: float, to_lng:
         "eta_seconds": int(round(_num_or_zero(r0.get("duration")))),
         "distance_km": round(_num_or_zero(r0.get("distance")) / 1000.0, 3),
     }
+
+
+# Google Directions API (fallback for the live route line when OSRM is down).
+_DIRECTIONS_URL = "https://maps.googleapis.com/maps/api/directions/json"
+# Clients poll the live route every ~20 s and a shared-trip page may poll the
+# same ride concurrently. Caching on a ~110 m origin grid (3 decimals) dedupes
+# concurrent viewers and stationary drivers without hiding real movement.
+# Must exceed the ~20 s client poll interval, or a stationary driver's next
+# poll always misses the expired entry and pays for a fresh Directions call.
+_LIVE_ROUTE_CACHE_TTL_S = 30
+
+
+def _decode_encoded_polyline(encoded: str) -> List[List[float]]:
+    """Decode a Google encoded polyline (1e-5 precision) into [[lat, lng], ...]."""
+    coords: List[List[float]] = []
+    index = lat = lng = 0
+    while index < len(encoded):
+        deltas: List[int] = []
+        for _ in range(2):
+            shift = result = 0
+            while True:
+                if index >= len(encoded):  # truncated input — keep what decoded cleanly
+                    return coords
+                b = ord(encoded[index]) - 63
+                index += 1
+                result |= (b & 0x1F) << shift
+                shift += 5
+                if b < 0x20:
+                    break
+            deltas.append(~(result >> 1) if result & 1 else result >> 1)
+        lat += deltas[0]
+        lng += deltas[1]
+        coords.append([round(lat * 1e-5, 6), round(lng * 1e-5, 6)])
+    return coords
+
+
+async def _compute_route_via_google(
+    from_lat: float, from_lng: float, to_lat: float, to_lng: float, api_key: str
+) -> Optional[dict]:
+    """Point-to-point route via Google Directions. Budget-gated and Redis-cached.
+
+    No departure_time param on purpose: traffic-aware requests bill at the
+    Advanced SKU; the fallback only needs road geometry + a reasonable ETA.
+    """
+    cache_key = f"live_route:google:{round(from_lat, 3)},{round(from_lng, 3)}:{round(to_lat, 5)},{round(to_lng, 5)}"
+    try:
+        cached = await redis_get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        logger.warning("[route_distance] live-route cache get failed", exc_info=False)
+
+    allowed, spent, budget = await check_budget()
+    if not allowed:
+        logger.warning(
+            "[route_distance] Maps daily budget reached (%.2f/%.2f USD) — skipping Directions fallback",
+            spent,
+            budget,
+        )
+        return None
+
+    params = {
+        "origin": f"{from_lat},{from_lng}",
+        "destination": f"{to_lat},{to_lng}",
+        "mode": "driving",
+        "key": api_key,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
+            resp = await client.get(_DIRECTIONS_URL, params=params)
+        await record_call("directions")
+        if resp.status_code != 200:
+            logger.warning("[route_distance] Directions API returned %d", resp.status_code)
+            return None
+        data = resp.json()
+    except Exception as e:
+        logger.warning("[route_distance] Directions API call failed: %s", e)
+        return None
+
+    routes = data.get("routes") or []
+    if data.get("status") != "OK" or not routes:
+        logger.warning("[route_distance] Directions status=%s", data.get("status"))
+        return None
+    r0 = routes[0]
+    polyline = _decode_encoded_polyline(((r0.get("overview_polyline") or {}).get("points")) or "")
+    if len(polyline) < 2:
+        return None
+    legs = r0.get("legs") or []
+    duration_s = sum(_num_or_zero((leg.get("duration") or {}).get("value")) for leg in legs)
+    distance_m = sum(_num_or_zero((leg.get("distance") or {}).get("value")) for leg in legs)
+    result = {
+        "polyline": _cap_polyline(polyline, _MAX_ROAD_POLYLINE_POINTS),
+        "eta_seconds": int(round(duration_s)),
+        "distance_km": round(distance_m / 1000.0, 3),
+    }
+    try:
+        await redis_set(cache_key, json.dumps(result), ttl=_LIVE_ROUTE_CACHE_TTL_S)
+    except Exception:
+        logger.warning("[route_distance] live-route cache set failed", exc_info=False)
+    return result
 
 
 async def snap_to_road(lat: float, lng: float) -> Optional[Tuple[float, float]]:

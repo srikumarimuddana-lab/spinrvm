@@ -31,6 +31,7 @@ try:
     from ..services.fare_service import recalculate_fare_for_distance
     from ..socket_manager import manager
     from ..utils.breadcrumb_buffer import flush_driver_breadcrumbs
+    from ..utils.breadcrumbs import invalidate_active_rides_cache
     from ..utils.datetime_utils import parse_iso_utc
     from ..utils.driver_online import intent_online
     from ..utils.driver_presence import (
@@ -63,6 +64,7 @@ except ImportError:
     from services.fare_service import recalculate_fare_for_distance
     from socket_manager import manager
     from utils.breadcrumb_buffer import flush_driver_breadcrumbs  # type: ignore
+    from utils.breadcrumbs import invalidate_active_rides_cache  # type: ignore
     from utils.datetime_utils import parse_iso_utc
     from utils.driver_online import intent_online  # type: ignore
     from utils.driver_presence import (
@@ -2975,6 +2977,11 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
     )
 
     await reset_miss_streak(driver["id"])
+
+    # The WS location hot path caches the driver's active rides for 5s
+    # (B3.1) — drop it so the first post-accept pings attach to this ride
+    # and reach the rider, instead of being served a stale empty list.
+    await invalidate_active_rides_cache(driver["id"])
 
     # Insurance Period 2 (en route to pickup — TNC primary commercial coverage).
     # In the batch-offer dispatch model the driver becomes obligated to the ride

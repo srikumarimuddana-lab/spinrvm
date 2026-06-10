@@ -101,6 +101,7 @@ from .fares import _fares_for_location_impl, get_fares_for_location
 
 try:
     from ..utils.datetime_utils import parse_iso_utc
+    from ..utils.earnings_snapshot import build_earnings_snapshot
     from ..utils.insurance_periods import record_period_transition
     from ..utils.ride_code import generate_ride_code
 except ImportError:
@@ -3084,22 +3085,19 @@ async def add_tip(
         snapshot["grand_total"] = _sum_fare_breakdown(updated_lines)
         update_payload["fare_breakdown_snapshot"] = snapshot
 
-    # Update driver_earnings_snapshot with the tip
+    # Update driver_earnings_snapshot with the tip — rebuild via the Decimal
+    # builder so the frozen total stays an exact component sum (feeds T4A).
     des = ride.get("driver_earnings_snapshot")
     if des and isinstance(des, dict):
-        des["tip"] = _f(new_tip)
-        des["total"] = round(
-            float(des.get("fare") or 0)
-            + float(new_tip)
-            + float(des.get("incentive") or 0)
-            + float(des.get("tax") or 0)
-            + float(des.get("cancel_fee") or 0),
-            2,
+        des.update(
+            build_earnings_snapshot(
+                fare=des.get("fare") or 0,
+                tip=new_tip,
+                incentive=des.get("incentive") or 0,
+                tax=des.get("tax") or 0,
+                cancel_fee=des.get("cancel_fee") or 0,
+            )
         )
-        des_lines = [ln for ln in (des.get("lines") or []) if ln.get("type") != "tip"]
-        if float(new_tip) > 0:
-            des_lines.insert(1, {"label": "Tip", "amount": _f(new_tip), "type": "tip"})
-        des["lines"] = des_lines
         update_payload["driver_earnings_snapshot"] = des
 
     await db_supabase.update_ride(ride_id, update_payload)
@@ -3612,19 +3610,15 @@ async def rate_driver(
         _rate_update: dict = {"tip_amount": _f(new_tip), "driver_earnings": _f(new_driver_earnings)}
         des = ride.get("driver_earnings_snapshot")
         if des and isinstance(des, dict):
-            des["tip"] = _f(new_tip)
-            des["total"] = round(
-                float(des.get("fare") or 0)
-                + float(new_tip)
-                + float(des.get("incentive") or 0)
-                + float(des.get("tax") or 0)
-                + float(des.get("cancel_fee") or 0),
-                2,
+            des.update(
+                build_earnings_snapshot(
+                    fare=des.get("fare") or 0,
+                    tip=new_tip,
+                    incentive=des.get("incentive") or 0,
+                    tax=des.get("tax") or 0,
+                    cancel_fee=des.get("cancel_fee") or 0,
+                )
             )
-            des_lines = [ln for ln in (des.get("lines") or []) if ln.get("type") != "tip"]
-            if float(new_tip) > 0:
-                des_lines.insert(1, {"label": "Tip", "amount": _f(new_tip), "type": "tip"})
-            des["lines"] = des_lines
             _rate_update["driver_earnings_snapshot"] = des
         await db_supabase.update_ride(ride_id, _rate_update)
 
@@ -4787,39 +4781,18 @@ async def rider_complete_ride(
 
     # ── Driver earnings snapshot ──
     try:
-        _ib = float(_rider_incentive_total.quantize(Decimal("0.01")))
-        _fare = round(
-            float(ride.get("base_fare") or 0)
-            + float(ride.get("distance_fare") or 0)
-            + float(ride.get("time_fare") or 0),
-            2,
-        )
-        _tip = round(float(ride.get("tip_amount") or 0), 2)
-        _tax = round(float(ride.get("tax_amount") or 0), 2)
-        _cfee = round(float(ride.get("cancellation_fee_driver") or 0), 2)
-        _total = round(_fare + _tip + _ib + _tax + _cfee, 2)
-        _lines = [{"label": "Ride Fare", "amount": _fare, "type": "fare"}]
-        if _tip > 0:
-            _lines.append({"label": "Tip", "amount": _tip, "type": "tip"})
-        if _ib > 0:
-            _lines.append({"label": "Area Boost", "amount": _ib, "type": "incentive"})
-        if _tax > 0:
-            _lines.append({"label": "Tax", "amount": _tax, "type": "tax"})
-        if _cfee > 0:
-            _lines.append({"label": "Cancel Fee", "amount": _cfee, "type": "cancel_fee"})
+        _fare_d = _d(ride.get("base_fare") or 0) + _d(ride.get("distance_fare") or 0) + _d(ride.get("time_fare") or 0)
         await db_supabase.update_one(
             "rides",
             {"id": ride_id},
             {
-                "driver_earnings_snapshot": {
-                    "fare": _fare,
-                    "tip": _tip,
-                    "incentive": _ib,
-                    "tax": _tax,
-                    "cancel_fee": _cfee,
-                    "total": _total,
-                    "lines": _lines,
-                }
+                "driver_earnings_snapshot": build_earnings_snapshot(
+                    fare=_fare_d,
+                    tip=ride.get("tip_amount") or 0,
+                    incentive=_rider_incentive_total,
+                    tax=ride.get("tax_amount") or 0,
+                    cancel_fee=ride.get("cancellation_fee_driver") or 0,
+                )
             },
         )
     except Exception:

@@ -20,10 +20,8 @@ try:
     from .. import db_supabase
     from ..core.config import settings
     from ..dependencies import _verify_admin_payload, verify_jwt_token
-    from ..settings_loader import get_app_settings
     from ..socket_manager import manager
     from ..utils.driver_presence import clear_presence, mark_present
-    from ..utils.maps_eta import get_ride_eta_seconds
     from ..utils.redis_client import redis_expire, redis_incr
 except ImportError:
     import db_supabase
@@ -31,6 +29,7 @@ except ImportError:
     from dependencies import _verify_admin_payload, verify_jwt_token
     from socket_manager import manager
     from utils.driver_presence import clear_presence, mark_present
+    from utils.redis_client import redis_expire, redis_incr  # type: ignore
 
 db = db_supabase  # legacy alias
 

@@ -62,6 +62,7 @@ except ImportError:
     from features import (
         calculate_airport_fee,
         calculate_all_fees,
+        notify_safety_team,
         send_push_notification,
     )
     from geo_utils import calculate_distance, get_service_area_polygon, point_in_polygon
@@ -111,6 +112,7 @@ except ImportError:
     from utils.datetime_utils import parse_iso_utc
     from utils.insurance_periods import record_period_transition  # type: ignore[assignment]
     from utils.metrics import inc as _metric_inc  # type: ignore
+    from utils.metrics import observe as _metric_observe  # type: ignore
     from utils.metrics import timed as _metric_timed  # type: ignore
     from utils.ride_code import generate_ride_code
 

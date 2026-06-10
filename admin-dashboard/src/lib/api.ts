@@ -2236,6 +2236,7 @@ export interface AdminVehicleType {
     icon?: string;
     capacity?: number;
     is_active: boolean;
+    marker_variant?: string;
 }
 
 export const adminListVehicleTypes = () =>

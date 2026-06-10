@@ -40,8 +40,20 @@ interface VehicleType {
     image_url?: string;
     illustration_url?: string;
     is_active: boolean;
+    // Which bundled map marker the rider app renders for drivers of this
+    // type. Must be one of MARKER_VARIANTS; defaults to standard.
+    marker_variant?: string;
     created_at?: string;
 }
+
+// Mirrors the icons bundled in the mobile apps (shared/components/CarMarker
+// CAR_IMAGES) and the backend's _VALID_MARKER_VARIANTS. Adding one requires
+// an app release, so the list is fixed here.
+const MARKER_VARIANTS = [
+    { value: "standard", label: "Standard", description: "White sedan" },
+    { value: "xl", label: "XL", description: "White van" },
+    { value: "premium", label: "Premium", description: "Black SUV" },
+] as const;
 
 const EMPTY_FORM: Omit<VehicleType, "id" | "created_at"> = {
     name: "",
@@ -50,6 +62,7 @@ const EMPTY_FORM: Omit<VehicleType, "id" | "created_at"> = {
     capacity: 4,
     image_url: "",
     is_active: true,
+    marker_variant: "standard",
 };
 
 export default function VehicleTypesPage() {
@@ -121,6 +134,7 @@ export default function VehicleTypesPage() {
             // illustration_url → image_url, but here we read either.
             image_url: vt.image_url || (vt as { illustration_url?: string }).illustration_url || "",
             is_active: vt.is_active,
+            marker_variant: vt.marker_variant || "standard",
         });
         setDialogOpen(true);
     };
@@ -263,6 +277,14 @@ export default function VehicleTypesPage() {
                                         <Car className="h-3.5 w-3.5" />
                                         {vt.icon}
                                     </span>
+                                    <span className="flex items-center gap-1" title="Map marker">
+                                        <img
+                                            src={`/markers/${vt.marker_variant || "standard"}.png`}
+                                            alt={`${vt.marker_variant || "standard"} marker`}
+                                            className="h-5 object-contain"
+                                        />
+                                        {vt.marker_variant || "standard"}
+                                    </span>
                                 </div>
 
                                 {/* Actions */}
@@ -399,6 +421,35 @@ export default function VehicleTypesPage() {
                                     />
                                 </div>
                             )}
+                        </div>
+
+                        <div className="space-y-2">
+                            <Label>Map marker</Label>
+                            <p className="text-xs text-muted-foreground">
+                                The car icon riders see on the map for drivers of this type.
+                            </p>
+                            <div className="grid grid-cols-3 gap-2">
+                                {MARKER_VARIANTS.map((m) => (
+                                    <button
+                                        key={m.value}
+                                        type="button"
+                                        onClick={() => setForm({ ...form, marker_variant: m.value })}
+                                        className={`flex flex-col items-center gap-1 rounded-lg border p-3 transition-colors ${
+                                            (form.marker_variant || "standard") === m.value
+                                                ? "border-primary bg-primary/5 ring-1 ring-primary"
+                                                : "border-input hover:bg-muted"
+                                        }`}
+                                    >
+                                        <img
+                                            src={`/markers/${m.value}.png`}
+                                            alt={m.label}
+                                            className="h-12 object-contain"
+                                        />
+                                        <span className="text-xs font-medium">{m.label}</span>
+                                        <span className="text-[10px] text-muted-foreground">{m.description}</span>
+                                    </button>
+                                ))}
+                            </div>
                         </div>
 
                         <div className="flex items-center justify-between">

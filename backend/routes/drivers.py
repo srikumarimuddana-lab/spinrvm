@@ -47,6 +47,8 @@ try:
     from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
     from ..utils.insurance_periods import record_period_transition
+    from ..utils.metrics import inc as _metric_inc
+    from ..utils.metrics import observe as _metric_observe
     from ..utils.money import dollars_to_cents
     from ..utils.t4a_pdf import generate_t4a_pdf
 except ImportError:
@@ -2986,11 +2988,12 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
         from repositories.driver_repo import update_acceptance_rate  # type: ignore
 
     await update_acceptance_rate(driver["id"], accepted=True)
+    _metric_inc("spinr_dispatch_offer_accepted_total")
 
     # Mark winner's offer as accepted, expire losers, release them
     try:
         now_iso = datetime.now(timezone.utc).isoformat()
-        await db_supabase.run_sync(
+        winner_res = await db_supabase.run_sync(
             lambda: (
                 db_supabase.supabase.table("ride_offers")
                 .update({"status": "accepted", "responded_at": now_iso})
@@ -3000,6 +3003,16 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
                 .execute()
             )
         )
+        # Offer-to-accept latency from the winner's own offer row (KPI:
+        # P95 dispatch offer → accept < 2s). Direct-assignment rides have
+        # no pending offer row — counter only, no duration sample.
+        winner_rows = getattr(winner_res, "data", None) or []
+        offered_at = parse_iso_utc(winner_rows[0].get("offered_at")) if winner_rows else None
+        if offered_at:
+            _metric_observe(
+                "spinr_dispatch_offer_to_accept_duration_ms",
+                (datetime.now(timezone.utc) - offered_at).total_seconds() * 1000.0,
+            )
         losers = await db_supabase.run_sync(
             lambda: (
                 db_supabase.supabase.table("ride_offers")

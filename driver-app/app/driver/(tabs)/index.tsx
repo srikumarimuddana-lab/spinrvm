@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDriverStore } from '../../../store/driverStore';
 import { useAuthStore } from '@shared/store/authStore';
+import { useVehicleTypeStore } from '@shared/store/vehicleTypeStore';
 import {
   DriverTopBar,
   DriverIdlePanel,
@@ -78,23 +79,17 @@ function DriverDashboard() {
 
   const isCancellingRide = useDriverStore((s) => s.isCancellingRide);
 
-  // Own-car marker icon, admin-configured per vehicle type (vehicle_types.
-  // marker_variant). GET /vehicle-types is cached client-side (cachedClient),
-  // so this is a cheap lookup on dashboard load. Cosmetic — failures keep
-  // the standard sedan.
-  const [markerVariant, setMarkerVariant] = useState<CarMarkerVariant>('standard');
-  const driverVehicleTypeId = driverData?.vehicle_type_id;
-  useEffect(() => {
-    if (!driverVehicleTypeId) return;
-    let cancelled = false;
-    api.get('/vehicle-types')
-      .then((res: any) => {
-        const vt = (res.data || []).find((t: any) => t.id === driverVehicleTypeId);
-        if (!cancelled && vt) setMarkerVariant(resolveMarkerVariant(vt.marker_variant, vt.name));
-      })
-      .catch(() => { /* cosmetic only — keep default marker */ });
-    return () => { cancelled = true; };
-  }, [driverVehicleTypeId]);
+  // Own-car marker, admin-configured per vehicle type. Resolved from the
+  // shared vehicleTypeStore (synced once per app open by the root layout) —
+  // no per-screen fetch.
+  const ownVehicleType = useVehicleTypeStore(
+    (s) => s.byId[(driverData?.vehicle_type_id as string) ?? ''],
+  );
+  const markerVariant: CarMarkerVariant = resolveMarkerVariant(
+    ownVehicleType?.marker_variant,
+    ownVehicleType?.name,
+  );
+  const markerImageUri = ownVehicleType?.marker_image_url;
 
   const { t } = useLanguageStore();
 
@@ -680,6 +675,7 @@ function DriverDashboard() {
             heading={location.coords.heading}
             isOnline={isOnline}
             variant={markerVariant}
+            imageUri={markerImageUri}
           />
         )}
         {mapMarkers}

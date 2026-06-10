@@ -22,6 +22,7 @@ import api from '@shared/api/client';
 import { useRideStore } from '../../store/rideStore';
 import AppMap from '@shared/components/AppMap';
 import CarMarker, { resolveMarkerVariant } from '@shared/components/CarMarker';
+import { useVehicleTypeStore } from '@shared/store/vehicleTypeStore';
 import { showToast } from '../../store/toastStore';
 import { SOSButton } from '@shared/components/SOSButton';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -38,7 +39,11 @@ export default function HomeScreen() {
   const [location, setLocation] = useState<any>(null);
   const [region, setRegion] = useState<any>(null);
   const [temperature, setTemperature] = useState<number | null>(null);
-  const [nearbyDrivers, setNearbyDrivers] = useState<{ id: string; lat: number; lng: number; heading?: number; vehicle_type_name?: string; marker_variant?: string }[]>([]);
+  const [nearbyDrivers, setNearbyDrivers] = useState<{ id: string; lat: number; lng: number; heading?: number; vehicle_type_id?: string; vehicle_type_name?: string; marker_variant?: string }[]>([]);
+  // Vehicle type config (marker variant + custom marker image), synced once
+  // per app open by the root layout — resolves every driver's marker without
+  // per-driver requests.
+  const vehicleTypesById = useVehicleTypeStore((s) => s.byId);
 
   const mapRef = useRef<any>(null);
   const bottomSheetRef = useRef<BottomSheet>(null);
@@ -187,6 +192,7 @@ export default function HomeScreen() {
             lat: d.lat,
             lng: d.lng,
             heading: d.heading ?? undefined,
+            vehicle_type_id: d.vehicle_type_id ?? undefined,
             vehicle_type_name: d.vehicle_type_name ?? undefined,
             marker_variant: d.marker_variant ?? undefined,
           }));
@@ -215,7 +221,7 @@ export default function HomeScreen() {
       const g = groups.get(key);
       if (g) g.push(d); else groups.set(key, [d]);
     }
-    const out: { id: string; lat: number; lng: number; heading: number; vehicle_type_name?: string; marker_variant?: string }[] = [];
+    const out: { id: string; lat: number; lng: number; heading: number; vehicle_type_id?: string; vehicle_type_name?: string; marker_variant?: string }[] = [];
     for (const group of groups.values()) {
       group.forEach((d, i) => {
         let { lat, lng } = d;
@@ -227,7 +233,7 @@ export default function HomeScreen() {
           lng += dLng;
         }
         const heading = d.heading ?? (group.length > 1 ? (360 / group.length) * i : 0);
-        out.push({ id: d.id, lat, lng, heading, vehicle_type_name: d.vehicle_type_name, marker_variant: d.marker_variant });
+        out.push({ id: d.id, lat, lng, heading, vehicle_type_id: d.vehicle_type_id, vehicle_type_name: d.vehicle_type_name, marker_variant: d.marker_variant });
       });
     }
     return out;
@@ -361,16 +367,23 @@ export default function HomeScreen() {
             userInterfaceStyle={isDark ? 'dark' : 'light'}
             onRegionChangeComplete={setRegion}
           >
-            {displayDrivers.map((driver) => (
-              <CarMarker
-                key={driver.id}
-                identifier={`nearby-${driver.id}`}
-                coordinate={{ latitude: driver.lat, longitude: driver.lng }}
-                heading={driver.heading}
-                variant={resolveMarkerVariant(driver.marker_variant, driver.vehicle_type_name)}
-                size={32}
-              />
-            ))}
+            {displayDrivers.map((driver) => {
+              const vt = vehicleTypesById[driver.vehicle_type_id ?? ''];
+              return (
+                <CarMarker
+                  key={driver.id}
+                  identifier={`nearby-${driver.id}`}
+                  coordinate={{ latitude: driver.lat, longitude: driver.lng }}
+                  heading={driver.heading}
+                  imageUri={vt?.marker_image_url}
+                  variant={resolveMarkerVariant(
+                    vt?.marker_variant ?? driver.marker_variant,
+                    vt?.name ?? driver.vehicle_type_name,
+                  )}
+                  size={32}
+                />
+              );
+            })}
           </AppMap>
         ) : (
           <View style={styles.mapPlaceholder}>

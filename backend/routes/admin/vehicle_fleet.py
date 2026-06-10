@@ -35,6 +35,19 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Map marker icons bundled in the rider/driver apps. Must stay in sync with
+# shared/components/CarMarker.tsx CAR_IMAGES and the CHECK constraint in
+# migration 140 — adding a marker requires an app release + new migration.
+_VALID_MARKER_VARIANTS = frozenset({"standard", "xl", "premium"})
+
+
+def _validate_marker_variant(value: str) -> None:
+    if value not in _VALID_MARKER_VARIANTS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid marker_variant '{value}'. Must be one of: {', '.join(sorted(_VALID_MARKER_VARIANTS))}",
+        )
+
 
 # ---------- Pydantic models ----------
 
@@ -52,6 +65,9 @@ class VehicleTypeCreateRequest(BaseModel):
     # admins typically upload after the type is created so the path
     # can be keyed by id.
     illustration_url: Optional[str] = None
+    # Which bundled map marker icon the rider app renders for drivers of
+    # this type (standard | xl | premium).
+    marker_variant: str = "standard"
 
 
 class VehicleTypeUpdateRequest(BaseModel):
@@ -63,6 +79,7 @@ class VehicleTypeUpdateRequest(BaseModel):
     price_per_minute: Optional[float] = None
     is_active: Optional[bool] = None
     illustration_url: Optional[str] = None
+    marker_variant: Optional[str] = None
 
 
 class FareConfigCreateRequest(BaseModel):
@@ -119,6 +136,7 @@ async def admin_get_vehicle_types():
 @router.post("/vehicle-types")
 async def admin_create_vehicle_type(vtype: VehicleTypeCreateRequest):
     """Create vehicle type."""
+    _validate_marker_variant(vtype.marker_variant)
     doc = {
         "name": vtype.name,
         "description": vtype.description,
@@ -128,6 +146,7 @@ async def admin_create_vehicle_type(vtype: VehicleTypeCreateRequest):
         "price_per_minute": vtype.price_per_minute,
         "is_active": vtype.is_active,
         "illustration_url": vtype.illustration_url,
+        "marker_variant": vtype.marker_variant,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     row = await db_supabase.insert_one("vehicle_types", doc)
@@ -157,6 +176,9 @@ async def admin_update_vehicle_type(type_id: str, vtype: VehicleTypeUpdateReques
     if vtype.illustration_url is not None:
         # Admin may pass "" to clear the override and revert to icon fallback.
         update_payload["illustration_url"] = vtype.illustration_url or None
+    if vtype.marker_variant is not None:
+        _validate_marker_variant(vtype.marker_variant)
+        update_payload["marker_variant"] = vtype.marker_variant
 
     if update_payload:
         await db_supabase.update_one("vehicle_types", {"id": type_id}, update_payload)

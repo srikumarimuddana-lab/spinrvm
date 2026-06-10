@@ -374,7 +374,9 @@ _DIRECTIONS_URL = "https://maps.googleapis.com/maps/api/directions/json"
 # Clients poll the live route every ~20 s and a shared-trip page may poll the
 # same ride concurrently. Caching on a ~110 m origin grid (3 decimals) dedupes
 # concurrent viewers and stationary drivers without hiding real movement.
-_LIVE_ROUTE_CACHE_TTL_S = 15
+# Must exceed the ~20 s client poll interval, or a stationary driver's next
+# poll always misses the expired entry and pays for a fresh Directions call.
+_LIVE_ROUTE_CACHE_TTL_S = 30
 
 
 def _decode_encoded_polyline(encoded: str) -> List[List[float]]:

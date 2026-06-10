@@ -73,7 +73,9 @@ def _fake_client(handler, calls):
 
 
 @contextmanager
-def _common_patches(app_settings, handler, calls, *, budget_allowed=True, cached=None, recorded=None):
+def _common_patches(
+    app_settings, handler, calls, *, budget_allowed=True, cached=None, recorded=None, cache_writes=None
+):
     """Patch settings/budget/redis/httpx so only `app_settings` drives provider choice.
 
     OSRM_URL and OSRM_FALLBACK_URL (public demo, non-empty by default) are
@@ -93,7 +95,9 @@ def _common_patches(app_settings, handler, calls, *, budget_allowed=True, cached
     async def _redis_get(_key):
         return cached
 
-    async def _redis_set(*_a, **_kw):
+    async def _redis_set(key, value, ttl=None, **_kw):
+        if cache_writes is not None:
+            cache_writes.append({"key": key, "value": value, "ttl": ttl})
         return None
 
     with ExitStack() as stack:
@@ -140,7 +144,7 @@ async def test_osrm_preferred_when_configured():
 
 @pytest.mark.asyncio
 async def test_falls_back_to_google_when_osrm_fails():
-    calls, recorded = [], []
+    calls, recorded, cache_writes = [], [], []
 
     def handler(url):
         if "/route/v1/driving/" in url:
@@ -149,7 +153,11 @@ async def test_falls_back_to_google_when_osrm_fails():
         return _Resp(body=_DIRECTIONS_BODY)
 
     with _common_patches(
-        {"osrm_url": "http://osrm:5000", "google_maps_api_key": "gk"}, handler, calls, recorded=recorded
+        {"osrm_url": "http://osrm:5000", "google_maps_api_key": "gk"},
+        handler,
+        calls,
+        recorded=recorded,
+        cache_writes=cache_writes,
     ):
         out = await rd.compute_route(50.45, -104.62, 50.44, -104.63)
 
@@ -159,6 +167,11 @@ async def test_falls_back_to_google_when_osrm_fails():
     assert out["distance_km"] == 3.3
     assert recorded == ["directions"]  # metered under the daily budget
     assert len(calls) == 2  # OSRM attempt, then Directions
+    # Cache TTL must outlive the ~20 s client poll interval, or a stationary
+    # driver's every poll misses the expired entry and pays for a fresh call.
+    assert len(cache_writes) == 1
+    assert cache_writes[0]["ttl"] > 20
+    assert json.loads(cache_writes[0]["value"]) == out
 
 
 @pytest.mark.asyncio

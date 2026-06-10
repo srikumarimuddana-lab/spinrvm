@@ -52,7 +52,7 @@ function RideInProgressScreenContent() {
   const trackBaseUrl = useContext(TrackBaseUrlContext);
   const {
     currentRide, currentDriver, fetchRide, cancelRide, clearRide,
-    triggerEmergency, isLoading, error, wsConnected,
+    triggerEmergency, isLoading, error, wsConnected, selectedVehicle,
     activeRideRouteCoords, lastEtaMin,
     setActiveRideRouteCoords, setLastEtaMin,
   } = useRideStore();
@@ -714,6 +714,7 @@ I've shared my live location with you for safety.
               <CarMarker
                 coordinate={{ latitude: currentDriver.lat, longitude: currentDriver.lng }}
                 heading={(currentDriver as any).heading}
+                vehicleType={selectedVehicle?.name}
                 size={44}
                 zIndex={100}
               />

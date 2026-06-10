@@ -50,7 +50,7 @@ function DriverArrivingScreenContent() {
   const {
     currentRide, currentDriver, fetchRide, triggerEmergency,
     isLoading, error, driverEtaSeconds, cancelRide, clearRide,
-    wsConnected,
+    wsConnected, selectedVehicle,
     activeRideRouteCoords, activeDriverRouteCoords,
     setActiveRideRouteCoords, setActiveDriverRouteCoords, setLastEtaMin,
   } = useRideStore();
@@ -388,7 +388,8 @@ function DriverArrivingScreenContent() {
           {/* Driver car */}
           {currentDriver?.lat != null && currentDriver?.lng != null && (
             <CarMarker coordinate={{ latitude: currentDriver.lat, longitude: currentDriver.lng }}
-              heading={(currentDriver as any).heading} size={44} zIndex={105} />
+              heading={(currentDriver as any).heading}
+              vehicleType={selectedVehicle?.name} size={44} zIndex={105} />
           )}
           {serviceAreaPolygons.map((coords, idx) => (
             <Polygon

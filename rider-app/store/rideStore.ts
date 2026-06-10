@@ -76,6 +76,8 @@ export interface NearbyDriver {
   lat: number;
   lng: number;
   vehicle_type_id: string;
+  /** Vehicle type name (e.g. "Sedan", "SUV") — picks the map marker art. */
+  vehicle_type_name?: string | null;
   vehicle_make?: string;
   vehicle_model?: string;
 }

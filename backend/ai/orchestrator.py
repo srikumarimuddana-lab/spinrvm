@@ -1,0 +1,207 @@
+"""Provider-agnostic chat-turn orchestrator.
+
+run_chat_turn() is an async generator of (event_name, payload) SSE frames:
+
+    meta   {conversation_id, user_message_id}
+    token  {text}                                  (repeated)
+    tool   {name, status: start|end, ok}           (names only — never payloads)
+    action {type, ...}                             (e.g. booking_proposal)
+    done   {message_id, usage, stop_reason}
+    error  {code, message}
+
+It owns the tool loop: stream one adapter turn → execute requested tools →
+append canonical tool_result messages → next turn, capped by
+ai_max_tool_iterations. Provider/config failures surface loudly (Sentry +
+error frame) — never a silent canned fallback (deliberate divergence from
+routes/support.py).
+"""
+
+import asyncio
+import json
+import logging
+from datetime import datetime, timezone
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+
+try:
+    from . import conversations
+    from .pii import scrub_pii
+    from .prompts import build_system_prompt
+    from .providers import get_adapter
+    from .providers.base import AIConfigError
+    from .tools import execute_tool, tool_defs_for
+except ImportError:
+    from ai import conversations
+    from ai.pii import scrub_pii
+    from ai.prompts import build_system_prompt
+    from ai.providers import get_adapter
+    from ai.providers.base import AIConfigError
+    from ai.tools import execute_tool, tool_defs_for
+
+try:
+    from ..settings_loader import get_app_settings
+    from ..utils.redis_client import redis_expire, redis_incr
+except ImportError:
+    from settings_loader import get_app_settings
+    from utils.redis_client import redis_expire, redis_incr
+
+logger = logging.getLogger(__name__)
+
+GENERIC_ERROR_MESSAGE = "Something went wrong on our side — please try again in a moment."
+
+Frame = Tuple[str, Dict[str, Any]]
+
+
+def _capture(exc: Exception, user: Dict[str, Any]) -> None:
+    """Sentry capture with the conventional tags; never raises."""
+    try:
+        import sentry_sdk
+
+        with sentry_sdk.push_scope() as scope:
+            scope.set_tag("domain", "ai")
+            scope.set_tag("surface", "backend")
+            scope.set_tag("rider_id", user.get("id"))
+            sentry_sdk.capture_exception(exc)
+    except Exception:  # pragma: no cover — sentry optional in dev
+        pass
+
+
+async def _over_daily_cap(user_id: str, cap: int) -> bool:
+    """Per-user daily message cap via Redis INCR. Fails OPEN with a loud log
+    (mirrors the non-OTP rate-limit policy) — the kill switch remains the
+    hard stop when Redis is down."""
+    key = f"ai:daily:{user_id}:{datetime.now(timezone.utc).strftime('%Y%m%d')}"
+    try:
+        count = await redis_incr(key)
+        if count == 1:
+            await redis_expire(key, 86400)
+        return count > cap
+    except Exception:
+        logger.error("ai daily-cap check failed — failing open", exc_info=True, extra={"user_id": user_id})
+        return False
+
+
+async def run_chat_turn(
+    *,
+    user: Dict[str, Any],
+    conversation_id: Optional[str],
+    user_message: str,
+    audience: str = "rider",
+) -> AsyncIterator[Frame]:
+    settings = await get_app_settings()
+
+    if not settings.get("ai_assistant_enabled"):
+        yield "error", {"code": "ai_disabled", "message": "The AI assistant is currently unavailable."}
+        return
+
+    cap = int(settings.get("ai_daily_message_cap") or 50)
+    if await _over_daily_cap(user["id"], cap):
+        yield (
+            "error",
+            {"code": "daily_cap", "message": "You've reached today's AI assistant limit — try again tomorrow."},
+        )
+        return
+
+    conversation = await conversations.get_or_create_conversation(user["id"], conversation_id, audience)
+    if conversation is None:
+        yield "error", {"code": "not_found", "message": "Conversation not found."}
+        return
+
+    scrubbed = scrub_pii(user_message)
+    user_row = await conversations.append_message(conversation, "user", scrubbed)
+    yield "meta", {"conversation_id": conversation["id"], "user_message_id": user_row["id"]}
+
+    history = await conversations.load_history(conversation["id"], int(settings.get("ai_history_max_messages") or 12))
+
+    try:
+        adapter = await get_adapter()
+    except AIConfigError as exc:
+        logger.error("ai adapter misconfigured: %s", exc, extra={"user_id": user.get("id")})
+        _capture(exc, user)
+        yield "error", {"code": "ai_misconfigured", "message": GENERIC_ERROR_MESSAGE}
+        return
+
+    system = build_system_prompt(settings, audience)
+    tools = tool_defs_for(audience)
+    messages: List[Dict[str, Any]] = list(history)
+
+    max_iterations = int(settings.get("ai_max_tool_iterations") or 6)
+    all_text: List[str] = []
+    used_tool_names: List[str] = []
+    total_usage = {"input_tokens": 0, "output_tokens": 0}
+
+    try:
+        for _iteration in range(max_iterations):
+            turn_text: List[str] = []
+            turn_end = None
+            async for event in adapter.stream_turn(system=system, messages=messages, tools=tools):
+                if event.type == "text" and event.text:
+                    turn_text.append(event.text)
+                    yield "token", {"text": event.text}
+                elif event.type == "turn_end":
+                    turn_end = event
+            if turn_end is None:  # adapter contract violation — surface loudly
+                raise RuntimeError(f"adapter {adapter.provider} ended stream without turn_end")
+
+            all_text.extend(turn_text)
+            for k in total_usage:
+                total_usage[k] += int((turn_end.usage or {}).get(k, 0) or 0)
+
+            tool_calls = turn_end.tool_calls or []
+            if turn_end.stop_reason != "tool_use" or not tool_calls:
+                break
+
+            messages.append({"role": "assistant", "content": "".join(turn_text), "tool_calls": tool_calls})
+            for tc in tool_calls:
+                yield "tool", {"name": tc.name, "status": "start"}
+            results = await asyncio.gather(
+                *(execute_tool(tc.name, tc.arguments, user=user, audience=audience) for tc in tool_calls)
+            )
+            for tc, (result, ok) in zip(tool_calls, results):
+                used_tool_names.append(tc.name)
+                client_action = result.pop("_client_action", None) if isinstance(result, dict) else None
+                if client_action:
+                    yield "action", client_action
+                yield "tool", {"name": tc.name, "status": "end", "ok": ok}
+                messages.append(
+                    {
+                        "role": "tool_result",
+                        "tool_call_id": tc.id,
+                        "tool_name": tc.name,
+                        "content": json.dumps(result, default=str),
+                        "is_error": not ok,
+                    }
+                )
+        else:
+            # Tool budget exhausted without a final answer.
+            logger.warning(
+                "ai tool loop hit iteration cap",
+                extra={"user_id": user.get("id"), "conversation_id": conversation["id"]},
+            )
+    except Exception as exc:
+        logger.error("ai chat turn failed", exc_info=True, extra={"user_id": user.get("id")})
+        _capture(exc, user)
+        yield "error", {"code": "provider_error", "message": GENERIC_ERROR_MESSAGE}
+        return
+
+    final_text = "".join(all_text).strip()
+    if not final_text:
+        final_text = "I couldn't finish that one — could you rephrase, or tap Contact Support?"
+        yield "token", {"text": final_text}
+
+    assistant_row = await conversations.append_message(
+        conversation,
+        "assistant",
+        final_text,
+        tool_names=used_tool_names or None,
+        usage=total_usage,
+        provider=getattr(adapter, "provider", None),
+        model=getattr(adapter, "model", None),
+    )
+    yield (
+        "done",
+        {
+            "message_id": assistant_row["id"],
+            "usage": total_usage,
+            "stop_reason": "end_turn",
+        },
+    )

@@ -106,24 +106,29 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
           contentInsetAdjustmentBehavior="automatic"
           contentContainerStyle={styles.sheetContent}
         >
-          <View style={styles.headerRow}>
-            <View style={styles.statusPill}>
-              <Ionicons name="checkmark-circle" size={18} color={colors.success} />
-              <Text style={styles.completedTitle} accessibilityRole="header">{t('tripCompleted.title')}</Text>
+          <View style={styles.successHeader}>
+            <View style={styles.successIconCircle}>
+              <Ionicons name="checkmark" size={28} color={colors.success} />
             </View>
+            <Text style={styles.completedTitle} accessibilityRole="header">{t('tripCompleted.title')}</Text>
             <Text style={styles.completedTime}>{completedAtLabel}</Text>
           </View>
 
-          <View style={styles.earningsHero}>
+          <LinearGradient
+            colors={[colors.success, `${colors.success}CC`]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.earningsHero}
+          >
             <Text style={styles.earningsHeroLabel}>{t('tripCompleted.yourEarnings')}</Text>
             <Text style={styles.earningsHeroAmount} allowFontScaling={false}>
               ${money(completedRide?.driver_earnings)}
             </Text>
             <View style={styles.keepBadge}>
-              <Ionicons name="shield-checkmark" size={14} color={colors.success} />
+              <Ionicons name="shield-checkmark" size={14} color="#fff" />
               <Text style={styles.keepBadgeText}>100% driver earnings</Text>
             </View>
-          </View>
+          </LinearGradient>
 
           <View style={styles.tripStats}>
             <View style={styles.tripStat}>
@@ -351,22 +356,23 @@ function createStyles(colors: ThemeColors) {
       gap: 12,
       paddingBottom: 16,
     },
-    headerRow: {
-      flexDirection: 'row',
+    successHeader: {
       alignItems: 'center',
-      justifyContent: 'space-between',
-      gap: 12,
+      gap: 4,
+      paddingTop: 4,
     },
-    statusPill: {
-      flexDirection: 'row',
+    successIconCircle: {
+      width: 52,
+      height: 52,
+      borderRadius: 26,
+      backgroundColor: colors.successBg,
+      justifyContent: 'center',
       alignItems: 'center',
-      gap: 6,
-      minWidth: 0,
-      flex: 1,
+      marginBottom: 4,
     },
     completedTitle: {
-      fontSize: 17,
-      fontWeight: '700',
+      fontSize: 19,
+      fontWeight: '800',
       color: colors.text,
     },
     completedTime: {
@@ -376,47 +382,44 @@ function createStyles(colors: ThemeColors) {
       fontVariant: ['tabular-nums'],
     },
     earningsHero: {
-      backgroundColor: colors.successBg,
-      borderRadius: 8,
+      borderRadius: 16,
       padding: 18,
-      borderWidth: 1,
-      borderColor: colors.success,
+      alignItems: 'center',
     },
     earningsHeroLabel: {
-      fontSize: 13,
+      fontSize: 12,
       fontWeight: '700',
-      color: colors.success,
+      color: 'rgba(255,255,255,0.9)',
       textTransform: 'uppercase',
-      letterSpacing: 0,
+      letterSpacing: 0.6,
     },
     earningsHeroAmount: {
       fontSize: 44,
-      fontWeight: '800',
-      color: colors.text,
+      fontWeight: '900',
+      color: '#fff',
       letterSpacing: 0,
-      marginTop: 4,
+      marginTop: 2,
       fontVariant: ['tabular-nums'],
     },
     keepBadge: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 6,
-      alignSelf: 'flex-start',
-      backgroundColor: colors.surface,
+      backgroundColor: 'rgba(255,255,255,0.18)',
       paddingHorizontal: 12,
-      paddingVertical: 7,
+      paddingVertical: 6,
       borderRadius: 999,
-      marginTop: 10,
+      marginTop: 8,
     },
     keepBadgeText: {
       fontSize: 12,
-      fontWeight: '600',
-      color: colors.text,
+      fontWeight: '700',
+      color: '#fff',
     },
     fareBreakdown: {
       width: '100%',
       backgroundColor: colors.surfaceLight,
-      borderRadius: 8,
+      borderRadius: 14,
       padding: 14,
       gap: 10,
       borderWidth: 1,
@@ -487,7 +490,7 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.surfaceLight,
       paddingHorizontal: 10,
       paddingVertical: 12,
-      borderRadius: 8,
+      borderRadius: 12,
       borderWidth: 1,
       borderColor: colors.border,
     },
@@ -499,7 +502,7 @@ function createStyles(colors: ThemeColors) {
     },
     routeCard: {
       backgroundColor: colors.surfaceLight,
-      borderRadius: 8,
+      borderRadius: 14,
       padding: 14,
       borderWidth: 1,
       borderColor: colors.border,
@@ -513,13 +516,13 @@ function createStyles(colors: ThemeColors) {
       width: 12,
       height: 12,
       borderRadius: 6,
-      backgroundColor: colors.success,
+      backgroundColor: colors.info,
     },
     dropoffDot: {
       width: 12,
       height: 12,
-      borderRadius: 3,
-      backgroundColor: colors.primary,
+      borderRadius: 6,
+      backgroundColor: colors.success,
     },
     routeLine: {
       width: 2,
@@ -537,7 +540,7 @@ function createStyles(colors: ThemeColors) {
     ratingSection: {
       width: '100%',
       backgroundColor: colors.surfaceLight,
-      borderRadius: 8,
+      borderRadius: 14,
       padding: 14,
       borderWidth: 1,
       borderColor: colors.border,
@@ -547,17 +550,18 @@ function createStyles(colors: ThemeColors) {
       fontSize: 15,
       fontWeight: '600',
       marginBottom: 12,
+      textAlign: 'center',
     },
     starsRow: {
       flexDirection: 'row',
-      gap: 8,
-      justifyContent: 'space-between',
+      gap: 14,
+      justifyContent: 'center',
     },
     commentInput: {
       width: '100%',
       marginTop: 12,
       backgroundColor: colors.background,
-      borderRadius: 8,
+      borderRadius: 10,
       padding: 12,
       color: colors.text,
       fontSize: 14,
@@ -579,7 +583,7 @@ function createStyles(colors: ThemeColors) {
       gap: 6,
       paddingHorizontal: 10,
       backgroundColor: colors.surfaceLight,
-      borderRadius: 8,
+      borderRadius: 12,
       borderWidth: 1,
       borderColor: colors.border,
     },

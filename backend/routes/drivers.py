@@ -40,6 +40,7 @@ try:
         present_driver_ids_checked,
         reset_miss_streak,
     )
+    from ..utils.earnings_snapshot import build_earnings_snapshot
     from ..utils.error_handling import (
         AccountDisabledException,
         ErrorCode,
@@ -51,7 +52,7 @@ try:
     from ..utils.insurance_periods import record_period_transition
     from ..utils.metrics import inc as _metric_inc
     from ..utils.metrics import observe as _metric_observe
-    from ..utils.money import dollars_to_cents
+    from ..utils.money import dollars_to_cents, to_decimal
     from ..utils.t4a_pdf import generate_t4a_pdf
 except ImportError:
     import db_supabase
@@ -73,6 +74,7 @@ except ImportError:
         present_driver_ids_checked,
         reset_miss_streak,
     )
+    from utils.earnings_snapshot import build_earnings_snapshot
     from utils.error_handling import (
         AccountDisabledException,
         ErrorCode,
@@ -84,7 +86,7 @@ except ImportError:
     from utils.insurance_periods import record_period_transition  # type: ignore[assignment]
     from utils.metrics import inc as _metric_inc  # type: ignore
     from utils.metrics import observe as _metric_observe  # type: ignore
-    from utils.money import dollars_to_cents
+    from utils.money import dollars_to_cents, to_decimal
     from utils.t4a_pdf import generate_t4a_pdf  # noqa: F401 – used in download_t4a_pdf
 
 db = db_supabase  # legacy alias
@@ -3905,8 +3907,13 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             exc_info=True,
         )
 
+    # Atomic completion guard: filter on status=in_progress so a concurrent
+    # complete/cancel that won the race after the read above matches zero rows
+    # instead of writing a second completion (same CAS pattern as ride
+    # acceptance filtering on status='searching').
+    _complete_filters = {"id": ride_id, "driver_id": driver["id"], "status": RideStatus.IN_PROGRESS}
     try:
-        await db_supabase.update_one("rides", {"id": ride_id, "driver_id": driver["id"]}, update_fields)
+        _updated_ride_row = await db_supabase.update_one("rides", _complete_filters, update_fields)
     except Exception as e:
         # Some columns may not exist yet in older deployments. Retry with only
         # the essential fields so ride completion never fails.
@@ -3921,9 +3928,13 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                 "distance_km",
             }
             safe_updates = {k: v for k, v in update_fields.items() if k in safe_keys}
-            await db_supabase.update_one("rides", {"id": ride_id, "driver_id": driver["id"]}, safe_updates)
+            _updated_ride_row = await db_supabase.update_one("rides", _complete_filters, safe_updates)
         else:
             raise
+    if _updated_ride_row is None:
+        raise RideStateError(
+            f"Ride {ride_id} is no longer in_progress — completion already processed by a concurrent request"
+        )
 
     # ── Record incentive claims ──────────────────────────────────
     # Fetch active incentives matching this ride's service area / vehicle type
@@ -3983,37 +3994,18 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     # _total_bonus comes from the incentive block above; default to 0 if
     # the variable wasn't set (incentive block errored before assignment).
     try:
-        _ib = float(_total_bonus.quantize(Decimal("0.01")))
-        _fare = round(
-            float(update_fields.get("base_fare") or ride.get("base_fare") or 0)
-            + float(update_fields.get("distance_fare") or ride.get("distance_fare") or 0)
-            + float(update_fields.get("time_fare") or ride.get("time_fare") or 0),
-            2,
+        _fare_d = (
+            to_decimal(update_fields.get("base_fare") or ride.get("base_fare") or 0)
+            + to_decimal(update_fields.get("distance_fare") or ride.get("distance_fare") or 0)
+            + to_decimal(update_fields.get("time_fare") or ride.get("time_fare") or 0)
         )
-        _tip = round(float(ride.get("tip_amount") or 0), 2)
-        _tax = round(float(ride.get("tax_amount") or 0), 2)
-        _cfee = round(float(ride.get("cancellation_fee_driver") or 0), 2)
-        _total = round(_fare + _tip + _ib + _tax + _cfee, 2)
-        _lines = [
-            {"label": "Ride Fare", "amount": _fare, "type": "fare"},
-        ]
-        if _tip > 0:
-            _lines.append({"label": "Tip", "amount": _tip, "type": "tip"})
-        if _ib > 0:
-            _lines.append({"label": "Area Boost", "amount": _ib, "type": "incentive"})
-        if _tax > 0:
-            _lines.append({"label": "Tax", "amount": _tax, "type": "tax"})
-        if _cfee > 0:
-            _lines.append({"label": "Cancel Fee", "amount": _cfee, "type": "cancel_fee"})
-        _snapshot = {
-            "fare": _fare,
-            "tip": _tip,
-            "incentive": _ib,
-            "tax": _tax,
-            "cancel_fee": _cfee,
-            "total": _total,
-            "lines": _lines,
-        }
+        _snapshot = build_earnings_snapshot(
+            fare=_fare_d,
+            tip=ride.get("tip_amount") or 0,
+            incentive=_total_bonus,
+            tax=ride.get("tax_amount") or 0,
+            cancel_fee=ride.get("cancellation_fee_driver") or 0,
+        )
         await db_supabase.update_one("rides", {"id": ride_id}, {"driver_earnings_snapshot": _snapshot})
     except Exception:
         logger.error("complete_ride: driver_earnings_snapshot failed for ride %s", ride_id, exc_info=True)

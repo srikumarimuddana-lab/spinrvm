@@ -256,3 +256,66 @@ def test_state_constants_are_disjoint_from_terminal():
     assert terminals.isdisjoint(set(ARRIVE_FROM_STATES))
     assert terminals.isdisjoint(set(START_FROM_STATES))
     assert terminals.isdisjoint(set(COMPLETE_FROM_STATES))
+
+
+@pytest.mark.asyncio
+class TestCompleteRideAtomicGuard:
+    """Completion must be a CAS on status='in_progress'.
+
+    The read-then-write window in complete_ride means two concurrent
+    completions (or a complete racing a cancel) could both pass the status
+    pre-check. The update filters on status='in_progress'; when it matches
+    zero rows the loser must raise RideStateError without running any
+    post-completion side-effects (driver availability, period transition,
+    completion broadcast).
+    """
+
+    async def test_concurrent_completion_loses_cas_raises_ride_state_error(self):
+        from backend.routes import drivers as drv
+        from backend.utils.error_handling import RideStateError
+
+        ride = {
+            "id": "r1",
+            "status": "in_progress",
+            "driver_id": "d1",
+            "rider_id": "rider-1",
+            "planned_distance_km": 2.0,
+            "distance_km": 2.0,
+            "base_fare": 3.0,
+            "distance_fare": 3.0,
+            "time_fare": 2.0,
+            "total_fare": 8.0,
+        }
+        driver = {"id": "d1", "user_id": "u1"}
+        captured_filters: dict = {}
+
+        async def fake_update_one(table, filters, updates, **kw):
+            if table == "rides" and updates.get("status") == "completed":
+                captured_filters.update(filters)
+                return None  # CAS matched zero rows — a concurrent request won
+            return {"id": "r1"}
+
+        async def fake_get_rows(table, filters=None, **kw):
+            if table == "drivers":
+                return [driver]
+            if table == "rides":
+                return [ride]
+            return []  # driver_location_history → no GPS recalculation
+
+        with (
+            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(side_effect=fake_update_one)),
+            patch("backend.routes.drivers.db_supabase.set_driver_available", AsyncMock()) as set_available,
+            patch("backend.routes.drivers.record_period_transition", AsyncMock()) as period_transition,
+            patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()) as ws_send,
+            patch("backend.routes.drivers.send_push_notification", AsyncMock()),
+        ):
+            with pytest.raises(RideStateError):
+                await drv.complete_ride(ride_id="r1", current_user={"id": "u1"})
+
+        # The completion update must carry the CAS status filter.
+        assert captured_filters.get("status") == "in_progress"
+        # Losing the race must not trigger post-completion side-effects.
+        set_available.assert_not_awaited()
+        period_transition.assert_not_awaited()
+        ws_send.assert_not_awaited()

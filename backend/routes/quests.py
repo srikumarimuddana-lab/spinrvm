@@ -118,9 +118,7 @@ async def get_available_quests(current_user: dict = Depends(get_current_user)):
                 {"driver_id": driver["id"]},
                 limit=100,
             )
-            progress_map = {
-                p["quest_id"]: p for p in progress_rows if p["quest_id"] in quest_ids
-            }
+            progress_map = {p["quest_id"]: p for p in progress_rows if p["quest_id"] in quest_ids}
         except Exception as e:
             logger.error(f"Error fetching progress: {e}")
 
@@ -171,9 +169,7 @@ async def join_quest(quest_id: str, current_user: dict = Depends(get_current_use
         raise HTTPException(status_code=400, detail="Quest has ended")
 
     # Check if already joined
-    existing = await db.find_one(
-        "quest_progress", {"quest_id": quest_id, "driver_id": driver["id"]}
-    )
+    existing = await db.find_one("quest_progress", {"quest_id": quest_id, "driver_id": driver["id"]})
     if existing:
         raise HTTPException(status_code=400, detail="Already joined this quest")
 
@@ -268,9 +264,7 @@ async def get_my_quests(current_user: dict = Depends(get_current_user)):
 
 
 @api_router.post("/progress/{progress_id}/claim")
-async def claim_quest_reward(
-    progress_id: str, current_user: dict = Depends(get_current_user)
-):
+async def claim_quest_reward(progress_id: str, current_user: dict = Depends(get_current_user)):
     """Claim the reward for a completed quest."""
     driver = await db.find_one("drivers", {"user_id": current_user["id"]})
     if not driver:
@@ -292,46 +286,94 @@ async def claim_quest_reward(
 
     reward_amount = _d(quest["reward_amount"])
 
-    # Pay reward to wallet
+    # Atomically claim BEFORE paying: the status filter means exactly one of
+    # any concurrent claim requests updates the row; the rest match zero rows
+    # and get a 409 instead of double-crediting the wallet.
+    now_iso = datetime.now(timezone.utc).isoformat()
+    claimed = await db.update_one(
+        "quest_progress",
+        {"id": progress_id, "status": "completed"},
+        {
+            "$set": {
+                "status": "claimed",
+                "claimed_at": now_iso,
+                "updated_at": now_iso,
+            }
+        },
+    )
+    if not claimed:
+        raise HTTPException(status_code=409, detail="Quest reward already claimed")
+
+    # Pay reward to wallet via the atomic RPC — never read-modify-write a
+    # wallet balance (lost update against concurrent wallet activity).
     if quest.get("reward_type", "wallet_credit") == "wallet_credit":
         from .wallet import _record_transaction, get_or_create_wallet
 
         wallet = await get_or_create_wallet(current_user["id"])
-        old_balance = _d(wallet.get("balance", 0))
-        new_balance = old_balance + _d(reward_amount)
+        try:
+            new_balance = await db.wallet_increment_balance(wallet["id"], reward_amount)
+        except Exception as credit_err:
+            # Release the claim so the driver can retry — otherwise the
+            # progress row stays 'claimed' with no money paid.
+            logger.error(
+                f"Quest reward credit failed for progress {progress_id}; releasing claim: {credit_err}",
+                exc_info=True,
+            )
+            try:
+                await db.update_one(
+                    "quest_progress",
+                    {"id": progress_id, "status": "claimed"},
+                    {"$set": {"status": "completed", "updated_at": datetime.now(timezone.utc).isoformat()}},
+                )
+            except Exception:
+                logger.error(
+                    f"Quest claim release also failed for progress {progress_id} — manual reconciliation required",
+                    exc_info=True,
+                )
+            raise HTTPException(status_code=503, detail="Reward payout failed — please retry") from credit_err
 
-        await db.update_one(
-            "wallets",
-            {"id": wallet["id"]},
-            {
-                "$set": {
-                    "balance": _f(new_balance),
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                }
-            },
-        )
-        await _record_transaction(
-            wallet_id=wallet["id"],
-            user_id=current_user["id"],
-            txn_type="quest_reward",
-            amount=_f(reward_amount),
-            balance_after=_f(new_balance),
-            reference_id=quest["id"],
-            description=f"Quest reward: {quest['title']}",
-        )
-
-    # Mark as claimed
-    await db.update_one(
-        "quest_progress",
-        {"id": progress_id},
-        {
-            "$set": {
-                "status": "claimed",
-                "claimed_at": datetime.now(timezone.utc).isoformat(),
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
-        },
-    )
+        try:
+            await _record_transaction(
+                wallet_id=wallet["id"],
+                user_id=current_user["id"],
+                txn_type="quest_reward",
+                amount=_f(reward_amount),
+                balance_after=_f(new_balance),
+                reference_id=quest["id"],
+                description=f"Quest reward: {quest['title']}",
+            )
+        except Exception as ledger_err:
+            # Money moved but the ledger write failed. Compensate (reverse the
+            # credit), and only release the claim once the reversal succeeded —
+            # releasing with the credit still applied would allow a double pay.
+            logger.error(
+                f"Quest reward ledger write failed for progress {progress_id}; reversing credit: {ledger_err}",
+                exc_info=True,
+            )
+            reversed_ok = False
+            try:
+                await db.wallet_increment_balance(wallet["id"], -reward_amount)
+                reversed_ok = True
+            except Exception:
+                logger.error(
+                    f"Compensating debit failed for progress {progress_id} — claim stays claimed with an "
+                    "unrecorded credit; manual reconciliation required",
+                    exc_info=True,
+                )
+            if reversed_ok:
+                try:
+                    await db.update_one(
+                        "quest_progress",
+                        {"id": progress_id, "status": "claimed"},
+                        {"$set": {"status": "completed", "updated_at": datetime.now(timezone.utc).isoformat()}},
+                    )
+                except Exception:
+                    logger.error(
+                        f"Quest claim release failed for progress {progress_id} — reward reversed but row "
+                        "stays claimed; manual fix required",
+                        exc_info=True,
+                    )
+            raise HTTPException(status_code=503, detail="Reward payout failed — please retry") from ledger_err
 
     return {
         "status": "claimed",
@@ -344,9 +386,7 @@ async def claim_quest_reward(
 
 
 @api_router.post("/admin/create")
-async def admin_create_quest(
-    req: CreateQuestRequest, admin: dict = Depends(get_admin_user)
-):
+async def admin_create_quest(req: CreateQuestRequest, admin: dict = Depends(get_admin_user)):
     """Create a new quest (admin only)."""
     quest_data = {
         "id": str(uuid.uuid4()),
@@ -405,9 +445,7 @@ async def admin_list_quests(
                 limit=1000,
             )
             total_participants = len(progress_rows)
-            completed = sum(
-                1 for p in progress_rows if p["status"] in ("completed", "claimed")
-            )
+            completed = sum(1 for p in progress_rows if p["status"] in ("completed", "claimed"))
             claimed = sum(1 for p in progress_rows if p["status"] == "claimed")
         except Exception:
             total_participants = completed = claimed = 0
@@ -427,9 +465,7 @@ async def admin_list_quests(
 
 
 @api_router.patch("/admin/{quest_id}")
-async def admin_update_quest(
-    quest_id: str, req: UpdateQuestRequest, admin: dict = Depends(get_admin_user)
-):
+async def admin_update_quest(quest_id: str, req: UpdateQuestRequest, admin: dict = Depends(get_admin_user)):
     """Update a quest (admin only)."""
     quest = await db.find_one("quests", {"id": quest_id})
     if not quest:
@@ -488,9 +524,7 @@ async def admin_get_quest_participants(
         if driver:
             user = await db.find_one("users", {"id": driver.get("user_id")})
             if user:
-                driver_name = (
-                    f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
-                )
+                driver_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
 
         target = quest["target_value"]
         current = p["current_value"]

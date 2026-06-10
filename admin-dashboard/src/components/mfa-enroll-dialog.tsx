@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { mfaEnroll, mfaConfirm } from "@/lib/api";
+import { mfaEnroll, mfaConfirm, MfaConfirmResponse } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,17 +18,24 @@ interface Props {
     open: boolean;
     onOpenChange: (open: boolean) => void;
     onEnrolled: () => void;
+    // Forced first-login enrollment (ADMIN_MFA_ENFORCED): the caller has no
+    // session yet, only an enrollment-scoped token from /login. Passed as the
+    // Bearer token on enroll/confirm; onSession receives the full session
+    // tokens once the user has saved their backup codes.
+    authToken?: string;
+    onSession?: (data: MfaConfirmResponse) => void;
 }
 
 type Step = "setup" | "backup-codes";
 
-export function MfaEnrollDialog({ open, onOpenChange, onEnrolled }: Props) {
+export function MfaEnrollDialog({ open, onOpenChange, onEnrolled, authToken, onSession }: Props) {
     const { toast } = useToast();
     const [step, setStep] = useState<Step>("setup");
     const [secret, setSecret] = useState("");
     const [otpauthUri, setOtpauthUri] = useState("");
     const [totpCode, setTotpCode] = useState("");
     const [backupCodes, setBackupCodes] = useState<string[]>([]);
+    const [session, setSession] = useState<MfaConfirmResponse | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
     const [enrollStarted, setEnrollStarted] = useState(false);
@@ -37,7 +44,7 @@ export function MfaEnrollDialog({ open, onOpenChange, onEnrolled }: Props) {
         setLoading(true);
         setError("");
         try {
-            const data = await mfaEnroll();
+            const data = await mfaEnroll(authToken);
             setSecret(data.secret);
             setOtpauthUri(data.otpauth_uri);
             setEnrollStarted(true);
@@ -52,8 +59,9 @@ export function MfaEnrollDialog({ open, onOpenChange, onEnrolled }: Props) {
         setLoading(true);
         setError("");
         try {
-            const data = await mfaConfirm(totpCode);
+            const data = await mfaConfirm(totpCode, authToken);
             setBackupCodes(data.backup_codes);
+            setSession(data);
             setStep("backup-codes");
         } catch (e: any) {
             setError(e.message || "Invalid code. Please try again.");
@@ -64,6 +72,9 @@ export function MfaEnrollDialog({ open, onOpenChange, onEnrolled }: Props) {
 
     const handleDone = () => {
         toast({ title: "MFA enabled", description: "Two-factor authentication is now active on your account." });
+        // Hand the session to the login flow only after the user has seen the
+        // backup codes — navigating earlier would hide them forever.
+        if (onSession && session) onSession(session);
         onEnrolled();
         onOpenChange(false);
         setStep("setup");
@@ -71,6 +82,7 @@ export function MfaEnrollDialog({ open, onOpenChange, onEnrolled }: Props) {
         setOtpauthUri("");
         setTotpCode("");
         setBackupCodes([]);
+        setSession(null);
         setEnrollStarted(false);
     };
 

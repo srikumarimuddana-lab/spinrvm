@@ -210,10 +210,10 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
                 },
             },
         )
-    except Exception:
+    except Exception as e:
         # Sentry not configured / import failed / network — the logger.error
         # above already carries the same signal via the loguru→Sentry bridge.
-        pass
+        logger.debug(f"refresh-token-reuse Sentry capture skipped: {e}")
 
     # Step 2: token_version bump. Pick the right table by audience.
     new_version: Optional[int] = None

@@ -384,6 +384,8 @@ if sentry_dsn:
     # DSN→Sentry pipeline works (and completes the Fly Sentry extension's
     # "waiting for first event" setup check) instead of waiting for the
     # first real production error to find out the integration is broken.
+    # (Merge note: main added an unconditional capture_message here; this
+    # branch's production-gated version supersedes it — dev boots stay quiet.)
     if getattr(settings, "ENV", "development") == "production":
         sentry_sdk.capture_message("spinr backend started — Sentry pipeline verified", level="info")
 elif getattr(settings, "ENV", "development") == "production":

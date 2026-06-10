@@ -121,10 +121,12 @@ async def list_staff(
     """
     staff = await db_supabase.get_rows("admin_staff", limit=limit, offset=offset)
     total = await db_supabase.count_documents("admin_staff")
-    # Remove passwords from response
+    # Strip credentials from the response. The TOTP secret is as sensitive as
+    # a password — anyone holding it can mint valid 6-digit codes — and this
+    # endpoint is readable by every staff role, not just super_admin.
     for s in staff:
-        s.pop("password_hash", None)
-        s.pop("password", None)
+        for _cred in ("password_hash", "password", "mfa_secret", "mfa_secret_pending", "mfa_backup_codes"):
+            s.pop(_cred, None)
     response.headers["X-Total-Count"] = str(total)
     response.headers["X-Limit"] = str(limit)
     return staff
@@ -208,8 +210,9 @@ async def get_staff(staff_id: str):
     s = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("admin_staff", {"id": staff_id}, limit=1))
     if not s:
         raise HTTPException(status_code=404, detail="Staff member not found")
-    s.pop("password_hash", None)
-    s.pop("password", None)
+    # Same credential-stripping as list_staff — see comment there.
+    for _cred in ("password_hash", "password", "mfa_secret", "mfa_secret_pending", "mfa_backup_codes"):
+        s.pop(_cred, None)
     return s
 
 
@@ -282,6 +285,64 @@ async def update_staff(staff_id: str, req: StaffUpdateRequest, admin: dict = Dep
             },
         )
 
+    return {"success": True}
+
+
+@router.post("/staff/{staff_id}/mfa-reset")
+async def reset_staff_mfa(staff_id: str, admin: dict = Depends(require_role("super_admin"))):
+    """Clear a staff member's MFA so they can re-enroll (lost phone / forgotten authenticator).
+
+    Super-admin only, and deliberately NOT for your own account: self-service
+    removal goes through Settings → Disable MFA (password + TOTP) or a backup
+    code at login — otherwise a hijacked super-admin session could silently
+    weaken its own account. The target's sessions and refresh tokens are
+    revoked because the account just lost a factor; they must log in again
+    (email + password only) and re-enroll from Settings.
+    """
+    if staff_id == admin.get("id"):
+        raise HTTPException(
+            status_code=400,
+            detail="Use Settings → Disable MFA (or a backup code at login) for your own account",
+        )
+    s = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("admin_staff", {"id": staff_id}, limit=1))
+    if not s:
+        raise HTTPException(status_code=404, detail="Staff member not found")
+    if not (s.get("mfa_enabled") or s.get("mfa_secret_pending")):
+        raise HTTPException(status_code=400, detail="MFA is not enabled for this staff member")
+
+    await db_supabase.update_one(
+        "admin_staff",
+        {"id": staff_id},
+        {
+            "mfa_enabled": False,
+            "mfa_secret": None,
+            "mfa_secret_pending": None,
+            "mfa_backup_codes": None,
+            # Bump token_version so the dependency gate rejects all existing
+            # access tokens for this staff member immediately (same pattern
+            # as deactivation above — the account just lost a factor).
+            "token_version": int(s.get("token_version") or 0) + 1,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    await revoke_all_for_user(staff_id)
+    await db_supabase.insert_one(
+        "audit_logs",
+        {
+            "id": str(uuid.uuid4()),
+            "actor_id": admin["id"],
+            "actor_role": admin.get("role"),
+            "action": "staff_mfa_reset",
+            "entity_type": "staff",
+            "entity_id": staff_id,
+            "details": {
+                "email_masked": _redact_email(s.get("email")),
+                "had_pending_enrollment": bool(s.get("mfa_secret_pending")),
+            },
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    logger.info(f"MFA reset for staff {staff_id} by super_admin {admin.get('id')}")
     return {"success": True}
 
 

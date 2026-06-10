@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getStaff, createStaff, updateStaff, deleteStaff } from "@/lib/api";
+import { getStaff, createStaff, updateStaff, deleteStaff, resetStaffMfa } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
 import { useRequireModule } from "@/hooks/useRequireModule";
-import { Users, Plus, Shield, Eye, EyeOff, Trash2, Edit, Check, X } from "lucide-react";
+import { Users, Plus, Shield, ShieldCheck, ShieldOff, Eye, EyeOff, Trash2, Edit, Check, X } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import {
     AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -59,6 +59,7 @@ interface Staff {
   is_active: boolean;
   created_at: string;
   last_login?: string;
+  mfa_enabled?: boolean;
 }
 
 export default function StaffPage() {
@@ -66,6 +67,7 @@ export default function StaffPage() {
   const { user } = useAuthStore();
   const { toast } = useToast();
   const [deleteTarget, setDeleteTarget] = useState<Staff | null>(null);
+  const [mfaResetTarget, setMfaResetTarget] = useState<Staff | null>(null);
   const [staff, setStaff] = useState<Staff[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -169,6 +171,22 @@ export default function StaffPage() {
       toast({ title: "Failed to delete staff member", description: e?.message, variant: "destructive" });
     } finally {
       setDeleteTarget(null);
+    }
+  };
+
+  const confirmMfaReset = async () => {
+    if (!mfaResetTarget) return;
+    try {
+      await resetStaffMfa(mfaResetTarget.id);
+      toast({
+        title: "MFA reset",
+        description: `${mfaResetTarget.email} was signed out everywhere and can now log in with email + password, then re-enroll from Settings.`,
+      });
+      loadStaff();
+    } catch (e: any) {
+      toast({ title: "Failed to reset MFA", description: e?.message, variant: "destructive" });
+    } finally {
+      setMfaResetTarget(null);
     }
   };
 
@@ -358,6 +376,12 @@ export default function StaffPage() {
                   {!s.is_active && (
                     <span className="px-2 py-0.5 rounded-md text-xs font-bold bg-yellow-100 text-yellow-700">DISABLED</span>
                   )}
+                  {s.mfa_enabled && (
+                    <span className="flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-bold bg-green-100 text-green-700">
+                      <ShieldCheck className="h-3 w-3" />
+                      MFA
+                    </span>
+                  )}
                 </div>
                 <p className="text-sm text-gray-500 mt-0.5">{s.email}</p>
 
@@ -377,6 +401,18 @@ export default function StaffPage() {
 
               {/* Actions */}
               <div className="flex items-center gap-2 shrink-0">
+                {/* Lost-phone recovery — super_admin only, never on your own
+                    account (self-service goes through Settings / backup codes;
+                    backend enforces both rules too). */}
+                {user?.role === "super_admin" && s.mfa_enabled && s.id !== user?.id && (
+                  <button
+                    onClick={() => setMfaResetTarget(s)}
+                    className="p-2 hover:bg-orange-50 rounded-lg transition"
+                    title="Reset MFA (lost phone)"
+                  >
+                    <ShieldOff className="h-4 w-4 text-orange-500" />
+                  </button>
+                )}
                 <button onClick={() => handleEdit(s)} className="p-2 hover:bg-gray-100 rounded-lg transition" title="Edit">
                   <Edit className="h-4 w-4 text-gray-500" />
                 </button>
@@ -395,6 +431,24 @@ export default function StaffPage() {
           ))}
         </div>
       )}
+
+      <AlertDialog open={!!mfaResetTarget} onOpenChange={(open) => { if (!open) setMfaResetTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Reset MFA for {mfaResetTarget?.first_name} {mfaResetTarget?.last_name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Use this when they lost their phone or authenticator. Their two-factor
+              setup and backup codes are wiped and they are signed out everywhere.
+              They can then log in with email + password and re-enroll a new
+              authenticator from Settings. The action is recorded in the audit log.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmMfaReset} className="bg-orange-600 hover:bg-orange-700">Reset MFA</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
         <AlertDialogContent>

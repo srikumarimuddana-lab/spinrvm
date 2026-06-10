@@ -146,10 +146,11 @@ async def test_create_payment_intent_ride_not_found():
 
 
 @pytest.mark.anyio
-async def test_create_payment_intent_fare_mismatch():
-    """Amount mismatch raises PaymentException(400) which gets wrapped to 500 by the
-    generic handler in create_payment_intent. Verify the ride fare lookup ran and an
-    HTTPException is raised."""
+async def test_create_payment_intent_ride_not_owned_403():
+    """A ride whose rider_id doesn't match the caller is rejected with the
+    ownership 403 from _authoritative_ride_charge — surfaced as-is, no longer
+    masked as a generic 500. (The advisory `amount` is ignored for ride
+    payments, so there is no separate fare-mismatch error path.)"""
     from fastapi import HTTPException
 
     from backend.routes.payments import PaymentIntentRequest, create_payment_intent
@@ -172,8 +173,7 @@ async def test_create_payment_intent_fare_mismatch():
                 request=mock_req,
                 current_user=_USER,
             )
-    # PaymentException(400) is re-raised as 500 by the generic except block
-    assert exc.value.status_code in (400, 500)
+    assert exc.value.status_code == 403
     mock_db.get_ride.assert_called_once_with("ride-123")
 
 
@@ -184,7 +184,8 @@ async def test_create_payment_intent_success_with_client_key():
     mock_req = MagicMock()
     mock_req.headers = {}
 
-    fake_ride = {"id": "ride-123", "total_fare": "15.00"}
+    # rider_id must match: _authoritative_ride_charge 403s on non-owners.
+    fake_ride = {"id": "ride-123", "total_fare": "15.00", "rider_id": _USER["id"]}
     mock_intent = MagicMock()
     mock_intent.client_secret = "pi_secret"
     mock_intent.id = "pi_001"
@@ -275,7 +276,7 @@ async def test_create_payment_intent_with_payment_method_id():
 
 @pytest.mark.anyio
 async def test_confirm_payment_mock():
-    from backend.routes.payments import confirm_payment
+    from backend.routes.payments import ConfirmPaymentRequest, confirm_payment
 
     with patch("backend.routes.payments.db_supabase") as mock_db:
         mock_db.update_ride = AsyncMock()
@@ -284,7 +285,7 @@ async def test_confirm_payment_mock():
         )
         mock_db.claim_ride_payment_processing = AsyncMock(return_value=True)
         result = await confirm_payment(
-            body={"payment_intent_id": "pi_mock_test", "ride_id": "ride-1"},
+            body=ConfirmPaymentRequest(**{"payment_intent_id": "pi_mock_test", "ride_id": "ride-1"}),
             current_user=_USER,
         )
 
@@ -294,10 +295,10 @@ async def test_confirm_payment_mock():
 
 @pytest.mark.anyio
 async def test_confirm_payment_mock_no_ride_id():
-    from backend.routes.payments import confirm_payment
+    from backend.routes.payments import ConfirmPaymentRequest, confirm_payment
 
     result = await confirm_payment(
-        body={"payment_intent_id": "pi_mock_xyz"},
+        body=ConfirmPaymentRequest(**{"payment_intent_id": "pi_mock_xyz"}),
         current_user=_USER,
     )
     assert result["status"] == "succeeded"
@@ -305,11 +306,11 @@ async def test_confirm_payment_mock_no_ride_id():
 
 @pytest.mark.anyio
 async def test_confirm_payment_no_stripe_key():
-    from backend.routes.payments import confirm_payment
+    from backend.routes.payments import ConfirmPaymentRequest, confirm_payment
 
     with patch("backend.routes.payments.get_app_settings", new_callable=AsyncMock, return_value=_settings(False)):
         result = await confirm_payment(
-            body={"payment_intent_id": "pi_real_001"},
+            body=ConfirmPaymentRequest(**{"payment_intent_id": "pi_real_001"}),
             current_user=_USER,
         )
     assert result["status"] == "unknown"
@@ -318,7 +319,7 @@ async def test_confirm_payment_no_stripe_key():
 
 @pytest.mark.anyio
 async def test_confirm_payment_real_stripe():
-    from backend.routes.payments import confirm_payment
+    from backend.routes.payments import ConfirmPaymentRequest, confirm_payment
 
     mock_intent = MagicMock()
     mock_intent.status = "succeeded"
@@ -335,7 +336,7 @@ async def test_confirm_payment_real_stripe():
         )
         mock_db.claim_ride_payment_processing = AsyncMock(return_value=True)
         result = await confirm_payment(
-            body={"payment_intent_id": "pi_real_001", "ride_id": "ride-1"},
+            body=ConfirmPaymentRequest(**{"payment_intent_id": "pi_real_001", "ride_id": "ride-1"}),
             current_user=_USER,
         )
 
@@ -709,7 +710,11 @@ async def test_delete_card_no_stripe_key_skips_detach():
 
 @pytest.mark.anyio
 async def test_payment_sheet_ride_idempotency_key():
-    """ride_id branch sets idempotency key as ps-{ride_id}-{user_id}."""
+    """ride_id branch sets idempotency key as ps-{ride_id}-{user_id}-{amount_cents}.
+
+    The amount-cents suffix is deliberate: a changed-tip retry must get a
+    distinct key (fresh PaymentIntent) instead of a Stripe IdempotencyError;
+    same amount → same key → still idempotent."""
     from backend.routes.payments import PaymentSheetRequest, create_payment_sheet
 
     mock_intent = MagicMock()
@@ -736,7 +741,7 @@ async def test_payment_sheet_ride_idempotency_key():
         )
 
     called_kwargs = create_spy.call_args[1]
-    assert called_kwargs["idempotency_key"] == f"ps-ride-ps-{_USER['id']}"
+    assert called_kwargs["idempotency_key"] == f"ps-ride-ps-{_USER['id']}-1200"
     assert result["paymentIntent"] == "pi_secret_ps"
 
 
@@ -806,7 +811,7 @@ async def test_confirm_payment_stripe_error():
     """Stripe error during confirm_payment surfaces as 500."""
     from fastapi import HTTPException
 
-    from backend.routes.payments import confirm_payment
+    from backend.routes.payments import ConfirmPaymentRequest, confirm_payment
 
     with (
         patch("backend.routes.payments.get_app_settings", new_callable=AsyncMock, return_value=_settings()),
@@ -817,7 +822,7 @@ async def test_confirm_payment_stripe_error():
     ):
         with pytest.raises(HTTPException) as exc:
             await confirm_payment(
-                body={"payment_intent_id": "pi_real_err"},
+                body=ConfirmPaymentRequest(**{"payment_intent_id": "pi_real_err"}),
                 current_user=_USER,
             )
     assert exc.value.status_code == 500

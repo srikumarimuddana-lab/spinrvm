@@ -3872,8 +3872,13 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             exc_info=True,
         )
 
+    # Atomic completion guard: filter on status=in_progress so a concurrent
+    # complete/cancel that won the race after the read above matches zero rows
+    # instead of writing a second completion (same CAS pattern as ride
+    # acceptance filtering on status='searching').
+    _complete_filters = {"id": ride_id, "driver_id": driver["id"], "status": RideStatus.IN_PROGRESS}
     try:
-        await db_supabase.update_one("rides", {"id": ride_id, "driver_id": driver["id"]}, update_fields)
+        _updated_ride_row = await db_supabase.update_one("rides", _complete_filters, update_fields)
     except Exception as e:
         # Some columns may not exist yet in older deployments. Retry with only
         # the essential fields so ride completion never fails.
@@ -3888,9 +3893,13 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                 "distance_km",
             }
             safe_updates = {k: v for k, v in update_fields.items() if k in safe_keys}
-            await db_supabase.update_one("rides", {"id": ride_id, "driver_id": driver["id"]}, safe_updates)
+            _updated_ride_row = await db_supabase.update_one("rides", _complete_filters, safe_updates)
         else:
             raise
+    if _updated_ride_row is None:
+        raise RideStateError(
+            f"Ride {ride_id} is no longer in_progress — completion already processed by a concurrent request"
+        )
 
     # ── Record incentive claims ──────────────────────────────────
     # Fetch active incentives matching this ride's service area / vehicle type

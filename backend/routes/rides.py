@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 try:
     from .. import db_supabase
-    from ..dependencies import generate_pickup_otp, get_current_user
+    from ..dependencies import generate_pickup_otp, get_current_user, get_current_user_allow_expired
     from ..features import (
         calculate_airport_fee,
         calculate_all_fees,
@@ -57,7 +57,7 @@ try:
     from ..validators import validate_ride_location
 except ImportError:
     import db_supabase
-    from dependencies import generate_pickup_otp, get_current_user
+    from dependencies import generate_pickup_otp, get_current_user, get_current_user_allow_expired
     from features import (
         calculate_airport_fee,
         calculate_all_fees,
@@ -149,6 +149,26 @@ except ImportError:
 db = db_supabase  # legacy alias
 
 import httpx as _httpx  # noqa: E402 — late import to avoid circular at module load
+
+
+def _push_in_background(*args, _ctx: str = "", **kwargs) -> None:
+    """Fire an informational push without blocking the request path.
+
+    FCM/Expo round-trips run 100–300 ms; awaiting them inline adds that
+    straight onto user-facing latency for pushes that are best-effort by
+    design (tip received, rating received, trip shared). Failures are
+    logged with ``_ctx`` — never re-raised into the caller. Time-critical
+    pushes (dispatch/safety) must NOT use this: they have their own
+    retry-queue fallback inside send_push_notification.
+    """
+
+    async def _send() -> None:
+        try:
+            await send_push_notification(*args, **kwargs)
+        except Exception:
+            logger.error(f"background push failed ({_ctx})", exc_info=True)
+
+    asyncio.create_task(_send())
 
 
 def _decode_polyline(encoded: str) -> list:
@@ -1402,6 +1422,31 @@ async def estimate_ride(
                     },
                 )
 
+    # Kick off the Directions polyline fetch NOW so its round-trip overlaps
+    # the driver/fare work below instead of stacking on top of it (the fare
+    # estimate budget is <300ms P95; Directions alone can take seconds).
+    # Placed after the geofence gates so rejected requests never spend a
+    # Maps API call. Never raises — resolves to None on any failure.
+    async def _polyline_fetch() -> Optional[list]:
+        try:
+            _ps = await get_app_settings()
+            _maps_key = (_ps or {}).get("google_maps_api_key", "")
+            if not _maps_key:
+                return None
+            return await _fetch_directions_polyline(
+                body.pickup_lat,
+                body.pickup_lng,
+                body.dropoff_lat,
+                body.dropoff_lng,
+                _maps_key,
+                waypoints=body.stops or [],
+            )
+        except Exception as _poly_err:
+            logger.warning("[estimate] polyline fetch failed (non-fatal): %s", _poly_err)
+            return None
+
+    polyline_task = asyncio.create_task(_polyline_fetch())
+
     # Fetch nearby online+available drivers once. Order by went_online_at DESC
     # so recently-toggled-online drivers fill the 200-row page first. Ghost
     # drivers (is_available=True in DB but heartbeat expired) tend to carry
@@ -1587,25 +1632,19 @@ async def estimate_ride(
             }
         )
 
-    # Fetch the road-following route polyline from Google Directions API.
-    # Same for all vehicle types, so called once. Returned as [[lat, lng], ...]
-    # so the rider app can render the gradient route line without a client-side
-    # Directions call (which requires the rider's own Google Maps API key).
+    # Collect the road-following polyline started before the driver/fare
+    # work. Same for all vehicle types, so fetched once; the rider app uses
+    # it to render the gradient route line without a client-side Directions
+    # call. Only a short top-up wait is granted here — a slow Directions API
+    # must not drag the estimate past its latency budget. On timeout the
+    # task is cancelled and the app falls back to straight-line rendering.
     route_polyline = None
     try:
-        _settings = await get_app_settings()
-        _maps_key = (_settings or {}).get("google_maps_api_key", "")
-        if _maps_key:
-            route_polyline = await _fetch_directions_polyline(
-                body.pickup_lat,
-                body.pickup_lng,
-                body.dropoff_lat,
-                body.dropoff_lng,
-                _maps_key,
-                waypoints=body.stops or [],
-            )
-    except Exception as _poly_err:
-        logger.warning("[estimate] polyline fetch failed (non-fatal): %s", _poly_err)
+        route_polyline = await asyncio.wait_for(polyline_task, timeout=0.5)
+    except asyncio.TimeoutError:
+        logger.info("[estimate] polyline not ready within budget — returning without it (non-fatal)")
+    except Exception as _poly_err:  # defensive — _polyline_fetch traps its own errors
+        logger.warning("[estimate] polyline await failed (non-fatal): %s", _poly_err)
 
     logger.info(
         "[estimate] returning %d estimates (polyline=%d pts): %s",
@@ -3095,22 +3134,17 @@ async def add_tip(
             await manager.send_personal_message(payload, f"driver_{driver_user_id}")
         except Exception as exc:
             logger.warning(f"[TIP] WS notify driver {driver_user_id} failed: {exc}")
-        try:
-            await send_push_notification(
-                driver_user_id,
-                "You got a tip! 💸",
-                f"{rider_name} tipped you ${tip_amount:.2f}",
-                data={
-                    "type": "tip_received",
-                    "ride_id": str(ride_id),
-                    "amount": f"{tip_amount:.2f}",
-                },
-            )
-        except Exception as exc:
-            logger.error(
-                f"[TIP] Push notify driver {driver_user_id} failed: {exc}",
-                exc_info=True,
-            )
+        _push_in_background(
+            driver_user_id,
+            "You got a tip! 💸",
+            f"{rider_name} tipped you ${tip_amount:.2f}",
+            data={
+                "type": "tip_received",
+                "ride_id": str(ride_id),
+                "amount": f"{tip_amount:.2f}",
+            },
+            _ctx=f"[TIP] driver {driver_user_id}",
+        )
 
     return {"success": True, "tip_amount": _money_str(new_tip)}
 
@@ -3428,22 +3462,17 @@ async def share_trip_with_contact(
     if contact_user:
         rider = await db.find_one("users", {"id": current_user["id"]})
         rider_name = f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip() if rider else "Someone"
-        try:
-            await send_push_notification(
-                contact_user["id"],
-                f"{rider_name} is sharing their ride with you",
-                f"Track their live location: {ride.get('pickup_address', '')} → {ride.get('dropoff_address', '')}",
-                data={
-                    "type": "trip_shared",
-                    "share_token": share_token,
-                    "ride_id": ride_id,
-                },
-            )
-        except Exception as _push_exc:
-            logger.error(
-                f"[SHARE] push to contact {contact_user['id']} failed: {_push_exc}",
-                exc_info=True,
-            )
+        _push_in_background(
+            contact_user["id"],
+            f"{rider_name} is sharing their ride with you",
+            f"Track their live location: {ride.get('pickup_address', '')} → {ride.get('dropoff_address', '')}",
+            data={
+                "type": "trip_shared",
+                "share_token": share_token,
+                "ride_id": ride_id,
+            },
+            _ctx=f"[SHARE] contact {contact_user['id']}",
+        )
 
     return {
         "success": True,
@@ -3623,19 +3652,17 @@ async def rate_driver(
     if driver and driver.get("user_id") and rating_data.rating:
         stars = "⭐" * int(rating_data.rating)
         tip_note = f" + ${rating_data.tip_amount:.2f} tip!" if rating_data.tip_amount > 0 else ""
-        try:
-            await send_push_notification(
-                driver["user_id"],
-                f"New Rating: {stars}",
-                f"A rider rated you {rating_data.rating}/5{tip_note}",
-                {
-                    "type": "rating_received",
-                    "rating": str(rating_data.rating),
-                    "ride_id": ride_id,
-                },
-            )
-        except Exception as push_err:
-            logger.info("[RATING] Push failed (non-fatal)", exc_info=push_err)
+        _push_in_background(
+            driver["user_id"],
+            f"New Rating: {stars}",
+            f"A rider rated you {rating_data.rating}/5{tip_note}",
+            {
+                "type": "rating_received",
+                "rating": str(rating_data.rating),
+                "ride_id": ride_id,
+            },
+            _ctx=f"[RATING] driver {driver['user_id']}",
+        )
 
     asyncio.create_task(
         log_user_action(
@@ -4145,7 +4172,10 @@ async def trigger_emergency(
     ride_id: str,
     body: EmergencyRequest,
     request: Request = None,
-    current_user: dict = Depends(get_current_user),
+    # SOS is never gated behind an auth refresh: a signature-valid token
+    # that merely expired mid-trip still identifies the caller. Ride
+    # membership is enforced below regardless.
+    current_user: dict = Depends(get_current_user_allow_expired),
 ):
     """Trigger an emergency alert for a live ride"""
     ride = await db_supabase.get_ride(ride_id)

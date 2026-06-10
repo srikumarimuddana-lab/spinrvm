@@ -7,6 +7,7 @@ deviating driver instead of freezing on the planned polyline.
 """
 
 import json
+from contextlib import ExitStack, contextmanager
 from unittest.mock import patch
 
 import pytest
@@ -71,7 +72,14 @@ def _fake_client(handler, calls):
     return _C
 
 
+@contextmanager
 def _common_patches(app_settings, handler, calls, *, budget_allowed=True, cached=None, recorded=None):
+    """Patch settings/budget/redis/httpx so only `app_settings` drives provider choice.
+
+    OSRM_URL and OSRM_FALLBACK_URL (public demo, non-empty by default) are
+    blanked so "OSRM unconfigured" in a test really means no OSRM provider.
+    """
+
     async def _settings():
         return app_settings
 
@@ -88,14 +96,19 @@ def _common_patches(app_settings, handler, calls, *, budget_allowed=True, cached
     async def _redis_set(*_a, **_kw):
         return None
 
-    return (
-        patch.object(rd, "get_app_settings", _settings),
-        patch.object(rd, "check_budget", _budget),
-        patch.object(rd, "record_call", _record),
-        patch.object(rd, "redis_get", _redis_get),
-        patch.object(rd, "redis_set", _redis_set),
-        patch.object(rd.httpx, "AsyncClient", _fake_client(handler, calls)),
-    )
+    with ExitStack() as stack:
+        for p in (
+            patch.object(rd.settings, "OSRM_URL", ""),
+            patch.object(rd.settings, "OSRM_FALLBACK_URL", ""),
+            patch.object(rd, "get_app_settings", _settings),
+            patch.object(rd, "check_budget", _budget),
+            patch.object(rd, "record_call", _record),
+            patch.object(rd, "redis_get", _redis_get),
+            patch.object(rd, "redis_set", _redis_set),
+            patch.object(rd.httpx, "AsyncClient", _fake_client(handler, calls)),
+        ):
+            stack.enter_context(p)
+        yield
 
 
 def test_decode_encoded_polyline_reference_vector():
@@ -113,8 +126,7 @@ async def test_osrm_preferred_when_configured():
         assert "/route/v1/driving/" in url
         return _Resp(body=_OSRM_BODY)
 
-    patches = _common_patches({"osrm_url": "http://osrm:5000", "google_maps_api_key": "gk"}, handler, calls)
-    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+    with _common_patches({"osrm_url": "http://osrm:5000", "google_maps_api_key": "gk"}, handler, calls):
         out = await rd.compute_route(50.45, -104.62, 50.44, -104.63)
 
     assert out == {
@@ -136,10 +148,9 @@ async def test_falls_back_to_google_when_osrm_fails():
         assert url == rd._DIRECTIONS_URL
         return _Resp(body=_DIRECTIONS_BODY)
 
-    patches = _common_patches(
+    with _common_patches(
         {"osrm_url": "http://osrm:5000", "google_maps_api_key": "gk"}, handler, calls, recorded=recorded
-    )
-    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+    ):
         out = await rd.compute_route(50.45, -104.62, 50.44, -104.63)
 
     assert out is not None
@@ -158,8 +169,7 @@ async def test_google_used_when_osrm_unconfigured():
         assert url == rd._DIRECTIONS_URL
         return _Resp(body=_DIRECTIONS_BODY)
 
-    patches = _common_patches({"google_maps_api_key": "gk"}, handler, calls)
-    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+    with _common_patches({"google_maps_api_key": "gk"}, handler, calls):
         out = await rd.compute_route(50.45, -104.62, 50.44, -104.63)
 
     assert out is not None and out["polyline"] == _ENC_DECODED
@@ -173,8 +183,7 @@ async def test_budget_breaker_blocks_google():
     def handler(_url):  # pragma: no cover - must never be reached
         raise AssertionError("HTTP call attempted with budget exhausted")
 
-    patches = _common_patches({"google_maps_api_key": "gk"}, handler, calls, budget_allowed=False)
-    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+    with _common_patches({"google_maps_api_key": "gk"}, handler, calls, budget_allowed=False):
         out = await rd.compute_route(50.45, -104.62, 50.44, -104.63)
 
     assert out is None
@@ -189,8 +198,7 @@ async def test_cache_hit_skips_google_call():
     def handler(_url):  # pragma: no cover - must never be reached
         raise AssertionError("HTTP call attempted on cache hit")
 
-    patches = _common_patches({"google_maps_api_key": "gk"}, handler, calls, cached=json.dumps(cached_result))
-    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+    with _common_patches({"google_maps_api_key": "gk"}, handler, calls, cached=json.dumps(cached_result)):
         out = await rd.compute_route(50.45, -104.62, 50.44, -104.63)
 
     assert out == cached_result
@@ -204,8 +212,7 @@ async def test_none_when_no_providers_configured():
     def handler(_url):  # pragma: no cover - must never be reached
         raise AssertionError("HTTP call attempted with no providers")
 
-    patches = _common_patches({}, handler, calls)
-    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+    with _common_patches({}, handler, calls):
         out = await rd.compute_route(50.45, -104.62, 50.44, -104.63)
 
     assert out is None

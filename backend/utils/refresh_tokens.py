@@ -6,7 +6,7 @@ are the only durable proof a client can present for "I was already
 logged in". This split means:
 
   • A leaked access token is limited by its TTL (see
-    core.config.ACCESS_TOKEN_TTL_DAYS / ADMIN_ACCESS_TOKEN_TTL_HOURS).
+    core.config.ACCESS_TOKEN_EXPIRE_MINUTES / ADMIN_ACCESS_TOKEN_TTL_HOURS).
   • A leaked refresh token can be revoked at will — we stamp
     revoked_at in refresh_tokens and every subsequent /auth/refresh
     call sees it.
@@ -210,10 +210,10 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
                 },
             },
         )
-    except Exception:
+    except Exception as e:
         # Sentry not configured / import failed / network — the logger.error
         # above already carries the same signal via the loguru→Sentry bridge.
-        pass
+        logger.debug(f"refresh-token-reuse Sentry capture skipped: {e}")
 
     # Step 2: token_version bump. Pick the right table by audience.
     new_version: Optional[int] = None

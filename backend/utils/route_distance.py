@@ -312,15 +312,16 @@ async def compute_route(from_lat: float, from_lng: float, to_lat: float, to_lng:
     For the live trip map: returns the optimal road route + ETA between the
     driver's current position and the destination (pickup or dropoff) as
     ``{"polyline": [[lat,lng],...], "eta_seconds": int, "distance_km": float}``.
-    Prefers self-hosted OSRM when configured; when OSRM is unconfigured or
-    fails, falls back to the Google Directions API (budget-gated + cached) so
-    the rider's route line keeps following the driver instead of freezing on
-    the planned polyline. Returns None only when every provider fails — the
-    client then keeps its saved line. This is /route (point-to-point optimal
-    path), distinct from /match (snap a driven trace) used for billing.
+    Provider chain: OSRM via _live_osrm_url (self-hosted, then the public demo
+    fallback when none is configured); if OSRM is unavailable or fails, the
+    Google Directions API (budget-gated + cached) so the rider's route line
+    keeps following the driver instead of freezing on the planned polyline.
+    Returns None only when every provider fails — the client then keeps its
+    saved line. This is /route (point-to-point optimal path), distinct from
+    /match (snap a driven trace) used for billing.
     """
     app_settings = await get_app_settings() or {}
-    osrm_url = (app_settings.get("osrm_url") or settings.OSRM_URL or "").strip()
+    osrm_url = _live_osrm_url(app_settings)
     if osrm_url:
         result = await _compute_route_via_osrm(from_lat, from_lng, to_lat, to_lng, osrm_url)
         if result is not None:
@@ -477,8 +478,9 @@ async def snap_to_road(lat: float, lng: float) -> Optional[Tuple[float, float]]:
     """
     app_settings = await get_app_settings() or {}
 
-    # 1) OSRM /nearest — single-point snap, very fast on self-hosted infra.
-    osrm_url = (app_settings.get("osrm_url") or settings.OSRM_URL or "").strip()
+    # 1) OSRM /nearest — single-point snap; public-OSRM fallback applies
+    #    when no self-hosted instance is configured (see _live_osrm_url).
+    osrm_url = _live_osrm_url(app_settings)
     if osrm_url:
         try:
             url = f"{osrm_url.rstrip('/')}/nearest/v1/driving/{lng},{lat}"  # OSRM is lng,lat
@@ -514,6 +516,21 @@ async def snap_to_road(lat: float, lng: float) -> Optional[Tuple[float, float]]:
             logger.warning("[route_distance] Google nearestRoads failed: %s", e)
 
     return None
+
+
+def _live_osrm_url(app_settings: dict) -> str:
+    """OSRM base URL for LIGHT live calls (/route line+ETA, /nearest snap).
+
+    Resolution: app_settings ``osrm_url`` (admin-rotatable) → OSRM_URL env →
+    OSRM_FALLBACK_URL (public demo server; see core/config.py for the
+    fair-use caveat). The /match billing path deliberately does NOT use the
+    fallback — billable distance only comes from explicitly configured infra.
+    """
+    return (
+        (app_settings.get("osrm_url") or "").strip()
+        or settings.OSRM_URL.strip()
+        or getattr(settings, "OSRM_FALLBACK_URL", "").strip()
+    )
 
 
 def _num_or_zero(v: Any) -> float:

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
-  View, Text, StyleSheet, TouchableOpacity, Share, Platform, BackHandler, ActivityIndicator,
+  View, Text, Image, StyleSheet, TouchableOpacity, Share, Platform, BackHandler, ActivityIndicator,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -289,12 +289,14 @@ function DriverArrivedScreenContent() {
           <View style={styles.driverCard}>
             <View style={styles.driverTop}>
               <View style={styles.avatar}>
-                <Ionicons name="person" size={26} color="#888" />
-                {currentDriver?.rating && (
-                  <View style={styles.ratingPill}>
-                    <Ionicons name="star" size={9} color="#FFB800" />
-                    <Text style={styles.ratingNum}>{currentDriver.rating}</Text>
-                  </View>
+                {currentDriver?.photo_url ? (
+                  <Image
+                    source={{ uri: currentDriver.photo_url }}
+                    style={styles.avatarImg}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <Ionicons name="person" size={26} color="#888" />
                 )}
               </View>
               <View style={{ flex: 1 }}>
@@ -512,15 +514,9 @@ function createStyles(colors: ThemeColors) {
     driverTop: { flexDirection: 'row', alignItems: 'center', marginBottom: 14 },
     avatar: {
       width: 50, height: 50, borderRadius: 25, backgroundColor: '#E8E8E8',
-      justifyContent: 'center', alignItems: 'center', marginRight: 12, position: 'relative',
+      justifyContent: 'center', alignItems: 'center', marginRight: 12, overflow: 'hidden',
     },
-    ratingPill: {
-      position: 'absolute', bottom: -3, left: -3,
-      flexDirection: 'row', alignItems: 'center',
-      backgroundColor: colors.surface, paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8,
-      shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2, elevation: 2,
-    },
-    ratingNum: { fontSize: 10, fontWeight: '700', color: colors.text, marginLeft: 2 },
+    avatarImg: { width: 50, height: 50, borderRadius: 25 },
     driverName: { fontSize: 17, fontWeight: '700', color: colors.text },
     ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
     driverMeta: { fontSize: 12, color: '#888', marginLeft: 2 },

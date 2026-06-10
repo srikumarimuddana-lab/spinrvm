@@ -598,6 +598,18 @@ const recordApiError = (entry: ApiErrorLogEntry) => {
   }
 };
 
+// ── SOS exemption from the 401 interceptor ───────────────────────────
+// POST /rides/{id}/emergency accepts EXPIRED access tokens server-side
+// (get_current_user_allow_expired) precisely so a mid-trip token lapse can
+// never block an SOS. A 401 there must NOT clear the session: nuking the
+// in-memory token between SOSButton retries and bouncing the user to the
+// login screen mid-emergency is the worst possible failure mode. We also
+// skip the silent-refresh dance — its nested /auth/refresh 401 path signs
+// the user out, which is the same hazard. The error propagates to the
+// SOSButton retry/failure UX instead. (/users/emergency-contacts is NOT
+// exempt — that's a normal authenticated CRUD surface.)
+const isSosUrl = (url: string): boolean => /^\/rides\/[^/]+\/emergency$/.test(url);
+
 const handleApiError = async (response: Response, method: string, url: string, retryFn?: () => Promise<unknown>): Promise<never> => {
   // ── Guard: refresh endpoint itself returned 401 ──────────────────
   // If the /auth/refresh call is rejected by the server the refresh token is
@@ -622,7 +634,9 @@ const handleApiError = async (response: Response, method: string, url: string, r
 
 
   // On 401, attempt a single silent token refresh then retry the original request.
-  if (response.status === 401 && _refreshCallback && retryFn) {
+  // SOS is exempt (see isSosUrl) — its backend route tolerates expired tokens,
+  // so the refresh round-trip only adds failure modes during an emergency.
+  if (response.status === 401 && _refreshCallback && retryFn && !isSosUrl(url)) {
     try {
       if (_refreshPromise) {
         // A refresh is already in-flight — queue this request and wait for
@@ -744,7 +758,8 @@ const handleApiError = async (response: Response, method: string, url: string, r
   // triggers the layout's redirect-to-login effect in both apps.
   // This prevents the "session limbo" state where API calls silently
   // fail 401 while the driver/rider still sees the dashboard.
-  if (response.status === 401) {
+  // SOS is exempt: never sign the user out mid-emergency (see isSosUrl).
+  if (response.status === 401 && !isSosUrl(url)) {
     console.log('[API] 401 Unauthorized — clearing session');
     setInMemoryToken(null);
     try {

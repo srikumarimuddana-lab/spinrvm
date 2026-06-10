@@ -29,6 +29,7 @@ export default function SettingsPage() {
 
     const [mfaEnabled, setMfaEnabled] = useState(false);
     const [mfaAvailable, setMfaAvailable] = useState(true);
+    const [mfaEnforced, setMfaEnforced] = useState(false);
     const [mfaLoading, setMfaLoading] = useState(true);
     const [showEnrollDialog, setShowEnrollDialog] = useState(false);
     const [showDisableForm, setShowDisableForm] = useState(false);
@@ -74,6 +75,7 @@ export default function SettingsPage() {
             .then((d) => {
                 setMfaEnabled(d.mfa_enabled);
                 setMfaAvailable(d.available !== false);
+                setMfaEnforced(d.enforced === true);
             })
             .catch(() => { })
             .finally(() => setMfaLoading(false));
@@ -544,7 +546,14 @@ export default function SettingsPage() {
                                         <ShieldCheck className="h-4 w-4" />
                                         MFA is enabled on your account.
                                     </div>
-                                    {showDisableForm ? (
+                                    {mfaEnforced ? (
+                                        <p className="text-sm text-muted-foreground">
+                                            Two-factor authentication is required for all staff accounts
+                                            and cannot be disabled. If you lose access to your
+                                            authenticator, use a backup code at login or ask a super
+                                            admin to reset your MFA.
+                                        </p>
+                                    ) : showDisableForm ? (
                                         <div className="space-y-3">
                                             {disableError && (
                                                 <div className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">

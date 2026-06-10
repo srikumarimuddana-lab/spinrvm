@@ -89,6 +89,20 @@ class PaymentIntentRequest(BaseModel):
     payment_method_id: Optional[str] = None
 
 
+class ConfirmPaymentRequest(BaseModel):
+    """Request body for POST /payments/confirm.
+
+    Typed (not a raw dict) so the pi_mock_* production guard and the
+    ownership checks below operate on validated, length-bounded strings —
+    unknown keys are rejected instead of silently carried along.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    payment_intent_id: Optional[str] = Field(None, min_length=1, max_length=255)
+    ride_id: Optional[str] = Field(None, min_length=1, max_length=64)
+
+
 class PaymentSheetRequest(BaseModel):
     """Request body for POST /payments/payment-sheet."""
 
@@ -274,6 +288,10 @@ async def create_payment_intent(
     except stripe.error.StripeError as e:
         logger.error(f"Stripe API error on create-intent: {e}", exc_info=True)
         raise HTTPException(status_code=502, detail="Payment service unavailable. Please try again.") from e
+    except HTTPException:
+        # Intentional 4xx (ownership 403, validation 400) from helpers like
+        # _authoritative_ride_charge must reach the client, not become a 500.
+        raise
     except Exception as e:
         logger.error(f"Unexpected error on create-intent: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
@@ -283,13 +301,13 @@ async def create_payment_intent(
 @payment_action_limit
 @idempotent_endpoint(scope="payment_confirm")
 async def confirm_payment(
-    body: Dict[str, Any],
+    body: ConfirmPaymentRequest,
     request: Request = None,
     current_user: dict = Depends(get_current_user),
 ):
     """Confirm payment was successful"""
-    payment_intent_id = body.get("payment_intent_id")
-    ride_id = body.get("ride_id")
+    payment_intent_id = body.payment_intent_id
+    ride_id = body.ride_id
 
     # Mock-payment shortcut is allowed only outside production, OR for an
     # allow-listed app-store reviewer account (so a reviewer can reach a "paid"
@@ -380,6 +398,9 @@ async def confirm_payment(
                 )
 
             return {"status": intent.status, "mock": False}
+        except HTTPException:
+            # Ownership 403s above must reach the client, not become a 500.
+            raise
         except Exception as e:
             logger.error(f"Stripe error: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
@@ -418,6 +439,9 @@ async def create_setup_intent(request: Request = None, current_user: dict = Depe
             "customer_id": customer_id,
             "mock": False,
         }
+    except HTTPException:
+        # The 400 for a missing Stripe customer must reach the client.
+        raise
     except Exception as e:
         logger.error(f"Stripe error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
@@ -820,6 +844,10 @@ async def create_payment_sheet(
     except stripe.error.StripeError as e:
         logger.error("Stripe payment-sheet error", exc_info=True)
         raise HTTPException(status_code=502, detail="Payment provider error. Please try again.") from e
+    except HTTPException:
+        # Intentional 4xx (ownership 403 from _authoritative_ride_charge)
+        # must reach the client, not become a 500.
+        raise
     except Exception as e:
         logger.error("payment-sheet unexpected error", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e

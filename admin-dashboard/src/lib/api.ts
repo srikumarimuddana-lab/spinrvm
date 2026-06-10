@@ -68,7 +68,12 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
         ...(isFormData ? {} : { "Content-Type": "application/json" }),
         ...(options.headers as Record<string, string>),
     };
-    if (token) headers["Authorization"] = `Bearer ${token}`;
+    // An explicit Authorization header from the caller wins over the store
+    // token. The forced-enrollment flow passes the enrollment-scoped token
+    // while a previous account's session may still sit in the Zustand store
+    // (account switching on /login) — overwriting it would enroll MFA on the
+    // wrong account.
+    if (token && !headers["Authorization"]) headers["Authorization"] = `Bearer ${token}`;
     const method = (options.method ?? "GET").toUpperCase();
     if (!["GET", "HEAD", "OPTIONS"].includes(method) && store.csrfToken) {
         headers["X-CSRF-Token"] = store.csrfToken;
@@ -84,7 +89,15 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
         if (res.status === 401) {
             // For the login endpoint, fall through to the !res.ok handler so
             // "Invalid credentials" is shown to the user rather than "Unauthorized".
-            if (path !== "/api/admin/auth/login") {
+            // Same for calls that supplied their own Authorization header (the
+            // forced-MFA-enrollment flow): silently refreshing would swap in the
+            // store session's token — acting as the previously signed-in account
+            // in the account-switch case — and the logout()+redirect below would
+            // destroy the enrollment flow. Those callers must see the real 401.
+            const callerProvidedAuth = Boolean(
+                (options.headers as Record<string, string> | undefined)?.["Authorization"],
+            );
+            if (path !== "/api/admin/auth/login" && !callerProvidedAuth) {
                 // Attempt one silent refresh before giving up. The HttpOnly
                 // refresh cookie is sent automatically — no need to check for
                 // a token in JS state.
@@ -205,7 +218,14 @@ export interface AdminMfaRequired {
     mfa_token: string;
 }
 
-export type AdminLoginResult = AdminLoginResponse | AdminMfaRequired;
+// ADMIN_MFA_ENFORCED: password was correct but the account has no MFA yet.
+// mfa_token is enrollment-scoped — only /mfa/enroll and /mfa/confirm accept it.
+export interface AdminMfaEnrollmentRequired {
+    mfa_enrollment_required: true;
+    mfa_token: string;
+}
+
+export type AdminLoginResult = AdminLoginResponse | AdminMfaRequired | AdminMfaEnrollmentRequired;
 
 export const loginAdmin = (phone: string, code: string) =>
     request<AuthResponse>("/api/auth/verify-otp", {
@@ -226,15 +246,30 @@ export const mfaChallenge = (mfa_token: string, totp_code: string) =>
     });
 
 export const mfaStatus = () =>
-    request<{ mfa_enabled: boolean; available: boolean }>("/api/admin/auth/mfa/status");
+    request<{ mfa_enabled: boolean; available: boolean; enforced?: boolean }>("/api/admin/auth/mfa/status");
 
-export const mfaEnroll = () =>
-    request<{ secret: string; otpauth_uri: string }>("/api/admin/auth/mfa/enroll", { method: "POST" });
+// Confirm also returns full session tokens so first-login enrollment
+// (no session yet, only the enrollment-scoped token) lands in the dashboard.
+// Settings-flow callers already have a session and can ignore them.
+export interface MfaConfirmResponse extends AdminLoginResponse {
+    backup_codes: string[];
+    refresh_expires_at?: string;
+}
 
-export const mfaConfirm = (totp_code: string) =>
-    request<{ backup_codes: string[] }>("/api/admin/auth/mfa/confirm", {
+// `authToken` carries the enrollment-scoped token during forced first-login
+// enrollment; omitted, the session token from the store is used (Settings flow).
+// The store token is null in the forced flow, so this header is not overwritten.
+export const mfaEnroll = (authToken?: string) =>
+    request<{ secret: string; otpauth_uri: string }>("/api/admin/auth/mfa/enroll", {
+        method: "POST",
+        ...(authToken ? { headers: { Authorization: `Bearer ${authToken}` } } : {}),
+    });
+
+export const mfaConfirm = (totp_code: string, authToken?: string) =>
+    request<MfaConfirmResponse>("/api/admin/auth/mfa/confirm", {
         method: "POST",
         body: JSON.stringify({ totp_code }),
+        ...(authToken ? { headers: { Authorization: `Bearer ${authToken}` } } : {}),
     });
 
 export const mfaDisable = (totp_code: string, password: string) =>
@@ -1917,6 +1952,11 @@ export const updateStaff = (id: string, data: any) =>
 
 export const deleteStaff = (id: string) =>
     request<any>(`/api/admin/staff/${id}`, { method: "DELETE" });
+
+// Lost-phone recovery: super_admin clears a staff member's MFA so they can
+// re-enroll. Backend revokes the target's sessions and audit-logs the action.
+export const resetStaffMfa = (id: string) =>
+    request<{ success: boolean }>(`/api/admin/staff/${id}/mfa-reset`, { method: "POST" });
 
 export const getStaffModules = () =>
     request<{ modules: string[]; role_presets: Record<string, string[]> }>("/api/admin/staff/modules/list");

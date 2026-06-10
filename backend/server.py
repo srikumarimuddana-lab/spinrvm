@@ -380,7 +380,24 @@ if sentry_dsn:
 
     logger.add(_loguru_sentry_sink, level="ERROR")
     logger.info("Sentry SDK initialized for error monitoring")
-    sentry_sdk.capture_message("Sentry connected – spinr-backend startup", level="info")
+    # One low-volume boot event per process: positively confirms the
+    # DSN→Sentry pipeline works (and completes the Fly Sentry extension's
+    # "waiting for first event" setup check) instead of waiting for the
+    # first real production error to find out the integration is broken.
+    # (Merge note: main added an unconditional capture_message here; this
+    # branch's production-gated version supersedes it — dev boots stay quiet.)
+    if getattr(settings, "ENV", "development") == "production":
+        sentry_sdk.capture_message("spinr backend started — Sentry pipeline verified", level="info")
+elif getattr(settings, "ENV", "development") == "production":
+    # Same precedent as the Redis-missing check (L-P1-1): observability
+    # degradation must not take the API down, but it must be impossible to
+    # miss. A production replica without Sentry means payment/dispatch/auth
+    # errors go nowhere — set the SENTRY_DSN secret (Fly: Sentry extension
+    # "Deploy Secrets", or `fly secrets set SENTRY_DSN=...`).
+    logger.error(
+        "SENTRY_DSN is not set in production — backend errors are NOT being "
+        "reported to Sentry. Deploy the SENTRY_DSN secret to restore error tracking."
+    )
 
 if __name__ == "__main__":
     import uvicorn

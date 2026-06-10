@@ -324,7 +324,13 @@ function RideOptionsScreenContent() {
         message: `Demand is higher than usual right now, so a ${surge}× surge multiplier is included in your fare. Your total is $${totalFare.toFixed(2)}.`,
         variant: 'warning',
         buttons: [
-          { text: `Book at $${totalFare.toFixed(2)}`, onPress: () => proceedWithBooking() },
+          // Deliberately NOT awaited: ConfirmSheet.handlePress awaits onPress
+          // and then always calls onClose() in its finally. Awaiting the whole
+          // booking here would let that onClose() fire AFTER proceedWithBooking
+          // sets a follow-up sheet (e.g. the 402 "Unpaid Ride" prompt) and
+          // silently close it. Returning immediately closes the surge sheet
+          // first; booking continues and any follow-up sheet survives.
+          { text: `Book at $${totalFare.toFixed(2)}`, onPress: () => { void proceedWithBooking(); } },
           { text: 'Cancel', style: 'cancel' },
         ],
       });
@@ -334,6 +340,7 @@ function RideOptionsScreenContent() {
   };
 
   const proceedWithBooking = async () => {
+    if (isBooking) return;
     setIsBooking(true);
     try {
       const corpId = useCorporate && selectedCorporateId ? selectedCorporateId : null;

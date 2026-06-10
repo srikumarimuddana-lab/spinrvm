@@ -420,7 +420,12 @@ I've shared my live location with you for safety.
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.driverName}>{currentDriver?.name || 'Your Driver'}</Text>
-            <Text style={styles.driverMeta}>{currentDriver?.total_rides || 0} trips completed</Text>
+            <View style={styles.ratingRow}>
+              <Ionicons name="star" size={13} color="#FFB800" />
+              <Text style={styles.driverMeta}>
+                {currentDriver?.rating ? `${currentDriver.rating} rating` : 'No ratings yet'}
+              </Text>
+            </View>
           </View>
           <TouchableOpacity
             style={styles.msgIconBtn}
@@ -436,12 +441,21 @@ I've shared my live location with you for safety.
 
         {/* Vehicle Info */}
         <View style={styles.vehicleBar}>
-          <Ionicons name="car" size={16} color={colors.primary} />
-          <Text style={styles.vehicleDetail}>
-            {currentDriver?.vehicle_color} {currentDriver?.vehicle_make} {currentDriver?.vehicle_model}
-          </Text>
-          <View style={styles.plateBadge}>
-            <Text style={styles.plateNum}>{currentDriver?.license_plate || 'N/A'}</Text>
+          <View style={styles.vehicleIconWrap}>
+            <Ionicons name="car" size={16} color={colors.primary} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.vehicleLabel}>VEHICLE</Text>
+            <Text style={styles.vehicleDetail}>
+              {[currentDriver?.vehicle_color, currentDriver?.vehicle_make, currentDriver?.vehicle_model]
+                .filter(Boolean).join(' ') || 'Vehicle info unavailable'}
+            </Text>
+          </View>
+          <View style={styles.plateWrap}>
+            <Text style={styles.plateLabel}>PLATE</Text>
+            <View style={styles.plateBadge}>
+              <Text style={styles.plateNum}>{currentDriver?.license_plate || 'N/A'}</Text>
+            </View>
           </View>
         </View>
       </View>
@@ -862,17 +876,25 @@ function createStyles(colors: ThemeColors) {
     },
     ratingPillText: { fontSize: 10, fontWeight: '700', color: colors.text, marginLeft: 2 },
     driverName: { fontSize: 16, fontWeight: '700', color: colors.text },
-    driverMeta: { fontSize: 12, color: colors.textDim, marginTop: 2 },
+    ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
+    driverMeta: { fontSize: 12, color: colors.textDim, marginLeft: 2 },
     msgIconBtn: {
       width: 44, height: 44, borderRadius: 22,
       backgroundColor: `${colors.primary}15`,
       justifyContent: 'center', alignItems: 'center',
     },
     vehicleBar: {
-      flexDirection: 'row', alignItems: 'center', gap: 8,
+      flexDirection: 'row', alignItems: 'center', gap: 10,
       paddingTop: 12, borderTopWidth: 1, borderTopColor: '#ECECEC',
     },
-    vehicleDetail: { flex: 1, fontSize: 13, fontWeight: '500', color: colors.textSecondary },
+    vehicleIconWrap: {
+      width: 32, height: 32, borderRadius: 8, backgroundColor: `${colors.primary}12`,
+      justifyContent: 'center', alignItems: 'center',
+    },
+    vehicleLabel: { fontSize: 9, fontWeight: '700', color: colors.textDim, letterSpacing: 0.8, marginBottom: 2 },
+    vehicleDetail: { fontSize: 13, fontWeight: '600', color: colors.text },
+    plateWrap: { alignItems: 'center' },
+    plateLabel: { fontSize: 9, fontWeight: '700', color: colors.textDim, letterSpacing: 0.8, marginBottom: 3 },
     plateBadge: {
       backgroundColor: colors.text, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 4,
     },

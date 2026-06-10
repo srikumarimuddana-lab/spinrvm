@@ -299,9 +299,12 @@ function DriverArrivedScreenContent() {
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.driverName}>{currentDriver?.name || 'Your Driver'}</Text>
-                <Text style={styles.driverMeta}>
-                  {currentDriver?.total_rides || 0} trips · Arrived at pickup
-                </Text>
+                <View style={styles.ratingRow}>
+                  <Ionicons name="star" size={13} color="#FFB800" />
+                  <Text style={styles.driverMeta}>
+                    {currentDriver?.rating ? `${currentDriver.rating} rating` : 'No ratings yet'}
+                  </Text>
+                </View>
               </View>
               <TouchableOpacity style={styles.msgBtn} onPress={handleMessage}>
                 <Ionicons name="chatbubble" size={18} color={colors.primary} />
@@ -314,12 +317,17 @@ function DriverArrivedScreenContent() {
                 <Ionicons name="car" size={16} color={colors.primary} />
               </View>
               <View style={{ flex: 1 }}>
+                <Text style={styles.vehicleLabel}>VEHICLE</Text>
                 <Text style={styles.vehicleName}>
-                  {currentDriver?.vehicle_color} {currentDriver?.vehicle_make} {currentDriver?.vehicle_model}
+                  {[currentDriver?.vehicle_color, currentDriver?.vehicle_make, currentDriver?.vehicle_model]
+                    .filter(Boolean).join(' ') || 'Vehicle info unavailable'}
                 </Text>
               </View>
-              <View style={styles.plateBadge}>
-                <Text style={styles.plateNum}>{currentDriver?.license_plate || 'N/A'}</Text>
+              <View style={styles.plateWrap}>
+                <Text style={styles.plateLabel}>PLATE</Text>
+                <View style={styles.plateBadge}>
+                  <Text style={styles.plateNum}>{currentDriver?.license_plate || 'N/A'}</Text>
+                </View>
               </View>
             </View>
           </View>
@@ -514,7 +522,8 @@ function createStyles(colors: ThemeColors) {
     },
     ratingNum: { fontSize: 10, fontWeight: '700', color: colors.text, marginLeft: 2 },
     driverName: { fontSize: 17, fontWeight: '700', color: colors.text },
-    driverMeta: { fontSize: 12, color: '#888', marginTop: 2 },
+    ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
+    driverMeta: { fontSize: 12, color: '#888', marginLeft: 2 },
     msgBtn: {
       width: 44, height: 44, borderRadius: 22,
       backgroundColor: `${colors.primary}12`, justifyContent: 'center', alignItems: 'center',
@@ -528,7 +537,10 @@ function createStyles(colors: ThemeColors) {
       width: 32, height: 32, borderRadius: 8, backgroundColor: `${colors.primary}12`,
       justifyContent: 'center', alignItems: 'center',
     },
-    vehicleName: { fontSize: 13, fontWeight: '500', color: colors.textSecondary },
+    vehicleLabel: { fontSize: 9, fontWeight: '700', color: '#888', letterSpacing: 0.8, marginBottom: 2 },
+    vehicleName: { fontSize: 13, fontWeight: '600', color: colors.text },
+    plateWrap: { alignItems: 'center' },
+    plateLabel: { fontSize: 9, fontWeight: '700', color: '#888', letterSpacing: 0.8, marginBottom: 3 },
     plateBadge: {
       backgroundColor: colors.text, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5,
     },

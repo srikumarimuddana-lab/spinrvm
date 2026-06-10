@@ -24,6 +24,7 @@ import NetInfo from '@react-native-community/netinfo';
 import api from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
+import { useVehicleTypesSync } from '@shared/store/vehicleTypeStore';
 import { useRideStore } from '../store/rideStore';
 import { useWorkProfileStore } from '../store/workProfileStore';
 import { useRiderSocket } from '../hooks/useRiderSocket';
@@ -155,6 +156,9 @@ export default function RootLayout() {
 
   const { initialize: initializeAuth, isInitialized: isAuthInitialized, token: authToken } = useAuthStore();
   const { initialize: initializeLocation, isInitialized: isLocationInitialized } = useLocationStore();
+  // One GET /vehicle-types per app open feeds every map marker + booking
+  // screen via the shared vehicleTypeStore (also refreshes on foreground).
+  useVehicleTypesSync();
   const hydrateWorkProfile = useWorkProfileStore(s => s.hydrate);
   const [isOffline, setIsOffline] = useState(false);
   // Hold the branded splash for a minimum duration so the logo + tagline are

@@ -75,6 +75,17 @@ def _lockout_key(email: str) -> str:
     return f"admin:login_failures:{email.lower().strip()}"
 
 
+def _log_safe_email(email: str) -> str:
+    """Stable non-PII identifier for an email in log lines.
+
+    PIPEDA discipline: raw email addresses must never appear in logs.
+    Same input → same digest, so lockout-related log lines for one
+    account remain correlatable without exposing the address.
+    """
+    digest = hashlib.sha256(email.lower().strip().encode()).hexdigest()[:12]
+    return f"email_sha256:{digest}"
+
+
 async def _is_account_locked(email: str) -> bool:
     try:
         val = await redis_get(_lockout_key(email))
@@ -82,7 +93,7 @@ async def _is_account_locked(email: str) -> bool:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[REDIS] _is_account_locked check failed for admin login ({email!r}): {e}")
+        logger.error(f"[REDIS] _is_account_locked check failed for admin login ({_log_safe_email(email)}): {e}")
         raise HTTPException(status_code=503, detail="ERR_AUTH_UNAVAILABLE") from None
 
 
@@ -93,14 +104,14 @@ async def _record_login_failure(email: str) -> None:
         if count == 1:
             await redis_expire(key, _LOGIN_LOCKOUT_TTL_SECONDS)
     except Exception as e:
-        logger.error(f"[REDIS] _record_login_failure could not persist failure count ({email!r}): {e}")
+        logger.error(f"[REDIS] _record_login_failure could not persist failure count ({_log_safe_email(email)}): {e}")
 
 
 async def _clear_login_failures(email: str) -> None:
     try:
         await redis_delete(_lockout_key(email))
     except Exception as e:
-        logger.error(f"[REDIS] _clear_login_failures could not clear failure count ({email!r}): {e}")
+        logger.error(f"[REDIS] _clear_login_failures could not clear failure count ({_log_safe_email(email)}): {e}")
 
 
 ALL_MODULES = [
@@ -1295,7 +1306,7 @@ async def admin_unlock(
     except Exception as e:
         logger.error(
             "[REDIS] admin_unlock could not read lockout state for %s: %s",
-            target_email,
+            _log_safe_email(target_email),
             e,
         )
         raise HTTPException(status_code=503, detail="ERR_AUTH_UNAVAILABLE") from None

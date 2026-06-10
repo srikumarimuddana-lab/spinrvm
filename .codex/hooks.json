@@ -1,0 +1,57 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash 'C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\.codex\\hooks\\pre-migration-write.sh'"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash 'C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\.codex\\hooks\\post-python-write.sh'"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'test -x .git/hooks/pre-commit || (cp .claude/hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit && echo \"pre-commit hook installed\")'"
+          },
+          {
+            "type": "command",
+            "command": "bash 'C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\.codex\\hooks\\session-start.sh'"
+          },
+          {
+            "type": "command",
+            "command": "bash -c 'cd backend && python3 -m pip install -q -r requirements.txt 2>/dev/null && echo \"backend deps ok\" || echo \"backend pip install skipped (no venv?)\"'"
+          },
+          {
+            "type": "command",
+            "command": "bash -c 'test -d rider-app/node_modules && echo \"rider-app deps ok\" || (cd rider-app && yarn install --frozen-lockfile --silent && echo \"rider-app deps installed\")'"
+          },
+          {
+            "type": "command",
+            "command": "bash -c 'test -d driver-app/node_modules && echo \"driver-app deps ok\" || (cd driver-app && yarn install --frozen-lockfile --silent && echo \"driver-app deps installed\")'"
+          },
+          {
+            "type": "command",
+            "command": "bash -c 'test -d admin-dashboard/node_modules && echo \"admin deps ok\" || (cd admin-dashboard && npm ci --silent && echo \"admin deps installed\")'"
+          }
+        ]
+      }
+    ]
+  }
+}

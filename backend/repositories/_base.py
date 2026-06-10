@@ -24,9 +24,14 @@ try:
     import httpx as _httpx
 
     _HTTPX_TIMEOUT_EXC = _httpx.TimeoutException
+    # NetworkError covers ConnectError/ReadError/WriteError/CloseError — transient
+    # transport failures (incl. SSL "EOF occurred in violation of protocol") that
+    # are safe to retry under read/idempotent_write policies.
+    _HTTPX_NETWORK_EXC = _httpx.NetworkError
 except ImportError:  # pragma: no cover
     _httpx = None  # type: ignore
     _HTTPX_TIMEOUT_EXC = None  # type: ignore
+    _HTTPX_NETWORK_EXC = None  # type: ignore
 
 try:
     from ..supabase_client import supabase  # type: ignore
@@ -203,7 +208,13 @@ async def run_sync(
             )
             is_timeout = _HTTPX_TIMEOUT_EXC is not None and isinstance(exc, _HTTPX_TIMEOUT_EXC)
             is_h2_stream_race = isinstance(exc, KeyError) and "http2" in traceback.format_exc().lower()
-            is_transient = is_conn_terminated or is_remote_disconnect or is_timeout or is_h2_stream_race
+            # httpx NetworkError family: ConnectError/ReadError/WriteError/CloseError.
+            # Covers SSL "EOF occurred in violation of protocol" (WriteError) seen when
+            # a pooled TLS connection is reused after the server closed it (e.g. cold start).
+            is_network_error = _HTTPX_NETWORK_EXC is not None and isinstance(exc, _HTTPX_NETWORK_EXC)
+            is_transient = (
+                is_conn_terminated or is_remote_disconnect or is_timeout or is_h2_stream_race or is_network_error
+            )
 
             if not is_transient:
                 break

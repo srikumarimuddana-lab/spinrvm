@@ -36,6 +36,9 @@ module.exports = {
     // Mock the index so jest-expo's setup.js gets a no-op instead of the real runtime.
     '^expo/src/winter$': '<rootDir>/__mocks__/expo-winter-runtime.js',
     '^expo/src/winter/ImportMetaRegistry$': '<rootDir>/__mocks__/expo-winter-runtime.js',
+    // Sentry needs native modules; tests exercise the errorReporting facade
+    // against this stub instead.
+    '^@sentry/react-native$': '<rootDir>/__mocks__/sentry-react-native.js',
     '^@shared/api/client$': '<rootDir>/__mocks__/@shared/api/client.js',
     '^@shared/config/spinr\\.config$': '<rootDir>/__mocks__/@shared/config/spinr.config.js',
     '^@shared/(.*)$': '<rootDir>/__mocks__/@shared/$1',

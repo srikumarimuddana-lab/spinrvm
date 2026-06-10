@@ -30,6 +30,8 @@ try:
     from ..schemas import Driver, RideRatingRequest
     from ..services.fare_service import recalculate_fare_for_distance
     from ..socket_manager import manager
+    from ..utils.breadcrumb_buffer import flush_driver_breadcrumbs
+    from ..utils.breadcrumbs import invalidate_active_rides_cache
     from ..utils.datetime_utils import parse_iso_utc
     from ..utils.driver_online import intent_online
     from ..utils.driver_presence import (
@@ -47,6 +49,8 @@ try:
     from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
     from ..utils.insurance_periods import record_period_transition
+    from ..utils.metrics import inc as _metric_inc
+    from ..utils.metrics import observe as _metric_observe
     from ..utils.money import dollars_to_cents
     from ..utils.t4a_pdf import generate_t4a_pdf
 except ImportError:
@@ -59,6 +63,8 @@ except ImportError:
     from schemas import Driver, RideRatingRequest
     from services.fare_service import recalculate_fare_for_distance
     from socket_manager import manager
+    from utils.breadcrumb_buffer import flush_driver_breadcrumbs  # type: ignore
+    from utils.breadcrumbs import invalidate_active_rides_cache  # type: ignore
     from utils.datetime_utils import parse_iso_utc
     from utils.driver_online import intent_online  # type: ignore
     from utils.driver_presence import (
@@ -76,6 +82,8 @@ except ImportError:
     from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
     from utils.insurance_periods import record_period_transition  # type: ignore[assignment]
+    from utils.metrics import inc as _metric_inc  # type: ignore
+    from utils.metrics import observe as _metric_observe  # type: ignore
     from utils.money import dollars_to_cents
     from utils.t4a_pdf import generate_t4a_pdf  # noqa: F401 – used in download_t4a_pdf
 
@@ -2970,6 +2978,11 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
 
     await reset_miss_streak(driver["id"])
 
+    # The WS location hot path caches the driver's active rides for 5s
+    # (B3.1) — drop it so the first post-accept pings attach to this ride
+    # and reach the rider, instead of being served a stale empty list.
+    await invalidate_active_rides_cache(driver["id"])
+
     # Insurance Period 2 (en route to pickup — TNC primary commercial coverage).
     # In the batch-offer dispatch model the driver becomes obligated to the ride
     # at acceptance (searching/driver_assigned → driver_accepted), so Period 2
@@ -2986,11 +2999,12 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
         from repositories.driver_repo import update_acceptance_rate  # type: ignore
 
     await update_acceptance_rate(driver["id"], accepted=True)
+    _metric_inc("spinr_dispatch_offer_accepted_total")
 
     # Mark winner's offer as accepted, expire losers, release them
     try:
         now_iso = datetime.now(timezone.utc).isoformat()
-        await db_supabase.run_sync(
+        winner_res = await db_supabase.run_sync(
             lambda: (
                 db_supabase.supabase.table("ride_offers")
                 .update({"status": "accepted", "responded_at": now_iso})
@@ -3000,6 +3014,16 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
                 .execute()
             )
         )
+        # Offer-to-accept latency from the winner's own offer row (KPI:
+        # P95 dispatch offer → accept < 2s). Direct-assignment rides have
+        # no pending offer row — counter only, no duration sample.
+        winner_rows = getattr(winner_res, "data", None) or []
+        offered_at = parse_iso_utc(winner_rows[0].get("offered_at")) if winner_rows else None
+        if offered_at:
+            _metric_observe(
+                "spinr_dispatch_offer_to_accept_duration_ms",
+                (datetime.now(timezone.utc) - offered_at).total_seconds() * 1000.0,
+            )
         losers = await db_supabase.run_sync(
             lambda: (
                 db_supabase.supabase.table("ride_offers")
@@ -3406,6 +3430,17 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
 
     if ride.get("status") not in COMPLETE_FROM_STATES:
         raise RideStateError(f"Cannot complete ride from state '{ride.get('status')}'; ride must be in_progress")
+
+    # B3.3: drain this driver's WS breadcrumb buffer before aggregating —
+    # otherwise the last ~10s of the trip would miss the settled distance
+    # and the SGI trail read below. Only meaningful when the driver's WS is
+    # on THIS replica (which it is for the driver calling this endpoint via
+    # the same affinity-LB'd session); a failed flush must not block
+    # completion — the buffer's disconnect flush still covers the points.
+    try:
+        await flush_driver_breadcrumbs(driver["id"])
+    except Exception:
+        logger.error("[complete_ride] breadcrumb flush failed for driver %s", driver["id"], exc_info=True)
 
     # ── Aggregate all GPS breadcrumbs for this ride ──
     # On completion we compute everything once and store it on the ride row.

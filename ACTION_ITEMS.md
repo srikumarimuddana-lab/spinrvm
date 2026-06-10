@@ -62,16 +62,16 @@ _Last updated: 2026-06-09 (branch `claude/rideshare-analysis-optimization-zjhsyb
   use `int(_round(amount * 100))`; DELETE on disputes blocked at DB level.
 
 ### B3. Driver location-update hot path (perf + Maps spend)
-- [ ] **Status:** open — threatens the <150ms location-write SLA
-- **Files:** `backend/routes/websocket.py:601-688`, `backend/utils/breadcrumbs.py`
-- **Approach (3 sub-items, separate commits):**
-  1. cache the driver's active ride in Redis (5s TTL) so `persist_ride_breadcrumbs`
-     doesn't re-query per ping;
-  2. recompute Google Maps ETA only when the driver moved >100m since the last
-     calc (Redis key `driver:{id}:last_eta_loc`);
-  3. batch breadcrumb writes (~10 points / 10s) instead of per-ping.
-- **Acceptance:** ≤1 Maps ETA call per driver per 100m moved; no per-ping rides query;
-  breadcrumb correctness covered by existing tests.
+- [x] **Status:** done — branch `claude/eager-franklin-69ta0w` (3 commits + completion-flush fix)
+- **Files:** `backend/routes/websocket.py`, `backend/utils/breadcrumbs.py`,
+  `backend/utils/maps_eta.py`, `backend/utils/breadcrumb_buffer.py`
+- **Done:**
+  1. `resolve_active_rides_cached` — Redis 5s TTL, empty results cached, soft
+     degrade (tests: `test_active_ride_cache.py`);
+  2. ETA movement gate >100m, ride-scoped `driver:{id}:last_eta_loc`, 120s upper
+     bound (tests: `test_maps_eta_movement_gate.py`);
+  3. breadcrumb batching 10 points / 10s / ride-change, flush on WS disconnect
+     and at complete_ride before trail aggregation (tests: `test_breadcrumb_buffer.py`).
 
 ### B4. WS per-user rate limit is per-replica only
 - [ ] **Status:** open (acknowledged P3 in code; formalized here)
@@ -131,12 +131,12 @@ how much they de-risk a public launch._
   (Fly + Railway) with no intermediate environment. Stand up a staging Fly app +
   throwaway Supabase project with synthetic data; point a `staging` branch or
   manual workflow at it. Prereq for E2, E4, and safe migration rehearsal.
-- [ ] **E2. Marketplace load/simulation testing** — `perf_baseline.py` is
-  micro-benchmarks only; there is no k6/Locust harness and no rider/driver bot
-  simulator. For a dispatch marketplace this is the industry-standard way to find
-  the breaking point of matching, WS fan-out, and surge under load *before* a
-  Saturday night does. Build: bot harness creating N concurrent ride requests +
-  M online drivers against staging; assert the SLA table in CLAUDE.md holds.
+- [ ] **E2. Marketplace load/simulation testing** — harness BUILT on branch
+  `claude/eager-franklin-69ta0w` (`loadtest/locustfile.py` + runbook with
+  breaking-point register): rider+driver bots, real dispatch matchmaking, WS
+  GPS pings, SLA gates from the CLAUDE.md table. **Execution still open** —
+  blocked on E1 (no staging env). First run: seed bot accounts per
+  `loadtest/README.md`, run the ramp scenario, record the breaking point.
 - [ ] **E3. Forced-upgrade gate for mobile apps** — no minimum-supported-version
   check exists. Old app binaries in the wild will eventually hit removed/changed
   APIs. Add `min_supported_version` to `app_settings`, a version header from the

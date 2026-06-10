@@ -3,7 +3,10 @@ B-P2-7: tests for the explicit DB ThreadPoolExecutor.
 
 Contract:
   - run_sync uses _DB_EXECUTOR (a dedicated pool), not the asyncio default.
-  - The pool's max_workers honours DB_THREAD_POOL_SIZE (default 32).
+  - The pool's max_workers honours DB_THREAD_POOL_SIZE (default 64), with
+    DB_THREAD_POOL_MAX accepted as a legacy fallback. There is exactly ONE
+    pool — the old second 64-worker executor that existed only to feed the
+    thread gauge is gone.
   - Threads in the pool carry the "spinr-db" name prefix so they're
     identifiable in profiling tools.
 """
@@ -15,13 +18,23 @@ import threading
 import pytest
 
 
-def test_db_executor_has_explicit_size_default_32():
+def test_db_executor_has_explicit_size_default_64():
     import db_supabase
 
     # _DB_EXECUTOR is a ThreadPoolExecutor — its max_workers is what we set.
     # ThreadPoolExecutor stores it in private attribute `_max_workers`.
-    assert db_supabase._DB_THREAD_POOL_SIZE == 32
-    assert db_supabase._DB_EXECUTOR._max_workers == 32
+    assert db_supabase._DB_THREAD_POOL_SIZE == 64
+    assert db_supabase._DB_EXECUTOR._max_workers == 64
+
+
+def test_single_db_executor_no_gauge_only_twin():
+    """The 32-vs-64 mismatch: run_sync ran on a 32-worker pool while a second
+    64-worker pool existed only to feed spinr_db_thread_pool_threads (always 0,
+    since it never ran work). Pin that the twin is gone."""
+    from repositories import _base
+
+    assert not hasattr(_base, "_db_executor")
+    assert not hasattr(_base, "_DB_POOL_MAX")
 
 
 def test_db_executor_threads_have_spinr_prefix():

@@ -15,8 +15,10 @@ _BROADCAST_SEND_TIMEOUT = 2.0
 
 try:
     from .logging_utils import diag_logger  # type: ignore
+    from .utils.metrics import observe as _metric_observe  # type: ignore
 except ImportError:
     from logging_utils import diag_logger  # type: ignore
+    from utils.metrics import observe as _metric_observe  # type: ignore
 
 
 # B-P1-12: per-user inbound message rate-limit. The receive loop in
@@ -268,9 +270,15 @@ class ConnectionManager:
         except ImportError:  # pragma: no cover — package-relative fallback
             from .utils.ws_pubsub import pubsub  # type: ignore
 
+        # KPI: spinr_ws_fanout_duration_ms (P95 < 100ms SLA). The pubsub
+        # label measures publish-to-Redis (delivery completes on the
+        # subscriber's _deliver_local); local measures the actual socket send.
+        t0 = time.monotonic()
         if await pubsub.publish(client_id, message):
+            _metric_observe("spinr_ws_fanout_duration_ms", (time.monotonic() - t0) * 1000.0, {"path": "pubsub"})
             return
         await self._deliver_local(message, client_id)
+        _metric_observe("spinr_ws_fanout_duration_ms", (time.monotonic() - t0) * 1000.0, {"path": "local"})
 
     async def _deliver_local(self, message: dict, client_id: str):
         """Write ``message`` to the socket for ``client_id`` on THIS machine only.

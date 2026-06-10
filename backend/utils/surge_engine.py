@@ -243,13 +243,24 @@ async def get_surge_status() -> List[Dict[str, Any]]:
         supply = await _count_supply_in_area(area)
         ratio = round(demand / max(supply, 1), 2)
 
+        # Per-area surge master toggle. Report the EFFECTIVE surge the fare
+        # paths would apply: when surge_enabled is off, surge never applies, so
+        # a parked multiplier / stale surge_active flag must read as 1.0× /
+        # inactive here too — otherwise the admin status view advertises surge
+        # that booking never charges. surge_enabled is surfaced so the dashboard
+        # can show the toggle state directly.
+        surge_enabled = bool(area.get("surge_enabled", False))
+        surge_active = surge_enabled and bool(area.get("surge_active", False))
+        multiplier = area.get("surge_multiplier", 1.0) if surge_active else 1.0
+
         statuses.append(
             {
                 "area_id": area["id"],
                 "name": area.get("name", ""),
                 "city": area.get("city", ""),
-                "multiplier": area.get("surge_multiplier", 1.0),
-                "surge_active": area.get("surge_active", False),
+                "surge_enabled": surge_enabled,
+                "multiplier": multiplier,
+                "surge_active": surge_active,
                 "source": area.get("surge_source", "auto"),
                 "demand_count": demand,
                 "supply_count": supply,

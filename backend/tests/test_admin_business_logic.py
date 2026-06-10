@@ -402,6 +402,61 @@ class TestServiceAreaValidation:
         assert captured["surge_active"] is False
         assert captured["surge_multiplier"] == 1.0
 
+    def test_surge_endpoint_enables_service_area_columns(self, client):
+        """PUT .../surge with is_active=True writes the surge columns fares read.
+
+        Regression: the endpoint used to only log a surge_pricing history row,
+        so the requested surge never reached the service_areas columns that the
+        fare paths gate on — every ride stayed at 1.0× despite a 'success'.
+        """
+        captured: dict = {}
+
+        async def _capture(table, filt, payload):
+            if table == "service_areas":
+                captured.update(payload)
+
+        with (
+            patch("db_supabase.get_rows", new=AsyncMock(return_value=[{"id": "area-1"}])),
+            patch("db_supabase.update_one", new=AsyncMock(side_effect=_capture)),
+            patch("db_supabase.insert_one", new=AsyncMock()),
+            patch("routes.admin.service_areas.invalidate_fare_cache", new=AsyncMock()),
+            patch("routes.admin.service_areas.log_admin_action", new=AsyncMock()),
+        ):
+            resp = client.put(
+                "/api/admin/service-areas/area-1/surge",
+                json={"multiplier": 1.75, "is_active": True},
+            )
+
+        assert resp.status_code == 200
+        assert captured["surge_enabled"] is True
+        assert captured["surge_active"] is True
+        assert captured["surge_multiplier"] == 1.75
+
+    def test_surge_endpoint_disables_and_resets_when_inactive(self, client):
+        """PUT .../surge with is_active=False disables surge and resets to 1.0×."""
+        captured: dict = {}
+
+        async def _capture(table, filt, payload):
+            if table == "service_areas":
+                captured.update(payload)
+
+        with (
+            patch("db_supabase.get_rows", new=AsyncMock(return_value=[{"id": "area-1"}])),
+            patch("db_supabase.update_one", new=AsyncMock(side_effect=_capture)),
+            patch("db_supabase.insert_one", new=AsyncMock()),
+            patch("routes.admin.service_areas.invalidate_fare_cache", new=AsyncMock()),
+            patch("routes.admin.service_areas.log_admin_action", new=AsyncMock()),
+        ):
+            resp = client.put(
+                "/api/admin/service-areas/area-1/surge",
+                json={"multiplier": 2.0, "is_active": False},
+            )
+
+        assert resp.status_code == 200
+        assert captured["surge_enabled"] is False
+        assert captured["surge_active"] is False
+        assert captured["surge_multiplier"] == 1.0
+
     def test_disabling_above_cap_surge_needs_no_justification(self, client):
         """Switching off a parked >2.5x surge must not require a justification.
 

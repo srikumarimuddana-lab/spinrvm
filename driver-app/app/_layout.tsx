@@ -23,6 +23,7 @@ const SPLASH_MIN_DISPLAY_MS = 3000;
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
+import { useVehicleTypesSync } from '@shared/store/vehicleTypeStore';
 import { useDriverStore } from '../store/driverStore';
 import BrandSplash from '../components/BrandSplash';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
@@ -351,6 +352,9 @@ export default function RootLayout() {
 
   const { initialize: initializeAuth, isInitialized: isAuthInitialized, token: authToken } = useAuthStore();
   const { initialize: initializeLocation, isInitialized: isLocationInitialized } = useLocationStore();
+  // One GET /vehicle-types per app open feeds the own-car map marker via
+  // the shared vehicleTypeStore (also refreshes on foreground).
+  useVehicleTypesSync();
   const [isOffline, setIsOffline] = useState(false);
   // Hold the branded splash for a minimum duration so the logo + tagline are
   // actually seen — auth/location init can finish in <400ms, cutting off the

@@ -2,6 +2,43 @@ import React, { useEffect, useRef, useState } from 'react';
 import { View, Image, Platform } from 'react-native';
 import { AnimatedRegion, Marker } from 'react-native-maps';
 
+const CAR_IMAGES = {
+    standard: require('../assets/car_marker.png'),
+    xl: require('../assets/car_marker_xl.png'),
+    premium: require('../assets/car_marker_premium.png'),
+} as const;
+
+export type CarMarkerVariant = keyof typeof CAR_IMAGES;
+
+/**
+ * Map a backend vehicle type name (vehicle_types.name: Economy / Premium /
+ * Van / XL) to a marker variant. Unknown or missing names fall back to the
+ * standard sedan so the map never breaks on new types.
+ */
+export function variantForVehicleType(name?: string | null): CarMarkerVariant {
+    const n = (name ?? '').toLowerCase();
+    if (n.includes('xl') || n.includes('van')) return 'xl';
+    if (n.includes('premium') || n.includes('lux')) return 'premium';
+    return 'standard';
+}
+
+/**
+ * Resolve the marker for a driver. Prefers the admin-configured
+ * vehicle_types.marker_variant (passed through the API, e.g.
+ * /drivers/nearby); falls back to vehicle type name matching for older
+ * backends that don't send it. Unknown values fall back too, so a future
+ * server-side variant can never crash an old client.
+ */
+export function resolveMarkerVariant(
+    markerVariant?: string | null,
+    vehicleTypeName?: string | null,
+): CarMarkerVariant {
+    if (markerVariant && markerVariant in CAR_IMAGES) {
+        return markerVariant as CarMarkerVariant;
+    }
+    return variantForVehicleType(vehicleTypeName);
+}
+
 interface CarMarkerProps {
     coordinate: {
         latitude: number;
@@ -11,6 +48,12 @@ interface CarMarkerProps {
     size?: number;
     zIndex?: number;
     identifier?: string;
+    variant?: CarMarkerVariant;
+    // Admin-uploaded custom marker (vehicle_types.marker_image_url),
+    // prefetched into the native image cache by vehicleTypeStore. Takes
+    // precedence over `variant`; on load failure the bundled variant
+    // image is rendered instead.
+    imageUri?: string | null;
 }
 
 // Position updates arrive every ~3-10 s (WS pings / GPS watch). Glide the car
@@ -74,6 +117,8 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     size = 40,
     zIndex = 1,
     identifier,
+    variant = 'standard',
+    imageUri,
 }) => {
     const markerRef = useRef<any>(null);
     const animatedRegion = useRef(
@@ -156,6 +201,13 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
         settleTimerRef.current = setTimeout(() => setTracksViewChanges(false), 350);
     };
 
+    // Custom marker failed to load (offline + cold cache, dead URL) — fall
+    // back to the bundled variant. Reset when the URL changes so a fixed
+    // upload is retried.
+    const [imageFailed, setImageFailed] = useState(false);
+    useEffect(() => setImageFailed(false), [imageUri]);
+    const useCustomImage = !!imageUri && !imageFailed;
+
     return (
         <Marker.Animated
             ref={markerRef}
@@ -178,7 +230,8 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                 }}
             >
                 <Image
-                    source={require('../assets/car_marker.png')}
+                    source={useCustomImage ? { uri: imageUri as string } : CAR_IMAGES[variant]}
+                    onError={() => { setImageFailed(true); setTracksViewChanges(true); }}
                     onLoad={handleImageLoaded}
                     style={{
                         width: size,
@@ -199,7 +252,9 @@ function _propsAreEqual(prev: CarMarkerProps, next: CarMarkerProps): boolean {
         prev.heading === next.heading &&
         prev.size === next.size &&
         prev.zIndex === next.zIndex &&
-        prev.identifier === next.identifier
+        prev.identifier === next.identifier &&
+        prev.variant === next.variant &&
+        prev.imageUri === next.imageUri
     );
 }
 

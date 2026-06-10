@@ -3,7 +3,7 @@ import json
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -445,18 +445,20 @@ def _sum_fare_breakdown(lines: list[dict]) -> float:
 
     This IS the rider's bill — the same number the receipt UI computes by
     summing the rendered items. Modifier rows (e.g. surge multiplier) carry
-    amount=None and are skipped. Result is rounded to cents and clamped at 0.
+    amount=None and are skipped. Summed in Decimal (HALF_UP) so the returned
+    grand_total always equals the exact sum of the line items shown; result
+    is rounded to cents and clamped at 0.
     """
-    total = 0.0
+    total = Decimal("0")
     for line in lines or []:
         amt = line.get("amount") if isinstance(line, dict) else None
         if amt is None:
             continue
         try:
-            total += float(amt)
-        except (TypeError, ValueError):
+            total += _d(amt)
+        except (TypeError, ValueError, InvalidOperation):
             continue
-    return max(0.0, round(total, 2))
+    return _f(_round(max(Decimal("0"), total)))
 
 
 def _build_fare_breakdown(ride: dict) -> list[dict]:

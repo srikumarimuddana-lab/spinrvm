@@ -17,6 +17,7 @@ import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
   Text,
+  Image,
   StyleSheet,
   TouchableOpacity,
   ScrollView,
@@ -410,12 +411,14 @@ I've shared my live location with you for safety.
       <View style={styles.driverCard}>
         <View style={styles.driverRow}>
           <View style={styles.driverAvatar}>
-            <Ionicons name="person" size={26} color={colors.textDim} />
-            {currentDriver?.rating && (
-              <View style={styles.ratingPill}>
-                <Ionicons name="star" size={9} color="#FFB800" />
-                <Text style={styles.ratingPillText}>{currentDriver.rating}</Text>
-              </View>
+            {currentDriver?.photo_url ? (
+              <Image
+                source={{ uri: currentDriver.photo_url }}
+                style={styles.driverAvatarImg}
+                resizeMode="cover"
+              />
+            ) : (
+              <Ionicons name="person" size={26} color={colors.textDim} />
             )}
           </View>
           <View style={{ flex: 1 }}>
@@ -866,15 +869,9 @@ function createStyles(colors: ThemeColors) {
     driverRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
     driverAvatar: {
       width: 48, height: 48, borderRadius: 24, backgroundColor: '#E8E8E8',
-      justifyContent: 'center', alignItems: 'center', marginRight: 12, position: 'relative',
+      justifyContent: 'center', alignItems: 'center', marginRight: 12, overflow: 'hidden',
     },
-    ratingPill: {
-      position: 'absolute', bottom: -4, left: -2,
-      flexDirection: 'row', alignItems: 'center',
-      backgroundColor: colors.surface, paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8,
-      shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2,
-    },
-    ratingPillText: { fontSize: 10, fontWeight: '700', color: colors.text, marginLeft: 2 },
+    driverAvatarImg: { width: 48, height: 48, borderRadius: 24 },
     driverName: { fontSize: 16, fontWeight: '700', color: colors.text },
     ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
     driverMeta: { fontSize: 12, color: colors.textDim, marginLeft: 2 },

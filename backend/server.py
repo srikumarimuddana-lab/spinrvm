@@ -288,6 +288,15 @@ app.include_router(auth_router, prefix="/api")
 # WebSocket routes — mounted at root so the path /ws/{client_type}/{client_id} is served directly
 app.include_router(websocket_router)
 
+# Optional MCP server at root (/mcp): same AI tool registry over streamable
+# HTTP for external agent clients. Not mounted when the `mcp` SDK is absent;
+# requests are 503 until app_settings.ai_mcp_enabled is turned on.
+from ai.mcp_server import build_mcp_asgi_app  # noqa: E402
+
+_mcp_asgi_app = build_mcp_asgi_app()
+if _mcp_asgi_app is not None:
+    app.mount("/mcp", _mcp_asgi_app)
+
 # Public settings endpoints (GET /settings, GET /settings/legal). Mounted at
 # root so mobile apps can call them without an auth token, and also at /api/v1
 # for parity. The legal screen fetch uses backendUrl/settings/legal directly.

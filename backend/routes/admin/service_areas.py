@@ -587,7 +587,35 @@ async def admin_delete_service_area(area_id: str, admin: dict = Depends(get_admi
 
 @router.put("/service-areas/{area_id}/surge")
 async def admin_update_surge_pricing(area_id: str, surge: SurgePricingRequest, admin: dict = Depends(get_admin_user)):
-    """Update surge pricing for a service area."""
+    """Update surge pricing for a service area.
+
+    ``is_active`` is the per-area surge master toggle:
+      * is_active=True  → enable surge and price at ``multiplier``
+      * is_active=False → disable surge; the area reverts to 1.0× and every
+        fare path / the surge engine ignores any parked multiplier.
+
+    The authoritative write is to the ``service_areas`` row (surge_enabled /
+    surge_active / surge_multiplier) — the columns every fare builder and the
+    surge engine gate on. A ``surge_pricing`` row is also written for history.
+    """
+    # Authoritative surge state — mirror the toggle onto the columns the fare
+    # builders (fare_service.py, routes/fares.py, features.py) and the surge
+    # engine actually read. Without this the call only logged a history row and
+    # left every ride priced at 1.0× regardless of the requested surge.
+    if surge.is_active:
+        area_update: Dict[str, Any] = {
+            "surge_enabled": True,
+            "surge_active": surge.multiplier > 1.0,
+            "surge_multiplier": surge.multiplier,
+        }
+    else:
+        area_update = {
+            "surge_enabled": False,
+            "surge_active": False,
+            "surge_multiplier": 1.0,
+        }
+    await db_supabase.update_one("service_areas", {"id": area_id}, area_update)
+
     surge_doc = {
         "id": str(uuid.uuid4()),
         "service_area_id": area_id,

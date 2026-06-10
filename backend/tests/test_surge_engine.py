@@ -518,3 +518,55 @@ def test_manual_override_value_above_auto_cap_is_valid() -> None:
     # The engine itself never calls ratio_to_multiplier on manual areas,
     # so the value is not clipped — just round-trip as-is.
     assert admin_stored_value == 3.0
+
+
+# ── get_surge_status: per-area toggle gating ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_surge_status_gates_on_surge_enabled():
+    """get_surge_status reports EFFECTIVE surge.
+
+    A parked multiplier on a surge-disabled area must read as 1.0× / inactive
+    (same gate the fare paths apply), and surge_enabled is surfaced so the
+    admin dashboard can show the toggle state.
+    """
+    areas = [
+        {
+            "id": "a1",
+            "name": "Disabled",
+            "surge_enabled": False,
+            "surge_active": True,
+            "surge_multiplier": 2.0,
+            "is_active": True,
+        },
+        {
+            "id": "a2",
+            "name": "Enabled",
+            "surge_enabled": True,
+            "surge_active": True,
+            "surge_multiplier": 1.75,
+            "is_active": True,
+        },
+    ]
+    db_mock = MagicMock()
+    db_mock.get_rows = AsyncMock(return_value=areas)
+
+    with (
+        patch("utils.surge_engine.db", db_mock),
+        patch("utils.surge_engine._count_demand_in_area", AsyncMock(return_value=0)),
+        patch("utils.surge_engine._count_supply_in_area", AsyncMock(return_value=5)),
+    ):
+        from utils.surge_engine import get_surge_status
+
+        statuses = await get_surge_status()
+
+    by_id = {s["area_id"]: s for s in statuses}
+    # Disabled area: toggle state exposed; surge gated to 1.0× / inactive.
+    assert by_id["a1"]["surge_enabled"] is False
+    assert by_id["a1"]["surge_active"] is False
+    assert by_id["a1"]["multiplier"] == 1.0
+    # Enabled + active area: the real multiplier surfaces.
+    assert by_id["a2"]["surge_enabled"] is True
+    assert by_id["a2"]["surge_active"] is True
+    assert by_id["a2"]["multiplier"] == 1.75

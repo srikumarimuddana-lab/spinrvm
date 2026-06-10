@@ -31,6 +31,7 @@ this constant.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import uuid
@@ -44,10 +45,17 @@ except ImportError:
 
 try:
     from .datetime_utils import parse_iso_utc
+    from .redis_client import redis_get, redis_set
 except ImportError:
     from utils.datetime_utils import parse_iso_utc  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+# B3.1: the WS location handler used to run a rides query on EVERY GPS ping
+# (~1/s per online driver) just to resolve the active ride. 5 s of staleness
+# is acceptable here — phase attribution is re-derived per point from server
+# milestones, and the settlement-time anomaly filter is the billing authority.
+_ACTIVE_RIDES_CACHE_TTL = 5
 
 # Ride status → insurance/tracking phase. Mirror of routes/websocket.py.
 RIDE_STATUS_TO_PHASE: Dict[str, str] = {
@@ -65,8 +73,25 @@ _MAX_CLIENT_CLOCK_SKEW = timedelta(minutes=5)
 _ACTIVE_RIDE_NOT_PROVIDED = object()
 
 
-async def resolve_active_ride(driver_id: str) -> Optional[Dict[str, Any]]:
-    """Return the driver's current active ride row, or None."""
+def _active_rides_cache_key(driver_id: str) -> str:
+    return f"driver:{driver_id}:active_rides"
+
+
+async def resolve_active_rides_cached(driver_id: str) -> List[Dict[str, Any]]:
+    """Driver's active ride rows, via a 5 s Redis cache (B3.1, <150ms SLA).
+
+    Empty results are cached too — idle online drivers ping constantly and
+    are exactly the case that must not hit the rides table per ping. Redis
+    being down degrades to the original per-ping query, never to an error.
+    """
+    key = _active_rides_cache_key(driver_id)
+    try:
+        raw = await redis_get(key)
+        if raw is not None:
+            return json.loads(raw)
+    except Exception:
+        logger.debug("active-rides cache read failed for %s; querying DB", driver_id, exc_info=True)
+
     active_rides = await db_supabase.get_rows(
         "rides",
         {"driver_id": driver_id, "status": {"$in": _ACTIVE_STATUSES}},
@@ -74,6 +99,16 @@ async def resolve_active_ride(driver_id: str) -> Optional[Dict[str, Any]]:
         desc=True,
         limit=10,
     )
+    try:
+        await redis_set(key, json.dumps(active_rides, default=str), ttl=_ACTIVE_RIDES_CACHE_TTL)
+    except Exception:
+        logger.debug("active-rides cache write failed for %s", driver_id, exc_info=True)
+    return active_rides
+
+
+async def resolve_active_ride(driver_id: str) -> Optional[Dict[str, Any]]:
+    """Return the driver's current active ride row, or None."""
+    active_rides = await resolve_active_rides_cached(driver_id)
     return active_rides[0] if active_rides else None
 
 
@@ -153,18 +188,18 @@ async def persist_ride_breadcrumbs(
     if not points:
         return 0
 
-    ride = (
-        await resolve_active_ride(driver_id)
-        if active_ride is _ACTIVE_RIDE_NOT_PROVIDED
-        else active_ride
-    )
+    ride = await resolve_active_ride(driver_id) if active_ride is _ACTIVE_RIDE_NOT_PROVIDED else active_ride
 
     ride_id = ride.get("id") if isinstance(ride, dict) else None
-    current_phase = RIDE_STATUS_TO_PHASE.get(ride.get("status", ""), "online_idle") if isinstance(ride, dict) else "online_idle"
+    current_phase = (
+        RIDE_STATUS_TO_PHASE.get(ride.get("status", ""), "online_idle") if isinstance(ride, dict) else "online_idle"
+    )
     # Points captured before the ride was assigned to this driver are stale
     # (previous ride / idle) and must not attach to this trip.
     window_start = (
-        parse_iso_utc(ride.get("driver_accepted_at")) or parse_iso_utc(ride.get("created_at")) if isinstance(ride, dict) else None
+        parse_iso_utc(ride.get("driver_accepted_at")) or parse_iso_utc(ride.get("created_at"))
+        if isinstance(ride, dict)
+        else None
     )
     if not isinstance(ride, dict) and not persist_idle:
         return 0
@@ -195,10 +230,7 @@ async def persist_ride_breadcrumbs(
         if point_ride and point_ride != ride_id:
             continue
         captured_at = parse_iso_utc(
-            p.get("captured_at")
-            or p.get("device_timestamp")
-            or p.get("recorded_at")
-            or p.get("timestamp")
+            p.get("captured_at") or p.get("device_timestamp") or p.get("recorded_at") or p.get("timestamp")
         )
         received_at = datetime.now(timezone.utc)
         bounded_captured_at = _bounded_capture_time(captured_at, received_at)
@@ -217,7 +249,9 @@ async def persist_ride_breadcrumbs(
                 "accuracy": p.get("accuracy"),
                 "altitude": p.get("altitude"),
                 # Server-authoritative phase from the point's own capture time.
-                "tracking_phase": _phase_for_timestamp(ride, bounded_captured_at, current_phase) if isinstance(ride, dict) else "online_idle",
+                "tracking_phase": _phase_for_timestamp(ride, bounded_captured_at, current_phase)
+                if isinstance(ride, dict)
+                else "online_idle",
                 "timestamp": bounded_captured_at,
                 "received_at": received_at,
             }

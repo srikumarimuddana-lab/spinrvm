@@ -1629,6 +1629,16 @@ async def get_nearby_drivers_public(
     except Exception as exc:
         logger.warning(f"/drivers/nearby presence filter failed, using DB state: {exc}")
 
+    # Resolve vehicle type names + admin-configured marker variant once so
+    # the rider app can pick the matching map marker (standard / XL /
+    # premium) without an extra round trip.
+    vt_name_by_id: dict = {}
+    vt_marker_by_id: dict = {}
+    if drivers:
+        vehicle_types = await db_supabase.get_rows("vehicle_types", {}, limit=100)
+        vt_name_by_id = {vt["id"]: vt.get("name") for vt in vehicle_types if vt.get("id")}
+        vt_marker_by_id = {vt["id"]: vt.get("marker_variant") for vt in vehicle_types if vt.get("id")}
+
     # Manual filtering by distance
     nearby = []
     for d in drivers:
@@ -1658,6 +1668,8 @@ async def get_nearby_drivers_public(
                     "lng": d_lng,
                     "heading": d.get("heading"),
                     "vehicle_type_id": d.get("vehicle_type_id"),
+                    "vehicle_type_name": vt_name_by_id.get(d.get("vehicle_type_id")),
+                    "marker_variant": vt_marker_by_id.get(d.get("vehicle_type_id")),
                     "vehicle_make": d.get("vehicle_make"),
                     "vehicle_model": d.get("vehicle_model"),
                 }

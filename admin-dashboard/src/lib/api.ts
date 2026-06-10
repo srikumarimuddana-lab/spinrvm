@@ -906,6 +906,20 @@ export const adminUploadVehicleIllustration = (id: string, file: File) => {
 };
 
 /**
+ * Upload a custom map marker image for a vehicle type. Transparent
+ * PNG/WebP only (car facing north), ≤500 KB. Returns the public URL
+ * stored on `vehicle_types.marker_image_url`.
+ */
+export const adminUploadVehicleMarker = (id: string, file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return request<{ marker_image_url: string }>(
+        `/api/admin/vehicle-types/${id}/upload-marker`,
+        { method: "POST", body: fd },
+    );
+};
+
+/**
  * Upload the driver-app ride-offer alert tone. mp3/wav, ≤500 KB.
  * Returns the public URL stored on `settings.ride_offer_sound_url`.
  */
@@ -2236,6 +2250,7 @@ export interface AdminVehicleType {
     icon?: string;
     capacity?: number;
     is_active: boolean;
+    marker_variant?: string;
 }
 
 export const adminListVehicleTypes = () =>

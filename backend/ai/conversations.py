@@ -27,13 +27,17 @@ def _now() -> str:
 
 
 async def get_or_create_conversation(
-    user_id: str, conversation_id: Optional[str], audience: str = "rider"
+    user_id: str,
+    conversation_id: Optional[str],
+    audience: str = "rider",
+    admin_actor_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Resolve an owned conversation, or create a fresh one.
 
     Returns None when conversation_id is supplied but does not belong to
     this user (caller turns that into a 404 — indistinguishable from a
-    missing conversation).
+    missing conversation). ``admin_actor_id`` stamps threads started from
+    the super-admin AI console on the user's behalf (migration 144).
     """
     if conversation_id:
         row = await db_supabase.find_one("ai_conversations", {"id": conversation_id, "user_id": user_id})
@@ -46,6 +50,8 @@ async def get_or_create_conversation(
         "created_at": _now(),
         "updated_at": _now(),
     }
+    if admin_actor_id:
+        row["admin_actor_id"] = admin_actor_id
     await db_supabase.insert_one("ai_conversations", row)
     return row
 

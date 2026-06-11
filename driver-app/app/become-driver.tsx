@@ -221,7 +221,18 @@ export default function BecomeDriverScreen() {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
       const data = await response.json();
-      setVehicleTypes(data);
+      let types = Array.isArray(data) ? data : [];
+      // A service area with no fare configs filters out every type
+      // (backend returns 200 + []). Fall back to the unfiltered active
+      // list so onboarding isn't blocked by missing fare configuration.
+      if (types.length === 0) {
+        const fallback = await fetch(`${SpinrConfig.backendUrl}/api/v1/vehicle-types`);
+        if (fallback.ok) {
+          const fallbackData = await fallback.json();
+          if (Array.isArray(fallbackData)) types = fallbackData;
+        }
+      }
+      setVehicleTypes(types);
     } catch (e: any) {
       console.log('Error fetching vehicle types:', e);
       Alert.alert('Connection Error', 'Failed to load vehicle types. Please check your internet connection.');

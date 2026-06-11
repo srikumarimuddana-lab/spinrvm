@@ -114,10 +114,13 @@ END $$;
 
 -- Members can read their own membership and allowance rows (convention;
 -- no current code path reads these via PostgREST — see header note).
+-- NOTE: corporate_members.user_id is UUID (migration 27); auth.uid() is also
+-- UUID — compare directly. auth.uid()::text would produce a uuid=text mismatch
+-- that aborts the policy creation.
 CREATE POLICY "Member read own corporate_members"
     ON corporate_members FOR SELECT
     TO authenticated
-    USING (user_id = auth.uid()::text);
+    USING (user_id = auth.uid());
 
 CREATE POLICY "Member read own corporate_member_allowances"
     ON corporate_member_allowances FOR SELECT
@@ -125,7 +128,7 @@ CREATE POLICY "Member read own corporate_member_allowances"
     USING (
         member_id IN (
             SELECT id FROM corporate_members
-            WHERE user_id = auth.uid()::text
+            WHERE user_id = auth.uid()
         )
     );
 
@@ -135,7 +138,7 @@ CREATE POLICY "Member read own corporate_allowance_requests"
     USING (
         member_id IN (
             SELECT id FROM corporate_members
-            WHERE user_id = auth.uid()::text
+            WHERE user_id = auth.uid()
         )
     );
 

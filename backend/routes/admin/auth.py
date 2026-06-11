@@ -99,9 +99,11 @@ async def _is_totp_locked(user_id: str) -> bool:
 async def _record_totp_failure(user_id: str) -> None:
     try:
         key = _totp_lockout_key(user_id)
-        count = await redis_incr(key)
-        if count == 1:
-            await redis_expire(key, _TOTP_LOCKOUT_TTL_SECONDS)
+        await redis_incr(key)
+        # Always refresh TTL — not just on first failure — so a partial write
+        # where incr succeeded but expire failed is healed on the next attempt,
+        # preventing an indefinitely-persisted lockout key.
+        await redis_expire(key, _TOTP_LOCKOUT_TTL_SECONDS)
     except Exception as e:
         logger.error("[REDIS] _record_totp_failure failed for user %s: %s", user_id, e)
 

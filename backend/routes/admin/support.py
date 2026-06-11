@@ -53,9 +53,10 @@ class ComplaintResolveRequest(BaseModel):
 
 
 class DisputeCreateRequest(BaseModel):
+    # user_name was removed (PIPEDA): names are joined from users at read
+    # time. Pydantic ignores the extra field if an old client still sends it.
     ride_id: Optional[str] = None
     user_id: Optional[str] = None
-    user_name: str = ""
     user_type: str = "rider"
     reason: str = ""
     description: str = ""

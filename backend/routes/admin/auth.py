@@ -85,9 +85,15 @@ async def _is_totp_locked(user_id: str) -> bool:
     try:
         val = await redis_get(_totp_lockout_key(user_id))
         return val is not None and int(val) >= _TOTP_MAX_FAILURES
+    except HTTPException:
+        raise
     except Exception as e:
+        # Fail CLOSED, same as _is_account_locked: the lockout is the only
+        # per-account defence against TOTP brute force (the per-IP SlowAPI
+        # limit is rotation-bypassable), so a degraded Redis must not
+        # silently restore that attack vector.
         logger.error("[REDIS] _is_totp_locked check failed for user %s: %s", user_id, e)
-        return False  # fail open on cache blip; DB token_version check still runs
+        raise HTTPException(status_code=503, detail="ERR_AUTH_UNAVAILABLE") from None
 
 
 async def _record_totp_failure(user_id: str) -> None:

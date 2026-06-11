@@ -1561,8 +1561,10 @@ export const getPromoStats = (range?: string) => {
 };
 
 /* ── Users (Riders + Drivers + Admins) ───────── */
-export const getUsers = (role: "all" | "rider" | "driver" | "admin" = "all") =>
-    request<any[]>(`/api/admin/users?role=${role}`);
+export const getUsers = (role: "all" | "rider" | "driver" | "admin" = "all", search?: string) =>
+    request<any[]>(
+        `/api/admin/users?role=${role}${search ? `&search=${encodeURIComponent(search)}` : ""}`,
+    );
 
 export const getUsersPaginated = (opts: {
     role?: "all" | "rider" | "driver" | "both" | "admin";

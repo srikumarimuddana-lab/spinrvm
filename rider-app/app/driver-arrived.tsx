@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
-  View, Text, StyleSheet, TouchableOpacity, Share, Platform, BackHandler, ActivityIndicator,
+  View, Text, Image, StyleSheet, TouchableOpacity, Share, Platform, BackHandler, ActivityIndicator,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -42,6 +42,7 @@ function DriverArrivedScreenContent() {
   const snapPoints = useMemo(() => ['42%', '70%'], []);
   const resumeKey = useAppResumeKey();
   const [routeCoords, setRouteCoords] = React.useState<any[]>([]);
+  const [driverPhotoError, setDriverPhotoError] = useState(false);
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;
     title: string;
@@ -289,19 +290,25 @@ function DriverArrivedScreenContent() {
           <View style={styles.driverCard}>
             <View style={styles.driverTop}>
               <View style={styles.avatar}>
-                <Ionicons name="person" size={26} color="#888" />
-                {currentDriver?.rating && (
-                  <View style={styles.ratingPill}>
-                    <Ionicons name="star" size={9} color="#FFB800" />
-                    <Text style={styles.ratingNum}>{currentDriver.rating}</Text>
-                  </View>
+                {currentDriver?.photo_url && !driverPhotoError ? (
+                  <Image
+                    source={{ uri: currentDriver.photo_url }}
+                    style={styles.avatarImg}
+                    resizeMode="cover"
+                    onError={() => setDriverPhotoError(true)}
+                  />
+                ) : (
+                  <Ionicons name="person" size={26} color="#888" />
                 )}
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.driverName}>{currentDriver?.name || 'Your Driver'}</Text>
-                <Text style={styles.driverMeta}>
-                  {currentDriver?.total_rides || 0} trips · Arrived at pickup
-                </Text>
+                <View style={styles.ratingRow}>
+                  <Ionicons name="star" size={13} color="#FFB800" />
+                  <Text style={styles.driverMeta}>
+                    {currentDriver?.rating ? `${currentDriver.rating} rating` : 'No ratings yet'}
+                  </Text>
+                </View>
               </View>
               <TouchableOpacity style={styles.msgBtn} onPress={handleMessage}>
                 <Ionicons name="chatbubble" size={18} color={colors.primary} />
@@ -314,12 +321,17 @@ function DriverArrivedScreenContent() {
                 <Ionicons name="car" size={16} color={colors.primary} />
               </View>
               <View style={{ flex: 1 }}>
+                <Text style={styles.vehicleLabel}>VEHICLE</Text>
                 <Text style={styles.vehicleName}>
-                  {currentDriver?.vehicle_color} {currentDriver?.vehicle_make} {currentDriver?.vehicle_model}
+                  {[currentDriver?.vehicle_color, currentDriver?.vehicle_make, currentDriver?.vehicle_model]
+                    .filter(Boolean).join(' ') || 'Vehicle info unavailable'}
                 </Text>
               </View>
-              <View style={styles.plateBadge}>
-                <Text style={styles.plateNum}>{currentDriver?.license_plate || 'N/A'}</Text>
+              <View style={styles.plateWrap}>
+                <Text style={styles.plateLabel}>PLATE</Text>
+                <View style={styles.plateBadge}>
+                  <Text style={styles.plateNum}>{currentDriver?.license_plate || 'N/A'}</Text>
+                </View>
               </View>
             </View>
           </View>
@@ -504,17 +516,12 @@ function createStyles(colors: ThemeColors) {
     driverTop: { flexDirection: 'row', alignItems: 'center', marginBottom: 14 },
     avatar: {
       width: 50, height: 50, borderRadius: 25, backgroundColor: '#E8E8E8',
-      justifyContent: 'center', alignItems: 'center', marginRight: 12, position: 'relative',
+      justifyContent: 'center', alignItems: 'center', marginRight: 12, overflow: 'hidden',
     },
-    ratingPill: {
-      position: 'absolute', bottom: -3, left: -3,
-      flexDirection: 'row', alignItems: 'center',
-      backgroundColor: colors.surface, paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8,
-      shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2, elevation: 2,
-    },
-    ratingNum: { fontSize: 10, fontWeight: '700', color: colors.text, marginLeft: 2 },
+    avatarImg: { width: 50, height: 50, borderRadius: 25 },
     driverName: { fontSize: 17, fontWeight: '700', color: colors.text },
-    driverMeta: { fontSize: 12, color: '#888', marginTop: 2 },
+    ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
+    driverMeta: { fontSize: 12, color: '#888', marginLeft: 2 },
     msgBtn: {
       width: 44, height: 44, borderRadius: 22,
       backgroundColor: `${colors.primary}12`, justifyContent: 'center', alignItems: 'center',
@@ -528,7 +535,10 @@ function createStyles(colors: ThemeColors) {
       width: 32, height: 32, borderRadius: 8, backgroundColor: `${colors.primary}12`,
       justifyContent: 'center', alignItems: 'center',
     },
-    vehicleName: { fontSize: 13, fontWeight: '500', color: colors.textSecondary },
+    vehicleLabel: { fontSize: 9, fontWeight: '700', color: '#888', letterSpacing: 0.8, marginBottom: 2 },
+    vehicleName: { fontSize: 13, fontWeight: '600', color: colors.text },
+    plateWrap: { alignItems: 'center' },
+    plateLabel: { fontSize: 9, fontWeight: '700', color: '#888', letterSpacing: 0.8, marginBottom: 3 },
     plateBadge: {
       backgroundColor: colors.text, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5,
     },

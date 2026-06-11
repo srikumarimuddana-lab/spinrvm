@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   Animated,
   Linking,
+  PanResponder,
   Platform,
   BackHandler,
   ScrollView,
@@ -121,6 +122,73 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   const shakeAnim = useRef(new Animated.Value(0)).current;
   const [verifying, setVerifying] = useState(false);
   const [pinError, setPinError] = useState(false);
+
+  // ── Draggable sheet ─────────────────────────────────────────
+  // The grab area (handle + status header) owns the pan gesture so dragging
+  // never fights the content ScrollView. dragY is the sheet's offset from
+  // fully-open (0) down to the collapsed peek, where only the grab area
+  // stays visible above the home indicator. Composed with the parent's
+  // slideUpAnim entry animation via Animated.add (both native-driven).
+  const dragY = useRef(new Animated.Value(0)).current;
+  const dragOffsetRef = useRef(0);
+  const sheetHeightRef = useRef(0);
+  const grabHeightRef = useRef(0);
+  const insetsBottomRef = useRef(insets.bottom);
+  insetsBottomRef.current = insets.bottom;
+  const [isCollapsed, setIsCollapsed] = useState(false);
+
+  const collapsedOffsetRef = useRef(() =>
+    Math.max(0, sheetHeightRef.current - grabHeightRef.current - insetsBottomRef.current),
+  );
+
+  const snapTo = (offset: number) => {
+    dragOffsetRef.current = offset;
+    setIsCollapsed(offset > 0);
+    Animated.spring(dragY, {
+      toValue: offset,
+      useNativeDriver: true,
+      tension: 90,
+      friction: 13,
+    }).start();
+  };
+  const snapToRef = useRef(snapTo);
+  snapToRef.current = snapTo;
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_e, g) =>
+        Math.abs(g.dy) > 4 && Math.abs(g.dy) > Math.abs(g.dx),
+      onPanResponderMove: (_e, g) => {
+        const next = Math.min(
+          Math.max(dragOffsetRef.current + g.dy, 0),
+          collapsedOffsetRef.current(),
+        );
+        dragY.setValue(next);
+      },
+      onPanResponderRelease: (_e, g) => {
+        const max = collapsedOffsetRef.current();
+        if (Math.abs(g.dy) < 6 && Math.abs(g.vy) < 0.3) {
+          // Tap on the grab area: always settle open (expands when collapsed).
+          snapToRef.current(0);
+          return;
+        }
+        // Project the gesture forward by its velocity, then snap to the
+        // nearer detent — a quick flick collapses/expands without a full drag.
+        const projected = dragOffsetRef.current + g.dy + g.vy * 150;
+        snapToRef.current(projected > max / 2 ? max : 0);
+      },
+      onPanResponderTerminate: () => {
+        snapToRef.current(dragOffsetRef.current);
+      },
+    }),
+  ).current;
+
+  // Phase changes always re-open the sheet — the PIN keypad or the new
+  // action buttons must never appear while the sheet is collapsed.
+  useEffect(() => {
+    snapToRef.current(0);
+  }, [rideState]);
 
   // Reset distance when ride phase OR ride id changes — prevents stale
   // accumulation carrying over to a different ride if the panel is recycled.
@@ -268,18 +336,21 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
       ? `~${routeEtaMinutes} min · ${routeDistanceKm} km`
       : `~${durMin} min · ${distKm.toFixed(1)} km`;
 
+  // Palette is deliberately restricted to red / green / white / grey:
+  // grey-charcoal = neutral phase + navigation, red = attention (waiting,
+  // cancel, destination), green = money + advancing the trip.
   const statusMap = {
     navigating_to_pickup: {
       icon: 'navigate-circle' as const,
       label: t('activeRide.enRouteToPickup'),
       sub: etaLine,
-      color: colors.info,
+      color: colors.text,
     },
     arrived_at_pickup: {
       icon: 'time' as const,
       label: t('activeRide.waiting'),
       sub: formatWait(waitSeconds),
-      color: colors.warning,
+      color: colors.error,
     },
     trip_in_progress: {
       icon: 'car-sport' as const,
@@ -300,47 +371,58 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
 
   return (
     <Animated.View
+      onLayout={e => { sheetHeightRef.current = e.nativeEvent.layout.height; }}
       style={[
         styles.container,
         {
-          transform: [{ translateY: slideUpAnim }],
+          transform: [{ translateY: Animated.add(slideUpAnim, dragY) }],
           opacity: fadeAnim,
           maxHeight: maxPanelHeight,
         },
       ]}
     >
-        {/* Drag handle */}
-        <View style={styles.dragHandleContainer}>
-          <View style={styles.dragHandle} />
+        {/* ── Grab area: drag handle + status header. Stays visible as the
+            collapsed peek; owns the pan gesture. ─────────────── */}
+        <View
+          {...panResponder.panHandlers}
+          onLayout={e => { grabHeightRef.current = e.nativeEvent.layout.height; }}
+          accessibilityRole="button"
+          accessibilityLabel={isCollapsed ? 'Expand ride details' : 'Collapse ride details'}
+          accessibilityHint="Drag down to minimize the ride panel, drag up or tap to expand it"
+        >
+          <View style={styles.dragHandleContainer}>
+            <View style={styles.dragHandle} />
+          </View>
+
+          {/* ── Header: phase status + live detail on the left, earnings on
+              the right. Doubles as the collapsed-peek summary. ── */}
+          <View
+            style={styles.headerRow}
+            accessibilityRole="text"
+            accessibilityLabel={`${status.label}, ${status.sub}, earnings $${earnings.toFixed(2)}`}
+          >
+            <View style={[styles.statusIconBg, { backgroundColor: `${status.color}18` }]}>
+              <Ionicons name={status.icon} size={20} color={status.color} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text allowFontScaling={false} style={[styles.statusText, { color: status.color }]}>{status.label}</Text>
+              <Text allowFontScaling={false} style={styles.statusSub}>{status.sub}</Text>
+            </View>
+            <View style={styles.earningsBox}>
+              <Text style={styles.earningsValue}>${earnings.toFixed(2)}</Text>
+              <Text allowFontScaling={false} style={styles.earningsLabel}>{t('activeRide.yourEarnings')}</Text>
+            </View>
+          </View>
         </View>
+
         <ScrollView
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
+          scrollEnabled={!isCollapsed}
           contentContainerStyle={{ paddingBottom: insets.bottom + 16 }}
         >
       {/* ── Main card ───────────────────────────────────────── */}
       <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 12) + 10 }]}>
-
-        {/* ── Header: phase status + live detail on the left, earnings on
-            the right. One row replaces the old floating pill + the
-            earnings/distance/time stat card (earnings was shown twice). ── */}
-        <View
-          style={styles.headerRow}
-          accessibilityRole="text"
-          accessibilityLabel={`${status.label}, ${status.sub}, earnings $${earnings.toFixed(2)}`}
-        >
-          <View style={[styles.statusIconBg, { backgroundColor: `${status.color}18` }]}>
-            <Ionicons name={status.icon} size={20} color={status.color} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text allowFontScaling={false} style={[styles.statusText, { color: status.color }]}>{status.label}</Text>
-            <Text allowFontScaling={false} style={styles.statusSub}>{status.sub}</Text>
-          </View>
-          <View style={styles.earningsBox}>
-            <Text style={styles.earningsValue}>${earnings.toFixed(2)}</Text>
-            <Text allowFontScaling={false} style={styles.earningsLabel}>{t('activeRide.yourEarnings')}</Text>
-          </View>
-        </View>
 
         {/* ── Trip card: rider + route in one card so the sheet reads as a
             single unit instead of stacked fragments. Route is hidden during
@@ -356,7 +438,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
               <Text style={styles.riderName}>{riderName}</Text>
               {rider?.rating ? (
                 <View style={styles.ratingRow}>
-                  <Ionicons name="star" size={11} color={colors.gold} />
+                  <Ionicons name="star" size={11} color={colors.text} />
                   <Text style={styles.ratingText}>{Number(rider.rating).toFixed(1)}</Text>
                 </View>
               ) : null}
@@ -372,12 +454,12 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
               </TouchableOpacity>
             ) : null}
             <TouchableOpacity
-              style={[styles.contactBtn, { backgroundColor: colors.infoBg }]}
+              style={[styles.contactBtn, styles.contactBtnNeutral]}
               accessibilityRole="button"
               accessibilityLabel={`Message ${riderName}`}
               onPress={() => router.push(`/driver/chat?rideId=${ride.id}` as any)}
             >
-              <Ionicons name="chatbubble-ellipses" size={18} color={colors.info} />
+              <Ionicons name="chatbubble-ellipses" size={18} color={colors.text} />
             </TouchableOpacity>
           </View>
 
@@ -385,7 +467,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           <>
             <View style={styles.cardDivider} />
             <View style={styles.routeRow}>
-              <View style={[styles.dot, { backgroundColor: colors.info }]} />
+              <View style={[styles.dot, { backgroundColor: colors.success }]} />
               <View style={{ flex: 1 }}>
                 <Text allowFontScaling={false} style={styles.routeLabel}>{t('rideOffer.pickup')}</Text>
                 <Text style={styles.routeAddress} numberOfLines={2}>{ride.pickup_address}</Text>
@@ -395,7 +477,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
               <View style={styles.routeLine} />
             </View>
             <View style={styles.routeRow}>
-              <View style={[styles.dot, { backgroundColor: colors.success }]} />
+              <View style={styles.destSquare} />
               <View style={{ flex: 1 }}>
                 <Text allowFontScaling={false} style={styles.routeLabel}>{t('rideOffer.dropoff')}</Text>
                 <Text style={styles.routeAddress} numberOfLines={2}>{ride.dropoff_address}</Text>
@@ -481,18 +563,18 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
         ) : null}
 
         {/* ── Action buttons. Consistent color language across all phases:
-            blue (info) = open navigation, green (success) = advance the
+            charcoal = open navigation, green (success) = advance the
             trip, red = cancel link only. ──────────────────── */}
         {rideState === 'navigating_to_pickup' ? (
           <View style={styles.actions}>
             <TouchableOpacity
-              style={[styles.actionPrimary, { backgroundColor: colors.info }]}
+              style={[styles.actionPrimary, styles.actionNeutral]}
               onPress={() => openMapsNavigation((ride as any).pickup_nav_lat ?? ride.pickup_lat, (ride as any).pickup_nav_lng ?? ride.pickup_lng, 'Pickup')}
               accessibilityRole="button"
               accessibilityLabel={t('activeRide.navigateToPickup')}
             >
-              <Ionicons name="navigate" size={20} color="#fff" />
-              <Text allowFontScaling={false} style={styles.actionPrimaryText}>{t('activeRide.navigateToPickup')}</Text>
+              <Ionicons name="navigate" size={20} color={colors.surface} />
+              <Text allowFontScaling={false} style={[styles.actionPrimaryText, styles.actionNeutralText]}>{t('activeRide.navigateToPickup')}</Text>
             </TouchableOpacity>
             {(() => {
               const atPickup = distanceToPickup === null || distanceToPickup === undefined || distanceToPickup <= 150;
@@ -528,13 +610,13 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
         {rideState === 'trip_in_progress' ? (
           <View style={styles.actions}>
             <TouchableOpacity
-              style={[styles.actionPrimary, { backgroundColor: colors.info }]}
+              style={[styles.actionPrimary, styles.actionNeutral]}
               onPress={() => openMapsNavigation(ride.dropoff_lat, ride.dropoff_lng, 'Dropoff')}
               accessibilityRole="button"
               accessibilityLabel={t('activeRide.navigateToDropoff')}
             >
-              <Ionicons name="navigate" size={20} color="#fff" />
-              <Text allowFontScaling={false} style={styles.actionPrimaryText}>{t('activeRide.navigateToDropoff')}</Text>
+              <Ionicons name="navigate" size={20} color={colors.surface} />
+              <Text allowFontScaling={false} style={[styles.actionPrimaryText, styles.actionNeutralText]}>{t('activeRide.navigateToDropoff')}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.actionPrimary, { backgroundColor: colors.success }]}
@@ -603,6 +685,11 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.surface,
       borderTopLeftRadius: 24,
       borderTopRightRadius: 24,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: -3 },
+      shadowOpacity: 0.08,
+      shadowRadius: 10,
+      elevation: 10,
     },
     dragHandleContainer: {
       alignItems: 'center',
@@ -620,7 +707,8 @@ function createStyles(colors: ThemeColors) {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 10,
-      marginBottom: 12,
+      paddingHorizontal: 16,
+      paddingBottom: 12,
     },
     statusIconBg: {
       width: 38,
@@ -631,26 +719,26 @@ function createStyles(colors: ThemeColors) {
     },
     statusText: { fontSize: 15, fontWeight: '800' },
     statusSub: { fontSize: 12, fontWeight: '600', color: colors.textDim, marginTop: 1, fontVariant: ['tabular-nums'] },
-    earningsBox: { alignItems: 'flex-end' },
-    earningsValue: { fontSize: 22, fontWeight: '900', color: colors.success, fontVariant: ['tabular-nums'] },
-    earningsLabel: { fontSize: 10, fontWeight: '600', color: colors.textDim, letterSpacing: 0.3 },
+    earningsBox: {
+      alignItems: 'center',
+      backgroundColor: colors.successBg,
+      borderRadius: 14,
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+    },
+    earningsValue: { fontSize: 19, fontWeight: '900', color: colors.success, fontVariant: ['tabular-nums'] },
+    earningsLabel: { fontSize: 9, fontWeight: '700', color: colors.textDim, letterSpacing: 0.4, textTransform: 'uppercase' },
 
     sheet: {
-      backgroundColor: colors.surface,
-      borderTopLeftRadius: 24,
-      borderTopRightRadius: 24,
       paddingHorizontal: 16,
-      paddingTop: 12,
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: -3 },
-      shadowOpacity: 0.08,
-      shadowRadius: 10,
-      elevation: 10,
+      paddingTop: 2,
     },
 
     tripCard: {
       backgroundColor: colors.surfaceLight,
-      borderRadius: 16,
+      borderRadius: 18,
+      borderWidth: 1,
+      borderColor: colors.border,
       padding: 14,
       marginBottom: 12,
     },
@@ -696,9 +784,15 @@ function createStyles(colors: ThemeColors) {
       justifyContent: 'center',
       alignItems: 'center',
     },
+    contactBtnNeutral: {
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
 
     routeRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
     dot: { width: 10, height: 10, borderRadius: 5, marginTop: 4 },
+    destSquare: { width: 10, height: 10, borderRadius: 2, marginTop: 4, backgroundColor: colors.error },
     routeLabel: { fontSize: 9, fontWeight: '800', color: colors.textDim, letterSpacing: 0.8, marginBottom: 2 },
     routeAddress: { fontSize: 13, fontWeight: '600', color: colors.text, lineHeight: 18 },
     routeLineContainer: { paddingLeft: 4, marginVertical: 4 },
@@ -758,13 +852,17 @@ function createStyles(colors: ThemeColors) {
     actions: { gap: 8 },
     actionPrimary: {
       flexDirection: 'row',
-      height: 50,
-      borderRadius: 14,
+      height: 52,
+      borderRadius: 16,
       justifyContent: 'center',
       alignItems: 'center',
       gap: 8,
     },
     actionPrimaryText: { fontSize: 15, fontWeight: '700', color: '#fff' },
+    // Charcoal in light mode, white in dark mode — the "open external
+    // navigation" action, distinct from green trip-advancing actions.
+    actionNeutral: { backgroundColor: colors.text },
+    actionNeutralText: { color: colors.surface },
     actionSecondary: {
       flexDirection: 'row',
       height: 50,

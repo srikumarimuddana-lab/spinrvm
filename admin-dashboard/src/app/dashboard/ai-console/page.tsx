@@ -55,24 +55,23 @@ export default function AiConsolePage() {
 
     const isSuperAdmin = me?.role === "super_admin";
 
+    // Server-side search: /admin/users supports `search`, and the default
+    // page is only 50 rows — local filtering would hide every older user
+    // (Codex review, PR #1797). Debounced so we don't query per keystroke.
     useEffect(() => {
         if (!isSuperAdmin) return;
-        getUsers(roleFilter)
-            .then((rows) => setUsers(Array.isArray(rows) ? rows : (rows as any)?.users ?? []))
-            .catch(() => setUsers([]));
-    }, [isSuperAdmin, roleFilter]);
+        const handle = setTimeout(
+            () => {
+                getUsers(roleFilter, search.trim() || undefined)
+                    .then((rows) => setUsers(Array.isArray(rows) ? rows : (rows as any)?.users ?? []))
+                    .catch(() => setUsers([]));
+            },
+            search.trim() ? 300 : 0,
+        );
+        return () => clearTimeout(handle);
+    }, [isSuperAdmin, roleFilter, search]);
 
-    const filteredUsers = useMemo(() => {
-        const needle = search.trim().toLowerCase();
-        if (!needle) return users.slice(0, 50);
-        return users
-            .filter((u) =>
-                [u.id, u.first_name, u.last_name, u.email, u.phone]
-                    .filter(Boolean)
-                    .some((v: string) => String(v).toLowerCase().includes(needle)),
-            )
-            .slice(0, 50);
-    }, [users, search]);
+    const filteredUsers = useMemo(() => users.slice(0, 50), [users]);
 
     const target = users.find((u) => u.id === targetId);
 

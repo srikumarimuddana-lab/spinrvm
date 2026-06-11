@@ -116,6 +116,11 @@ class DriverNoteCreate(BaseModel):
     category: str = "general"
 
 
+class PhotoReviewRequest(BaseModel):
+    action: Literal["approve", "reject"]
+    reason: Optional[str] = None
+
+
 # ---------- Drivers list ----------
 
 
@@ -208,6 +213,8 @@ async def admin_get_drivers(
                 "name": _user_display_name(u) or d.get("name"),
                 "email": u.get("email") if u else None,
                 "phone": u.get("phone") if u else d.get("phone"),
+                "profile_image": u.get("profile_image") if u else None,
+                "profile_image_status": u.get("profile_image_status") if u else None,
             }
         )
     return out
@@ -1025,6 +1032,50 @@ async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest, admin: d
 
     await log_admin_action(admin, "driver_verified", "drivers", driver_id, {"verified": req.verified})
     return {"message": f"Driver {'verified' if req.verified else 'unverified'}"}
+
+
+@router.put("/drivers/{driver_id}/profile-photo/review")
+async def admin_review_driver_photo(driver_id: str, req: PhotoReviewRequest, admin: dict = Depends(get_admin_user)):
+    """Approve or reject a driver's pending profile photo."""
+    driver = await db_supabase.get_driver_by_id(driver_id)
+    if not driver:
+        raise HTTPException(status_code=404, detail=f"Driver {driver_id} not found")
+
+    user_id = driver.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=422, detail="Driver has no linked user account")
+
+    new_status = "approved" if req.action == "approve" else "rejected"
+    try:
+        await db_supabase.update_one("users", {"id": user_id}, {"profile_image_status": new_status})
+    except Exception as e:
+        logger.error(f"Failed to update profile_image_status for user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail="Database error updating photo status") from e
+
+    try:
+        msg = (
+            "Your profile photo has been approved. Riders will now see your photo."
+            if req.action == "approve"
+            else f"Your profile photo was rejected. Please upload a clear, recent photo of yourself.{(' Reason: ' + req.reason) if req.reason else ''}"
+        )
+        await send_push_notification(
+            user_id, "Profile Photo Update", msg, {"type": "photo_review_result", "status": new_status}
+        )
+    except Exception as e:
+        logger.warning(f"Push notification failed for driver photo review {driver_id}: {e}")
+
+    await _log_driver_activity(
+        driver_id,
+        "photo_reviewed",
+        f"Profile photo {new_status}",
+        req.reason or "",
+        {"action": req.action, "reason": req.reason},
+        actor=admin.get("email") or admin.get("sub") or "admin",
+    )
+    await log_admin_action(
+        admin, "driver_photo_reviewed", "drivers", driver_id, {"action": req.action, "reason": req.reason}
+    )
+    return {"message": f"Photo {new_status}", "profile_image_status": new_status}
 
 
 @router.post("/drivers/{driver_id}/action")

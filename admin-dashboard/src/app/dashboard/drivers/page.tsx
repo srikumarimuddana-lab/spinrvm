@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, retryPayout, refreshDriverStripeKyc, revealDriverSin, logPiiReveal, type DriverLiveStats, type DriverPayoutSummary } from "@/lib/api";
+import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, retryPayout, refreshDriverStripeKyc, revealDriverSin, logPiiReveal, reviewDriverProfilePhoto, type DriverLiveStats, type DriverPayoutSummary } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
@@ -1071,6 +1071,10 @@ export default function DriversPage() {
                                         driver={selected}
                                         docKeyToExpiryField={_docKeyToExpiryField}
                                         onOpenDocumentsTab={() => setDetailTab("documents")}
+                                        onPhotoReviewed={(newStatus) => {
+                                            setSelected((prev: any) => prev ? { ...prev, profile_image_status: newStatus } : prev);
+                                            setDrivers(prevList => prevList.map(d => d.id === selected.id ? { ...d, profile_image_status: newStatus } : d));
+                                        }}
                                     />
                                 </TabsContent>
 
@@ -1199,13 +1203,30 @@ function VerificationSummaryCard({
     driver,
     docKeyToExpiryField,
     onOpenDocumentsTab,
+    onPhotoReviewed,
 }: {
     requiredDocs: { id?: string; key: string; label: string; has_expiry: boolean }[];
     activeDocs: any[];
     driver: any;
     docKeyToExpiryField: (key: string) => string | null;
     onOpenDocumentsTab: () => void;
+    onPhotoReviewed?: (newStatus: string) => void;
 }) {
+    const [photoActing, setPhotoActing] = useState<"approve" | "reject" | null>(null);
+    const { toast } = useToast();
+
+    const handlePhotoAction = async (action: "approve" | "reject") => {
+        setPhotoActing(action);
+        try {
+            const result = await reviewDriverProfilePhoto(driver.id, action);
+            toast({ title: action === "approve" ? "Photo approved" : "Photo rejected", description: result.message });
+            onPhotoReviewed?.(result.profile_image_status);
+        } catch {
+            toast({ title: "Action failed", description: "Could not update photo status.", variant: "destructive" });
+        } finally {
+            setPhotoActing(null);
+        }
+    };
     const rows = requiredDocs.map(rd => {
         const matchingDocs = activeDocs.filter(d => matchesRequirement(d, rd));
         const hasApproved = matchingDocs.some(d => d.status === "approved");
@@ -1269,15 +1290,56 @@ function VerificationSummaryCard({
                         );
                     })}
                 </div>
-                <div className="flex items-center justify-between pt-1 text-xs border-t border-border">
-                    <div className="flex items-center gap-2">
-                        <div className={`w-2 h-2 rounded-full ${driver.profile_photo_url ? "bg-emerald-500" : "bg-muted-foreground/30"}`} />
-                        <span className="text-muted-foreground">Profile photo</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <div className={`w-2 h-2 rounded-full ${driver.vehicle_photo_url ? "bg-emerald-500" : "bg-muted-foreground/30"}`} />
-                        <span className="text-muted-foreground">Vehicle photo</span>
-                    </div>
+                <div className="pt-1 border-t border-border space-y-2">
+                    {/* Profile photo row — shows review controls when pending */}
+                    {driver.profile_image_status === "pending_review" && driver.profile_image ? (
+                        <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/10 p-3 space-y-2">
+                            <div className="flex items-center gap-2 text-xs font-semibold text-amber-700 dark:text-amber-400">
+                                <Clock className="h-3.5 w-3.5" />
+                                Profile photo pending review
+                            </div>
+                            <img
+                                src={driver.profile_image}
+                                alt="Driver profile photo"
+                                className="w-20 h-20 rounded-lg object-cover border border-border"
+                            />
+                            <div className="flex gap-2">
+                                <Button
+                                    size="sm"
+                                    className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white flex-1"
+                                    disabled={photoActing !== null}
+                                    onClick={() => handlePhotoAction("approve")}
+                                >
+                                    {photoActing === "approve" ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle className="h-3 w-3 mr-1" />}
+                                    Approve
+                                </Button>
+                                <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 text-xs border-red-300 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 flex-1"
+                                    disabled={photoActing !== null}
+                                    onClick={() => handlePhotoAction("reject")}
+                                >
+                                    {photoActing === "reject" ? <Loader2 className="h-3 w-3 animate-spin" /> : <XCircle className="h-3 w-3 mr-1" />}
+                                    Reject
+                                </Button>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="flex items-center justify-between text-xs">
+                            <div className="flex items-center gap-2">
+                                <div className={`w-2 h-2 rounded-full ${driver.profile_image_status === "approved" ? "bg-emerald-500" : driver.profile_photo_url ? "bg-emerald-500" : "bg-muted-foreground/30"}`} />
+                                <span className="text-muted-foreground">
+                                    Profile photo
+                                    {driver.profile_image_status === "rejected" && <span className="ml-1 text-red-500">(rejected)</span>}
+                                </span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <div className={`w-2 h-2 rounded-full ${driver.vehicle_photo_url ? "bg-emerald-500" : "bg-muted-foreground/30"}`} />
+                                <span className="text-muted-foreground">Vehicle photo</span>
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>

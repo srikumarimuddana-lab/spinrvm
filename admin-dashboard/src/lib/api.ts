@@ -692,6 +692,16 @@ export const getDriverStats = (params?: {
 export const updateDriver = (id: string, data: Record<string, any>) =>
     request<any>(`/api/admin/drivers/${id}`, { method: "PUT", body: JSON.stringify(data) });
 
+export const reviewDriverProfilePhoto = (
+    driverId: string,
+    action: "approve" | "reject",
+    reason?: string,
+) =>
+    request<{ message: string; profile_image_status: string }>(
+        `/api/admin/drivers/${driverId}/profile-photo/review`,
+        { method: "PUT", body: JSON.stringify({ action, reason }) },
+    );
+
 /* ── Earnings ─────────────────────────────── */
 export const getEarnings = () => request<any[]>("/api/admin/earnings");
 

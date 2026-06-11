@@ -32,7 +32,7 @@ import BrandSplash from '../components/BrandSplash';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
 import { ThemeProvider, useTheme } from '@shared/theme/ThemeContext';
-import { captureMessage, setUser, initErrorReporting } from '@shared/services/errorReporting';
+import { captureMessage, setUser, initErrorReporting, wrapApp } from '@shared/services/errorReporting';
 import Analytics from '@shared/analytics';
 import {
   initFirebaseServices,
@@ -146,7 +146,7 @@ setBackgroundMessageHandler(async (remoteMessage: any) => {
 });
 
 
-export default function RootLayout() {
+function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
     PlusJakartaSans_400Regular,
     PlusJakartaSans_500Medium,
@@ -695,4 +695,8 @@ function RootLayoutInner({
     </ErrorBoundary>
   );
 }
+
+// Wrap the root with Sentry's error boundary + navigation/touch instrumentation.
+// No-op until EXPO_PUBLIC_SENTRY_DSN is set (see initErrorReporting); safe in Expo Go/web.
+export default wrapApp(RootLayout);
 

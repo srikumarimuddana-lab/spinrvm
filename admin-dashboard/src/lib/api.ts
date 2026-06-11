@@ -815,6 +815,17 @@ export const updateSettings = (data: any) =>
         body: JSON.stringify(data),
     });
 
+/* ── AI Assistant ─────────────────────────── */
+export interface AiCatalogModel { id: string; label: string; }
+export interface AiCatalogProvider {
+    provider: string;
+    label: string;
+    key_field: string;
+    models: AiCatalogModel[];
+}
+export const getAiCatalog = () =>
+    request<{ providers: AiCatalogProvider[] }>("/api/admin/ai/catalog");
+
 /* ── Service Areas ────────────────────────── */
 export const getServiceAreas = () =>
     request<any[]>("/api/admin/service-areas");

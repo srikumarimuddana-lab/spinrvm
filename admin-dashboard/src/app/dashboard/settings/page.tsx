@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getSettings, updateSettings, mfaStatus, mfaDisable, adminUploadRideOfferSound } from "@/lib/api";
+import { getSettings, updateSettings, mfaStatus, mfaDisable, adminUploadRideOfferSound, getAiCatalog, type AiCatalogProvider } from "@/lib/api";
 import { MfaEnrollDialog } from "@/components/mfa-enroll-dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -39,6 +39,7 @@ export default function SettingsPage() {
     const [disableError, setDisableError] = useState("");
 
     const [soundUploading, setSoundUploading] = useState(false);
+    const [aiCatalog, setAiCatalog] = useState<AiCatalogProvider[]>([]);
 
     const handleUploadOfferSound = async (file: File) => {
         if (file.size > 500 * 1024) {
@@ -70,6 +71,10 @@ export default function SettingsPage() {
             .then(setSettings)
             .catch(() => { })
             .finally(() => setLoading(false));
+
+        getAiCatalog()
+            .then((d) => setAiCatalog(d.providers ?? []))
+            .catch(() => { });
 
         mfaStatus()
             .then((d) => {
@@ -263,6 +268,139 @@ export default function SettingsPage() {
                                     GCP Console &rarr; APIs &amp; Services &rarr; Credentials
                                 </p>
                             </div>
+                        </CardContent>
+                    </Card>
+
+                    {/* AI Assistant — provider/model selection + key. One key
+                        field per provider; switching providers rebinds the
+                        field. Changes take effect within ~60s (settings TTL),
+                        no redeploy. */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">AI Assistant</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            {(() => {
+                                const provider = settings.ai_provider || "anthropic";
+                                const entry = aiCatalog.find((p) => p.provider === provider);
+                                const keyField = entry?.key_field ?? `ai_api_key_${provider}`;
+                                const suggestions = entry?.models ?? [];
+                                const isSuggested = suggestions.some((m) => m.id === settings.ai_model);
+                                const modelSelectValue = isSuggested ? settings.ai_model : "__custom__";
+                                return (
+                                    <>
+                                        <div className="flex items-center justify-between">
+                                            <div>
+                                                <Label>Enable AI assistant</Label>
+                                                <p className="text-xs text-muted-foreground">
+                                                    Kill switch for the rider AI mode + SupportScreen chat. Off hides all entry points.
+                                                </p>
+                                            </div>
+                                            <Switch
+                                                checked={!!settings.ai_assistant_enabled}
+                                                onCheckedChange={(v) => update("ai_assistant_enabled", v)}
+                                            />
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div className="space-y-2">
+                                                <Label>Provider</Label>
+                                                <Select
+                                                    value={provider}
+                                                    onValueChange={(v) => {
+                                                        update("ai_provider", v);
+                                                        const next = aiCatalog.find((p) => p.provider === v);
+                                                        if (next?.models?.length) update("ai_model", next.models[0].id);
+                                                    }}
+                                                >
+                                                    <SelectTrigger><SelectValue /></SelectTrigger>
+                                                    <SelectContent>
+                                                        {(aiCatalog.length ? aiCatalog : [{ provider: "anthropic", label: "Anthropic (Claude)", key_field: "ai_api_key_anthropic", models: [] }]).map((p) => (
+                                                            <SelectItem key={p.provider} value={p.provider}>{p.label}</SelectItem>
+                                                        ))}
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                            <div className="space-y-2">
+                                                <Label>Model</Label>
+                                                <Select
+                                                    value={modelSelectValue}
+                                                    onValueChange={(v) => update("ai_model", v === "__custom__" ? "" : v)}
+                                                >
+                                                    <SelectTrigger><SelectValue /></SelectTrigger>
+                                                    <SelectContent>
+                                                        {suggestions.map((m) => (
+                                                            <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>
+                                                        ))}
+                                                        <SelectItem value="__custom__">Custom model id…</SelectItem>
+                                                    </SelectContent>
+                                                </Select>
+                                                {modelSelectValue === "__custom__" && (
+                                                    <Input
+                                                        value={settings.ai_model || ""}
+                                                        onChange={(e) => update("ai_model", e.target.value)}
+                                                        placeholder={provider === "openrouter" ? "vendor/model-id" : "model-id"}
+                                                    />
+                                                )}
+                                            </div>
+                                        </div>
+                                        <div className="space-y-2">
+                                            <Label>{entry?.label ?? provider} API key</Label>
+                                            <Input
+                                                type="password"
+                                                value={settings[keyField] || ""}
+                                                onChange={(e) => update(keyField, e.target.value)}
+                                                placeholder="Paste the key for the selected provider"
+                                            />
+                                            <p className="text-xs text-muted-foreground">
+                                                Saved per provider — switching back later reuses the stored key.
+                                            </p>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div className="space-y-2">
+                                                <Label>Daily messages per user</Label>
+                                                <Input
+                                                    type="number" min={1} max={500}
+                                                    value={settings.ai_daily_message_cap ?? 50}
+                                                    onChange={(e) => update("ai_daily_message_cap", parseInt(e.target.value))}
+                                                />
+                                            </div>
+                                            <div className="space-y-2">
+                                                <Label>Max output tokens</Label>
+                                                <Input
+                                                    type="number" min={128} max={4096}
+                                                    value={settings.ai_max_output_tokens ?? 1024}
+                                                    onChange={(e) => update("ai_max_output_tokens", parseInt(e.target.value))}
+                                                />
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center justify-between">
+                                            <div>
+                                                <Label>MCP server (/mcp)</Label>
+                                                <p className="text-xs text-muted-foreground">
+                                                    Read-only tool access for external agent clients. Leave off unless needed.
+                                                </p>
+                                            </div>
+                                            <Switch
+                                                checked={!!settings.ai_mcp_enabled}
+                                                onCheckedChange={(v) => update("ai_mcp_enabled", v)}
+                                            />
+                                        </div>
+                                        <div className="flex items-center justify-between">
+                                            <div>
+                                                <Label>AI escalation opens Zoho tickets</Label>
+                                                <p className="text-xs text-muted-foreground">
+                                                    Off = the assistant only deep-links to human support (recommended).
+                                                </p>
+                                            </div>
+                                            <Switch
+                                                checked={!!settings.ai_escalation_creates_ticket}
+                                                onCheckedChange={(v) => update("ai_escalation_creates_ticket", v)}
+                                            />
+                                        </div>
+                                    </>
+                                );
+                            })()}
                         </CardContent>
                     </Card>
 

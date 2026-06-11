@@ -35,6 +35,12 @@
         "noRideRequests": "Aucune demande de course",
         "waitingForRequests": "En attente de demandes de course...",
         "gettingLocation": "Localisation en cours...",
+        "locationDeniedTitle": "Autorisation de localisation requise",
+        "locationDeniedBody": "Spinr a besoin de votre position pour afficher la carte et recevoir des demandes de course. Activez l'accès à la localisation dans les réglages de votre appareil.",
+        "locationUnavailableTitle": "Impossible d'obtenir votre position",
+        "locationUnavailableBody": "Vérifiez que le GPS est activé, puis réessayez.",
+        "openSettings": "Ouvrir les réglages",
+        "retryLocation": "Réessayer",
         "go": "GO",
         "stop": "STOP"
     },

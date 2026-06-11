@@ -8,7 +8,7 @@ import {
     Flame, Building2, LifeBuoy, HelpCircle,
     LogOut, Menu, X, ChevronLeft, ChevronRight,
     Sun, Moon, Shield, ShieldAlert, Cloud, Trophy, TrendingUp, Activity,
-    Inbox, Clock, Headphones, BarChart3, Send,
+    Inbox, Clock, Headphones, BarChart3, Send, Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useState, useEffect } from "react";
@@ -107,6 +107,10 @@ const NAV_GROUPS: NavGroup[] = [
             { href: "/dashboard/monitoring/redis", label: "Redis & Infra", icon: Activity, module: "settings" },
             { href: "/dashboard/audit-logs", label: "Audit Logs", icon: Shield, module: "settings" },
             { href: "/dashboard/settings", label: "Settings", icon: Settings, module: "settings" },
+            // module "ai_console" is granted to no staff role — combined with
+            // the isSuperAdmin bypass this makes the entry super-admin-only;
+            // the page and the backend re-check the role themselves.
+            { href: "/dashboard/ai-console", label: "AI Console", icon: Sparkles, module: "ai_console" },
             { href: "/dashboard/staff", label: "Staff", icon: Users, module: "staff" },
         ],
     },

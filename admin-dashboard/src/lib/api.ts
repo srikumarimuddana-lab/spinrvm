@@ -826,6 +826,33 @@ export interface AiCatalogProvider {
 export const getAiCatalog = () =>
     request<{ providers: AiCatalogProvider[] }>("/api/admin/ai/catalog");
 
+/* Super-admin AI console — chat as a user + view their threads. */
+export interface AdminAiChatResponse {
+    conversation_id: string;
+    message_id: string;
+    reply: string;
+    actions: any[];
+    audience: string;
+}
+export const adminAiChat = (data: {
+    user_id: string;
+    message: string;
+    conversation_id?: string | null;
+    audience?: "rider" | "driver";
+}) =>
+    request<AdminAiChatResponse>("/api/admin/ai/chat", {
+        method: "POST",
+        body: JSON.stringify(data),
+    });
+export const getAdminAiConversations = (userId: string) =>
+    request<{ conversations: { id: string; title: string; updated_at: string }[] }>(
+        `/api/admin/ai/users/${userId}/conversations`,
+    );
+export const getAdminAiMessages = (userId: string, conversationId: string) =>
+    request<{ messages: { id: string; role: "user" | "assistant"; content: string; created_at: string }[] }>(
+        `/api/admin/ai/users/${userId}/conversations/${conversationId}/messages`,
+    );
+
 /* ── Service Areas ────────────────────────── */
 export const getServiceAreas = () =>
     request<any[]>("/api/admin/service-areas");
@@ -1534,6 +1561,9 @@ export const getPromoStats = (range?: string) => {
 };
 
 /* ── Users (Riders + Drivers + Admins) ───────── */
+// NOTE: no `search` param here on purpose — search terms can be phone
+// numbers/emails and GET query strings land in browser history and proxy
+// logs. Use the POST-based adminSearchUsers for user search.
 export const getUsers = (role: "all" | "rider" | "driver" | "admin" = "all") =>
     request<any[]>(`/api/admin/users?role=${role}`);
 

@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
     adminAiChat,
+    adminSearchUsers,
     getAdminAiConversations,
     getAdminAiMessages,
     getUsers,
@@ -55,18 +56,23 @@ export default function AiConsolePage() {
 
     const isSuperAdmin = me?.role === "super_admin";
 
-    // Server-side search: /admin/users supports `search`, and the default
-    // page is only 50 rows — local filtering would hide every older user
+    // Server-side search (the default /admin/users page is only 50 rows, so
+    // local filtering would hide older users) via the POST-based typeahead —
+    // search terms can be phone numbers and must stay out of URL/proxy logs
     // (Codex review, PR #1797). Debounced so we don't query per keystroke.
     useEffect(() => {
         if (!isSuperAdmin) return;
+        const term = search.trim();
         const handle = setTimeout(
             () => {
-                getUsers(roleFilter, search.trim() || undefined)
+                const fetcher = term
+                    ? adminSearchUsers({ search: term, role: roleFilter, limit: 50 })
+                    : getUsers(roleFilter);
+                fetcher
                     .then((rows) => setUsers(Array.isArray(rows) ? rows : (rows as any)?.users ?? []))
                     .catch(() => setUsers([]));
             },
-            search.trim() ? 300 : 0,
+            term ? 300 : 0,
         );
         return () => clearTimeout(handle);
     }, [isSuperAdmin, roleFilter, search]);
@@ -74,6 +80,19 @@ export default function AiConsolePage() {
     const filteredUsers = useMemo(() => users.slice(0, 50), [users]);
 
     const target = users.find((u) => u.id === targetId);
+
+    // A refreshed search can drop the previously selected user from the
+    // results; without this, the composer would silently keep posting into
+    // the OLD user's real thread (Codex review, PR #1797). The composer is
+    // additionally gated on `target` below.
+    useEffect(() => {
+        if (targetId && users.length > 0 && !users.some((u) => u.id === targetId)) {
+            setTargetId("");
+            setConversationId(null);
+            setConversations([]);
+            setMessages([]);
+        }
+    }, [users, targetId]);
 
     const loadConversations = useCallback(async (userId: string) => {
         try {
@@ -111,13 +130,15 @@ export default function AiConsolePage() {
 
     const send = async () => {
         const text = input.trim();
-        if (!text || !targetId || sending) return;
+        // Gate on `target` (resolved from the CURRENT results), not just the
+        // stored id — never post into a user who dropped out of the search.
+        if (!text || !target || sending) return;
         setSending(true);
         setInput("");
         setMessages((prev) => [...prev, { id: `local-${Date.now()}`, role: "user", content: text }]);
         try {
             const res = await adminAiChat({
-                user_id: targetId,
+                user_id: target.id,
                 message: text,
                 conversation_id: conversationId,
                 audience: roleFilter,
@@ -132,7 +153,7 @@ export default function AiConsolePage() {
                     content: `⚡ action → ${a.type}${a.type === "booking_proposal" ? ` (${a.proposal?.pickup_address} → ${a.proposal?.dropoff_address})` : ""}`,
                 })),
             ]);
-            loadConversations(targetId);
+            loadConversations(target.id);
         } catch (err: any) {
             toast({
                 title: "AI chat failed",
@@ -280,10 +301,10 @@ export default function AiConsolePage() {
                                 value={input}
                                 onChange={(e) => setInput(e.target.value)}
                                 onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && send()}
-                                placeholder={targetId ? "Message as this user…" : "Select a user first"}
-                                disabled={!targetId || sending}
+                                placeholder={target ? "Message as this user…" : "Select a user first"}
+                                disabled={!target || sending}
                             />
-                            <Button onClick={send} disabled={!targetId || sending || !input.trim()}>
+                            <Button onClick={send} disabled={!target || sending || !input.trim()}>
                                 <Send className="h-4 w-4" />
                             </Button>
                         </div>

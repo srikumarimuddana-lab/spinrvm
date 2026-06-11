@@ -53,6 +53,7 @@ try:
 except ImportError:
     from routes.disputes import admin_router as disputes_admin_router
 
+from .ai_console import router as ai_console_router
 from .analytics import api_router as analytics_router
 from .auth import admin_auth_router
 from .auth import router as auth_router
@@ -93,6 +94,9 @@ admin_router = APIRouter(
 # `auth_router` is an empty placeholder; the real login/session/logout routes
 # live on `admin_auth_router`, mounted separately by server.py (no auth gate).
 admin_router.include_router(auth_router)
+# No module gate — the routes enforce role == super_admin themselves
+# (impersonation + chat-history reads are stricter than any module grant).
+admin_router.include_router(ai_console_router)
 admin_router.include_router(settings_router, dependencies=[Depends(require_module("settings"))])
 admin_router.include_router(service_areas_router, dependencies=[Depends(require_module("service_areas"))])
 admin_router.include_router(venues_router, dependencies=[Depends(require_module("service_areas"))])

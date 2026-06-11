@@ -87,6 +87,7 @@ async def run_chat_turn(
     conversation_id: Optional[str],
     user_message: str,
     audience: str = "rider",
+    admin_actor_id: Optional[str] = None,
 ) -> AsyncIterator[Frame]:
     settings = await get_app_settings()
 
@@ -104,7 +105,9 @@ async def run_chat_turn(
         )
         return
 
-    conversation = await conversations.get_or_create_conversation(user["id"], conversation_id, audience)
+    conversation = await conversations.get_or_create_conversation(
+        user["id"], conversation_id, audience, admin_actor_id=admin_actor_id
+    )
     if conversation is None:
         yield "error", {"code": "not_found", "message": "Conversation not found."}
         return

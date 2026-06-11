@@ -12,6 +12,7 @@ import {
   FlatList,
   KeyboardAvoidingView,
   Platform,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -22,10 +23,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
+import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import type { AiChatMessage } from '@shared/types/ai';
+import BookingProposalCard from '../components/BookingProposalCard';
 import { useAiChatStore } from '../store/aiChatStore';
+import { useRideStore } from '../store/rideStore';
 
 const QUICK_PROMPTS = [
   "Where's my driver?",
@@ -34,6 +38,80 @@ const QUICK_PROMPTS = [
   'Do I have any promos?',
   'Book me a ride home',
 ];
+
+const ACTIVE_STATUSES = ['searching', 'driver_assigned', 'driver_accepted', 'driver_arrived', 'in_progress'];
+
+/** Where "Track ride" lands per ride status (mirrors payment-confirm.tsx). */
+const TRACK_ROUTES: Record<string, string> = {
+  searching: '/(tabs)',
+  driver_assigned: '/driver-arriving',
+  driver_accepted: '/driver-arriving',
+  driver_arrived: '/driver-arrived',
+  in_progress: '/ride-in-progress',
+};
+
+/**
+ * Live ride status inside the chat — fed by rideStore via the global
+ * useRiderSocket mount, zero AI involvement. Answers "searching… / driver
+ * found" and offers the trip-share link + tracking deep-link.
+ */
+function RideStatusBanner({ colors, styles }: { colors: ThemeColors; styles: ReturnType<typeof createStyles> }) {
+  const router = useRouter();
+  const currentRide = useRideStore((s) => s.currentRide);
+  const currentDriver = useRideStore((s) => s.currentDriver);
+
+  const status = currentRide?.status ?? '';
+  if (!currentRide || !ACTIVE_STATUSES.includes(status)) return null;
+
+  let statusText = 'Trip in progress';
+  if (status === 'searching') statusText = 'Searching for a driver…';
+  else if (status === 'driver_assigned' || status === 'driver_accepted') {
+    statusText = currentDriver
+      ? `Driver found: ${currentDriver.name} — ${[currentDriver.vehicle_color, currentDriver.vehicle_make, currentDriver.vehicle_model].filter(Boolean).join(' ')}${currentDriver.license_plate ? `, plate ${currentDriver.license_plate}` : ''}`
+      : 'Driver found — on the way!';
+  } else if (status === 'driver_arrived') statusText = 'Your driver has arrived!';
+
+  const handleShare = async () => {
+    try {
+      const res = await api.get(`/rides/${currentRide.id}/share`);
+      const url = res.data?.share_url;
+      if (url) await Share.share({ message: `Follow my Spinr trip live: ${url}` });
+    } catch (error) {
+      console.error('[ai-assistant] share link failed:', error);
+    }
+  };
+
+  return (
+    <View style={styles.rideBanner}>
+      <View style={styles.rideBannerTextRow}>
+        {status === 'searching' ? (
+          <ActivityIndicator size="small" color={colors.primary} />
+        ) : (
+          <Ionicons name="car" size={16} color={colors.primary} />
+        )}
+        <Text style={styles.rideBannerText} numberOfLines={2}>
+          {statusText}
+        </Text>
+      </View>
+      <View style={styles.rideBannerButtons}>
+        {status !== 'searching' && (
+          <TouchableOpacity style={styles.rideBannerButton} onPress={handleShare} accessibilityLabel="Share trip">
+            <Ionicons name="share-outline" size={14} color={colors.primary} />
+            <Text style={styles.rideBannerButtonText}>Share trip</Text>
+          </TouchableOpacity>
+        )}
+        <TouchableOpacity
+          style={styles.rideBannerButton}
+          onPress={() => router.push((TRACK_ROUTES[status] ?? '/(tabs)') as never)}
+          accessibilityLabel="Track ride"
+        >
+          <Ionicons name="navigate-outline" size={14} color={colors.primary} />
+          <Text style={styles.rideBannerButtonText}>Track ride</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
 
 export default function AiAssistantScreen() {
   const router = useRouter();
@@ -91,16 +169,8 @@ export default function AiAssistantScreen() {
         </TouchableOpacity>
       );
     }
-    if (item.kind === 'booking_proposal') {
-      // Booking confirmation card lands with BookingProposalCard (M5.4);
-      // until then, point the rider at the standard booking flow.
-      return (
-        <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/' as never)}>
-          <Ionicons name="car-outline" size={18} color={colors.primary} />
-          <Text style={styles.actionCardText}>Review this trip in the booking screen</Text>
-          <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
-        </TouchableOpacity>
-      );
+    if (item.kind === 'booking_proposal' && item.action?.type === 'booking_proposal') {
+      return <BookingProposalCard proposal={item.action.proposal} />;
     }
 
     const isUser = item.role === 'user';
@@ -171,6 +241,8 @@ export default function AiAssistantScreen() {
             onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
           />
         )}
+
+        <RideStatusBanner colors={colors} styles={styles} />
 
         {toolStatus ? (
           <View style={styles.toolStatusRow}>
@@ -289,6 +361,21 @@ const createStyles = (colors: ThemeColors) =>
       alignSelf: 'flex-start',
     },
     actionCardText: { fontSize: 14, fontWeight: '600', color: colors.text },
+    rideBanner: {
+      marginHorizontal: 12,
+      marginTop: 4,
+      padding: 12,
+      borderRadius: 12,
+      backgroundColor: colors.surfaceLight,
+      borderWidth: 1,
+      borderColor: colors.border,
+      gap: 8,
+    },
+    rideBannerTextRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    rideBannerText: { flex: 1, fontSize: 13, fontWeight: '600', color: colors.text },
+    rideBannerButtons: { flexDirection: 'row', gap: 14, paddingLeft: 24 },
+    rideBannerButton: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    rideBannerButtonText: { fontSize: 13, fontWeight: '600', color: colors.primary },
     toolStatusRow: {
       flexDirection: 'row',
       alignItems: 'center',

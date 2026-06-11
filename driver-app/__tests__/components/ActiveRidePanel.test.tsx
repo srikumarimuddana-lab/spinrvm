@@ -136,6 +136,12 @@ describe('ActiveRidePanel', () => {
     expect(getByText('Cancel Ride')).toBeTruthy();
   });
 
+  it('renders the draggable grab area expanded by default', () => {
+    const { getByLabelText } = renderWithSafeArea(<ActiveRidePanel {...defaultProps} />);
+    // Label flips to "Expand ride details" when collapsed; expanded is the default.
+    expect(getByLabelText('Collapse ride details')).toBeTruthy();
+  });
+
   it('renders nothing when ride is null', () => {
     // Render inside SafeAreaProvider (the panel calls useSafeAreaInsets before
     // its early-return); assert the panel produced no panel-specific output by

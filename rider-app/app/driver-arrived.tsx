@@ -42,6 +42,7 @@ function DriverArrivedScreenContent() {
   const snapPoints = useMemo(() => ['42%', '70%'], []);
   const resumeKey = useAppResumeKey();
   const [routeCoords, setRouteCoords] = React.useState<any[]>([]);
+  const [driverPhotoError, setDriverPhotoError] = useState(false);
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;
     title: string;
@@ -289,11 +290,12 @@ function DriverArrivedScreenContent() {
           <View style={styles.driverCard}>
             <View style={styles.driverTop}>
               <View style={styles.avatar}>
-                {currentDriver?.photo_url ? (
+                {currentDriver?.photo_url && !driverPhotoError ? (
                   <Image
                     source={{ uri: currentDriver.photo_url }}
                     style={styles.avatarImg}
                     resizeMode="cover"
+                    onError={() => setDriverPhotoError(true)}
                   />
                 ) : (
                   <Ionicons name="person" size={26} color="#888" />

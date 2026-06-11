@@ -54,8 +54,13 @@ async def render_ride_snapshot_google(
     pickup_trail = _extract_trail((phase_polylines or {}).get("navigating_to_pickup"))
     trip_trail = _extract_trail((phase_polylines or {}).get("trip_in_progress"))
 
-    if pickup_trail or trip_trail:
-        trail_points = pickup_trail + trip_trail
+    # Require at least 10 combined phase-trail points before trusting them.
+    # Fewer than that means GPS coverage was too sparse and the Static Maps API
+    # draws straight segments between the handful of points — the reported
+    # "double line" artifact.  Fall through to route_polyline in that case.
+    _phase_points = pickup_trail + trip_trail
+    if len(_phase_points) >= 10:
+        trail_points = _phase_points
     elif route_polyline:
         for pt in route_polyline:
             try:

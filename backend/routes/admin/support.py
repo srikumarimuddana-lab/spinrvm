@@ -143,8 +143,9 @@ async def admin_get_disputes(
                 name = " ".join(p for p in parts if p).strip()
                 if name and u.get("id"):
                     user_name_map[u["id"]] = name
-        except Exception:
-            logger.warning("Failed to enrich disputes with user names")
+        except Exception as exc:
+            logger.error("Failed to enrich disputes with user names: %s", exc, exc_info=True)
+            raise HTTPException(status_code=503, detail="ERR_DATABASE") from exc
 
     return [{**d, "user_name": user_name_map.get(d.get("user_id", ""), "")} for d in disputes]
 

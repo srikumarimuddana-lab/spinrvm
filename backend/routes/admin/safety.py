@@ -168,7 +168,7 @@ async def admin_get_safety_incident(incident_id: str):
                     "pickup_address": ride.get("pickup_address"),
                     "dropoff_address": ride.get("dropoff_address"),
                     "total_fare": ride.get("total_fare"),
-                    "started_at": ride.get("started_at"),
+                    "started_at": ride.get("ride_started_at"),
                     "completed_at": ride.get("ride_completed_at"),
                 }
         except Exception:

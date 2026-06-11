@@ -7,16 +7,34 @@
 --
 -- Pattern follows migration 51 (audit_logs lockdown).
 --
+-- Companion: migration 143 builds the single-accepted-offer unique index
+-- CONCURRENTLY (the runner executes CONCURRENTLY files in autocommit mode,
+-- which cannot host the DO blocks below). The duplicate-accepted repair that
+-- the index depends on runs HERE, before 143.
+--
+-- Note: backend mobile/admin traffic is always mediated by the service_role
+-- client (db_supabase) — the apps never talk to PostgREST directly. The
+-- member/rider SELECT policies below exist for convention compliance and
+-- future direct-read tooling, not because any current code path needs them.
+--
+-- Deploy sequencing (user_name scrub): old replicas still write user_name
+-- during the rolling deploy window; rows written between this migration and
+-- the code rollout keep a name until the follow-up migration that drops the
+-- column. Acceptable: the API stops returning the stored value immediately
+-- (read-time enrichment overwrites it).
+--
 -- Rollback plan:
 --   DROP the new SELECT-only policies, re-run the dynamic block from migration
 --   27 to restore FOR ALL policies, and GRANT INSERT/UPDATE/DELETE on the
---   affected tables back to the authenticated role. Low blast radius: the
---   service_role bypass policy (written by migration 10 / migration 27) stays
---   untouched throughout, so the backend is unaffected at all times.
+--   affected tables back to the authenticated role. Drop constraint
+--   ride_offers_status_check and re-add migration 131's five-value version.
+--   The user_name scrub and the accepted-offer repair are irreversible short
+--   of PITR. Low blast radius throughout: the service_role bypass policies
+--   (migrations 10 / 27) stay untouched, so the backend is unaffected.
 -- =============================================================================
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- 1. disputes: replace FOR ALL (no WITH CHECK) with SELECT only.
+-- 1. disputes: replace FOR ALL (no WITH CHECK) with enumerated SELECT.
 --    Migration 10 created "Admin full access disputes" FOR ALL TO authenticated.
 --    Legitimate writes on disputes go through service_role (backend); no
 --    direct-from-browser INSERT/UPDATE/DELETE is ever needed.
@@ -34,6 +52,13 @@ CREATE POLICY "Admin read disputes"
         )
     );
 
+-- Convention: every user-data table enumerates SELECT for its owner.
+CREATE POLICY "Rider read own disputes"
+    ON disputes FOR SELECT
+    TO authenticated
+    USING (user_id = auth.uid()::text);
+
+REVOKE ALL ON disputes FROM anon;
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON disputes FROM authenticated;
 GRANT  SELECT ON disputes TO authenticated;
 
@@ -79,11 +104,40 @@ BEGIN
             );
         END IF;
 
-        -- Strip write access from the authenticated role (backend uses service_role)
+        -- Strip all anon access and write access from authenticated
+        -- (backend uses service_role for every read and write today).
+        EXECUTE format('REVOKE ALL ON %I FROM anon', t);
         EXECUTE format('REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON %I FROM authenticated', t);
         EXECUTE format('GRANT SELECT ON %I TO authenticated', t);
     END LOOP;
 END $$;
+
+-- Members can read their own membership and allowance rows (convention;
+-- no current code path reads these via PostgREST — see header note).
+CREATE POLICY "Member read own corporate_members"
+    ON corporate_members FOR SELECT
+    TO authenticated
+    USING (user_id = auth.uid()::text);
+
+CREATE POLICY "Member read own corporate_member_allowances"
+    ON corporate_member_allowances FOR SELECT
+    TO authenticated
+    USING (
+        member_id IN (
+            SELECT id FROM corporate_members
+            WHERE user_id = auth.uid()::text
+        )
+    );
+
+CREATE POLICY "Member read own corporate_allowance_requests"
+    ON corporate_allowance_requests FOR SELECT
+    TO authenticated
+    USING (
+        member_id IN (
+            SELECT id FROM corporate_members
+            WHERE user_id = auth.uid()::text
+        )
+    );
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 3. PIPEDA data minimization: scrub persisted full legal names from disputes.
@@ -92,54 +146,69 @@ END $$;
 --    writes this column. The column itself stays (dropping it would break
 --    in-flight inserts from old replicas during the deploy window) — drop in
 --    a follow-up migration once this code is fully rolled out.
+--    Batched so the scrub never holds row locks on the whole table at once.
 -- ─────────────────────────────────────────────────────────────────────────────
-UPDATE disputes SET user_name = '' WHERE COALESCE(user_name, '') <> '';
+DO $$
+DECLARE
+    updated INT;
+BEGIN
+    LOOP
+        UPDATE disputes SET user_name = ''
+        WHERE id IN (
+            SELECT id FROM disputes
+            WHERE COALESCE(user_name, '') <> ''
+            LIMIT 500
+        );
+        GET DIAGNOSTICS updated = ROW_COUNT;
+        EXIT WHEN updated = 0;
+        PERFORM pg_sleep(0.05);
+    END LOOP;
+END $$;
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- 4. Rides idempotency: DB-enforced unique constraint.
---    Closes P1: "read-then-act" on idempotency_key; a flaky-network double-tap
---    can create two rides (and two charges). The partial unique index converts
---    the race into a constraint violation the backend can detect and handle.
+-- 4. Latent bug fix discovered while hardening ride_offers: rides.py
+--    rider-cancel writes status='cancelled' on pending offers, but the CHECK
+--    constraint (migrations 100/131) never allowed that value — the write
+--    fails and is swallowed by the caller's try/except, leaving drivers with
+--    stale offer panels. Widen the allowed set. NOT VALID avoids the
+--    full-table validation scan under ACCESS EXCLUSIVE; the VALIDATE step
+--    takes only SHARE UPDATE EXCLUSIVE (does not block dispatch traffic).
+--    Additive change — no existing row can violate it.
 -- ─────────────────────────────────────────────────────────────────────────────
-CREATE UNIQUE INDEX IF NOT EXISTS rides_rider_idempotency_key
-    ON rides (rider_id, idempotency_key)
-    WHERE idempotency_key IS NOT NULL;
-
--- ─────────────────────────────────────────────────────────────────────────────
--- 5. Double-dispatch guard: at most one accepted offer per ride.
---    Defense-in-depth behind the atomic accept filter in routes/drivers.py
---    (status=searching AND driver_id IS NULL). Safe because a ride never
---    returns to 'searching' after an accept: the offer-timeout revert only
---    fires pre-accept (offer still 'pending'), and a post-accept driver
---    cancel terminates the ride ('cancelled') rather than re-dispatching.
--- ─────────────────────────────────────────────────────────────────────────────
--- Latent bug fix discovered while adding the index: rides.py rider-cancel
--- writes status='cancelled' on pending offers, but the CHECK constraint
--- (migrations 100/131) never allowed that value — the write fails and is
--- swallowed by the caller's try/except, leaving drivers with stale offer
--- panels. Widen the allowed set (additive, no existing row violates it).
 ALTER TABLE ride_offers DROP CONSTRAINT IF EXISTS ride_offers_status_check;
 ALTER TABLE ride_offers
     ADD CONSTRAINT ride_offers_status_check
-    CHECK (status IN ('pending', 'accepted', 'declined', 'expired', 'preempted', 'cancelled'));
+    CHECK (status IN ('pending', 'accepted', 'declined', 'expired', 'preempted', 'cancelled'))
+    NOT VALID;
+ALTER TABLE ride_offers VALIDATE CONSTRAINT ride_offers_status_check;
 
--- Repair any divergence the race already produced: where multiple offers are
--- 'accepted' for one ride, keep the one matching rides.driver_id (the actual
--- winner on the ride row) and demote the rest to 'preempted'. Without this
--- the unique index below fails to build on affected production data.
-UPDATE ride_offers o
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 5. Repair the divergence the double-accept race already produced: where
+--    multiple offers are 'accepted' for one ride, keep exactly one winner —
+--    preferring the offer matching rides.driver_id (the row-level truth),
+--    falling back to the earliest response when driver_id is NULL — and
+--    demote the rest to 'preempted'. Without this, migration 143's unique
+--    index fails to build on affected production data.
+-- ─────────────────────────────────────────────────────────────────────────────
+WITH ranked AS (
+    SELECT o.id,
+           row_number() OVER (
+               PARTITION BY o.ride_id
+               ORDER BY (o.driver_id = r.driver_id) DESC NULLS LAST,
+                        o.responded_at NULLS LAST,
+                        o.offered_at
+           ) AS rn
+    FROM ride_offers o
+    LEFT JOIN rides r ON r.id = o.ride_id
+    WHERE o.status = 'accepted'
+)
+UPDATE ride_offers
 SET status = 'preempted'
-WHERE o.status = 'accepted'
-  AND EXISTS (
-      SELECT 1 FROM ride_offers o2
-      WHERE o2.ride_id = o.ride_id
-        AND o2.status = 'accepted'
-        AND o2.id <> o.id
-  )
-  AND o.driver_id IS DISTINCT FROM (SELECT r.driver_id FROM rides r WHERE r.id = o.ride_id);
+WHERE id IN (SELECT id FROM ranked WHERE rn > 1);
 
-CREATE UNIQUE INDEX IF NOT EXISTS ride_offers_one_accepted_per_ride
-    ON ride_offers (ride_id)
-    WHERE status = 'accepted';
+-- Booking idempotency note: the partial unique index on
+-- rides(rider_id, idempotency_key) already exists — migration 44 created
+-- idx_rides_rider_idempotency_key. routes/rides.py now catches its
+-- violation and returns the original ride. No new index here.
 
 NOTIFY pgrst, 'reload schema';

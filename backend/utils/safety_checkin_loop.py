@@ -90,7 +90,7 @@ async def _tick() -> None:
             continue
 
         # Only act on rides that started long enough ago.
-        started_at_raw = ride.get("started_at") or ride.get("updated_at")
+        started_at_raw = ride.get("ride_started_at") or ride.get("updated_at")
         if not started_at_raw:
             continue
         try:

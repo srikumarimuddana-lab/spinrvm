@@ -80,22 +80,40 @@ async def invalidate_fare_cache() -> int:
 async def get_vehicle_types(service_area_id: Optional[str] = None):
     """Return active vehicle types, optionally filtered to those configured for a service area.
 
-    When ``service_area_id`` is provided, only vehicle types that have an
-    active fare_config row for that area are returned. This prevents
-    drivers from picking a vehicle type that has no fare set up for their
-    area (which would fail at ride creation).
+    When ``service_area_id`` is provided, only vehicle types with pricing
+    configured for that area are returned. This prevents drivers from
+    picking a vehicle type that has no fare set up for their area (which
+    would fail at ride creation).
+
+    Pricing-source precedence mirrors ``build_fares_for_area``:
+    ``service_areas.vehicle_pricing`` JSONB (what the Service Areas admin
+    editor writes, keyed by vehicle type NAME) is authoritative; legacy
+    ``fare_configs`` rows (keyed by vehicle_type_id) apply only when the
+    area has no vehicle_pricing. Filtering on fare_configs alone returned
+    an empty list for every area configured through the admin UI.
     """
     types = await db_supabase.get_rows("vehicle_types", {"is_active": True}, limit=100)
 
     if service_area_id:
-        configs = await db_supabase.get_rows(
-            "fare_configs",
-            {"service_area_id": service_area_id, "is_active": True},
-            columns="vehicle_type_id",
-            limit=100,
+        areas = await db_supabase.get_rows("service_areas", {"id": service_area_id}, limit=1)
+        vp_raw = (areas[0] if areas else {}).get("vehicle_pricing") or []
+        allowed_names = (
+            {row["vehicle_type"] for row in vp_raw if isinstance(row, dict) and row.get("vehicle_type")}
+            if isinstance(vp_raw, list)
+            else set()
         )
-        allowed_ids = {c["vehicle_type_id"] for c in (configs or []) if c.get("vehicle_type_id")}
-        types = [vt for vt in (types or []) if vt.get("id") in allowed_ids]
+
+        if allowed_names:
+            types = [vt for vt in (types or []) if vt.get("name") in allowed_names]
+        else:
+            configs = await db_supabase.get_rows(
+                "fare_configs",
+                {"service_area_id": service_area_id, "is_active": True},
+                columns="vehicle_type_id",
+                limit=100,
+            )
+            allowed_ids = {c["vehicle_type_id"] for c in (configs or []) if c.get("vehicle_type_id")}
+            types = [vt for vt in (types or []) if vt.get("id") in allowed_ids]
 
     for vt in types or []:
         if isinstance(vt, dict) and vt.get("illustration_url") and not vt.get("image_url"):

@@ -87,6 +87,10 @@ async def test_build_fares_for_area_returns_only_configured_vehicle_types():
         {"id": "vt_lux", "name": "Luxury", "is_active": True},
     ]
 
+    # Stale legacy fare_configs rows that would re-expose Luxury if the
+    # fallback were (incorrectly) consulted despite vehicle_pricing existing.
+    stale_legacy_fares = [{"vehicle_type_id": "vt_lux", "base_fare": 5.00, "is_active": True}]
+
     with patch("backend.routes.fares.db_supabase.get_rows", new_callable=AsyncMock) as mock_get_rows:
         mock_get_rows.return_value = stale_legacy_fares
         fares = await build_fares_for_area(matched_area, vehicle_types)
@@ -96,3 +100,67 @@ async def test_build_fares_for_area_returns_only_configured_vehicle_types():
     fares_by_id = {fare["vehicle_type"]["id"]: fare for fare in fares}
     assert fares_by_id["vt_sedan"]["base_fare"] == "4.25"
     assert fares_by_id["vt_xl"]["base_fare"] == "6.00"
+
+
+def _vehicle_types_db(area_row, fare_config_rows):
+    """get_rows side-effect for the /vehicle-types endpoint tests."""
+    all_types = [
+        {"id": "vt_economy", "name": "Economy", "is_active": True},
+        {"id": "vt_xl", "name": "XL", "is_active": True},
+        {"id": "vt_van", "name": "Van", "is_active": True},
+        {"id": "vt_premium", "name": "Premium", "is_active": True},
+    ]
+
+    async def _get_rows(table, filters=None, **kw):
+        if table == "vehicle_types":
+            return all_types
+        if table == "service_areas":
+            return [area_row] if area_row else []
+        if table == "fare_configs":
+            return fare_config_rows
+        raise AssertionError(f"unexpected table {table}")
+
+    return _get_rows
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_get_vehicle_types_honours_vehicle_pricing_jsonb():
+    """Regression: areas configured via the admin Vehicle Pricing editor write
+    service_areas.vehicle_pricing JSONB, not fare_configs rows. The area filter
+    must honour that (it previously returned [] for every such area, leaving
+    the driver app's vehicle type picker empty)."""
+    from backend.routes.fares import get_vehicle_types
+
+    area = {
+        "id": "area_regina",
+        "vehicle_pricing": [
+            {"vehicle_type": "Economy", "base_fare": 2.0},
+            {"vehicle_type": "XL", "base_fare": 2.0},
+            {"vehicle_type": "Van", "base_fare": 2.0},
+        ],
+    }
+    with patch(
+        "backend.routes.fares.db_supabase.get_rows",
+        side_effect=_vehicle_types_db(area, fare_config_rows=[]),
+    ):
+        types = await get_vehicle_types(service_area_id="area_regina")
+
+    assert [vt["name"] for vt in types] == ["Economy", "XL", "Van"]
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_get_vehicle_types_falls_back_to_fare_configs_when_no_jsonb():
+    """Areas without vehicle_pricing JSONB still filter via legacy fare_configs."""
+    from backend.routes.fares import get_vehicle_types
+
+    area = {"id": "area_legacy", "vehicle_pricing": []}
+    legacy = [{"vehicle_type_id": "vt_premium"}]
+    with patch(
+        "backend.routes.fares.db_supabase.get_rows",
+        side_effect=_vehicle_types_db(area, fare_config_rows=legacy),
+    ):
+        types = await get_vehicle_types(service_area_id="area_legacy")
+
+    assert [vt["name"] for vt in types] == ["Premium"]

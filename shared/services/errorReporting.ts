@@ -180,3 +180,22 @@ export function addBreadcrumb(message: string): void {
     crashlytics()?.log(message);
   } catch {}
 }
+
+/**
+ * Wrap the app root with Sentry's error boundary + touch/navigation
+ * instrumentation. Apply once at the default export of each app's root layout:
+ *   export default wrapApp(RootLayout);
+ *
+ * Safe to call unconditionally: returns the component unchanged on web or when
+ * the native Sentry module is unavailable (Expo Go / tests). The wrapper is a
+ * no-op until initErrorReporting() supplies a DSN, so it never sends on its own.
+ */
+export function wrapApp<T>(RootComponent: T): T {
+  if (Platform.OS === 'web') return RootComponent;
+  try {
+    const Sentry = require('@sentry/react-native');
+    return Sentry.wrap(RootComponent as any) as T;
+  } catch {
+    return RootComponent;
+  }
+}

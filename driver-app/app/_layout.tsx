@@ -32,7 +32,7 @@ import { ThemeProvider, useTheme } from '@shared/theme/ThemeContext';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { queryClient, asyncStoragePersister, QUERY_CACHE_BUSTER } from '@shared/api/queryClient';
-import { captureMessage, setUser, initErrorReporting } from '@shared/services/errorReporting';
+import { captureMessage, setUser, initErrorReporting, wrapApp } from '@shared/services/errorReporting';
 import {
   initFirebaseServices,
   requestNotificationPermission,
@@ -342,7 +342,7 @@ function usePushNotificationRouter() {
   }, [router]);
 }
 
-export default function RootLayout() {
+function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
     PlusJakartaSans_400Regular,
     PlusJakartaSans_500Medium,
@@ -626,4 +626,8 @@ function DriverRootLayoutInner({
     </ErrorBoundary>
   );
 }
+
+// Wrap the root with Sentry's error boundary + navigation/touch instrumentation.
+// No-op until EXPO_PUBLIC_SENTRY_DSN is set (see initErrorReporting); safe in Expo Go/web.
+export default wrapApp(RootLayout);
 

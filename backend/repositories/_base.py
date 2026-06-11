@@ -453,6 +453,9 @@ def _build_or_clause_term(col: str, val: Any) -> Optional[str]:
             return f"{col}.lt.{_unwrap_enum(val['$lt'])}"
         if "$lte" in val:
             return f"{col}.lte.{_unwrap_enum(val['$lte'])}"
+        if "$in" in val and isinstance(val["$in"], (list, tuple)):
+            items = ",".join(str(_unwrap_enum(x)) for x in val["$in"])
+            return f"{col}.in.({items})"
         return None
     if val is None:
         return f"{col}.is.null"

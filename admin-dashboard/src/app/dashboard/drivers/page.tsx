@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef, useDeferredValue } from "react";
 import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, retryPayout, refreshDriverStripeKyc, revealDriverSin, logPiiReveal, reviewDriverProfilePhoto, type DriverLiveStats, type DriverPayoutSummary } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
@@ -78,6 +78,7 @@ export default function DriversPage() {
     const [hasNextPage, setHasNextPage] = useState(false);
     const reqIdRef = useRef(0);
     const [search, setSearch] = useState("");
+    const debouncedSearch = useDeferredValue(search);
     const [showPii, setShowPii] = useState(false);
     const [statusFilter, setStatusFilter] = useState("all");
     const [sortKey, setSortKey] = useState<string>("created_at");
@@ -166,6 +167,7 @@ export default function DriversPage() {
         if (serviceAreaId) opts.service_area_id = serviceAreaId;
         if (statusFilter === "online") opts.is_online = true;
         else if (["active", "pending", "needs_review", "suspended", "banned"].includes(statusFilter)) opts.status = statusFilter;
+        if (debouncedSearch.trim()) opts.search = debouncedSearch.trim();
         getDrivers(opts)
             .then((rows) => {
                 if (reqId !== reqIdRef.current) return;
@@ -175,12 +177,12 @@ export default function DriversPage() {
             })
             .catch(() => { if (reqId === reqIdRef.current) { setDrivers([]); setHasNextPage(false); } })
             .finally(() => { if (reqId === reqIdRef.current) setTableLoading(false); });
-    }, [page, serviceAreaId, statusFilter]);
+    }, [page, serviceAreaId, statusFilter, debouncedSearch]);
 
     useEffect(() => { loadData(); }, [loadData]);
     useEffect(() => { loadDrivers(); }, [loadDrivers]);
     // Reset to first page when filters change.
-    useEffect(() => { setPage(0); }, [statusFilter, serviceAreaId]);
+    useEffect(() => { setPage(0); }, [statusFilter, serviceAreaId, debouncedSearch]);
     // Vehicle-type catalogue + areaId → allowed vt-id set. The map is
     // unioned from BOTH pricing stores because admins can configure
     // vehicles for an area either way:
@@ -338,7 +340,8 @@ export default function DriversPage() {
     const setEf = (field: string, value: string) => setEditForm(prev => ({ ...prev, [field]: value }));
 
     const filtered = drivers.filter(d => {
-        const matchSearch = !search || (d.first_name + " " + d.last_name).toLowerCase().includes(search.toLowerCase()) || d.email?.toLowerCase().includes(search.toLowerCase()) || d.license_plate?.toLowerCase().includes(search.toLowerCase()) || d.id?.toLowerCase().includes(search.toLowerCase());
+        const s = search.toLowerCase();
+        const matchSearch = !s || (d.first_name + " " + d.last_name).toLowerCase().includes(s) || d.email?.toLowerCase().includes(s) || d.phone?.toLowerCase().includes(s) || d.license_plate?.toLowerCase().includes(s) || d.id?.toLowerCase().includes(s);
         let matchStatus = true;
         if (statusFilter === "online") matchStatus = d.is_online;
         if (statusFilter === "active") matchStatus = d.status === "active";
@@ -508,7 +511,7 @@ export default function DriversPage() {
                             </button>
                         ))}
                     </div>
-                    <div className="relative w-full sm:w-72"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search by name, email, plate..." aria-label="Search drivers" value={search} onChange={e => setSearch(e.target.value)} className="pl-9 h-9 text-sm" /></div>
+                    <div className="relative w-full sm:w-72"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search by name, phone, email, plate..." aria-label="Search drivers" value={search} onChange={e => setSearch(e.target.value)} className="pl-9 h-9 text-sm" /></div>
                 </div>
 
                 <div className="bg-card border rounded-2xl overflow-hidden shadow-sm">

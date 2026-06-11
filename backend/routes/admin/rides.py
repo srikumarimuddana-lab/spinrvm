@@ -80,7 +80,7 @@ _VALID_SORT_COLUMNS = {
 
 
 async def _resolve_name_search(search: str) -> tuple[list[str], list[str]]:
-    """Look up rider/driver IDs whose display name matches the search term.
+    """Look up rider/driver IDs whose name or phone matches the search term.
 
     Returns (matching_rider_ids, matching_driver_ids).
     """
@@ -88,15 +88,17 @@ async def _resolve_name_search(search: str) -> tuple[list[str], list[str]]:
 
     matching_users = await db_supabase.get_rows(
         "users",
-        {"$or": [{"first_name": pattern}, {"last_name": pattern}]},
-        columns="id",
+        {"$or": [{"first_name": pattern}, {"last_name": pattern}, {"phone": pattern}]},
+        columns="id,role",
         limit=200,
     )
     rider_ids = [u["id"] for u in matching_users if u.get("id")]
 
+    # Drivers table also stores a phone column and a name column (which may be
+    # stale); search both so partial phone numbers find the right driver.
     matching_drivers = await db_supabase.get_rows(
         "drivers",
-        {"name": pattern},
+        {"$or": [{"name": pattern}, {"phone": pattern}]},
         columns="id",
         limit=200,
     )

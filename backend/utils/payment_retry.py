@@ -147,6 +147,7 @@ async def retry_stuck_payouts() -> None:
             {"status": "pending"},
             limit=50,
             order="created_at",
+            columns="id,driver_id,retry_count,status",
         )
     except Exception as e:
         logger.error(f"Payout retry: failed to fetch payouts: {e}")
@@ -190,6 +191,11 @@ async def retry_failed_payments():
             {"payment_status": {"$in": ["failed", "requires_action", "processing"]}},
             limit=50,
             order="created_at",
+            columns=(
+                "id,rider_id,driver_id,payment_status,payment_retry_count,"
+                "payment_intent_id,admin_alerted_payment_exhausted,total_fare,"
+                "created_at,updated_at"
+            ),
         )
     except Exception as e:
         logger.error(f"Payment retry: failed to fetch rides: {e}")

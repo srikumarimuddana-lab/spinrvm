@@ -505,6 +505,10 @@ def _apply_filters(q, filters: Optional[Dict[str, Any]]):
                     q = q.ilike(k, pattern)
                 else:
                     q = q.like(k, pattern)
+        elif v is None:
+            # SQL `= NULL` never matches; PostgREST needs `is.null`. Without
+            # this, a {"driver_id": None} filter silently matches zero rows.
+            q = q.is_(k, "null")
         else:
             q = q.eq(k, v.value if isinstance(v, _Enum) else v)
     return q

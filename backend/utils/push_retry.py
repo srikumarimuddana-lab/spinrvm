@@ -82,7 +82,10 @@ async def _tick() -> None:
         resp = await run_sync(
             lambda: (
                 supabase.table("push_retry_queue")
-                .select("*, users!inner(fcm_token,fcm_token_rider,fcm_token_driver)")
+                .select(
+                    "id,user_id,title,body,data,attempts,target_app,"
+                    " users!inner(fcm_token,fcm_token_rider,fcm_token_driver)"
+                )
                 .is_("sent_at", "null")
                 .lte("next_attempt_at", now_iso)
                 .lte("attempts", _MAX_ATTEMPTS - 1)

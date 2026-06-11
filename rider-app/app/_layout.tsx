@@ -652,6 +652,7 @@ function RootLayoutInner({
             <Stack.Screen name="promotions" />
             <Stack.Screen name="loyalty" />
             <Stack.Screen name="support" />
+            <Stack.Screen name="ai-assistant" />
             <Stack.Screen name="legal" />
             <Stack.Screen name="emergency-contacts" />
             <Stack.Screen name="report-safety" />

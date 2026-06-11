@@ -20,6 +20,7 @@ try:
     from ..dependencies import get_admin_user  # type: ignore
     from ..services.corporate_wallet_service import apply_adjustment  # type: ignore
     from ..settings_loader import get_app_settings  # type: ignore
+    from ..utils.money import dollars_to_cents  # type: ignore
     from ..validators import validate_id  # type: ignore
 except ImportError:
     from db_supabase import (  # type: ignore
@@ -31,6 +32,7 @@ except ImportError:
     from dependencies import get_admin_user  # type: ignore
     from services.corporate_wallet_service import apply_adjustment  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
+    from utils.money import dollars_to_cents  # type: ignore
     from validators import validate_id  # type: ignore
 
 
@@ -53,9 +55,7 @@ async def get_wallet(
     limit: int = 50,
     current_admin: dict = Depends(get_admin_user),
 ):
-    _valid, normalized_id = validate_id(
-        company_id, "Corporate Account ID", raise_exception=True
-    )
+    _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
     wallet = await get_corporate_wallet_by_company(normalized_id)
     if not wallet:
         raise HTTPException(status_code=404, detail="Wallet not found")
@@ -69,16 +69,14 @@ async def get_wallet(
 
 class TopUpRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    amount: float = Field(
-        ..., ge=100, le=10000, description="CAD between 100 and 10000"
-    )
+    amount: Decimal = Field(..., ge=Decimal("100"), le=Decimal("10000"), description="CAD between 100 and 10000")
     payment_method_id: Optional[str] = None
     client_idempotency_key: Optional[str] = None
 
 
 class AdjustRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    amount: float = Field(..., ge=-100000.0, le=100000.0)
+    amount: Decimal = Field(..., ge=Decimal("-100000.00"), le=Decimal("100000.00"))
     notes: str = Field(..., min_length=1, max_length=500)
 
 
@@ -88,9 +86,7 @@ async def manual_topup(
     body: TopUpRequest,
     current_admin: dict = Depends(get_admin_user),
 ):
-    _valid, normalized_id = validate_id(
-        company_id, "Corporate Account ID", raise_exception=True
-    )
+    _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
     company = await get_corporate_account_by_id(normalized_id)
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
@@ -109,7 +105,7 @@ async def manual_topup(
         raise HTTPException(status_code=500, detail="Stripe not configured")
 
     intent_kwargs = dict(
-        amount=int(round(body.amount * 100)),
+        amount=dollars_to_cents(body.amount),
         currency="cad",
         customer=company["stripe_customer_id"],
         metadata={
@@ -131,8 +127,7 @@ async def manual_topup(
     # track); fall back to a 1-minute time-bucket keyed on the wallet so the
     # same top-up amount within the same minute reuses the same intent.
     intent_kwargs["idempotency_key"] = (
-        body.client_idempotency_key
-        or f"corp-topup-{wallet['id']}-{int(time.time() // 60)}"
+        body.client_idempotency_key or f"corp-topup-{wallet['id']}-{int(time.time() // 60)}"
     )
     intent = stripe.PaymentIntent.create(**intent_kwargs)
     return {"payment_intent_id": intent.id, "client_secret": intent.client_secret}
@@ -144,9 +139,7 @@ async def manual_adjust(
     body: AdjustRequest,
     current_admin: dict = Depends(get_admin_user),
 ):
-    _valid, normalized_id = validate_id(
-        company_id, "Corporate Account ID", raise_exception=True
-    )
+    _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
     wallet = await get_corporate_wallet_by_company(normalized_id)
     if not wallet:
         raise HTTPException(status_code=404, detail="Wallet not found")
@@ -163,9 +156,11 @@ async def manual_adjust(
 class WalletConfigPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
     auto_topup_enabled: Optional[bool] = None
-    auto_topup_threshold: Optional[float] = Field(None, ge=0)
-    auto_topup_amount: Optional[float] = Field(None, gt=0, le=10000)
-    auto_topup_daily_cap: Optional[float] = Field(None, gt=0, le=50000)
+    # Money fields parse as Decimal (2 dp) so binary-float artifacts never
+    # reach validation or the DB; serialized back at the write boundary below.
+    auto_topup_threshold: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
+    auto_topup_amount: Optional[Decimal] = Field(None, gt=0, le=10000, decimal_places=2)
+    auto_topup_daily_cap: Optional[Decimal] = Field(None, gt=0, le=50000, decimal_places=2)
 
 
 @router.put("/{company_id}/wallet/config")
@@ -174,21 +169,20 @@ async def update_wallet_config(
     body: WalletConfigPatch,
     current_admin: dict = Depends(get_admin_user),
 ):
-    _valid, normalized_id = validate_id(
-        company_id, "Corporate Account ID", raise_exception=True
-    )
+    _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
     wallet = await get_corporate_wallet_by_company(normalized_id)
     if not wallet:
         raise HTTPException(status_code=404, detail="Wallet not found")
-    patch = body.model_dump(exclude_none=True)
+    # Decimal → float only at the DB write boundary (values are 2-dp clean
+    # by validation, so the conversion is exact) — supabase-py can't
+    # serialize Decimal.
+    patch = {k: float(v) if isinstance(v, Decimal) else v for k, v in body.model_dump(exclude_none=True).items()}
     if not patch:
         return wallet
     # Enabling auto-topup requires enough config to actually run a tick.
     new_enabled = patch.get("auto_topup_enabled", wallet.get("auto_topup_enabled"))
     if new_enabled:
-        threshold = patch.get(
-            "auto_topup_threshold", wallet.get("auto_topup_threshold")
-        )
+        threshold = patch.get("auto_topup_threshold", wallet.get("auto_topup_threshold"))
         amount = patch.get("auto_topup_amount", wallet.get("auto_topup_amount"))
         if threshold is None or amount is None:
             raise HTTPException(

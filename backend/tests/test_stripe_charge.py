@@ -136,8 +136,9 @@ class TestSuccess:
         assert kwargs["confirm"] is True
         assert kwargs["metadata"]["ride_id"] == "ride_helper_1"
         assert kwargs["metadata"]["rider_id"] == "rider_helper_1"
-        # Idempotency key pins future retries to the same PI
-        assert kwargs["idempotency_key"] == "ride-charge-ride_helper_1"
+        # Idempotency key pins future retries to the same PI; the amount is
+        # part of the key so a re-charge at a different total gets a fresh key.
+        assert kwargs["idempotency_key"] == "ride-charge-ride_helper_1-2550"
 
     async def test_amount_rounded_to_cents_correctly(self):
         """Float 19.999 must round to 2000 cents, not 1999 or 2001."""
@@ -308,4 +309,24 @@ class TestIdempotencyKey:
             await charge_ride(**_KW)
 
         keys = [call.kwargs["idempotency_key"] for call in mock_stripe.PaymentIntent.create.call_args_list]
-        assert keys == ["ride-charge-ride_helper_1", "ride-charge-ride_helper_1"]
+        assert keys == ["ride-charge-ride_helper_1-2550", "ride-charge-ride_helper_1-2550"]
+
+    async def test_confirm_path_carries_idempotency_key(self):
+        """The retry/3DS confirm path must be idempotent too: two replicas
+        that both pass the DB claim race must not both charge. The key is
+        deterministic — ride-confirm-{ride_id}-{amount_cents} — so Stripe
+        returns the original confirmation to the loser."""
+        from backend.utils.stripe_charge import charge_ride
+
+        intent = MagicMock(id="pi_existing", status="succeeded", client_secret=None)
+        mock_stripe = MagicMock()
+        mock_stripe.PaymentIntent.confirm.return_value = intent
+
+        with _patch_settings(), patch("backend.utils.stripe_charge.stripe", mock_stripe):
+            outcome = await charge_ride(**_KW, payment_intent_id="pi_existing")
+
+        assert outcome.status == "succeeded"
+        mock_stripe.PaymentIntent.create.assert_not_called()
+        mock_stripe.PaymentIntent.confirm.assert_called_once()
+        kwargs = mock_stripe.PaymentIntent.confirm.call_args.kwargs
+        assert kwargs["idempotency_key"] == "ride-confirm-ride_helper_1-2550"

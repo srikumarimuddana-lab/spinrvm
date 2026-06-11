@@ -194,9 +194,12 @@ async def charge_ride(
         if payment_intent_id:
             # Confirm an already-created PaymentIntent (e.g. retry after 3DS
             # requires_action, or a PI created at booking time).
+            # Idempotency key guards against two replicas both confirming and
+            # both charging when they simultaneously pass the DB claim race.
             intent = stripe.PaymentIntent.confirm(
                 payment_intent_id,
                 api_key=stripe_secret,
+                idempotency_key=f"ride-confirm-{ride_id}-{amount_cents}",
             )
         else:
             intent = stripe.PaymentIntent.create(

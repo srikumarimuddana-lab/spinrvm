@@ -91,6 +91,17 @@ export default function HomeScreen() {
   };
 
   const refreshLocation = useCallback(async (useCache: boolean) => {
+    // Time-box every expo-location call. On a wedged location subsystem these
+    // can hang indefinitely (permission query, last-known, or the live fix),
+    // which would silently strand the map — and the booking pickup written by
+    // setUserLocation — on a stale cached coordinate with no signal to the
+    // rider that the position is wrong.
+    const withTimeout = <T,>(p: Promise<T>, ms: number): Promise<T> =>
+      Promise.race([
+        p,
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('location timeout')), ms)),
+      ]);
+
     if (useCache) {
       const cached = await loadLastLocation();
       if (cached) {
@@ -98,10 +109,18 @@ export default function HomeScreen() {
       }
     }
 
-    let { status } = await Location.getForegroundPermissionsAsync();
-    if (status !== 'granted') {
-      const res = await Location.requestForegroundPermissionsAsync();
-      status = res.status;
+    let status: string;
+    try {
+      ({ status } = await withTimeout(Location.getForegroundPermissionsAsync(), 10000));
+      if (status !== 'granted') {
+        const res = await withTimeout(Location.requestForegroundPermissionsAsync(), 60000);
+        status = res.status;
+      }
+    } catch {
+      // Permission query hung or threw — we can't reach location services.
+      // Surface it instead of silently sitting on the cached map.
+      showToast('Location unavailable', "Couldn't reach location services. Pull down to refresh.", 'warning');
+      return;
     }
     if (status !== 'granted') {
       showToast('Location Required', 'Enable location in Settings to use Spinr.', 'warning');
@@ -111,7 +130,7 @@ export default function HomeScreen() {
 
     if (useCache) {
       try {
-        const lastKnown = await Location.getLastKnownPositionAsync();
+        const lastKnown = await withTimeout(Location.getLastKnownPositionAsync(), 5000);
         if (lastKnown) {
           setLocation(lastKnown);
           saveLastLocation(lastKnown.coords.latitude, lastKnown.coords.longitude);
@@ -119,8 +138,15 @@ export default function HomeScreen() {
       } catch {}
     }
 
-    Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
-      .then(loc => {
+    // Fire-and-forget so home data (saved addresses, notifications) isn't
+    // blocked waiting on a GPS fix, but bounded by withTimeout so a hung fix
+    // can't leave the pickup stuck on a stale cache without telling the rider.
+    void (async () => {
+      try {
+        const loc = await withTimeout(
+          Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+          15000,
+        );
         setLocation(loc);
         setUserLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
         saveLastLocation(loc.coords.latitude, loc.coords.longitude);
@@ -133,8 +159,13 @@ export default function HomeScreen() {
             }
           })
           .catch(() => {});
-      })
-      .catch(() => {});
+      } catch {
+        // No fresh fix (timeout / weak GPS). The map may be showing a stale
+        // cached coordinate; leave the booking pickup unset and tell the rider
+        // so they don't book from the wrong spot. The locate button retries.
+        showToast('Using approximate location', 'Tap the locate button to refresh your GPS position.', 'warning');
+      }
+    })();
   }, [setUserLocation]);
 
   const fetchHomeData = useCallback(async () => {

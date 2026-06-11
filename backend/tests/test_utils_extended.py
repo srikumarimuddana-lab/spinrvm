@@ -1471,6 +1471,110 @@ class TestCoercePolyline:
 
 
 # ===========================================================================
+# utils/route_snapshot.py — render_ride_snapshot_google trail selection
+# ===========================================================================
+
+
+class TestSnapshotTrailSelection:
+    """The receipt snapshot must draw the travelled trip leg only — never the
+    navigating_to_pickup leg, and never straight chords from a sparse trip
+    trail (the 'two lines on the snapshot' regression)."""
+
+    def _patch_static_maps(self, monkeypatch, captured: list):
+        from backend.utils import route_snapshot
+
+        class _FakeResp:
+            status_code = 200
+            headers = {"content-type": "image/png"}
+            content = b"\x89PNG"
+
+        class _FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def get(self, url):
+                captured.append(url)
+                return _FakeResp()
+
+        monkeypatch.setattr(route_snapshot.httpx, "AsyncClient", _FakeClient)
+
+    def _render(self, monkeypatch, **kwargs):
+        import asyncio
+
+        from backend.utils.route_snapshot import render_ride_snapshot_google
+
+        captured: list = []
+        self._patch_static_maps(monkeypatch, captured)
+        png = asyncio.run(
+            render_ride_snapshot_google(
+                api_key="test-key",
+                pickup_lat=50.45,
+                pickup_lng=-104.61,
+                dropoff_lat=50.41,
+                dropoff_lng=-104.63,
+                **kwargs,
+            )
+        )
+        assert png == b"\x89PNG"
+        assert len(captured) == 1
+        return captured[0]
+
+    @staticmethod
+    def _trip_trail(n):
+        return [[50.45 + i * 0.001, -104.61 - i * 0.001, "2026-06-11T10:00:00Z"] for i in range(n)]
+
+    @staticmethod
+    def _pickup_trail(n):
+        return [[50.48 + i * 0.001, -104.58 - i * 0.001, "2026-06-11T09:50:00Z"] for i in range(n)]
+
+    def test_dense_trip_trail_drawn_without_pickup_leg(self, monkeypatch):
+        url = self._render(
+            monkeypatch,
+            phase_polylines={
+                "navigating_to_pickup": self._pickup_trail(20),
+                "trip_in_progress": self._trip_trail(20),
+            },
+        )
+        assert "path=" in url
+        assert "50.45,-104.61" in url  # trip leg start
+        assert "50.48,-104.58" not in url  # pickup approach leg excluded
+
+    def test_sparse_trip_trail_falls_back_to_route_polyline(self, monkeypatch):
+        # A dense pickup leg must NOT carry a sparse trip leg over the
+        # 10-point threshold — that combination drew the pickup approach as
+        # the "actual path" plus straight chords pickup→dropoff.
+        url = self._render(
+            monkeypatch,
+            phase_polylines={
+                "navigating_to_pickup": self._pickup_trail(50),
+                "trip_in_progress": self._trip_trail(4),
+            },
+            route_polyline=[[50.44, -104.62], [50.43, -104.625], [50.42, -104.628]],
+        )
+        assert "50.44,-104.62" in url  # route_polyline fallback used
+        assert "50.48,-104.58" not in url  # pickup leg still excluded
+
+    def test_no_phase_trails_uses_route_polyline(self, monkeypatch):
+        url = self._render(
+            monkeypatch,
+            route_polyline=[[50.45, -104.61], [50.41, -104.63]],
+        )
+        assert "path=" in url
+        assert "50.45,-104.61" in url
+
+    def test_no_trail_at_all_renders_markers_only(self, monkeypatch):
+        url = self._render(monkeypatch)
+        assert "path=" not in url
+        assert "markers=color:green" in url and "markers=color:red" in url
+
+
+# ===========================================================================
 # utils/subprocessor_audit.py — _fetch_page and _sha256 coverage
 # ===========================================================================
 

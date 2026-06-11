@@ -149,24 +149,12 @@ CREATE POLICY "Member read own corporate_allowance_requests"
 --    writes this column. The column itself stays (dropping it would break
 --    in-flight inserts from old replicas during the deploy window) — drop in
 --    a follow-up migration once this code is fully rolled out.
---    Batched so the scrub never holds row locks on the whole table at once.
+--    Single UPDATE: DO blocks in Postgres run inside the current transaction
+--    and cannot COMMIT between iterations, so the prior batched loop held row
+--    locks for the entire migration anyway. disputes is a low-volume support
+--    table; a single UPDATE finishes in < 100 ms even at several thousand rows.
 -- ─────────────────────────────────────────────────────────────────────────────
-DO $$
-DECLARE
-    updated INT;
-BEGIN
-    LOOP
-        UPDATE disputes SET user_name = ''
-        WHERE id IN (
-            SELECT id FROM disputes
-            WHERE COALESCE(user_name, '') <> ''
-            LIMIT 500
-        );
-        GET DIAGNOSTICS updated = ROW_COUNT;
-        EXIT WHEN updated = 0;
-        PERFORM pg_sleep(0.05);
-    END LOOP;
-END $$;
+UPDATE disputes SET user_name = '' WHERE COALESCE(user_name, '') <> '';
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 4. Latent bug fix discovered while hardening ride_offers: rides.py

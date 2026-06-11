@@ -372,6 +372,15 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       return null;
     }
 
+    // Permission can be granted while device-wide location services are
+    // off (Android quick-settings toggle) — getCurrentPositionAsync would
+    // just throw, so detect it up front.
+    const servicesOn = await Location.hasServicesEnabledAsync().catch(() => true);
+    if (!servicesOn) {
+      setLocationStatus(locationRef.current ? 'ok' : 'unavailable');
+      return null;
+    }
+
     if (useCache) {
       try {
         const lastKnown = await Location.getLastKnownPositionAsync();
@@ -380,7 +389,13 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     }
 
     try {
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      // getCurrentPositionAsync has no timeout and can hang indefinitely
+      // waiting for a fix (indoors, weak GPS) — race it so the driver
+      // never sits on the spinner forever.
+      const loc = await Promise.race([
+        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('location fix timeout')), 15000)),
+      ]);
       setLocation(loc);
       locationRef.current = loc;
       setLocationStatus('ok');
@@ -390,8 +405,17 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       } catch {}
       return loc;
     } catch {
-      // A lastKnown fix may already be rendering the map — only flag
-      // unavailable when there is nothing to show at all.
+      // Fix failed or timed out — a coarse last-known position still lets
+      // the map render; watchPositionAsync corrects it once a fix lands.
+      try {
+        const lastKnown = await Location.getLastKnownPositionAsync();
+        if (lastKnown) {
+          setLocation(lastKnown);
+          locationRef.current = lastKnown;
+          setLocationStatus('ok');
+          return lastKnown;
+        }
+      } catch {}
       setLocationStatus(locationRef.current ? 'ok' : 'unavailable');
       return null;
     }

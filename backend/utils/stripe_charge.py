@@ -33,10 +33,15 @@ Outcome variants
 Idempotency
 -----------
 
-``idempotency_key = "ride-charge-{ride_id}"`` — Stripe dedupes identical
-keys for 24h. Combined with the caller's atomic ``payment_status =
-'processing'`` DB lock, a double-tap or retry after a dropped response
-cannot result in a double charge.
+``idempotency_key = "ride-charge-{ride_id}-{amount_cents}"`` on the create
+path and ``"ride-confirm-{ride_id}-{amount_cents}"`` on the confirm
+(retry / 3DS) path — Stripe dedupes identical keys for 24h. The amount is
+part of the key so a legitimate re-charge at a different total (e.g. tip
+updated after a decline) gets a fresh key instead of an IdempotencyError.
+payment_retry.py uses the same ride-confirm key scheme so both confirm
+code paths share Stripe-side deduplication. Combined with the caller's
+atomic ``payment_status = 'processing'`` DB lock, a double-tap or retry
+after a dropped response cannot result in a double charge.
 
 Currency
 --------

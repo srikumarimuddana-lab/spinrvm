@@ -66,7 +66,7 @@ def test_retry_idempotency_key_is_deterministic_from_ride_and_count():
     confirm is collapsed at the API boundary."""
     ride = _ride_row(payment_retry_count=2)
 
-    fake_intent = MagicMock(status="requires_payment_method")
+    fake_intent = MagicMock(status="requires_payment_method", amount=2550)
     captured_keys: list[str] = []
 
     def _capture_confirm(_pi_id, **kwargs):
@@ -91,10 +91,11 @@ def test_retry_idempotency_key_is_deterministic_from_ride_and_count():
         asyncio.run(retry_failed_payments())
 
     assert len(captured_keys) == 2
-    # Key shape: retry-confirm-<ride_id>-<retry_count>
-    assert captured_keys[0] == "retry-confirm-ride_1-2"
+    # Key shape: ride-confirm-<ride_id>-<amount_cents> — shared with
+    # charge_ride's confirm path so both code paths dedupe at Stripe.
+    assert captured_keys[0] == "ride-confirm-ride_1-2550"
     assert captured_keys[0] == captured_keys[1], (
-        "Two replicas at the same retry_count must produce identical idempotency keys"
+        "Two replicas confirming the same PI must produce identical idempotency keys"
     )
 
 

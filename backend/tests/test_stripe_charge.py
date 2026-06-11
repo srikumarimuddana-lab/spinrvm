@@ -23,6 +23,7 @@ Branches exercised:
 
 from __future__ import annotations
 
+from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -30,7 +31,7 @@ import pytest
 _KW = dict(
     ride={"id": "ride_helper_1"},
     rider_id="rider_helper_1",
-    total_amount=25.50,
+    total_amount=Decimal("25.50"),
     stripe_customer_id="cus_helper",
     payment_method_id="pm_helper",
 )
@@ -124,7 +125,7 @@ class TestSuccess:
 
         assert outcome.status == "succeeded"
         assert outcome.payment_intent_id == "pi_success_xxx"
-        assert outcome.charged_amount == 25.50
+        assert outcome.charged_amount == Decimal("25.50")
         # Stripe PaymentIntent.create called with correct shape
         mock_stripe.PaymentIntent.create.assert_called_once()
         kwargs = mock_stripe.PaymentIntent.create.call_args.kwargs

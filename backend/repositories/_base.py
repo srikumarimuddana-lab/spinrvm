@@ -487,16 +487,6 @@ def _apply_filters(q, filters: Optional[Dict[str, Any]]):
             if "$in" in v and isinstance(v["$in"], (list, tuple)):
                 clean = [_unwrap_enum(x) for x in v["$in"]]
                 q = q.in_(k, clean)
-            elif "$gt" in v:
-                q = q.gt(k, _unwrap_enum(v["$gt"]))
-            elif "$gte" in v:
-                q = q.gte(k, _unwrap_enum(v["$gte"]))
-            elif "$lt" in v:
-                q = q.lt(k, _unwrap_enum(v["$lt"]))
-            elif "$lte" in v:
-                q = q.lte(k, _unwrap_enum(v["$lte"]))
-            elif "$ne" in v:
-                q = q.neq(k, _unwrap_enum(v["$ne"]))
             elif "$nin" in v and isinstance(v["$nin"], (list, tuple)):
                 q = q.not_.in_(k, [_unwrap_enum(x) for x in v["$nin"]])
             elif "$regex" in v:
@@ -505,6 +495,19 @@ def _apply_filters(q, filters: Optional[Dict[str, Any]]):
                     q = q.ilike(k, pattern)
                 else:
                     q = q.like(k, pattern)
+            else:
+                # Range / comparison operators — all may coexist in one dict
+                # (e.g. {"$gte": start, "$lte": end}), so each is a plain if.
+                if "$gt" in v:
+                    q = q.gt(k, _unwrap_enum(v["$gt"]))
+                if "$gte" in v:
+                    q = q.gte(k, _unwrap_enum(v["$gte"]))
+                if "$lt" in v:
+                    q = q.lt(k, _unwrap_enum(v["$lt"]))
+                if "$lte" in v:
+                    q = q.lte(k, _unwrap_enum(v["$lte"]))
+                if "$ne" in v:
+                    q = q.neq(k, _unwrap_enum(v["$ne"]))
         elif v is None:
             # SQL `= NULL` never matches; PostgREST needs `is.null`. Without
             # this, a {"driver_id": None} filter silently matches zero rows.

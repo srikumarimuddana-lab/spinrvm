@@ -409,7 +409,7 @@ async def _validate_ride_route(ride_id: str, breadcrumbs: list, driver_id: str) 
         try:
             await db_supabase.update_one("rides", {"id": ride_id}, {"route_validation": result})
         except Exception as db_exc:
-            logger.warning(f"[route_validation] failed to store results on ride {ride_id}: {db_exc}")
+            logger.error(f"[route_validation] failed to store results on ride {ride_id}: {db_exc}", exc_info=True)
 
         if result["verdict"] in ("suspicious", "likely_spoofed"):
             logger.warning(

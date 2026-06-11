@@ -368,16 +368,25 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       status = res.status;
     }
     if (status !== 'granted') {
+      // The dashboard gates on location, not status — a fix restored from
+      // the AsyncStorage cache above would keep a stale map rendered over
+      // this blocking error, and locationRef would leak the stale position
+      // to the backend on WS reconnect. Clear both.
+      setLocation(null);
+      locationRef.current = null;
       setLocationStatus('denied');
       return null;
     }
 
     // Permission can be granted while device-wide location services are
     // off (Android quick-settings toggle) — getCurrentPositionAsync would
-    // just throw, so detect it up front.
+    // just throw, so detect it up front. No fix will ever arrive in this
+    // state, so a stale cached map would be misleading: clear it too.
     const servicesOn = await Location.hasServicesEnabledAsync().catch(() => true);
     if (!servicesOn) {
-      setLocationStatus(locationRef.current ? 'ok' : 'unavailable');
+      setLocation(null);
+      locationRef.current = null;
+      setLocationStatus('unavailable');
       return null;
     }
 
@@ -416,7 +425,18 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           return lastKnown;
         }
       } catch {}
-      setLocationStatus(locationRef.current ? 'ok' : 'unavailable');
+      if (locationRef.current) {
+        // A real fix from this session (lastKnown/watcher) is still on the
+        // map — keep it; the watcher corrects it once a fresh fix lands.
+        setLocationStatus('ok');
+      } else {
+        // Only the AsyncStorage-cached coordinate (if any) is showing.
+        // It never reached locationRef so it can't be sent to dispatch,
+        // but it would silently mask this failure — clear it so the
+        // retry UI appears instead of a stale map.
+        setLocation(null);
+        setLocationStatus('unavailable');
+      }
       return null;
     }
   }, []);

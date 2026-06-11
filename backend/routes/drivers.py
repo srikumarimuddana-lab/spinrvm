@@ -3685,10 +3685,12 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                     for p in sampled
                 ]
 
-            # Combined polyline for the static map snapshot (route_snapshot_url)
+            # Trip-leg polyline for the static map snapshot (route_snapshot_url)
             # ONLY — kept in-memory, not persisted to rides (geometry now lives in
-            # ride_routes). [[lat, lng, phase], ...].
-            trip_points = [b for b in all_breadcrumbs if b.get("tracking_phase") in phases_to_split]
+            # ride_routes). [[lat, lng, phase], ...]. The navigating_to_pickup leg
+            # is excluded: the receipt map shows the travelled pickup→dropoff
+            # route only (drawing both legs read as two routes on the snapshot).
+            trip_points = [b for b in all_breadcrumbs if b.get("tracking_phase") == "trip_in_progress"]
             if trip_points:
                 MAX_POINTS = 200
                 step = max(1, len(trip_points) // MAX_POINTS)
@@ -4040,16 +4042,22 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     # embed a permanent image URL. Only regenerate if we have enough GPS
     # data to produce a meaningful route — otherwise preserve the planned-
     # route snapshot from creation (which used the Google Directions polyline).
-    # Threshold mirrors the distance-calculation guard: < 5 trip_in_progress
-    # points means the breadcrumb trail is essentially a straight line and
-    # the planned-route image will be more accurate than the GPS trace.
+    # A road-snapped trip geometry (sanity-gated above) always qualifies; a raw
+    # breadcrumb trail needs >= 10 trip_in_progress points, mirroring the
+    # renderer's own sparsity guard. Below that the Static Maps API draws
+    # straight chords between the few points — the "straight line P→D next to
+    # the real path" snapshot artifact — and the planned-route image from
+    # creation is more accurate than the GPS trace.
     trip_points_for_snapshot = sum(
         1
         for b in (all_breadcrumbs if "all_breadcrumbs" in locals() else [])
         if b.get("tracking_phase") == "trip_in_progress"
     )
-    has_gps_trail = trip_points_for_snapshot >= 5
+    has_gps_trail = bool(road_polyline) or trip_points_for_snapshot >= 10
     if has_gps_trail:
+        # Prefer the road-snapped trip polyline: it follows the road network
+        # even where raw GPS was sparse. phase_polylines is dropped in that
+        # case so the renderer can't pick the raw trail over it.
         asyncio.create_task(
             _generate_and_store_ride_snapshot(
                 ride_id=ride_id,
@@ -4057,8 +4065,8 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                 pickup_lng=ride.get("pickup_lng"),
                 dropoff_lat=ride.get("dropoff_lat"),
                 dropoff_lng=ride.get("dropoff_lng"),
-                phase_polylines=phase_polylines,
-                route_polyline=route_polyline,
+                phase_polylines=None if road_polyline else phase_polylines,
+                route_polyline=road_polyline or route_polyline,
             )
         )
     else:

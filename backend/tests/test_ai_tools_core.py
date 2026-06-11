@@ -1,0 +1,181 @@
+"""Tool registry core: validation, dispatch, audience gating, capping.
+
+These tests use throwaway specs registered directly into TOOL_REGISTRY —
+no DB, no provider SDKs. The contract pinned here is what keeps a confused
+or adversarial model harmless: unknown tools/args come back as error
+results (never exceptions), the caller decides the audience, handlers are
+time-boxed, and oversized results are capped before re-entering context.
+"""
+
+import asyncio
+
+import pytest
+
+from backend.ai import tools as ai_tools
+from backend.ai.tools import (
+    TOOL_REGISTRY,
+    TOOL_RESULT_MAX_CHARS,
+    ToolSpec,
+    execute_tool,
+    register,
+    tool_defs_for,
+    validate_args,
+)
+
+USER = {"id": "user-1", "is_driver": False}
+
+
+@pytest.fixture(autouse=True)
+def _isolated_registry():
+    """Each test gets a clean registry; mark it loaded so ensure_registry_loaded
+    doesn't import domain modules underneath the test."""
+    saved = dict(TOOL_REGISTRY)
+    saved_loaded = ai_tools._registry_loaded
+    TOOL_REGISTRY.clear()
+    ai_tools._registry_loaded = True
+    yield
+    TOOL_REGISTRY.clear()
+    TOOL_REGISTRY.update(saved)
+    ai_tools._registry_loaded = saved_loaded
+
+
+def _spec(name="echo", audiences=frozenset({"rider"}), schema=None, handler=None, **kw):
+    async def default_handler(user, **args):
+        return {"echo": args, "user_id": user["id"]}
+
+    return ToolSpec(
+        name=name,
+        description="test tool",
+        input_schema=schema or {"type": "object", "properties": {}, "required": []},
+        handler=handler or default_handler,
+        audiences=audiences,
+        **kw,
+    )
+
+
+class TestValidateArgs:
+    SCHEMA = {
+        "type": "object",
+        "properties": {
+            "limit": {"type": "integer", "minimum": 1, "maximum": 10},
+            "status": {"type": "string", "enum": ["completed", "cancelled"]},
+            "query": {"type": "string", "maxLength": 100},
+        },
+        "required": ["limit"],
+    }
+
+    def test_valid(self):
+        assert validate_args(self.SCHEMA, {"limit": 5, "status": "completed"}) == []
+
+    def test_missing_required(self):
+        assert any("missing required" in e for e in validate_args(self.SCHEMA, {}))
+
+    def test_unknown_key_rejected(self):
+        errs = validate_args(self.SCHEMA, {"limit": 5, "user_id": "victim-2"})
+        assert any("unknown argument: user_id" in e for e in errs)
+
+    def test_type_mismatch(self):
+        assert any("must be a integer" in e for e in validate_args(self.SCHEMA, {"limit": "five"}))
+
+    def test_bool_is_not_integer(self):
+        assert validate_args(self.SCHEMA, {"limit": True}) != []
+
+    def test_bounds(self):
+        assert any(">= 1" in e for e in validate_args(self.SCHEMA, {"limit": 0}))
+        assert any("<= 10" in e for e in validate_args(self.SCHEMA, {"limit": 99}))
+
+    def test_enum(self):
+        errs = validate_args(self.SCHEMA, {"limit": 1, "status": "in_progress"})
+        assert any("must be one of" in e for e in errs)
+
+    def test_string_length_cap(self):
+        errs = validate_args(self.SCHEMA, {"limit": 1, "query": "x" * 101})
+        assert any("at most 100" in e for e in errs)
+
+
+class TestRegistry:
+    def test_duplicate_name_raises(self):
+        register(_spec())
+        with pytest.raises(ValueError):
+            register(_spec())
+
+    def test_tool_defs_sorted_and_audience_filtered(self):
+        register(_spec(name="zeta"))
+        register(_spec(name="alpha"))
+        register(_spec(name="driver_only", audiences=frozenset({"driver"})))
+        defs = tool_defs_for("rider")
+        assert [d["name"] for d in defs] == ["alpha", "zeta"]
+        assert {"name", "description", "input_schema"} == set(defs[0].keys())
+
+
+class TestExecuteTool:
+    @pytest.mark.anyio
+    async def test_happy_path_injects_user(self):
+        register(_spec())
+        result, ok = await execute_tool("echo", {}, user=USER)
+        assert ok is True
+        assert result["user_id"] == "user-1"
+
+    @pytest.mark.anyio
+    async def test_unknown_tool_is_error_result(self):
+        result, ok = await execute_tool("nope", {}, user=USER)
+        assert ok is False
+        assert "unknown tool" in result["error"]
+
+    @pytest.mark.anyio
+    async def test_audience_gate(self):
+        register(_spec(name="driver_only", audiences=frozenset({"driver"})))
+        result, ok = await execute_tool("driver_only", {}, user=USER, audience="rider")
+        assert ok is False
+        _, ok2 = await execute_tool("driver_only", {}, user=USER, audience="driver")
+        assert ok2 is True
+
+    @pytest.mark.anyio
+    async def test_invalid_args_is_error_result(self):
+        register(
+            _spec(
+                schema={
+                    "type": "object",
+                    "properties": {"n": {"type": "integer"}},
+                    "required": ["n"],
+                }
+            )
+        )
+        result, ok = await execute_tool("echo", {"n": "NaN"}, user=USER)
+        assert ok is False
+        assert "must be a integer" in result["error"]
+
+    @pytest.mark.anyio
+    async def test_handler_exception_is_contained(self):
+        async def boom(user, **args):
+            raise RuntimeError("db exploded")
+
+        register(_spec(handler=boom))
+        result, ok = await execute_tool("echo", {}, user=USER)
+        assert ok is False
+        # Internals never leak to the model.
+        assert "db exploded" not in result["error"]
+
+    @pytest.mark.anyio
+    async def test_timeout_is_contained(self, monkeypatch):
+        monkeypatch.setattr(ai_tools, "TOOL_TIMEOUT_SECONDS", 0.01)
+
+        async def slow(user, **args):
+            await asyncio.sleep(1)
+            return {}
+
+        register(_spec(handler=slow))
+        result, ok = await execute_tool("echo", {}, user=USER)
+        assert ok is False
+        assert "too long" in result["error"]
+
+    @pytest.mark.anyio
+    async def test_oversized_result_capped(self):
+        async def huge(user, **args):
+            return {"rows": ["x" * 100] * 200}
+
+        register(_spec(handler=huge))
+        result, ok = await execute_tool("echo", {}, user=USER)
+        assert ok is True
+        assert result["_truncated"] is True
+        assert len(result["preview"]) <= TOOL_RESULT_MAX_CHARS

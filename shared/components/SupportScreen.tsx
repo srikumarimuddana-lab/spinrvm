@@ -50,61 +50,30 @@ interface CompanyInfo {
 const SUPPORT_PHONE_DISPLAY = '1-800-SPINR';
 const SUPPORT_EMAIL = 'support@spinr.ca';
 
-const SYSTEM_PROMPTS: Record<Role, string> = {
-  rider: `You are Spinr's friendly AI support assistant for riders. Spinr is a ride-hailing app operating in Saskatoon and Regina, Saskatchewan, Canada.
-
-Key facts:
-- Spinr charges 0% commission to drivers (unique value proposition)
-- Cancellation is free within 2 minutes of driver acceptance
-- The app supports loyalty points, wallet top-ups, fare splitting, promo codes, scheduled rides, and carpool
-- Support email: support@spinr.ca
-- Support hours: Mon–Fri 9am–6pm CST
-
-Answer rider questions concisely and helpfully. For sensitive account-specific issues (billing disputes, account bans), direct them to the human support form or support@spinr.ca. Keep responses under 150 words.`,
-
-  driver: `You are Spinr's friendly AI support assistant for drivers. Spinr is a ride-hailing app operating in Saskatoon and Regina, Saskatchewan, Canada.
-
-Key facts:
-- Spinr charges 0% commission to drivers (you keep 100% of fares)
-- Drivers must complete background checks and upload license, insurance, and vehicle docs
-- Earnings are paid weekly via direct deposit; instant cashout requires a connected debit card
-- Document expiry warnings appear in the Documents tab — keep insurance & licence current to stay online
-- Support email: support@spinr.ca
-- Support hours: Mon–Fri 9am–6pm CST
-
-Answer driver questions concisely and helpfully. For sensitive account-specific issues (payout problems, document rejections, account suspension), direct them to the Contact tab or support@spinr.ca. Keep responses under 150 words.`,
-};
-
 const WELCOME_MESSAGES: Record<Role, string> = {
   rider: "Hi! I'm Spinr's AI assistant. Ask me anything about your rides, payments, account, or how the app works.",
   driver: "Hi! I'm Spinr's AI assistant. Ask me anything about onboarding, payouts, documents, or how the app works.",
 };
 
-// ── Claude API ───────────────────────────────────────────────────────────────
-async function askClaude(messages: ChatMessage[], role: Role): Promise<string> {
-  const apiMessages = messages.map((m) => ({ role: m.role, content: m.content }));
-
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY ?? '',
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 300,
-      system: SYSTEM_PROMPTS[role],
-      messages: apiMessages,
-    }),
+// ── AI assistant (server-side) ───────────────────────────────────────────────
+// All AI inference happens behind the authenticated backend (/ai/chat) —
+// prompts, tools and provider keys live server-side. No API key ships in the
+// app bundle. The backend picks the rider/driver tool set from the user row.
+async function askAssistant(
+  message: string,
+  conversationId: string | null,
+): Promise<{ reply: string; conversationId: string | null }> {
+  const res = await api.post('/ai/chat', {
+    message,
+    conversation_id: conversationId,
+    stream: false,
   });
-
-  if (!res.ok) throw new Error(`API error ${res.status}`);
-  const data = await res.json();
-  return (
-    data.content?.[0]?.text ??
-    "I'm sorry, I couldn't process that. Please try again or contact support@spinr.ca."
-  );
+  return {
+    reply:
+      res.data?.reply ||
+      "I'm sorry, I couldn't process that. Please try again or contact support@spinr.ca.",
+    conversationId: res.data?.conversation_id ?? conversationId,
+  };
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -142,6 +111,9 @@ export default function SupportScreen({ role, initialTab = 'faq' }: Props) {
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
   const chatListRef = useRef<FlatList>(null);
+  // Server-side conversation thread for the AI chat tab (multi-turn context
+  // lives in the backend, not in this component).
+  const conversationIdRef = useRef<string | null>(null);
 
   // Contact form
   const [issue, setIssue] = useState('');
@@ -233,15 +205,15 @@ export default function SupportScreen({ role, initialTab = 'faq' }: Props) {
       timestamp: new Date(),
     };
 
-    const updated = [...chatMessages, userMsg];
-    setChatMessages(updated);
+    setChatMessages((prev) => [...prev, userMsg]);
     setChatInput('');
     setChatLoading(true);
 
     setTimeout(() => chatListRef.current?.scrollToEnd({ animated: true }), 100);
 
     try {
-      const reply = await askClaude(updated, role);
+      const { reply, conversationId } = await askAssistant(text, conversationIdRef.current);
+      conversationIdRef.current = conversationId;
       setChatMessages((prev) => [
         ...prev,
         {
@@ -266,7 +238,7 @@ export default function SupportScreen({ role, initialTab = 'faq' }: Props) {
       setChatLoading(false);
       setTimeout(() => chatListRef.current?.scrollToEnd({ animated: true }), 100);
     }
-  }, [chatInput, chatMessages, chatLoading, role]);
+  }, [chatInput, chatLoading]);
 
   const renderChatMessage = ({ item }: { item: ChatMessage }) => {
     const isUser = item.role === 'user';

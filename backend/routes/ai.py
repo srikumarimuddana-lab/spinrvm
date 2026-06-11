@@ -1,0 +1,161 @@
+"""AI assistant endpoints.
+
+POST /ai/chat                       — SSE stream (default) or single JSON reply
+GET  /ai/config                     — feature flag + disclaimer (gates UI entry points)
+GET  /ai/conversations              — owner-scoped list
+GET  /ai/conversations/{id}/messages
+DELETE /ai/conversations/{id}      — PIPEDA right-to-delete
+
+SSE is hand-rolled over StreamingResponse (sse-starlette is not in the
+lockfile): `event: <name>\\ndata: <json>\\n\\n` frames with a `: ping`
+comment every 15s so Fly/Railway proxies don't idle the connection.
+"""
+
+import asyncio
+import json
+import logging
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+
+try:
+    from ai import conversations
+    from ai.orchestrator import run_chat_turn
+    from dependencies import get_current_user
+    from settings_loader import get_app_settings
+    from utils.rate_limiter import ai_chat_limit
+except ImportError:
+    from ..ai import conversations  # type: ignore
+    from ..ai.orchestrator import run_chat_turn  # type: ignore
+    from ..dependencies import get_current_user  # type: ignore
+    from ..settings_loader import get_app_settings  # type: ignore
+    from ..utils.rate_limiter import ai_chat_limit  # type: ignore
+
+logger = logging.getLogger(__name__)
+
+api_router = APIRouter(prefix="/ai", tags=["AI Assistant"])
+
+_PING_INTERVAL_SECONDS = 15
+
+_ERROR_STATUS = {
+    "ai_disabled": 503,
+    "daily_cap": 429,
+    "not_found": 404,
+    "ai_misconfigured": 503,
+    "provider_error": 502,
+}
+
+_SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",  # disable proxy buffering (Fly/Railway/nginx)
+}
+
+
+class AiChatRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=1000)
+    conversation_id: Optional[str] = Field(None, max_length=64)
+    stream: bool = True
+
+
+def _audience_for(user: dict) -> str:
+    # SupportScreen is shared by both apps; the user row decides the tool set.
+    return "driver" if user.get("is_driver") else "rider"
+
+
+def _sse(event: str, payload: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
+
+
+async def _sse_with_pings(frames):
+    """Wrap the orchestrator frame generator, interleaving keep-alive pings
+    whenever no frame arrives within the ping interval."""
+    iterator = frames.__aiter__()
+    while True:
+        next_frame = asyncio.ensure_future(iterator.__anext__())
+        while True:
+            done, _ = await asyncio.wait({next_frame}, timeout=_PING_INTERVAL_SECONDS)
+            if done:
+                break
+            yield ": ping\n\n"
+        try:
+            name, payload = next_frame.result()
+        except StopAsyncIteration:
+            return
+        yield _sse(name, payload)
+
+
+@api_router.get("/config")
+async def ai_config(current_user: dict = Depends(get_current_user)):
+    settings = await get_app_settings()
+    return {
+        "enabled": bool(settings.get("ai_assistant_enabled")),
+        "disclaimer": settings.get("ai_disclaimer", ""),
+    }
+
+
+@api_router.post("/chat")
+@ai_chat_limit
+async def ai_chat(
+    body: AiChatRequest,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
+    frames = run_chat_turn(
+        user=current_user,
+        conversation_id=body.conversation_id,
+        user_message=body.message,
+        audience=_audience_for(current_user),
+    )
+
+    if body.stream:
+        return StreamingResponse(_sse_with_pings(frames), media_type="text/event-stream", headers=_SSE_HEADERS)
+
+    # Non-streaming (SupportScreen tab): drain the frames into one reply.
+    reply_parts: list = []
+    actions: list = []
+    meta: dict = {}
+    done: dict = {}
+    async for name, payload in frames:
+        if name == "token":
+            reply_parts.append(payload.get("text", ""))
+        elif name == "action":
+            actions.append(payload)
+        elif name == "meta":
+            meta = payload
+        elif name == "done":
+            done = payload
+        elif name == "error":
+            raise HTTPException(
+                status_code=_ERROR_STATUS.get(payload.get("code"), 502),
+                detail={"code": payload.get("code"), "message": payload.get("message")},
+            )
+    return {
+        "conversation_id": meta.get("conversation_id"),
+        "message_id": done.get("message_id"),
+        "reply": "".join(reply_parts),
+        "actions": actions,
+    }
+
+
+@api_router.get("/conversations")
+async def list_ai_conversations(current_user: dict = Depends(get_current_user)):
+    return {"conversations": await conversations.list_conversations(current_user["id"])}
+
+
+@api_router.get("/conversations/{conversation_id}/messages")
+async def get_ai_conversation_messages(conversation_id: str, current_user: dict = Depends(get_current_user)):
+    messages = await conversations.get_messages(conversation_id, current_user["id"])
+    if messages is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"messages": messages}
+
+
+@api_router.delete("/conversations/{conversation_id}", status_code=204)
+async def delete_ai_conversation(conversation_id: str, current_user: dict = Depends(get_current_user)):
+    deleted = await conversations.delete_conversation(conversation_id, current_user["id"])
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return None

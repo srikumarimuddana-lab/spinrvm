@@ -11,16 +11,16 @@ PIPEDA / DV-16: User messages are PII-scrubbed before being sent to Gemini
 replaced with redaction tokens so they do not appear in Google's telemetry.
 """
 
-import re
-
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 try:
+    from ai.pii import scrub_pii
     from dependencies import get_current_user
     from services.zoho_desk_integration import create_support_ticket
     from services.zoho_desk_service import ZohoDeskError
 except ImportError:
+    from ..ai.pii import scrub_pii  # type: ignore
     from .dependencies import get_current_user  # type: ignore
     from .services.zoho_desk_integration import create_support_ticket  # type: ignore
     from .services.zoho_desk_service import ZohoDeskError  # type: ignore
@@ -85,30 +85,8 @@ Always be concise, friendly, and helpful. If you don't know the answer, direct t
 Do not invent policies or fees. Only reference the information above.
 """
 
-# ── PII scrubbing patterns (PIPEDA / DV-16) ──────────────────────────────────
-# Applied to user messages BEFORE sending to Gemini (Google LLC, US).
-# Names cannot be scrubbed reliably with regex; mitigate via data-minimization
-# principle: the system prompt never asks for names, and we strip the patterns
-# below which cover the highest-risk identifiers.
-_PII_PATTERNS: list[tuple[re.Pattern, str]] = [
-    # North American phone numbers (+1 optional, various separators)
-    (re.compile(r"(\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}"), "[PHONE]"),
-    # Email addresses
-    (re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"), "[EMAIL]"),
-    # GPS coordinates  lat,lng or lat/lng (±90/±180 range)
-    (re.compile(r"-?\d{1,2}\.\d{4,},\s*-?\d{1,3}\.\d{4,}"), "[COORDS]"),
-    # Canadian postal codes (A1A 1A1 or A1A1A1)
-    (re.compile(r"\b[A-Za-z]\d[A-Za-z][\s-]?\d[A-Za-z]\d\b"), "[POSTAL]"),
-]
-
-
-def _scrub_pii(text: str) -> str:
-    for pattern, token in _PII_PATTERNS:
-        text = pattern.sub(token, text)
-    return text
-
-
-# ─────────────────────────────────────────────────────────────────────────────
+# PII scrubbing (PIPEDA / DV-16) is shared with the rider AI mode — see
+# backend/ai/pii.py. Applied to user messages BEFORE sending to Gemini.
 
 
 class ChatRequest(BaseModel):
@@ -134,7 +112,7 @@ async def support_chat(
         if not api_key:
             return {"reply": FALLBACK_REPLY}
 
-        scrubbed_message = _scrub_pii(req.message)
+        scrubbed_message = scrub_pii(req.message)
 
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(

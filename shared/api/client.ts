@@ -641,8 +641,16 @@ const handleApiError = async (response: Response, method: string, url: string, r
       if (_refreshPromise) {
         // A refresh is already in-flight — queue this request and wait for
         // the new token rather than firing a second /auth/refresh call.
+        // An empty token means the refresh FAILED: reject with the original
+        // 401 instead of retrying. Retrying with a blank Authorization
+        // header 401s again and every queued request would then start its
+        // own refresh cycle — a refresh storm.
         const retried = await new Promise<unknown>((resolve, reject) => {
-          _subscribeTokenRefresh((_newToken) => {
+          _subscribeTokenRefresh((newToken) => {
+            if (!newToken) {
+              reject(response);
+              return;
+            }
             retryFn().then(resolve).catch(reject);
           });
         });

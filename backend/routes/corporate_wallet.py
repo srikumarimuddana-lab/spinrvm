@@ -124,10 +124,14 @@ async def manual_topup(
         )
     # Always set an idempotency key so retries after network timeouts don't
     # create duplicate PaymentIntents. Client may supply one (e.g. a UUID they
-    # track); fall back to a 1-minute time-bucket keyed on the wallet so the
-    # same top-up amount within the same minute reuses the same intent.
+    # track); fall back to a 1-minute time-bucket keyed on wallet + amount so
+    # a retry of the same top-up reuses the intent, while a different amount
+    # in the same minute gets a fresh key (same scheme as ride-charge keys —
+    # without the amount, the second top-up would silently return the first
+    # PI with the wrong amount).
     intent_kwargs["idempotency_key"] = (
-        body.client_idempotency_key or f"corp-topup-{wallet['id']}-{int(time.time() // 60)}"
+        body.client_idempotency_key
+        or f"corp-topup-{wallet['id']}-{dollars_to_cents(body.amount)}-{int(time.time() // 60)}"
     )
     intent = stripe.PaymentIntent.create(**intent_kwargs)
     return {"payment_intent_id": intent.id, "client_secret": intent.client_secret}

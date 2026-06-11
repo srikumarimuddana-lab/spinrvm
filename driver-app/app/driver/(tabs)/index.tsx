@@ -97,6 +97,7 @@ function DriverDashboard() {
     isOnline,
     connectionState,
     location,
+    locationStatus,
     otpInput,
     setOtpInput,
     toggleOnline,
@@ -625,6 +626,36 @@ function DriverDashboard() {
   };
 
   if (!location?.coords) {
+    // Permission denied or the GPS fix failed: an infinite spinner here gave
+    // the driver no way out (and nothing reaches the backend, so no logs).
+    if (locationStatus === 'denied' || locationStatus === 'unavailable') {
+      const denied = locationStatus === 'denied';
+      return (
+        <View style={[styles.container, { justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 }]}>
+          <Ionicons name={denied ? 'location-outline' : 'navigate-outline'} size={48} color={colors.primary} />
+          <Text style={styles.locationFallbackTitle}>
+            {t(denied ? 'home.locationDeniedTitle' : 'home.locationUnavailableTitle')}
+          </Text>
+          <Text style={styles.locationFallbackBody}>
+            {t(denied ? 'home.locationDeniedBody' : 'home.locationUnavailableBody')}
+          </Text>
+          {denied && (
+            <TouchableOpacity style={styles.locationFallbackBtn} onPress={() => Linking.openSettings()} activeOpacity={0.8}>
+              <Text style={styles.locationFallbackBtnText}>{t('home.openSettings')}</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            style={[styles.locationFallbackBtn, denied && styles.locationFallbackBtnSecondary]}
+            onPress={() => refreshLocation(true)}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.locationFallbackBtnText, denied && styles.locationFallbackBtnTextSecondary]}>
+              {t('home.retryLocation')}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
     return (
       <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
         <ActivityIndicator size="large" color={colors.primary} />
@@ -969,6 +1000,40 @@ function createStyles(colors: ThemeColors) {
       color: '#fff',
       fontSize: 12,
       fontWeight: '600',
+    },
+    locationFallbackTitle: {
+      color: colors.text,
+      marginTop: 16,
+      fontSize: 17,
+      fontWeight: '700',
+      textAlign: 'center',
+    },
+    locationFallbackBody: {
+      color: colors.textDim,
+      marginTop: 8,
+      fontSize: 14,
+      lineHeight: 20,
+      textAlign: 'center',
+    },
+    locationFallbackBtn: {
+      marginTop: 16,
+      backgroundColor: colors.primary,
+      borderRadius: 12,
+      paddingVertical: 12,
+      paddingHorizontal: 32,
+    },
+    locationFallbackBtnSecondary: {
+      backgroundColor: 'transparent',
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    locationFallbackBtnText: {
+      color: '#fff',
+      fontSize: 15,
+      fontWeight: '600',
+    },
+    locationFallbackBtnTextSecondary: {
+      color: colors.text,
     },
     markerContainer: {
       alignItems: 'center',

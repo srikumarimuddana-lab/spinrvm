@@ -10,7 +10,7 @@ Covers:
 - Already escalated → no duplicate escalation
 - FCM push failure → loop continues to next ride
 - Ride with no rider_id → push skipped silently
-- Ride with no started_at → skipped
+- Ride with no ride_started_at → skipped
 - _escalate sets escalated key only after successful DB insert
 """
 
@@ -33,7 +33,7 @@ def _ride(
     if started_at is None:
         ts = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
         started_at = ts.isoformat()
-    return {"id": ride_id, "rider_id": rider_id, "status": "in_progress", "started_at": started_at}
+    return {"id": ride_id, "rider_id": rider_id, "status": "in_progress", "ride_started_at": started_at}
 
 
 def _now_iso() -> str:
@@ -88,8 +88,8 @@ async def test_tick_skips_ride_newer_than_20_minutes():
 
 
 @pytest.mark.asyncio
-async def test_tick_skips_ride_with_no_started_at():
-    """Ride missing started_at → skipped entirely."""
+async def test_tick_skips_ride_with_no_ride_started_at():
+    """Ride missing ride_started_at (and updated_at) → skipped entirely."""
     push = AsyncMock()
     ride = {"id": "r1", "rider_id": "u1", "status": "in_progress"}
 

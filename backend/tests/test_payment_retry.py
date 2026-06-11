@@ -42,6 +42,7 @@ def _make_ride(**overrides) -> dict:
 def _fake_intent(status: str) -> MagicMock:
     intent = MagicMock()
     intent.status = status
+    intent.amount = 2550  # cents — feeds the ride-confirm idempotency key
     return intent
 
 
@@ -86,9 +87,7 @@ async def test_retry_skips_when_stripe_already_succeeded():
 
     # update_one is awaited twice: once for the atomic 'retrying' claim,
     # then for the final 'paid' write. Locate the 'paid' call.
-    paid_calls = [
-        c for c in mock_db_update.await_args_list if c[0][2].get("$set", {}).get("payment_status") == "paid"
-    ]
+    paid_calls = [c for c in mock_db_update.await_args_list if c[0][2].get("$set", {}).get("payment_status") == "paid"]
     assert len(paid_calls) == 1
     paid_call = paid_calls[0]
     assert paid_call[0][0] == "rides"
@@ -135,11 +134,10 @@ async def test_retry_proceeds_when_stripe_failed():
     mock_confirm.assert_called_once()
     _, confirm_kwargs = mock_confirm.call_args
     assert "idempotency_key" in confirm_kwargs
-    # Idempotency key uses the pre-attempt retry_count (1) so a replay of
-    # the same attempt produces the same key — preventing double charges.
-    # Format: retry-confirm-<ride_id>-<retry_count>
-    assert RIDE_ID in confirm_kwargs["idempotency_key"]
-    assert confirm_kwargs["idempotency_key"].endswith("-1")
+    # Scheduled retries use per-attempt keys so each retry gets a fresh Stripe
+    # call rather than replaying a cached transient error. payment_retry_count=1
+    # → retry_count=1 → attempt=2 → key suffix "-retry-2".
+    assert confirm_kwargs["idempotency_key"] == f"ride-confirm-{RIDE_ID}-2550-retry-2"
 
     # DB update must set payment_status='processing' and increment count
     mock_db_update.assert_awaited()

@@ -232,7 +232,7 @@ async def test_admin_access_token_rejected_after_token_version_bump():
     """Codex #1724 (P1): a revoked admin access token must not pass
     _require_staff_from_token and mint a fresh session via confirm."""
     stale = admin_auth._mint_admin_access_token(
-        user_id=STAFF_ID, email=EMAIL, role="operations", modules=["dashboard"], phone=EMAIL, token_version=0
+        user_id=STAFF_ID, email=EMAIL, role="operations", modules=["dashboard"], token_version=0
     )[0]
     with patch.object(admin_auth.db, "find_one", AsyncMock(return_value=_staff_row(token_version=1))):
         with pytest.raises(HTTPException) as exc_info:
@@ -247,7 +247,7 @@ async def test_settings_reenrollment_does_not_mint_new_session():
     secret = pyotp.random_base32()
     staff = _staff_row(mfa_secret_pending=secret)
     session_header = "Bearer " + admin_auth._mint_admin_access_token(
-        user_id=STAFF_ID, email=EMAIL, role="operations", modules=["dashboard"], phone=EMAIL, token_version=0
+        user_id=STAFF_ID, email=EMAIL, role="operations", modules=["dashboard"], token_version=0
     )[0]
 
     class _Body:
@@ -325,7 +325,7 @@ async def test_enroll_token_dies_once_mfa_is_enabled():
     # A full admin session token is still fine on the same endpoints
     # (Settings flow for an enrolled account, e.g. /mfa/disable).
     session = admin_auth._mint_admin_access_token(
-        user_id=STAFF_ID, email=EMAIL, role="operations", modules=["dashboard"], phone=EMAIL, token_version=0
+        user_id=STAFF_ID, email=EMAIL, role="operations", modules=["dashboard"], token_version=0
     )[0]
     with patch.object(admin_auth.db, "find_one", AsyncMock(return_value=enrolled_row)):
         staff = await admin_auth._require_staff_from_token(f"Bearer {session}", allow_enroll_token=True)
@@ -380,7 +380,7 @@ async def test_mfa_disable_blocked_under_enforcement():
     secret = pyotp.random_base32()
     enrolled = _staff_row(mfa_enabled=True, mfa_secret=secret, password_hash="bcrypt$x")
     header = "Bearer " + admin_auth._mint_admin_access_token(
-        user_id=STAFF_ID, email=EMAIL, role="operations", modules=["dashboard"], phone=EMAIL, token_version=0
+        user_id=STAFF_ID, email=EMAIL, role="operations", modules=["dashboard"], token_version=0
     )[0]
 
     class _Body:
@@ -416,7 +416,7 @@ async def test_jti_revoked_admin_token_rejected_by_mfa_helper():
     without bumping token_version; the MFA helper must honor the denylist so
     a logged-out token can't start/confirm enrollment or disable MFA."""
     token = admin_auth._mint_admin_access_token(
-        user_id=STAFF_ID, email=EMAIL, role="operations", modules=["dashboard"], phone=EMAIL, token_version=0
+        user_id=STAFF_ID, email=EMAIL, role="operations", modules=["dashboard"], token_version=0
     )[0]
     with (
         patch.object(admin_auth, "redis_get", AsyncMock(return_value="1")),  # jti revoked

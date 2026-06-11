@@ -72,9 +72,7 @@ async def _alert_admins_payment_exhausted(ride: dict) -> None:
             }
         )
     except Exception as exc:
-        logger.error(
-            f"Admin WS broadcast failed for exhausted payment ride {ride_id}: {exc}"
-        )
+        logger.error(f"Admin WS broadcast failed for exhausted payment ride {ride_id}: {exc}")
 
     try:
         admin_users = await db.get_rows("users", {"role": "admin"}, limit=50)
@@ -87,9 +85,7 @@ async def _alert_admins_payment_exhausted(ride: dict) -> None:
                     data={"type": "payment_retries_exhausted", "ride_id": ride_id},
                 )
             except Exception as _push_exc:
-                logger.debug(
-                    f"Payment alert push to admin {admin.get('id')} failed: {_push_exc}"
-                )
+                logger.debug(f"Payment alert push to admin {admin.get('id')} failed: {_push_exc}")
     except Exception as exc:
         logger.error(f"Failed to fetch admin users for payment alert: {exc}")
 
@@ -267,9 +263,7 @@ async def retry_failed_payments():
             import stripe
 
             # Attempt to confirm the payment intent
-            intent = stripe.PaymentIntent.retrieve(
-                payment_intent_id, api_key=stripe_secret
-            )
+            intent = stripe.PaymentIntent.retrieve(payment_intent_id, api_key=stripe_secret)
 
             if intent.status == "succeeded":
                 await db.update_one(
@@ -282,17 +276,22 @@ async def retry_failed_payments():
                         }
                     },
                 )
-                logger.info(
-                    f"Payment retry: ride {ride_id} already paid (intent succeeded)"
-                )
+                logger.info(f"Payment retry: ride {ride_id} already paid (intent succeeded)")
                 continue
 
             elif intent.status in ("requires_payment_method", "requires_confirmation"):
                 attempt = retry_count + 1
+                # Scheduled retries use a per-attempt suffix so each retry
+                # gets a fresh Stripe call. The in-flight race (two replicas
+                # both confirming during trip-end) is handled by charge_ride's
+                # key (ride-confirm-{ride_id}-{amount}); by the time the retry
+                # loop fires, that initial window has closed and we need a new
+                # idempotency key to avoid Stripe replaying a cached transient
+                # error from attempt 1 on attempts 2+.
                 stripe.PaymentIntent.confirm(
                     payment_intent_id,
                     api_key=stripe_secret,
-                    idempotency_key=f"retry-confirm-{ride_id}-{retry_count}",
+                    idempotency_key=f"ride-confirm-{ride_id}-{intent.amount}-retry-{attempt}",
                 )
                 await db.update_one(
                     "rides",
@@ -370,9 +369,7 @@ async def retry_failed_payments():
                             data={"type": "payment_failed", "ride_id": ride_id},
                         )
                     except Exception as push_err:
-                        logger.debug(
-                            f"Payment failure push notification failed: {push_err}"
-                        )
+                        logger.debug(f"Payment failure push notification failed: {push_err}")
 
 
 async def payment_retry_loop():

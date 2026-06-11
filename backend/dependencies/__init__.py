@@ -146,10 +146,13 @@ async def _verify_admin_payload(payload: dict) -> "dict | None":
     """
     _admin_roles = {"admin", "super_admin", "operations", "support", "finance", "custom"}
     _token_aud = payload.get("aud")
-    # Admin token: aud == JWT_AUD_ADMIN, or (legacy) no aud + role/email present.
-    _is_admin_payload = _token_aud == JWT_AUD_ADMIN or (
-        _token_aud is None and payload.get("role") in _admin_roles and bool(payload.get("email"))
-    )
+    # Admin token: aud MUST equal JWT_AUD_ADMIN. The former legacy branch that
+    # accepted a no-aud token with role+email claims let a crafted admin-001
+    # token through with zero DB verification — every admin token minted since
+    # the aud rollout carries the claim, so the grace path is retired.
+    _is_admin_payload = _token_aud == JWT_AUD_ADMIN
+    if _token_aud is None and payload.get("role") in _admin_roles and bool(payload.get("email")):
+        raise HTTPException(status_code=401, detail="ERR_TOKEN_AUDIENCE")
     _expected_aud = JWT_AUD_ADMIN if _is_admin_payload else JWT_AUD_MOBILE
     if _token_aud is not None and _token_aud != _expected_aud:
         raise HTTPException(status_code=401, detail="ERR_TOKEN_AUDIENCE")

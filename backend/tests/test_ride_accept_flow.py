@@ -192,14 +192,59 @@ class TestAcceptRideFlipsStatus:
 
         # The winning driver must transition to Period 2, linked to this ride.
         period_2_calls = [
-            c for c in period_mock.call_args_list
-            if len(c.args) >= 2 and c.args[0] == DRIVER_ID and c.args[1] == 2
+            c for c in period_mock.call_args_list if len(c.args) >= 2 and c.args[0] == DRIVER_ID and c.args[1] == 2
         ]
         assert period_2_calls, (
             "accept_ride must record insurance Period 2 for the winning driver; "
             f"got calls: {period_mock.call_args_list}"
         )
         assert period_2_calls[0].kwargs.get("ride_id") == RIDE_ID
+
+    def test_searching_path_claim_filter_requires_unclaimed_ride(self):
+        """Broadcast/searching accept must claim with an UNCONDITIONAL atomic
+        filter: status=searching AND driver_id IS NULL. Without the driver_id
+        clause, the offer-expiry/revert-to-searching window lets two drivers
+        both end up accepted (the read of ride.driver_id is non-atomic)."""
+        from backend.routes import drivers as drivers_mod
+
+        # Ride is in searching with no driver assigned; this driver holds a
+        # pending ride_offers row (batch dispatch).
+        pre_ride = _ride_row("searching", driver_id=None)
+        post_ride = _ride_row(
+            "driver_accepted",
+            driver_id=DRIVER_ID,
+            driver_accepted_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+        async def _get_rows(table, *args, **kwargs):
+            if table == "drivers":
+                return [_driver_row()]
+            if table == "ride_offers":
+                return [{"id": "offer-1", "ride_id": RIDE_ID, "driver_id": DRIVER_ID, "status": "pending"}]
+            return []
+
+        update_one_mock = AsyncMock(return_value=post_ride)
+
+        with (
+            patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=pre_ride)),
+            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.drivers.db.update_one", update_one_mock),
+            patch("backend.routes.drivers.db.find_one", AsyncMock(return_value=post_ride)),
+            patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.drivers.send_push_notification", AsyncMock()),
+        ):
+            result = asyncio.run(
+                drivers_mod.accept_ride(
+                    ride_id=RIDE_ID,
+                    current_user={"id": DRIVER_USER_ID},
+                )
+            )
+
+        assert result == {"success": True}
+        assert update_one_mock.await_count == 1
+        accept_filter = update_one_mock.call_args.args[1]
+        assert accept_filter == {"id": RIDE_ID, "status": "searching", "driver_id": None}
 
     def test_double_accept_rejected_by_guard(self):
         """When the atomic guard returns None (ride already taken by concurrent request),

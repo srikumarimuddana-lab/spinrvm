@@ -50,33 +50,6 @@ export default function RideDetailsScreen() {
     finally { setLoading(false); }
   };
 
-  // Fetch Google Directions route when no stored polyline is available.
-  // Done via REST (not MapViewDirections) to avoid the strokeWidth=0 artifact
-  // on Android PROVIDER_GOOGLE which renders a straight connector line.
-  useEffect(() => {
-    if (savedPolyline.length >= 2 || !ride?.pickup_lat || !ride?.dropoff_lat || !GOOGLE_MAPS_API_KEY) return;
-    let cancelled = false;
-    const fetchFallbackRoute = async () => {
-      try {
-        const origin = `${ride.pickup_lat},${ride.pickup_lng}`;
-        const dest = `${ride.dropoff_lat},${ride.dropoff_lng}`;
-        const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${dest}&key=${GOOGLE_MAPS_API_KEY}`;
-        const res = await fetch(url);
-        const data = await res.json();
-        const encoded = data?.routes?.[0]?.overview_polyline?.points;
-        if (encoded && !cancelled) {
-          const coords = decodePolyline(encoded);
-          setFallbackCoords(coords);
-          mapRef.current?.fitToCoordinates(coords, {
-            edgePadding: { top: 30, right: 30, bottom: 30, left: 30 }, animated: false,
-          });
-        }
-      } catch { }
-    };
-    fetchFallbackRoute();
-    return () => { cancelled = true; };
-  }, [savedPolyline.length, ride?.pickup_lat, ride?.pickup_lng, ride?.dropoff_lat, ride?.dropoff_lng]);
-
   const normalizedBreakdown = useMemo(() => {
     const raw: any[] = ride?.fare_breakdown || [];
 
@@ -118,6 +91,40 @@ export default function RideDetailsScreen() {
       .filter((p: any) => Array.isArray(p) && p.length >= 2)
       .map((p: any) => ({ latitude: p[0], longitude: p[1] }));
   }, [ride]);
+
+  // Fetch Google Directions route when no stored polyline is available and the
+  // ride has no pre-rendered snapshot (snapshot branch renders an Image — the
+  // MapView never mounts so fetching here would be a wasted paid API call).
+  // Placed after savedPolyline so the dep array can reference it without TDZ.
+  useEffect(() => {
+    if (
+      savedPolyline.length >= 2 ||
+      !ride?.pickup_lat || !ride?.dropoff_lat ||
+      ride?.route_snapshot_url ||
+      !GOOGLE_MAPS_API_KEY
+    ) return;
+    let cancelled = false;
+    const fetchFallbackRoute = async () => {
+      try {
+        const origin = `${ride.pickup_lat},${ride.pickup_lng}`;
+        const dest = `${ride.dropoff_lat},${ride.dropoff_lng}`;
+        const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${dest}&key=${GOOGLE_MAPS_API_KEY}`;
+        const res = await fetch(url);
+        const data = await res.json();
+        if (data.status !== 'OK') return;
+        const encoded = data?.routes?.[0]?.overview_polyline?.points;
+        if (encoded && !cancelled) {
+          const coords = decodePolyline(encoded);
+          setFallbackCoords(coords);
+          mapRef.current?.fitToCoordinates(coords, {
+            edgePadding: { top: 30, right: 30, bottom: 30, left: 30 }, animated: false,
+          });
+        }
+      } catch { }
+    };
+    fetchFallbackRoute();
+    return () => { cancelled = true; };
+  }, [savedPolyline.length, ride?.pickup_lat, ride?.pickup_lng, ride?.dropoff_lat, ride?.dropoff_lng, ride?.route_snapshot_url]);
 
   const polylineToRender = savedPolyline.length >= 2 ? savedPolyline : fallbackCoords;
 

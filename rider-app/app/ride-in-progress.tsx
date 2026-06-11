@@ -60,6 +60,7 @@ function RideInProgressScreenContent() {
   // Seed ETA and route from store so this screen shows correct values
   // immediately even before the first Directions fetch completes — and
   // skips the fetch entirely if driver-arriving already retrieved the route.
+  const [driverPhotoError, setDriverPhotoError] = useState(false);
   const [eta, setEta] = useState(lastEtaMin ?? 15);
   const [estimatedTime, setEstimatedTime] = useState('12:45 PM');
   const [currentLocation, setCurrentLocation] = useState('4th Avenue North');
@@ -411,11 +412,12 @@ I've shared my live location with you for safety.
       <View style={styles.driverCard}>
         <View style={styles.driverRow}>
           <View style={styles.driverAvatar}>
-            {currentDriver?.photo_url ? (
+            {currentDriver?.photo_url && !driverPhotoError ? (
               <Image
                 source={{ uri: currentDriver.photo_url }}
                 style={styles.driverAvatarImg}
                 resizeMode="cover"
+                onError={() => setDriverPhotoError(true)}
               />
             ) : (
               <Ionicons name="person" size={26} color={colors.textDim} />

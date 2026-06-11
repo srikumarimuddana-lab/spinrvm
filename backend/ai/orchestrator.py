@@ -39,6 +39,7 @@ except ImportError:
 
 try:
     from ..settings_loader import get_app_settings
+    from ..utils.metrics import inc as _metric_inc
     from ..utils.redis_client import redis_expire, redis_incr
 except ImportError:
     from settings_loader import get_app_settings
@@ -90,11 +91,13 @@ async def run_chat_turn(
     settings = await get_app_settings()
 
     if not settings.get("ai_assistant_enabled"):
+        _metric_inc("spinr_ai_chat_turns_total", {"outcome": "disabled"})
         yield "error", {"code": "ai_disabled", "message": "The AI assistant is currently unavailable."}
         return
 
     cap = int(settings.get("ai_daily_message_cap") or 50)
     if await _over_daily_cap(user["id"], cap):
+        _metric_inc("spinr_ai_chat_turns_total", {"outcome": "capped"})
         yield (
             "error",
             {"code": "daily_cap", "message": "You've reached today's AI assistant limit — try again tomorrow."},
@@ -117,6 +120,8 @@ async def run_chat_turn(
     except AIConfigError as exc:
         logger.error("ai adapter misconfigured: %s", exc, extra={"user_id": user.get("id")})
         _capture(exc, user)
+        _metric_inc("spinr_ai_provider_errors_total", {"provider": getattr(exc, "provider", "unknown")})
+        _metric_inc("spinr_ai_chat_turns_total", {"outcome": "error"})
         yield "error", {"code": "ai_misconfigured", "message": GENERIC_ERROR_MESSAGE}
         return
 
@@ -158,8 +163,11 @@ async def run_chat_turn(
             )
             for tc, (result, ok) in zip(tool_calls, results):
                 used_tool_names.append(tc.name)
+                _metric_inc("spinr_ai_tool_calls_total", {"tool": tc.name, "ok": str(ok).lower()})
                 client_action = result.pop("_client_action", None) if isinstance(result, dict) else None
                 if client_action:
+                    if client_action.get("type") == "booking_proposal":
+                        _metric_inc("spinr_ai_booking_proposals_total")
                     yield "action", client_action
                 yield "tool", {"name": tc.name, "status": "end", "ok": ok}
                 messages.append(
@@ -180,6 +188,8 @@ async def run_chat_turn(
     except Exception as exc:
         logger.error("ai chat turn failed", exc_info=True, extra={"user_id": user.get("id")})
         _capture(exc, user)
+        _metric_inc("spinr_ai_provider_errors_total", {"provider": getattr(adapter, "provider", "unknown")})
+        _metric_inc("spinr_ai_chat_turns_total", {"outcome": "error"})
         yield "error", {"code": "provider_error", "message": GENERIC_ERROR_MESSAGE}
         return
 
@@ -197,6 +207,9 @@ async def run_chat_turn(
         provider=getattr(adapter, "provider", None),
         model=getattr(adapter, "model", None),
     )
+    _metric_inc("spinr_ai_chat_turns_total", {"outcome": "completed"})
+    _metric_inc("spinr_ai_tokens_total", {"direction": "input"}, by=total_usage["input_tokens"])
+    _metric_inc("spinr_ai_tokens_total", {"direction": "output"}, by=total_usage["output_tokens"])
     yield (
         "done",
         {

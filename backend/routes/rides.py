@@ -2276,6 +2276,16 @@ async def create_ride(
                 break
             if "rides_one_active_per_rider" in msg:
                 raise HTTPException(status_code=409, detail="You already have an active ride") from e
+            if "idx_rides_rider_idempotency_key" in msg:
+                # DB-enforced idempotency: concurrent duplicate request lost the
+                # race. Return the already-created ride instead of a new charge.
+                existing = await db_supabase.find_one(
+                    "rides",
+                    {"idempotency_key": ride_data.get("idempotency_key"), "rider_id": current_user["id"]},
+                )
+                if existing:
+                    return existing
+                raise HTTPException(status_code=409, detail="Duplicate ride request") from e
             if "unique" in msg or "duplicate" in msg or "23505" in msg:
                 continue  # retry with a new code for ride_code conflicts
             raise

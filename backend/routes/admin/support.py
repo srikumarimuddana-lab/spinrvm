@@ -53,9 +53,10 @@ class ComplaintResolveRequest(BaseModel):
 
 
 class DisputeCreateRequest(BaseModel):
+    # user_name was removed (PIPEDA): names are joined from users at read
+    # time. Pydantic ignores the extra field if an old client still sends it.
     ride_id: Optional[str] = None
     user_id: Optional[str] = None
-    user_name: str = ""
     user_type: str = "rider"
     reason: str = ""
     description: str = ""
@@ -122,7 +123,31 @@ async def admin_get_disputes(
     except Exception:
         logger.warning("disputes table may not exist yet")
         return []
-    return disputes
+
+    if not disputes:
+        return disputes
+
+    # Enrich with user_name joined from users table — PIPEDA-safe because
+    # we derive the name at read time from user_id rather than storing it.
+    user_ids = list({d["user_id"] for d in disputes if d.get("user_id")})
+    user_name_map: Dict[str, str] = {}
+    if user_ids:
+        try:
+            users = await db_supabase.get_rows(
+                "users",
+                {"id": {"$in": user_ids}},
+                limit=len(user_ids),
+            )
+            for u in users or []:
+                parts = [u.get("first_name") or "", u.get("last_name") or ""]
+                name = " ".join(p for p in parts if p).strip()
+                if name and u.get("id"):
+                    user_name_map[u["id"]] = name
+        except Exception as exc:
+            logger.error("Failed to enrich disputes with user names: %s", exc, exc_info=True)
+            raise HTTPException(status_code=503, detail="ERR_DATABASE") from exc
+
+    return [{**d, "user_name": user_name_map.get(d.get("user_id", ""), "")} for d in disputes]
 
 
 @router.get("/disputes/stats")
@@ -161,7 +186,8 @@ async def admin_create_dispute(dispute: DisputeCreateRequest):
         "id": str(uuid.uuid4()),
         "ride_id": dispute.ride_id,
         "user_id": dispute.user_id,
-        "user_name": dispute.user_name,
+        # PIPEDA data minimization: user_name is NOT persisted — the admin
+        # list endpoint joins users by user_id at read time instead.
         "user_type": dispute.user_type,
         "reason": dispute.reason,
         "description": dispute.description,
@@ -178,9 +204,7 @@ async def admin_create_dispute(dispute: DisputeCreateRequest):
 @router.get("/disputes/{dispute_id}")
 async def admin_get_dispute_details(dispute_id: str):
     """Get detailed dispute information."""
-    dispute = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("disputes", {"id": dispute_id}, limit=1)
-    )
+    dispute = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("disputes", {"id": dispute_id}, limit=1))
     if not dispute:
         raise HTTPException(status_code=404, detail="Dispute not found")
 
@@ -295,16 +319,12 @@ async def admin_get_ticket_details(ticket_id: str):
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
 
-    messages = await db_supabase.get_rows(
-        "support_messages", {"ticket_id": ticket_id}, order="created_at", limit=100
-    )
+    messages = await db_supabase.get_rows("support_messages", {"ticket_id": ticket_id}, order="created_at", limit=100)
     return {**ticket, "messages": messages}
 
 
 @router.post("/tickets/{ticket_id}/reply")
-async def admin_reply_to_ticket(
-    ticket_id: str, reply: TicketReplyRequest, admin: dict = Depends(get_admin_user)
-):
+async def admin_reply_to_ticket(ticket_id: str, reply: TicketReplyRequest, admin: dict = Depends(get_admin_user)):
     """Reply to a support ticket. sender_id is set from the authenticated admin (F-29)."""
     message_doc = {
         "ticket_id": ticket_id,
@@ -375,26 +395,18 @@ async def admin_delete_ticket(ticket_id: str):
 
 
 @router.post("/rides/{ride_id}/flag")
-async def admin_flag_ride_participant(
-    ride_id: str, req: FlagRequest, admin: dict = Depends(get_admin_user)
-):
+async def admin_flag_ride_participant(ride_id: str, req: FlagRequest, admin: dict = Depends(get_admin_user)):
     """Flag a rider or driver from a ride. 3 active flags = auto-ban."""
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
     if req.target_type not in ("rider", "driver"):
-        raise HTTPException(
-            status_code=400, detail="target_type must be 'rider' or 'driver'"
-        )
+        raise HTTPException(status_code=400, detail="target_type must be 'rider' or 'driver'")
 
-    target_id = (
-        ride.get("rider_id") if req.target_type == "rider" else ride.get("driver_id")
-    )
+    target_id = ride.get("rider_id") if req.target_type == "rider" else ride.get("driver_id")
     if not target_id:
-        raise HTTPException(
-            status_code=400, detail=f"No {req.target_type} assigned to this ride"
-        )
+        raise HTTPException(status_code=400, detail=f"No {req.target_type} assigned to this ride")
 
     flag_data = {
         "id": str(uuid.uuid4()),
@@ -439,18 +451,14 @@ async def admin_list_flags(
         filters["service_area_id"] = service_area_id
     if is_active is not None:
         filters["is_active"] = is_active
-    flags = await db_supabase.get_rows(
-        "flags", filters, order="created_at", desc=True, limit=limit, offset=offset
-    )
+    flags = await db_supabase.get_rows("flags", filters, order="created_at", desc=True, limit=limit, offset=offset)
     return flags
 
 
 @router.put("/flags/{flag_id}/deactivate")
 async def admin_deactivate_flag(flag_id: str, admin: dict = Depends(get_admin_user)):
     """Deactivate a flag (soft delete)."""
-    result = await db_supabase.update_one(
-        "flags", {"id": flag_id}, {"$set": {"is_active": False}}
-    )
+    result = await db_supabase.update_one("flags", {"id": flag_id}, {"$set": {"is_active": False}})
     if not result:
         raise HTTPException(status_code=404, detail="Flag not found")
     await log_admin_action(admin, "flag_deactivated", "flags", flag_id, {})
@@ -475,17 +483,11 @@ async def admin_create_complaint(ride_id: str, req: ComplaintRequest):
         raise HTTPException(status_code=404, detail="Ride not found")
 
     if req.against_type not in ("rider", "driver"):
-        raise HTTPException(
-            status_code=400, detail="against_type must be 'rider' or 'driver'"
-        )
+        raise HTTPException(status_code=400, detail="against_type must be 'rider' or 'driver'")
 
-    against_id = (
-        ride.get("rider_id") if req.against_type == "rider" else ride.get("driver_id")
-    )
+    against_id = ride.get("rider_id") if req.against_type == "rider" else ride.get("driver_id")
     if not against_id:
-        raise HTTPException(
-            status_code=400, detail=f"No {req.against_type} assigned to this ride"
-        )
+        raise HTTPException(status_code=400, detail=f"No {req.against_type} assigned to this ride")
 
     complaint_data = {
         "id": str(uuid.uuid4()),
@@ -547,9 +549,7 @@ async def admin_list_complaints(
         filters["against_type"] = against_type
     if service_area_id and service_area_id != "all":
         filters["service_area_id"] = service_area_id
-    return await db_supabase.get_rows(
-        "complaints", filters, order="created_at", desc=True, limit=limit, offset=offset
-    )
+    return await db_supabase.get_rows("complaints", filters, order="created_at", desc=True, limit=limit, offset=offset)
 
 
 @router.delete("/complaints/{complaint_id}")

@@ -2956,8 +2956,11 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
             "driver_id": driver["id"],
         }
     else:
-        # Broadcast/searching path: claim only if the ride is still unclaimed.
-        accept_filter = {"id": ride_id, "status": RideStatus.SEARCHING}
+        # Broadcast/searching path: claim only if the ride is still unclaimed
+        # AND no driver_id is set. Belt-and-suspenders against the offer-expiry
+        # race where the revert-to-searching window has a stale request from a
+        # previously-assigned driver still in flight.
+        accept_filter = {"id": ride_id, "status": RideStatus.SEARCHING, "driver_id": None}
 
     guard = await db.update_one(
         "rides",

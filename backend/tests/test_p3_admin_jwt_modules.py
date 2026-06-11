@@ -33,7 +33,6 @@ def _mint(
     email: str = "admin@spinr.ca",
     role: str = "admin",
     modules: list | None = None,
-    phone: str = "+13061234567",
     token_version: int = 0,
     ttl_hours: float = 12,
 ) -> str:
@@ -45,7 +44,6 @@ def _mint(
         email=email,
         role=role,
         modules=modules if modules is not None else ["dashboard", "users"],
-        phone=phone,
         token_version=token_version,
     )
     return token

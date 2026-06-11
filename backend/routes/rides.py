@@ -3955,7 +3955,7 @@ async def cancel_ride_rider(
                 except Exception as _e:
                     logger.warning(f"[CANCEL] failed to notify batch-offer driver {_offer_did}: {_e}")
     except Exception as _batch_exc:
-        logger.warning(f"[CANCEL] batch offer cleanup failed for ride {ride_id}: {_batch_exc}")
+        logger.error(f"[CANCEL] batch offer cleanup failed for ride {ride_id}: {_batch_exc}", exc_info=True)
 
     # Notify the rider's own connection — broadcast_ride_status only fans
     # out to the rider when rider_id is passed, but an explicit message

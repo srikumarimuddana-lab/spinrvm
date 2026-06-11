@@ -51,16 +51,21 @@ async def render_ride_snapshot_google(
     # Build path from phase_polylines or route_polyline
     trail_points: list[str] = []
 
-    pickup_trail = _extract_trail((phase_polylines or {}).get("navigating_to_pickup"))
     trip_trail = _extract_trail((phase_polylines or {}).get("trip_in_progress"))
 
-    # Require at least 10 combined phase-trail points before trusting them.
-    # Fewer than that means GPS coverage was too sparse and the Static Maps API
-    # draws straight segments between the handful of points — the reported
-    # "double line" artifact.  Fall through to route_polyline in that case.
-    _phase_points = pickup_trail + trip_trail
-    if len(_phase_points) >= 10:
-        trail_points = _phase_points
+    # The snapshot shows the travelled pickup→dropoff route ONLY. The
+    # navigating_to_pickup leg is deliberately excluded: drawn alongside the
+    # trip leg it reads as a second route on the receipt map (admin tooling
+    # replays per-phase trails from ride_routes instead).
+    #
+    # Require at least 10 trip-leg points before trusting the raw trail —
+    # gated on the trip leg ALONE, not the combined phase count: a dense
+    # pickup leg used to carry a sparse trip leg over the threshold, and the
+    # Static Maps API then drew straight chords between the few trip points
+    # (the reported "straight line between P and D" next to the real path).
+    # Fall through to route_polyline in that case.
+    if len(trip_trail) >= 10:
+        trail_points = trip_trail
     elif route_polyline:
         for pt in route_polyline:
             try:
@@ -174,12 +179,12 @@ def render_ride_snapshot(
 
     import io
 
-    pickup_trail = _coerce_polyline((phase_polylines or {}).get("navigating_to_pickup"))
+    # Trip leg only — see render_ride_snapshot_google for why the
+    # navigating_to_pickup leg is excluded from the snapshot.
     trip_trail = _coerce_polyline((phase_polylines or {}).get("trip_in_progress"))
-    has_phase_trails = bool(pickup_trail) or bool(trip_trail)
 
     legacy_trail: list[tuple[float, float]] = []
-    if not has_phase_trails and route_polyline:
+    if not trip_trail and route_polyline:
         for pt in route_polyline:
             try:
                 lat = float(pt[0])
@@ -196,8 +201,6 @@ def render_ride_snapshot(
         m.add_marker(CircleMarker((dropoff_lng, dropoff_lat), "#ffffff", 14))
         m.add_marker(CircleMarker((dropoff_lng, dropoff_lat), "#ef4444", 10))
 
-        if pickup_trail:
-            m.add_line(Line(pickup_trail, "#f59e0b", 4))
         if trip_trail:
             m.add_line(Line(trip_trail, "#3b82f6", 4))
         if legacy_trail:

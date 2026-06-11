@@ -70,6 +70,42 @@ _LOGIN_MAX_FAILURES = 5
 # lock you out of a local environment for the rest of the day.
 _LOGIN_LOCKOUT_TTL_SECONDS = 2 * 60 if settings.ENV.lower() != "production" else 24 * 60 * 60
 
+# Per-account TOTP failure lockout — prevents brute-forcing 6-digit codes via
+# IP rotation (the per-IP SlowAPI limit alone is insufficient: 10 req/min × N
+# IPs = fast exhaustion of the 10^6 TOTP space within the 30-second window).
+_TOTP_MAX_FAILURES = 5
+_TOTP_LOCKOUT_TTL_SECONDS = 15 * 60  # 15 min; codes rotate every 30 s anyway
+
+
+def _totp_lockout_key(user_id: str) -> str:
+    return f"admin:totp_failures:{user_id}"
+
+
+async def _is_totp_locked(user_id: str) -> bool:
+    try:
+        val = await redis_get(_totp_lockout_key(user_id))
+        return val is not None and int(val) >= _TOTP_MAX_FAILURES
+    except Exception as e:
+        logger.error("[REDIS] _is_totp_locked check failed for user %s: %s", user_id, e)
+        return False  # fail open on cache blip; DB token_version check still runs
+
+
+async def _record_totp_failure(user_id: str) -> None:
+    try:
+        key = _totp_lockout_key(user_id)
+        count = await redis_incr(key)
+        if count == 1:
+            await redis_expire(key, _TOTP_LOCKOUT_TTL_SECONDS)
+    except Exception as e:
+        logger.error("[REDIS] _record_totp_failure failed for user %s: %s", user_id, e)
+
+
+async def _clear_totp_failures(user_id: str) -> None:
+    try:
+        await redis_delete(_totp_lockout_key(user_id))
+    except Exception as e:
+        logger.error("[REDIS] _clear_totp_failures failed for user %s: %s", user_id, e)
+
 
 def _lockout_key(email: str) -> str:
     return f"admin:login_failures:{email.lower().strip()}"
@@ -169,7 +205,6 @@ def _mint_admin_access_token(
     email: str,
     role: str,
     modules: list,
-    phone: str,
     token_version: int,
 ) -> tuple[str, datetime]:
     """Mint an admin access token with a bounded TTL and a token_version
@@ -177,6 +212,10 @@ def _mint_admin_access_token(
     tokens after an admin force-logout-all. Historically admin tokens
     were minted WITHOUT an ``exp`` claim, so a single captured token
     granted permanent access — the primary P0-S3 fix is this function.
+
+    PIPEDA: the ``phone`` claim is always empty — admin staff have no phone
+    on file and the old behavior of duplicating the email into it doubled
+    the PII payload of every minted token for no consumer.
     """
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(hours=settings.ADMIN_ACCESS_TOKEN_TTL_HOURS)
@@ -186,7 +225,7 @@ def _mint_admin_access_token(
             "email": email,
             "role": role,
             "modules": modules,
-            "phone": phone,
+            "phone": "",
             "aud": JWT_AUD_ADMIN,
             "token_version": int(token_version or 0),
             "jti": secrets.token_hex(16),
@@ -293,7 +332,6 @@ async def admin_login(request: Request, response: Response, body: LoginRequest):
             email=body.email,
             role="super_admin",
             modules=ALL_MODULES,
-            phone=body.email,
             token_version=0,
         )
         refresh_raw, _, refresh_expires_at = await issue_refresh_token(
@@ -352,7 +390,6 @@ async def admin_login(request: Request, response: Response, body: LoginRequest):
                 email=staff["email"],
                 role=staff.get("role", "custom"),
                 modules=modules,
-                phone=staff["email"],
                 token_version=int(staff.get("token_version") or 0),
             )
             refresh_raw, _, refresh_expires_at = await issue_refresh_token(
@@ -452,7 +489,6 @@ async def admin_refresh(request: Request, body: RefreshRequest):
         email=email,
         role=role,
         modules=modules,
-        phone=email,
         token_version=token_version,
     )
     return {
@@ -959,7 +995,6 @@ async def admin_mfa_confirm(
         email=staff["email"],
         role=staff.get("role", "custom"),
         modules=modules,
-        phone=staff["email"],
         token_version=int(staff.get("token_version") or 0),
     )
     refresh_raw, _, refresh_expires_at = await issue_refresh_token(
@@ -1058,13 +1093,23 @@ async def admin_mfa_challenge(request: Request, body: MfaChallengeRequest):
         raise HTTPException(status_code=401, detail="Invalid MFA token")
     if not staff.get("mfa_enabled") or not staff.get("mfa_secret"):
         raise HTTPException(status_code=400, detail="MFA not configured for this account")
+    # Per-account TOTP lockout — the per-IP SlowAPI limit alone is bypassable
+    # via IP rotation; 6-digit codes are brute-forceable without this gate.
+    if await _is_totp_locked(user_id):
+        logger.error(
+            "MFA challenge: account locked out after repeated TOTP failures",
+            extra={"domain": "admin", "user_id": user_id},
+        )
+        raise HTTPException(status_code=429, detail="Too many failed codes — try again later")
     totp_valid = pyotp.TOTP(staff["mfa_secret"]).verify(body.totp_code, valid_window=1)
     if not totp_valid:
         backup_codes = staff.get("mfa_backup_codes") or []
         matched, updated_codes = _consume_backup_code(body.totp_code, backup_codes)
         if not matched:
+            await _record_totp_failure(user_id)
             raise HTTPException(status_code=401, detail="Invalid TOTP code or backup code")
         await db_supabase.update_one("admin_staff", {"id": user_id}, {"mfa_backup_codes": updated_codes})
+    await _clear_totp_failures(user_id)
     user_agent = request.headers.get("user-agent", "")
     client_ip = get_remote_address(request)
     modules = staff.get("modules", ["dashboard"])
@@ -1073,7 +1118,6 @@ async def admin_mfa_challenge(request: Request, body: MfaChallengeRequest):
         email=staff["email"],
         role=staff.get("role", "custom"),
         modules=modules,
-        phone=staff["email"],
         token_version=int(staff.get("token_version") or 0),
     )
     refresh_raw, _, refresh_expires_at = await issue_refresh_token(
@@ -1108,6 +1152,7 @@ class BreakGlassRequest(BaseModel):
 
 
 @admin_auth_router.post("/break-glass")
+@limiter.limit("5/hour")
 async def break_glass_access(request: Request, body: BreakGlassRequest):
     """Emergency access endpoint — issues a 1-hour super_admin JWT when a
     valid pre-shared break-glass token is presented with a justification.
@@ -1160,12 +1205,16 @@ async def break_glass_access(request: Request, body: BreakGlassRequest):
     except ImportError:
         from ..utils.redis_client import redis_expire, redis_get, redis_incr  # type: ignore[no-redef]
 
-    daily_use_count: int = 0
+    # Fail CLOSED: an unreadable counter on a super-admin-minting endpoint
+    # must block, not allow — an attacker who can degrade Redis must not gain
+    # unlimited brute-force attempts. The 1h-window SlowAPI decorator above is
+    # an additional per-IP backstop, but it shares the same Redis dependency.
     try:
         count_raw = await redis_get(_BG_RATE_KEY)
         count = int(count_raw or 0)
-    except Exception:
-        count = 0
+    except Exception as e:
+        logger.error("break_glass: rate-limit counter unreadable (Redis down) — failing closed: %s", e)
+        raise HTTPException(status_code=503, detail="Break-glass temporarily unavailable") from e
 
     if count >= _BG_MAX_USES_PER_DAY:
         logger.error(
@@ -1181,8 +1230,9 @@ async def break_glass_access(request: Request, body: BreakGlassRequest):
         if daily_use_count == 1:
             # First use today — set expiry to 24h
             await redis_expire(_BG_RATE_KEY, 86400)
-    except Exception:  # noqa: S110
-        pass  # Redis unavailable — allow through; rate limiting is best-effort
+    except Exception as e:
+        logger.error("break_glass: rate-limit counter increment failed — failing closed: %s", e)
+        raise HTTPException(status_code=503, detail="Break-glass temporarily unavailable") from e
 
     # 4. Constant-time token comparison
     provided_hash = hashlib.sha256(body.token.encode()).hexdigest()

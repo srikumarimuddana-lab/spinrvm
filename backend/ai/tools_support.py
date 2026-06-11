@@ -1,0 +1,187 @@
+"""FAQ, company-info and escalation tools for the AI assistant.
+
+Available to both rider and driver audiences. escalate_to_support is the
+assistant's only potential side effect, and it is OFF by default: it
+returns a deep-link payload the client renders as a "Contact support"
+button. Only when app_settings.ai_escalation_creates_ticket is enabled does
+it open a Zoho ticket (reusing the existing /support/escalate integration).
+Safety topics always route to 911/SOS language — never just a ticket.
+"""
+
+import logging
+from typing import Any, Dict
+
+try:
+    from .tools import ToolSpec, register
+except ImportError:
+    from ai.tools import ToolSpec, register
+
+try:
+    from .. import db_supabase
+    from ..settings_loader import get_app_settings
+except ImportError:
+    import db_supabase
+    from settings_loader import get_app_settings
+
+logger = logging.getLogger(__name__)
+
+_BOTH = frozenset({"rider", "driver"})
+
+ESCALATION_CATEGORIES = [
+    "refund",
+    "account",
+    "lost_item",
+    "complaint",
+    "payment_issue",
+    "safety",
+    "other",
+]
+
+# Deep-link targets the apps know how to open (see rider-app routes).
+_CATEGORY_LINKS = {
+    "lost_item": "/lost-and-found",
+}
+_DEFAULT_LINK = "/support"
+
+
+def _tokenize(text: str) -> set:
+    return {w for w in "".join(c.lower() if c.isalnum() else " " for c in text).split() if len(w) > 2}
+
+
+async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
+    audience = user.get("ai_audience", "rider")
+    rows = await db_supabase.get_rows(
+        "faqs",
+        {"is_active": True, "audience": {"$in": ["both", audience]}},
+        limit=200,
+    )
+    q_tokens = _tokenize(query)
+    scored = []
+    for row in rows or []:
+        text = f"{row.get('question', '')} {row.get('answer', '')} {row.get('category', '')}"
+        overlap = len(q_tokens & _tokenize(text))
+        if overlap:
+            scored.append((overlap, row))
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return {
+        "results": [
+            {
+                "question": r.get("question"),
+                "answer": r.get("answer"),
+                "category": r.get("category"),
+            }
+            for _, r in scored[:5]
+        ]
+    }
+
+
+async def get_company_info(user: Dict[str, Any]) -> Dict[str, Any]:
+    settings = await get_app_settings()
+    return {
+        "name": settings.get("company_name", "Spinr") or "Spinr",
+        "address": settings.get("company_address", "") or "",
+        "phone": settings.get("company_phone", "") or "",
+        "email": settings.get("company_email", "") or "",
+        "website": settings.get("company_website", "") or "",
+    }
+
+
+async def escalate_to_support(user: Dict[str, Any], reason: str, category: str) -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        "action": "open_support",
+        "category": category,
+        "link": _CATEGORY_LINKS.get(category, _DEFAULT_LINK),
+        "message": "I've prepared a handoff to our human support team.",
+    }
+    if category == "safety":
+        # The assistant is never an emergency channel (see CLAUDE.md).
+        result["message"] = (
+            "If anyone is in danger, call 911 now or use the SOS button in the app. "
+            "For non-urgent safety concerns our support team will follow up."
+        )
+
+    settings = await get_app_settings()
+    if settings.get("ai_escalation_creates_ticket"):
+        try:
+            from ..services.zoho_desk_integration import create_support_ticket
+        except ImportError:
+            from services.zoho_desk_integration import create_support_ticket
+        try:
+            ticket = await create_support_ticket(
+                user=user, message=f"[AI escalation:{category}] {reason}", transcript=None
+            )
+            result["ticket_number"] = ticket.get("ticketNumber")
+            result["message"] += " A support ticket has been opened; we'll follow up by email."
+        except Exception:
+            # Zoho outage must not strand the rider — the deep link still works.
+            logger.error("ai escalation ticket failed", exc_info=True, extra={"user_id": user.get("id")})
+    return result
+
+
+register(
+    ToolSpec(
+        name="search_faqs",
+        description=(
+            "Call this for how-the-app-works and policy questions — scheduling rides, "
+            "cancellation fees, splitting fares, accessibility, service animals, payments "
+            "setup. Returns matching help-centre articles; answer ONLY from them and say "
+            "so if nothing matches."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "description": "Keywords from the rider's question.",
+                }
+            },
+            "required": ["query"],
+        },
+        handler=search_faqs,
+        audiences=_BOTH,
+    )
+)
+
+register(
+    ToolSpec(
+        name="get_company_info",
+        description=(
+            "Call this when the user asks how to contact Spinr, the support phone/email, "
+            "or where the company is based."
+        ),
+        input_schema={"type": "object", "properties": {}, "required": []},
+        handler=get_company_info,
+        audiences=_BOTH,
+    )
+)
+
+register(
+    ToolSpec(
+        name="escalate_to_support",
+        description=(
+            "Call this when the user needs a human: refunds, account suspensions, lost "
+            "items, disputes, complaints, payment problems you cannot explain from data, "
+            "or anything outside your scope. Returns a handoff the app renders as a "
+            "'Contact support' button — tell the user to tap it."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "maxLength": 300,
+                    "description": "One-sentence summary of what the user needs.",
+                },
+                "category": {
+                    "type": "string",
+                    "enum": ESCALATION_CATEGORIES,
+                    "description": "Best-fit category for routing.",
+                },
+            },
+            "required": ["reason", "category"],
+        },
+        handler=escalate_to_support,
+        audiences=_BOTH,
+    )
+)

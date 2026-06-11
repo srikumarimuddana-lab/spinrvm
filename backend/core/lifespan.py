@@ -444,6 +444,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to start WS pub/sub: {e}", exc_info=True)
 
+    # Start the MCP streamable-HTTP session manager if /mcp was mounted
+    # (no-op when the mcp SDK is absent). Never a boot-blocker — the AI chat
+    # path runs tools in-process and does not depend on this.
+    try:
+        try:
+            from ai.mcp_server import start_mcp
+        except ImportError:
+            from ..ai.mcp_server import start_mcp
+        await start_mcp()
+    except Exception as e:
+        logger.error(f"Failed to start MCP session manager: {e}", exc_info=True)
+
     # Perform startup checks
     logger.info(f"Spinr API startup complete ({len(background_tasks)} background tasks running)")
 
@@ -451,6 +463,14 @@ async def lifespan(app: FastAPI):
 
     # Cleanup on shutdown — cancel background tasks and await them.
     logger.info("Shutting down Spinr API...")
+    try:
+        try:
+            from ai.mcp_server import stop_mcp
+        except ImportError:
+            from ..ai.mcp_server import stop_mcp
+        await stop_mcp()
+    except Exception as e:
+        logger.warning(f"Error stopping MCP session manager: {e}")
     # Stop WS pub/sub FIRST so in-flight publishes don't race against
     # a half-torn-down Redis client during the last ~millisecond of
     # shutdown (and so its consumer task isn't left as an orphan when

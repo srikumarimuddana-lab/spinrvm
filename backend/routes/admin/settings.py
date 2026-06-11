@@ -53,6 +53,12 @@ _CREDENTIAL_FIELDS = frozenset(
         # trip in plaintext on GET unless it stays masked here. Keeps the
         # super-admin-only reveal flow as the only way to read it.
         "sendgrid_api_key",
+        # AI assistant provider keys (one per provider; the AI settings card
+        # shows a single field bound to the selected provider).
+        "ai_api_key_anthropic",
+        "ai_api_key_openai",
+        "ai_api_key_gemini",
+        "ai_api_key_openrouter",
     }
 )
 
@@ -142,6 +148,22 @@ class SettingsUpdateRequest(BaseModel):
     max_simultaneous_offers: Optional[int] = Field(default=None, ge=1, le=10)
     ride_offer_timeout_seconds: Optional[int] = Field(default=None, ge=5, le=60)
     use_eta_ranking: Optional[bool] = None
+    # AI assistant (rider AI mode, backend/ai/) — provider/model swap at
+    # runtime, keys masked like the Stripe/Twilio credentials above.
+    ai_assistant_enabled: Optional[bool] = None
+    ai_mcp_enabled: Optional[bool] = None
+    ai_provider: Optional[str] = Field(default=None, pattern="^(anthropic|openai|gemini|openrouter)$")
+    ai_model: Optional[str] = Field(default=None, max_length=120)
+    ai_api_key_anthropic: Optional[str] = None
+    ai_api_key_openai: Optional[str] = None
+    ai_api_key_gemini: Optional[str] = None
+    ai_api_key_openrouter: Optional[str] = None
+    ai_max_output_tokens: Optional[int] = Field(default=None, ge=128, le=4096)
+    ai_max_tool_iterations: Optional[int] = Field(default=None, ge=1, le=10)
+    ai_daily_message_cap: Optional[int] = Field(default=None, ge=1, le=500)
+    ai_history_max_messages: Optional[int] = Field(default=None, ge=2, le=50)
+    ai_escalation_creates_ticket: Optional[bool] = None
+    ai_disclaimer: Optional[str] = Field(default=None, max_length=300)
 
 
 @router.get("/settings")
@@ -149,6 +171,20 @@ async def admin_get_settings(admin: dict = Depends(get_admin_user)):
     """Get all settings. Credential fields are masked — use /settings/reveal/{field} to read a value."""
     raw = await get_app_settings()
     return _mask_credentials(raw)
+
+
+@router.get("/ai/catalog")
+async def admin_ai_catalog(admin: dict = Depends(get_admin_user)):
+    """Provider → model suggestions for the AI Assistant settings card.
+
+    Entries are suggestions only — the card also accepts a custom model id
+    (an invalid id surfaces as a provider error on the next chat turn).
+    """
+    try:
+        from ai.catalog import get_catalog
+    except ImportError:
+        from ...ai.catalog import get_catalog
+    return get_catalog()
 
 
 @router.get("/settings/reveal/{field}")

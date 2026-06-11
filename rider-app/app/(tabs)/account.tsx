@@ -354,6 +354,8 @@ export default function AccountScreen() {
             <View style={styles.card}>
               <MenuRow styles={styles} colors={colors} icon="bag-handle" iconColor="#F97316" iconBg="rgba(249, 115, 22, 0.1)" label="Lost & Found" onPress={() => router.push('/lost-and-found' as any)} />
               <View style={styles.cardDivider} />
+              <MenuRow styles={styles} colors={colors} icon="sparkles" iconColor="#8B5CF6" iconBg="rgba(139, 92, 246, 0.1)" label="AI Assistant" onPress={() => router.push('/ai-assistant' as any)} />
+              <View style={styles.cardDivider} />
               <MenuRow styles={styles} colors={colors} icon="help-circle" iconColor="#2563EB" iconBg="rgba(37, 99, 235, 0.1)" label="Help Center" onPress={() => router.push('/support' as any)} />
               <View style={styles.cardDivider} />
               <MenuRow styles={styles} colors={colors} icon="document-text" iconColor={colors.textDim} iconBg={colors.surfaceLight} label="Legal" onPress={() => router.push('/legal?type=tos' as any)} />

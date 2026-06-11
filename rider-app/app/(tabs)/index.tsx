@@ -20,6 +20,7 @@ import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { useAuthStore } from '@shared/store/authStore';
 import api from '@shared/api/client';
 import { useRideStore } from '../../store/rideStore';
+import { useAiChatStore } from '../../store/aiChatStore';
 import AppMap from '@shared/components/AppMap';
 import CarMarker from '@shared/components/CarMarker';
 import { showToast } from '../../store/toastStore';
@@ -33,6 +34,11 @@ export default function HomeScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
   const { savedAddresses, fetchSavedAddresses, setUserLocation, currentRide, triggerEmergency, fetchActiveRide } = useRideStore();
+  const aiEnabled = useAiChatStore((s) => s.enabled);
+  const loadAiConfig = useAiChatStore((s) => s.loadConfig);
+  useEffect(() => {
+    loadAiConfig();
+  }, [loadAiConfig]);
   const [unreadNotifCount, setUnreadNotifCount] = useState(0);
   const [showPromo, setShowPromo] = useState(true);
   const [location, setLocation] = useState<any>(null);
@@ -510,10 +516,14 @@ function BottomSheetContent({
         <TouchableOpacity
           style={styles.aiButton}
           onPress={() => {
-            showToast('Coming Soon', 'AI Ride Booking is coming soon!', 'info');
+            if (aiEnabled) {
+              router.push('/ai-assistant' as any);
+            } else {
+              showToast('Coming Soon', 'AI Ride Booking is coming soon!', 'info');
+            }
           }}
           activeOpacity={0.8}
-          accessibilityLabel="AI ride booking"
+          accessibilityLabel="AI assistant"
           accessibilityRole="button"
         >
           <View style={styles.aiIconGlow} />

@@ -117,10 +117,13 @@ class TestChatAsUser:
             )
         assert gen.kwargs["audience"] == "rider"
 
-    def test_admin_account_is_not_a_target(self, super_admin_client):
-        p1, p2, p3 = _patches(target={"id": "admin-2", "role": "admin"})
+    @pytest.mark.parametrize("role", ["admin", "super_admin", "operations", "support", "finance", "custom"])
+    def test_staff_accounts_are_not_targets(self, super_admin_client, role):
+        # Codex review (PR #1797): the full staff-role set must be rejected,
+        # not just role == "admin" — mirrors dependencies._admin_roles.
+        p1, p2, p3 = _patches(target={"id": "staff-2", "role": role})
         with p1, p2, p3:
-            resp = super_admin_client.post("/api/v1/admin/ai/chat", json={"user_id": "admin-2", "message": "hi"})
+            resp = super_admin_client.post("/api/v1/admin/ai/chat", json={"user_id": "staff-2", "message": "hi"})
         assert resp.status_code == 404
 
     def test_every_chat_is_audited(self, super_admin_client):

@@ -74,10 +74,16 @@ async def _audit(admin: Dict[str, Any], action: str, target_user_id: str, detail
     )
 
 
+# Mirrors dependencies._admin_roles: every staff role, not just "admin".
+# A super_admin/operations/support/finance/custom user row is a staff
+# account and must never be an impersonable test subject.
+_ADMIN_ROLES = frozenset({"admin", "super_admin", "operations", "support", "finance", "custom"})
+
+
 async def _target_user(user_id: str) -> Dict[str, Any]:
     user = await db_supabase.get_user_by_id(user_id)
-    if not user or user.get("role") == "admin":
-        # Admin accounts are not impersonable test subjects.
+    if not user or user.get("role") in _ADMIN_ROLES:
+        # Staff accounts are not impersonable test subjects.
         raise HTTPException(status_code=404, detail="User not found")
     return user
 

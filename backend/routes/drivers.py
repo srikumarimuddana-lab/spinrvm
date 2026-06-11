@@ -332,6 +332,11 @@ async def _generate_and_store_ride_snapshot(
                         # supabase-py serialises bools as JSON, so the string
                         # form is what ends up on the wire; lowercase "true".
                         "upsert": "true",
+                        # Cache effectively forever (1 year, the HTTP max
+                        # per RFC 9111). Snapshots are immutable per ride;
+                        # a regenerated snapshot may never be re-fetched by
+                        # clients that already cached it, which is accepted.
+                        "cache-control": "31536000",
                     },
                 ),
             )

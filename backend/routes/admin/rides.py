@@ -251,6 +251,11 @@ async def admin_get_active_rides():
             {"status": {"$in": active_statuses}},
             limit=200,
             order="created_at",
+            columns=(
+                "id,status,rider_id,driver_id,pickup_address,dropoff_address,"
+                "pickup_lat,pickup_lng,dropoff_lat,dropoff_lng,"
+                "total_fare,vehicle_type_id,created_at"
+            ),
         )
     except Exception as e:
         logger.error(f"Failed to fetch active rides: {e}")

@@ -241,7 +241,7 @@ Rules:
 
 Migrations live in `backend/migrations/` and are applied in filename order by `backend/migrate.py`.
 
-Naming: `NN_short_description.sql` where `NN` is a zero-padded sequence number (currently highest applied is `101_users_add_is_rider.sql`; **next free slot is `102`**). Pick the next available number — never reuse or reorder existing numbers. If two PRs conflict on a number, the second one renames to the next free slot before merge. Note: the runner uses the full filename as the idempotency key, so already-applied migrations must never be renamed. (Pre-existing duplicate prefixes at 08, 28, 29, 48, 50, 51, 52, 54, 55, 56, 57, 58, 91, 92, 96 are handled by full-filename keying — do not introduce new duplicates; a CI prefix-uniqueness check blocks them.)
+Naming: `NN_short_description.sql` where `NN` is a zero-padded sequence number (currently highest is `141_retention_purge_ai_messages.sql`; **next free slot is `142`** — re-verify with `ls backend/migrations | sort -V | tail -1` since this note goes stale). Pick the next available number — never reuse or reorder existing numbers. If two PRs conflict on a number, the second one renames to the next free slot before merge. Note: the runner uses the full filename as the idempotency key, so already-applied migrations must never be renamed. (Pre-existing duplicate prefixes at 08, 28, 29, 48, 50, 51, 52, 54, 55, 56, 57, 58, 91, 92, 96, 138 are handled by full-filename keying — do not introduce new duplicates; a CI prefix-uniqueness check blocks them.)
 
 Migration rules:
 - **Append-only**: never edit a merged migration. Schema changes go in a new file.
@@ -304,7 +304,7 @@ Logging:
 - Never `print()` in production code. Never `logger.warning(...)` and continue on a DB/auth/payment error.
 
 Sentry tags (attach to every captured event):
-- `domain`: one of `dispatch`, `payments`, `auth`, `corporate`, `safety`, `drivers`, `rides`, `admin`
+- `domain`: one of `dispatch`, `payments`, `auth`, `corporate`, `safety`, `drivers`, `rides`, `admin`, `ai`
 - `surface`: one of `backend`, `rider-app`, `driver-app`, `admin`
 - `ride_id`, `driver_id`, `rider_id` — only IDs, never PII
 - `env`: `production` / `staging` / `development`

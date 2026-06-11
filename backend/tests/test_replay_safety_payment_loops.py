@@ -91,9 +91,11 @@ def test_retry_idempotency_key_is_deterministic_from_ride_and_count():
         asyncio.run(retry_failed_payments())
 
     assert len(captured_keys) == 2
-    # Key shape: ride-confirm-<ride_id>-<amount_cents> — shared with
-    # charge_ride's confirm path so both code paths dedupe at Stripe.
-    assert captured_keys[0] == "ride-confirm-ride_1-2550"
+    # Key shape: ride-confirm-<ride_id>-<amount_cents>-retry-<attempt>.
+    # payment_retry_count=2 → retry_count=2 → attempt=3.
+    # Two replicas with the same retry_count still produce identical keys,
+    # so concurrent confirms for the same attempt still dedupe at Stripe.
+    assert captured_keys[0] == "ride-confirm-ride_1-2550-retry-3"
     assert captured_keys[0] == captured_keys[1], (
         "Two replicas confirming the same PI must produce identical idempotency keys"
     )

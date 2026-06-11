@@ -123,7 +123,30 @@ async def admin_get_disputes(
     except Exception:
         logger.warning("disputes table may not exist yet")
         return []
-    return disputes
+
+    if not disputes:
+        return disputes
+
+    # Enrich with user_name joined from users table — PIPEDA-safe because
+    # we derive the name at read time from user_id rather than storing it.
+    user_ids = list({d["user_id"] for d in disputes if d.get("user_id")})
+    user_name_map: Dict[str, str] = {}
+    if user_ids:
+        try:
+            users = await db_supabase.get_rows(
+                "users",
+                {"id": {"$in": user_ids}},
+                limit=len(user_ids),
+            )
+            for u in users or []:
+                parts = [u.get("first_name") or "", u.get("last_name") or ""]
+                name = " ".join(p for p in parts if p).strip()
+                if name and u.get("id"):
+                    user_name_map[u["id"]] = name
+        except Exception:
+            logger.warning("Failed to enrich disputes with user names")
+
+    return [{**d, "user_name": user_name_map.get(d.get("user_id", ""), "")} for d in disputes]
 
 
 @router.get("/disputes/stats")

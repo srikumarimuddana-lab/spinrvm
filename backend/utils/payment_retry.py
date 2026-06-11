@@ -275,15 +275,17 @@ async def retry_failed_payments():
 
             elif intent.status in ("requires_payment_method", "requires_confirmation"):
                 attempt = retry_count + 1
-                # Same key scheme as charge_ride's confirm path
-                # (ride-confirm-{ride_id}-{amount_cents}) so the two confirm
-                # code paths share Stripe-side deduplication — a confirm
-                # racing in from process_payment and one from this loop must
-                # resolve to a single operation, never two charges.
+                # Scheduled retries use a per-attempt suffix so each retry
+                # gets a fresh Stripe call. The in-flight race (two replicas
+                # both confirming during trip-end) is handled by charge_ride's
+                # key (ride-confirm-{ride_id}-{amount}); by the time the retry
+                # loop fires, that initial window has closed and we need a new
+                # idempotency key to avoid Stripe replaying a cached transient
+                # error from attempt 1 on attempts 2+.
                 stripe.PaymentIntent.confirm(
                     payment_intent_id,
                     api_key=stripe_secret,
-                    idempotency_key=f"ride-confirm-{ride_id}-{intent.amount}",
+                    idempotency_key=f"ride-confirm-{ride_id}-{intent.amount}-retry-{attempt}",
                 )
                 await db.update_one(
                     "rides",

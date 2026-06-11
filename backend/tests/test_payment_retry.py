@@ -134,10 +134,10 @@ async def test_retry_proceeds_when_stripe_failed():
     mock_confirm.assert_called_once()
     _, confirm_kwargs = mock_confirm.call_args
     assert "idempotency_key" in confirm_kwargs
-    # Idempotency key is shared with charge_ride's confirm path —
-    # ride-confirm-<ride_id>-<amount_cents> — so a confirm racing in from
-    # process_payment and one from this loop dedupe to a single Stripe op.
-    assert confirm_kwargs["idempotency_key"] == f"ride-confirm-{RIDE_ID}-2550"
+    # Scheduled retries use per-attempt keys so each retry gets a fresh Stripe
+    # call rather than replaying a cached transient error. payment_retry_count=1
+    # → retry_count=1 → attempt=2 → key suffix "-retry-2".
+    assert confirm_kwargs["idempotency_key"] == f"ride-confirm-{RIDE_ID}-2550-retry-2"
 
     # DB update must set payment_status='processing' and increment count
     mock_db_update.assert_awaited()

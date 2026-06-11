@@ -1561,10 +1561,11 @@ export const getPromoStats = (range?: string) => {
 };
 
 /* ── Users (Riders + Drivers + Admins) ───────── */
-export const getUsers = (role: "all" | "rider" | "driver" | "admin" = "all", search?: string) =>
-    request<any[]>(
-        `/api/admin/users?role=${role}${search ? `&search=${encodeURIComponent(search)}` : ""}`,
-    );
+// NOTE: no `search` param here on purpose — search terms can be phone
+// numbers/emails and GET query strings land in browser history and proxy
+// logs. Use the POST-based adminSearchUsers for user search.
+export const getUsers = (role: "all" | "rider" | "driver" | "admin" = "all") =>
+    request<any[]>(`/api/admin/users?role=${role}`);
 
 export const getUsersPaginated = (opts: {
     role?: "all" | "rider" | "driver" | "both" | "admin";

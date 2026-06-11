@@ -71,6 +71,7 @@ async def _count_demand_in_area(area_id: str) -> int:
                 "ride_requested_at": {"$gte": cutoff},
             },
             limit=500,
+            columns="id,status",
         )
         # Count rides that are still active or very recently requested
         active_statuses = {
@@ -93,7 +94,12 @@ async def _count_supply_in_area(area: Dict[str, Any]) -> int:
         return 0
 
     try:
-        drivers = await db.get_rows("drivers", {"is_online": True, "is_available": True}, limit=500)
+        drivers = await db.get_rows(
+            "drivers",
+            {"is_online": True, "is_available": True},
+            limit=500,
+            columns="id,user_id,lat,lng",
+        )
 
         # Presence filter: ghost-online drivers (app force-killed, phone dead)
         # shouldn't count as "supply" or we'd compute a lower surge than the

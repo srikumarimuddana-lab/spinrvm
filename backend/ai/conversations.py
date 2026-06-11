@@ -1,6 +1,6 @@
 """Persistence for AI assistant conversations (ai_conversations / ai_messages).
 
-PIPEDA contract (see migration 140): only user text (already PII-scrubbed by
+PIPEDA contract (see migration 144): only user text (already PII-scrubbed by
 the orchestrator) and assistant replies are written. Tool arguments and tool
 results never reach these tables — an assistant row records tool *names*
 only. Every read and delete is owner-scoped; a foreign conversation_id
@@ -37,7 +37,7 @@ async def get_or_create_conversation(
     Returns None when conversation_id is supplied but does not belong to
     this user (caller turns that into a 404 — indistinguishable from a
     missing conversation). ``admin_actor_id`` stamps threads started from
-    the super-admin AI console on the user's behalf (migration 142).
+    the super-admin AI console on the user's behalf (migration 145).
     """
     if conversation_id:
         row = await db_supabase.find_one("ai_conversations", {"id": conversation_id, "user_id": user_id})

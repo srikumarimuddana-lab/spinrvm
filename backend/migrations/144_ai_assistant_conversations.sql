@@ -1,4 +1,4 @@
--- 140_ai_assistant_conversations.sql
+-- 144_ai_assistant_conversations.sql
 -- Rollback:
 --   DROP TABLE IF EXISTS public.ai_messages;
 --   DROP TABLE IF EXISTS public.ai_conversations;
@@ -8,7 +8,7 @@
 -- assistant replies are persisted. Tool-call arguments and tool results
 -- (addresses, balances, GPS) live only in request memory and are never
 -- written here — an assistant row keeps tool_names for transparency only.
--- Rows are purged after 90 days by purge_pii_retention (migration 141).
+-- Rows are purged after 90 days by purge_pii_retention (migration 143, Step J).
 
 CREATE TABLE IF NOT EXISTS public.ai_conversations (
     id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -40,7 +40,7 @@ CREATE INDEX IF NOT EXISTS ai_conversations_user_updated_idx
 CREATE INDEX IF NOT EXISTS ai_messages_conversation_created_idx
     ON public.ai_messages (conversation_id, created_at);
 
--- Retention purge scans by age (migration 141).
+-- Retention purge scans by age (migration 143, Step J).
 CREATE INDEX IF NOT EXISTS ai_messages_created_idx
     ON public.ai_messages (created_at);
 

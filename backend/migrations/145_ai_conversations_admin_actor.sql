@@ -1,4 +1,4 @@
--- 142_ai_conversations_admin_actor.sql
+-- 145_ai_conversations_admin_actor.sql
 -- Rollback:
 --   ALTER TABLE public.ai_conversations DROP COLUMN IF EXISTS admin_actor_id;
 --

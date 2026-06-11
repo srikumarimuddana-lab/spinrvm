@@ -57,6 +57,7 @@ export default function VehicleInfoScreen() {
 
     const [vehicleTypeName, setVehicleTypeName] = useState('');
     const [vehicleTypes, setVehicleTypes] = useState<VehicleType[]>([]);
+    const [vehicleTypesStatus, setVehicleTypesStatus] = useState<'loading' | 'error' | 'loaded'>('loading');
     const [showVehicleTypePicker, setShowVehicleTypePicker] = useState(false);
 
     useEffect(() => {
@@ -75,17 +76,30 @@ export default function VehicleInfoScreen() {
     }, [driver]);
 
     const fetchVehicleTypes = async () => {
+        setVehicleTypesStatus('loading');
         try {
             const areaId = driver?.service_area_id;
-            const url = areaId ? `/vehicle-types?service_area_id=${areaId}` : '/vehicle-types';
-            const response = await api.get<VehicleType[]>(url);
-            setVehicleTypes(response.data);
+            let types: VehicleType[] = [];
+            if (areaId) {
+                const response = await api.get<VehicleType[]>(`/vehicle-types?service_area_id=${areaId}`);
+                types = response.data || [];
+            }
+            // A service area with no fare configs filters out every type
+            // (backend returns 200 + []). The driver still needs to classify
+            // their vehicle, so fall back to the unfiltered active list.
+            if (types.length === 0) {
+                const response = await api.get<VehicleType[]>('/vehicle-types');
+                types = response.data || [];
+            }
+            setVehicleTypes(types);
+            setVehicleTypesStatus('loaded');
             if (driver?.vehicle_type_id) {
-                const found = response.data.find((t: any) => t.id === driver.vehicle_type_id);
+                const found = types.find((t: any) => t.id === driver.vehicle_type_id);
                 if (found) setVehicleTypeName(found.name);
             }
-        } catch (error) {
-            console.log('Failed to fetch vehicle types');
+        } catch (error: any) {
+            setVehicleTypesStatus('error');
+            showToast('error', 'Error', error?.response?.data?.detail || 'Failed to load vehicle types. Check your connection and try again.');
         }
     };
 
@@ -387,6 +401,25 @@ export default function VehicleInfoScreen() {
                                     )}
                                 </TouchableOpacity>
                             )}
+                            ListEmptyComponent={
+                                <View style={styles.vehicleTypeEmpty}>
+                                    {vehicleTypesStatus === 'loading' ? (
+                                        <ActivityIndicator color={colors.primary} />
+                                    ) : (
+                                        <>
+                                            <Ionicons name="car-outline" size={36} color={colors.textDim} />
+                                            <Text style={styles.vehicleTypeEmptyText}>
+                                                {vehicleTypesStatus === 'error'
+                                                    ? "Couldn't load vehicle types. Check your connection and try again."
+                                                    : 'No vehicle types are available yet. Please contact support.'}
+                                            </Text>
+                                            <TouchableOpacity style={styles.vehicleTypeRetryBtn} onPress={fetchVehicleTypes} activeOpacity={0.8}>
+                                                <Text style={styles.vehicleTypeRetryText}>Try Again</Text>
+                                            </TouchableOpacity>
+                                        </>
+                                    )}
+                                </View>
+                            }
                         />
                     </View>
                 </View>
@@ -633,5 +666,9 @@ function createStyles(colors: ThemeColors) {
         vehicleTypeInfo: { flex: 1 },
         vehicleTypeOptionName: { fontSize: 16, fontWeight: '700', color: colors.text },
         vehicleTypeOptionDesc: { fontSize: 13, color: colors.textDim, marginTop: 2 },
+        vehicleTypeEmpty: { paddingVertical: 36, paddingHorizontal: 24, alignItems: 'center', gap: 12 },
+        vehicleTypeEmptyText: { fontSize: 14, color: colors.textDim, textAlign: 'center', lineHeight: 20 },
+        vehicleTypeRetryBtn: { backgroundColor: colors.primary, borderRadius: 10, paddingVertical: 10, paddingHorizontal: 28 },
+        vehicleTypeRetryText: { color: '#fff', fontSize: 14, fontWeight: '600' },
     });
 }

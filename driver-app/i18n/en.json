@@ -35,6 +35,12 @@
         "noRideRequests": "No ride requests",
         "waitingForRequests": "Waiting for ride requests...",
         "gettingLocation": "Getting your location...",
+        "locationDeniedTitle": "Location permission needed",
+        "locationDeniedBody": "Spinr needs your location to show the map and receive ride requests. Enable location access in your device settings.",
+        "locationUnavailableTitle": "Couldn't get your location",
+        "locationUnavailableBody": "Check that GPS is turned on, then try again.",
+        "openSettings": "Open Settings",
+        "retryLocation": "Try Again",
         "go": "GO",
         "stop": "STOP"
     },

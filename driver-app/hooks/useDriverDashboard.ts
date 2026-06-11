@@ -61,11 +61,14 @@ const _toFiniteCoord = (v: unknown): number | null => {
   return n;
 };
 
+export type LocationStatus = 'pending' | 'denied' | 'unavailable' | 'ok';
+
 interface UseDriverDashboardReturn {
   // State
   isOnline: boolean;
   connectionState: ConnectionState;
   location: Location.LocationObject | null;
+  locationStatus: LocationStatus;
   otpInput: string;
   setOtpInput: (value: string) => void;
   wsError: string | null;
@@ -207,6 +210,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   const [isOnline, setIsOnline] = useState(driverData?.is_online || false);
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
+  // Why a separate status: `location` stays null when permission is denied or
+  // the GPS fix fails, and the dashboard used to spin on "Getting your
+  // location..." forever with no way to tell those cases apart.
+  const [locationStatus, setLocationStatus] = useState<LocationStatus>('pending');
   const [otpInput, setOtpInput] = useState('');
 
   // Clear OTP input when ride state changes away from arrived_at_pickup
@@ -343,6 +350,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // AppState refresh the map would still point at home until
   // watchPositionAsync starts after Go Online).
   const refreshLocation = useCallback(async (useCache: boolean) => {
+    setLocationStatus(prev => (prev === 'ok' ? prev : 'pending'));
     if (useCache) {
       try {
         const AsyncStorage = require('@react-native-async-storage/async-storage').default;
@@ -359,7 +367,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       const res = await Location.requestForegroundPermissionsAsync();
       status = res.status;
     }
-    if (status !== 'granted') return null;
+    if (status !== 'granted') {
+      setLocationStatus('denied');
+      return null;
+    }
 
     if (useCache) {
       try {
@@ -372,12 +383,16 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       setLocation(loc);
       locationRef.current = loc;
+      setLocationStatus('ok');
       try {
         const AsyncStorage = require('@react-native-async-storage/async-storage').default;
         AsyncStorage.setItem('spinr_driver_last_location', JSON.stringify({ lat: loc.coords.latitude, lng: loc.coords.longitude }));
       } catch {}
       return loc;
     } catch {
+      // A lastKnown fix may already be rendering the map — only flag
+      // unavailable when there is nothing to show at all.
+      setLocationStatus(locationRef.current ? 'ok' : 'unavailable');
       return null;
     }
   }, []);
@@ -1373,6 +1388,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     isOnline,
     connectionState,
     location,
+    locationStatus,
     otpInput,
     setOtpInput,
     wsError,

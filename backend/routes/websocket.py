@@ -8,20 +8,20 @@ from firebase_admin import auth as firebase_auth
 from loguru import logger
 
 try:
-    from ..utils.breadcrumbs import persist_ride_breadcrumbs
+    from ..utils.breadcrumb_buffer import buffer_ride_breadcrumb, flush_driver_breadcrumbs
+    from ..utils.breadcrumbs import persist_ride_breadcrumbs, resolve_active_rides_cached
     from ..utils.location_integrity import check_location_integrity
 except ImportError:
-    from utils.breadcrumbs import persist_ride_breadcrumbs  # type: ignore
+    from utils.breadcrumb_buffer import buffer_ride_breadcrumb, flush_driver_breadcrumbs  # type: ignore
+    from utils.breadcrumbs import persist_ride_breadcrumbs, resolve_active_rides_cached  # type: ignore
     from utils.location_integrity import check_location_integrity  # type: ignore
 
 try:
     from .. import db_supabase
     from ..core.config import settings
     from ..dependencies import _verify_admin_payload, verify_jwt_token
-    from ..settings_loader import get_app_settings
     from ..socket_manager import manager
     from ..utils.driver_presence import clear_presence, mark_present
-    from ..utils.maps_eta import get_ride_eta_seconds
     from ..utils.redis_client import redis_expire, redis_incr
 except ImportError:
     import db_supabase
@@ -29,6 +29,7 @@ except ImportError:
     from dependencies import _verify_admin_payload, verify_jwt_token
     from socket_manager import manager
     from utils.driver_presence import clear_presence, mark_present
+    from utils.redis_client import redis_expire, redis_incr  # type: ignore
 
 db = db_supabase  # legacy alias
 
@@ -607,35 +608,26 @@ async def websocket_endpoint(
                     # foregrounded, not just that TCP is open.
                     await mark_present(driver_id)
 
-                    # Resolve active rides for rider fan-out. The shared
-                    # breadcrumb writer below independently derives ride_id and
-                    # phase from server milestones so single pings and buffered
-                    # batches follow the same billing/dispute rules.
-                    active_rides = await db_supabase.get_rows(
-                        "rides",
-                        {
-                            "driver_id": driver_id,
-                            "status": {
-                                "$in": [
-                                    "driver_assigned",
-                                    "driver_accepted",
-                                    "driver_arrived",
-                                    "in_progress",
-                                ]
-                            },
-                        },
-                        limit=10,
-                    )
+                    # Resolve active rides for rider fan-out. B3.1: served from
+                    # a 5 s Redis cache — this runs on EVERY GPS ping and used
+                    # to be a per-ping rides query. The shared breadcrumb writer
+                    # below independently derives ride_id and phase from server
+                    # milestones so single pings and buffered batches follow
+                    # the same billing/dispute rules.
+                    active_rides = await resolve_active_rides_cached(driver_id)
                     active_ride = active_rides[0] if active_rides else None
                     ride_id = active_ride["id"] if active_ride else None
 
-                    # Persist through the shared breadcrumb path even for a single
-                    # live ping. That path stores the device capture timestamp
+                    # B3.3: buffer per-ping points and write them as one
+                    # insert (~10 points / 10s) through the shared breadcrumb
+                    # path. That path stores the device capture timestamp
                     # when supplied (captured_at/device_timestamp/recorded_at/
                     # timestamp), records received_at separately, and derives
                     # ride phase from server ride milestones instead of trusting
-                    # the client's current message timing or phase tag.
-                    await persist_ride_breadcrumbs(driver_id, [data], persist_idle=True, active_ride=active_ride)
+                    # the client's current message timing or phase tag. The
+                    # buffer flushes early on ride-context change, and the
+                    # disconnect/completion paths flush the remainder.
+                    await buffer_ride_breadcrumb(driver_id, data, active_ride=active_ride)
 
                     # Refresh the Maps API key from DB at most every 60 s.
                     now_mono = asyncio.get_event_loop().time()
@@ -1043,3 +1035,14 @@ async def websocket_endpoint(
         # GAP FIX: Cancel heartbeat task on disconnect
         if hb_task:
             hb_task.cancel()
+        # B3.3: persist any buffered breadcrumbs so a disconnect never strands
+        # the tail of a trail. Best-effort — cleanup must not mask the
+        # original disconnect, and the on-device buffer re-uploads via REST.
+        if current_driver_id:
+            try:
+                await flush_driver_breadcrumbs(current_driver_id)
+            except Exception:
+                logger.error(
+                    f"[WS] breadcrumb flush on disconnect failed for driver {current_driver_id}",
+                    exc_info=True,
+                )

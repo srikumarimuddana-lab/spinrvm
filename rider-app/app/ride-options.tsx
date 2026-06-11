@@ -29,7 +29,8 @@ import { showToast } from '../store/toastStore';
 import ConfirmSheet from '../components/ConfirmSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import { CarMarker } from '@shared/components/CarMarker';
+import { CarMarker, resolveMarkerVariant } from '@shared/components/CarMarker';
+import { useVehicleTypeStore } from '@shared/store/vehicleTypeStore';
 import SchedulePicker from '../components/SchedulePicker';
 import SkeletonBox from '../components/SkeletonBox';
 import { useResponsive } from '@shared/utils/responsive';
@@ -72,6 +73,10 @@ function RideOptionsScreenContent() {
     availablePromos, appliedPromo, fetchAvailablePromos, applyPromo,
     setRoutePolyline, routePolyline,
   } = useRideStore();
+
+  // Vehicle type config (marker variant + custom marker image), synced once
+  // per app open by the root layout.
+  const vehicleTypesById = useVehicleTypeStore((s) => s.byId);
 
   // ── Payment state ──
   const { wallet, fetchWallet } = useWalletStore();
@@ -313,6 +318,34 @@ function RideOptionsScreenContent() {
         return;
       }
     }
+    // Surge transparency: surge must be explicitly acknowledged before
+    // booking, never discovered on the receipt. The badge on the estimate
+    // card is passive — this sheet forces an active confirm at >1.0×.
+    const surge = selectedEstimate.surge_multiplier ?? 1;
+    if (surge > 1.0) {
+      setConfirmSheet({
+        visible: true,
+        title: `${surge}× surge pricing is in effect`,
+        message: `Demand is higher than usual right now, so a ${surge}× surge multiplier is included in your fare. Your total is $${totalFare.toFixed(2)}.`,
+        variant: 'warning',
+        buttons: [
+          // Deliberately NOT awaited: ConfirmSheet.handlePress awaits onPress
+          // and then always calls onClose() in its finally. Awaiting the whole
+          // booking here would let that onClose() fire AFTER proceedWithBooking
+          // sets a follow-up sheet (e.g. the 402 "Unpaid Ride" prompt) and
+          // silently close it. Returning immediately closes the surge sheet
+          // first; booking continues and any follow-up sheet survives.
+          { text: `Book at $${totalFare.toFixed(2)}`, onPress: () => { void proceedWithBooking(); } },
+          { text: 'Cancel', style: 'cancel' },
+        ],
+      });
+      return;
+    }
+    await proceedWithBooking();
+  };
+
+  const proceedWithBooking = async () => {
+    if (isBooking) return;
     setIsBooking(true);
     try {
       const corpId = useCorporate && selectedCorporateId ? selectedCorporateId : null;
@@ -489,11 +522,20 @@ function RideOptionsScreenContent() {
             typeof d.lat === 'number' && !isNaN(d.lat) &&
             typeof d.lng === 'number' && !isNaN(d.lng) &&
             Math.abs(d.lat) > 0.1 && Math.abs(d.lng) > 0.1
-          ).map((driver) => (
-            <CarMarker key={driver.id} identifier={driver.id}
-              coordinate={{ latitude: driver.lat, longitude: driver.lng }}
-              heading={(driver as any).heading ?? Math.random() * 360} size={36} zIndex={101} />
-          ))}
+          ).map((driver) => {
+            const vt = vehicleTypesById[driver.vehicle_type_id ?? ''];
+            return (
+              <CarMarker key={driver.id} identifier={driver.id}
+                coordinate={{ latitude: driver.lat, longitude: driver.lng }}
+                heading={(driver as any).heading ?? Math.random() * 360}
+                imageUri={vt?.marker_image_url}
+                variant={resolveMarkerVariant(
+                  vt?.marker_variant ?? driver.marker_variant,
+                  vt?.name ?? driver.vehicle_type_name,
+                )}
+                size={36} zIndex={101} />
+            );
+          })}
           {serviceAreaPolygons.map((coords, idx) => (
             <Polygon
               key={`sa-poly-${idx}`}

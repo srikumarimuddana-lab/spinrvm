@@ -30,6 +30,8 @@ try:
     from ..schemas import Driver, RideRatingRequest
     from ..services.fare_service import recalculate_fare_for_distance
     from ..socket_manager import manager
+    from ..utils.breadcrumb_buffer import flush_driver_breadcrumbs
+    from ..utils.breadcrumbs import invalidate_active_rides_cache
     from ..utils.datetime_utils import parse_iso_utc
     from ..utils.driver_online import intent_online
     from ..utils.driver_presence import (
@@ -38,6 +40,7 @@ try:
         present_driver_ids_checked,
         reset_miss_streak,
     )
+    from ..utils.earnings_snapshot import build_earnings_snapshot
     from ..utils.error_handling import (
         AccountDisabledException,
         ErrorCode,
@@ -47,7 +50,9 @@ try:
     from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
     from ..utils.insurance_periods import record_period_transition
-    from ..utils.money import dollars_to_cents
+    from ..utils.metrics import inc as _metric_inc
+    from ..utils.metrics import observe as _metric_observe
+    from ..utils.money import dollars_to_cents, to_decimal
     from ..utils.t4a_pdf import generate_t4a_pdf
 except ImportError:
     import db_supabase
@@ -59,6 +64,8 @@ except ImportError:
     from schemas import Driver, RideRatingRequest
     from services.fare_service import recalculate_fare_for_distance
     from socket_manager import manager
+    from utils.breadcrumb_buffer import flush_driver_breadcrumbs  # type: ignore
+    from utils.breadcrumbs import invalidate_active_rides_cache  # type: ignore
     from utils.datetime_utils import parse_iso_utc
     from utils.driver_online import intent_online  # type: ignore
     from utils.driver_presence import (
@@ -67,6 +74,7 @@ except ImportError:
         present_driver_ids_checked,
         reset_miss_streak,
     )
+    from utils.earnings_snapshot import build_earnings_snapshot
     from utils.error_handling import (
         AccountDisabledException,
         ErrorCode,
@@ -76,7 +84,9 @@ except ImportError:
     from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
     from utils.insurance_periods import record_period_transition  # type: ignore[assignment]
-    from utils.money import dollars_to_cents
+    from utils.metrics import inc as _metric_inc  # type: ignore
+    from utils.metrics import observe as _metric_observe  # type: ignore
+    from utils.money import dollars_to_cents, to_decimal
     from utils.t4a_pdf import generate_t4a_pdf  # noqa: F401 – used in download_t4a_pdf
 
 db = db_supabase  # legacy alias
@@ -322,6 +332,11 @@ async def _generate_and_store_ride_snapshot(
                         # supabase-py serialises bools as JSON, so the string
                         # form is what ends up on the wire; lowercase "true".
                         "upsert": "true",
+                        # Cache effectively forever (1 year, the HTTP max
+                        # per RFC 9111). Snapshots are immutable per ride;
+                        # a regenerated snapshot may never be re-fetched by
+                        # clients that already cached it, which is accepted.
+                        "cache-control": "31536000",
                     },
                 ),
             )
@@ -399,7 +414,7 @@ async def _validate_ride_route(ride_id: str, breadcrumbs: list, driver_id: str) 
         try:
             await db_supabase.update_one("rides", {"id": ride_id}, {"route_validation": result})
         except Exception as db_exc:
-            logger.warning(f"[route_validation] failed to store results on ride {ride_id}: {db_exc}")
+            logger.error(f"[route_validation] failed to store results on ride {ride_id}: {db_exc}", exc_info=True)
 
         if result["verdict"] in ("suspicious", "likely_spoofed"):
             logger.warning(
@@ -1619,6 +1634,16 @@ async def get_nearby_drivers_public(
     except Exception as exc:
         logger.warning(f"/drivers/nearby presence filter failed, using DB state: {exc}")
 
+    # Resolve vehicle type names + admin-configured marker variant once so
+    # the rider app can pick the matching map marker (standard / XL /
+    # premium) without an extra round trip.
+    vt_name_by_id: dict = {}
+    vt_marker_by_id: dict = {}
+    if drivers:
+        vehicle_types = await db_supabase.get_rows("vehicle_types", {}, limit=100)
+        vt_name_by_id = {vt["id"]: vt.get("name") for vt in vehicle_types if vt.get("id")}
+        vt_marker_by_id = {vt["id"]: vt.get("marker_variant") for vt in vehicle_types if vt.get("id")}
+
     # Manual filtering by distance
     nearby = []
     for d in drivers:
@@ -1648,6 +1673,8 @@ async def get_nearby_drivers_public(
                     "lng": d_lng,
                     "heading": d.get("heading"),
                     "vehicle_type_id": d.get("vehicle_type_id"),
+                    "vehicle_type_name": vt_name_by_id.get(d.get("vehicle_type_id")),
+                    "marker_variant": vt_marker_by_id.get(d.get("vehicle_type_id")),
                     "vehicle_make": d.get("vehicle_make"),
                     "vehicle_model": d.get("vehicle_model"),
                 }
@@ -2970,6 +2997,11 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
 
     await reset_miss_streak(driver["id"])
 
+    # The WS location hot path caches the driver's active rides for 5s
+    # (B3.1) — drop it so the first post-accept pings attach to this ride
+    # and reach the rider, instead of being served a stale empty list.
+    await invalidate_active_rides_cache(driver["id"])
+
     # Insurance Period 2 (en route to pickup — TNC primary commercial coverage).
     # In the batch-offer dispatch model the driver becomes obligated to the ride
     # at acceptance (searching/driver_assigned → driver_accepted), so Period 2
@@ -2986,11 +3018,12 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
         from repositories.driver_repo import update_acceptance_rate  # type: ignore
 
     await update_acceptance_rate(driver["id"], accepted=True)
+    _metric_inc("spinr_dispatch_offer_accepted_total")
 
     # Mark winner's offer as accepted, expire losers, release them
     try:
         now_iso = datetime.now(timezone.utc).isoformat()
-        await db_supabase.run_sync(
+        winner_res = await db_supabase.run_sync(
             lambda: (
                 db_supabase.supabase.table("ride_offers")
                 .update({"status": "accepted", "responded_at": now_iso})
@@ -3000,6 +3033,16 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
                 .execute()
             )
         )
+        # Offer-to-accept latency from the winner's own offer row (KPI:
+        # P95 dispatch offer → accept < 2s). Direct-assignment rides have
+        # no pending offer row — counter only, no duration sample.
+        winner_rows = getattr(winner_res, "data", None) or []
+        offered_at = parse_iso_utc(winner_rows[0].get("offered_at")) if winner_rows else None
+        if offered_at:
+            _metric_observe(
+                "spinr_dispatch_offer_to_accept_duration_ms",
+                (datetime.now(timezone.utc) - offered_at).total_seconds() * 1000.0,
+            )
         losers = await db_supabase.run_sync(
             lambda: (
                 db_supabase.supabase.table("ride_offers")
@@ -3406,6 +3449,17 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
 
     if ride.get("status") not in COMPLETE_FROM_STATES:
         raise RideStateError(f"Cannot complete ride from state '{ride.get('status')}'; ride must be in_progress")
+
+    # B3.3: drain this driver's WS breadcrumb buffer before aggregating —
+    # otherwise the last ~10s of the trip would miss the settled distance
+    # and the SGI trail read below. Only meaningful when the driver's WS is
+    # on THIS replica (which it is for the driver calling this endpoint via
+    # the same affinity-LB'd session); a failed flush must not block
+    # completion — the buffer's disconnect flush still covers the points.
+    try:
+        await flush_driver_breadcrumbs(driver["id"])
+    except Exception:
+        logger.error("[complete_ride] breadcrumb flush failed for driver %s", driver["id"], exc_info=True)
 
     # ── Aggregate all GPS breadcrumbs for this ride ──
     # On completion we compute everything once and store it on the ride row.
@@ -3870,8 +3924,13 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             exc_info=True,
         )
 
+    # Atomic completion guard: filter on status=in_progress so a concurrent
+    # complete/cancel that won the race after the read above matches zero rows
+    # instead of writing a second completion (same CAS pattern as ride
+    # acceptance filtering on status='searching').
+    _complete_filters = {"id": ride_id, "driver_id": driver["id"], "status": RideStatus.IN_PROGRESS}
     try:
-        await db_supabase.update_one("rides", {"id": ride_id, "driver_id": driver["id"]}, update_fields)
+        _updated_ride_row = await db_supabase.update_one("rides", _complete_filters, update_fields)
     except Exception as e:
         # Some columns may not exist yet in older deployments. Retry with only
         # the essential fields so ride completion never fails.
@@ -3886,9 +3945,13 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                 "distance_km",
             }
             safe_updates = {k: v for k, v in update_fields.items() if k in safe_keys}
-            await db_supabase.update_one("rides", {"id": ride_id, "driver_id": driver["id"]}, safe_updates)
+            _updated_ride_row = await db_supabase.update_one("rides", _complete_filters, safe_updates)
         else:
             raise
+    if _updated_ride_row is None:
+        raise RideStateError(
+            f"Ride {ride_id} is no longer in_progress — completion already processed by a concurrent request"
+        )
 
     # ── Record incentive claims ──────────────────────────────────
     # Fetch active incentives matching this ride's service area / vehicle type
@@ -3948,37 +4011,18 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     # _total_bonus comes from the incentive block above; default to 0 if
     # the variable wasn't set (incentive block errored before assignment).
     try:
-        _ib = float(_total_bonus.quantize(Decimal("0.01")))
-        _fare = round(
-            float(update_fields.get("base_fare") or ride.get("base_fare") or 0)
-            + float(update_fields.get("distance_fare") or ride.get("distance_fare") or 0)
-            + float(update_fields.get("time_fare") or ride.get("time_fare") or 0),
-            2,
+        _fare_d = (
+            to_decimal(update_fields.get("base_fare") or ride.get("base_fare") or 0)
+            + to_decimal(update_fields.get("distance_fare") or ride.get("distance_fare") or 0)
+            + to_decimal(update_fields.get("time_fare") or ride.get("time_fare") or 0)
         )
-        _tip = round(float(ride.get("tip_amount") or 0), 2)
-        _tax = round(float(ride.get("tax_amount") or 0), 2)
-        _cfee = round(float(ride.get("cancellation_fee_driver") or 0), 2)
-        _total = round(_fare + _tip + _ib + _tax + _cfee, 2)
-        _lines = [
-            {"label": "Ride Fare", "amount": _fare, "type": "fare"},
-        ]
-        if _tip > 0:
-            _lines.append({"label": "Tip", "amount": _tip, "type": "tip"})
-        if _ib > 0:
-            _lines.append({"label": "Area Boost", "amount": _ib, "type": "incentive"})
-        if _tax > 0:
-            _lines.append({"label": "Tax", "amount": _tax, "type": "tax"})
-        if _cfee > 0:
-            _lines.append({"label": "Cancel Fee", "amount": _cfee, "type": "cancel_fee"})
-        _snapshot = {
-            "fare": _fare,
-            "tip": _tip,
-            "incentive": _ib,
-            "tax": _tax,
-            "cancel_fee": _cfee,
-            "total": _total,
-            "lines": _lines,
-        }
+        _snapshot = build_earnings_snapshot(
+            fare=_fare_d,
+            tip=ride.get("tip_amount") or 0,
+            incentive=_total_bonus,
+            tax=ride.get("tax_amount") or 0,
+            cancel_fee=ride.get("cancellation_fee_driver") or 0,
+        )
         await db_supabase.update_one("rides", {"id": ride_id}, {"driver_earnings_snapshot": _snapshot})
     except Exception:
         logger.error("complete_ride: driver_earnings_snapshot failed for ride %s", ride_id, exc_info=True)

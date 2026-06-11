@@ -1,9 +1,10 @@
 import asyncio
 import json
 import secrets
+import time as _time_mod
 import uuid
 from datetime import datetime, timedelta, timezone
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -61,6 +62,7 @@ except ImportError:
     from features import (
         calculate_airport_fee,
         calculate_all_fees,
+        notify_safety_team,
         send_push_notification,
     )
     from geo_utils import calculate_distance, get_service_area_polygon, point_in_polygon
@@ -101,11 +103,19 @@ from .fares import _fares_for_location_impl, get_fares_for_location
 
 try:
     from ..utils.datetime_utils import parse_iso_utc
+    from ..utils.earnings_snapshot import build_earnings_snapshot
     from ..utils.insurance_periods import record_period_transition
+    from ..utils.metrics import inc as _metric_inc
+    from ..utils.metrics import observe as _metric_observe
+    from ..utils.metrics import timed as _metric_timed
     from ..utils.ride_code import generate_ride_code
 except ImportError:
     from utils.datetime_utils import parse_iso_utc
+    from utils.earnings_snapshot import build_earnings_snapshot  # noqa: F401
     from utils.insurance_periods import record_period_transition  # type: ignore[assignment]
+    from utils.metrics import inc as _metric_inc  # type: ignore
+    from utils.metrics import observe as _metric_observe  # type: ignore
+    from utils.metrics import timed as _metric_timed  # type: ignore
     from utils.ride_code import generate_ride_code
 
 try:
@@ -444,18 +454,20 @@ def _sum_fare_breakdown(lines: list[dict]) -> float:
 
     This IS the rider's bill — the same number the receipt UI computes by
     summing the rendered items. Modifier rows (e.g. surge multiplier) carry
-    amount=None and are skipped. Result is rounded to cents and clamped at 0.
+    amount=None and are skipped. Summed in Decimal (HALF_UP) so the returned
+    grand_total always equals the exact sum of the line items shown; result
+    is rounded to cents and clamped at 0.
     """
-    total = 0.0
+    total = Decimal("0")
     for line in lines or []:
         amt = line.get("amount") if isinstance(line, dict) else None
         if amt is None:
             continue
         try:
-            total += float(amt)
-        except (TypeError, ValueError):
+            total += _d(amt)
+        except (TypeError, ValueError, InvalidOperation):
             continue
-    return max(0.0, round(total, 2))
+    return _f(_round(max(Decimal("0"), total)))
 
 
 def _build_fare_breakdown(ride: dict) -> list[dict]:
@@ -787,6 +799,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
         for d, _ in claimed_drivers:
             await db_supabase.set_driver_available(d["id"], True)
         return
+    _metric_inc("spinr_dispatch_offer_sent_total", by=len(offer_rows))
 
     # ── Parallel enrichment (shared across all drivers) ───────────
     async def _fetch_rider() -> dict | None:
@@ -1328,6 +1341,7 @@ async def _filter_reachable_drivers(all_drivers: list) -> list:
 
 @api_router.post("/estimate")
 @api_rate_limit
+@_metric_timed("spinr_fare_calc_duration_ms")
 async def estimate_ride(
     body: RideEstimateRequest,
     request: Request = None,
@@ -3084,22 +3098,19 @@ async def add_tip(
         snapshot["grand_total"] = _sum_fare_breakdown(updated_lines)
         update_payload["fare_breakdown_snapshot"] = snapshot
 
-    # Update driver_earnings_snapshot with the tip
+    # Update driver_earnings_snapshot with the tip — rebuild via the Decimal
+    # builder so the frozen total stays an exact component sum (feeds T4A).
     des = ride.get("driver_earnings_snapshot")
     if des and isinstance(des, dict):
-        des["tip"] = _f(new_tip)
-        des["total"] = round(
-            float(des.get("fare") or 0)
-            + float(new_tip)
-            + float(des.get("incentive") or 0)
-            + float(des.get("tax") or 0)
-            + float(des.get("cancel_fee") or 0),
-            2,
+        des.update(
+            build_earnings_snapshot(
+                fare=des.get("fare") or 0,
+                tip=new_tip,
+                incentive=des.get("incentive") or 0,
+                tax=des.get("tax") or 0,
+                cancel_fee=des.get("cancel_fee") or 0,
+            )
         )
-        des_lines = [ln for ln in (des.get("lines") or []) if ln.get("type") != "tip"]
-        if float(new_tip) > 0:
-            des_lines.insert(1, {"label": "Tip", "amount": _f(new_tip), "type": "tip"})
-        des["lines"] = des_lines
         update_payload["driver_earnings_snapshot"] = des
 
     await db_supabase.update_ride(ride_id, update_payload)
@@ -3151,6 +3162,19 @@ async def add_tip(
 
 class ProcessPaymentRequest(BaseModel):
     tip_amount: Decimal = Field(default=Decimal("0"), ge=0, le=500)
+
+
+def _record_settlement_metrics(payment_method: str, result, duration_ms: float) -> None:
+    """KPI: spinr_payment_settlement_total{method,outcome} + duration histogram.
+
+    Outcome mapping: already_paid is split out from success because no money
+    moved (idempotent replay) — counting it as success would mask retry storms
+    behind a healthy-looking settlement rate.
+    """
+    method = {"wallet": "wallet", "company_allowance": "corporate"}.get(payment_method, "card")
+    outcome = "already_paid" if result.already_paid else ("success" if result.success else "failed")
+    _metric_inc("spinr_payment_settlement_total", {"method": method, "outcome": outcome})
+    _metric_observe("spinr_payment_settlement_duration_ms", duration_ms, {"method": method})
 
 
 @api_router.post("/{ride_id}/process-payment")
@@ -3308,6 +3332,7 @@ async def process_payment(
     _snap = ride.get("fare_breakdown_snapshot")
     _snap_lines = (_snap.get("lines") if isinstance(_snap, dict) else None) if _snap else None
 
+    _settle_started = _time_mod.monotonic()
     if payment_method == "wallet":
         result = await settle_wallet(
             ride,
@@ -3321,6 +3346,8 @@ async def process_payment(
         result = await settle_corporate(ride, ride_id, total_charge, tip_rounded)
     else:
         result = await settle_card(ride, ride_id, current_user["id"], total_charge, tip_rounded)
+
+    _record_settlement_metrics(payment_method, result, (_time_mod.monotonic() - _settle_started) * 1000.0)
 
     if not result.success:
         detail = result.error or "Payment failed"
@@ -3612,19 +3639,15 @@ async def rate_driver(
         _rate_update: dict = {"tip_amount": _f(new_tip), "driver_earnings": _f(new_driver_earnings)}
         des = ride.get("driver_earnings_snapshot")
         if des and isinstance(des, dict):
-            des["tip"] = _f(new_tip)
-            des["total"] = round(
-                float(des.get("fare") or 0)
-                + float(new_tip)
-                + float(des.get("incentive") or 0)
-                + float(des.get("tax") or 0)
-                + float(des.get("cancel_fee") or 0),
-                2,
+            des.update(
+                build_earnings_snapshot(
+                    fare=des.get("fare") or 0,
+                    tip=new_tip,
+                    incentive=des.get("incentive") or 0,
+                    tax=des.get("tax") or 0,
+                    cancel_fee=des.get("cancel_fee") or 0,
+                )
             )
-            des_lines = [ln for ln in (des.get("lines") or []) if ln.get("type") != "tip"]
-            if float(new_tip) > 0:
-                des_lines.insert(1, {"label": "Tip", "amount": _f(new_tip), "type": "tip"})
-            des["lines"] = des_lines
             _rate_update["driver_earnings_snapshot"] = des
         await db_supabase.update_ride(ride_id, _rate_update)
 
@@ -3932,7 +3955,7 @@ async def cancel_ride_rider(
                 except Exception as _e:
                     logger.warning(f"[CANCEL] failed to notify batch-offer driver {_offer_did}: {_e}")
     except Exception as _batch_exc:
-        logger.warning(f"[CANCEL] batch offer cleanup failed for ride {ride_id}: {_batch_exc}")
+        logger.error(f"[CANCEL] batch offer cleanup failed for ride {ride_id}: {_batch_exc}", exc_info=True)
 
     # Notify the rider's own connection — broadcast_ride_status only fans
     # out to the rider when rider_id is passed, but an explicit message
@@ -4316,66 +4339,9 @@ async def get_chat_status(ride_id: str, current_user: dict = Depends(get_current
     return {"available": True, "post_trip": False}
 
 
-@api_router.get("/{ride_id}/call")
-async def get_call_info(ride_id: str, current_user: dict = Depends(get_current_user)):
-    """Get masked phone number for calling the other party during an active ride.
-
-    Returns a proxy number or the real number depending on Twilio config.
-    In production, this would create a Twilio Proxy session to mask both
-    parties' real numbers. For now, it returns the other party's phone
-    directly so the call button works immediately.
-    """
-    ride = await db.find_one("rides", {"id": ride_id})
-    if not ride:
-        raise HTTPException(status_code=404, detail="Ride not found")
-
-    if ride.get("status") in RideStatus.terminal_statuses():
-        raise HTTPException(status_code=400, detail="Cannot call on a completed or cancelled ride")
-
-    is_rider = ride.get("rider_id") == current_user["id"]
-    driver = await db.find_one("drivers", {"user_id": current_user["id"]})
-    is_driver = driver and ride.get("driver_id") == driver["id"]
-
-    if not (is_rider or is_driver):
-        raise HTTPException(status_code=403, detail="Not part of this ride")
-
-    if is_rider:
-        # Rider wants to call the driver
-        if not ride.get("driver_id"):
-            raise HTTPException(status_code=400, detail="No driver assigned yet")
-        target_driver = await db.find_one("drivers", {"id": ride["driver_id"]})
-        if not target_driver:
-            raise HTTPException(status_code=404, detail="Driver not found")
-        target_user = await db.find_one("users", {"id": target_driver.get("user_id")})
-        phone = target_user.get("phone") if target_user else None
-        name = (
-            f"{target_user.get('first_name', '')} {target_user.get('last_name', '')}".strip()
-            if target_user
-            else "Driver"
-        )
-    else:
-        # Driver wants to call the rider
-        target_user = await db.find_one("users", {"id": ride["rider_id"]})
-        phone = target_user.get("phone") if target_user else None
-        name = (
-            f"{target_user.get('first_name', '')} {target_user.get('last_name', '')}".strip()
-            if target_user
-            else "Rider"
-        )
-
-    if not phone:
-        raise HTTPException(status_code=404, detail="Phone number not available")
-
-    # In production: create Twilio Proxy session here and return proxy number
-    # For now, return the real number with a masked display
-    masked = f"({'*' * (len(phone) - 4)}{phone[-4:]})" if len(phone) > 4 else phone
-
-    return {
-        "phone": phone,
-        "masked": masked,
-        "name": name,
-        "proxy": False,  # Set to True when Twilio Proxy is configured
-    }
+# NOTE: there is deliberately no GET /{ride_id}/call endpoint. Rider↔driver
+# contact is in-app chat only — real phone numbers are never exposed to the
+# other party (privacy decision, 2026-06). test_coverage_rides.py pins this.
 
 
 @api_router.get("/{ride_id}/messages")
@@ -4787,39 +4753,18 @@ async def rider_complete_ride(
 
     # ── Driver earnings snapshot ──
     try:
-        _ib = float(_rider_incentive_total.quantize(Decimal("0.01")))
-        _fare = round(
-            float(ride.get("base_fare") or 0)
-            + float(ride.get("distance_fare") or 0)
-            + float(ride.get("time_fare") or 0),
-            2,
-        )
-        _tip = round(float(ride.get("tip_amount") or 0), 2)
-        _tax = round(float(ride.get("tax_amount") or 0), 2)
-        _cfee = round(float(ride.get("cancellation_fee_driver") or 0), 2)
-        _total = round(_fare + _tip + _ib + _tax + _cfee, 2)
-        _lines = [{"label": "Ride Fare", "amount": _fare, "type": "fare"}]
-        if _tip > 0:
-            _lines.append({"label": "Tip", "amount": _tip, "type": "tip"})
-        if _ib > 0:
-            _lines.append({"label": "Area Boost", "amount": _ib, "type": "incentive"})
-        if _tax > 0:
-            _lines.append({"label": "Tax", "amount": _tax, "type": "tax"})
-        if _cfee > 0:
-            _lines.append({"label": "Cancel Fee", "amount": _cfee, "type": "cancel_fee"})
+        _fare_d = _d(ride.get("base_fare") or 0) + _d(ride.get("distance_fare") or 0) + _d(ride.get("time_fare") or 0)
         await db_supabase.update_one(
             "rides",
             {"id": ride_id},
             {
-                "driver_earnings_snapshot": {
-                    "fare": _fare,
-                    "tip": _tip,
-                    "incentive": _ib,
-                    "tax": _tax,
-                    "cancel_fee": _cfee,
-                    "total": _total,
-                    "lines": _lines,
-                }
+                "driver_earnings_snapshot": build_earnings_snapshot(
+                    fare=_fare_d,
+                    tip=ride.get("tip_amount") or 0,
+                    incentive=_rider_incentive_total,
+                    tax=ride.get("tax_amount") or 0,
+                    cancel_fee=ride.get("cancellation_fee_driver") or 0,
+                )
             },
         )
     except Exception:

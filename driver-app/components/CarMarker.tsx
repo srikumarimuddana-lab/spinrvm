@@ -2,6 +2,32 @@ import React, { useEffect, useRef, useState } from 'react';
 import { View, Image, Platform } from 'react-native';
 import { AnimatedRegion, Marker } from 'react-native-maps';
 
+const CAR_IMAGES = {
+    standard: require('../assets/images/car_marker.png'),
+    xl: require('../assets/images/car_marker_xl.png'),
+    premium: require('../assets/images/car_marker_premium.png'),
+} as const;
+
+export type CarMarkerVariant = keyof typeof CAR_IMAGES;
+
+/**
+ * Resolve the marker for a vehicle type. Prefers the admin-configured
+ * vehicle_types.marker_variant (loaded from GET /vehicle-types); falls back
+ * to name matching for older backends, then to the standard sedan.
+ */
+export function resolveMarkerVariant(
+    markerVariant?: string | null,
+    vehicleTypeName?: string | null,
+): CarMarkerVariant {
+    if (markerVariant && markerVariant in CAR_IMAGES) {
+        return markerVariant as CarMarkerVariant;
+    }
+    const n = (vehicleTypeName ?? '').toLowerCase();
+    if (n.includes('xl') || n.includes('van')) return 'xl';
+    if (n.includes('premium') || n.includes('lux')) return 'premium';
+    return 'standard';
+}
+
 interface CarMarkerProps {
     coordinate: {
         latitude: number;
@@ -10,6 +36,11 @@ interface CarMarkerProps {
     heading?: number | null;
     isOnline?: boolean;
     size?: number;
+    variant?: CarMarkerVariant;
+    // Admin-uploaded custom marker (vehicle_types.marker_image_url),
+    // prefetched by vehicleTypeStore. Takes precedence over `variant`;
+    // falls back to the bundled variant image on load failure.
+    imageUri?: string | null;
 }
 
 // Position updates land every 3-10 s depending on ride phase (see
@@ -75,6 +106,8 @@ export const CarMarker: React.FC<CarMarkerProps> = ({
     heading,
     isOnline = true,
     size = 40,
+    variant = 'standard',
+    imageUri,
 }) => {
     const markerRef = useRef<any>(null);
     const animatedRegion = useRef(
@@ -157,6 +190,13 @@ export const CarMarker: React.FC<CarMarkerProps> = ({
         settleTimerRef.current = setTimeout(() => setTracksViewChanges(false), 350);
     };
 
+    // Custom marker failed to load (offline + cold cache, dead URL) — fall
+    // back to the bundled variant. Reset when the URL changes so a fixed
+    // upload is retried.
+    const [imageFailed, setImageFailed] = useState(false);
+    useEffect(() => setImageFailed(false), [imageUri]);
+    const useCustomImage = !!imageUri && !imageFailed;
+
     return (
         <Marker.Animated
             ref={markerRef}
@@ -178,7 +218,8 @@ export const CarMarker: React.FC<CarMarkerProps> = ({
                 }}
             >
                 <Image
-                    source={require('../assets/images/car_marker.png')}
+                    source={useCustomImage ? { uri: imageUri as string } : CAR_IMAGES[variant]}
+                    onError={() => { setImageFailed(true); setTracksViewChanges(true); }}
                     onLoad={handleImageLoaded}
                     style={{
                         width: size,

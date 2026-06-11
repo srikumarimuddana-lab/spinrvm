@@ -81,6 +81,7 @@ async def _tick() -> None:
         "rides",
         {"status": "in_progress"},
         limit=200,
+        columns="id,rider_id,started_at,updated_at",
     )
 
     for ride in in_progress or []:

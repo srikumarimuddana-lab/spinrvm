@@ -34,8 +34,12 @@ import type {
   SelectedItem,
 } from "./types";
 
-const POLL_INTERVAL_MS = 60_000;
-const DEGRADED_POLL_INTERVAL_MS = 5_000;
+// With a healthy WebSocket the REST poll is only a drift-reconciliation
+// sweep — snapshots + incremental events carry the live state — so 5 min
+// keeps Supabase egress down. The degraded interval is the real fallback
+// while the socket reconnects.
+const POLL_INTERVAL_MS = 300_000;
+const DEGRADED_POLL_INTERVAL_MS = 10_000;
 
 export default function MonitoringPage() {
   const { allowed } = useRequireModule("rides");

@@ -112,6 +112,7 @@ from features import admin_support_router, pricing_router, support_router
 from routes.addresses import api_router as addresses_router
 from routes.admin import admin_auth_router
 from routes.admin import admin_router as admin_router
+from routes.ai import api_router as ai_router
 from routes.auth import api_router as auth_router
 from routes.corporate_accounts import router as corporate_accounts_router
 from routes.corporate_company import router as corporate_company_router

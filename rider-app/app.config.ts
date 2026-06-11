@@ -165,6 +165,19 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // See plugin file comments for the full diagnosis.
         './plugins/withKspVersion',
         '@logrocket/react-native',
+        // Sentry native crash capture + automatic sourcemap upload at EAS build
+        // time. organization/project/url come from build env; the auth token is
+        // read from SENTRY_AUTH_TOKEN by sentry-cli (never commit it). Runtime JS
+        // error capture is wired separately via initErrorReporting()
+        // (EXPO_PUBLIC_SENTRY_DSN). Upload step no-ops gracefully when env unset.
+        [
+            '@sentry/react-native/expo',
+            {
+                organization: process.env.SENTRY_ORG,
+                project: process.env.SENTRY_PROJECT,
+                url: process.env.SENTRY_URL ?? 'https://sentry.io/',
+            },
+        ],
     ],
     experiments: {
         typedRoutes: false

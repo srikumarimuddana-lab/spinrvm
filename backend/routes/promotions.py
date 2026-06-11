@@ -237,32 +237,30 @@ async def _validate_promo_for_user(
     if total_budget > 0 and promo.get("budget_used", 0) >= total_budget:
         raise HTTPException(status_code=400, detail="This promotion has reached its budget limit")
 
-    # Calculate discount
+    # Calculate discount — Decimal end-to-end (no float round-trip)
     free_ride = promo.get("free_ride", False)
     discount_type = promo.get("discount_type", "flat")
-    discount_value = float(promo.get("discount_value", 0))
+    discount_value = Decimal(str(promo.get("discount_value", 0) or 0))
 
     if free_ride:
         # Covers the entire grand_total — rider pays $0
         discount = grand_total if grand_total is not None else ride_fare
     elif discount_type == "percentage":
         # Percentage applies to ride portion only (never to fees or taxes)
-        discount = (ride_fare * Decimal(str(discount_value)) / Decimal("100")).quantize(
-            Decimal("0.01"), rounding=ROUND_HALF_UP
-        )
+        discount = (ride_fare * discount_value / Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         max_cap = promo.get("max_discount")
         if max_cap and discount > Decimal(str(max_cap)):
             discount = Decimal(str(max_cap))
     else:
         # Flat discount capped at ride_fare (driver earnings only — never discounts fees/taxes)
-        discount = min(Decimal(str(discount_value)), ride_fare)
+        discount = min(discount_value, ride_fare)
 
     return {
         "valid": True,
         "code": code,
         "free_ride": free_ride,
         "discount_type": discount_type,
-        "discount_value": discount_value,
+        "discount_value": float(discount_value),
         "discount_amount": discount,
         "max_discount": promo.get("max_discount"),
         "promo_id": promo["id"],
@@ -522,25 +520,33 @@ async def get_available_promos(
             if p.get("total_budget", 0) > 0 and p.get("budget_used", 0) >= p["total_budget"]:
                 continue  # noqa: E701
 
-            # Calculate discount
-            effective_ride = ride_portion if ride_portion is not None else ride_fare
+            # Calculate discount — same Decimal HALF_UP math as the validate/
+            # apply path so the advertised amount always equals the charged
+            # amount (the old float round() here could disagree by a cent).
+            effective_ride = Decimal(str(ride_portion if ride_portion is not None else ride_fare))
+            ride_fare_d = Decimal(str(ride_fare))
             free_ride_flag = p.get("free_ride", False)
             discount_type = p.get("discount_type", "flat")
-            discount_value = float(p.get("discount_value", 0))
+            discount_value = Decimal(str(p.get("discount_value", 0) or 0))
             if free_ride_flag:
-                discount = ride_fare  # covers everything; rider pays $0
+                discount = ride_fare_d  # covers everything; rider pays $0
             elif discount_type == "percentage":
                 # Applies to ride portion only (never to fees/taxes)
-                discount = round(effective_ride * (discount_value / 100), 2) if effective_ride > 0 else 0
+                if effective_ride > 0:
+                    discount = (effective_ride * discount_value / Decimal("100")).quantize(
+                        Decimal("0.01"), rounding=ROUND_HALF_UP
+                    )
+                else:
+                    discount = Decimal("0")
                 max_cap = p.get("max_discount")
-                if max_cap and discount > max_cap:
-                    discount = max_cap  # noqa: E701
+                if max_cap and discount > Decimal(str(max_cap)):
+                    discount = Decimal(str(max_cap))
             else:
                 # Flat discount capped at the ride portion (driver earnings:
                 # base+dist+time). When the ride portion is unknown (0), fall
                 # back to ride_fare so we never advertise a discount larger
                 # than the rider would actually be charged.
-                cap_basis = effective_ride if effective_ride > 0 else ride_fare
+                cap_basis = effective_ride if effective_ride > 0 else ride_fare_d
                 discount = min(discount_value, cap_basis) if cap_basis > 0 else discount_value
 
             entry: dict = {
@@ -548,9 +554,9 @@ async def get_available_promos(
                 "code": p.get("code"),
                 "free_ride": free_ride_flag,
                 "discount_type": discount_type,
-                "discount_value": discount_value,
+                "discount_value": float(discount_value),
                 "max_discount": p.get("max_discount"),
-                "discount_amount": discount,
+                "discount_amount": float(discount),
                 "description": p.get("description", ""),
                 "expiry_date": p.get("expiry_date"),
                 "min_ride_fare": p.get("min_ride_fare", 0),

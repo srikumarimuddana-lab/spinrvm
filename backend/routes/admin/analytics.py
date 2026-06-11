@@ -424,13 +424,19 @@ async def get_surge_history(
     """Get surge pricing history for a specific service area (last N hours)."""
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     try:
+        # Time filter and ordering happen DB-side: ascending order with the
+        # filter applied in Python fetched the OLDEST 500 rows for the area,
+        # so the requested window was empty once history outgrew the limit.
+        # Newest-first + $gte cutoff always returns the requested window and
+        # is served by idx_surge_pricing_area_created (migration 142).
         records = await db.get_rows(
             "surge_pricing",
-            {"service_area_id": area_id},
+            {"service_area_id": area_id, "created_at": {"$gte": cutoff}},
             limit=500,
             order="created_at",
+            desc=True,
+            columns="multiplier,demand_count,supply_count,ratio,source,created_at",
         )
-        # Filter by time
         filtered = [
             {
                 "multiplier": r.get("multiplier", 1.0),
@@ -441,7 +447,6 @@ async def get_surge_history(
                 "created_at": r.get("created_at"),
             }
             for r in records
-            if isinstance(r.get("created_at", ""), str) and r.get("created_at", "") >= cutoff
         ]
         # Reverse to chronological order
         filtered.reverse()

@@ -40,6 +40,24 @@ jest.mock('@shared/config/spinr.config', () => ({
 
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 
+// Mock the router like TripCompletedPanel.test.tsx does — importing the real
+// expo-router drags the whole react-navigation tree through babel, which
+// fails on react-native's flow-typed internals under jest.
+jest.mock('expo-router', () => ({
+  useRouter: () => ({ push: jest.fn(), back: jest.fn() }),
+}));
+
+// Modal-based children pull react-native's flow-typed native specs through
+// babel codegen, which the jest transform can't parse. The panel's own
+// layout is what's under test, so stub them out.
+jest.mock('../../components/CancelReasonSheet', () => ({
+  __esModule: true,
+  default: () => null,
+}));
+jest.mock('../../components/AlertDialog', () => ({
+  showAlert: jest.fn(),
+}));
+
 jest.mock('../../store/languageStore', () => ({
   useLanguageStore: () => ({ t: (key: string) => key }),
 }));

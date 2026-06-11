@@ -351,6 +351,24 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // watchPositionAsync starts after Go Online).
   const refreshLocation = useCallback(async (useCache: boolean) => {
     setLocationStatus(prev => (prev === 'ok' ? prev : 'pending'));
+
+    // Every expo-location call below can, on some devices, neither resolve
+    // nor reject — the location subsystem wedges (services flapping, a stuck
+    // GMS provider, a hung permission dialog). Previously only
+    // getCurrentPositionAsync was raced against a timeout; the permission,
+    // services, and last-known queries were not. If any of those hung, the
+    // dashboard sat on the 'pending' spinner forever ("Getting your
+    // location…") with no retry UI, even when permission was granted.
+    // Time-box every call so refreshLocation always reaches a terminal
+    // status and the driver always gets either a map or the retry button.
+    const withTimeout = <T,>(p: Promise<T>, ms: number): Promise<T> =>
+      Promise.race([
+        p,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('location call timeout')), ms),
+        ),
+      ]);
+
     if (useCache) {
       try {
         const AsyncStorage = require('@react-native-async-storage/async-storage').default;
@@ -362,81 +380,101 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       } catch {}
     }
 
-    let { status } = await Location.getForegroundPermissionsAsync();
-    if (status !== 'granted') {
-      const res = await Location.requestForegroundPermissionsAsync();
-      status = res.status;
-    }
-    if (status !== 'granted') {
-      // The dashboard gates on location, not status — a fix restored from
-      // the AsyncStorage cache above would keep a stale map rendered over
-      // this blocking error, and locationRef would leak the stale position
-      // to the backend on WS reconnect. Clear both.
-      setLocation(null);
-      locationRef.current = null;
-      setLocationStatus('denied');
-      return null;
-    }
-
-    // Permission can be granted while device-wide location services are
-    // off (Android quick-settings toggle) — getCurrentPositionAsync would
-    // just throw, so detect it up front. No fix will ever arrive in this
-    // state, so a stale cached map would be misleading: clear it too.
-    const servicesOn = await Location.hasServicesEnabledAsync().catch(() => true);
-    if (!servicesOn) {
-      setLocation(null);
-      locationRef.current = null;
-      setLocationStatus('unavailable');
-      return null;
-    }
-
-    if (useCache) {
-      try {
-        const lastKnown = await Location.getLastKnownPositionAsync();
-        if (lastKnown) { setLocation(lastKnown); locationRef.current = lastKnown; }
-      } catch {}
-    }
-
     try {
-      // getCurrentPositionAsync has no timeout and can hang indefinitely
-      // waiting for a fix (indoors, weak GPS) — race it so the driver
-      // never sits on the spinner forever.
-      const loc = await Promise.race([
-        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('location fix timeout')), 15000)),
-      ]);
-      setLocation(loc);
-      locationRef.current = loc;
-      setLocationStatus('ok');
+      let status: string;
       try {
-        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-        AsyncStorage.setItem('spinr_driver_last_location', JSON.stringify({ lat: loc.coords.latitude, lng: loc.coords.longitude }));
-      } catch {}
-      return loc;
-    } catch {
-      // Fix failed or timed out — a coarse last-known position still lets
-      // the map render; watchPositionAsync corrects it once a fix lands.
-      try {
-        const lastKnown = await Location.getLastKnownPositionAsync();
-        if (lastKnown) {
-          setLocation(lastKnown);
-          locationRef.current = lastKnown;
-          setLocationStatus('ok');
-          return lastKnown;
+        ({ status } = await withTimeout(Location.getForegroundPermissionsAsync(), 10000));
+        if (status !== 'granted') {
+          // The request can legitimately block on the OS dialog, so allow
+          // it longer than a silent query before giving up.
+          const res = await withTimeout(Location.requestForegroundPermissionsAsync(), 60000);
+          status = res.status;
         }
-      } catch {}
-      if (locationRef.current) {
-        // A real fix from this session (lastKnown/watcher) is still on the
-        // map — keep it; the watcher corrects it once a fresh fix lands.
-        setLocationStatus('ok');
-      } else {
-        // Only the AsyncStorage-cached coordinate (if any) is showing.
-        // It never reached locationRef so it can't be sent to dispatch,
-        // but it would silently mask this failure — clear it so the
-        // retry UI appears instead of a stale map.
+      } catch {
+        // Permission query hung or threw — we can't prove access. Surface the
+        // retry UI rather than stranding the driver on the spinner.
         setLocation(null);
+        locationRef.current = null;
         setLocationStatus('unavailable');
+        return null;
       }
+      if (status !== 'granted') {
+        // The dashboard gates on location, not status — a fix restored from
+        // the AsyncStorage cache above would keep a stale map rendered over
+        // this blocking error, and locationRef would leak the stale position
+        // to the backend on WS reconnect. Clear both.
+        setLocation(null);
+        locationRef.current = null;
+        setLocationStatus('denied');
+        return null;
+      }
+
+      // Permission can be granted while device-wide location services are
+      // off (Android quick-settings toggle) — getCurrentPositionAsync would
+      // just throw, so detect it up front. No fix will ever arrive in this
+      // state, so a stale cached map would be misleading: clear it too.
+      const servicesOn = await withTimeout(Location.hasServicesEnabledAsync(), 5000).catch(() => true);
+      if (!servicesOn) {
+        setLocation(null);
+        locationRef.current = null;
+        setLocationStatus('unavailable');
+        return null;
+      }
+
+      if (useCache) {
+        try {
+          const lastKnown = await withTimeout(Location.getLastKnownPositionAsync(), 5000);
+          if (lastKnown) { setLocation(lastKnown); locationRef.current = lastKnown; }
+        } catch {}
+      }
+
+      try {
+        // getCurrentPositionAsync has no timeout and can hang indefinitely
+        // waiting for a fix (indoors, weak GPS) — race it so the driver
+        // never sits on the spinner forever.
+        const loc = await withTimeout(
+          Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+          15000,
+        );
+        setLocation(loc);
+        locationRef.current = loc;
+        setLocationStatus('ok');
+        try {
+          const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+          AsyncStorage.setItem('spinr_driver_last_location', JSON.stringify({ lat: loc.coords.latitude, lng: loc.coords.longitude }));
+        } catch {}
+        return loc;
+      } catch {
+        // Fix failed or timed out — a coarse last-known position still lets
+        // the map render; watchPositionAsync corrects it once a fix lands.
+        try {
+          const lastKnown = await withTimeout(Location.getLastKnownPositionAsync(), 5000);
+          if (lastKnown) {
+            setLocation(lastKnown);
+            locationRef.current = lastKnown;
+            setLocationStatus('ok');
+            return lastKnown;
+          }
+        } catch {}
+        if (locationRef.current) {
+          // A real fix from this session (lastKnown/watcher) is still on the
+          // map — keep it; the watcher corrects it once a fresh fix lands.
+          setLocationStatus('ok');
+        } else {
+          // Only the AsyncStorage-cached coordinate (if any) is showing.
+          // It never reached locationRef so it can't be sent to dispatch,
+          // but it would silently mask this failure — clear it so the
+          // retry UI appears instead of a stale map.
+          setLocation(null);
+          setLocationStatus('unavailable');
+        }
+        return null;
+      }
+    } catch {
+      // Absolute backstop: nothing above should escape, but if it does the
+      // driver must never be left stranded on the 'pending' spinner.
+      if (!locationRef.current) setLocation(null);
+      setLocationStatus(prev => (prev === 'ok' ? prev : 'unavailable'));
       return null;
     }
   }, []);

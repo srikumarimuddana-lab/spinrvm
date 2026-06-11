@@ -343,9 +343,32 @@ class AnalyticsService:
         """Track payment processing event."""
         return self.track(user_id, "Payment Processed", payment_data)
 
-    def track_driver_online(self, driver_id: str, location: Dict[str, float]) -> bool:
-        """Track driver going online."""
-        return self.track(driver_id, "Driver Online", location)
+    # Geohash base-32 alphabet (excludes a, i, l, o). Used to reject anything
+    # that isn't a geohash — including stringified coordinates like
+    # "52.13,-106.66", which contain '.', ',' or '-'.
+    _GEOHASH_ALPHABET = frozenset("0123456789bcdefghjkmnpqrstuvwxyz")
+
+    def track_driver_online(self, driver_id: str, area_geohash: str) -> bool:
+        """Track driver going online.
+
+        PIPEDA (ACTION_ITEMS B1): accepts an area *geohash string* only —
+        raw GPS coordinates must never be forwarded to third-party
+        analytics (Mixpanel/Amplitude). Callers geohash before calling;
+        a lat/lng dict raises TypeError and a non-geohash string (e.g.
+        stringified coordinates) raises ValueError so a coordinate
+        payload can never slip through silently.
+        """
+        if not isinstance(area_geohash, str):
+            raise TypeError(
+                "track_driver_online accepts an area geohash string only — "
+                "never raw lat/lng (PIPEDA; see ACTION_ITEMS.md B1)"
+            )
+        if not area_geohash or not set(area_geohash.lower()) <= self._GEOHASH_ALPHABET:
+            raise ValueError(
+                f"track_driver_online: {area_geohash!r} is not a geohash — "
+                "raw coordinates must never reach third-party analytics"
+            )
+        return self.track(driver_id, "Driver Online", {"area_geohash": area_geohash.lower()})
 
     def track_driver_offline(self, driver_id: str) -> bool:
         """Track driver going offline."""

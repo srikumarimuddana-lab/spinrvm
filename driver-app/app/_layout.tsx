@@ -23,6 +23,7 @@ const SPLASH_MIN_DISPLAY_MS = 3000;
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
+import { useVehicleTypesSync } from '@shared/store/vehicleTypeStore';
 import { useDriverStore } from '../store/driverStore';
 import BrandSplash from '../components/BrandSplash';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
@@ -31,7 +32,7 @@ import { ThemeProvider, useTheme } from '@shared/theme/ThemeContext';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { queryClient, asyncStoragePersister, QUERY_CACHE_BUSTER } from '@shared/api/queryClient';
-import { captureMessage, setUser } from '@shared/services/errorReporting';
+import { captureMessage, setUser, initErrorReporting, wrapApp } from '@shared/services/errorReporting';
 import {
   initFirebaseServices,
   requestNotificationPermission,
@@ -61,6 +62,14 @@ if (Platform.OS === 'android' || Platform.OS === 'ios') {
     console.log('[Notifee] native module not available — falling back to expo-notifications only');
   }
 }
+
+// Crash/error reporting (Sentry primary, Crashlytics fallback) — initialised
+// at module scope so errors during the first render are captured. No-ops
+// when EXPO_PUBLIC_SENTRY_DSN is unset (dev/Expo Go) or on web.
+initErrorReporting({
+  dsn: process.env.EXPO_PUBLIC_SENTRY_DSN,
+  surface: 'driver-app',
+});
 
 // expo-notifications' push-token APIs were removed from Expo Go in SDK 53,
 // and its import throws on web where notifications don't exist. Lazy-require
@@ -333,7 +342,7 @@ function usePushNotificationRouter() {
   }, [router]);
 }
 
-export default function RootLayout() {
+function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
     PlusJakartaSans_400Regular,
     PlusJakartaSans_500Medium,
@@ -343,6 +352,9 @@ export default function RootLayout() {
 
   const { initialize: initializeAuth, isInitialized: isAuthInitialized, token: authToken } = useAuthStore();
   const { initialize: initializeLocation, isInitialized: isLocationInitialized } = useLocationStore();
+  // One GET /vehicle-types per app open feeds the own-car map marker via
+  // the shared vehicleTypeStore (also refreshes on foreground).
+  useVehicleTypesSync();
   const [isOffline, setIsOffline] = useState(false);
   // Hold the branded splash for a minimum duration so the logo + tagline are
   // actually seen — auth/location init can finish in <400ms, cutting off the
@@ -614,4 +626,8 @@ function DriverRootLayoutInner({
     </ErrorBoundary>
   );
 }
+
+// Wrap the root with Sentry's error boundary + navigation/touch instrumentation.
+// No-op until EXPO_PUBLIC_SENTRY_DSN is set (see initErrorReporting); safe in Expo Go/web.
+export default wrapApp(RootLayout);
 

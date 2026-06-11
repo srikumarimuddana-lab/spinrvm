@@ -24,6 +24,7 @@ import NetInfo from '@react-native-community/netinfo';
 import api from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
+import { useVehicleTypesSync } from '@shared/store/vehicleTypeStore';
 import { useRideStore } from '../store/rideStore';
 import { useWorkProfileStore } from '../store/workProfileStore';
 import { useRiderSocket } from '../hooks/useRiderSocket';
@@ -31,7 +32,7 @@ import BrandSplash from '../components/BrandSplash';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
 import { ThemeProvider, useTheme } from '@shared/theme/ThemeContext';
-import { captureMessage, setUser } from '@shared/services/errorReporting';
+import { captureMessage, setUser, initErrorReporting, wrapApp } from '@shared/services/errorReporting';
 import Analytics from '@shared/analytics';
 import {
   initFirebaseServices,
@@ -87,6 +88,14 @@ function routeFromNotificationData(data: Record<string, string> | undefined) {
   }
 }
 
+// Crash/error reporting (Sentry primary, Crashlytics fallback) — initialised
+// at module scope so errors during the first render are captured. No-ops
+// when EXPO_PUBLIC_SENTRY_DSN is unset (dev/Expo Go) or on web.
+initErrorReporting({
+  dsn: process.env.EXPO_PUBLIC_SENTRY_DSN,
+  surface: 'rider-app',
+});
+
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 const canUseNotifications = !isExpoGo && Platform.OS !== 'web';
 let Notifications: any = null;
@@ -137,7 +146,7 @@ setBackgroundMessageHandler(async (remoteMessage: any) => {
 });
 
 
-export default function RootLayout() {
+function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
     PlusJakartaSans_400Regular,
     PlusJakartaSans_500Medium,
@@ -147,6 +156,9 @@ export default function RootLayout() {
 
   const { initialize: initializeAuth, isInitialized: isAuthInitialized, token: authToken } = useAuthStore();
   const { initialize: initializeLocation, isInitialized: isLocationInitialized } = useLocationStore();
+  // One GET /vehicle-types per app open feeds every map marker + booking
+  // screen via the shared vehicleTypeStore (also refreshes on foreground).
+  useVehicleTypesSync();
   const hydrateWorkProfile = useWorkProfileStore(s => s.hydrate);
   const [isOffline, setIsOffline] = useState(false);
   // Hold the branded splash for a minimum duration so the logo + tagline are
@@ -683,4 +695,8 @@ function RootLayoutInner({
     </ErrorBoundary>
   );
 }
+
+// Wrap the root with Sentry's error boundary + navigation/touch instrumentation.
+// No-op until EXPO_PUBLIC_SENTRY_DSN is set (see initErrorReporting); safe in Expo Go/web.
+export default wrapApp(RootLayout);
 

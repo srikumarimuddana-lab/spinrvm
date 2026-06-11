@@ -63,3 +63,7 @@ backend/typing_extensions.py
 # Generated code-review artifacts (audit output — not source)
 code_review_report_*.json
 
+# CI scan artifacts (gitleaks SARIF zips etc.) — never commit these
+*gitleaks-artifact.zip
+*.sarif
+

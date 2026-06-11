@@ -548,3 +548,55 @@ class TestAsyncHelpers:
 
         with pytest.raises(ValueError, match="Test error"):
             await run_sync(sync_func_raises)
+
+    @pytest.mark.asyncio
+    async def test_run_sync_retries_ssl_write_error_on_read(self, monkeypatch):
+        """A transient httpx.WriteError (SSL 'EOF occurred in violation of
+        protocol') must be classified transient and retried under the read
+        policy. Regression for cold-start TLS drops that previously failed at
+        attempt 0 with backoffs unused."""
+        import httpx
+
+        from backend.repositories import _base
+
+        # Don't actually sleep through the backoff in a unit test.
+        async def _no_sleep(_delay):
+            return None
+
+        monkeypatch.setattr(_base.asyncio, "sleep", _no_sleep)
+
+        calls = {"n": 0}
+
+        def flaky():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise httpx.WriteError("EOF occurred in violation of protocol (_ssl.c:2427)")
+            return "ok"
+
+        result = await _base.run_sync(flaky, retry_policy="read")
+        assert result == "ok"
+        assert calls["n"] == 2, "WriteError should have been retried once"
+
+    @pytest.mark.asyncio
+    async def test_run_sync_does_not_retry_write_policy(self, monkeypatch):
+        """The non-idempotent write policy has zero backoffs, so even a
+        transient WriteError must NOT be retried — guards against double-writes."""
+        import httpx
+
+        from backend.repositories import _base
+        from backend.utils.error_handling import DatabaseError
+
+        async def _no_sleep(_delay):
+            return None
+
+        monkeypatch.setattr(_base.asyncio, "sleep", _no_sleep)
+
+        calls = {"n": 0}
+
+        def always_drops():
+            calls["n"] += 1
+            raise httpx.WriteError("EOF occurred in violation of protocol (_ssl.c:2427)")
+
+        with pytest.raises(DatabaseError):
+            await _base.run_sync(always_drops, retry_policy="write")
+        assert calls["n"] == 1, "write policy must not retry"

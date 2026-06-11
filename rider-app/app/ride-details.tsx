@@ -6,13 +6,27 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
-import MapViewDirections from 'react-native-maps-directions';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+
+function decodePolyline(encoded: string): { latitude: number; longitude: number }[] {
+  const points: { latitude: number; longitude: number }[] = [];
+  let index = 0, lat = 0, lng = 0;
+  while (index < encoded.length) {
+    let b: number, shift = 0, result = 0;
+    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lat += (result & 1) ? ~(result >> 1) : (result >> 1);
+    shift = 0; result = 0;
+    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lng += (result & 1) ? ~(result >> 1) : (result >> 1);
+    points.push({ latitude: lat / 1e5, longitude: lng / 1e5 });
+  }
+  return points;
+}
 
 export default function RideDetailsScreen() {
   const router = useRouter();
@@ -77,6 +91,40 @@ export default function RideDetailsScreen() {
       .filter((p: any) => Array.isArray(p) && p.length >= 2)
       .map((p: any) => ({ latitude: p[0], longitude: p[1] }));
   }, [ride]);
+
+  // Fetch Google Directions route when no stored polyline is available and the
+  // ride has no pre-rendered snapshot (snapshot branch renders an Image — the
+  // MapView never mounts so fetching here would be a wasted paid API call).
+  // Placed after savedPolyline so the dep array can reference it without TDZ.
+  useEffect(() => {
+    if (
+      savedPolyline.length >= 2 ||
+      !ride?.pickup_lat || !ride?.dropoff_lat ||
+      ride?.route_snapshot_url ||
+      !GOOGLE_MAPS_API_KEY
+    ) return;
+    let cancelled = false;
+    const fetchFallbackRoute = async () => {
+      try {
+        const origin = `${ride.pickup_lat},${ride.pickup_lng}`;
+        const dest = `${ride.dropoff_lat},${ride.dropoff_lng}`;
+        const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${dest}&key=${GOOGLE_MAPS_API_KEY}`;
+        const res = await fetch(url);
+        const data = await res.json();
+        if (data.status !== 'OK') return;
+        const encoded = data?.routes?.[0]?.overview_polyline?.points;
+        if (encoded && !cancelled) {
+          const coords = decodePolyline(encoded);
+          setFallbackCoords(coords);
+          mapRef.current?.fitToCoordinates(coords, {
+            edgePadding: { top: 30, right: 30, bottom: 30, left: 30 }, animated: false,
+          });
+        }
+      } catch { }
+    };
+    fetchFallbackRoute();
+    return () => { cancelled = true; };
+  }, [savedPolyline.length, ride?.pickup_lat, ride?.pickup_lng, ride?.dropoff_lat, ride?.dropoff_lng, ride?.route_snapshot_url]);
 
   const polylineToRender = savedPolyline.length >= 2 ? savedPolyline : fallbackCoords;
 
@@ -172,21 +220,6 @@ export default function RideDetailsScreen() {
                   }
                 }}
               >
-                {savedPolyline.length < 2 && GOOGLE_MAPS_API_KEY && (
-                  <MapViewDirections
-                    origin={{ latitude: ride.pickup_lat, longitude: ride.pickup_lng }}
-                    destination={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }}
-                    apikey={GOOGLE_MAPS_API_KEY}
-                    strokeWidth={0}
-                    strokeColor="transparent"
-                    onReady={(r: any) => {
-                      setFallbackCoords(r.coordinates);
-                      mapRef.current?.fitToCoordinates(r.coordinates, {
-                        edgePadding: { top: 30, right: 30, bottom: 30, left: 30 }, animated: false,
-                      });
-                    }}
-                  />
-                )}
                 {polylineToRender.length > 1 && (() => {
                   const total = polylineToRender.length;
                   const SEGS = 15;

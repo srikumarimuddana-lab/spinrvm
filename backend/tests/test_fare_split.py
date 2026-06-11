@@ -213,6 +213,74 @@ class TestCreateFareSplit:
         assert data["your_share"] == "10.00"
 
 
+class TestShareSumInvariant:
+    """Property: fare-split shares always sum to total_fare.
+
+    Participant shares round DOWN to whole cents and the requester absorbs
+    the remainder. The previous per-share round(total/count) drifted:
+    $10.00 / 3 → 3 × $3.33 = $9.99.
+    """
+
+    @pytest.mark.parametrize(
+        ("total_fare", "phones"),
+        [
+            (10.00, [PHONE_PARTICIPANT_1, PHONE_PARTICIPANT_2]),  # 3-way, classic remainder
+            (100.01, [PHONE_PARTICIPANT_1, PHONE_PARTICIPANT_2, PHONE_PARTICIPANT_3]),
+            (0.04, [PHONE_PARTICIPANT_1, PHONE_PARTICIPANT_2, PHONE_PARTICIPANT_3]),  # micro-fare
+            (19.99, [PHONE_PARTICIPANT_1]),
+            (33.34, [PHONE_PARTICIPANT_1, PHONE_PARTICIPANT_2]),
+            (7.77, [PHONE_PARTICIPANT_1, PHONE_PARTICIPANT_2]),
+        ],
+    )
+    def test_shares_sum_to_total_fare(self, client, total_fare, phones):
+        from decimal import Decimal
+
+        ride = {**SAMPLE_RIDE, "total_fare": total_fare, "grand_total": total_fare}
+        mock_db = make_mock_db()
+        mock_db.rides.find_one = AsyncMock(return_value=ride)
+        mock_db.fare_splits.find_one = AsyncMock(return_value=None)
+        mock_db.users.find_one = AsyncMock(return_value=None)
+
+        with patch("routes.fare_split.db", mock_db):
+            resp = client.post(
+                "/api/v1/fare-split",
+                json={"ride_id": "ride_123", "participant_phones": phones},
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        shares = [Decimal(p["share_amount"]) for p in data["participants"]]
+        requester_share = Decimal(data["your_share"])
+        assert requester_share >= 0
+        assert all(s >= 0 for s in shares)
+        assert requester_share + sum(shares) == Decimal(data["total_fare"]), data
+
+    def test_ten_dollar_three_way_split_loses_no_cent(self):
+        """$10.00 / 3: participants pay $3.33, requester pays $3.34."""
+        from decimal import Decimal
+
+        from routes.fare_split import _split_shares
+
+        participant, requester = _split_shares(Decimal("10.00"), 3)
+        assert participant == Decimal("3.33")
+        assert requester == Decimal("3.34")
+        assert participant * 2 + requester == Decimal("10.00")
+
+    def test_requester_share_derived_from_stored_rows(self):
+        """After a decline-recalc, requester share = total − active rows."""
+        from decimal import Decimal
+
+        from routes.fare_split import _requester_share_from_rows
+
+        split = {"total_fare": 10.0, "split_count": 3}
+        participants = [
+            {"share_amount": 3.33, "status": "accepted"},
+            {"share_amount": 3.33, "status": "paid"},
+            {"share_amount": 5.0, "status": "declined"},  # excluded
+        ]
+        assert _requester_share_from_rows(split, participants) == Decimal("3.34")
+
+
 class TestGetFareSplit:
     """GET /api/v1/fare-split/{split_id}"""
 

@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDriverStore } from '../../../store/driverStore';
 import { useAuthStore } from '@shared/store/authStore';
+import { useVehicleTypeStore } from '@shared/store/vehicleTypeStore';
 import {
   DriverTopBar,
   DriverIdlePanel,
@@ -15,7 +16,7 @@ import {
 } from '../../../components/dashboard';
 import { RideOfferPanel } from '../../../components/panels/RideOfferPanel';
 import { useDriverDashboard } from '../../../hooks/useDriverDashboard';
-import { CarMarker } from '../../../components/CarMarker';
+import { CarMarker, resolveMarkerVariant, type CarMarkerVariant } from '../../../components/CarMarker';
 import { SOSButton } from '@shared/components/SOSButton';
 import { useLanguageStore } from '../../../store/languageStore';
 import { showToast } from '../../../hooks/useToast';
@@ -77,6 +78,18 @@ function DriverDashboard() {
   } = useDriverStore();
 
   const isCancellingRide = useDriverStore((s) => s.isCancellingRide);
+
+  // Own-car marker, admin-configured per vehicle type. Resolved from the
+  // shared vehicleTypeStore (synced once per app open by the root layout) —
+  // no per-screen fetch.
+  const ownVehicleType = useVehicleTypeStore(
+    (s) => s.byId[(driverData?.vehicle_type_id as string) ?? ''],
+  );
+  const markerVariant: CarMarkerVariant = resolveMarkerVariant(
+    ownVehicleType?.marker_variant,
+    ownVehicleType?.name,
+  );
+  const markerImageUri = ownVehicleType?.marker_image_url;
 
   const { t } = useLanguageStore();
 
@@ -661,6 +674,8 @@ function DriverDashboard() {
             }}
             heading={location.coords.heading}
             isOnline={isOnline}
+            variant={markerVariant}
+            imageUri={markerImageUri}
           />
         )}
         {mapMarkers}

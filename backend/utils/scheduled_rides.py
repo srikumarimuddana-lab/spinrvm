@@ -237,6 +237,7 @@ async def check_scheduled_rides():
             },
             limit=100,
             order="scheduled_time",
+            columns="id,rider_id,scheduled_time,scheduled_dispatched,reminder_sent,dropoff_address",
         )
     except Exception as e:
         original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None

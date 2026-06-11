@@ -1,10 +1,11 @@
 """AI chat retention (Step J) regression checks.
 
-History: this branch introduced Step J (90-day ai_messages/ai_conversations
-purge) as migration 141; main's 143_retention_purge_surge_pricing.sql was
-forked from it (adding Step K) and supersedes it, so 141 was dropped from
-this branch and 143 is now the authoritative purge_pii_retention
-definition. CI has no Postgres, so these checks pin the SQL contract
+History: migration 141 (merged via PR #1779) introduced Step J — the
+90-day ai_messages/ai_conversations purge. Main's
+143_retention_purge_surge_pricing.sql re-forked it (adding Step K), so 143
+is now the authoritative purge_pii_retention definition; 141 stays in the
+tree untouched because it has been applied (never rename/delete applied
+migrations). CI has no Postgres, so these checks pin the SQL contract
 textually: Step J survives in 143 with the 90d chat window, dry-run
 support, result counters, and the SECURITY DEFINER + grant lockdown.
 """
@@ -70,16 +71,13 @@ class TestReForkIntegrity:
 
 
 class TestTableMigrationPairing:
-    def test_ai_tables_migration_present_and_renumbered(self):
-        # Step J references ai_messages/ai_conversations — their creating
-        # migration must exist on this branch (renumbered past main's 143).
-        sql = (MIGRATIONS / "144_ai_assistant_conversations.sql").read_text()
+    def test_ai_tables_migration_present(self):
+        # Step J references ai_messages/ai_conversations — created by 140,
+        # which merged to main via PR #1779 (applied; never rename it).
+        sql = (MIGRATIONS / "140_ai_assistant_conversations.sql").read_text()
         assert "CREATE TABLE IF NOT EXISTS public.ai_messages" in sql
         assert "ENABLE ROW LEVEL SECURITY" in sql
 
-    def test_admin_actor_migration_renumbered(self):
-        sql = (MIGRATIONS / "145_ai_conversations_admin_actor.sql").read_text()
+    def test_admin_actor_migration_present(self):
+        sql = (MIGRATIONS / "144_ai_conversations_admin_actor.sql").read_text()
         assert "ADD COLUMN IF NOT EXISTS admin_actor_id" in sql
-
-    def test_superseded_migration_removed(self):
-        assert not (MIGRATIONS / "141_retention_purge_ai_messages.sql").exists()

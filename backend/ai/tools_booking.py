@@ -9,7 +9,7 @@ Nothing in this module writes to the database.
 
 These tools are chat-only (mcp_exposed=False) and rider-only. Coordinates
 flow through tool results because the flow needs them; they are ephemeral —
-never logged, never persisted (backend/ai/tools.py contract + migration 144).
+never logged, never persisted (backend/ai/tools.py contract + migration 140).
 
 The conversational quote is an APPROXIMATION (same fare-config data the
 /fares endpoint serves, Decimal math, surge included) and is labelled as

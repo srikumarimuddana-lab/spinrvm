@@ -6,7 +6,7 @@ import asyncio
 import logging
 import random
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 try:
@@ -27,6 +27,7 @@ try:
         as_utc,
         local_date_for_send_window,
         missing_required_document_uploads,
+        open_send_windows,
         reminder_message,
         should_skip_driver,
     )
@@ -41,6 +42,7 @@ except ImportError:
         as_utc,
         local_date_for_send_window,
         missing_required_document_uploads,
+        open_send_windows,
         reminder_message,
         should_skip_driver,
     )
@@ -52,6 +54,12 @@ logger = logging.getLogger(__name__)
 CHECK_INTERVAL_SECONDS = 15 * 60
 PAGE_SIZE = 200
 LOG_TABLE = "driver_onboarding_reminder_log"
+
+# Windows ('<tz>:<local-date>') this process has already scanned. The 15-min
+# tick is only a clock check; the full drivers/documents scan runs once per
+# timezone per day, inside the 08:00 local send hour. In-process only — the
+# DB claim log keeps sends idempotent across replicas and restarts.
+_completed_windows: set[str] = set()
 
 
 async def _get_rows(table: str, filters: dict[str, Any] | None, **kwargs) -> list[dict[str, Any]]:
@@ -130,13 +138,25 @@ async def _send(driver: dict[str, Any], kind: str, local_date: str, now: datetim
 
 async def check_driver_onboarding_reminders(now_utc: datetime | None = None) -> dict[str, int]:
     now = as_utc(now_utc)
+    stats = {"drivers_scanned": 0, "claims_attempted": 0, "pushes_delivered": 0}
+
     areas = {
         str(r["id"]): r
         for r in await _get_rows("service_areas", {}, limit=1000, columns="id,timezone,required_documents")
         if r.get("id")
     }
+
+    # Daily gate: the drivers + documents scan only runs while some known
+    # timezone (area timezones + default) is inside its 08:00 send hour, and
+    # at most once per window per process. Outside the window each tick costs
+    # only the small service_areas read above. Drivers with a personal
+    # timezone matching no service area are covered by the default-timezone
+    # window rather than their own.
+    windows = open_send_windows({(a.get("timezone") or "") for a in areas.values()}, now)
+    if not windows - _completed_windows:
+        return stats
+
     global_reqs = await _get_rows("document_requirements", {}, limit=200, columns="id,name,is_mandatory")
-    stats = {"drivers_scanned": 0, "claims_attempted": 0, "pushes_delivered": 0}
 
     offset = 0
     while True:
@@ -179,6 +199,12 @@ async def check_driver_onboarding_reminders(now_utc: datetime | None = None) -> 
         if len(drivers) < PAGE_SIZE:
             break
         offset += PAGE_SIZE
+
+    _completed_windows.update(windows)
+    # Drop windows older than yesterday so the memo can't grow unbounded
+    # (ISO dates compare lexicographically).
+    cutoff = (now - timedelta(days=1)).date().isoformat()
+    _completed_windows.difference_update({w for w in _completed_windows if w.rsplit(":", 1)[1] < cutoff})
 
     if stats["claims_attempted"]:
         logger.info("onboarding reminders: %s", stats)

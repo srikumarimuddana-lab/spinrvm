@@ -1339,14 +1339,21 @@ async def _filter_reachable_drivers(all_drivers: list) -> list:
     return filtered
 
 
-@api_router.post("/estimate")
-@api_rate_limit
-@_metric_timed("spinr_fare_calc_duration_ms")
-async def estimate_ride(
+async def compute_ride_estimates(
     body: RideEstimateRequest,
-    request: Request = None,
-    current_user: dict = Depends(get_current_user),
-):
+    rider_id: str,
+    *,
+    include_polyline: bool = True,
+) -> dict:
+    """Shared estimate engine behind POST /rides/estimate.
+
+    Single fare path for every quoting surface (rider app, AI assistant
+    get_fare_quote): geofence gates, live driver availability/ETA, surge,
+    area fees + taxes, and per-vehicle surge-locked estimate tokens.
+    Raises HTTPException(400 OUTSIDE_SERVICE_AREA) exactly like the route.
+    ``include_polyline=False`` skips the Directions fetch for callers that
+    don't render a map (saves a Maps API call and its latency).
+    """
     validate_ride_location(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
     distance_km = calculate_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
     duration_minutes = int(distance_km / 30 * 60) + 5
@@ -1459,7 +1466,7 @@ async def estimate_ride(
             logger.warning("[estimate] polyline fetch failed (non-fatal): %s", _poly_err)
             return None
 
-    polyline_task = asyncio.create_task(_polyline_fetch())
+    polyline_task = asyncio.create_task(_polyline_fetch()) if include_polyline else None
 
     # Fetch nearby online+available drivers once. Order by went_online_at DESC
     # so recently-toggled-online drivers fill the 200-row page first. Ghost
@@ -1603,7 +1610,7 @@ async def estimate_ride(
         # reuse the surge_multiplier shown here instead of re-reading the
         # service area (which may have changed between estimate + confirm).
         estimate_token = sign_estimate_token(
-            rider_id=current_user["id"],
+            rider_id=rider_id,
             vehicle_type_id=vt_id,
             pickup_lat=body.pickup_lat,
             pickup_lng=body.pickup_lng,
@@ -1653,12 +1660,13 @@ async def estimate_ride(
     # must not drag the estimate past its latency budget. On timeout the
     # task is cancelled and the app falls back to straight-line rendering.
     route_polyline = None
-    try:
-        route_polyline = await asyncio.wait_for(polyline_task, timeout=0.5)
-    except asyncio.TimeoutError:
-        logger.info("[estimate] polyline not ready within budget — returning without it (non-fatal)")
-    except Exception as _poly_err:  # defensive — _polyline_fetch traps its own errors
-        logger.warning("[estimate] polyline await failed (non-fatal): %s", _poly_err)
+    if polyline_task is not None:
+        try:
+            route_polyline = await asyncio.wait_for(polyline_task, timeout=0.5)
+        except asyncio.TimeoutError:
+            logger.info("[estimate] polyline not ready within budget — returning without it (non-fatal)")
+        except Exception as _poly_err:  # defensive — _polyline_fetch traps its own errors
+            logger.warning("[estimate] polyline await failed (non-fatal): %s", _poly_err)
 
     logger.info(
         "[estimate] returning %d estimates (polyline=%d pts): %s",
@@ -1667,6 +1675,17 @@ async def estimate_ride(
         [(e["vehicle_type"].get("name", "?"), e["available"], e["driver_count"]) for e in estimates],
     )
     return {"estimates": estimates, "route_polyline": route_polyline}
+
+
+@api_router.post("/estimate")
+@api_rate_limit
+@_metric_timed("spinr_fare_calc_duration_ms")
+async def estimate_ride(
+    body: RideEstimateRequest,
+    request: Request = None,
+    current_user: dict = Depends(get_current_user),
+):
+    return await compute_ride_estimates(body, current_user["id"])
 
 
 async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):

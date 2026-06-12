@@ -28,6 +28,7 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import type { AiChatMessage, LocationSuggestionCandidate } from '@shared/types/ai';
 import BookingProposalCard from '../components/BookingProposalCard';
+import FareQuoteCard from '../components/FareQuoteCard';
 import { useAiChatStore } from '../store/aiChatStore';
 import { useRideStore } from '../store/rideStore';
 
@@ -229,6 +230,22 @@ export default function AiAssistantScreen() {
     }
     if (item.kind === 'booking_proposal' && item.action?.type === 'booking_proposal') {
       return <BookingProposalCard proposal={item.action.proposal} />;
+    }
+    if (item.kind === 'fare_quote' && item.action?.type === 'fare_quote') {
+      const quote = item.action;
+      return (
+        <FareQuoteCard
+          quote={quote}
+          onSelect={(option) => {
+            // Self-contained message: the assistant's next turn sees only
+            // message text, so the tap must restate the trip context.
+            const from = quote.pickup_address ? ` from ${quote.pickup_address}` : '';
+            const to = quote.dropoff_address ? ` to ${quote.dropoff_address}` : '';
+            const promo = option.promo_code ? ` with promo ${option.promo_code}` : '';
+            handleSend(`Book the ${option.vehicle_type ?? 'recommended option'}${from}${to}${promo}.`);
+          }}
+        />
+      );
     }
     if (item.kind === 'location_suggestions' && item.action?.type === 'location_suggestions') {
       return (

@@ -384,17 +384,49 @@ async def apply_promo(
     }
 
 
-@api_router.get("/available")
-@promo_available_limit
-async def get_available_promos(
-    request: Request,
-    ride_fare: float = Query(0.0),  # grand total (kept for backward compat + min-fare check)
-    ride_portion: Optional[float] = Query(None),  # ride-only portion (base+dist+time) for promo calculation
-    pickup_lat: Optional[float] = Query(None),
-    pickup_lng: Optional[float] = Query(None),
-    current_user: dict = Depends(get_current_user),
-):
-    """Get all promos available to this user, filtered by pickup service area."""
+def compute_promo_discount(promo: Dict[str, Any], ride_portion: Decimal, grand_total: Decimal) -> Decimal:
+    """Discount a promo yields for a quote — pure Decimal math shared by
+    /promo/available and the AI fare-quote tool so the advertised savings
+    always equal what settlement charges.
+
+    ``ride_portion`` is base+dist+time (the only part regular promos
+    discount — never fees or taxes); ``free_ride`` promos cover the full
+    ``grand_total`` so the rider pays $0.
+    """
+    if promo.get("free_ride"):
+        return grand_total
+    discount_type = promo.get("discount_type", "flat")
+    discount_value = Decimal(str(promo.get("discount_value", 0) or 0))
+    if discount_type == "percentage":
+        if ride_portion <= 0:
+            return Decimal("0")
+        discount = (ride_portion * discount_value / Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        max_cap = promo.get("max_discount")
+        if max_cap and discount > Decimal(str(max_cap)):
+            discount = Decimal(str(max_cap))
+        return discount
+    # Flat discount capped at the ride portion (driver earnings). When the
+    # ride portion is unknown (0), fall back to grand_total so we never
+    # advertise a discount larger than the rider would actually be charged.
+    cap_basis = ride_portion if ride_portion > 0 else grand_total
+    return min(discount_value, cap_basis) if cap_basis > 0 else discount_value
+
+
+async def list_available_promos(
+    user_id: str,
+    *,
+    ride_fare: float = 0.0,
+    ride_portion: Optional[float] = None,
+    pickup_lat: Optional[float] = None,
+    pickup_lng: Optional[float] = None,
+) -> list:
+    """Full promo-eligibility engine behind GET /promo/available.
+
+    Shared by the route and the AI assistant's quoting tool so every
+    surface advertises the same promos with the same amounts.
+    ``ride_fare`` is the grand total; ``ride_portion`` is base+dist+time.
+    Returns entries sorted eligible-first, biggest discount first.
+    """
     now = datetime.now(timezone.utc)
 
     # Resolve pickup service area so we can filter area-specific promos.
@@ -425,15 +457,13 @@ async def get_available_promos(
         promos = [p for p in promos if p.get("service_area_id") is None]
 
     # Pre-fetch user data for targeting checks
-    user = await db_supabase.get_user_by_id(current_user["id"])
-    total_rides = await db_supabase.count_documents(
-        "rides", {"rider_id": current_user["id"], "status": RideStatus.COMPLETED}
-    )
+    user = await db_supabase.get_user_by_id(user_id)
+    total_rides = await db_supabase.count_documents("rides", {"rider_id": user_id, "status": RideStatus.COMPLETED})
     recent_cutoff_30 = (now - timedelta(days=30)).isoformat()
     await db_supabase.count_documents(
         "rides",
         {
-            "rider_id": current_user["id"],
+            "rider_id": user_id,
             "status": RideStatus.COMPLETED,
             "ride_completed_at": {"$gte": recent_cutoff_30},
         },
@@ -441,7 +471,7 @@ async def get_available_promos(
 
     # Pre-fetch all user promo applications in one query so per-promo usage
     # check is O(1) instead of one DB call per promo (N+1 reduction).
-    all_user_apps = await db_supabase.get_rows("promo_applications", {"user_id": current_user["id"]}, limit=2000) or []
+    all_user_apps = await db_supabase.get_rows("promo_applications", {"user_id": user_id}, limit=2000) or []
     user_usage_by_promo: dict = {}
     for app in all_user_apps:
         pid = app.get("promo_id")
@@ -481,7 +511,7 @@ async def get_available_promos(
 
             # Private coupon
             assigned = p.get("assigned_user_ids", [])
-            if assigned and current_user["id"] not in assigned:
+            if assigned and user_id not in assigned:
                 continue  # noqa: E701
 
             # First ride only
@@ -502,7 +532,7 @@ async def get_available_promos(
                 recent = await db_supabase.count_documents(
                     "rides",
                     {
-                        "rider_id": current_user["id"],
+                        "rider_id": user_id,
                         "status": RideStatus.COMPLETED,
                         "ride_completed_at": {"$gte": cutoff},
                     },
@@ -528,26 +558,7 @@ async def get_available_promos(
             free_ride_flag = p.get("free_ride", False)
             discount_type = p.get("discount_type", "flat")
             discount_value = Decimal(str(p.get("discount_value", 0) or 0))
-            if free_ride_flag:
-                discount = ride_fare_d  # covers everything; rider pays $0
-            elif discount_type == "percentage":
-                # Applies to ride portion only (never to fees/taxes)
-                if effective_ride > 0:
-                    discount = (effective_ride * discount_value / Decimal("100")).quantize(
-                        Decimal("0.01"), rounding=ROUND_HALF_UP
-                    )
-                else:
-                    discount = Decimal("0")
-                max_cap = p.get("max_discount")
-                if max_cap and discount > Decimal(str(max_cap)):
-                    discount = Decimal(str(max_cap))
-            else:
-                # Flat discount capped at the ride portion (driver earnings:
-                # base+dist+time). When the ride portion is unknown (0), fall
-                # back to ride_fare so we never advertise a discount larger
-                # than the rider would actually be charged.
-                cap_basis = effective_ride if effective_ride > 0 else ride_fare_d
-                discount = min(discount_value, cap_basis) if cap_basis > 0 else discount_value
+            discount = compute_promo_discount(p, effective_ride, ride_fare_d)
 
             entry: dict = {
                 "promo_id": p["id"],
@@ -574,6 +585,26 @@ async def get_available_promos(
     # Eligible first, then by biggest discount
     available.sort(key=lambda x: (not x.get("eligible", True), -x["discount_amount"]))
     return available
+
+
+@api_router.get("/available")
+@promo_available_limit
+async def get_available_promos(
+    request: Request,
+    ride_fare: float = Query(0.0),  # grand total (kept for backward compat + min-fare check)
+    ride_portion: Optional[float] = Query(None),  # ride-only portion (base+dist+time) for promo calculation
+    pickup_lat: Optional[float] = Query(None),
+    pickup_lng: Optional[float] = Query(None),
+    current_user: dict = Depends(get_current_user),
+):
+    """Get all promos available to this user, filtered by pickup service area."""
+    return await list_available_promos(
+        current_user["id"],
+        ride_fare=ride_fare,
+        ride_portion=ride_portion,
+        pickup_lat=pickup_lat,
+        pickup_lng=pickup_lng,
+    )
 
 
 # ============ Admin Promo Code CRUD ============

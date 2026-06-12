@@ -2,18 +2,22 @@
 
 Available to both rider and driver audiences. escalate_to_support is the
 assistant's only potential side effect, and it is OFF by default: it
-returns a deep-link payload the client renders as a "Contact support"
-button. Only when app_settings.ai_escalation_creates_ticket is enabled does
-it open a Zoho ticket (reusing the existing /support/escalate integration).
-Safety topics always route to 911/SOS language — never just a ticket.
+returns an ``open_support`` _client_action the apps render as a "Contact
+support" button. Only when app_settings.ai_escalation_creates_ticket is
+enabled does it open a Zoho ticket (reusing the existing /support/escalate
+integration), attaching the recent chat transcript so agents get context
+without asking the user to repeat themselves. Safety topics always route
+to 911/SOS language — never just a ticket.
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 try:
+    from . import conversations
     from .tools import ToolSpec, register
 except ImportError:
+    from ai import conversations
     from ai.tools import ToolSpec, register
 
 try:
@@ -58,11 +62,19 @@ async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
     q_tokens = _tokenize(query)
     scored = []
     for row in rows or []:
-        text = f"{row.get('question', '')} {row.get('answer', '')} {row.get('category', '')}"
-        overlap = len(q_tokens & _tokenize(text))
-        if overlap:
-            scored.append((overlap, row))
+        # Question matches count double — a query echoing the question is a
+        # far stronger signal than the same words buried in an answer body.
+        question_overlap = len(q_tokens & _tokenize(row.get("question", "")))
+        body_overlap = len(q_tokens & _tokenize(f"{row.get('answer', '')} {row.get('category', '')}"))
+        score = question_overlap * 2 + body_overlap
+        if score:
+            scored.append((score, row))
     scored.sort(key=lambda pair: pair[0], reverse=True)
+    if not scored:
+        return {
+            "results": [],
+            "note": "No matching help-centre article — say so plainly and offer escalate_to_support.",
+        }
     return {
         "results": [
             {
@@ -86,12 +98,42 @@ async def get_company_info(user: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+# Transcript bounds for escalation tickets: enough for an agent to catch up,
+# small enough to keep tickets readable.
+_TRANSCRIPT_MAX_MESSAGES = 10
+_TRANSCRIPT_MAX_MESSAGE_CHARS = 300
+
+
+async def _recent_transcript(conversation_id: Optional[str]) -> Optional[str]:
+    """Compact 'User:/Assistant:' transcript of the current conversation for
+    the support ticket. Messages are already PII-scrubbed at ingest. Returns
+    None when unavailable — a transcript must never block an escalation."""
+    if not conversation_id:
+        return None
+    try:
+        history = await conversations.load_history(conversation_id, _TRANSCRIPT_MAX_MESSAGES)
+    except Exception:
+        logger.error("ai escalation transcript load failed", exc_info=True)
+        return None
+    lines = []
+    for m in history:
+        label = "Assistant" if m.get("role") == "assistant" else "User"
+        content = (m.get("content") or "").strip()
+        if content:
+            lines.append(f"{label}: {content[:_TRANSCRIPT_MAX_MESSAGE_CHARS]}")
+    return "\n".join(lines) or None
+
+
 async def escalate_to_support(user: Dict[str, Any], reason: str, category: str) -> Dict[str, Any]:
+    link = _CATEGORY_LINKS.get(category, _DEFAULT_LINK)
     result: Dict[str, Any] = {
         "action": "open_support",
         "category": category,
-        "link": _CATEGORY_LINKS.get(category, _DEFAULT_LINK),
+        "link": link,
         "message": "I've prepared a handoff to our human support team.",
+        # Lifted into an SSE `action` frame by the orchestrator; the apps and
+        # the admin console render it as the "Contact support" card.
+        "_client_action": {"type": "open_support", "category": category, "link": link},
     }
     if category == "safety":
         # The assistant is never an emergency channel (see CLAUDE.md).
@@ -107,8 +149,9 @@ async def escalate_to_support(user: Dict[str, Any], reason: str, category: str) 
         except ImportError:
             from services.zoho_desk_integration import create_support_ticket
         try:
+            transcript = await _recent_transcript(user.get("_conversation_id"))
             ticket = await create_support_ticket(
-                user=user, message=f"[AI escalation:{category}] {reason}", transcript=None
+                user=user, message=f"[AI escalation:{category}] {reason}", transcript=transcript
             )
             result["ticket_number"] = ticket.get("ticketNumber")
             result["message"] += " A support ticket has been opened; we'll follow up by email."
@@ -147,8 +190,7 @@ register(
     ToolSpec(
         name="get_company_info",
         description=(
-            "Call this when the user asks how to contact Spinr, the support phone/email, "
-            "or where the company is based."
+            "Call this when the user asks how to contact Spinr, the support phone/email, or where the company is based."
         ),
         input_schema={"type": "object", "properties": {}, "required": []},
         handler=get_company_info,

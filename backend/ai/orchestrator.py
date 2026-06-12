@@ -134,10 +134,13 @@ async def run_chat_turn(
     tools = tool_defs_for(audience)
     messages: List[Dict[str, Any]] = list(history)
 
-    # Device location rides along to tools only (never into the prompt, the
-    # conversation rows, or logs) — booking tools use it to bias place
-    # search and resolve "my location" pickups.
-    tool_user = {**user, "_client_location": client_location} if client_location else user
+    # Per-turn context rides along to tools only (never into the prompt, the
+    # conversation rows, or logs): device location lets booking tools bias
+    # place search / resolve "my location"; the conversation id lets
+    # escalate_to_support attach a transcript to the ticket.
+    tool_user = {**user, "_conversation_id": conversation["id"]}
+    if client_location:
+        tool_user["_client_location"] = client_location
 
     max_iterations = int(settings.get("ai_max_tool_iterations") or 6)
     all_text: List[str] = []

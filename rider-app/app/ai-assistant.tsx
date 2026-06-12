@@ -28,6 +28,7 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import type { AiChatMessage, LocationSuggestionCandidate } from '@shared/types/ai';
 import BookingProposalCard from '../components/BookingProposalCard';
+import FareQuoteCard from '../components/FareQuoteCard';
 import { useAiChatStore } from '../store/aiChatStore';
 import { useRideStore } from '../store/rideStore';
 
@@ -229,6 +230,14 @@ export default function AiAssistantScreen() {
     }
     if (item.kind === 'booking_proposal' && item.action?.type === 'booking_proposal') {
       return <BookingProposalCard proposal={item.action.proposal} />;
+    }
+    if (item.kind === 'fare_quote' && item.action?.type === 'fare_quote') {
+      return (
+        <FareQuoteCard
+          quote={item.action}
+          onSelect={(option) => handleSend(`Book the ${option.vehicle_type ?? 'recommended option'}.`)}
+        />
+      );
     }
     if (item.kind === 'location_suggestions' && item.action?.type === 'location_suggestions') {
       return (

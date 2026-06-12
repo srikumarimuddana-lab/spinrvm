@@ -43,6 +43,7 @@ try:
     from ..utils.redis_client import redis_expire, redis_incr
 except ImportError:
     from settings_loader import get_app_settings
+    from utils.metrics import inc as _metric_inc
     from utils.redis_client import redis_expire, redis_incr
 
 logger = logging.getLogger(__name__)
@@ -62,8 +63,8 @@ def _capture(exc: Exception, user: Dict[str, Any]) -> None:
             scope.set_tag("surface", "backend")
             scope.set_tag("rider_id", user.get("id"))
             sentry_sdk.capture_exception(exc)
-    except Exception:  # pragma: no cover — sentry optional in dev
-        pass
+    except Exception as _sentry_exc:  # pragma: no cover — sentry optional in dev
+        logger.debug("sentry capture skipped: %s", _sentry_exc)
 
 
 async def _over_daily_cap(user_id: str, cap: int) -> bool:
@@ -164,7 +165,7 @@ async def run_chat_turn(
             results = await asyncio.gather(
                 *(execute_tool(tc.name, tc.arguments, user=user, audience=audience) for tc in tool_calls)
             )
-            for tc, (result, ok) in zip(tool_calls, results):
+            for tc, (result, ok) in zip(tool_calls, results, strict=True):
                 used_tool_names.append(tc.name)
                 _metric_inc("spinr_ai_tool_calls_total", {"tool": tc.name, "ok": str(ok).lower()})
                 client_action = result.pop("_client_action", None) if isinstance(result, dict) else None

@@ -1,8 +1,10 @@
 """FAQ / company / escalation tools.
 
-Pins: audience filtering on FAQ search, the deep-link-only default for
-escalation (Zoho ticket only behind the settings flag, and a Zoho outage
-never strands the user), and the 911/SOS language on safety escalations.
+Pins: audience filtering on FAQ search (question matches outrank answer
+matches), the deep-link-only default for escalation (Zoho ticket only
+behind the settings flag, and a Zoho outage never strands the user), the
+open_support _client_action card contract, the conversation transcript on
+tickets, and the 911/SOS language on safety escalations.
 """
 
 from unittest.mock import AsyncMock, patch
@@ -50,9 +52,7 @@ class TestSearchFaqs:
     async def test_keyword_match_and_shape(self):
         get_rows = AsyncMock(return_value=FAQS)
         with patch.object(tools_support.db_supabase, "get_rows", get_rows):
-            result, ok = await execute_tool(
-                "search_faqs", {"query": "can I schedule a ride for tomorrow"}, user=RIDER
-            )
+            result, ok = await execute_tool("search_faqs", {"query": "can I schedule a ride for tomorrow"}, user=RIDER)
         assert ok
         assert result["results"][0]["question"].startswith("Can I schedule")
         # audience filter is server-decided and sent to the DB query
@@ -66,10 +66,36 @@ class TestSearchFaqs:
         assert get_rows.await_args.args[1]["audience"] == {"$in": ["both", "driver"]}
 
     @pytest.mark.anyio
-    async def test_no_match_returns_empty(self):
+    async def test_no_match_returns_empty_with_note(self):
         with patch.object(tools_support.db_supabase, "get_rows", AsyncMock(return_value=FAQS)):
             result, ok = await execute_tool("search_faqs", {"query": "zzzqqq"}, user=RIDER)
         assert ok and result["results"] == []
+        assert "No matching" in result["note"]
+
+    @pytest.mark.anyio
+    async def test_question_match_outranks_answer_match(self):
+        faqs = [
+            {
+                # Query tokens appear only in the ANSWER (3 hits, weight 1 → 3)
+                "question": "How do refunds work?",
+                "answer": "You can schedule advance ride pickups from the booking screen.",
+                "category": "rides",
+                "audience": "both",
+                "is_active": True,
+            },
+            {
+                # Query tokens appear in the QUESTION (2 hits, weight 2 → 4)
+                "question": "Can I schedule a ride?",
+                "answer": "Yes.",
+                "category": "rides",
+                "audience": "both",
+                "is_active": True,
+            },
+        ]
+        with patch.object(tools_support.db_supabase, "get_rows", AsyncMock(return_value=faqs)):
+            result, ok = await execute_tool("search_faqs", {"query": "schedule advance ride"}, user=RIDER)
+        assert ok
+        assert result["results"][0]["question"] == "Can I schedule a ride?"
 
 
 class TestCompanyInfo:
@@ -93,6 +119,9 @@ class TestEscalation:
         assert ok
         assert result["action"] == "open_support"
         assert result["link"] == "/support"
+        # The card contract: orchestrator lifts this into an SSE action frame
+        # so the apps/console render the "Contact support" card.
+        assert result["_client_action"] == {"type": "open_support", "category": "refund", "link": "/support"}
         assert "ticket_number" not in result
         ticket.assert_not_awaited()
 
@@ -120,8 +149,9 @@ class TestEscalation:
     @pytest.mark.anyio
     async def test_flag_enables_zoho_ticket(self):
         ticket = AsyncMock(return_value={"ticketNumber": "T-123"})
-        with _settings(ai_escalation_creates_ticket=True), patch(
-            "backend.services.zoho_desk_integration.create_support_ticket", ticket
+        with (
+            _settings(ai_escalation_creates_ticket=True),
+            patch("backend.services.zoho_desk_integration.create_support_ticket", ticket),
         ):
             result, ok = await execute_tool(
                 "escalate_to_support",
@@ -130,12 +160,55 @@ class TestEscalation:
             )
         assert ok and result["ticket_number"] == "T-123"
         ticket.assert_awaited_once()
+        # No conversation id on the user → no transcript on the ticket.
+        assert ticket.await_args.kwargs["transcript"] is None
+
+    @pytest.mark.anyio
+    async def test_ticket_includes_conversation_transcript(self):
+        ticket = AsyncMock(return_value={"ticketNumber": "T-124"})
+        history = AsyncMock(
+            return_value=[
+                {"role": "user", "content": "My driver took a wrong turn and I was overcharged"},
+                {"role": "assistant", "content": "I can see the fare — let me hand you to support."},
+            ]
+        )
+        with (
+            _settings(ai_escalation_creates_ticket=True),
+            patch("backend.services.zoho_desk_integration.create_support_ticket", ticket),
+            patch.object(tools_support.conversations, "load_history", history),
+        ):
+            result, ok = await execute_tool(
+                "escalate_to_support",
+                {"reason": "billing dispute", "category": "payment_issue"},
+                user={**RIDER, "_conversation_id": "conv-1"},
+            )
+        assert ok and result["ticket_number"] == "T-124"
+        transcript = ticket.await_args.kwargs["transcript"]
+        assert "User: My driver took a wrong turn" in transcript
+        assert "Assistant: I can see the fare" in transcript
+
+    @pytest.mark.anyio
+    async def test_transcript_failure_never_blocks_ticket(self):
+        ticket = AsyncMock(return_value={"ticketNumber": "T-125"})
+        with (
+            _settings(ai_escalation_creates_ticket=True),
+            patch("backend.services.zoho_desk_integration.create_support_ticket", ticket),
+            patch.object(tools_support.conversations, "load_history", AsyncMock(side_effect=RuntimeError("db down"))),
+        ):
+            result, ok = await execute_tool(
+                "escalate_to_support",
+                {"reason": "billing dispute", "category": "payment_issue"},
+                user={**RIDER, "_conversation_id": "conv-1"},
+            )
+        assert ok and result["ticket_number"] == "T-125"
+        assert ticket.await_args.kwargs["transcript"] is None
 
     @pytest.mark.anyio
     async def test_zoho_outage_still_returns_deep_link(self):
         ticket = AsyncMock(side_effect=RuntimeError("zoho down"))
-        with _settings(ai_escalation_creates_ticket=True), patch(
-            "backend.services.zoho_desk_integration.create_support_ticket", ticket
+        with (
+            _settings(ai_escalation_creates_ticket=True),
+            patch("backend.services.zoho_desk_integration.create_support_ticket", ticket),
         ):
             result, ok = await execute_tool(
                 "escalate_to_support",

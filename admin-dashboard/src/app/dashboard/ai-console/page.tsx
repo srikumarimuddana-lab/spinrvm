@@ -31,12 +31,154 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/components/ui/use-toast";
-import { Bot, MessageSquarePlus, Send, ShieldAlert, User as UserIcon } from "lucide-react";
+import { Bot, Car, LifeBuoy, MapPin, MessageSquarePlus, Send, ShieldAlert, Tag, User as UserIcon } from "lucide-react";
+import type { AiAction } from "@spinr/shared/types/ai";
 
 interface ChatBubble {
     id: string;
     role: "user" | "assistant";
     content: string;
+    /** Rich client action (fare quote / location suggestions / booking
+     * proposal) — rendered as the same card the rider sees in-app. */
+    action?: AiAction;
+}
+
+/** Mirrors the rider app's action cards so the console shows exactly what
+ * the rider would see (shared/types/ai.ts is the contract for both). */
+function ActionBubble({ action, onQuickSend }: { action: AiAction; onQuickSend: (text: string) => void }) {
+    if (action.type === "fare_quote") {
+        const meta = [
+            action.distance_km != null ? `${action.distance_km} km` : null,
+            action.duration_minutes != null ? `about ${action.duration_minutes} min` : null,
+        ]
+            .filter(Boolean)
+            .join(" · ");
+        return (
+            <div className="max-w-[75%] rounded-lg border bg-muted px-3 py-2 text-sm space-y-2">
+                <div className="flex items-center gap-2 font-semibold">
+                    <Tag className="h-4 w-4 text-primary" /> Ride options
+                    {meta && <span className="font-normal text-xs text-muted-foreground">{meta}</span>}
+                </div>
+                {action.quotes.map((q, i) => {
+                    const hasSavings = !!q.promo_savings && q.final_total !== q.total;
+                    // Self-contained message (mirrors the rider app): the next
+                    // turn sees only message text, so restate the trip context.
+                    const from = action.pickup_address ? ` from ${action.pickup_address}` : "";
+                    const to = action.dropoff_address ? ` to ${action.dropoff_address}` : "";
+                    const promo = q.promo_code ? ` with promo ${q.promo_code}` : "";
+                    return (
+                        <button
+                            key={q.vehicle_type_id ?? i}
+                            onClick={() => onQuickSend(`Book the ${q.vehicle_type ?? "recommended option"}${from}${to}${promo}.`)}
+                            className="w-full flex items-center justify-between gap-3 rounded-md bg-background px-2 py-1.5 text-left hover:bg-accent"
+                        >
+                            <span>
+                                <span className="font-medium">{q.vehicle_type ?? "Ride"}</span>
+                                <span className="block text-xs text-muted-foreground">
+                                    {[
+                                        q.eta_minutes != null ? `${q.eta_minutes} min away` : null,
+                                        q.capacity != null ? `${q.capacity} seats` : null,
+                                        (q.surge_multiplier ?? 1) > 1 ? `${q.surge_multiplier}x surge` : null,
+                                    ]
+                                        .filter(Boolean)
+                                        .join(" · ")}
+                                </span>
+                                {hasSavings && (
+                                    <span className="block text-xs font-medium text-green-600">
+                                        {q.promo_code} · save ${q.promo_savings}
+                                    </span>
+                                )}
+                            </span>
+                            <span className="text-right">
+                                {hasSavings && (
+                                    <span className="block text-xs text-muted-foreground line-through">${q.total}</span>
+                                )}
+                                <span className="font-semibold">${q.final_total}</span>
+                            </span>
+                        </button>
+                    );
+                })}
+                <p className="text-[11px] text-muted-foreground">
+                    Totals include taxes &amp; fees. The rider sees this as a tappable card.
+                </p>
+            </div>
+        );
+    }
+    if (action.type === "location_suggestions") {
+        return (
+            <div className="max-w-[75%] rounded-lg border bg-muted px-3 py-2 text-sm space-y-1">
+                <div className="flex items-center gap-2 font-semibold">
+                    <MapPin className="h-4 w-4 text-primary" />
+                    Choose {action.location_role === "pickup" ? "a pickup" : action.location_role === "dropoff" ? "a dropoff" : "a location"}
+                </div>
+                {action.candidates.slice(0, 3).map((c, i) => {
+                    const label = c.address || c.name;
+                    const suffix =
+                        action.location_role === "pickup"
+                            ? " as my pickup"
+                            : action.location_role === "dropoff"
+                              ? " as my dropoff"
+                              : "";
+                    return (
+                        <button
+                            key={`${c.lat}:${c.lng}:${i}`}
+                            onClick={() => label && onQuickSend(`Use ${label}${suffix}.`)}
+                            className="w-full rounded-md bg-background px-2 py-1.5 text-left hover:bg-accent"
+                        >
+                            <span className="font-medium">{c.name || c.address}</span>
+                            {c.name && c.address && (
+                                <span className="block text-xs text-muted-foreground">{c.address}</span>
+                            )}
+                        </button>
+                    );
+                })}
+            </div>
+        );
+    }
+    if (action.type === "booking_proposal") {
+        const p = action.proposal;
+        return (
+            <div className="max-w-[75%] rounded-lg border bg-muted px-3 py-2 text-sm space-y-1">
+                <div className="flex items-center gap-2 font-semibold">
+                    <Car className="h-4 w-4 text-primary" /> Booking card shown to rider
+                </div>
+                <p className="text-xs">{p.pickup_address}</p>
+                <p className="text-xs">→ {p.dropoff_address}</p>
+                <p className="text-xs text-muted-foreground">
+                    {[
+                        p.scheduled_time ? `Scheduled ${p.scheduled_time}` : "Now",
+                        p.payment_method ?? null,
+                        p.promo_code ? `promo ${p.promo_code}` : null,
+                    ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                </p>
+                <p className="text-[11px] text-muted-foreground">
+                    The ride books only when the rider taps Confirm in the app.
+                </p>
+            </div>
+        );
+    }
+    if (action.type === "open_support") {
+        return (
+            <div className="max-w-[75%] rounded-lg border bg-muted px-3 py-2 text-sm space-y-1">
+                <div className="flex items-center gap-2 font-semibold">
+                    <LifeBuoy className="h-4 w-4 text-primary" /> Support handoff
+                </div>
+                <p className="text-xs text-muted-foreground">
+                    Category: {action.category} · opens {action.link} in the app
+                </p>
+                <p className="text-[11px] text-muted-foreground">
+                    The rider sees this as a tappable &quot;Contact support&quot; button.
+                </p>
+            </div>
+        );
+    }
+    return (
+        <div className="max-w-[75%] rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
+            ⚡ action → {(action as { type: string }).type}
+        </div>
+    );
 }
 
 export default function AiConsolePage() {
@@ -128,8 +270,8 @@ export default function AiConsolePage() {
         setMessages([]);
     };
 
-    const send = async () => {
-        const text = input.trim();
+    const send = async (textOverride?: string) => {
+        const text = (textOverride ?? input).trim();
         // Gate on `target` (resolved from the CURRENT results), not just the
         // stored id — never post into a user who dropped out of the search.
         if (!text || !target || sending) return;
@@ -147,10 +289,11 @@ export default function AiConsolePage() {
             setMessages((prev) => [
                 ...prev,
                 { id: res.message_id ?? `r-${Date.now()}`, role: "assistant", content: res.reply },
-                ...res.actions.map((a: any, i: number) => ({
+                ...res.actions.map((a: AiAction, i: number) => ({
                     id: `a-${Date.now()}-${i}`,
                     role: "assistant" as const,
-                    content: `⚡ action → ${a.type}${a.type === "booking_proposal" ? ` (${a.proposal?.pickup_address} → ${a.proposal?.dropoff_address})` : ""}`,
+                    content: "",
+                    action: a,
                 })),
             ]);
             loadConversations(target.id);
@@ -282,11 +425,15 @@ export default function AiConsolePage() {
                             {messages.map((m) => (
                                 <div key={m.id} className={`flex gap-2 ${m.role === "user" ? "justify-end" : ""}`}>
                                     {m.role === "assistant" && <Bot className="h-5 w-5 text-primary shrink-0 mt-1" />}
-                                    <div
-                                        className={`max-w-[75%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${m.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}
-                                    >
-                                        {m.content}
-                                    </div>
+                                    {m.action ? (
+                                        <ActionBubble action={m.action} onQuickSend={(text) => send(text)} />
+                                    ) : (
+                                        <div
+                                            className={`max-w-[75%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${m.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}
+                                        >
+                                            {m.content}
+                                        </div>
+                                    )}
                                     {m.role === "user" && <UserIcon className="h-5 w-5 text-muted-foreground shrink-0 mt-1" />}
                                 </div>
                             ))}
@@ -304,7 +451,7 @@ export default function AiConsolePage() {
                                 placeholder={target ? "Message as this user…" : "Select a user first"}
                                 disabled={!target || sending}
                             />
-                            <Button onClick={send} disabled={!target || sending || !input.trim()}>
+                            <Button onClick={() => send()} disabled={!target || sending || !input.trim()}>
                                 <Send className="h-4 w-4" />
                             </Button>
                         </div>

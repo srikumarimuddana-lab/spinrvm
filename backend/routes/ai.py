@@ -54,10 +54,20 @@ _SSE_HEADERS = {
 }
 
 
+class AiChatLocation(BaseModel):
+    lat: float = Field(..., ge=-90, le=90)
+    lng: float = Field(..., ge=-180, le=180)
+
+
 class AiChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=1000)
     conversation_id: Optional[str] = Field(None, max_length=64)
     stream: bool = True
+    # Rider's current device location, sent opportunistically by the app so
+    # booking tools can bias place search / resolve "my location" pickups.
+    # Ephemeral: passed to tools for this turn only — never logged, never
+    # persisted (PIPEDA: raw GPS must not reach logs or storage).
+    location: Optional[AiChatLocation] = None
 
 
 def _audience_for(user: dict) -> str:
@@ -108,6 +118,7 @@ async def ai_chat(
         conversation_id=body.conversation_id,
         user_message=body.message,
         audience=_audience_for(current_user),
+        client_location=body.location.model_dump() if body.location else None,
     )
 
     if body.stream:

@@ -10,6 +10,7 @@
  */
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Location from 'expo-location';
 import api from '@shared/api/client';
 import type { AiAction, AiChatMessage, AiSseEvent } from '@shared/types/ai';
 import { streamChat } from '../utils/aiChat';
@@ -31,13 +32,34 @@ const TOOL_STATUS: Record<string, string> = {
   search_faqs: 'Searching the help centre…',
   get_company_info: 'Getting contact info…',
   find_place: 'Finding that place…',
-  get_fare_quote: 'Getting a quote…',
+  get_rider_location: 'Finding your location…',
+  get_fare_quote: 'Getting exact prices…',
   propose_ride_booking: 'Preparing your booking…',
   escalate_to_support: 'Preparing a support handoff…',
 };
 
 let nextId = 0;
 const newId = () => `local-${Date.now()}-${nextId++}`;
+
+/** Reject cached fixes older than this — a stale position would send "my
+ * location" pickups to the wrong area; the backend then falls back to the
+ * rider's last ride pickup instead. */
+const LOCATION_MAX_AGE_MS = 5 * 60 * 1000;
+
+/** Last-known device position, only when permission is already granted —
+ * the chat never triggers a permission prompt. Null on any failure or when
+ * the only available fix is older than LOCATION_MAX_AGE_MS. */
+async function deviceLocation(): Promise<{ lat: number; lng: number } | null> {
+  try {
+    const { granted } = await Location.getForegroundPermissionsAsync();
+    if (!granted) return null;
+    const pos = await Location.getLastKnownPositionAsync({ maxAge: LOCATION_MAX_AGE_MS });
+    if (!pos) return null;
+    return { lat: pos.coords.latitude, lng: pos.coords.longitude };
+  } catch {
+    return null;
+  }
+}
 
 const ERROR_MESSAGES: Record<string, string> = {
   ai_disabled: 'The AI assistant is currently unavailable.',
@@ -167,7 +189,9 @@ export const useAiChatStore = create<AiChatState>((set, get) => ({
                     ? 'booking_proposal'
                     : action.type === 'location_suggestions'
                       ? 'location_suggestions'
-                      : 'support_action',
+                      : action.type === 'fare_quote'
+                        ? 'fare_quote'
+                        : 'support_action',
                 content: '',
                 action,
                 createdAt: Date.now(),
@@ -188,6 +212,7 @@ export const useAiChatStore = create<AiChatState>((set, get) => ({
       await streamChat({
         message: trimmed,
         conversationId: get().conversationId,
+        location: await deviceLocation(),
         onEvent,
         signal: abortController.signal,
       });

@@ -31,7 +31,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/components/ui/use-toast";
-import { Bot, Car, MapPin, MessageSquarePlus, Send, ShieldAlert, Tag, User as UserIcon } from "lucide-react";
+import { Bot, Car, LifeBuoy, MapPin, MessageSquarePlus, Send, ShieldAlert, Tag, User as UserIcon } from "lucide-react";
 import type { AiAction } from "@spinr/shared/types/ai";
 
 interface ChatBubble {
@@ -154,9 +154,24 @@ function ActionBubble({ action, onQuickSend }: { action: AiAction; onQuickSend: 
             </div>
         );
     }
+    if (action.type === "open_support") {
+        return (
+            <div className="max-w-[75%] rounded-lg border bg-muted px-3 py-2 text-sm space-y-1">
+                <div className="flex items-center gap-2 font-semibold">
+                    <LifeBuoy className="h-4 w-4 text-primary" /> Support handoff
+                </div>
+                <p className="text-xs text-muted-foreground">
+                    Category: {action.category} · opens {action.link} in the app
+                </p>
+                <p className="text-[11px] text-muted-foreground">
+                    The rider sees this as a tappable &quot;Contact support&quot; button.
+                </p>
+            </div>
+        );
+    }
     return (
         <div className="max-w-[75%] rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
-            ⚡ action → {action.type}
+            ⚡ action → {(action as { type: string }).type}
         </div>
     );
 }

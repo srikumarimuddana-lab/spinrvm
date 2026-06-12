@@ -106,6 +106,9 @@ export async function streamChat(options: StreamChatOptions): Promise<void> {
       message,
       conversation_id: conversationId,
       stream: true,
+      // The surface decides the tool set: without this, a dual-role account
+      // (rider with is_driver=true) gets the FAQ-only driver assistant here.
+      audience: 'rider',
       ...(location ? { location } : {}),
     }),
     signal,

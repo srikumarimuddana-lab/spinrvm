@@ -179,3 +179,18 @@ class TestExecuteTool:
         assert ok is True
         assert result["_truncated"] is True
         assert len(result["preview"]) <= TOOL_RESULT_MAX_CHARS
+
+    @pytest.mark.anyio
+    async def test_client_action_survives_truncation(self):
+        """The card payload never enters the model context, so it must not
+        count against — or be destroyed by — the result cap."""
+        action = {"type": "fare_quote", "quotes": [{"vehicle_type": "Economy"}]}
+
+        async def huge_with_card(user, **args):
+            return {"rows": ["x" * 100] * 200, "_client_action": action}
+
+        register(_spec(handler=huge_with_card))
+        result, ok = await execute_tool("echo", {}, user=USER)
+        assert ok is True
+        assert result["_truncated"] is True
+        assert result["_client_action"] == action

@@ -143,10 +143,17 @@ def validate_args(schema: Dict[str, Any], args: Dict[str, Any]) -> List[str]:
 
 
 def _cap_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Cap the MODEL-facing portion of a result. ``_client_action`` is popped
+    by the orchestrator before the result enters the model context, so it
+    neither counts against the budget nor gets destroyed by truncation —
+    a rich quote card must survive even when the textual result is huge."""
+    client_action = result.pop("_client_action", None) if isinstance(result, dict) else None
     serialized = json.dumps(result, default=str)
-    if len(serialized) <= TOOL_RESULT_MAX_CHARS:
-        return result
-    return {"_truncated": True, "preview": serialized[:TOOL_RESULT_MAX_CHARS]}
+    if len(serialized) > TOOL_RESULT_MAX_CHARS:
+        result = {"_truncated": True, "preview": serialized[:TOOL_RESULT_MAX_CHARS]}
+    if client_action is not None:
+        result["_client_action"] = client_action
+    return result
 
 
 async def execute_tool(

@@ -53,6 +53,9 @@ export class SseFrameParser {
 export interface StreamChatOptions {
   message: string;
   conversationId: string | null;
+  /** Rider's current device location (only when permission already granted) —
+   * lets booking tools resolve "my location" without asking. */
+  location?: { lat: number; lng: number } | null;
   onEvent: (event: AiSseEvent) => void;
   signal?: AbortSignal;
   /** Test seams — default to expo/fetch + the shared auth helpers. */
@@ -82,6 +85,7 @@ export async function streamChat(options: StreamChatOptions): Promise<void> {
   const {
     message,
     conversationId,
+    location,
     onEvent,
     signal,
     fetchImpl = defaultFetch,
@@ -98,7 +102,12 @@ export async function streamChat(options: StreamChatOptions): Promise<void> {
       Accept: 'text/event-stream',
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ message, conversation_id: conversationId, stream: true }),
+    body: JSON.stringify({
+      message,
+      conversation_id: conversationId,
+      stream: true,
+      ...(location ? { location } : {}),
+    }),
     signal,
   });
 

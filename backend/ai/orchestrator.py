@@ -89,6 +89,7 @@ async def run_chat_turn(
     user_message: str,
     audience: str = "rider",
     admin_actor_id: Optional[str] = None,
+    client_location: Optional[Dict[str, float]] = None,
 ) -> AsyncIterator[Frame]:
     settings = await get_app_settings()
 
@@ -133,6 +134,11 @@ async def run_chat_turn(
     tools = tool_defs_for(audience)
     messages: List[Dict[str, Any]] = list(history)
 
+    # Device location rides along to tools only (never into the prompt, the
+    # conversation rows, or logs) — booking tools use it to bias place
+    # search and resolve "my location" pickups.
+    tool_user = {**user, "_client_location": client_location} if client_location else user
+
     max_iterations = int(settings.get("ai_max_tool_iterations") or 6)
     all_text: List[str] = []
     used_tool_names: List[str] = []
@@ -163,7 +169,7 @@ async def run_chat_turn(
             for tc in tool_calls:
                 yield "tool", {"name": tc.name, "status": "start"}
             results = await asyncio.gather(
-                *(execute_tool(tc.name, tc.arguments, user=user, audience=audience) for tc in tool_calls)
+                *(execute_tool(tc.name, tc.arguments, user=tool_user, audience=audience) for tc in tool_calls)
             )
             for tc, (result, ok) in zip(tool_calls, results, strict=True):
                 used_tool_names.append(tc.name)

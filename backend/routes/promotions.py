@@ -24,7 +24,7 @@ except ImportError:
     from dependencies import get_admin_user, get_current_user
     from models.ride_status import RideStatus
     from utils.datetime_utils import parse_iso_utc
-    from utils.rate_limiter import promo_validate_limit
+    from utils.rate_limiter import promo_available_limit, promo_validate_limit
 
 get_current_admin = get_admin_user
 

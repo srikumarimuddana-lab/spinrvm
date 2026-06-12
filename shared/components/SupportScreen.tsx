@@ -63,7 +63,7 @@ async function askAssistant(
   message: string,
   conversationId: string | null,
 ): Promise<{ reply: string; conversationId: string | null }> {
-  const res = await api.post('/ai/chat', {
+  const res = await api.post<{ reply?: string; conversation_id?: string | null }>('/ai/chat', {
     message,
     conversation_id: conversationId,
     stream: false,

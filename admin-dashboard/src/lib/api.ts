@@ -1072,6 +1072,19 @@ export const getApprovalQueue = (params?: {
     );
 };
 
+export const reviewDriverPhoto = (
+    driverId: string,
+    action: "approved" | "rejected",
+    reason?: string,
+) =>
+    request<{ message: string; driver_id: string }>(
+        `/api/admin/drivers/${driverId}/photo-review`,
+        {
+            method: "POST",
+            body: JSON.stringify({ action, ...(reason ? { reason } : {}) }),
+        },
+    );
+
 export interface ExpiringDocItem {
     driver_id: string;
     user_id: string | null;

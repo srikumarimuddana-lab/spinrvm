@@ -8,6 +8,7 @@ import {
     ChevronRight,
     Filter,
     Inbox,
+    Camera,
 } from "lucide-react";
 import {
     getApprovalQueue,
@@ -28,6 +29,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { QueueStats } from "./_components/queue-stats";
 import { DocumentReviewer } from "../_components/document-reviewer";
+import { PhotoReviewer } from "../_components/photo-reviewer";
 
 const formatTimeInQueue = (seconds: number) => {
     if (seconds < 60) return `${seconds}s`;
@@ -62,6 +64,7 @@ export default function ApprovalQueuePage() {
     const [serviceAreas, setServiceAreas] = useState<Array<{ id: string; name?: string }>>([]);
     const [refreshing, setRefreshing] = useState(false);
     const [reviewerDriver, setReviewerDriver] = useState<{ id: string; name: string } | null>(null);
+    const [photoReviewDriver, setPhotoReviewDriver] = useState<{ id: string; name: string; photoUrl: string | null } | null>(null);
 
     const load = useCallback(async () => {
         try {
@@ -130,14 +133,14 @@ export default function ApprovalQueuePage() {
             </div>
 
             <div className="rounded-xl border border-border overflow-hidden bg-card">
-                <div className="grid grid-cols-[1fr_120px_110px_110px_150px_120px_100px] gap-4 px-4 py-3 bg-muted/30 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <div className="grid grid-cols-[1fr_120px_110px_110px_150px_120px_160px] gap-4 px-4 py-3 bg-muted/30 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                     <div>Applicant</div>
                     <div>Status</div>
                     <div>Pending</div>
                     <div>Missing</div>
                     <div>Time in queue</div>
                     <div>Service area</div>
-                    <div className="text-right">Action</div>
+                    <div className="text-right">Actions</div>
                 </div>
 
                 {items.length === 0 ? (
@@ -150,7 +153,7 @@ export default function ApprovalQueuePage() {
                     items.map((it) => (
                         <div
                             key={it.driver_id}
-                            className="grid grid-cols-[1fr_120px_110px_110px_150px_120px_100px] gap-4 items-center px-4 py-3 border-t border-border hover:bg-muted/20 transition-colors"
+                            className="grid grid-cols-[1fr_120px_110px_110px_150px_120px_160px] gap-4 items-center px-4 py-3 border-t border-border hover:bg-muted/20 transition-colors"
                         >
                             <div className="flex items-center gap-3 min-w-0">
                                 {it.profile_photo_url ? (
@@ -209,14 +212,29 @@ export default function ApprovalQueuePage() {
                             <div className="text-xs text-muted-foreground truncate">
                                 {it.service_area_name || "—"}
                             </div>
-                            <div className="text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                                {it.has_pending_photo && (
+                                    <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-8 border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-900/20"
+                                        onClick={() => setPhotoReviewDriver({
+                                            id: it.driver_id,
+                                            name: it.name || it.email || it.driver_id,
+                                            photoUrl: it.profile_photo_url,
+                                        })}
+                                    >
+                                        <Camera className="h-3.5 w-3.5 mr-1" />
+                                        Photo
+                                    </Button>
+                                )}
                                 <Button
                                     size="sm"
                                     variant="default"
                                     className="h-8"
                                     onClick={() => setReviewerDriver({ id: it.driver_id, name: it.name || it.email || it.driver_id })}
                                 >
-                                    Review
+                                    Docs
                                     <ChevronRight className="h-3.5 w-3.5 ml-0.5" />
                                 </Button>
                             </div>
@@ -230,6 +248,15 @@ export default function ApprovalQueuePage() {
                 driverId={reviewerDriver?.id || null}
                 driverName={reviewerDriver?.name}
                 onClose={() => setReviewerDriver(null)}
+                onAfterAction={load}
+            />
+
+            <PhotoReviewer
+                open={!!photoReviewDriver}
+                driverId={photoReviewDriver?.id || null}
+                driverName={photoReviewDriver?.name}
+                photoUrl={photoReviewDriver?.photoUrl}
+                onClose={() => setPhotoReviewDriver(null)}
                 onAfterAction={load}
             />
         </div>

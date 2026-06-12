@@ -76,17 +76,21 @@ function ActionBubble({ action, onQuickSend }: { action: AiAction; onQuickSend: 
                                 <span className="font-medium">{q.vehicle_type ?? "Ride"}</span>
                                 <span className="block text-xs text-muted-foreground">
                                     {[
-                                        q.eta_minutes != null ? `${q.eta_minutes} min away` : null,
+                                        q.eta_minutes != null
+                                            ? `${q.eta_minutes} min${q.closest_driver_km != null ? ` (${q.closest_driver_km} km)` : ""} away`
+                                            : null,
                                         q.capacity != null ? `${q.capacity} seats` : null,
                                         (q.surge_multiplier ?? 1) > 1 ? `${q.surge_multiplier}x surge` : null,
                                     ]
                                         .filter(Boolean)
                                         .join(" · ")}
                                 </span>
-                                {hasSavings && (
+                                {hasSavings ? (
                                     <span className="block text-xs font-medium text-green-600">
                                         {q.promo_code} · save ${q.promo_savings}
                                     </span>
+                                ) : (
+                                    <span className="block text-xs text-muted-foreground">No promo applied</span>
                                 )}
                             </span>
                             <span className="text-right">
@@ -98,6 +102,34 @@ function ActionBubble({ action, onQuickSend }: { action: AiAction; onQuickSend: 
                         </button>
                     );
                 })}
+                {(() => {
+                    // Mirror the rider app: line-item details for the recommended option.
+                    const rec =
+                        action.quotes.find((q) => q.vehicle_type_id === action.recommended_vehicle_type_id) ??
+                        action.quotes[0];
+                    if (!rec?.breakdown?.length) return null;
+                    return (
+                        <div className="rounded-md bg-background px-2 py-1.5 space-y-0.5">
+                            <p className="text-xs font-semibold">Fare details — {rec.vehicle_type ?? "recommended"}</p>
+                            {rec.breakdown.map((line, i) => (
+                                <p key={i} className="flex justify-between text-xs text-muted-foreground">
+                                    <span>{line.label}</span>
+                                    {line.amount != null && <span>${line.amount.toFixed(2)}</span>}
+                                </p>
+                            ))}
+                            {rec.promo_savings && (
+                                <p className="flex justify-between text-xs font-medium text-green-600">
+                                    <span>Promo {rec.promo_code}</span>
+                                    <span>-${rec.promo_savings}</span>
+                                </p>
+                            )}
+                            <p className="flex justify-between text-xs font-semibold">
+                                <span>You pay</span>
+                                <span>${rec.final_total}</span>
+                            </p>
+                        </div>
+                    );
+                })()}
                 <p className="text-[11px] text-muted-foreground">
                     Totals include taxes &amp; fees. The rider sees this as a tappable card.
                 </p>

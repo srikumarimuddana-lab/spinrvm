@@ -153,16 +153,21 @@ async def calculate_surge_for_area(area: Dict[str, Any]) -> Dict[str, Any]:
 
 async def recalculate_all_surges() -> List[Dict[str, Any]]:
     """
-    Recalculate surge for all active service areas.
+    Recalculate surge for all surge-enabled active service areas.
 
     Only updates areas where surge_source == 'auto' (or not set).
     Areas with surge_source == 'manual' are skipped — the admin's
     override takes precedence until they reset it to auto.
+
+    surge_enabled is filtered in the DB query (not just in Python) so a
+    deployment where no area has the surge toggle on costs one empty
+    response per tick instead of a full service_areas read every 2 min
+    (Supabase egress).
     """
     results = []
 
     try:
-        areas = await db.get_rows("service_areas", {"is_active": True}, limit=100)
+        areas = await db.get_rows("service_areas", {"is_active": True, "surge_enabled": True}, limit=100)
     except Exception as e:
         original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
         logger.error(f"Surge: failed to fetch service areas: {e} | original={original}")
@@ -179,10 +184,10 @@ async def recalculate_all_surges() -> List[Dict[str, Any]]:
             continue
 
         # Per-area admin master gate: never auto-activate surge for an area the
-        # operator hasn't explicitly enabled (surge_enabled defaults FALSE). The
-        # fare paths also refuse to apply surge for disabled areas, but skipping
-        # here keeps surge_active/multiplier from ever being written in the first
-        # place, so nothing stale lingers if the area is later enabled.
+        # operator hasn't explicitly enabled (surge_enabled defaults FALSE).
+        # The DB query above already filters on surge_enabled; this guard is a
+        # backstop so a caller passing unfiltered rows can never auto-activate
+        # a disabled area. The fare paths apply the same gate.
         if not area.get("surge_enabled", False):
             continue
 

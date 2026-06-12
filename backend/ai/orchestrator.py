@@ -98,14 +98,18 @@ async def run_chat_turn(
         yield "error", {"code": "ai_disabled", "message": "The AI assistant is currently unavailable."}
         return
 
-    cap = int(settings.get("ai_daily_message_cap") or 50)
-    if await _over_daily_cap(user["id"], cap):
-        _metric_inc("spinr_ai_chat_turns_total", {"outcome": "capped"})
-        yield (
-            "error",
-            {"code": "daily_cap", "message": "You've reached today's AI assistant limit — try again tomorrow."},
-        )
-        return
+    # Admin-console turns (super-admin-only, audited) don't count against —
+    # or get blocked by — the impersonated user's daily cap: heavy console
+    # testing was 429ing and silently draining the target rider's quota.
+    if admin_actor_id is None:
+        cap = int(settings.get("ai_daily_message_cap") or 50)
+        if await _over_daily_cap(user["id"], cap):
+            _metric_inc("spinr_ai_chat_turns_total", {"outcome": "capped"})
+            yield (
+                "error",
+                {"code": "daily_cap", "message": "You've reached today's AI assistant limit — try again tomorrow."},
+            )
+            return
 
     conversation = await conversations.get_or_create_conversation(
         user["id"], conversation_id, audience, admin_actor_id=admin_actor_id

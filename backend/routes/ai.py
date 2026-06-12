@@ -68,9 +68,16 @@ class AiChatRequest(BaseModel):
     # Ephemeral: passed to tools for this turn only — never logged, never
     # persisted (PIPEDA: raw GPS must not reach logs or storage).
     location: Optional[AiChatLocation] = None
+    # Which app surface is asking. Dual-role users (rider account with
+    # is_driver=true) were getting the driver tool set inside the rider app,
+    # so "Where's my driver?" had no ride tools to answer with. The surface
+    # knows what it is; data scoping stays per-user either way (same model as
+    # the admin console's audience override).
+    audience: Optional[str] = Field(None, pattern="^(rider|driver)$")
 
 
 def _audience_for(user: dict) -> str:
+    # Fallback for older app builds that don't send `audience`:
     # SupportScreen is shared by both apps; the user row decides the tool set.
     return "driver" if user.get("is_driver") else "rider"
 
@@ -117,7 +124,7 @@ async def ai_chat(
         user=current_user,
         conversation_id=body.conversation_id,
         user_message=body.message,
-        audience=_audience_for(current_user),
+        audience=body.audience or _audience_for(current_user),
         client_location=body.location.model_dump() if body.location else None,
     )
 

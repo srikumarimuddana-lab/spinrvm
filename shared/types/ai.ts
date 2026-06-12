@@ -75,6 +75,11 @@ export type AiAction =
       distance_km?: number | null;
       duration_minutes?: number | null;
       currency?: string;
+      /** Resolved trip endpoints — included so a tapped option can send a
+       * self-contained booking message (conversation history keeps only
+       * message text, never tool results). */
+      pickup_address?: string;
+      dropoff_address?: string;
       quotes: FareQuoteOption[];
     }
   | { type: 'open_support'; category: string; link: string; message?: string };

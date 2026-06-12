@@ -232,10 +232,18 @@ export default function AiAssistantScreen() {
       return <BookingProposalCard proposal={item.action.proposal} />;
     }
     if (item.kind === 'fare_quote' && item.action?.type === 'fare_quote') {
+      const quote = item.action;
       return (
         <FareQuoteCard
-          quote={item.action}
-          onSelect={(option) => handleSend(`Book the ${option.vehicle_type ?? 'recommended option'}.`)}
+          quote={quote}
+          onSelect={(option) => {
+            // Self-contained message: the assistant's next turn sees only
+            // message text, so the tap must restate the trip context.
+            const from = quote.pickup_address ? ` from ${quote.pickup_address}` : '';
+            const to = quote.dropoff_address ? ` to ${quote.dropoff_address}` : '';
+            const promo = option.promo_code ? ` with promo ${option.promo_code}` : '';
+            handleSend(`Book the ${option.vehicle_type ?? 'recommended option'}${from}${to}${promo}.`);
+          }}
         />
       );
     }

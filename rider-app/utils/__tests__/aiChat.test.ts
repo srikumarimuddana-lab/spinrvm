@@ -77,7 +77,7 @@ function streamResponse(chunks: string[], init: { ok?: boolean; status?: number;
 
 describe('streamChat', () => {
   it('POSTs with auth + stream body and delivers events in order', async () => {
-    const fetchImpl = jest.fn(async () => streamResponse([FRAME]));
+    const fetchImpl = jest.fn(async (_url: string, _init: any) => streamResponse([FRAME]));
     const events: AiSseEvent[] = [];
     await streamChat({
       message: 'where is my driver?',
@@ -121,7 +121,7 @@ describe('streamChat', () => {
 
   it('passes the abort signal to the transport', async () => {
     const controller = new AbortController();
-    const fetchImpl = jest.fn(async () => streamResponse([]));
+    const fetchImpl = jest.fn(async (_url: string, _init: any) => streamResponse([]));
     await streamChat({
       message: 'hi',
       conversationId: null,

@@ -24,6 +24,8 @@ jest.mock('@shared/api/client', () => ({
     patch: jest.fn(),
     delete: jest.fn(),
   },
+  hasAuthToken: jest.fn(() => true),
+  SpinrApiError: class SpinrApiError extends Error {},
 }));
 
 jest.mock('@shared/store/authStore', () => ({

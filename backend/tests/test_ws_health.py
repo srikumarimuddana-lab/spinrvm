@@ -14,6 +14,8 @@ from __future__ import annotations
 import sys
 from unittest.mock import MagicMock
 
+import pytest
+
 # Stub heavy deps before any backend import (mirrors test_p3_ws_broadcast).
 _STUBS = ["loguru", "logging_utils", "fastapi", "fastapi.websockets"]
 for _m in _STUBS:

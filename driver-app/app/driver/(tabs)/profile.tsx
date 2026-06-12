@@ -293,7 +293,9 @@ export default function ProfileScreen() {
           )}
 
           <Text style={styles.name}>
-            {driverData?.name || (user?.first_name ? `${user.first_name} ${user.last_name || ''}` : 'Driver')}
+            {user?.first_name
+              ? `${user.first_name} ${user.last_name || ''}`.trim()
+              : driverData?.name || 'Driver'}
           </Text>
           <Text style={styles.subtitle}>
             {driverData?.is_verified ? 'Verified Driver' : 'Pending Verification'}

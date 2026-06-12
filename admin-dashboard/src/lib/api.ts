@@ -1036,6 +1036,7 @@ export interface ApprovalQueueItem {
     email: string | null;
     phone: string | null;
     profile_photo_url: string | null;
+    has_pending_photo: boolean;
     status: string;
     created_at: string | null;
     queue_started_at: string | null;

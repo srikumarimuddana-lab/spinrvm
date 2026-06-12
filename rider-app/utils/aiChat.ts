@@ -53,6 +53,10 @@ export class SseFrameParser {
 export interface StreamChatOptions {
   message: string;
   conversationId: string | null;
+  /** Persona for this surface. The main-screen assistant always sends
+   * 'rider' so dual-role (rider+driver) accounts still get the booking
+   * tools; omitting it lets the backend infer from the user row. */
+  audience?: 'rider' | 'driver';
   /** Rider's current device location (only when permission already granted) —
    * lets booking tools resolve "my location" without asking. */
   location?: { lat: number; lng: number } | null;
@@ -85,6 +89,7 @@ export async function streamChat(options: StreamChatOptions): Promise<void> {
   const {
     message,
     conversationId,
+    audience,
     location,
     onEvent,
     signal,
@@ -106,6 +111,7 @@ export async function streamChat(options: StreamChatOptions): Promise<void> {
       message,
       conversation_id: conversationId,
       stream: true,
+      ...(audience ? { audience } : {}),
       ...(location ? { location } : {}),
     }),
     signal,

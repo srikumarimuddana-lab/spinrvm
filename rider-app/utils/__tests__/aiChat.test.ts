@@ -82,6 +82,7 @@ describe('streamChat', () => {
     await streamChat({
       message: 'where is my driver?',
       conversationId: 'conv-1',
+      audience: 'rider',
       onEvent: (e) => events.push(e),
       fetchImpl,
     });
@@ -94,6 +95,17 @@ describe('streamChat', () => {
     expect(JSON.parse(init.body)).toEqual({
       message: 'where is my driver?',
       conversation_id: 'conv-1',
+      stream: true,
+      audience: 'rider',
+    });
+  });
+
+  it('omits audience from the body when not provided', async () => {
+    const fetchImpl = jest.fn(async (_url: string, _init: any) => streamResponse([FRAME]));
+    await streamChat({ message: 'hi', conversationId: null, onEvent: jest.fn(), fetchImpl });
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toEqual({
+      message: 'hi',
+      conversation_id: null,
       stream: true,
     });
   });

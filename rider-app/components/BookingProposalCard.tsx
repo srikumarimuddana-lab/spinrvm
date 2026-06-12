@@ -8,7 +8,7 @@
  * rideStore.createRide() path (idempotency key, active-ride guard, 402
  * handling). Anything needing more input deep-links to the standard flow.
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -21,7 +21,10 @@ import {
   QUOTE_REFRESH_SECONDS,
   displayFare,
   mapBookingError,
+  paymentMethodForProposal,
   pickEstimate,
+  promoForProposal,
+  scheduledDateForProposal,
   type BookingErrorDescriptor,
 } from './bookingProposal';
 
@@ -41,17 +44,24 @@ export default function BookingProposalCard({ proposal }: Props) {
   const fetchEstimates = useRideStore((s) => s.fetchEstimates);
   const selectVehicle = useRideStore((s) => s.selectVehicle);
   const createRide = useRideStore((s) => s.createRide);
+  const applyPromo = useRideStore((s) => s.applyPromo);
+  const setScheduledTime = useRideStore((s) => s.setScheduledTime);
   const estimates = useRideStore((s) => s.estimates);
 
   const [phase, setPhase] = useState<Phase>('quoting');
   const [errorInfo, setErrorInfo] = useState<BookingErrorDescriptor | null>(null);
   const bookedRef = useRef(false);
+  const paymentMethod = useMemo(() => paymentMethodForProposal(proposal), [proposal]);
+  const scheduledDate = useMemo(() => scheduledDateForProposal(proposal), [proposal]);
+  const proposedPromo = useMemo(() => promoForProposal(proposal), [proposal]);
 
   const loadQuote = useCallback(() => {
     setPickup({ address: proposal.pickup_address, lat: proposal.pickup_lat, lng: proposal.pickup_lng });
     setDropoff({ address: proposal.dropoff_address, lat: proposal.dropoff_lat, lng: proposal.dropoff_lng });
+    applyPromo(proposedPromo);
+    setScheduledTime(scheduledDate);
     fetchEstimates();
-  }, [proposal, setPickup, setDropoff, fetchEstimates]);
+  }, [proposal, setPickup, setDropoff, applyPromo, proposedPromo, setScheduledTime, scheduledDate, fetchEstimates]);
 
   useEffect(() => {
     loadQuote();
@@ -76,14 +86,16 @@ export default function BookingProposalCard({ proposal }: Props) {
     setPhase('booking');
     try {
       selectVehicle(estimate.vehicle_type as never);
-      await createRide('card');
+      applyPromo(proposedPromo);
+      setScheduledTime(scheduledDate);
+      await createRide(paymentMethod);
       bookedRef.current = true;
       setPhase('booked');
     } catch (error: unknown) {
       setErrorInfo(mapBookingError(error));
       setPhase('error');
     }
-  }, [estimate, selectVehicle, createRide]);
+  }, [estimate, selectVehicle, applyPromo, proposedPromo, setScheduledTime, scheduledDate, createRide, paymentMethod]);
 
   return (
     <View style={styles.card}>
@@ -118,6 +130,32 @@ export default function BookingProposalCard({ proposal }: Props) {
             <Text style={styles.vehicleName}>{estimate.vehicle_type.name}</Text>
             <Text style={styles.fareText}>${displayFare(estimate)}</Text>
           </View>
+          <View style={styles.preferenceGrid}>
+            <View style={styles.preferencePill}>
+              <Ionicons name="time-outline" size={12} color={colors.textDim} />
+              <Text style={styles.preferenceText}>
+                {scheduledDate
+                  ? scheduledDate.toLocaleString('en-CA', {
+                      weekday: 'short',
+                      month: 'short',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })
+                  : 'Now'}
+              </Text>
+            </View>
+            <View style={styles.preferencePill}>
+              <Ionicons name={paymentMethod === 'wallet' ? 'wallet-outline' : 'card-outline'} size={12} color={colors.textDim} />
+              <Text style={styles.preferenceText}>{paymentMethod === 'wallet' ? 'Wallet' : 'Card'}</Text>
+            </View>
+            {proposal.promo_code ? (
+              <View style={styles.preferencePill}>
+                <Ionicons name="pricetag-outline" size={12} color={colors.success} />
+                <Text style={[styles.preferenceText, { color: colors.success }]}>Promo {proposal.promo_code}</Text>
+              </View>
+            ) : null}
+          </View>
           {(estimate.surge_multiplier ?? 1) > 1 && (
             <View style={styles.surgeBadge}>
               <Ionicons name="trending-up" size={12} color={colors.warning} />
@@ -138,6 +176,9 @@ export default function BookingProposalCard({ proposal }: Props) {
             )}
           </TouchableOpacity>
           <Text style={styles.fineprint}>Total incl. fees & taxes. Quote refreshes automatically.</Text>
+          {proposal.promo_code ? (
+            <Text style={styles.fineprint}>Promo eligibility is confirmed when the ride is created.</Text>
+          ) : null}
         </>
       )}
 
@@ -197,6 +238,17 @@ const createStyles = (colors: ThemeColors) =>
     },
     vehicleName: { fontSize: 14, fontWeight: '600', color: colors.text },
     fareText: { fontSize: 18, fontWeight: '700', color: colors.text },
+    preferenceGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+    preferencePill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      paddingHorizontal: 8,
+      paddingVertical: 5,
+      borderRadius: 999,
+      backgroundColor: colors.surfaceLight,
+    },
+    preferenceText: { fontSize: 11, color: colors.textDim, fontWeight: '600' },
     surgeBadge: { flexDirection: 'row', alignItems: 'center', gap: 4 },
     surgeText: { fontSize: 12, color: colors.warning, fontWeight: '600' },
     confirmButton: {

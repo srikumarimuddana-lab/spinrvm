@@ -1,15 +1,18 @@
-"""Booking-flow tools: find_place, get_fare_quote, propose_ride_booking.
+"""Booking-flow tools: find_place, get_rider_location, get_fare_quote,
+propose_ride_booking.
 
 Pins the trust boundary: the proposal tool performs NO writes and returns a
 _client_action payload (rendered as a native card; Confirm goes through the
-normal POST /rides path). Also pins: out-of-area refusals, the approximate-
-quote math (Decimal, surge applied, minimum fare respected), maps-budget
-gating, and that booking tools are hidden from the MCP surface.
+normal POST /rides path). Also pins: out-of-area refusals, that the quote
+runs through the real estimate engine (compute_ride_estimates) with the
+best eligible promo auto-applied, rider-location biasing of place search,
+maps-budget gating, and that booking tools are hidden from the MCP surface.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from backend.ai import tools_booking
 from backend.ai.tools import TOOL_REGISTRY, ensure_registry_loaded, execute_tool
@@ -17,16 +20,6 @@ from backend.ai.tools import TOOL_REGISTRY, ensure_registry_loaded, execute_tool
 RIDER = {"id": "rider-1"}
 
 AREA = {"id": "area-1", "name": "Saskatoon"}
-
-FARE_ROW = {
-    "vehicle_type": {"id": "vt-1", "name": "Spinr X", "capacity": 4},
-    "base_fare": "3.00",
-    "per_km_rate": "1.50",
-    "per_minute_rate": "0.20",
-    "minimum_fare": "7.00",
-    "booking_fee": "2.00",
-    "surge_multiplier": 1.5,
-}
 
 GEOCODE_OK = {
     "status": "OK",
@@ -83,6 +76,13 @@ def _patch_budget(within=True):
     return patch.object(tools_booking, "check_budget", AsyncMock(return_value=(within, 1.0, 10.0)))
 
 
+LAST_RIDE = {"pickup_lat": 50.4501, "pickup_lng": -104.6178, "pickup_address": "4325 Wakeling St, Regina"}
+
+
+def _patch_last_ride(rows=None):
+    return patch.object(tools_booking.db_supabase, "get_rows", AsyncMock(return_value=rows or []))
+
+
 class TestFindPlace:
     @pytest.mark.anyio
     async def test_geocodes_and_flags_service_area(self):
@@ -91,6 +91,7 @@ class TestFindPlace:
             _patch_budget(),
             _patch_http(GEOCODE_OK),
             _patch_area(),
+            _patch_last_ride(),
             patch.object(tools_booking, "record_call", AsyncMock()),
         ):
             result, ok = await execute_tool("find_place", {"query": "saskatoon airport"}, user=RIDER)
@@ -98,6 +99,38 @@ class TestFindPlace:
         cand = result["candidates"][0]
         assert cand["in_service_area"] is True
         assert cand["lat"] == 52.1708
+
+    @pytest.mark.anyio
+    async def test_biases_search_to_last_ride_pickup_when_no_near_args(self):
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(PLACES_OK),
+            _patch_area(),
+            _patch_last_ride([LAST_RIDE]),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": "superstore"}, user=RIDER)
+        assert ok
+        assert result["search_biased_by"] == "last_ride"
+        assert len(result["candidates"]) == 3
+
+    @pytest.mark.anyio
+    async def test_biases_search_to_device_location_first(self):
+        rides_lookup = AsyncMock(return_value=[LAST_RIDE])
+        rider = {**RIDER, "_client_location": {"lat": 50.45, "lng": -104.62}}
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(PLACES_OK),
+            _patch_area(),
+            patch.object(tools_booking.db_supabase, "get_rows", rides_lookup),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("find_place", {"query": "superstore"}, user=rider)
+        assert ok
+        assert result["search_biased_by"] == "device"
+        rides_lookup.assert_not_awaited()
 
     @pytest.mark.anyio
     async def test_vague_place_returns_clickable_nearby_suggestions(self):
@@ -132,6 +165,83 @@ class TestFindPlace:
         assert ok and "error" in result
 
 
+class TestRiderLocation:
+    @pytest.mark.anyio
+    async def test_device_location_preferred(self):
+        rider = {**RIDER, "_client_location": {"lat": 50.45, "lng": -104.62}}
+        no_maps = AsyncMock(return_value=(None, {"error": "unavailable"}))
+        with patch.object(tools_booking, "_places_available", no_maps):
+            result, ok = await execute_tool("get_rider_location", {}, user=rider)
+        assert ok
+        assert result["source"] == "device"
+        assert result["lat"] == 50.45 and result["lng"] == -104.62
+
+    @pytest.mark.anyio
+    async def test_falls_back_to_last_ride_pickup_with_address(self):
+        with _patch_last_ride([LAST_RIDE]):
+            result, ok = await execute_tool("get_rider_location", {}, user=RIDER)
+        assert ok
+        assert result["source"] == "last_ride"
+        assert result["address"] == "4325 Wakeling St, Regina"
+        assert "most recent ride" in result["note"]
+
+    @pytest.mark.anyio
+    async def test_no_known_location_is_a_clean_error(self):
+        with _patch_last_ride([]):
+            result, ok = await execute_tool("get_rider_location", {}, user=RIDER)
+        assert ok and "error" in result
+
+
+ESTIMATES = {
+    "estimates": [
+        {
+            "vehicle_type": {"id": "vt-1", "name": "Economy", "capacity": 4, "image_url": None},
+            "base_fare": "3.00",
+            "distance_fare": "9.60",
+            "time_fare": "3.40",
+            "grand_total": 18.48,
+            "surge_multiplier": 1.0,
+            "available": True,
+            "eta_minutes": 4,
+            "driver_count": 2,
+            "distance_km": 6.4,
+            "duration_minutes": 17,
+        },
+        {
+            "vehicle_type": {"id": "vt-2", "name": "XL", "capacity": 6},
+            "base_fare": "5.00",
+            "distance_fare": "12.00",
+            "time_fare": "4.00",
+            "grand_total": 25.00,
+            "surge_multiplier": 1.0,
+            "available": False,
+            "eta_minutes": None,
+            "driver_count": 0,
+            "distance_km": 6.4,
+            "duration_minutes": 17,
+        },
+    ],
+    "route_polyline": None,
+}
+
+PROMOS = [
+    # flat $10 — best for the Economy ride portion (3.00+9.60+3.40 = 16.00)
+    {"code": "SAVE10", "free_ride": False, "discount_type": "flat", "discount_value": 10.0, "min_ride_fare": 0},
+    # bigger on paper but requires a $20 ride portion — must be skipped
+    {"code": "BIG15", "free_ride": False, "discount_type": "flat", "discount_value": 15.0, "min_ride_fare": 20},
+]
+
+
+def _patch_estimates(payload=None, error: Exception | None = None):
+    mock = AsyncMock(side_effect=error) if error else AsyncMock(return_value=payload)
+    return patch("backend.routes.rides.compute_ride_estimates", mock)
+
+
+def _patch_promos(promos=None, error: Exception | None = None):
+    mock = AsyncMock(side_effect=error) if error else AsyncMock(return_value=promos or [])
+    return patch("backend.routes.promotions.list_available_promos", mock)
+
+
 class TestFareQuote:
     ARGS = {
         "pickup_lat": 52.1318,
@@ -141,37 +251,73 @@ class TestFareQuote:
     }
 
     @pytest.mark.anyio
-    async def test_quote_math_decimal_surge_and_booking_fee(self):
-        with (
-            _patch_area(),
-            patch("backend.routes.fares.get_fares_for_location", AsyncMock(return_value=[FARE_ROW])),
-            patch.object(tools_booking, "calculate_distance", MagicMock(return_value=10.0)),
-        ):
+    async def test_quote_uses_estimate_engine_and_applies_best_promo(self):
+        with _patch_estimates(ESTIMATES), _patch_promos(PROMOS):
             result, ok = await execute_tool("get_fare_quote", self.ARGS, user=RIDER)
         assert ok
+        # Only the available vehicle type is quoted; the other is named.
+        assert len(result["quotes"]) == 1
+        assert result["unavailable_vehicle_types"] == ["XL"]
         q = result["quotes"][0]
-        # base 3.00 + 1.50*10km + 0.20*25min = 23.00 → ×1.5 surge = 34.50 + 2.00 fee
-        assert result["duration_minutes"] == 25
-        assert q["approx_fare"] == "36.50"
-        assert q["surge_multiplier"] == 1.5
-        assert "Approximate" in result["note"]
-
-    @pytest.mark.anyio
-    async def test_minimum_fare_floor(self):
-        with (
-            _patch_area(),
-            patch("backend.routes.fares.get_fares_for_location", AsyncMock(return_value=[FARE_ROW])),
-            patch.object(tools_booking, "calculate_distance", MagicMock(return_value=0.5)),
-        ):
-            result, _ = await execute_tool("get_fare_quote", self.ARGS, user=RIDER)
-        # ride fare would be 3.00+0.75+1.20=4.95 → floored to 7.00 ×1.5 + 2.00
-        assert result["quotes"][0]["approx_fare"] == "12.50"
+        assert q["vehicle_type"] == "Economy"
+        assert q["eta_minutes"] == 4
+        assert q["total"] == "18.48"
+        # SAVE10 wins (BIG15 misses the $20 min ride portion of $16.00).
+        assert q["promo_code"] == "SAVE10"
+        assert q["promo_savings"] == "10.00"
+        assert q["final_total"] == "8.48"
+        assert result["recommended_vehicle_type_id"] == "vt-1"
+        # Rich card for both surfaces, with the same quotes.
+        action = result["_client_action"]
+        assert action["type"] == "fare_quote"
+        assert action["quotes"] == result["quotes"]
+        assert action["distance_km"] == 6.4
 
     @pytest.mark.anyio
     async def test_out_of_area_pickup_refused(self):
-        with _patch_area(area=None):
+        exc = HTTPException(
+            status_code=400,
+            detail={"code": "OUTSIDE_SERVICE_AREA", "message": "Sorry, your pickup location is outside"},
+        )
+        with _patch_estimates(error=exc):
             result, ok = await execute_tool("get_fare_quote", self.ARGS, user=RIDER)
         assert ok and "outside" in result["error"]
+
+    @pytest.mark.anyio
+    async def test_no_drivers_returns_note_without_card(self):
+        all_unavailable = {
+            "estimates": [dict(ESTIMATES["estimates"][0], available=False, eta_minutes=None, driver_count=0)],
+            "route_polyline": None,
+        }
+        with _patch_estimates(all_unavailable), _patch_promos([]):
+            result, ok = await execute_tool("get_fare_quote", self.ARGS, user=RIDER)
+        assert ok
+        assert result["no_drivers"] is True
+        assert result["quotes"] == []
+        assert "_client_action" not in result
+
+    @pytest.mark.anyio
+    async def test_promo_failure_does_not_kill_quote(self):
+        with _patch_estimates(ESTIMATES), _patch_promos(error=RuntimeError("promo db down")):
+            result, ok = await execute_tool("get_fare_quote", self.ARGS, user=RIDER)
+        assert ok
+        q = result["quotes"][0]
+        assert q["final_total"] == q["total"] == "18.48"
+        assert "promo_code" not in q
+        assert "promo lookup failed" in result["promo_note"]
+
+    @pytest.mark.anyio
+    async def test_free_ride_promo_drops_total_to_zero(self):
+        free = [
+            {"code": "FREERIDE", "free_ride": True, "discount_type": "flat", "discount_value": 0, "min_ride_fare": 0}
+        ]
+        with _patch_estimates(ESTIMATES), _patch_promos(free):
+            result, ok = await execute_tool("get_fare_quote", self.ARGS, user=RIDER)
+        assert ok
+        q = result["quotes"][0]
+        assert q["promo_code"] == "FREERIDE"
+        assert q["promo_savings"] == "18.48"
+        assert q["final_total"] == "0.00"
 
 
 class TestProposal:
@@ -242,7 +388,7 @@ class TestProposal:
 
 def test_booking_tools_hidden_from_mcp():
     ensure_registry_loaded()
-    for name in ("find_place", "get_fare_quote", "propose_ride_booking"):
+    for name in ("find_place", "get_rider_location", "get_fare_quote", "propose_ride_booking"):
         assert TOOL_REGISTRY[name].mcp_exposed is False
         assert "rider" in TOOL_REGISTRY[name].audiences
         assert "driver" not in TOOL_REGISTRY[name].audiences

@@ -44,6 +44,16 @@ EXTRA_GUARDED_MODULES = [
     "socket_manager.py",
     "utils/breadcrumbs.py",
     "utils/breadcrumb_buffer.py",
+    # AI assistant modules — same hazard class hit PR #1843 (Codex P2s:
+    # a formatter stripped _metric_timed / promo_available_limit from
+    # fallback branches mid-refactor).
+    "ai/conversations.py",
+    "ai/orchestrator.py",
+    "ai/tools.py",
+    "ai/tools_account.py",
+    "ai/tools_booking.py",
+    "ai/tools_rides.py",
+    "ai/tools_support.py",
 ]
 
 # Pre-existing fallback gaps (file → names missing from the except branch).

@@ -68,11 +68,22 @@ class AiChatRequest(BaseModel):
     # Ephemeral: passed to tools for this turn only — never logged, never
     # persisted (PIPEDA: raw GPS must not reach logs or storage).
     location: Optional[AiChatLocation] = None
+    # Persona the calling surface wants. Dual-role (rider+driver) accounts
+    # would otherwise always infer "driver", which strips the booking tools
+    # from the rider app's main-screen assistant. "rider" is open to every
+    # account (anyone can ride); "driver" is gated on the user row.
+    audience: Optional[str] = Field(None, pattern="^(rider|driver)$")
 
 
 def _audience_for(user: dict) -> str:
     # SupportScreen is shared by both apps; the user row decides the tool set.
     return "driver" if user.get("is_driver") else "rider"
+
+
+def _resolve_audience(requested: Optional[str], user: dict) -> str:
+    if requested == "driver" and not user.get("is_driver"):
+        raise HTTPException(status_code=403, detail="Driver assistant is only available to driver accounts")
+    return requested or _audience_for(user)
 
 
 def _sse(event: str, payload: dict) -> str:
@@ -117,7 +128,7 @@ async def ai_chat(
         user=current_user,
         conversation_id=body.conversation_id,
         user_message=body.message,
-        audience=_audience_for(current_user),
+        audience=_resolve_audience(body.audience, current_user),
         client_location=body.location.model_dump() if body.location else None,
     )
 

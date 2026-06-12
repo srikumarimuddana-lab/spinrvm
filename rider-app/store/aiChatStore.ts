@@ -212,6 +212,10 @@ export const useAiChatStore = create<AiChatState>((set, get) => ({
       await streamChat({
         message: trimmed,
         conversationId: get().conversationId,
+        // Main-screen assistant is always the rider persona — dual-role
+        // accounts must keep booking tools here (help-centre chat stays on
+        // the backend-inferred persona for driver grievances).
+        audience: 'rider',
         location: await deviceLocation(),
         onEvent,
         signal: abortController.signal,

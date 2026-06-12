@@ -6,7 +6,7 @@ import asyncio
 import logging
 import random
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 try:
@@ -27,6 +27,7 @@ try:
         as_utc,
         local_date_for_send_window,
         missing_required_document_uploads,
+        open_send_windows,
         reminder_message,
         should_skip_driver,
     )
@@ -41,6 +42,7 @@ except ImportError:
         as_utc,
         local_date_for_send_window,
         missing_required_document_uploads,
+        open_send_windows,
         reminder_message,
         should_skip_driver,
     )
@@ -53,17 +55,34 @@ CHECK_INTERVAL_SECONDS = 15 * 60
 PAGE_SIZE = 200
 LOG_TABLE = "driver_onboarding_reminder_log"
 
+# Windows ('<tz>:<local-date>') this process has already scanned. The 15-min
+# tick is only a clock check; the full drivers/documents scan runs once per
+# timezone per day, inside the 08:00 local send hour. In-process only — the
+# DB claim log keeps sends idempotent across replicas and restarts.
+_completed_windows: set[str] = set()
 
-async def _get_rows(table: str, filters: dict[str, Any] | None, **kwargs) -> list[dict[str, Any]]:
+
+async def _get_rows(table: str, filters: dict[str, Any] | None, **kwargs) -> list[dict[str, Any]] | None:
+    """Rows, or None when the read failed.
+
+    None (not []) so callers can tell "table is empty" from "DB error" —
+    a failed read during the send window must leave the window incomplete
+    so the next tick retries, instead of silently skipping the day.
+    """
     try:
         return await db.get_rows(table, filters or {}, **kwargs)
     except Exception as exc:
         original = getattr(exc, "details", {}).get("original") if hasattr(exc, "details") else None
         logger.error("onboarding reminders: failed to read %s: %s original=%s", table, exc, original, exc_info=True)
-        return []
+        return None
 
 
-async def _claim(driver_id: str, user_id: str, kind: str, local_date: str, now: datetime) -> dict[str, Any] | None:
+# Sentinel distinguishing "claim insert failed" (retry next tick) from
+# "already claimed today" (None — definitive, no retry needed).
+_CLAIM_ERROR = object()
+
+
+async def _claim(driver_id: str, user_id: str, kind: str, local_date: str, now: datetime):
     try:
         return await db.insert_one(
             LOG_TABLE,
@@ -87,7 +106,7 @@ async def _claim(driver_id: str, user_id: str, kind: str, local_date: str, now: 
             original,
             exc_info=True,
         )
-        return None
+        return _CLAIM_ERROR
 
 
 async def _mark(claim: dict[str, Any], now: datetime, delivered: bool, error: str | None) -> None:
@@ -109,10 +128,15 @@ async def _mark(claim: dict[str, Any], now: datetime, delivered: bool, error: st
         logger.error("onboarding reminders: log update failed: %s original=%s", exc, original, exc_info=True)
 
 
-async def _send(driver: dict[str, Any], kind: str, local_date: str, now: datetime) -> bool:
+async def _send(driver: dict[str, Any], kind: str, local_date: str, now: datetime) -> bool | None:
+    """True = delivered, False = not needed/failed-after-claim, None = claim
+    insert failed (no dedupe row exists — the window must stay incomplete so
+    the next tick retries)."""
     driver_id = str(driver["id"])
     user_id = str(driver["user_id"])
     claim = await _claim(driver_id, user_id, kind, local_date, now)
+    if claim is _CLAIM_ERROR:
+        return None
     if not claim:
         return False
 
@@ -130,14 +154,32 @@ async def _send(driver: dict[str, Any], kind: str, local_date: str, now: datetim
 
 async def check_driver_onboarding_reminders(now_utc: datetime | None = None) -> dict[str, int]:
     now = as_utc(now_utc)
-    areas = {
-        str(r["id"]): r
-        for r in await _get_rows("service_areas", {}, limit=1000, columns="id,timezone,required_documents")
-        if r.get("id")
-    }
-    global_reqs = await _get_rows("document_requirements", {}, limit=200, columns="id,name,is_mandatory")
     stats = {"drivers_scanned": 0, "claims_attempted": 0, "pushes_delivered": 0}
 
+    area_rows = await _get_rows("service_areas", {}, limit=1000, columns="id,timezone,required_documents")
+    if area_rows is None:
+        return stats  # read failed — retry next tick, window stays incomplete
+    areas = {str(r["id"]): r for r in area_rows if r.get("id")}
+
+    # Daily gate: the drivers + documents scan only runs while some known
+    # timezone (area timezones + default) is inside its 08:00 send hour, and
+    # at most once per window per process. Outside the window each tick costs
+    # only the small service_areas read above. The drivers table has no
+    # timezone column (the driver.timezone fallback in driver_timezone() is
+    # defensive only), so drivers without a service area always resolve to
+    # DEFAULT_TIMEZONE — whose window is always gated.
+    windows = open_send_windows({(a.get("timezone") or "") for a in areas.values()}, now)
+    if not windows - _completed_windows:
+        return stats
+
+    global_reqs = await _get_rows("document_requirements", {}, limit=200, columns="id,name,is_mandatory")
+    if global_reqs is None:
+        return stats  # read failed — retry next tick, window stays incomplete
+
+    # Any failed read below leaves scan_ok False so the window is NOT marked
+    # completed — the next 15-min tick inside the same send hour retries.
+    # Claims already written for earlier pages dedupe via DuplicateRecordError.
+    scan_ok = True
     offset = 0
     while True:
         drivers = await _get_rows(
@@ -147,6 +189,9 @@ async def check_driver_onboarding_reminders(now_utc: datetime | None = None) -> 
             offset=offset,
             columns="id,user_id,status,deleted_at,service_area_id,vehicle_type_id,vehicle_make,vehicle_model,license_plate",
         )
+        if drivers is None:
+            scan_ok = False
+            break
         if not drivers:
             break
 
@@ -157,6 +202,11 @@ async def check_driver_onboarding_reminders(now_utc: datetime | None = None) -> 
             limit=max(1000, len(ids) * 10),
             columns="id,driver_id,requirement_id,requirement_key,document_type,status",
         )
+        if docs is None:
+            # Without the docs we can't tell uploaded from missing; processing
+            # the page anyway would push false "upload your documents" nags.
+            scan_ok = False
+            break
         docs_by_driver: dict[str, list[dict[str, Any]]] = {}
         for doc in docs:
             if doc.get("driver_id"):
@@ -171,14 +221,29 @@ async def check_driver_onboarding_reminders(now_utc: datetime | None = None) -> 
                 continue
             if not _has_vehicle_details(driver):
                 stats["claims_attempted"] += 1
-                stats["pushes_delivered"] += int(await _send(driver, VEHICLE_DETAILS, local_date, now))
+                sent = await _send(driver, VEHICLE_DETAILS, local_date, now)
+                if sent is None:
+                    scan_ok = False  # claim insert failed — retry this window next tick
+                else:
+                    stats["pushes_delivered"] += int(sent)
             if missing_required_document_uploads(driver, docs_by_driver.get(str(driver["id"]), []), areas, global_reqs):
                 stats["claims_attempted"] += 1
-                stats["pushes_delivered"] += int(await _send(driver, VEHICLE_DOCUMENTS, local_date, now))
+                sent = await _send(driver, VEHICLE_DOCUMENTS, local_date, now)
+                if sent is None:
+                    scan_ok = False
+                else:
+                    stats["pushes_delivered"] += int(sent)
 
         if len(drivers) < PAGE_SIZE:
             break
         offset += PAGE_SIZE
+
+    if scan_ok:
+        _completed_windows.update(windows)
+    # Drop windows older than yesterday so the memo can't grow unbounded
+    # (ISO dates compare lexicographically).
+    cutoff = (now - timedelta(days=1)).date().isoformat()
+    _completed_windows.difference_update({w for w in _completed_windows if w.rsplit(":", 1)[1] < cutoff})
 
     if stats["claims_attempted"]:
         logger.info("onboarding reminders: %s", stats)

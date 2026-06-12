@@ -250,6 +250,18 @@ async def lifespan(app: FastAPI):
     # persistent flag. See backend/utils/driver_online.py for the
     # effective-online helper used by readers.
 
+    # Stale intent reconciler — every 15 min, flips is_online=False for
+    # drivers whose app has been unreachable for hours (default 4h, durable
+    # drivers.updated_at signal, Redis-healthy gate + presence double-check).
+    # Closes the insurance-period audit gap left by force-killed apps without
+    # repeating the retired presence_sweeper's 30s-scale mass-flip failure.
+    try:
+        from utils.stale_intent_reconciler import stale_intent_reconciler_loop
+
+        _spawn("stale_intent_reconciler (15min)", stale_intent_reconciler_loop)
+    except Exception as e:
+        logger.error(f"Failed to import stale intent reconciler: {e}", exc_info=True)
+
     # Safety check-in — every 30s: sends a push to riders whose trip has been
     # in_progress for ≥ 20 minutes.  If the rider does not respond within 90s,
     # an open safety incident is created for the trust-and-safety team.
@@ -347,6 +359,7 @@ async def lifespan(app: FastAPI):
             "payment_retry (5min)",
             "document_expiry (12h)",
             "driver_onboarding_reminders (15min)",
+            "stale_intent_reconciler (15min)",
             "corporate_autotopup (10min)",
             "corporate_low_balance (1h)",
             "allowance_reset (1h)",

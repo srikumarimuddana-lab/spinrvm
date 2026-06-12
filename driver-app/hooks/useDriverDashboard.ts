@@ -1107,62 +1107,14 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     return () => clearInterval(id);
   }, [connectionState]);
 
-  // ─── Engagement Check (Zombie Driver Prevention) ─────────────────
-  // Uber/Lyft prompt "Are you still there?" after ~15 mins of idle online time.
-  // Prevents drivers from leaving the app open on a desk and walking away,
-  // which causes missed offers and bad rider experiences.
-  const [idleResetCount, setIdleResetCount] = useState(0);
-  useEffect(() => {
-    if (!isOnline || rideState !== 'idle') {
-      return;
-    }
-
-    let promptTimeout: ReturnType<typeof setTimeout>;
-    let offlineTimeout: ReturnType<typeof setTimeout>;
-
-    const IDLE_MINUTES = 15;
-    const RESPONSE_SECONDS = 60;
-
-    promptTimeout = setTimeout(() => {
-      showAlert(
-        "Still driving?",
-        "You've been online but idle for a while. Do you want to stay online and receive rides?",
-        [
-          {
-            text: "Go Offline",
-            style: "destructive",
-            onPress: () => {
-              clearTimeout(offlineTimeout);
-              setIsOnline(false);
-              updateDriverStatus(false).catch(() => {});
-            }
-          },
-          {
-            text: "Stay Online",
-            style: "default",
-            onPress: () => {
-              clearTimeout(offlineTimeout);
-              setIdleResetCount(c => c + 1);
-            }
-          }
-        ],
-      );
-
-      // Force offline if no response
-      offlineTimeout = setTimeout(() => {
-        setIsOnline(false);
-        updateDriverStatus(false).catch(() => {});
-        showAlert("Went Offline", "You were taken offline due to inactivity.");
-      }, RESPONSE_SECONDS * 1000);
-
-    }, IDLE_MINUTES * 60 * 1000);
-
-    return () => {
-      clearTimeout(promptTimeout);
-      clearTimeout(offlineTimeout);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOnline, rideState, idleResetCount]);
+  // ─── No idle-time auto-offline ───────────────────────────────────
+  // A 15-min "Still driving?" prompt used to force drivers offline here.
+  // Removed: long offer-less stretches are normal in a low-density market,
+  // and the prompt silently offlined drivers whose phone was locked in a
+  // dash mount. Zombie drivers are handled where Uber/Lyft handle them:
+  // the backend auto-offlines after N consecutive missed offers
+  // (auto_offline_miss_threshold) and the stale-intent reconciler flips
+  // intent for apps that have been unreachable for hours.
 
   // ─── Toggle Online/Offline ───────────────────────────────────────
   const toggleOnline = async () => {

@@ -7,6 +7,10 @@ export interface AiChatRequest {
   message: string;
   conversation_id: string | null;
   stream: boolean;
+  /** Rider's current device location, sent opportunistically so booking
+   * tools can bias place search / resolve "my location" pickups.
+   * Ephemeral on the backend — never logged or persisted. */
+  location?: { lat: number; lng: number } | null;
 }
 
 export interface AiConfig {
@@ -39,6 +43,25 @@ export interface LocationSuggestionCandidate {
   service_area?: string | null;
 }
 
+/** One vehicle option inside a fare_quote action. Amounts are exact
+ * Decimal strings (taxes and fees included) from the same estimate engine
+ * as the booking screen; the best eligible promo is pre-applied. */
+export interface FareQuoteOption {
+  vehicle_type_id?: string | null;
+  vehicle_type?: string | null;
+  capacity?: number | null;
+  image_url?: string | null;
+  eta_minutes?: number | null;
+  drivers_nearby?: number | null;
+  surge_multiplier?: number | null;
+  /** Total before promo savings. */
+  total: string;
+  promo_code?: string;
+  promo_savings?: string;
+  /** What the rider pays after the auto-applied promo. */
+  final_total: string;
+}
+
 export type AiAction =
   | { type: 'booking_proposal'; proposal: BookingProposal }
   | {
@@ -46,6 +69,13 @@ export type AiAction =
       query: string;
       location_role?: 'pickup' | 'dropoff' | null;
       candidates: LocationSuggestionCandidate[];
+    }
+  | {
+      type: 'fare_quote';
+      distance_km?: number | null;
+      duration_minutes?: number | null;
+      currency?: string;
+      quotes: FareQuoteOption[];
     }
   | { type: 'open_support'; category: string; link: string; message?: string };
 
@@ -69,7 +99,7 @@ export type AiSseEvent =
 export interface AiChatMessage {
   id: string;
   role: 'user' | 'assistant';
-  kind: 'text' | 'booking_proposal' | 'location_suggestions' | 'support_action' | 'ride_status';
+  kind: 'text' | 'booking_proposal' | 'location_suggestions' | 'fare_quote' | 'support_action' | 'ride_status';
   content: string;
   action?: AiAction;
   createdAt: number;

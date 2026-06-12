@@ -154,6 +154,10 @@ class AppSettings(BaseModel):
     # Distribution list for safety-incident transactional emails. See
     # migration 95 + the _notify_safety_team helper in features.py.
     safety_alert_emails: str = ""
+    # Hours of app unreachability before the stale-intent reconciler flips
+    # a driver's is_online=false (utils/stale_intent_reconciler.py,
+    # migration 146). Range 1-48 enforced by the admin API + DB CHECK.
+    stale_intent_offline_hours: float = 4.0
     # ── AI assistant (rider AI mode, backend/ai/) ────────────────────────
     # Master kill switch. Defaults OFF: the feature ships dark and is enabled
     # from the admin dashboard once a provider key is set. Effective within

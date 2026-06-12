@@ -245,7 +245,7 @@ async def get_rider_location(user: Dict[str, Any]) -> Dict[str, Any]:
             except Exception:
                 logger.error("ai get_rider_location reverse geocode failed", exc_info=True)
     result["note"] = (
-        "This is the rider's live device location."
+        "This is a recent fix from the rider's device — confirm the address with them before booking."
         if hint["source"] == "device"
         else "This is the pickup of their most recent ride — confirm it's still where they are."
     )
@@ -328,6 +328,8 @@ async def get_fare_quote(
     pickup_lng: float,
     dropoff_lat: float,
     dropoff_lng: float,
+    pickup_address: Optional[str] = None,
+    dropoff_address: Optional[str] = None,
 ) -> Dict[str, Any]:
     try:
         from ..routes.rides import RideEstimateRequest, compute_ride_estimates
@@ -412,6 +414,14 @@ async def get_fare_quote(
         "duration_minutes": estimates[0].get("duration_minutes"),
         "currency": "CAD",
     }
+    # Addresses ride along in the card so a tapped option can send a
+    # self-contained "Book the X from A to B" message — conversation history
+    # keeps only message text, so the next turn must not depend on this
+    # turn's tool results (Codex review, PR #1843).
+    if pickup_address:
+        shared["pickup_address"] = pickup_address
+    if dropoff_address:
+        shared["dropoff_address"] = dropoff_address
 
     if not quotes:
         return {
@@ -569,12 +579,17 @@ register(
             "Call this once pickup and dropoff coordinates are known. Returns exact "
             "totals per available vehicle option (taxes, fees and live surge included) "
             "with the best eligible promo already applied, plus ETA and driver "
-            "availability — and shows the rider a quote card automatically. Quote "
-            "before proposing any booking."
+            "availability — and shows the rider a quote card automatically. Always "
+            "pass the resolved pickup_address and dropoff_address so the card's "
+            "tap-to-book works. Quote before proposing any booking."
         ),
         input_schema={
             "type": "object",
-            "properties": dict(_COORD_PROPS),
+            "properties": {
+                **_COORD_PROPS,
+                "pickup_address": {"type": "string", "maxLength": 300},
+                "dropoff_address": {"type": "string", "maxLength": 300},
+            },
             "required": ["pickup_lat", "pickup_lng", "dropoff_lat", "dropoff_lng"],
         },
         handler=get_fare_quote,

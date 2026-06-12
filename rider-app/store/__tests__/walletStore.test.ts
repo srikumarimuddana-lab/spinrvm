@@ -47,7 +47,9 @@ describe('walletStore', () => {
       isLoading: false,
       error: null,
     });
-    jest.clearAllMocks();
+    // resetAllMocks (not clearAllMocks) so unconsumed mockResolvedValueOnce
+    // values can never leak between tests.
+    jest.resetAllMocks();
   });
 
   // ---------------------------------------------------------------------------
@@ -75,15 +77,24 @@ describe('walletStore', () => {
 
   // ---------------------------------------------------------------------------
   describe('topUp', () => {
-    it('updates wallet balance after top-up', async () => {
+    it('returns PaymentSheet params and leaves the balance untouched', async () => {
+      // topUp only creates the Stripe PaymentIntent; the balance updates
+      // after the PaymentSheet flow completes and fetchWallet refetches.
       useWalletStore.setState({ wallet: makeWallet({ balance: '50.00' }) });
-      mockApi.post.mockResolvedValueOnce({ data: { balance: 70.0 }, status: 200 });
-      mockApi.get.mockResolvedValueOnce({ data: makeWallet({ balance: '70.00' }), status: 200 });
+      const sheetParams = {
+        paymentIntent: 'pi_secret',
+        ephemeralKey: 'ek_test',
+        customer: 'cus_1',
+        publishableKey: 'pk_test',
+      };
+      mockApi.post.mockResolvedValueOnce({ data: sheetParams, status: 200 });
 
-      await useWalletStore.getState().topUp(20.0);
+      const result = await useWalletStore.getState().topUp(20.0);
 
       expect(mockApi.post).toHaveBeenCalledWith('/wallet/top-up', { amount: 20.0 });
-      expect(useWalletStore.getState().wallet?.balance).toBe('70.00');
+      expect(result).toEqual(sheetParams);
+      expect(useWalletStore.getState().wallet?.balance).toBe('50.00');
+      expect(useWalletStore.getState().isLoading).toBe(false);
     });
 
     it('throws and sets error when top-up fails', async () => {

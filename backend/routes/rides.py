@@ -1602,8 +1602,10 @@ async def compute_ride_estimates(
 
         # Calculate ETA: closest driver's distance / avg speed (30km/h in city)
         eta_minutes = None
+        closest_driver_km = None
         if nearby_for_type:
             closest = min(nearby_for_type, key=lambda x: x["distance_km"])
+            closest_driver_km = round(closest["distance_km"], 1)
             eta_minutes = max(2, int(closest["distance_km"] / 30 * 60) + 1)
 
         # P0-4 surge-lock: sign a token per vehicle_type so POST /rides can
@@ -1647,6 +1649,7 @@ async def compute_ride_estimates(
                 "fare_breakdown": fare_breakdown_lines,
                 "available": is_available,
                 "eta_minutes": eta_minutes,
+                "closest_driver_km": closest_driver_km,
                 "driver_count": driver_count,
                 "wav_available": wav_available,
                 "estimate_token": estimate_token,

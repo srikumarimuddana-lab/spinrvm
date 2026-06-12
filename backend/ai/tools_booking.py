@@ -400,9 +400,13 @@ async def get_fare_quote(
             "image_url": vt.get("image_url"),
             "eta_minutes": e.get("eta_minutes"),
             "drivers_nearby": e.get("driver_count"),
+            "closest_driver_km": e.get("closest_driver_km"),
             "surge_multiplier": e.get("surge_multiplier"),
             "total": str(total),
             "final_total": str(total - _money(promo["savings"])) if promo else str(total),
+            # Labelled line items from the estimate engine (display-only
+            # floats) so breakdown questions are answerable pre-booking.
+            "breakdown": e.get("fare_breakdown") or [],
         }
         if promo:
             quote["promo_code"] = promo["code"]
@@ -439,12 +443,21 @@ async def get_fare_quote(
         **shared,
         "quotes": quotes,
         "recommended_vehicle_type_id": recommended["vehicle_type_id"],
-        "_client_action": {"type": "fare_quote", **shared, "quotes": quotes},
+        "_client_action": {
+            "type": "fare_quote",
+            **shared,
+            "quotes": quotes,
+            "recommended_vehicle_type_id": recommended["vehicle_type_id"],
+        },
         "note": (
-            "Totals are exact (taxes and fees included) and the best eligible promo "
-            "is already applied per option. A quote card is now shown to the rider — "
-            "keep your reply to one or two short sentences (mention the savings if "
-            "any), then ask if they want to book or see other promo codes."
+            "Totals are exact (taxes and fees included); the best eligible promo is "
+            "already applied per option — if an option has no promo_code, say plainly "
+            "that no promo is currently available. A quote card is now shown to the "
+            "rider. Reply in ONE short message: recommended option and final price, "
+            "promo savings or 'no promo', trip distance and time, and how close the "
+            "nearest driver is. If asked for the fare breakdown before booking, answer "
+            "from each option's breakdown lines — never claim breakdowns exist only on "
+            "receipts. Then ask if they want to book or see other promo codes."
         ),
     }
     if unavailable:

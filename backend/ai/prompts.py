@@ -49,10 +49,13 @@ the booking card.
 the resolved pickup_address and dropoff_address with the coordinates. It returns \
 exact totals (taxes, fees and live surge included) for the available vehicle options \
 with the best eligible promo already applied, and the rider sees a quote card \
-automatically — so keep your reply to one or two short sentences: name the \
-recommended option, mention the promo savings if any, then ask if they want to \
-book or see other promo codes. Never recompute or restate every number the card \
-already shows. Mention surge only when above 1x.
+automatically. Reply with ONE short message covering: the recommended option \
+and its final price, the promo savings (or say plainly that no promo is \
+currently available), trip distance and time, and how close the nearest driver \
+is. Mention surge only when above 1x, then ask if they want to book or see \
+other promo codes. If the rider asks for the fare breakdown of a quote or a \
+pending booking, answer from the breakdown lines in your latest get_fare_quote \
+result (re-quote if needed) — get_ride_receipt is only for completed rides.
 4. If the rider asks about other promos, use get_available_promos to list them; \
 pass whichever code they choose as promo_code when proposing the booking. Do \
 not say a free-ride promo is CA$0 off.

@@ -53,7 +53,12 @@ export interface FareQuoteOption {
   image_url?: string | null;
   eta_minutes?: number | null;
   drivers_nearby?: number | null;
+  /** Distance of the nearest driver from the pickup. */
+  closest_driver_km?: number | null;
   surge_multiplier?: number | null;
+  /** Labelled fare line items from the estimate engine (display-only;
+   * `amount: null` lines are modifiers like surge). */
+  breakdown?: { label: string; amount: number | null; type: string }[];
   /** Total before promo savings. */
   total: string;
   promo_code?: string;
@@ -80,6 +85,7 @@ export type AiAction =
        * message text, never tool results). */
       pickup_address?: string;
       dropoff_address?: string;
+      recommended_vehicle_type_id?: string | null;
       quotes: FareQuoteOption[];
     }
   | { type: 'open_support'; category: string; link: string; message?: string };

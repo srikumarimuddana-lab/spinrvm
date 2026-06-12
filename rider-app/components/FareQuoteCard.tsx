@@ -22,6 +22,42 @@ interface Props {
   onSelect: (option: FareQuoteOption) => void;
 }
 
+/** Line-item fare details for the recommended (cheapest) option, plus its
+ * promo savings — so the rider sees exactly what they'd pay before booking. */
+function FareBreakdown({
+  quote,
+  styles,
+}: {
+  quote: FareQuoteAction;
+  styles: ReturnType<typeof createStyles>;
+}) {
+  const option =
+    quote.quotes.find((q) => q.vehicle_type_id === quote.recommended_vehicle_type_id) ?? quote.quotes[0];
+  if (!option?.breakdown?.length) return null;
+
+  return (
+    <View style={styles.breakdownWrap}>
+      <Text style={styles.breakdownTitle}>Fare details — {option.vehicle_type ?? 'recommended'}</Text>
+      {option.breakdown.map((line, i) => (
+        <View key={`${line.label}-${i}`} style={styles.breakdownRow}>
+          <Text style={styles.breakdownLabel}>{line.label}</Text>
+          {line.amount != null ? <Text style={styles.breakdownAmount}>${line.amount.toFixed(2)}</Text> : null}
+        </View>
+      ))}
+      {option.promo_savings ? (
+        <View style={styles.breakdownRow}>
+          <Text style={styles.breakdownSavings}>Promo {option.promo_code}</Text>
+          <Text style={styles.breakdownSavings}>-${option.promo_savings}</Text>
+        </View>
+      ) : null}
+      <View style={styles.breakdownRow}>
+        <Text style={styles.breakdownTotal}>You pay</Text>
+        <Text style={styles.breakdownTotal}>${option.final_total}</Text>
+      </View>
+    </View>
+  );
+}
+
 export default function FareQuoteCard({ quote, onSelect }: Props) {
   const { colors } = useTheme();
   const styles = createStyles(colors);
@@ -45,7 +81,9 @@ export default function FareQuoteCard({ quote, onSelect }: Props) {
         const hasSavings = !!option.promo_savings && option.final_total !== option.total;
         const surge = option.surge_multiplier ?? 1;
         const optionMeta = [
-          option.eta_minutes != null ? `${option.eta_minutes} min away` : null,
+          option.eta_minutes != null
+            ? `${option.eta_minutes} min${option.closest_driver_km != null ? ` (${option.closest_driver_km} km)` : ''} away`
+            : null,
           option.capacity != null ? `${option.capacity} seats` : null,
         ]
           .filter(Boolean)
@@ -68,7 +106,9 @@ export default function FareQuoteCard({ quote, onSelect }: Props) {
                     {option.promo_code} · save ${option.promo_savings}
                   </Text>
                 </View>
-              ) : null}
+              ) : (
+                <Text style={styles.noPromoText}>No promo applied</Text>
+              )}
             </View>
             <View style={styles.priceCol}>
               {hasSavings ? <Text style={styles.strikePrice}>${option.total}</Text> : null}
@@ -80,6 +120,8 @@ export default function FareQuoteCard({ quote, onSelect }: Props) {
           </TouchableOpacity>
         );
       })}
+
+      <FareBreakdown quote={quote} styles={styles} />
 
       <Text style={styles.fineprint}>Totals include taxes & fees. Tap an option to book it.</Text>
     </View>
@@ -115,6 +157,19 @@ const createStyles = (colors: ThemeColors) =>
     optionMeta: { fontSize: 12, color: colors.textDim },
     savingsPill: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
     savingsText: { fontSize: 11, fontWeight: '600', color: colors.success },
+    noPromoText: { fontSize: 11, color: colors.textDim, marginTop: 2 },
+    breakdownWrap: {
+      gap: 4,
+      paddingTop: 8,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.border,
+    },
+    breakdownTitle: { fontSize: 12, fontWeight: '700', color: colors.text },
+    breakdownRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
+    breakdownLabel: { flex: 1, fontSize: 12, color: colors.textDim },
+    breakdownAmount: { fontSize: 12, color: colors.text },
+    breakdownSavings: { fontSize: 12, fontWeight: '600', color: colors.success },
+    breakdownTotal: { fontSize: 13, fontWeight: '700', color: colors.text },
     priceCol: { alignItems: 'flex-end', gap: 1 },
     strikePrice: { fontSize: 12, color: colors.textDim, textDecorationLine: 'line-through' },
     finalPrice: { fontSize: 16, fontWeight: '700', color: colors.text },

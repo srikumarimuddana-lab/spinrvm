@@ -189,6 +189,22 @@ class TestGuards:
         assert frames[0][1]["code"] == "daily_cap"
 
     @pytest.mark.anyio
+    async def test_admin_console_turns_skip_daily_cap(self):
+        """Console turns (audited, super-admin-only) must neither drain nor
+        be blocked by the impersonated user's daily quota."""
+        adapter = FakeAdapter([[_text("hi!"), _end()]])
+        patches, mocks = _patches(adapter)
+        mocks["incr"].return_value = 51  # target rider is over their cap
+        frames = []
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], patches[7], patches[8]:
+            async for frame in orch.run_chat_turn(
+                user=USER, conversation_id="conv-1", user_message="hi", admin_actor_id="admin-1"
+            ):
+                frames.append(frame)
+        assert [n for n, _ in frames] == ["meta", "token", "done"]
+        mocks["incr"].assert_not_awaited()
+
+    @pytest.mark.anyio
     async def test_foreign_conversation_not_found(self):
         adapter = FakeAdapter([])
         frames, _ = await _run(adapter, conv=None)

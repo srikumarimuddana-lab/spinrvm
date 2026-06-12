@@ -356,7 +356,11 @@ jobs:
   # Deploy Backend
   deploy-backend:
     runs-on: ubuntu-latest
-    needs: [backend-test]
+    # python-dependency-audit gates the deploy (not the tests): before the
+    # audit was split into its own job, a pip-audit failure inside
+    # backend-test blocked this deploy transitively — keep that release
+    # blocker intact now that tests report independently.
+    needs: [backend-test, python-dependency-audit]
     if: github.ref == 'refs/heads/main'
 
     steps:

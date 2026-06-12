@@ -39,8 +39,10 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 _GEOCODE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
+_PLACES_TEXT_URL = "https://maps.googleapis.com/maps/api/place/textsearch/json"
 _HTTP_TIMEOUT = 4.0
 _CENT = Decimal("0.01")
+_PLACE_RADIUS_METERS = 25000
 
 _COORD_PROPS = {
     "pickup_lat": {"type": "number", "minimum": -90, "maximum": 90},
@@ -54,6 +56,30 @@ def _money(v) -> Decimal:
     return Decimal(str(v)).quantize(_CENT, rounding=ROUND_HALF_UP)
 
 
+def _looks_like_street_address(query: str) -> bool:
+    q = query.lower()
+    return any(ch.isdigit() for ch in q) and any(
+        token in q
+        for token in (
+            " st",
+            " street",
+            " ave",
+            " avenue",
+            " rd",
+            " road",
+            " dr",
+            " drive",
+            " blvd",
+            " boulevard",
+            " cres",
+            " crescent",
+            " way",
+            " lane",
+            " ln",
+        )
+    )
+
+
 async def _resolve_area(lat: float, lng: float):
     try:
         from ..routes.fares import resolve_service_area_for_point
@@ -62,42 +88,15 @@ async def _resolve_area(lat: float, lng: float):
     return await resolve_service_area_for_point(lat, lng)
 
 
-async def find_place(user: Dict[str, Any], query: str) -> Dict[str, Any]:
-    settings = await get_app_settings()
-    api_key = settings.get("google_maps_api_key") or ""
-    if not api_key:
-        return {"error": "place lookup is not available right now — ask the rider to pick the location in the app"}
+async def _maps_get(url: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+        resp = await client.get(url, params=params)
+        return resp.json()
 
-    within, spent, budget = await check_budget()
-    if not within:
-        logger.error("ai find_place blocked: maps budget exhausted (%.2f/%.2f USD)", spent, budget)
-        return {"error": "place lookup is not available right now — ask the rider to pick the location in the app"}
 
-    try:
-        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-            resp = await client.get(
-                _GEOCODE_URL,
-                params={
-                    "address": query,
-                    "components": "country:CA",
-                    "region": "ca",
-                    "key": api_key,
-                    "language": "en",
-                },
-            )
-            data = resp.json()
-    except Exception:
-        logger.error("ai find_place geocode request failed", exc_info=True)
-        return {"error": "place lookup failed — try again or pick the location in the app"}
-
-    if data.get("status") not in ("OK", "ZERO_RESULTS"):
-        logger.error("ai find_place geocode API error: %s", data.get("status"))
-        return {"error": "place lookup failed — try again or pick the location in the app"}
-
-    await record_call("geocode")
-
+async def _candidates_from_results(results) -> list:
     candidates = []
-    for result in (data.get("results") or [])[:3]:
+    for result in (results or [])[:3]:
         loc = (result.get("geometry") or {}).get("location") or {}
         lat, lng = loc.get("lat"), loc.get("lng")
         if lat is None or lng is None:
@@ -105,6 +104,7 @@ async def find_place(user: Dict[str, Any], query: str) -> Dict[str, Any]:
         area = await _resolve_area(lat, lng)
         candidates.append(
             {
+                "name": result.get("name"),
                 "address": result.get("formatted_address"),
                 "lat": lat,
                 "lng": lng,
@@ -112,10 +112,110 @@ async def find_place(user: Dict[str, Any], query: str) -> Dict[str, Any]:
                 "service_area": (area or {}).get("name"),
             }
         )
+    return candidates
+
+
+def _suggestions_action(query: str, candidates: list, location_role: Optional[str]) -> Dict[str, Any]:
+    return {
+        "type": "location_suggestions",
+        "query": query,
+        "location_role": location_role,
+        "candidates": candidates[:3],
+    }
+
+
+async def _lookup_place_candidates(
+    *,
+    api_key: str,
+    query: str,
+    near_lat: Optional[float] = None,
+    near_lng: Optional[float] = None,
+) -> Dict[str, Any]:
+    use_geocode_first = _looks_like_street_address(query)
+    attempts = ("geocode", "places") if use_geocode_first else ("places", "geocode")
+
+    for kind in attempts:
+        try:
+            if kind == "places":
+                params: Dict[str, Any] = {
+                    "query": query,
+                    "region": "ca",
+                    "key": api_key,
+                    "language": "en",
+                }
+                if near_lat is not None and near_lng is not None:
+                    params["location"] = f"{near_lat},{near_lng}"
+                    params["radius"] = _PLACE_RADIUS_METERS
+                data = await _maps_get(_PLACES_TEXT_URL, params)
+                allowed = ("OK", "ZERO_RESULTS")
+            else:
+                data = await _maps_get(
+                    _GEOCODE_URL,
+                    {
+                        "address": query,
+                        "components": "country:CA",
+                        "region": "ca",
+                        "key": api_key,
+                        "language": "en",
+                    },
+                )
+                allowed = ("OK", "ZERO_RESULTS")
+        except Exception:
+            logger.error("ai find_place maps request failed", exc_info=True)
+            return {"error": "place lookup failed — try again or pick the location in the app"}
+
+        if data.get("status") not in allowed:
+            logger.error("ai find_place maps API error: %s", data.get("status"))
+            return {"error": "place lookup failed — try again or pick the location in the app"}
+
+        await record_call("places_text_search" if kind == "places" else "geocode")
+        candidates = await _candidates_from_results(data.get("results") or [])
+        if candidates:
+            return {"candidates": candidates, "source": kind}
+
+    return {"candidates": []}
+
+
+async def _places_available() -> tuple:
+    settings = await get_app_settings()
+    api_key = settings.get("google_maps_api_key") or ""
+    if not api_key:
+        return None, {
+            "error": "place lookup is not available right now — ask the rider to pick the location in the app"
+        }
+
+    within, spent, budget = await check_budget()
+    if not within:
+        logger.error("ai find_place blocked: maps budget exhausted (%.2f/%.2f USD)", spent, budget)
+        return None, {
+            "error": "place lookup is not available right now — ask the rider to pick the location in the app"
+        }
+    return api_key, None
+
+
+async def find_place(
+    user: Dict[str, Any],
+    query: str,
+    near_lat: Optional[float] = None,
+    near_lng: Optional[float] = None,
+    location_role: Optional[str] = None,
+) -> Dict[str, Any]:
+    api_key, error = await _places_available()
+    if error:
+        return error
+
+    lookup = await _lookup_place_candidates(api_key=api_key, query=query, near_lat=near_lat, near_lng=near_lng)
+    if lookup.get("error"):
+        return {"error": lookup["error"]}
+    candidates = lookup.get("candidates") or []
     if not candidates:
         return {"candidates": [], "note": "No matching place found — ask the rider to rephrase or pick on the map."}
     if len(candidates) > 1:
-        return {"candidates": candidates, "note": "Multiple matches — ask the rider which one they mean."}
+        return {
+            "candidates": candidates,
+            "_client_action": _suggestions_action(query, candidates, location_role),
+            "note": "Multiple matches — ask the rider which one they mean.",
+        }
     return {"candidates": candidates}
 
 
@@ -128,7 +228,10 @@ async def get_fare_quote(
 ) -> Dict[str, Any]:
     area = await _resolve_area(pickup_lat, pickup_lng)
     if area is None:
-        return {"error": "pickup is outside Spinr's service areas", "hint": "use get_service_info to list operating cities"}
+        return {
+            "error": "pickup is outside Spinr's service areas",
+            "hint": "use get_service_info to list operating cities",
+        }
 
     try:
         from ..routes.fares import get_fares_for_location
@@ -183,10 +286,28 @@ async def propose_ride_booking(
     dropoff_address: str,
     vehicle_type_id: Optional[str] = None,
     promo_code: Optional[str] = None,
+    scheduled_time: Optional[str] = None,
+    payment_method: Optional[str] = None,
 ) -> Dict[str, Any]:
     area = await _resolve_area(pickup_lat, pickup_lng)
     if area is None:
-        return {"error": "pickup is outside Spinr's service areas — booking is not possible there"}
+        api_key, error = await _places_available()
+        if not error and api_key:
+            retry = await _lookup_place_candidates(
+                api_key=api_key,
+                query=pickup_address,
+                near_lat=dropoff_lat,
+                near_lng=dropoff_lng,
+            )
+            for candidate in retry.get("candidates") or []:
+                if candidate.get("in_service_area"):
+                    pickup_lat = candidate["lat"]
+                    pickup_lng = candidate["lng"]
+                    pickup_address = candidate.get("address") or pickup_address
+                    area = await _resolve_area(pickup_lat, pickup_lng)
+                    break
+        if area is None:
+            return {"error": "pickup is outside Spinr's service areas — booking is not possible there"}
 
     proposal = {
         "pickup_lat": pickup_lat,
@@ -200,6 +321,10 @@ async def propose_ride_booking(
         proposal["vehicle_type_id"] = vehicle_type_id
     if promo_code:
         proposal["promo_code"] = promo_code
+    if scheduled_time:
+        proposal["scheduled_time"] = scheduled_time
+    if payment_method:
+        proposal["payment_method"] = payment_method.lower()
 
     return {
         # Lifted out by the orchestrator into an SSE `action` frame; the
@@ -228,7 +353,24 @@ register(
                     "type": "string",
                     "maxLength": 200,
                     "description": "Place name or address to look up (Canada).",
-                }
+                },
+                "near_lat": {
+                    "type": "number",
+                    "minimum": -90,
+                    "maximum": 90,
+                    "description": "Optional latitude to bias vague place searches near a known pickup or dropoff.",
+                },
+                "near_lng": {
+                    "type": "number",
+                    "minimum": -180,
+                    "maximum": 180,
+                    "description": "Optional longitude to bias vague place searches near a known pickup or dropoff.",
+                },
+                "location_role": {
+                    "type": "string",
+                    "enum": ["pickup", "dropoff"],
+                    "description": "Which endpoint this place will fill, if known.",
+                },
             },
             "required": ["query"],
         },
@@ -272,6 +414,16 @@ register(
                 "dropoff_address": {"type": "string", "maxLength": 300},
                 "vehicle_type_id": {"type": "string", "maxLength": 64},
                 "promo_code": {"type": "string", "maxLength": 40},
+                "scheduled_time": {
+                    "type": "string",
+                    "maxLength": 80,
+                    "description": "ISO-8601 pickup time for scheduled rides. Omit for now.",
+                },
+                "payment_method": {
+                    "type": "string",
+                    "enum": ["card", "wallet"],
+                    "description": "Rider's stated payment preference. Omit if unknown.",
+                },
             },
             "required": [
                 "pickup_lat",

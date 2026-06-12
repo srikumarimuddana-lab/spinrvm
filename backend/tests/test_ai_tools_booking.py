@@ -252,8 +252,9 @@ class TestFareQuote:
 
     @pytest.mark.anyio
     async def test_quote_uses_estimate_engine_and_applies_best_promo(self):
+        args = dict(self.ARGS, pickup_address="123 Main St, Saskatoon", dropoff_address="Saskatoon Airport")
         with _patch_estimates(ESTIMATES), _patch_promos(PROMOS):
-            result, ok = await execute_tool("get_fare_quote", self.ARGS, user=RIDER)
+            result, ok = await execute_tool("get_fare_quote", args, user=RIDER)
         assert ok
         # Only the available vehicle type is quoted; the other is named.
         assert len(result["quotes"]) == 1
@@ -267,11 +268,15 @@ class TestFareQuote:
         assert q["promo_savings"] == "10.00"
         assert q["final_total"] == "8.48"
         assert result["recommended_vehicle_type_id"] == "vt-1"
-        # Rich card for both surfaces, with the same quotes.
+        # Rich card for both surfaces, with the same quotes. Addresses ride
+        # along so a tapped option can send a self-contained booking message
+        # (history keeps only message text, never tool results).
         action = result["_client_action"]
         assert action["type"] == "fare_quote"
         assert action["quotes"] == result["quotes"]
         assert action["distance_km"] == 6.4
+        assert action["pickup_address"] == "123 Main St, Saskatoon"
+        assert action["dropoff_address"] == "Saskatoon Airport"
 
     @pytest.mark.anyio
     async def test_out_of_area_pickup_refused(self):

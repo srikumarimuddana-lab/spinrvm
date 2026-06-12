@@ -203,9 +203,14 @@ ESTIMATES = {
             "surge_multiplier": 1.0,
             "available": True,
             "eta_minutes": 4,
+            "closest_driver_km": 1.8,
             "driver_count": 2,
             "distance_km": 6.4,
             "duration_minutes": 17,
+            "fare_breakdown": [
+                {"label": "Ride fare (6.4 km)", "amount": 16.0, "type": "ride"},
+                {"label": "GST (5%)", "amount": 0.88, "type": "tax"},
+            ],
         },
         {
             "vehicle_type": {"id": "vt-2", "name": "XL", "capacity": 6},
@@ -262,6 +267,8 @@ class TestFareQuote:
         q = result["quotes"][0]
         assert q["vehicle_type"] == "Economy"
         assert q["eta_minutes"] == 4
+        assert q["closest_driver_km"] == 1.8
+        assert q["breakdown"][0]["label"].startswith("Ride fare")
         assert q["total"] == "18.48"
         # SAVE10 wins (BIG15 misses the $20 min ride portion of $16.00).
         assert q["promo_code"] == "SAVE10"

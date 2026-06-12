@@ -22,8 +22,12 @@ if SUPABASE_URL and SUPABASE_KEY:
     # latency per request (acceptable for an admin backend).
     try:
         _pg = supabase.postgrest
-        _old = _pg._client
-        _pg._client = httpx.Client(
+        # postgrest 2.x stores its httpx.Client as `.session` (the older `._client`
+        # attribute does not exist — using it silently left the client on HTTP/2,
+        # which is NOT thread-safe across our _DB_EXECUTOR pool and caused
+        # "RuntimeError: deque mutated during iteration" in h2's hpack table).
+        _old = _pg.session
+        _pg.session = httpx.Client(
             base_url=str(_old.base_url),
             headers=dict(_old.headers),
             http2=False,
@@ -33,9 +37,17 @@ if SUPABASE_URL and SUPABASE_KEY:
             verify=True,
         )
     except Exception as _patch_exc:
+        # Loud, not swallowed: if this fails the client falls back to HTTP/2 and
+        # will intermittently crash background loops under concurrency. A future
+        # postgrest attribute rename must scream here, not hide (CLAUDE.md: never
+        # warning-and-continue on a DB error).
         import logging as _logging
-        _logging.getLogger(__name__).warning(
-            "Failed to patch Supabase postgrest client to HTTP/1.1: %s", _patch_exc
+
+        _logging.getLogger(__name__).error(
+            "Failed to patch Supabase postgrest client to HTTP/1.1 — HTTP/2 still "
+            "active, expect 'deque mutated during iteration' under thread concurrency: %s",
+            _patch_exc,
+            exc_info=True,
         )
 else:
     # Supabase not configured; code should handle supabase being None

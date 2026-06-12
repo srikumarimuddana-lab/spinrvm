@@ -87,6 +87,22 @@ class TestChatStreaming:
             rider_client.post("/api/v1/ai/chat", json={"message": "payout question"})
         assert gen.kwargs["audience"] == "driver"
 
+    def test_client_declared_audience_wins_over_user_row(self, rider_client):
+        # Dual-role user in the rider app: the surface declares itself rider
+        # and must get the rider tool set despite is_driver=True.
+        from backend.server import app
+        from dependencies import get_current_user
+
+        app.dependency_overrides[get_current_user] = lambda: {"id": "d-1", "is_driver": True}
+        gen = _frames_gen(HAPPY_FRAMES)
+        with patch("backend.routes.ai.run_chat_turn", gen):
+            rider_client.post("/api/v1/ai/chat", json={"message": "where is my driver?", "audience": "rider"})
+        assert gen.kwargs["audience"] == "rider"
+
+    def test_audience_rejects_unknown_values(self, rider_client):
+        resp = rider_client.post("/api/v1/ai/chat", json={"message": "hi", "audience": "admin"})
+        assert resp.status_code == 422
+
 
 class TestChatNonStreaming:
     def test_json_reply_shape(self, rider_client):

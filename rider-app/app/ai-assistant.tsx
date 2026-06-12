@@ -302,8 +302,7 @@ export default function AiAssistantScreen() {
 
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         {showWelcome ? (
           <View style={styles.welcomeWrap}>
@@ -353,6 +352,8 @@ export default function AiAssistantScreen() {
             maxLength={1000}
             editable={!isStreaming}
             onSubmitEditing={() => handleSend()}
+            returnKeyType="send"
+            blurOnSubmit={false}
           />
           {isStreaming ? (
             <TouchableOpacity style={styles.sendButton} onPress={stopStreaming} accessibilityLabel="Stop">
@@ -365,7 +366,7 @@ export default function AiAssistantScreen() {
               disabled={!input.trim()}
               accessibilityLabel="Send"
             >
-              <Ionicons name="arrow-up" size={18} color="#fff" />
+              <Ionicons name="send" size={20} color="#fff" />
             </TouchableOpacity>
           )}
         </View>
@@ -508,39 +509,43 @@ const createStyles = (colors: ThemeColors) =>
       paddingVertical: 6,
     },
     toolStatusText: { fontSize: 13, color: colors.textDim, fontStyle: 'italic' },
+    // Input area mirrors the help-centre chat tab (shared SupportScreen) so
+    // both AI entry points type and look the same.
     inputRow: {
       flexDirection: 'row',
       alignItems: 'flex-end',
-      gap: 8,
-      paddingHorizontal: 12,
-      paddingTop: 8,
+      gap: 10,
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
     },
     input: {
       flex: 1,
-      minHeight: 42,
-      maxHeight: 110,
-      borderRadius: 21,
+      backgroundColor: colors.surfaceLight,
+      borderRadius: 20,
       paddingHorizontal: 16,
       paddingVertical: 10,
-      backgroundColor: colors.surface,
-      color: colors.text,
       fontSize: 15,
+      color: colors.text,
+      maxHeight: 100,
+      borderWidth: 1,
+      borderColor: colors.border,
     },
     sendButton: {
-      width: 42,
-      height: 42,
-      borderRadius: 21,
+      width: 44,
+      height: 44,
+      borderRadius: 22,
       backgroundColor: colors.primary,
-      alignItems: 'center',
       justifyContent: 'center',
+      alignItems: 'center',
     },
     sendButtonDisabled: { opacity: 0.4 },
     disclaimer: {
       fontSize: 11,
       color: colors.textDim,
       textAlign: 'center',
-      paddingHorizontal: 24,
-      paddingTop: 6,
-      paddingBottom: 4,
+      paddingHorizontal: 20,
+      paddingBottom: 8,
     },
   });

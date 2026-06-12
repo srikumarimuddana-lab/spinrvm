@@ -26,7 +26,7 @@ import { Ionicons } from '@expo/vector-icons';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import type { AiChatMessage } from '@shared/types/ai';
+import type { AiChatMessage, LocationSuggestionCandidate } from '@shared/types/ai';
 import BookingProposalCard from '../components/BookingProposalCard';
 import { useAiChatStore } from '../store/aiChatStore';
 import { useRideStore } from '../store/rideStore';
@@ -113,6 +113,64 @@ function RideStatusBanner({ colors, styles }: { colors: ThemeColors; styles: Ret
   );
 }
 
+function LocationSuggestionsCard({
+  item,
+  onSelect,
+  colors,
+  styles,
+}: {
+  item: AiChatMessage;
+  onSelect: (candidate: LocationSuggestionCandidate) => void;
+  colors: ThemeColors;
+  styles: ReturnType<typeof createStyles>;
+}) {
+  if (item.action?.type !== 'location_suggestions') return null;
+  const role = item.action.location_role;
+  const title =
+    role === 'pickup'
+      ? 'Choose your pickup'
+      : role === 'dropoff'
+        ? 'Choose your dropoff'
+        : 'Choose a location';
+
+  return (
+    <View style={styles.locationCard}>
+      <View style={styles.locationHeader}>
+        <Ionicons name="location-outline" size={17} color={colors.primary} />
+        <Text style={styles.locationTitle}>{title}</Text>
+      </View>
+      {item.action.candidates.slice(0, 3).map((candidate, index) => {
+        const primary = candidate.name || candidate.address || `Option ${index + 1}`;
+        const secondary = candidate.name && candidate.address ? candidate.address : candidate.service_area;
+        return (
+          <TouchableOpacity
+            key={`${candidate.lat}:${candidate.lng}:${index}`}
+            style={styles.locationOption}
+            onPress={() => onSelect(candidate)}
+            accessibilityRole="button"
+            accessibilityLabel={`Use ${primary}`}
+          >
+            <View style={styles.locationPin}>
+              <Text style={styles.locationPinText}>{index + 1}</Text>
+            </View>
+            <View style={styles.locationCopy}>
+              <Text style={styles.locationPrimary} numberOfLines={1}>
+                {primary}
+              </Text>
+              {secondary ? (
+                <Text style={styles.locationSecondary} numberOfLines={2}>
+                  {secondary}
+                </Text>
+              ) : null}
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
 export default function AiAssistantScreen() {
   const router = useRouter();
   const { colors } = useTheme();
@@ -171,6 +229,22 @@ export default function AiAssistantScreen() {
     }
     if (item.kind === 'booking_proposal' && item.action?.type === 'booking_proposal') {
       return <BookingProposalCard proposal={item.action.proposal} />;
+    }
+    if (item.kind === 'location_suggestions' && item.action?.type === 'location_suggestions') {
+      return (
+        <LocationSuggestionsCard
+          item={item}
+          colors={colors}
+          styles={styles}
+          onSelect={(candidate) => {
+            const label = candidate.address || candidate.name;
+            if (!label) return;
+            const role = item.action?.type === 'location_suggestions' ? item.action.location_role : null;
+            const suffix = role === 'pickup' ? ' as my pickup' : role === 'dropoff' ? ' as my dropoff' : '';
+            handleSend(`Use ${label}${suffix}.`);
+          }}
+        />
+      );
     }
 
     const isUser = item.role === 'user';
@@ -361,6 +435,39 @@ const createStyles = (colors: ThemeColors) =>
       alignSelf: 'flex-start',
     },
     actionCardText: { fontSize: 14, fontWeight: '600', color: colors.text },
+    locationCard: {
+      marginLeft: 34,
+      padding: 12,
+      borderRadius: 12,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+      gap: 8,
+      alignSelf: 'stretch',
+    },
+    locationHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    locationTitle: { fontSize: 14, fontWeight: '700', color: colors.text },
+    locationOption: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      paddingVertical: 9,
+      paddingHorizontal: 8,
+      borderRadius: 10,
+      backgroundColor: colors.surfaceLight,
+    },
+    locationPin: {
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.primary,
+    },
+    locationPinText: { fontSize: 12, fontWeight: '700', color: '#fff' },
+    locationCopy: { flex: 1 },
+    locationPrimary: { fontSize: 14, fontWeight: '700', color: colors.text },
+    locationSecondary: { fontSize: 12, color: colors.textDim, lineHeight: 16 },
     rideBanner: {
       marginHorizontal: 12,
       marginTop: 4,

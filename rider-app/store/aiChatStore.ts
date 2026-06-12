@@ -162,7 +162,12 @@ export const useAiChatStore = create<AiChatState>((set, get) => ({
               {
                 id: newId(),
                 role: 'assistant',
-                kind: action.type === 'booking_proposal' ? 'booking_proposal' : 'support_action',
+                kind:
+                  action.type === 'booking_proposal'
+                    ? 'booking_proposal'
+                    : action.type === 'location_suggestions'
+                      ? 'location_suggestions'
+                      : 'support_action',
                 content: '',
                 action,
                 createdAt: Date.now(),

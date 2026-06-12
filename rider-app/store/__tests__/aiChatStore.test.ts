@@ -110,6 +110,28 @@ describe('sendMessage', () => {
     expect(cards[0].action).toEqual(proposal);
   });
 
+  it('renders location suggestions as dedicated action bubbles', async () => {
+    const suggestions = {
+      type: 'location_suggestions' as const,
+      query: 'walmart',
+      location_role: 'dropoff' as const,
+      candidates: [
+        {
+          name: 'Walmart Supercentre',
+          address: '4500 Gordon Rd, Regina, SK, Canada',
+          lat: 50.4079,
+          lng: -104.6501,
+          in_service_area: true,
+        },
+      ],
+    };
+    scriptStream([{ event: 'action', data: suggestions }]);
+    await useAiChatStore.getState().sendMessage('walmart');
+    const cards = useAiChatStore.getState().messages.filter((m) => m.kind === 'location_suggestions');
+    expect(cards).toHaveLength(1);
+    expect(cards[0].action).toEqual(suggestions);
+  });
+
   it('maps stream errors to friendly text and never leaves an empty bubble', async () => {
     scriptStream([], 'daily_cap');
     await useAiChatStore.getState().sendMessage('hello');

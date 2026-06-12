@@ -23,6 +23,8 @@ class FakeReconcilerDB:
 
     async def get_rows(self, table: str, filters: dict | None = None, **kwargs):
         if table == "drivers":
+            # Offset paging is only sound with a stable order (PR #1848 review).
+            assert kwargs.get("order") == "updated_at", "candidate scan must be deterministically ordered"
             # Honour limit/offset over the *currently matching* set, like
             # PostgREST would: flipped drivers leave the predicate.
             flipped = {f["id"] for f, _u in self.updates} if self.claim_returns_row else set()
@@ -130,6 +132,24 @@ async def test_presence_unreachable_flag_aborts_tick(patched):
 
     assert stats["flipped"] == 0
     assert fake_db.updates == []
+
+
+@pytest.mark.asyncio
+async def test_reconnect_between_batch_check_and_claim_skips_flip(patched):
+    """A WS pong refreshes Redis presence without touching drivers.updated_at,
+    so the claim predicate can't see a reconnect — the per-driver presence
+    re-check right before the claim must catch it."""
+    rec, fake_db = patched
+    fake_db.drivers = [{"id": "d1", "user_id": "u1", "updated_at": "old"}]
+    # Batch check: absent. Per-driver re-check just before the claim: present.
+    rec.present_driver_ids_checked = AsyncMock(side_effect=[(set(), True), ({"d1"}, True)])
+
+    stats = await rec.reconcile_stale_intent(NOW)
+
+    assert stats["flipped"] == 0
+    assert stats["skipped_present"] == 1
+    assert fake_db.updates == []
+    rec.record_period_transition.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -20,6 +20,7 @@ class FakeReminderDB:
         self.updates: list[tuple[dict, dict]] = []
         self.tables_read: list[str] = []
         self.failing_tables: set[str] = set()
+        self.failing_claims = False
         self.driver = {
             "id": "driver-1",
             "user_id": "user-1",
@@ -56,6 +57,8 @@ class FakeReminderDB:
 
     async def insert_one(self, table: str, doc: dict):
         assert table == "driver_onboarding_reminder_log"
+        if self.failing_claims:
+            raise RuntimeError("simulated claim insert outage")
         if self.duplicate_claims:
             from utils.driver_onboarding_reminders import DuplicateRecordError
 
@@ -178,3 +181,27 @@ async def test_failed_scan_does_not_complete_window(monkeypatch):
     retried = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 20, tzinfo=timezone.utc))
     assert retried["drivers_scanned"] == 1
     assert retried["pushes_delivered"] == 2
+
+
+@pytest.mark.asyncio
+async def test_failed_claim_insert_does_not_complete_window(monkeypatch):
+    """A claim-log insert outage leaves no dedupe row, so the window must
+    stay incomplete and the next tick must retry the sends (only duplicate
+    claims are a definitive 'already sent today')."""
+    from utils import driver_onboarding_reminders as reminders
+
+    fake_db = FakeReminderDB()
+    send_push = AsyncMock(return_value=True)
+    monkeypatch.setattr(reminders, "db", fake_db)
+    monkeypatch.setattr(reminders, "send_push_notification", send_push)
+
+    fake_db.failing_claims = True
+    failed = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 5, tzinfo=timezone.utc))
+    assert failed["pushes_delivered"] == 0
+    assert reminders._completed_windows == set()
+    send_push.assert_not_awaited()
+
+    fake_db.failing_claims = False
+    retried = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 20, tzinfo=timezone.utc))
+    assert retried["pushes_delivered"] == 2
+    assert reminders._completed_windows != set()

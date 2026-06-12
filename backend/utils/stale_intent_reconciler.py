@@ -130,6 +130,7 @@ async def reconcile_stale_intent(now_utc: datetime | None = None) -> dict[str, i
         candidates = await db.get_rows(
             "drivers",
             {"is_online": True, "updated_at": {"$lt": cutoff}},
+            order="updated_at",
             limit=CANDIDATE_LIMIT,
             offset=offset,
             columns="id,user_id,updated_at",
@@ -174,6 +175,24 @@ async def reconcile_stale_intent(now_utc: datetime | None = None) -> dict[str, i
                     f"stale_intent: driver {driver_id} is stale but linked to an active ride — "
                     "left online; investigate the ride"
                 )
+                continue
+
+            # Presence can have refreshed since the batched check above (a WS
+            # pong updates Redis but not drivers.updated_at, so the claim
+            # predicate alone can't see a reconnect). Re-check this one
+            # driver immediately before the claim to shrink that window to
+            # milliseconds.
+            try:
+                present_now, reachable_now = await present_driver_ids_checked([driver_id])
+            except Exception as exc:
+                logger.warning(f"stale_intent: presence re-check failed — tick aborted: {exc}")
+                return stats
+            if not reachable_now:
+                logger.warning("stale_intent: presence store unreachable — tick aborted")
+                return stats
+            if present_now:
+                stats["skipped_present"] += 1
+                page_skips += 1
                 continue
 
             # Atomic claim. Re-asserting the staleness predicate closes the

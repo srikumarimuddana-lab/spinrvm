@@ -62,13 +62,19 @@ LOG_TABLE = "driver_onboarding_reminder_log"
 _completed_windows: set[str] = set()
 
 
-async def _get_rows(table: str, filters: dict[str, Any] | None, **kwargs) -> list[dict[str, Any]]:
+async def _get_rows(table: str, filters: dict[str, Any] | None, **kwargs) -> list[dict[str, Any]] | None:
+    """Rows, or None when the read failed.
+
+    None (not []) so callers can tell "table is empty" from "DB error" —
+    a failed read during the send window must leave the window incomplete
+    so the next tick retries, instead of silently skipping the day.
+    """
     try:
         return await db.get_rows(table, filters or {}, **kwargs)
     except Exception as exc:
         original = getattr(exc, "details", {}).get("original") if hasattr(exc, "details") else None
         logger.error("onboarding reminders: failed to read %s: %s original=%s", table, exc, original, exc_info=True)
-        return []
+        return None
 
 
 async def _claim(driver_id: str, user_id: str, kind: str, local_date: str, now: datetime) -> dict[str, Any] | None:
@@ -140,11 +146,10 @@ async def check_driver_onboarding_reminders(now_utc: datetime | None = None) -> 
     now = as_utc(now_utc)
     stats = {"drivers_scanned": 0, "claims_attempted": 0, "pushes_delivered": 0}
 
-    areas = {
-        str(r["id"]): r
-        for r in await _get_rows("service_areas", {}, limit=1000, columns="id,timezone,required_documents")
-        if r.get("id")
-    }
+    area_rows = await _get_rows("service_areas", {}, limit=1000, columns="id,timezone,required_documents")
+    if area_rows is None:
+        return stats  # read failed — retry next tick, window stays incomplete
+    areas = {str(r["id"]): r for r in area_rows if r.get("id")}
 
     # Daily gate: the drivers + documents scan only runs while some known
     # timezone (area timezones + default) is inside its 08:00 send hour, and
@@ -157,7 +162,13 @@ async def check_driver_onboarding_reminders(now_utc: datetime | None = None) -> 
         return stats
 
     global_reqs = await _get_rows("document_requirements", {}, limit=200, columns="id,name,is_mandatory")
+    if global_reqs is None:
+        return stats  # read failed — retry next tick, window stays incomplete
 
+    # Any failed read below leaves scan_ok False so the window is NOT marked
+    # completed — the next 15-min tick inside the same send hour retries.
+    # Claims already written for earlier pages dedupe via DuplicateRecordError.
+    scan_ok = True
     offset = 0
     while True:
         drivers = await _get_rows(
@@ -167,6 +178,9 @@ async def check_driver_onboarding_reminders(now_utc: datetime | None = None) -> 
             offset=offset,
             columns="id,user_id,status,deleted_at,service_area_id,vehicle_type_id,vehicle_make,vehicle_model,license_plate",
         )
+        if drivers is None:
+            scan_ok = False
+            break
         if not drivers:
             break
 
@@ -177,6 +191,11 @@ async def check_driver_onboarding_reminders(now_utc: datetime | None = None) -> 
             limit=max(1000, len(ids) * 10),
             columns="id,driver_id,requirement_id,requirement_key,document_type,status",
         )
+        if docs is None:
+            # Without the docs we can't tell uploaded from missing; processing
+            # the page anyway would push false "upload your documents" nags.
+            scan_ok = False
+            break
         docs_by_driver: dict[str, list[dict[str, Any]]] = {}
         for doc in docs:
             if doc.get("driver_id"):
@@ -200,7 +219,8 @@ async def check_driver_onboarding_reminders(now_utc: datetime | None = None) -> 
             break
         offset += PAGE_SIZE
 
-    _completed_windows.update(windows)
+    if scan_ok:
+        _completed_windows.update(windows)
     # Drop windows older than yesterday so the memo can't grow unbounded
     # (ISO dates compare lexicographically).
     cutoff = (now - timedelta(days=1)).date().isoformat()

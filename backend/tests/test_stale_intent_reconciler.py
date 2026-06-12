@@ -23,7 +23,13 @@ class FakeReconcilerDB:
 
     async def get_rows(self, table: str, filters: dict | None = None, **kwargs):
         if table == "drivers":
-            return self.drivers
+            # Honour limit/offset over the *currently matching* set, like
+            # PostgREST would: flipped drivers leave the predicate.
+            flipped = {f["id"] for f, _u in self.updates} if self.claim_returns_row else set()
+            matching = [d for d in self.drivers if d["id"] not in flipped]
+            offset = kwargs.get("offset") or 0
+            limit = kwargs.get("limit") or len(matching)
+            return matching[offset : offset + limit]
         if table == "rides":
             return self.active_rides
         return []
@@ -31,8 +37,9 @@ class FakeReconcilerDB:
     async def update_one(self, table: str, filters: dict, update: dict):
         assert table == "drivers"
         assert filters.get("is_online") is True, "flip must be an atomic claim on is_online=true"
+        assert "$lt" in filters.get("updated_at", {}), "claim must re-assert the staleness predicate"
         self.updates.append((filters, update))
-        return {**filters, **update} if self.claim_returns_row else None
+        return {**update, "id": filters["id"]} if self.claim_returns_row else None
 
 
 @pytest.fixture
@@ -42,7 +49,7 @@ def patched(monkeypatch):
     fake_db = FakeReconcilerDB()
     monkeypatch.setattr(rec, "db", fake_db)
     monkeypatch.setattr(rec, "get_redis_stats", AsyncMock(return_value={"connected": True}))
-    monkeypatch.setattr(rec, "present_driver_ids", AsyncMock(return_value=set()))
+    monkeypatch.setattr(rec, "present_driver_ids_checked", AsyncMock(return_value=(set(), True)))
     monkeypatch.setattr(rec, "record_period_transition", AsyncMock())
     monkeypatch.setattr(rec, "send_push_notification", AsyncMock(return_value=True))
     monkeypatch.setattr(rec, "get_app_settings", AsyncMock(return_value={}))
@@ -58,7 +65,9 @@ async def test_flips_stale_absent_driver(patched):
 
     assert stats["flipped"] == 1
     filters, update = fake_db.updates[0]
-    assert filters == {"id": "d1", "is_online": True}
+    assert filters["id"] == "d1"
+    assert filters["is_online"] is True
+    assert filters["updated_at"] == {"$lt": (NOW - rec.timedelta(hours=4)).isoformat()}
     assert update["is_online"] is False
     assert update["is_available"] is False
     assert update["went_offline_at"] == NOW.isoformat()
@@ -86,7 +95,7 @@ async def test_present_driver_is_never_flipped(patched):
     revoked) → reachable → leave intent alone."""
     rec, fake_db = patched
     fake_db.drivers = [{"id": "d1", "user_id": "u1", "updated_at": "old"}]
-    rec.present_driver_ids = AsyncMock(return_value={"d1"})
+    rec.present_driver_ids_checked = AsyncMock(return_value=({"d1"}, True))
 
     stats = await rec.reconcile_stale_intent(NOW)
 
@@ -100,12 +109,61 @@ async def test_presence_lookup_failure_skips_tick(patched):
     """No trustworthy presence → err on not flipping anyone."""
     rec, fake_db = patched
     fake_db.drivers = [{"id": "d1", "user_id": "u1", "updated_at": "old"}]
-    rec.present_driver_ids = AsyncMock(side_effect=RuntimeError("Redis down"))
+    rec.present_driver_ids_checked = AsyncMock(side_effect=RuntimeError("Redis down"))
 
     stats = await rec.reconcile_stale_intent(NOW)
 
     assert stats["flipped"] == 0
     assert fake_db.updates == []
+
+
+@pytest.mark.asyncio
+async def test_presence_unreachable_flag_aborts_tick(patched):
+    """present_driver_ids_checked returning reachable=False (Redis configured
+    but down mid-tick) must abort — an empty set in that state means
+    'unknowable', not 'everyone offline'."""
+    rec, fake_db = patched
+    fake_db.drivers = [{"id": "d1", "user_id": "u1", "updated_at": "old"}]
+    rec.present_driver_ids_checked = AsyncMock(return_value=(set(), False))
+
+    stats = await rec.reconcile_stale_intent(NOW)
+
+    assert stats["flipped"] == 0
+    assert fake_db.updates == []
+
+
+@pytest.mark.asyncio
+async def test_settings_read_failure_skips_tick(patched):
+    """A settings outage must not silently apply the 4h default over an
+    operator-raised threshold."""
+    rec, fake_db = patched
+    fake_db.drivers = [{"id": "d1", "user_id": "u1", "updated_at": "old"}]
+    rec.get_app_settings = AsyncMock(side_effect=RuntimeError("settings DB down"))
+
+    stats = await rec.reconcile_stale_intent(NOW)
+
+    assert stats["flipped"] == 0
+    assert fake_db.updates == []
+
+
+@pytest.mark.asyncio
+async def test_pages_past_skipped_candidates(patched, monkeypatch):
+    """Skipped (present) drivers filling the first page must not shadow
+    absent drivers behind them."""
+    rec, fake_db = patched
+    monkeypatch.setattr(rec, "CANDIDATE_LIMIT", 2)
+    fake_db.drivers = [
+        {"id": "d1", "user_id": "u1", "updated_at": "old"},  # present → skip
+        {"id": "d2", "user_id": "u2", "updated_at": "old"},  # present → skip
+        {"id": "d3", "user_id": "u3", "updated_at": "old"},  # absent → flip
+    ]
+    rec.present_driver_ids_checked = AsyncMock(side_effect=lambda ids: ({"d1", "d2"} & set(ids), True))
+
+    stats = await rec.reconcile_stale_intent(NOW)
+
+    assert stats["skipped_present"] == 2
+    assert stats["flipped"] == 1
+    assert fake_db.updates[0][0]["id"] == "d3"
 
 
 @pytest.mark.asyncio
@@ -146,4 +204,4 @@ async def test_no_candidates_is_a_cheap_noop(patched):
 
     assert stats["candidates"] == 0
     assert fake_db.updates == []
-    rec.present_driver_ids.assert_not_awaited()
+    rec.present_driver_ids_checked.assert_not_awaited()

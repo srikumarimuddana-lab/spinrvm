@@ -95,6 +95,7 @@ describe('streamChat', () => {
       message: 'where is my driver?',
       conversation_id: 'conv-1',
       stream: true,
+      audience: 'rider',
     });
   });
 

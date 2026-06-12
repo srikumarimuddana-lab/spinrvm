@@ -135,7 +135,7 @@ describe('sendMessage', () => {
 
 describe('config + history', () => {
   it('loadConfig gates the entry points', async () => {
-    mockApi.get.mockResolvedValueOnce({ data: { enabled: true, disclaimer: 'AI can be wrong.' } });
+    mockApi.get.mockResolvedValueOnce({ data: { enabled: true, disclaimer: 'AI can be wrong.' }, status: 200 });
     await useAiChatStore.getState().loadConfig();
     expect(useAiChatStore.getState().enabled).toBe(true);
     expect(useAiChatStore.getState().disclaimer).toBe('AI can be wrong.');
@@ -154,6 +154,7 @@ describe('config + history', () => {
           { id: 'm2', role: 'assistant', content: 'hello!', created_at: '2026-06-01T00:00:01Z' },
         ],
       },
+      status: 200,
     });
     await useAiChatStore.getState().loadHistory();
     const { messages, conversationId } = useAiChatStore.getState();

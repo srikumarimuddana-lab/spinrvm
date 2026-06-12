@@ -23,6 +23,7 @@ import { showToast } from '../../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useWorkProfileStore } from '../../store/workProfileStore';
+import { useAiChatStore } from '../../store/aiChatStore';
 
 const BLURHASH_PLACEHOLDER = 'LGF5]+Yk^6#M@-5c,1J5@[or[Q6.';
 
@@ -33,6 +34,20 @@ export default function AccountScreen() {
   const { profiles, workModeEnabled } = useWorkProfileStore();
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const aiEnabled = useAiChatStore((s) => s.enabled);
+  const loadAiConfig = useAiChatStore((s) => s.loadConfig);
+
+  useEffect(() => {
+    loadAiConfig();
+  }, [loadAiConfig]);
+
+  const handleAiPress = () => {
+    if (aiEnabled) {
+      router.push('/ai-assistant' as any);
+    } else {
+      showToast('Coming Soon', 'AI Ride Booking is coming soon!', 'info');
+    }
+  };
 
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
@@ -354,7 +369,7 @@ export default function AccountScreen() {
             <View style={styles.card}>
               <MenuRow styles={styles} colors={colors} icon="bag-handle" iconColor="#F97316" iconBg="rgba(249, 115, 22, 0.1)" label="Lost & Found" onPress={() => router.push('/lost-and-found' as any)} />
               <View style={styles.cardDivider} />
-              <MenuRow styles={styles} colors={colors} icon="sparkles" iconColor="#8B5CF6" iconBg="rgba(139, 92, 246, 0.1)" label="AI Assistant" onPress={() => router.push('/ai-assistant' as any)} />
+              <MenuRow styles={styles} colors={colors} icon="sparkles" iconColor="#8B5CF6" iconBg="rgba(139, 92, 246, 0.1)" label="AI Assistant" onPress={handleAiPress} />
               <View style={styles.cardDivider} />
               <MenuRow styles={styles} colors={colors} icon="help-circle" iconColor="#2563EB" iconBg="rgba(37, 99, 235, 0.1)" label="Help Center" onPress={() => router.push('/support' as any)} />
               <View style={styles.cardDivider} />

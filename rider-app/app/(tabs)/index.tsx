@@ -273,6 +273,14 @@ export default function HomeScreen() {
     router.push('/search-destination' as any);
   };
 
+  const handleAiPress = () => {
+    if (aiEnabled) {
+      router.push('/ai-assistant' as any);
+    } else {
+      showToast('Coming Soon', 'AI Ride Booking is coming soon!', 'info');
+    }
+  };
+
   const handleQuickAction = (_type: string) => {
     router.push('/search-destination' as any);
   };
@@ -473,6 +481,7 @@ export default function HomeScreen() {
             showPromo={showPromo}
             setShowPromo={setShowPromo}
             handleSearchPress={handleSearchPress}
+            handleAiPress={handleAiPress}
             handleQuickAction={handleQuickAction}
           />
         </View>
@@ -501,6 +510,7 @@ export default function HomeScreen() {
               showPromo={showPromo}
               setShowPromo={setShowPromo}
               handleSearchPress={handleSearchPress}
+              handleAiPress={handleAiPress}
               handleQuickAction={handleQuickAction}
             />
           </BottomSheetScrollView>
@@ -511,11 +521,11 @@ export default function HomeScreen() {
 }
 
 function BottomSheetContent({
-  colors, styles, showPromo, setShowPromo, handleSearchPress, handleQuickAction,
+  colors, styles, showPromo, setShowPromo, handleSearchPress, handleAiPress, handleQuickAction,
 }: {
   colors: ThemeColors; styles: any;
   showPromo: boolean; setShowPromo: (v: boolean) => void;
-  handleSearchPress: () => void; handleQuickAction: (type: string) => void;
+  handleSearchPress: () => void; handleAiPress: () => void; handleQuickAction: (type: string) => void;
 }) {
   return (
     <>
@@ -531,13 +541,7 @@ function BottomSheetContent({
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.aiButton}
-          onPress={() => {
-            if (aiEnabled) {
-              router.push('/ai-assistant' as any);
-            } else {
-              showToast('Coming Soon', 'AI Ride Booking is coming soon!', 'info');
-            }
-          }}
+          onPress={handleAiPress}
           activeOpacity={0.8}
           accessibilityLabel="AI assistant"
           accessibilityRole="button"

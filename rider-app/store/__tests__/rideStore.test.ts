@@ -21,7 +21,12 @@ jest.mock('@shared/api/client', () => {
     patch: jest.fn(),
     delete: jest.fn(),
   };
-  return { __esModule: true, default: mockClient };
+  return {
+    __esModule: true,
+    default: mockClient,
+    hasAuthToken: jest.fn(() => true),
+    SpinrApiError: class SpinrApiError extends Error {},
+  };
 });
 
 // Mock the auth store (imported transitively via @shared/store/authStore)
@@ -297,7 +302,13 @@ describe('rideStore — double-booking prevention', () => {
       currentRide: makeRide('searching') as any,
     });
 
-    // The store guard throws before the API is ever called, so no mock is needed.
+    // The guard revalidates against the server before throwing, so
+    // GET /rides/active must confirm the ride is still live.
+    const mockApi = require('@shared/api/client').default;
+    mockApi.get.mockResolvedValueOnce({
+      data: { active: true, ride: makeRide('searching') },
+      status: 200,
+    });
     await expect(
       act(async () => { await useRideStore.getState().createRide('card'); })
     ).rejects.toThrow('A ride is already active');
@@ -315,11 +326,11 @@ describe('rideStore — cancel after driver_arrived', () => {
     err.response = { status: 400, data: { detail: 'Cancellation fee applies after driver has arrived' } };
     mockApi.post.mockRejectedValueOnce(err);
 
+    // cancelRide records the error in state and rethrows so callers can react
     await act(async () => {
-      await useRideStore.getState().cancelRide();
+      await expect(useRideStore.getState().cancelRide()).rejects.toThrow('Cancellation fee applies');
     });
 
-    // cancelRide swallows the error into state — verify error was recorded
     expect(useRideStore.getState().error).toBeTruthy();
     // Ride is NOT cleared on error — rider stays on the screen
     expect(useRideStore.getState().currentRide).not.toBeNull();
@@ -394,9 +405,9 @@ describe('rideStore — cancelRide after driver_arrived', () => {
     err.response = { status: 400, data: { detail: 'Cancellation fee applies' } };
     mockApi.post.mockRejectedValueOnce(err);
 
-    // cancelRide does not rethrow — it sets error state
+    // cancelRide sets error state and rethrows for the caller to handle
     await act(async () => {
-      await useRideStore.getState().cancelRide();
+      await expect(useRideStore.getState().cancelRide()).rejects.toThrow();
     });
 
     const state = useRideStore.getState();

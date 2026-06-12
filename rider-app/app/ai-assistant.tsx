@@ -73,7 +73,7 @@ function RideStatusBanner({ colors, styles }: { colors: ThemeColors; styles: Ret
 
   const handleShare = async () => {
     try {
-      const res = await api.get(`/rides/${currentRide.id}/share`);
+      const res = await api.get<{ share_url?: string }>(`/rides/${currentRide.id}/share`);
       const url = res.data?.share_url;
       if (url) await Share.share({ message: `Follow my Spinr trip live: ${url}` });
     } catch (error) {

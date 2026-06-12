@@ -73,7 +73,7 @@ export const useAiChatStore = create<AiChatState>((set, get) => ({
 
   loadConfig: async () => {
     try {
-      const res = await api.get('/ai/config');
+      const res = await api.get<{ enabled?: boolean; disclaimer?: string }>('/ai/config');
       set({ enabled: !!res.data?.enabled, disclaimer: res.data?.disclaimer ?? '' });
     } catch {
       // Config failure just hides the entry points; nothing to surface.
@@ -85,7 +85,9 @@ export const useAiChatStore = create<AiChatState>((set, get) => ({
     try {
       const stored = await AsyncStorage.getItem(CONVERSATION_KEY);
       if (!stored) return;
-      const res = await api.get(`/ai/conversations/${stored}/messages`);
+      const res = await api.get<{
+        messages?: { id: string; role: 'user' | 'assistant'; content: string; created_at: string }[];
+      }>(`/ai/conversations/${stored}/messages`);
       const messages: AiChatMessage[] = (res.data?.messages ?? []).map(
         (m: { id: string; role: 'user' | 'assistant'; content: string; created_at: string }) => ({
           id: m.id,

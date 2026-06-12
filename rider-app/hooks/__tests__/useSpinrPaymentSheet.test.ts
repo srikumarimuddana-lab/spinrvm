@@ -56,7 +56,7 @@ describe('useSpinrPaymentSheet', () => {
       outcome = await result.current.presentSheet({ rideId: 'ride-1', amount: 15.5 });
     });
     expect(outcome!.ok).toBe(true);
-    expect(mockApi.post).toHaveBeenCalledWith('/payments/payment-sheet', { amount: 15.5, ride_id: 'ride-1' });
+    expect(mockApi.post).toHaveBeenCalledWith('/payments/payment-sheet', { amount: 15.5, ride_id: 'ride-1', tip_amount: 0 });
   });
 
   it('includes tipAmount in the total sent to the backend', async () => {

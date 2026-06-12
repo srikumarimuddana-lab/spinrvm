@@ -808,29 +808,38 @@ function RideOptionsScreenContent() {
               </TouchableOpacity>
 
               {/* Schedule row */}
-              <TouchableOpacity
-                style={styles.actionRow}
-                onPress={() => scheduledTime ? setScheduledTime(null) : setShowScheduleModal(true)}
-                activeOpacity={0.7}
-              >
+              <View style={styles.actionRow}>
                 <View style={styles.actionRowIcon}>
                   <Ionicons name="time" size={18} color={colors.primary} />
                 </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.actionRowValue}>
-                    {scheduledTime
-                      ? `${scheduledTime.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' })} at ${scheduledTime.toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' })}`
-                      : 'Now'}
-                  </Text>
-                </View>
                 {scheduledTime ? (
-                  <TouchableOpacity onPress={() => setScheduledTime(null)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                    <Ionicons name="close-circle" size={18} color="#9CA3AF" />
-                  </TouchableOpacity>
+                  <>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.actionRowValue}>
+                        {scheduledTime.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' })} at{' '}
+                        {scheduledTime.toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' })}
+                      </Text>
+                    </View>
+                    <TouchableOpacity onPress={() => setScheduledTime(null)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                      <Ionicons name="close-circle" size={18} color="#9CA3AF" />
+                    </TouchableOpacity>
+                  </>
                 ) : (
-                  <Ionicons name="chevron-forward" size={16} color="#9CA3AF" />
+                  <View style={styles.scheduleToggle}>
+                    <View style={[styles.scheduleToggleBtn, styles.scheduleToggleBtnActive]}>
+                      <Text style={[styles.scheduleToggleText, styles.scheduleToggleTextActive]}>Now</Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.scheduleToggleBtn}
+                      onPress={() => setShowScheduleModal(true)}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="calendar-outline" size={14} color={colors.textDim} />
+                      <Text style={styles.scheduleToggleText}>Schedule</Text>
+                    </TouchableOpacity>
+                  </View>
                 )}
-              </TouchableOpacity>
+              </View>
 
               {/* Confirm button */}
               <TouchableOpacity
@@ -1682,6 +1691,36 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
     actionRowValue: {
       fontSize: sf(14),
       fontFamily: 'PlusJakartaSans_500Medium',
+      color: colors.text,
+    },
+    scheduleToggle: {
+      flexDirection: 'row',
+      backgroundColor: colors.border,
+      borderRadius: 20,
+      padding: 2,
+    },
+    scheduleToggleBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      paddingHorizontal: 14,
+      paddingVertical: 7,
+      borderRadius: 18,
+    },
+    scheduleToggleBtnActive: {
+      backgroundColor: colors.surface,
+      shadowColor: '#000',
+      shadowOpacity: 0.08,
+      shadowOffset: { width: 0, height: 1 },
+      shadowRadius: 3,
+      elevation: 2,
+    },
+    scheduleToggleText: {
+      fontSize: sf(13),
+      fontFamily: 'PlusJakartaSans_600SemiBold',
+      color: colors.textDim,
+    },
+    scheduleToggleTextActive: {
       color: colors.text,
     },
     confirmButton: {

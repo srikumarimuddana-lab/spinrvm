@@ -302,7 +302,7 @@ export default function AiAssistantScreen() {
 
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
       >
         {showWelcome ? (
@@ -520,6 +520,8 @@ const createStyles = (colors: ThemeColors) =>
       minHeight: 42,
       maxHeight: 110,
       borderRadius: 21,
+      borderWidth: 1,
+      borderColor: colors.border,
       paddingHorizontal: 16,
       paddingVertical: 10,
       backgroundColor: colors.surface,

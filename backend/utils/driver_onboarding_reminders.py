@@ -77,7 +77,12 @@ async def _get_rows(table: str, filters: dict[str, Any] | None, **kwargs) -> lis
         return None
 
 
-async def _claim(driver_id: str, user_id: str, kind: str, local_date: str, now: datetime) -> dict[str, Any] | None:
+# Sentinel distinguishing "claim insert failed" (retry next tick) from
+# "already claimed today" (None — definitive, no retry needed).
+_CLAIM_ERROR = object()
+
+
+async def _claim(driver_id: str, user_id: str, kind: str, local_date: str, now: datetime):
     try:
         return await db.insert_one(
             LOG_TABLE,
@@ -101,7 +106,7 @@ async def _claim(driver_id: str, user_id: str, kind: str, local_date: str, now: 
             original,
             exc_info=True,
         )
-        return None
+        return _CLAIM_ERROR
 
 
 async def _mark(claim: dict[str, Any], now: datetime, delivered: bool, error: str | None) -> None:
@@ -123,10 +128,15 @@ async def _mark(claim: dict[str, Any], now: datetime, delivered: bool, error: st
         logger.error("onboarding reminders: log update failed: %s original=%s", exc, original, exc_info=True)
 
 
-async def _send(driver: dict[str, Any], kind: str, local_date: str, now: datetime) -> bool:
+async def _send(driver: dict[str, Any], kind: str, local_date: str, now: datetime) -> bool | None:
+    """True = delivered, False = not needed/failed-after-claim, None = claim
+    insert failed (no dedupe row exists — the window must stay incomplete so
+    the next tick retries)."""
     driver_id = str(driver["id"])
     user_id = str(driver["user_id"])
     claim = await _claim(driver_id, user_id, kind, local_date, now)
+    if claim is _CLAIM_ERROR:
+        return None
     if not claim:
         return False
 
@@ -210,10 +220,18 @@ async def check_driver_onboarding_reminders(now_utc: datetime | None = None) -> 
                 continue
             if not _has_vehicle_details(driver):
                 stats["claims_attempted"] += 1
-                stats["pushes_delivered"] += int(await _send(driver, VEHICLE_DETAILS, local_date, now))
+                sent = await _send(driver, VEHICLE_DETAILS, local_date, now)
+                if sent is None:
+                    scan_ok = False  # claim insert failed — retry this window next tick
+                else:
+                    stats["pushes_delivered"] += int(sent)
             if missing_required_document_uploads(driver, docs_by_driver.get(str(driver["id"]), []), areas, global_reqs):
                 stats["claims_attempted"] += 1
-                stats["pushes_delivered"] += int(await _send(driver, VEHICLE_DOCUMENTS, local_date, now))
+                sent = await _send(driver, VEHICLE_DOCUMENTS, local_date, now)
+                if sent is None:
+                    scan_ok = False
+                else:
+                    stats["pushes_delivered"] += int(sent)
 
         if len(drivers) < PAGE_SIZE:
             break

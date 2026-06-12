@@ -22,6 +22,9 @@ import api from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 import { useTranslation } from '../../i18n';
 import type { FareBreakdownLine } from '../../store/walletStore';
+import { showToast } from '../../store/toastStore';
+import ConfirmSheet from '../../components/ConfirmSheet';
+import { useScheduledRideReminder } from '../../hooks/useScheduledRideReminder';
 
 interface RideHistory {
   id: string;
@@ -60,7 +63,13 @@ const PAGE_LIMIT = 20;
 export default function ActivityScreen() {
   const router = useRouter();
   const { token } = useAuthStore();
-  const { scheduledRides, fetchScheduledRides } = useRideStore();
+  const { scheduledRides, fetchScheduledRides, cancelScheduledRide } = useRideStore();
+  const { cancelReminder } = useScheduledRideReminder();
+  const [confirmSheet, setConfirmSheet] = useState<{
+    visible: boolean; title: string; message: string;
+    variant: 'info' | 'warning' | 'danger' | 'success';
+    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+  }>({ visible: false, title: '', message: '', variant: 'info' });
   const [rides, setRides] = useState<RideHistory[]>([]);
   const [vehicleTypes, setVehicleTypes] = useState<Record<string, string>>({});
   const [filter, setFilter] = useState<FilterType>('all');
@@ -195,6 +204,46 @@ export default function ActivityScreen() {
       return date.toLocaleDateString([], { month: 'short', day: 'numeric' }) +
         `, ${date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
     }
+  };
+
+  const formatScheduledDateTime = (dateStr: string) => {
+    const d = new Date(dateStr);
+    const date = d.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' });
+    const time = d.toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' });
+    return { date, time };
+  };
+
+  const getTimeUntil = (dateStr: string) => {
+    const diff = new Date(dateStr).getTime() - Date.now();
+    if (diff <= 0) return 'Dispatching...';
+    const hours = Math.floor(diff / (1000 * 60 * 60));
+    const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+    if (hours > 0) return `In ${hours}h ${mins}m`;
+    return `In ${mins} min`;
+  };
+
+  const handleCancelScheduled = (rideId: string) => {
+    setConfirmSheet({
+      visible: true,
+      title: 'Cancel Scheduled Ride',
+      message: 'Are you sure you want to cancel this scheduled ride?',
+      variant: 'warning',
+      buttons: [
+        {
+          text: 'Cancel Ride', style: 'destructive',
+          onPress: async () => {
+            try {
+              await cancelScheduledRide(rideId);
+              cancelReminder(rideId).catch(() => {});
+              showToast('Cancelled', 'Your scheduled ride has been cancelled.', 'success');
+            } catch (err: any) {
+              showToast('Error', err.message || 'Failed to cancel ride', 'danger');
+            }
+          },
+        },
+        { text: 'Keep', style: 'cancel' },
+      ],
+    });
   };
 
   const getStatusColor = (status: string): string => {
@@ -523,13 +572,19 @@ export default function ActivityScreen() {
       )}
 
       {activeTab === 'upcoming' && (
-        <ScrollView
+        <FlatList
+          data={scheduledRides as any[]}
+          keyExtractor={(item: any) => item.id}
           style={styles.content}
-          contentContainerStyle={styles.contentContainer}
+          contentContainerStyle={[styles.contentContainer, scheduledRides.length === 0 && { flex: 1 }]}
           showsVerticalScrollIndicator={false}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        >
-          {scheduledRides.length === 0 ? (
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+          ListHeaderComponent={scheduledRides.length > 0 ? (
+            <Text style={styles.scheduledListHeader}>
+              {scheduledRides.length} upcoming ride{scheduledRides.length !== 1 ? 's' : ''}
+            </Text>
+          ) : null}
+          ListEmptyComponent={
             <View style={styles.emptyState}>
               <View style={styles.emptyIconContainer}>
                 <Ionicons name="calendar-outline" size={48} color="#CCC" />
@@ -537,40 +592,60 @@ export default function ActivityScreen() {
               <Text style={styles.emptyTitle}>{t('activity.no_upcoming')}</Text>
               <Text style={styles.emptyText}>{t('activity.no_upcoming_subtitle')}</Text>
             </View>
-          ) : (
-            scheduledRides.map((ride: any) => (
-              <TouchableOpacity
-                key={ride.id}
-                style={styles.rideCard}
-                onPress={() => handleRidePress(ride)}
-                accessibilityRole="button"
-                accessibilityLabel={`Scheduled ride to ${ride.dropoff_address || 'unknown destination'}`}
-              >
-                <View style={[styles.rideIcon, { backgroundColor: '#EFF6FF' }]}>
-                  <Ionicons name="calendar" size={20} color="#3B82F6" />
+          }
+          renderItem={({ item }: { item: any }) => {
+            const { date, time } = formatScheduledDateTime(item.scheduled_time);
+            const timeUntil = getTimeUntil(item.scheduled_time);
+            const isImminent = new Date(item.scheduled_time).getTime() - Date.now() < 15 * 60 * 1000;
+            return (
+              <View style={styles.scheduledCard}>
+                <View style={styles.scheduledCardHeader}>
+                  <View style={[styles.timeBadge, isImminent && styles.timeBadgeImminent]}>
+                    <Ionicons name="time" size={14} color={isImminent ? '#FFF' : colors.primary} />
+                    <Text style={[styles.timeBadgeText, isImminent && { color: '#FFF' }]}>{timeUntil}</Text>
+                  </View>
+                  <Text style={styles.scheduledFare}>${parseFloat(String(item.total_fare || 0)).toFixed(2)}</Text>
                 </View>
-                <View style={styles.rideDetails}>
-                  <Text style={styles.rideDestination} numberOfLines={1}>
-                    {ride.dropoff_address || 'Unknown destination'}
-                  </Text>
-                  <Text style={styles.rideInfo}>
-                    {ride.scheduled_time ? formatDate(ride.scheduled_time) : 'Scheduled'} · {getVehicleType(ride.vehicle_type_id)}
-                  </Text>
+                <View style={styles.scheduleInfoRow}>
+                  <Ionicons name="calendar" size={16} color={colors.textDim} />
+                  <Text style={styles.scheduleInfoText}>{date} at {time}</Text>
                 </View>
-                <View style={styles.rideFareContainer}>
-                  <Text style={styles.rideFare} allowFontScaling={false}>
-                    ${parseFloat(String(ride.grand_total ?? ride.total_fare ?? 0)).toFixed(2)}
-                  </Text>
-                  <View style={styles.rideStatusContainer}>
-                    <View style={[styles.statusDot, { backgroundColor: '#3B82F6' }]} />
-                    <Text style={[styles.rideStatus, { color: '#3B82F6' }]} allowFontScaling={false}>{t('activity.scheduled')}</Text>
+                <View style={styles.scheduledRoute}>
+                  <View style={styles.routePoint}>
+                    <View style={[styles.routeDot, { backgroundColor: '#10B981' }]} />
+                    <Text style={styles.routeAddress} numberOfLines={1}>{item.pickup_address}</Text>
+                  </View>
+                  <View style={styles.routeConnector} />
+                  <View style={styles.routePoint}>
+                    <View style={[styles.routeDot, { backgroundColor: colors.primary }]} />
+                    <Text style={styles.routeAddress} numberOfLines={1}>{item.dropoff_address}</Text>
                   </View>
                 </View>
-              </TouchableOpacity>
-            ))
-          )}
-        </ScrollView>
+                <View style={styles.scheduledFooter}>
+                  <View style={styles.scheduledStats}>
+                    <Text style={styles.scheduledStatText}>{item.distance_km?.toFixed(1)} km</Text>
+                    <Text style={styles.scheduledStatDot}> · </Text>
+                    <Text style={styles.scheduledStatText}>{item.duration_minutes} min</Text>
+                  </View>
+                  <TouchableOpacity style={styles.cancelScheduledBtn} onPress={() => handleCancelScheduled(item.id)}>
+                    <Ionicons name="close-circle-outline" size={18} color="#EF4444" />
+                    <Text style={styles.cancelScheduledText}>Cancel</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            );
+          }}
+        />
       )}
+
+      <ConfirmSheet
+        visible={confirmSheet.visible}
+        title={confirmSheet.title}
+        message={confirmSheet.message}
+        variant={confirmSheet.variant}
+        buttons={confirmSheet.buttons}
+        onClose={() => setConfirmSheet(prev => ({ ...prev, visible: false }))}
+      />
     </SafeAreaView>
   );
 }
@@ -689,4 +764,37 @@ function createStyles(colors: ThemeColors, isCompactFilterLayout: boolean) { ret
     fontSize: 14, fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim,
     textAlign: 'center', lineHeight: 22,
   },
+  scheduledListHeader: {
+    fontSize: 14, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.textDim, marginBottom: 12,
+  },
+  scheduledCard: {
+    backgroundColor: colors.surface, borderRadius: 16, padding: 18, marginBottom: 12,
+    shadowColor: '#000', shadowOpacity: 0.04, shadowOffset: { width: 0, height: 2 }, shadowRadius: 8,
+    elevation: 2, borderWidth: 1, borderColor: colors.border,
+  },
+  scheduledCardHeader: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12,
+  },
+  timeBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: colors.primary + '15', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12,
+  },
+  timeBadgeImminent: { backgroundColor: '#F59E0B' },
+  timeBadgeText: { fontSize: 13, fontFamily: 'PlusJakartaSans_700Bold', color: colors.primary },
+  scheduledFare: { fontSize: 18, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text },
+  scheduleInfoRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 14 },
+  scheduleInfoText: { fontSize: 14, fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim },
+  scheduledRoute: { marginBottom: 14 },
+  routePoint: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  routeDot: { width: 10, height: 10, borderRadius: 5 },
+  routeAddress: { flex: 1, fontSize: 14, fontFamily: 'PlusJakartaSans_400Regular', color: colors.text },
+  routeConnector: {
+    width: 2, height: 16, backgroundColor: colors.border, marginLeft: 4, marginVertical: 2,
+  },
+  scheduledFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  scheduledStats: { flexDirection: 'row', alignItems: 'center' },
+  scheduledStatText: { fontSize: 13, fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim },
+  scheduledStatDot: { fontSize: 13, color: colors.border },
+  cancelScheduledBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 4 },
+  cancelScheduledText: { fontSize: 14, fontFamily: 'PlusJakartaSans_600SemiBold', color: '#EF4444' },
 }); }

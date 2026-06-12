@@ -660,7 +660,6 @@ function RootLayoutInner({
             <Stack.Screen name="manage-cards" />
             <Stack.Screen name="notifications" />
             <Stack.Screen name="saved-places" />
-            <Stack.Screen name="scheduled-rides" />
             <Stack.Screen name="promotions" />
             <Stack.Screen name="loyalty" />
             <Stack.Screen name="support" />

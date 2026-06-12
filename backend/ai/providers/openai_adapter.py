@@ -94,7 +94,10 @@ class OpenAIAdapter(BaseLLMAdapter):
         async with openai.AsyncOpenAI(**client_kwargs) as client:
             stream = await client.chat.completions.create(
                 model=self.model,
-                max_tokens=self.max_tokens,
+                # max_completion_tokens (not the deprecated max_tokens): newer
+                # OpenAI models (o1/o3/gpt-5 family) reject max_tokens with a 400
+                # "unsupported_parameter"; gpt-4o/4o-mini accept the new name too.
+                max_completion_tokens=self.max_tokens,
                 messages=_to_wire(system, messages),
                 tools=_tools_to_wire(tools) or None,
                 stream=True,

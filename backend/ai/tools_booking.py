@@ -1,4 +1,4 @@
-"""Booking-flow tools: place lookup, approximate quote, booking proposal.
+"""Booking-flow tools: place lookup, rider location, fare quote, booking proposal.
 
 Trust boundary (see plan §3.3): the model can only *propose* a booking.
 propose_ride_booking returns a ``_client_action`` payload that the app
@@ -11,9 +11,13 @@ These tools are chat-only (mcp_exposed=False) and rider-only. Coordinates
 flow through tool results because the flow needs them; they are ephemeral —
 never logged, never persisted (backend/ai/tools.py contract + migration 140).
 
-The conversational quote is an APPROXIMATION (same fare-config data the
-/fares endpoint serves, Decimal math, surge included) and is labelled as
-such; the binding number is on the card.
+get_fare_quote runs the SAME engine as POST /rides/estimate
+(compute_ride_estimates: geofence, live driver availability/ETA, surge,
+fees + taxes) and auto-applies the best eligible promo through the same
+helpers as /promo/available — so the chat quote, the booking card and the
+rider's receipt can never disagree. The quote also ships a ``fare_quote``
+client action so both the rider app and the admin AI console render it as
+a rich card instead of re-reading numbers from model prose.
 """
 
 import logging
@@ -21,6 +25,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, Optional
 
 import httpx
+from fastapi import HTTPException
 
 try:
     from .tools import ToolSpec, register
@@ -28,11 +33,11 @@ except ImportError:
     from ai.tools import ToolSpec, register
 
 try:
-    from ..geo_utils import calculate_distance
+    from .. import db_supabase
     from ..settings_loader import get_app_settings
     from ..utils.maps_budget import check_budget, record_call
 except ImportError:
-    from geo_utils import calculate_distance
+    import db_supabase
     from settings_loader import get_app_settings
     from utils.maps_budget import check_budget, record_call
 
@@ -193,6 +198,60 @@ async def _places_available() -> tuple:
     return api_key, None
 
 
+async def _rider_location_hint(user: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Rider's best-known location: the device location the app sent with
+    this chat turn, else their most recent ride's pickup. Coordinates are
+    ephemeral tool data — never logged, never persisted."""
+    loc = user.get("_client_location") or {}
+    if loc.get("lat") is not None and loc.get("lng") is not None:
+        return {"lat": float(loc["lat"]), "lng": float(loc["lng"]), "source": "device"}
+    try:
+        rows = await db_supabase.get_rows("rides", {"rider_id": user["id"]}, order="created_at", desc=True, limit=1)
+    except Exception:
+        logger.error("ai rider location hint lookup failed", exc_info=True)
+        return None
+    if rows and rows[0].get("pickup_lat") is not None and rows[0].get("pickup_lng") is not None:
+        return {
+            "lat": rows[0]["pickup_lat"],
+            "lng": rows[0]["pickup_lng"],
+            "source": "last_ride",
+            "address": rows[0].get("pickup_address"),
+        }
+    return None
+
+
+async def get_rider_location(user: Dict[str, Any]) -> Dict[str, Any]:
+    hint = await _rider_location_hint(user)
+    if not hint:
+        return {"error": "no known location for this rider — ask them for a pickup address"}
+
+    result: Dict[str, Any] = {"lat": hint["lat"], "lng": hint["lng"], "source": hint["source"]}
+    if hint.get("address"):
+        result["address"] = hint["address"]
+    elif hint["source"] == "device":
+        # Reverse geocode so the model has an address label for the booking
+        # card. Budget-gated like every other Maps call; coords still work
+        # without it.
+        api_key, error = await _places_available()
+        if not error:
+            try:
+                data = await _maps_get(
+                    _GEOCODE_URL,
+                    {"latlng": f"{hint['lat']},{hint['lng']}", "key": api_key, "language": "en"},
+                )
+                if data.get("status") == "OK" and data.get("results"):
+                    result["address"] = data["results"][0].get("formatted_address")
+                    await record_call("geocode")
+            except Exception:
+                logger.error("ai get_rider_location reverse geocode failed", exc_info=True)
+    result["note"] = (
+        "This is the rider's live device location."
+        if hint["source"] == "device"
+        else "This is the pickup of their most recent ride — confirm it's still where they are."
+    )
+    return result
+
+
 async def find_place(
     user: Dict[str, Any],
     query: str,
@@ -204,6 +263,16 @@ async def find_place(
     if error:
         return error
 
+    # No explicit bias from the model → centre the search on the rider's
+    # best-known location so "superstore" means THEIR superstore, not one
+    # three provinces away.
+    bias_source = None
+    if near_lat is None or near_lng is None:
+        hint = await _rider_location_hint(user)
+        if hint:
+            near_lat, near_lng = hint["lat"], hint["lng"]
+            bias_source = hint["source"]
+
     lookup = await _lookup_place_candidates(api_key=api_key, query=query, near_lat=near_lat, near_lng=near_lng)
     if lookup.get("error"):
         return {"error": lookup["error"]}
@@ -211,12 +280,46 @@ async def find_place(
     if not candidates:
         return {"candidates": [], "note": "No matching place found — ask the rider to rephrase or pick on the map."}
     if len(candidates) > 1:
-        return {
+        result = {
             "candidates": candidates,
             "_client_action": _suggestions_action(query, candidates, location_role),
             "note": "Multiple matches — ask the rider which one they mean.",
         }
-    return {"candidates": candidates}
+    else:
+        result = {"candidates": candidates}
+    if bias_source:
+        result["search_biased_by"] = bias_source
+    return result
+
+
+def _ride_portion(estimate: Dict[str, Any]) -> Decimal:
+    """base+dist+time — the only part promos discount (never fees/taxes)."""
+    return (
+        _money(estimate.get("base_fare", 0))
+        + _money(estimate.get("distance_fare", 0))
+        + _money(estimate.get("time_fare", 0))
+    )
+
+
+def _best_promo_for(promos: list, portion: Decimal, total: Decimal) -> Optional[Dict[str, Any]]:
+    """Pick the promo with the biggest savings for one vehicle quote, using
+    the same Decimal math as /promo/available (compute_promo_discount)."""
+    try:
+        from ..routes.promotions import compute_promo_discount
+    except ImportError:
+        from routes.promotions import compute_promo_discount
+
+    best_code, best_discount = None, Decimal("0")
+    for p in promos or []:
+        min_fare = Decimal(str(p.get("min_ride_fare") or 0))
+        if min_fare > 0 and portion < min_fare:
+            continue  # min-fare eligibility is per vehicle type
+        discount = min(compute_promo_discount(p, portion, total), total)
+        if discount > best_discount:
+            best_code, best_discount = p.get("code"), discount
+    if not best_code or best_discount <= 0:
+        return None
+    return {"code": best_code, "savings": str(_money(best_discount))}
 
 
 async def get_fare_quote(
@@ -226,54 +329,119 @@ async def get_fare_quote(
     dropoff_lat: float,
     dropoff_lng: float,
 ) -> Dict[str, Any]:
-    area = await _resolve_area(pickup_lat, pickup_lng)
-    if area is None:
+    try:
+        from ..routes.rides import RideEstimateRequest, compute_ride_estimates
+    except ImportError:
+        from routes.rides import RideEstimateRequest, compute_ride_estimates
+
+    try:
+        estimate_result = await compute_ride_estimates(
+            RideEstimateRequest(
+                pickup_lat=pickup_lat,
+                pickup_lng=pickup_lng,
+                dropoff_lat=dropoff_lat,
+                dropoff_lng=dropoff_lng,
+            ),
+            user["id"],
+            include_polyline=False,
+        )
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
         return {
-            "error": "pickup is outside Spinr's service areas",
+            "error": detail.get("message") or "this trip cannot be quoted",
             "hint": "use get_service_info to list operating cities",
         }
 
-    try:
-        from ..routes.fares import get_fares_for_location
-    except ImportError:
-        from routes.fares import get_fares_for_location
+    estimates = estimate_result.get("estimates") or []
+    if not estimates:
+        return {"error": "no vehicle options are configured for this pickup area"}
 
-    fares = await get_fares_for_location(pickup_lat, pickup_lng)
-    distance_km = calculate_distance(pickup_lat, pickup_lng, dropoff_lat, dropoff_lng)
-    # Same heuristic the /rides/estimate endpoint uses for duration.
-    duration_minutes = int(distance_km / 30 * 60) + 5
+    # Best eligible promo, fetched once through the same engine as
+    # /promo/available. A promo failure must not kill the quote — surface it
+    # in the result instead.
+    promos: list = []
+    promo_note = None
+    try:
+        from ..routes.promotions import list_available_promos
+    except ImportError:
+        from routes.promotions import list_available_promos
+    basis = min(
+        [e for e in estimates if e.get("available")] or estimates,
+        key=lambda e: Decimal(str(e.get("grand_total", 0))),
+    )
+    try:
+        promos = await list_available_promos(
+            user["id"],
+            ride_fare=float(Decimal(str(basis.get("grand_total", 0)))),
+            ride_portion=float(_ride_portion(basis)),
+            pickup_lat=pickup_lat,
+            pickup_lng=pickup_lng,
+        )
+    except Exception:
+        logger.error("ai get_fare_quote promo lookup failed", exc_info=True)
+        promo_note = "promo lookup failed — quote shown without promo savings"
 
     quotes = []
-    for f in fares or []:
-        vt = f.get("vehicle_type") or {}
-        surge = Decimal(str(f.get("surge_multiplier", 1.0)))
-        ride_fare = (
-            _money(f.get("base_fare", 0))
-            + _money(f.get("per_km_rate", 0)) * _money(distance_km)
-            + _money(f.get("per_minute_rate", 0)) * Decimal(duration_minutes)
-        )
-        ride_fare = max(ride_fare, _money(f.get("minimum_fare", 0)))
-        approx = _money(ride_fare * surge + _money(f.get("booking_fee", 0)))
-        quotes.append(
-            {
-                "vehicle_type_id": vt.get("id"),
-                "vehicle_type": vt.get("name"),
-                "capacity": vt.get("capacity"),
-                "approx_fare": str(approx),
-                "surge_multiplier": float(surge),
-            }
-        )
+    unavailable = []
+    for e in estimates:
+        vt = e.get("vehicle_type") or {}
+        if not e.get("available"):
+            if vt.get("name"):
+                unavailable.append(vt["name"])
+            continue
+        total = _money(e.get("grand_total", 0))
+        promo = _best_promo_for(promos, _ride_portion(e), total)
+        quote = {
+            "vehicle_type_id": vt.get("id"),
+            "vehicle_type": vt.get("name"),
+            "capacity": vt.get("capacity"),
+            "image_url": vt.get("image_url"),
+            "eta_minutes": e.get("eta_minutes"),
+            "drivers_nearby": e.get("driver_count"),
+            "surge_multiplier": e.get("surge_multiplier"),
+            "total": str(total),
+            "final_total": str(total - _money(promo["savings"])) if promo else str(total),
+        }
+        if promo:
+            quote["promo_code"] = promo["code"]
+            quote["promo_savings"] = promo["savings"]
+        quotes.append(quote)
 
-    return {
-        "service_area": area.get("name"),
-        "distance_km": round(distance_km, 1),
-        "duration_minutes": duration_minutes,
+    shared = {
+        "distance_km": estimates[0].get("distance_km"),
+        "duration_minutes": estimates[0].get("duration_minutes"),
+        "currency": "CAD",
+    }
+
+    if not quotes:
+        return {
+            **shared,
+            "quotes": [],
+            "no_drivers": True,
+            "note": (
+                "No drivers are available near this pickup right now — tell the rider "
+                "plainly and suggest trying again in a few minutes."
+            ),
+        }
+
+    recommended = min(quotes, key=lambda q: Decimal(q["final_total"]))
+    result = {
+        **shared,
         "quotes": quotes,
+        "recommended_vehicle_type_id": recommended["vehicle_type_id"],
+        "_client_action": {"type": "fare_quote", **shared, "quotes": quotes},
         "note": (
-            "Approximate, before taxes and area fees. Tell the rider the exact total "
-            "appears on the booking card before they confirm. Surge shown is live."
+            "Totals are exact (taxes and fees included) and the best eligible promo "
+            "is already applied per option. A quote card is now shown to the rider — "
+            "keep your reply to one or two short sentences (mention the savings if "
+            "any), then ask if they want to book or see other promo codes."
         ),
     }
+    if unavailable:
+        result["unavailable_vehicle_types"] = unavailable
+    if promo_note:
+        result["promo_note"] = promo_note
+    return result
 
 
 async def propose_ride_booking(
@@ -381,11 +549,28 @@ register(
 
 register(
     ToolSpec(
+        name="get_rider_location",
+        description=(
+            "Call this when the rider says 'from my location', 'near me', 'where I am', "
+            "or asks for a ride without giving a pickup. Returns their device location "
+            "(if shared with the app) or their most recent ride's pickup, with an "
+            "address when known. Confirm it with the rider before booking from it."
+        ),
+        input_schema={"type": "object", "properties": {}, "required": []},
+        handler=get_rider_location,
+        mcp_exposed=False,
+    )
+)
+
+register(
+    ToolSpec(
         name="get_fare_quote",
         description=(
-            "Call this once pickup and dropoff coordinates are known, to tell the rider "
-            "the approximate price per vehicle option (surge included). Always present it "
-            "as approximate — the exact total appears on the booking card."
+            "Call this once pickup and dropoff coordinates are known. Returns exact "
+            "totals per available vehicle option (taxes, fees and live surge included) "
+            "with the best eligible promo already applied, plus ETA and driver "
+            "availability — and shows the rider a quote card automatically. Quote "
+            "before proposing any booking."
         ),
         input_schema={
             "type": "object",

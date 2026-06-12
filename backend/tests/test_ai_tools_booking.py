@@ -38,6 +38,27 @@ GEOCODE_OK = {
     ],
 }
 
+PLACES_OK = {
+    "status": "OK",
+    "results": [
+        {
+            "name": "Walmart Supercentre",
+            "formatted_address": "4500 Gordon Rd, Regina, SK, Canada",
+            "geometry": {"location": {"lat": 50.4079, "lng": -104.6501}},
+        },
+        {
+            "name": "Walmart East",
+            "formatted_address": "2150 Prince of Wales Dr, Regina, SK, Canada",
+            "geometry": {"location": {"lat": 50.4497, "lng": -104.5345}},
+        },
+        {
+            "name": "Walmart Rochdale",
+            "formatted_address": "3939 Rochdale Blvd, Regina, SK, Canada",
+            "geometry": {"location": {"lat": 50.4966, "lng": -104.6401}},
+        },
+    ],
+}
+
 
 def _patch_area(area=AREA):
     return patch.object(tools_booking, "_resolve_area", AsyncMock(return_value=area))
@@ -55,9 +76,7 @@ def _patch_http(payload):
 
 
 def _patch_settings(key="gmaps-key"):
-    return patch.object(
-        tools_booking, "get_app_settings", AsyncMock(return_value={"google_maps_api_key": key})
-    )
+    return patch.object(tools_booking, "get_app_settings", AsyncMock(return_value={"google_maps_api_key": key}))
 
 
 def _patch_budget(within=True):
@@ -79,6 +98,26 @@ class TestFindPlace:
         cand = result["candidates"][0]
         assert cand["in_service_area"] is True
         assert cand["lat"] == 52.1708
+
+    @pytest.mark.anyio
+    async def test_vague_place_returns_clickable_nearby_suggestions(self):
+        with (
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(PLACES_OK),
+            _patch_area(),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool(
+                "find_place",
+                {"query": "walmart", "near_lat": 50.41, "near_lng": -104.65, "location_role": "dropoff"},
+                user=RIDER,
+            )
+        assert ok
+        assert len(result["candidates"]) == 3
+        assert result["_client_action"]["type"] == "location_suggestions"
+        assert result["_client_action"]["location_role"] == "dropoff"
+        assert result["_client_action"]["candidates"][0]["name"] == "Walmart Supercentre"
 
     @pytest.mark.anyio
     async def test_budget_exhausted_degrades_gracefully(self):
@@ -149,18 +188,44 @@ class TestProposal:
     @pytest.mark.anyio
     async def test_proposal_emits_client_action_and_no_writes(self):
         insert = AsyncMock()
+        args = dict(
+            self.ARGS,
+            promo_code="SAVE75",
+            scheduled_time="2026-06-12T20:00:00-06:00",
+            payment_method="wallet",
+        )
         with (
             _patch_area(),
             patch("backend.db_supabase.insert_one", insert, create=True),
         ):
-            result, ok = await execute_tool("propose_ride_booking", self.ARGS, user=RIDER)
+            result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
         assert ok
         action = result["_client_action"]
         assert action["type"] == "booking_proposal"
         assert action["proposal"]["pickup_address"] == "123 Main St"
         assert action["proposal"]["vehicle_type_id"] == "vt-1"
+        assert action["proposal"]["promo_code"] == "SAVE75"
+        assert action["proposal"]["scheduled_time"] == "2026-06-12T20:00:00-06:00"
+        assert action["proposal"]["payment_method"] == "wallet"
         assert "do not claim the ride is booked" in result["message"]
         insert.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_proposal_reresolves_pickup_address_when_coords_are_stale(self):
+        stale_then_fixed = AsyncMock(side_effect=[None, AREA, AREA])
+        with (
+            patch.object(tools_booking, "_resolve_area", stale_then_fixed),
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(GEOCODE_OK),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("propose_ride_booking", self.ARGS, user=RIDER)
+        assert ok
+        proposal = result["_client_action"]["proposal"]
+        assert proposal["pickup_lat"] == 52.1708
+        assert proposal["pickup_lng"] == -106.6997
+        assert proposal["pickup_address"] == "Saskatoon Airport (YXE), SK, Canada"
 
     @pytest.mark.anyio
     async def test_out_of_area_refused(self):

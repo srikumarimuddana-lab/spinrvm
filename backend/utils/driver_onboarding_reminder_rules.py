@@ -43,6 +43,20 @@ def local_date_for_send_window(
     return local_now.date().isoformat() if local_now.hour == LOCAL_SEND_HOUR else None
 
 
+def open_send_windows(timezones: set[str] | list[str], now: datetime) -> set[str]:
+    """Return '<tz>:<local-date>' keys for timezones currently inside the 08:00 send hour.
+
+    DEFAULT_TIMEZONE is always included so drivers without a service area
+    (whose timezone falls back to the default) still get a daily window.
+    """
+    keys: set[str] = set()
+    for tz_name in {t for t in timezones if t} | {DEFAULT_TIMEZONE}:
+        local_now = now.astimezone(_zone(tz_name))
+        if local_now.hour == LOCAL_SEND_HOUR:
+            keys.add(f"{tz_name}:{local_now.date().isoformat()}")
+    return keys
+
+
 def should_skip_driver(driver: dict[str, Any]) -> bool:
     return bool(
         not driver.get("id")

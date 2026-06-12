@@ -100,7 +100,7 @@ async def test_count_demand_counts_active_statuses_only():
     rides = [
         {"status": "searching"},
         {"status": "driver_assigned"},
-        {"status": "driver_en_route"},
+        {"status": "driver_accepted"},
         {"status": "completed"},  # not active
         {"status": "cancelled"},  # not active
     ]
@@ -308,9 +308,7 @@ async def test_recalculate_skips_sub_areas():
 @pytest.mark.asyncio
 async def test_recalculate_does_not_update_db_when_multiplier_unchanged():
     """If new multiplier equals current, no DB update_one call."""
-    areas = [
-        {"id": "a1", "surge_source": "auto", "surge_enabled": True, "surge_multiplier": 1.0, "is_active": True}
-    ]
+    areas = [{"id": "a1", "surge_source": "auto", "surge_enabled": True, "surge_multiplier": 1.0, "is_active": True}]
     db_mock = MagicMock()
     db_mock.get_rows = AsyncMock(return_value=areas)
     db_mock.update_one = AsyncMock()
@@ -333,9 +331,7 @@ async def test_recalculate_does_not_update_db_when_multiplier_unchanged():
 @pytest.mark.asyncio
 async def test_recalculate_updates_db_when_multiplier_changes():
     """When new multiplier differs from stored, update_one IS called."""
-    areas = [
-        {"id": "a1", "surge_source": "auto", "surge_enabled": True, "surge_multiplier": 1.0, "is_active": True}
-    ]
+    areas = [{"id": "a1", "surge_source": "auto", "surge_enabled": True, "surge_multiplier": 1.0, "is_active": True}]
     db_mock = MagicMock()
     db_mock.get_rows = AsyncMock(return_value=areas)
     db_mock.update_one = AsyncMock()
@@ -355,6 +351,26 @@ async def test_recalculate_updates_db_when_multiplier_changes():
     update_payload = db_mock.update_one.call_args[0][2]
     assert update_payload["surge_multiplier"] == 1.5
     assert update_payload["surge_active"] is True
+
+
+@pytest.mark.asyncio
+async def test_recalculate_filters_surge_enabled_in_db_query():
+    """The service_areas read filters surge_enabled=True in the DB.
+
+    Disabled areas must never be fetched at all — with the toggle off
+    everywhere, each 2-min tick costs one empty response instead of a
+    full table read (Supabase egress).
+    """
+    db_mock = MagicMock()
+    db_mock.get_rows = AsyncMock(return_value=[])
+
+    with patch("utils.surge_engine.db", db_mock):
+        from utils.surge_engine import recalculate_all_surges
+
+        results = await recalculate_all_surges()
+
+    assert results == []
+    db_mock.get_rows.assert_awaited_once_with("service_areas", {"is_active": True, "surge_enabled": True}, limit=100)
 
 
 @pytest.mark.asyncio
@@ -433,9 +449,7 @@ async def test_recalculate_service_areas_db_failure_returns_empty():
 @pytest.mark.asyncio
 async def test_recalculate_inserts_surge_pricing_history_row():
     """Every processed area gets a surge_pricing history row inserted."""
-    areas = [
-        {"id": "a1", "surge_source": "auto", "surge_enabled": True, "surge_multiplier": 1.0, "is_active": True}
-    ]
+    areas = [{"id": "a1", "surge_source": "auto", "surge_enabled": True, "surge_multiplier": 1.0, "is_active": True}]
     db_mock = MagicMock()
     db_mock.get_rows = AsyncMock(return_value=areas)
     db_mock.update_one = AsyncMock()
@@ -468,6 +482,7 @@ async def test_surge_recalculated_for_auto_source_area() -> None:
         "id": "area-auto-01",
         "name": "South End",
         "is_active": True,
+        "surge_enabled": True,
         "surge_source": "auto",
         "surge_multiplier": 1.0,
         "parent_service_area_id": None,

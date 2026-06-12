@@ -4,12 +4,23 @@ from unittest.mock import AsyncMock
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _reset_completed_windows(monkeypatch):
+    """Each test starts with a fresh once-per-window memo."""
+    from utils import driver_onboarding_reminders as reminders
+
+    monkeypatch.setattr(reminders, "_completed_windows", set())
+
+
 class FakeReminderDB:
     def __init__(self, *, duplicate_claims: bool = False, docs: list[dict] | None = None):
         self.duplicate_claims = duplicate_claims
         self.docs = docs or []
         self.claims: list[dict] = []
         self.updates: list[tuple[dict, dict]] = []
+        self.tables_read: list[str] = []
+        self.failing_tables: set[str] = set()
+        self.failing_claims = False
         self.driver = {
             "id": "driver-1",
             "user_id": "user-1",
@@ -23,6 +34,9 @@ class FakeReminderDB:
         }
 
     async def get_rows(self, table: str, filters: dict | None = None, **kwargs):
+        self.tables_read.append(table)
+        if table in self.failing_tables:
+            raise RuntimeError(f"simulated DB failure reading {table}")
         if table == "service_areas":
             return [
                 {
@@ -43,6 +57,8 @@ class FakeReminderDB:
 
     async def insert_one(self, table: str, doc: dict):
         assert table == "driver_onboarding_reminder_log"
+        if self.failing_claims:
+            raise RuntimeError("simulated claim insert outage")
         if self.duplicate_claims:
             from utils.driver_onboarding_reminders import DuplicateRecordError
 
@@ -98,3 +114,94 @@ async def test_duplicate_daily_claim_suppresses_duplicate_pushes(monkeypatch):
     assert fake_db.claims == []
     assert fake_db.updates == []
     send_push.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_outside_send_window_skips_drivers_scan(monkeypatch):
+    """Outside the 08:00 local hour, a tick reads only service_areas — the
+    drivers/documents scan (the egress-heavy part) must not run."""
+    from utils import driver_onboarding_reminders as reminders
+
+    fake_db = FakeReminderDB()
+    send_push = AsyncMock(return_value=True)
+    monkeypatch.setattr(reminders, "db", fake_db)
+    monkeypatch.setattr(reminders, "send_push_notification", send_push)
+
+    # 18:05 UTC is 12:05 in America/Regina — no window open.
+    stats = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 18, 5, tzinfo=timezone.utc))
+
+    assert stats == {"drivers_scanned": 0, "claims_attempted": 0, "pushes_delivered": 0}
+    assert fake_db.tables_read == ["service_areas"]
+    send_push.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_scan_runs_once_per_send_window(monkeypatch):
+    """A second tick inside the same 08:00 window skips the drivers scan
+    (in-process memo); the next day's window scans again."""
+    from utils import driver_onboarding_reminders as reminders
+
+    fake_db = FakeReminderDB()
+    send_push = AsyncMock(return_value=True)
+    monkeypatch.setattr(reminders, "db", fake_db)
+    monkeypatch.setattr(reminders, "send_push_notification", send_push)
+
+    first = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 5, tzinfo=timezone.utc))
+    assert first["drivers_scanned"] == 1
+
+    fake_db.tables_read.clear()
+    second = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 20, tzinfo=timezone.utc))
+    assert second == {"drivers_scanned": 0, "claims_attempted": 0, "pushes_delivered": 0}
+    assert fake_db.tables_read == ["service_areas"]
+
+    next_day = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 10, 14, 5, tzinfo=timezone.utc))
+    assert next_day["drivers_scanned"] == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_scan_does_not_complete_window(monkeypatch):
+    """A DB failure mid-scan must leave the send window incomplete so the
+    next tick in the same hour retries — not silently skip the day."""
+    from utils import driver_onboarding_reminders as reminders
+
+    fake_db = FakeReminderDB()
+    send_push = AsyncMock(return_value=True)
+    monkeypatch.setattr(reminders, "db", fake_db)
+    monkeypatch.setattr(reminders, "send_push_notification", send_push)
+
+    # First tick: the drivers read fails inside the 08:00 window.
+    fake_db.failing_tables = {"drivers"}
+    failed = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 5, tzinfo=timezone.utc))
+    assert failed == {"drivers_scanned": 0, "claims_attempted": 0, "pushes_delivered": 0}
+    assert reminders._completed_windows == set()
+    send_push.assert_not_awaited()
+
+    # Next tick, DB recovered: the scan runs and the reminders go out.
+    fake_db.failing_tables = set()
+    retried = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 20, tzinfo=timezone.utc))
+    assert retried["drivers_scanned"] == 1
+    assert retried["pushes_delivered"] == 2
+
+
+@pytest.mark.asyncio
+async def test_failed_claim_insert_does_not_complete_window(monkeypatch):
+    """A claim-log insert outage leaves no dedupe row, so the window must
+    stay incomplete and the next tick must retry the sends (only duplicate
+    claims are a definitive 'already sent today')."""
+    from utils import driver_onboarding_reminders as reminders
+
+    fake_db = FakeReminderDB()
+    send_push = AsyncMock(return_value=True)
+    monkeypatch.setattr(reminders, "db", fake_db)
+    monkeypatch.setattr(reminders, "send_push_notification", send_push)
+
+    fake_db.failing_claims = True
+    failed = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 5, tzinfo=timezone.utc))
+    assert failed["pushes_delivered"] == 0
+    assert reminders._completed_windows == set()
+    send_push.assert_not_awaited()
+
+    fake_db.failing_claims = False
+    retried = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 20, tzinfo=timezone.utc))
+    assert retried["pushes_delivered"] == 2
+    assert reminders._completed_windows != set()

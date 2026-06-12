@@ -148,6 +148,9 @@ class SettingsUpdateRequest(BaseModel):
     max_simultaneous_offers: Optional[int] = Field(default=None, ge=1, le=10)
     ride_offer_timeout_seconds: Optional[int] = Field(default=None, ge=5, le=60)
     use_eta_ranking: Optional[bool] = None
+    # Hours of unreachability before the stale-intent reconciler flips a
+    # driver's is_online=false (migration 146). Bounds mirror the DB CHECK.
+    stale_intent_offline_hours: Optional[float] = Field(default=None, ge=1, le=48)
     # AI assistant (rider AI mode, backend/ai/) — provider/model swap at
     # runtime, keys masked like the Stripe/Twilio credentials above.
     ai_assistant_enabled: Optional[bool] = None

@@ -44,6 +44,29 @@ export function displayFare(estimate: EstimateLike): string {
   return estimate.grand_total ?? estimate.total_fare;
 }
 
+export type ProposalPaymentMethod = 'card' | 'wallet';
+
+export function paymentMethodForProposal(proposal: BookingProposal): ProposalPaymentMethod {
+  return proposal.payment_method === 'wallet' ? 'wallet' : 'card';
+}
+
+export function scheduledDateForProposal(proposal: BookingProposal): Date | null {
+  if (!proposal.scheduled_time) return null;
+  const date = new Date(proposal.scheduled_time);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+export function promoForProposal(proposal: BookingProposal) {
+  const code = proposal.promo_code?.trim();
+  if (!code) return null;
+  return {
+    id: `ai-${code}`,
+    code,
+    discount_type: 'unknown',
+    discount_value: 0,
+  };
+}
+
 export interface BookingErrorDescriptor {
   message: string;
   /** Deep link the card offers when the standard flow must take over. */

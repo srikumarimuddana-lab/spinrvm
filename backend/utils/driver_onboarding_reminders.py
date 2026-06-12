@@ -164,9 +164,10 @@ async def check_driver_onboarding_reminders(now_utc: datetime | None = None) -> 
     # Daily gate: the drivers + documents scan only runs while some known
     # timezone (area timezones + default) is inside its 08:00 send hour, and
     # at most once per window per process. Outside the window each tick costs
-    # only the small service_areas read above. Drivers with a personal
-    # timezone matching no service area are covered by the default-timezone
-    # window rather than their own.
+    # only the small service_areas read above. The drivers table has no
+    # timezone column (the driver.timezone fallback in driver_timezone() is
+    # defensive only), so drivers without a service area always resolve to
+    # DEFAULT_TIMEZONE — whose window is always gated.
     windows = open_send_windows({(a.get("timezone") or "") for a in areas.values()}, now)
     if not windows - _completed_windows:
         return stats

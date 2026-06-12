@@ -14,10 +14,15 @@
 -- the query pattern without the index, violating the index-with-query-pattern
 -- migration rule.
 --
+-- CONCURRENTLY because drivers is a hot table (every location batch and
+-- online/offline toggle writes to it); a plain CREATE INDEX would hold a
+-- write-blocking lock for the duration of the build. The migration runner
+-- detects CONCURRENTLY and switches to autocommit (scripts/migrate.py).
+--
 -- Rollback:
---   DROP INDEX IF EXISTS idx_drivers_online_updated_at;
+--   DROP INDEX CONCURRENTLY IF EXISTS idx_drivers_online_updated_at;
 
-CREATE INDEX IF NOT EXISTS idx_drivers_online_updated_at
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_drivers_online_updated_at
     ON public.drivers (updated_at)
     WHERE is_online = true;
 

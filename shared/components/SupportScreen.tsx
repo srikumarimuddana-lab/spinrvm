@@ -58,18 +58,15 @@ const WELCOME_MESSAGES: Record<Role, string> = {
 // ── AI assistant (server-side) ───────────────────────────────────────────────
 // All AI inference happens behind the authenticated backend (/ai/chat) —
 // prompts, tools and provider keys live server-side. No API key ships in the
-// app bundle. The hosting app's role decides the rider/driver tool set
-// (dual-role accounts would otherwise get the wrong assistant).
+// app bundle. The backend picks the rider/driver tool set from the user row.
 async function askAssistant(
   message: string,
   conversationId: string | null,
-  audience: Role,
 ): Promise<{ reply: string; conversationId: string | null }> {
   const res = await api.post<{ reply?: string; conversation_id?: string | null }>('/ai/chat', {
     message,
     conversation_id: conversationId,
     stream: false,
-    audience,
   });
   return {
     reply:
@@ -215,7 +212,7 @@ export default function SupportScreen({ role, initialTab = 'faq' }: Props) {
     setTimeout(() => chatListRef.current?.scrollToEnd({ animated: true }), 100);
 
     try {
-      const { reply, conversationId } = await askAssistant(text, conversationIdRef.current, role);
+      const { reply, conversationId } = await askAssistant(text, conversationIdRef.current);
       conversationIdRef.current = conversationId;
       setChatMessages((prev) => [
         ...prev,

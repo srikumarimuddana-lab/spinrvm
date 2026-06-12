@@ -87,19 +87,36 @@ class TestChatStreaming:
             rider_client.post("/api/v1/ai/chat", json={"message": "payout question"})
         assert gen.kwargs["audience"] == "driver"
 
-    def test_client_declared_audience_wins_over_user_row(self, rider_client):
-        # Dual-role user in the rider app: the surface declares itself rider
-        # and must get the rider tool set despite is_driver=True.
+    def test_explicit_rider_audience_wins_for_dual_role_user(self, rider_client):
+        # The rider app's main-screen assistant must get rider tools even when
+        # the account is also a driver (dual-role).
         from backend.server import app
         from dependencies import get_current_user
 
         app.dependency_overrides[get_current_user] = lambda: {"id": "d-1", "is_driver": True}
         gen = _frames_gen(HAPPY_FRAMES)
         with patch("backend.routes.ai.run_chat_turn", gen):
-            rider_client.post("/api/v1/ai/chat", json={"message": "where is my driver?", "audience": "rider"})
+            rider_client.post("/api/v1/ai/chat", json={"message": "book me a ride", "audience": "rider"})
         assert gen.kwargs["audience"] == "rider"
 
-    def test_audience_rejects_unknown_values(self, rider_client):
+    def test_driver_audience_rejected_for_non_driver(self, rider_client):
+        gen = _frames_gen(HAPPY_FRAMES)
+        with patch("backend.routes.ai.run_chat_turn", gen):
+            resp = rider_client.post("/api/v1/ai/chat", json={"message": "payouts?", "audience": "driver"})
+        assert resp.status_code == 403
+        assert not hasattr(gen, "kwargs")
+
+    def test_explicit_driver_audience_allowed_for_driver(self, rider_client):
+        from backend.server import app
+        from dependencies import get_current_user
+
+        app.dependency_overrides[get_current_user] = lambda: {"id": "d-1", "is_driver": True}
+        gen = _frames_gen(HAPPY_FRAMES)
+        with patch("backend.routes.ai.run_chat_turn", gen):
+            rider_client.post("/api/v1/ai/chat", json={"message": "payouts?", "audience": "driver"})
+        assert gen.kwargs["audience"] == "driver"
+
+    def test_invalid_audience_rejected(self, rider_client):
         resp = rider_client.post("/api/v1/ai/chat", json={"message": "hi", "audience": "admin"})
         assert resp.status_code == 422
 

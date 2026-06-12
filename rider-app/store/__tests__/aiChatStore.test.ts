@@ -79,6 +79,12 @@ describe('sendMessage', () => {
     expect(mockStream.mock.calls[0][0].conversationId).toBe('conv-9');
   });
 
+  it('always requests the rider persona so dual-role accounts keep booking tools', async () => {
+    scriptStream([]);
+    await useAiChatStore.getState().sendMessage('book me a ride');
+    expect(mockStream.mock.calls[0][0].audience).toBe('rider');
+  });
+
   it('tracks tool status while a tool runs and clears it on tokens', async () => {
     const seen: (string | null)[] = [];
     mockStream.mockImplementation(async ({ onEvent }) => {

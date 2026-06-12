@@ -26,10 +26,27 @@ export interface BookingProposal {
   dropoff_address: string;
   vehicle_type_id?: string;
   promo_code?: string;
+  scheduled_time?: string;
+  payment_method?: 'card' | 'wallet';
+}
+
+export interface LocationSuggestionCandidate {
+  name?: string | null;
+  address?: string | null;
+  lat: number;
+  lng: number;
+  in_service_area?: boolean;
+  service_area?: string | null;
 }
 
 export type AiAction =
   | { type: 'booking_proposal'; proposal: BookingProposal }
+  | {
+      type: 'location_suggestions';
+      query: string;
+      location_role?: 'pickup' | 'dropoff' | null;
+      candidates: LocationSuggestionCandidate[];
+    }
   | { type: 'open_support'; category: string; link: string; message?: string };
 
 export type AiSseEvent =
@@ -52,7 +69,7 @@ export type AiSseEvent =
 export interface AiChatMessage {
   id: string;
   role: 'user' | 'assistant';
-  kind: 'text' | 'booking_proposal' | 'support_action' | 'ride_status';
+  kind: 'text' | 'booking_proposal' | 'location_suggestions' | 'support_action' | 'ride_status';
   content: string;
   action?: AiAction;
   createdAt: number;

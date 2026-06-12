@@ -5,7 +5,14 @@
  * createRide failures map to actionable copy with deep links (active ride,
  * unpaid ride, missing details, generic).
  */
-import { displayFare, mapBookingError, pickEstimate } from '../bookingProposal';
+import {
+  displayFare,
+  mapBookingError,
+  paymentMethodForProposal,
+  pickEstimate,
+  promoForProposal,
+  scheduledDateForProposal,
+} from '../bookingProposal';
 import type { BookingProposal } from '@shared/types/ai';
 
 const PROPOSAL: BookingProposal = {
@@ -54,6 +61,28 @@ describe('displayFare', () => {
   });
   it('falls back to total_fare for legacy estimates', () => {
     expect(displayFare(est('vt-x', { grand_total: undefined }))).toBe('18.50');
+  });
+});
+
+describe('proposal preferences', () => {
+  it('defaults to card unless the AI proposal explicitly says wallet', () => {
+    expect(paymentMethodForProposal(PROPOSAL)).toBe('card');
+    expect(paymentMethodForProposal({ ...PROPOSAL, payment_method: 'wallet' })).toBe('wallet');
+  });
+
+  it('parses valid scheduled times and ignores invalid ones', () => {
+    const date = scheduledDateForProposal({ ...PROPOSAL, scheduled_time: '2026-06-12T20:00:00-06:00' });
+    expect(date?.toISOString()).toBe('2026-06-13T02:00:00.000Z');
+    expect(scheduledDateForProposal({ ...PROPOSAL, scheduled_time: 'not a date' })).toBeNull();
+  });
+
+  it('creates a lightweight promo object for rideStore.createRide', () => {
+    expect(promoForProposal(PROPOSAL)).toBeNull();
+    expect(promoForProposal({ ...PROPOSAL, promo_code: ' SAVE75 ' })).toMatchObject({
+      code: 'SAVE75',
+      discount_type: 'unknown',
+      discount_value: 0,
+    });
   });
 });
 

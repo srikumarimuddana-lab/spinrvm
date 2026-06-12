@@ -19,6 +19,7 @@ class FakeReminderDB:
         self.claims: list[dict] = []
         self.updates: list[tuple[dict, dict]] = []
         self.tables_read: list[str] = []
+        self.failing_tables: set[str] = set()
         self.driver = {
             "id": "driver-1",
             "user_id": "user-1",
@@ -33,6 +34,8 @@ class FakeReminderDB:
 
     async def get_rows(self, table: str, filters: dict | None = None, **kwargs):
         self.tables_read.append(table)
+        if table in self.failing_tables:
+            raise RuntimeError(f"simulated DB failure reading {table}")
         if table == "service_areas":
             return [
                 {
@@ -150,3 +153,28 @@ async def test_scan_runs_once_per_send_window(monkeypatch):
 
     next_day = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 10, 14, 5, tzinfo=timezone.utc))
     assert next_day["drivers_scanned"] == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_scan_does_not_complete_window(monkeypatch):
+    """A DB failure mid-scan must leave the send window incomplete so the
+    next tick in the same hour retries — not silently skip the day."""
+    from utils import driver_onboarding_reminders as reminders
+
+    fake_db = FakeReminderDB()
+    send_push = AsyncMock(return_value=True)
+    monkeypatch.setattr(reminders, "db", fake_db)
+    monkeypatch.setattr(reminders, "send_push_notification", send_push)
+
+    # First tick: the drivers read fails inside the 08:00 window.
+    fake_db.failing_tables = {"drivers"}
+    failed = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 5, tzinfo=timezone.utc))
+    assert failed == {"drivers_scanned": 0, "claims_attempted": 0, "pushes_delivered": 0}
+    assert reminders._completed_windows == set()
+    send_push.assert_not_awaited()
+
+    # Next tick, DB recovered: the scan runs and the reminders go out.
+    fake_db.failing_tables = set()
+    retried = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 20, tzinfo=timezone.utc))
+    assert retried["drivers_scanned"] == 1
+    assert retried["pushes_delivered"] == 2

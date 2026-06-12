@@ -41,13 +41,19 @@ const TOOL_STATUS: Record<string, string> = {
 let nextId = 0;
 const newId = () => `local-${Date.now()}-${nextId++}`;
 
+/** Reject cached fixes older than this — a stale position would send "my
+ * location" pickups to the wrong area; the backend then falls back to the
+ * rider's last ride pickup instead. */
+const LOCATION_MAX_AGE_MS = 5 * 60 * 1000;
+
 /** Last-known device position, only when permission is already granted —
- * the chat never triggers a permission prompt. Null on any failure. */
+ * the chat never triggers a permission prompt. Null on any failure or when
+ * the only available fix is older than LOCATION_MAX_AGE_MS. */
 async function deviceLocation(): Promise<{ lat: number; lng: number } | null> {
   try {
     const { granted } = await Location.getForegroundPermissionsAsync();
     if (!granted) return null;
-    const pos = await Location.getLastKnownPositionAsync();
+    const pos = await Location.getLastKnownPositionAsync({ maxAge: LOCATION_MAX_AGE_MS });
     if (!pos) return null;
     return { lat: pos.coords.latitude, lng: pos.coords.longitude };
   } catch {

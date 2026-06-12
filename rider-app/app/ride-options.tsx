@@ -13,11 +13,13 @@ import {
   Modal,
   Animated,
   TextInput,
+  InteractionManager,
 } from 'react-native';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import CustomToggle from '../components/CustomToggle';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Circle, Polyline, Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
@@ -126,6 +128,21 @@ function RideOptionsScreenContent() {
   const mapRef = useRef<MapView>(null);
   const sheetRef = useRef<BottomSheet>(null);
   const snapPoints = useMemo(() => ['40%', '68%'], []);
+
+  // @gorhom/bottom-sheet computes its position against containerHeight during
+  // mount. When the screen opens inside a navigation transition the container
+  // hasn't reported its real height yet, so the sheet renders off-screen.
+  // InteractionManager.runAfterInteractions fires after ALL pending animations
+  // (including the navigation slide) are done — at that point containerHeight
+  // is correct and snapToIndex reliably positions the sheet.
+  useFocusEffect(
+    useCallback(() => {
+      const task = InteractionManager.runAfterInteractions(() => {
+        sheetRef.current?.snapToIndex(0);
+      });
+      return () => task.cancel();
+    }, [])
+  );
   const fareChevronAnim = useRef(new Animated.Value(0)).current;
   const { scheduleReminder } = useScheduledRideReminder();
 

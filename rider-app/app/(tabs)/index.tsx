@@ -9,6 +9,7 @@ import {
   Image,
   Linking,
   AppState,
+  InteractionManager,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -63,8 +64,11 @@ export default function HomeScreen() {
   const handleContainerLayout = useCallback((e: { nativeEvent: { layout: { height: number } } }) => {
     if (didInitSheet.current || e.nativeEvent.layout.height <= 0) return;
     didInitSheet.current = true;
-    // Defer one frame so the sheet's own internal measurement has settled.
-    requestAnimationFrame(() => bottomSheetRef.current?.snapToIndex(0));
+    // Wait for all animations (including navigation transition) to finish before
+    // snapping — requestAnimationFrame fires too early (~16 ms) while the nav
+    // transition is still running (~300 ms), leaving Reanimated with a zero
+    // containerHeight and the sheet rendered off-screen.
+    InteractionManager.runAfterInteractions(() => bottomSheetRef.current?.snapToIndex(0));
   }, []);
   const lastFetchedAt = useRef<number>(0);
   const snapPoints = useMemo(() => ['28%', '45%'], []);

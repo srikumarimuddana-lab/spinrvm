@@ -10,6 +10,7 @@ import {
   mapBookingError,
   paymentMethodForProposal,
   pickEstimate,
+  postBookingRoute,
   promoForProposal,
   scheduledDateForProposal,
 } from '../bookingProposal';
@@ -83,6 +84,23 @@ describe('proposal preferences', () => {
       discount_type: 'unknown',
       discount_value: 0,
     });
+  });
+});
+
+describe('postBookingRoute', () => {
+  it('immediate ride hands off to the live tracking screen', () => {
+    expect(postBookingRoute('ride-1', null)).toEqual({
+      pathname: '/driver-arriving',
+      params: { rideId: 'ride-1' },
+    });
+  });
+
+  it('scheduled ride stays on the chat (no active ride to track)', () => {
+    expect(postBookingRoute('ride-1', new Date('2026-06-13T02:00:00Z'))).toBeNull();
+  });
+
+  it('never navigates without a ride id', () => {
+    expect(postBookingRoute(undefined, null)).toBeNull();
   });
 });
 

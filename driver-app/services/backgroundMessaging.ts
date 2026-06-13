@@ -172,6 +172,10 @@ export function registerBackgroundMessageHandlers(): void {
       if (!parsed || !parsed.ride_id) return;
       try {
         if (parsed.action === 'decline') {
+          // The driver declined — drop the stashed offer payload so the
+          // dashboard can't re-hydrate this (now declined) offer panel on the
+          // next open before the offer's original expiry.
+          await _clearPendingOffer();
           const delivered = await _declineHeadless(parsed.ride_id);
           if (!delivered) await _stashAction(parsed.action, parsed.ride_id);
         } else {
@@ -196,11 +200,22 @@ async function _stashAction(action: string, rideId: string): Promise<void> {
   );
 }
 
+async function _clearPendingOffer(): Promise<void> {
+  try {
+    const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+    await AsyncStorage.removeItem(PENDING_OFFER_KEY);
+  } catch (e) {
+    console.warn('[Notifee] clear pending offer failed:', e);
+  }
+}
+
 // Execute a ride-offer decline directly against the backend from the headless
-// background context. Returns true if the request reached the backend (the
-// decline is delivered, or the ride was already reassigned), false only when
-// we couldn't reach it (no token / network error) so the caller can stash for
-// retry. Mirrors the headless auth + fetch pattern in utils/backgroundLocation.
+// background context. Returns true only when the decline is settled — a 2xx,
+// or a terminal "offer already gone" status (404/409/410) where retrying is
+// pointless. Returns false for token-rejection (401/403), transient/5xx, or
+// network errors so the caller stashes the decline to retry with fresh auth on
+// the next app open. Mirrors the headless auth + fetch pattern in
+// utils/backgroundLocation.
 async function _declineHeadless(rideId: string): Promise<boolean> {
   if (!API_URL) return false;
   let token: string | null = null;
@@ -211,14 +226,20 @@ async function _declineHeadless(rideId: string): Promise<boolean> {
   }
   if (!token) return false;
   try {
-    await fetch(`${API_URL}/api/v1/drivers/rides/${rideId}/decline`, {
+    const resp = await fetch(`${API_URL}/api/v1/drivers/rides/${rideId}/decline`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
       },
     });
-    return true;
+    if (resp.ok) return true;
+    // Offer already reassigned/expired/gone — terminal, don't bother retrying.
+    if (resp.status === 404 || resp.status === 409 || resp.status === 410) return true;
+    // 401/403 (token rejected) or 5xx/429 (transient) — undelivered; stash so
+    // the dashboard retries with a fresh token on next open.
+    console.warn(`[Notifee] headless decline returned ${resp.status}; will retry on open`);
+    return false;
   } catch (e) {
     console.warn('[Notifee] headless decline network error:', e);
     return false;

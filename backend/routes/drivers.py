@@ -5362,9 +5362,15 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
     stripe_session_id = None
     payment_status = "pending"
 
+    # Dual-import (package vs top-level run modes) — must be OUTSIDE the broad
+    # Stripe try below, else an ImportError in top-level mode is swallowed as a
+    # 502 before we can reach the no-Stripe/free-plan activation path.
     try:
         from ..settings_loader import get_app_settings
+    except ImportError:
+        from settings_loader import get_app_settings
 
+    try:
         _settings = await get_app_settings()
         _stripe_secret = _settings.get("stripe_secret_key", "")
         _price_id = plan.get("stripe_price_id")
@@ -5452,6 +5458,28 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
             status_code=502,
             detail="Payment service unavailable. Please try again later.",
         ) from _stripe_err
+
+    # Supersede any older pending checkout rows for this driver before
+    # inserting the new one. Without this, a double-tap / retry / plan-change
+    # leaves multiple valid Checkout URLs, and a stale session completing late
+    # could activate over a newer choice (_activate_subscription only acts on
+    # rows still in "pending", so superseding neutralises the old ones).
+    if checkout_url:
+        stale_pending = (
+            await db_supabase.get_rows(
+                "driver_subscriptions",
+                {"driver_id": driver["id"], "status": "pending"},
+                columns="id",
+                limit=20,
+            )
+            or []
+        )
+        for row in stale_pending:
+            await db_supabase.update_one(
+                "driver_subscriptions",
+                {"id": row["id"]},
+                {"status": "superseded"},
+            )
 
     # Create the subscription row (pending payment if Checkout, or paid in dev mode)
     subscription = {
@@ -5576,8 +5604,12 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
     (whichever runs first). Idempotent — skips if already active.
     """
     sub = await db.find_one("driver_subscriptions", {"id": subscription_id})
-    if not sub or sub.get("status") == "active":
-        return  # already done
+    # Only a still-pending checkout row activates. A row that is already
+    # active (idempotent replay), cancelled, or superseded by a newer checkout
+    # is terminal — never (re)activate it, so a stale session completing late
+    # can't replace the driver's current plan.
+    if not sub or sub.get("status") != "pending":
+        return
 
     driver_id = sub.get("driver_id")
 

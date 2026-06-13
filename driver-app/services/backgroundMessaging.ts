@@ -141,9 +141,14 @@ export function registerBackgroundMessageHandlers(): void {
     }
 
     // 2. Surface the Uber-style heads-up + full-screen-intent notification
-    //    via Notifee. This is what the driver actually sees on the lock
-    //    screen, with Accept/Decline buttons.
-    if (displayRideOfferNotification) {
+    //    via Notifee — ANDROID ONLY. Android dispatch pushes are data-only
+    //    (backend sends notification=None), so nothing renders unless we do.
+    //    iOS dispatch instead rides on a visible APNs alert (backend sets
+    //    aps.alert + sound=ride_offer.caf + category=ride-offer, with
+    //    content_available=True which also wakes this handler) — so the OS
+    //    already shows the offer card with Accept/Decline. Rendering Notifee
+    //    here on iOS would produce a duplicate notification for the same ride.
+    if (Platform.OS === 'android' && displayRideOfferNotification) {
       try {
         const offer = offerDisplayDataFromFcm(data);
         if (offer) await displayRideOfferNotification(offer);

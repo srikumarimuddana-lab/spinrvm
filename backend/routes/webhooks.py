@@ -34,6 +34,11 @@ _STRIPE_HANDLED_EVENTS = frozenset(
         "charge.refunded",
         "charge.dispute.created",
         "charge.dispute.closed",
+        # Recurring Spinr Pass (mode="subscription" plans): renewal succeeded,
+        # renewal failed (dunning), and status changes (past_due → canceled).
+        "invoice.paid",
+        "invoice.payment_failed",
+        "customer.subscription.updated",
         "customer.subscription.deleted",
         # Connect Express KYC mirror — fired whenever the driver progresses
         # through Stripe's hosted onboarding (uploads ID, accepts ToS,
@@ -51,6 +56,26 @@ _STRIPE_HANDLED_EVENTS = frozenset(
 )
 # Public alias exported for tests
 ALLOWED_STRIPE_EVENTS = _STRIPE_HANDLED_EVENTS
+
+
+def _invoice_period_end_iso(invoice: dict) -> str | None:
+    """Extract the billing-period end (ISO UTC) from a Stripe Invoice.
+
+    Stripe's invoice line carries the authoritative period end for the cycle
+    just paid. Returns None if the structure is missing so the caller can fall
+    back to plan duration. Defensive on every nested path — Stripe trims
+    fields and StripeObjects flatten to plain dicts via to_dict_recursive.
+    """
+    try:
+        lines = (invoice.get("lines") or {}).get("data") or []
+        if lines:
+            period = lines[0].get("period") or {}
+            end = period.get("end")
+            if end:
+                return datetime.fromtimestamp(int(end), tz=timezone.utc).isoformat()
+    except Exception:
+        pass
+    return None
 
 
 @api_router.post("/stripe")
@@ -631,6 +656,149 @@ async def stripe_webhook(request: Request):
         except ImportError:
             from services.stripe_kyc_sync import apply_account_update
         await apply_account_update(data_object, event_id=event_id)
+
+    elif event_type == "invoice.paid":
+        # Recurring Spinr Pass renewal succeeded (also fires for the first
+        # invoice of a new subscription). Extend the driver's row to the
+        # invoice's period end — idempotent for both subscription_create and
+        # subscription_cycle.
+        invoice = data_object
+        stripe_sub_id = invoice.get("subscription")
+        if not stripe_sub_id:
+            logger.info(
+                "invoice.paid without subscription id — skipping",
+                extra={"domain": "drivers", "event_id": event_id},
+            )
+        else:
+            row = await db_supabase.find_one("driver_subscriptions", {"stripe_subscription_id": stripe_sub_id})
+            if not row:
+                logger.warning(
+                    "invoice.paid: no subscription row for stripe_sub %s",
+                    stripe_sub_id,
+                    extra={"domain": "drivers", "event_id": event_id},
+                )
+            else:
+                new_expires = _invoice_period_end_iso(invoice)
+                if not new_expires:
+                    duration_days = 30
+                    if row.get("plan_id"):
+                        plan = await db_supabase.find_one("subscription_plans", {"id": row["plan_id"]})
+                        if plan and plan.get("duration_days"):
+                            duration_days = plan["duration_days"]
+                    new_expires = (datetime.now(timezone.utc) + timedelta(days=duration_days)).isoformat()
+
+                await db_supabase.update_one(
+                    "driver_subscriptions",
+                    {"id": row["id"]},
+                    {
+                        "status": "active",
+                        "payment_status": "paid",
+                        "expires_at": new_expires,
+                        "expiry_warned": False,
+                    },
+                )
+                logger.info(
+                    "Spinr Pass renewed: row=%s stripe_sub=%s until=%s",
+                    row["id"],
+                    stripe_sub_id,
+                    new_expires,
+                    extra={"domain": "drivers", "event_id": event_id},
+                )
+                # Only notify on actual renewal cycles — the initial invoice's
+                # activation push already went out from the checkout handler.
+                if invoice.get("billing_reason") == "subscription_cycle":
+                    driver_row = await db_supabase.find_one("drivers", {"id": row.get("driver_id")})
+                    if driver_row and driver_row.get("user_id"):
+                        try:
+                            await send_push_notification(
+                                driver_row["user_id"],
+                                "Spinr Pass renewed",
+                                "Your Spinr Pass renewed. You're all set to keep accepting rides.",
+                                data={"type": "subscription_renewed", "deeplink": "/driver/subscription"},
+                            )
+                        except Exception:
+                            logger.warning(
+                                "Push notification failed for subscription_renewed; continuing",
+                                exc_info=True,
+                            )
+
+    elif event_type == "invoice.payment_failed":
+        # Recurring renewal charge failed. Flag the row past_due and nudge the
+        # driver to update their card. We don't terminate here — Stripe retries
+        # per its dunning settings, then fires customer.subscription.updated
+        # (past_due) / .deleted (canceled), which we handle separately.
+        invoice = data_object
+        stripe_sub_id = invoice.get("subscription")
+        row = None
+        if stripe_sub_id:
+            row = await db_supabase.find_one("driver_subscriptions", {"stripe_subscription_id": stripe_sub_id})
+        if not row:
+            logger.warning(
+                "invoice.payment_failed: no subscription row for stripe_sub %s",
+                stripe_sub_id,
+                extra={"domain": "drivers", "event_id": event_id},
+            )
+        else:
+            await db_supabase.update_one(
+                "driver_subscriptions",
+                {"id": row["id"]},
+                {"payment_status": "past_due"},
+            )
+            logger.warning(
+                "Spinr Pass renewal payment failed: row=%s stripe_sub=%s",
+                row["id"],
+                stripe_sub_id,
+                extra={"domain": "drivers", "event_id": event_id},
+            )
+            driver_row = await db_supabase.find_one("drivers", {"id": row.get("driver_id")})
+            if driver_row and driver_row.get("user_id"):
+                try:
+                    await send_push_notification(
+                        driver_row["user_id"],
+                        "Spinr Pass payment failed",
+                        "We couldn't renew your Spinr Pass. Please update your card to keep accepting rides.",
+                        data={"type": "subscription_past_due", "deeplink": "/driver/subscription"},
+                    )
+                except Exception:
+                    logger.warning(
+                        "Push notification failed for subscription_past_due; continuing",
+                        exc_info=True,
+                    )
+
+    elif event_type == "customer.subscription.updated":
+        # Mirror Stripe's authoritative subscription status onto our row.
+        # Fires often; we act only on meaningful transitions and ack the rest.
+        subscription = data_object
+        stripe_sub_id = subscription.get("id")
+        stripe_status = subscription.get("status")
+        row = None
+        if stripe_sub_id:
+            row = await db_supabase.find_one("driver_subscriptions", {"stripe_subscription_id": stripe_sub_id})
+        if not row:
+            logger.info(
+                "customer.subscription.updated: no row for stripe_sub %s — skipping",
+                stripe_sub_id,
+                extra={"domain": "drivers", "event_id": event_id},
+            )
+        else:
+            updates: dict = {}
+            if stripe_status in ("canceled", "unpaid", "incomplete_expired"):
+                updates = {
+                    "status": "cancelled",
+                    "cancelled_at": datetime.now(timezone.utc).isoformat(),
+                }
+            elif stripe_status == "past_due":
+                updates = {"payment_status": "past_due"}
+            elif stripe_status == "active":
+                updates = {"status": "active", "payment_status": "paid"}
+            if updates:
+                await db_supabase.update_one("driver_subscriptions", {"id": row["id"]}, updates)
+                logger.info(
+                    "Spinr Pass subscription updated: row=%s stripe_status=%s",
+                    row["id"],
+                    stripe_status,
+                    extra={"domain": "drivers", "event_id": event_id},
+                )
 
     elif event_type in ("payout.paid", "payout.failed"):
         # Connected-account bank settlement of a driver payout. Instant

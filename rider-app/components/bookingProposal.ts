@@ -67,6 +67,18 @@ export function promoForProposal(proposal: BookingProposal) {
   };
 }
 
+/** Where the card lands after a successful booking. Immediate rides hand
+ * off to the live tracking screen (callers must use router.replace so back
+ * can't return to the chat mid-ride); scheduled rides return null and stay
+ * on the chat — there is no active ride to track yet. */
+export function postBookingRoute(
+  rideId: string | undefined,
+  scheduledDate: Date | null,
+): { pathname: string; params: { rideId: string } } | null {
+  if (scheduledDate || !rideId) return null;
+  return { pathname: '/driver-arriving', params: { rideId } };
+}
+
 export interface BookingErrorDescriptor {
   message: string;
   /** Deep link the card offers when the standard flow must take over. */

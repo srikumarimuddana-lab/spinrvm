@@ -76,7 +76,7 @@ export default function ActivityView() {
   }, [loading, loadingMore, hasMoreHistory, fetchRideHistory, rideHistory.length]);
 
   const filteredRides = useMemo(() => {
-    return rideHistory.filter((r) => {
+    const matched = rideHistory.filter((r) => {
       if (statusFilter !== 'all') {
         if (statusFilter === 'scheduled' && r.status !== 'scheduled') return false;
         if (statusFilter !== 'scheduled' && r.status !== statusFilter) return false;
@@ -96,6 +96,14 @@ export default function ActivityView() {
         }
       }
       return true;
+    });
+    // Pin upcoming scheduled rides to the top of the list (rendered in a
+    // distinct blue) so a driver sees their pre-booked trips above past ones,
+    // mirroring the rider activity list. Stable within each group otherwise.
+    return [...matched].sort((a, b) => {
+      const aSched = a.status === 'scheduled' ? 0 : 1;
+      const bSched = b.status === 'scheduled' ? 0 : 1;
+      return aSched - bSched;
     });
   }, [rideHistory, statusFilter, period]);
   const canLoadMoreHistory =
@@ -234,12 +242,15 @@ export default function ActivityView() {
               filteredRides.map((ride) => {
                 const isCompleted = ride.status === 'completed';
                 const isCancelled = ride.status === 'cancelled';
-                const statusColor = isCompleted ? '#10b981' : isCancelled ? '#ef4444' : '#f59e0b';
-                const statusBg = isCompleted ? 'rgba(16,185,129,0.1)' : isCancelled ? 'rgba(239,68,68,0.1)' : 'rgba(245,158,11,0.1)';
-                const statusLabel = isCompleted ? 'Completed' : isCancelled ? 'Cancelled' : 'Scheduled';
-                const statusIcon = isCompleted ? 'checkmark-circle' : isCancelled ? 'close-circle' : 'time';
+                const isScheduled = ride.status === 'scheduled';
+                const statusColor = isCompleted ? '#10b981' : isCancelled ? '#ef4444' : isScheduled ? '#3b82f6' : '#f59e0b';
+                const statusBg = isCompleted ? 'rgba(16,185,129,0.1)' : isCancelled ? 'rgba(239,68,68,0.1)' : isScheduled ? 'rgba(59,130,246,0.1)' : 'rgba(245,158,11,0.1)';
+                const statusLabel = isCompleted ? 'Completed' : isCancelled ? 'Cancelled' : isScheduled ? 'Scheduled' : 'Pending';
+                const statusIcon = isCompleted ? 'checkmark-circle' : isCancelled ? 'close-circle' : isScheduled ? 'calendar' : 'time';
 
-                const date = ride.ride_completed_at || (ride as any).cancelled_at || ride.created_at;
+                const date = isScheduled
+                  ? ((ride as any).scheduled_time || ride.created_at)
+                  : (ride.ride_completed_at || (ride as any).cancelled_at || ride.created_at);
                 const tipAmount = parseMoney((ride as any).tip_amount);
                 const incentiveAmount = parseMoney((ride as any).incentive_amount);
                 const totalEarned = parseMoney((ride as any).total_earned);

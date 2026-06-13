@@ -672,6 +672,16 @@ async def stripe_webhook(request: Request):
                     stripe_sub_id,
                     extra={"domain": "drivers", "event_id": event_id},
                 )
+            elif row.get("status") == "cancelled" or row.get("cancelled_at"):
+                # Terminal row — a late/duplicate invoice.paid arriving after a
+                # local cancel or customer.subscription.deleted must NOT flip
+                # the row back to active and restore gated access.
+                logger.warning(
+                    "invoice.paid ignored for cancelled subscription: row=%s stripe_sub=%s",
+                    row["id"],
+                    stripe_sub_id,
+                    extra={"domain": "drivers", "event_id": event_id},
+                )
             else:
                 new_expires = _invoice_period_end_iso(invoice)
                 if not new_expires:

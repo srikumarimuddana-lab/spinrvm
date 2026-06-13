@@ -11,6 +11,7 @@ import { router } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
 import { useDriverStore } from '../store/driverStore';
 import { useRideOfferSound, setOfferSoundUrl } from './useRideOfferSound';
+import { tKey } from '../i18n';
 import api from '@shared/api/client';
 import { useDriverConfig } from '@shared/hooks/queries';
 import { API_URL } from '@shared/config';
@@ -99,7 +100,7 @@ interface UseDriverDashboardReturn {
 // Lazy-load Notifee helpers; mirrors the gating in _layout.tsx so the
 // dashboard still mounts in Expo Go / web (where the native module is absent).
 let _dismissRideOfferNotification: (() => Promise<void>) | null = null;
-let _displayRideOfferNotification: ((o: any) => Promise<void>) | null = null;
+let _displayRideOfferNotification: ((o: any, opts?: { silent?: boolean }) => Promise<void>) | null = null;
 if (Platform.OS === 'android' || Platform.OS === 'ios') {
   try {
     const _notifee = require('../services/notifeeService');
@@ -125,6 +126,11 @@ function _surfaceOfferNotification(data: any): void {
     const n = typeof v === 'number' ? v : parseFloat(String(v));
     return Number.isFinite(n) ? n : undefined;
   };
+  // Silent when the app is foreground-active: the in-app offer panel is
+  // visible and useRideOfferSound is already looping the tone, so a channel
+  // sound here would double-ring. Backgrounded-but-alive (WS still connected)
+  // keeps the audible heads-up since the in-app loop can't be heard.
+  const silent = AppState.currentState === 'active';
   display({
     ride_id: data.ride_id,
     booking_id: data.booking_id || data.ride_id,
@@ -138,7 +144,7 @@ function _surfaceOfferNotification(data: any): void {
     rider_name: data.rider_name || undefined,
     countdown_seconds: _num(data.countdown_seconds),
     offer_expires_at: data.offer_expires_at || undefined,
-  }).catch((e: any) => console.warn('[Offer] Notifee surface failed:', e));
+  }, { silent }).catch((e: any) => console.warn('[Offer] Notifee surface failed:', e));
 }
 const PENDING_ACTION_KEY = 'spinr_pending_notifee_action';
 
@@ -923,7 +929,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           if (msg.includes('token') || msg.includes('auth') || msg.includes('user_not_found')) {
             return;
           }
-          setWsError(t('dashboard.connectionLost'));
+          setWsError(tKey('dashboard.connectionLost'));
           return;
         }
         // auth_success is the definitive signal that the backend accepted

@@ -62,14 +62,26 @@ def write_caf(samples: list[float], path: Path) -> None:
 
     header = b"caff" + struct.pack(">HH", 1, 0)  # magic, version 1, flags 0
 
-    # 'desc' chunk: format description (32 bytes). Format flags 0 means
-    # big-endian integer PCM, matching the ">h" packing above.
+    # 'desc' chunk: format description (32 bytes).
+    #
+    # Format flags = 0 is CORRECT here and must stay 0. The CAF container's
+    # mFormatFlags use the CAF flag enum, NOT the CoreAudio
+    # AudioStreamBasicDescription (ASBD) flags. Per Apple's "Apple Core Audio
+    # Format Specification 1.0", the only two LPCM flags defined for CAF are:
+    #     kCAFLinearPCMFormatFlagIsFloat        = 1 << 0
+    #     kCAFLinearPCMFormatFlagIsLittleEndian = 1 << 1
+    # Integer PCM is signed by definition and big-endian is the default
+    # (absence of the LittleEndian flag), so 16-bit signed big-endian PCM — the
+    # ">h" packing above — is flags = 0. Do NOT apply ASBD values like
+    # kAudioFormatFlagIsSignedInteger(4)/IsPacked(8)/IsBigEndian(2): setting
+    # bit 1 here would declare little-endian and mis-describe these big-endian
+    # bytes, which is what makes a CAF play as garbage or get rejected.
     desc = (
         b"desc"
         + struct.pack(">q", 32)
         + struct.pack(">d", float(SAMPLE_RATE))  # sample rate
         + b"lpcm"                                 # format id
-        + struct.pack(">I", 0)                    # format flags
+        + struct.pack(">I", 0)                    # format flags (CAF: 0 = signed big-endian int)
         + struct.pack(">I", 2)                    # bytes per packet (mono s16)
         + struct.pack(">I", 1)                    # frames per packet
         + struct.pack(">I", 1)                    # channels per frame

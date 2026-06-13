@@ -41,6 +41,12 @@ _STRIPE_HANDLED_EVENTS = frozenset(
         # the account's status. Drives the Payouts tab's Tax & Identity
         # section in the admin slideout.
         "account.updated",
+        # Connected-account bank settlement of a driver payout. Lets us
+        # reconcile the payouts row to the true outcome — an instant payout
+        # marked "completed" synchronously can still be rejected by the bank
+        # days later (closed account, etc.); payout.failed is how we learn.
+        "payout.paid",
+        "payout.failed",
     }
 )
 # Public alias exported for tests
@@ -612,6 +618,87 @@ async def stripe_webhook(request: Request):
         except ImportError:
             from services.stripe_kyc_sync import apply_account_update
         await apply_account_update(data_object, event_id=event_id)
+
+    elif event_type in ("payout.paid", "payout.failed"):
+        # Connected-account bank settlement of a driver payout. Instant
+        # payouts (routes/drivers.py request_instant_payout) do an explicit
+        # Payout.create and store its po_ id in payouts.stripe_payout_id, so
+        # those reconcile here. Standard payouts only do a Transfer and store
+        # a tr_ id — those won't match a Payout event, and Stripe's automatic
+        # scheduled payouts of the connected balance also fire here with no
+        # tracked row. A no-match is therefore expected: log and ack, never
+        # 5xx (a 5xx would make Stripe retry a payout we don't track for days).
+        stripe_payout_id = data_object.get("id")
+        payout_row = None
+        if stripe_payout_id:
+            payout_row = await db_supabase.find_one("payouts", {"stripe_payout_id": stripe_payout_id})
+
+        if not payout_row:
+            logger.info(
+                "payout webhook %s: no tracked payout row for %s "
+                "(auto-scheduled connected-account payout or standard transfer) — acking",
+                event_type,
+                stripe_payout_id,
+                extra={"domain": "payments", "event_id": event_id},
+            )
+        elif event_type == "payout.paid":
+            await db_supabase.update_one(
+                "payouts",
+                {"id": payout_row["id"]},
+                {
+                    "status": "completed",
+                    "processed_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            logger.info(
+                "Payout settled to bank: payout_row=%s po=%s",
+                payout_row["id"],
+                stripe_payout_id,
+                extra={"domain": "payments", "event_id": event_id},
+            )
+        else:  # payout.failed
+            failure_message = (
+                data_object.get("failure_message")
+                or data_object.get("failure_code")
+                or "Bank payout failed"
+            )
+            await db_supabase.update_one(
+                "payouts",
+                {"id": payout_row["id"]},
+                {
+                    "status": "failed",
+                    "failure_reason": str(failure_message)[:500],
+                    "requires_manual_review": True,
+                    "processed_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            logger.error(
+                "PAYOUT FAILED at bank: payout_row=%s po=%s reason=%s",
+                payout_row["id"],
+                stripe_payout_id,
+                failure_message,
+                extra={
+                    "domain": "payments",
+                    "event_id": event_id,
+                    "driver_id": payout_row.get("driver_id") or "",
+                },
+            )
+            # Notify the driver their money didn't land so they can fix their
+            # bank details and retry.
+            driver_row = await db_supabase.find_one("drivers", {"id": payout_row.get("driver_id")})
+            if driver_row and driver_row.get("user_id"):
+                try:
+                    await send_push_notification(
+                        driver_row["user_id"],
+                        "Payout failed",
+                        "Your payout could not be deposited. Please check your bank details and try again.",
+                        data={"type": "payout_failed", "deeplink": "/driver/earnings"},
+                    )
+                except Exception:
+                    logger.warning(
+                        "Push notification failed for payout_failed event; continuing",
+                        exc_info=True,
+                    )
 
     else:
         if event_type in _STRIPE_HANDLED_EVENTS:

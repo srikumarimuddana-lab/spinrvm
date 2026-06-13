@@ -2038,6 +2038,12 @@ async def request_payout(
 
     status = "pending"
     stripe_payout_id = None
+    # Pre-allocate the payout id so the Stripe Transfer carries a stable
+    # idempotency key — a retry of this same payout never double-transfers.
+    # (The @idempotent_endpoint decorator dedupes at the HTTP layer, but a
+    # Stripe-level key is defence in depth against any path that re-enters
+    # this block, matching the money-safety contract of request_instant_payout.)
+    payout_id = str(uuid.uuid4())
 
     if stripe_secret and stripe_account_id:
         try:
@@ -2046,6 +2052,7 @@ async def request_payout(
                 currency="cad",
                 destination=stripe_account_id,
                 api_key=stripe_secret,
+                idempotency_key=f"payout-transfer-{payout_id}",
             )
             status = RideStatus.COMPLETED
             stripe_payout_id = transfer.id
@@ -2062,7 +2069,7 @@ async def request_payout(
             ) from e
 
     payout = {
-        "id": str(uuid.uuid4()),
+        "id": payout_id,
         "driver_id": driver["id"],
         "amount": req.amount,
         "status": status,

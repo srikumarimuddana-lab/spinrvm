@@ -24,7 +24,7 @@ Run:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -72,9 +72,8 @@ class TestGetScheduledRides:
         from backend.routes import rides as rides_mod
 
         rides = [_scheduled_ride(), _scheduled_ride(id="ride-002")]
-        cursor = _SimpleCursor(rides)
 
-        with patch("backend.routes.rides.db_supabase.get_rides_for_user", MagicMock(return_value=cursor)):
+        with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=rides)):
             result = await rides_mod.get_scheduled_rides(
                 current_user={"id": RIDER_ID},
             )
@@ -85,14 +84,46 @@ class TestGetScheduledRides:
     async def test_returns_empty_list_when_no_scheduled_rides(self):
         from backend.routes import rides as rides_mod
 
-        cursor = _SimpleCursor([])
-
-        with patch("backend.routes.rides.db_supabase.get_rides_for_user", MagicMock(return_value=cursor)):
+        with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])):
             result = await rides_mod.get_scheduled_rides(
                 current_user={"id": RIDER_ID},
             )
 
         assert result == []
+
+    async def test_excludes_cancelled_and_completed(self):
+        """The upcoming list must filter out terminal rides — a cancelled
+        scheduled ride is shown in history instead (see history filter)."""
+        from backend.routes import rides as rides_mod
+
+        captured = {}
+
+        async def _capture(table, filt, **kw):
+            captured["filter"] = filt
+            return []
+
+        with patch("backend.routes.rides.db_supabase.get_rows", _capture):
+            await rides_mod.get_scheduled_rides(current_user={"id": RIDER_ID})
+
+        status_filter = captured["filter"]["status"]
+        assert "cancelled" in status_filter["$nin"]
+        assert "completed" in status_filter["$nin"]
+
+
+@pytest.mark.unit
+class TestHistoryVisibilityForScheduled:
+    """A scheduled ride cancelled before dispatch (driver_id=null) must still
+    surface in /rides/history. Pins _RIDE_HISTORY_VISIBLE_OR."""
+
+    def test_cancelled_scheduled_ride_in_history_filter(self):
+        from backend.routes.rides import _RIDE_HISTORY_VISIBLE_OR
+
+        # completed rides
+        assert "status.eq.completed" in _RIDE_HISTORY_VISIBLE_OR
+        # cancelled rides that had a driver
+        assert "and(status.eq.cancelled,driver_id.not.is.null)" in _RIDE_HISTORY_VISIBLE_OR
+        # NEW: cancelled scheduled rides even with no driver assigned
+        assert "and(status.eq.cancelled,is_scheduled.is.true)" in _RIDE_HISTORY_VISIBLE_OR
 
 
 # ─────────────────────────────────────────────────────────────────────────────

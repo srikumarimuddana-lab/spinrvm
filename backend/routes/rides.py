@@ -2638,8 +2638,18 @@ async def get_active_ride(request: Request = None, current_user: dict = Depends(
     return {"active": True, "ride": ride_data}
 
 
+# History visibility: completed rides, plus cancelled rides that either had a
+# driver assigned OR were scheduled bookings. The driver_id guard hides the
+# noise of a rider who cancels a live 'searching' ride before any driver was
+# found — but that same guard previously also hid a SCHEDULED ride cancelled
+# before its dispatch time (status=cancelled, driver_id=null). Such a ride had
+# already dropped out of GET /rides/scheduled (which excludes cancelled), so it
+# became invisible to the rider entirely. Surfacing is_scheduled cancellations
+# keeps the rider's cancelled pre-bookings on the activity list.
 _RIDE_HISTORY_VISIBLE_OR = (
-    f"status.eq.{RideStatus.COMPLETED.value},and(status.eq.{RideStatus.CANCELLED.value},driver_id.not.is.null)"
+    f"status.eq.{RideStatus.COMPLETED.value},"
+    f"and(status.eq.{RideStatus.CANCELLED.value},driver_id.not.is.null),"
+    f"and(status.eq.{RideStatus.CANCELLED.value},is_scheduled.is.true)"
 )
 
 

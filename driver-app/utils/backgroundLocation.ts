@@ -2,8 +2,15 @@ import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
-import { API_URL } from '@shared/config';
-import { getAppCheckToken } from '@shared/services/firebase';
+import SpinrConfig from '@shared/config/spinr.config';
+import { getAppCheckToken, initFirebaseServices } from '@shared/services/firebase';
+
+// Use the same backend-URL resolver as the shared API client — it carries the
+// production fallback (api-spinr.spinr.ca) and the expoConfig.extra value.
+// @shared/config's API_URL is env-var-only and resolves to '' on production /
+// OTA builds that rely on the hardcoded fallback, which would make every
+// headless request (token refresh, location batch) a silent no-op.
+const API_URL = SpinrConfig.backendUrl;
 
 const TASK_NAME = 'spinr-background-location';
 
@@ -59,8 +66,11 @@ export async function getBackgroundAuthToken(): Promise<string | null> {
   }
 
   try {
-    // App Check is enforced on /api/* in production. Best-effort: attach a
-    // token when the SDK can mint one (null → omit, same as the shared client).
+    // App Check is enforced on /api/* in production. Initialize it here first —
+    // this headless task doesn't mount _layout, so initFirebaseServices() (which
+    // configures the App Check provider) hasn't run yet; without it
+    // getAppCheckToken() returns null. initFirebaseServices is idempotent.
+    await initFirebaseServices();
     const appCheckToken = await getAppCheckToken();
     const resp = await fetch(`${API_URL}/api/v1/auth/refresh`, {
       method: 'POST',

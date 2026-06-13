@@ -25,9 +25,14 @@
  */
 
 import { Platform } from 'react-native';
-import { setBackgroundMessageHandler, getAppCheckToken } from '@shared/services/firebase';
-import { API_URL } from '@shared/config';
+import { setBackgroundMessageHandler, getAppCheckToken, initFirebaseServices } from '@shared/services/firebase';
+import SpinrConfig from '@shared/config/spinr.config';
 import { getBackgroundAuthToken } from '../utils/backgroundLocation';
+
+// Same backend-URL source as the shared API client (production fallback +
+// expoConfig.extra), not @shared/config's env-var-only API_URL which resolves
+// to '' on production / OTA builds that rely on the hardcoded fallback.
+const API_URL = SpinrConfig.backendUrl;
 
 // AsyncStorage keys shared with useDriverDashboard.ts (which consumes both)
 // and _layout.tsx (which writes PENDING_ACTION_KEY from foreground events).
@@ -240,10 +245,10 @@ async function _declineHeadless(rideId: string): Promise<boolean> {
   }
   if (!token) return false;
   try {
-    // App Check is enforced on /api/* in production. Attach a token when the
-    // SDK can mint one (best-effort: getAppCheckToken returns null if App
-    // Check isn't initialized in this headless context, matching how the
-    // shared client omits the header).
+    // App Check is enforced on /api/* in production. This headless task doesn't
+    // mount _layout, so initialize App Check here first (idempotent) — otherwise
+    // its provider is unconfigured and getAppCheckToken() returns null.
+    await initFirebaseServices();
     const appCheckToken = await getAppCheckToken();
     const resp = await fetch(`${API_URL}/api/v1/drivers/rides/${rideId}/decline`, {
       method: 'POST',

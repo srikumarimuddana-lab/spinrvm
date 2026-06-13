@@ -349,9 +349,22 @@ async def stripe_webhook(request: Request):
                 from routes.drivers import _activate_subscription  # type: ignore
 
             await _activate_subscription(subscription_id, plan_id)
+
+            # Recurring plans (mode="subscription") return a Stripe
+            # Subscription id on the session — persist it so the renewal /
+            # dunning / cancellation webhooks can match this row.
+            stripe_subscription_id = data_object.get("subscription")
+            if stripe_subscription_id:
+                await db_supabase.update_one(
+                    "driver_subscriptions",
+                    {"id": subscription_id},
+                    {"stripe_subscription_id": stripe_subscription_id},
+                )
+
             logger.info(
                 f"[WEBHOOK] Spinr Pass activated via checkout.session.completed: "
-                f"subscription={subscription_id} driver={driver_id} plan={plan_id}"
+                f"subscription={subscription_id} driver={driver_id} plan={plan_id} "
+                f"stripe_sub={stripe_subscription_id}"
             )
         else:
             logger.info(
@@ -658,9 +671,7 @@ async def stripe_webhook(request: Request):
             )
         else:  # payout.failed
             failure_message = (
-                data_object.get("failure_message")
-                or data_object.get("failure_code")
-                or "Bank payout failed"
+                data_object.get("failure_message") or data_object.get("failure_code") or "Bank payout failed"
             )
             await db_supabase.update_one(
                 "payouts",

@@ -5336,10 +5336,43 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
         _settings = await get_app_settings()
         _stripe_secret = _settings.get("stripe_secret_key", "")
         _base_url = _settings.get("base_url", "http://localhost:8000")
+        _price_id = plan.get("stripe_price_id")
+        _metadata = {
+            "driver_id": driver["id"],
+            "subscription_id": subscription_id,
+            "plan_id": plan_id,
+        }
+        _success_url = f"{_base_url}/api/v1/drivers/subscription/verify-session?session_id={{CHECKOUT_SESSION_ID}}"
+        _cancel_url = f"{_base_url}/drivers/subscription"
 
-        if _stripe_secret and plan_price > 0:
-            # Create a Checkout Session for the driver to complete payment.
-            # The webhook (checkout.session.completed) will activate the subscription.
+        if _stripe_secret and _price_id:
+            # Recurring billing: Stripe Subscription mode. Stripe auto-renews
+            # the driver's card each period and fires invoice.paid (renewal)
+            # / invoice.payment_failed (dunning) / customer.subscription.*
+            # which routes/webhooks.py reconciles. Requires a recurring Price
+            # created in the Stripe dashboard and stored on the plan.
+            _session = stripe.checkout.Session.create(
+                mode="subscription",
+                line_items=[{"price": _price_id, "quantity": 1}],
+                metadata=_metadata,
+                # Mirror our ids onto the Stripe Subscription so renewal
+                # invoices and subscription events are self-identifying.
+                subscription_data={"metadata": _metadata},
+                success_url=_success_url,
+                cancel_url=_cancel_url,
+                api_key=_stripe_secret,
+            )
+            checkout_url = _session.url
+            stripe_session_id = _session.id
+            payment_status = "pending"
+            logger.info(
+                f"[SUBSCRIBE] Recurring checkout session created: session={stripe_session_id} "
+                f"subscription={subscription_id} driver={driver['id']} price={_price_id}"
+            )
+        elif _stripe_secret and plan_price > 0:
+            # One-off Checkout (no recurring Price on this plan). The webhook
+            # (checkout.session.completed) activates the subscription; renewal
+            # is expiry-driven (driver re-subscribes each period).
             _amount_cents = int(plan_price * 100)
             _session = stripe.checkout.Session.create(
                 payment_method_types=["card"],
@@ -5358,20 +5391,16 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
                         "quantity": 1,
                     }
                 ],
-                metadata={
-                    "driver_id": driver["id"],
-                    "subscription_id": subscription_id,
-                    "plan_id": plan_id,
-                },
-                success_url=f"{_base_url}/api/v1/drivers/subscription/verify-session?session_id={{CHECKOUT_SESSION_ID}}",
-                cancel_url=f"{_base_url}/drivers/subscription",
+                metadata=_metadata,
+                success_url=_success_url,
+                cancel_url=_cancel_url,
                 api_key=_stripe_secret,
             )
             checkout_url = _session.url
             stripe_session_id = _session.id
             payment_status = "pending"
             logger.info(
-                f"[SUBSCRIBE] Checkout session created: session={stripe_session_id} "
+                f"[SUBSCRIBE] One-off checkout session created: session={stripe_session_id} "
                 f"subscription={subscription_id} driver={driver['id']}"
             )
         else:

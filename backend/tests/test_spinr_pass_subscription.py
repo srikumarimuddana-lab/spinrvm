@@ -87,7 +87,7 @@ class TestSubscriptionCheckoutFlow:
             patch("uuid.uuid4", return_value=sub_id),
         ):
             # Setup mocks
-            mock_get_rows.side_effect = lambda table, filters, limit=None: {
+            mock_get_rows.side_effect = lambda table, filters, columns=None, limit=None: {
                 "drivers": [mock_driver],
                 "service_areas": [{"spinr_pass_enabled": True}],
                 "subscription_plans": [mock_plan],
@@ -141,7 +141,7 @@ class TestSubscriptionCheckoutFlow:
             patch("backend.db_supabase.insert_one") as mock_insert,
             patch("backend.settings_loader.get_app_settings") as mock_get_settings,
         ):
-            mock_get_rows.side_effect = lambda table, filters, limit=None: {
+            mock_get_rows.side_effect = lambda table, filters, columns=None, limit=None: {
                 "drivers": [mock_driver],
                 "service_areas": [{"spinr_pass_enabled": True}],
                 "subscription_plans": [mock_plan],
@@ -174,7 +174,7 @@ class TestSubscriptionCheckoutFlow:
         current_user = {"id": "user-123"}
 
         with patch("backend.db_supabase.get_rows") as mock_get_rows, patch("backend.settings_loader.get_app_settings"):
-            mock_get_rows.side_effect = lambda table, filters, limit=None: {
+            mock_get_rows.side_effect = lambda table, filters, columns=None, limit=None: {
                 "drivers": [mock_driver],
                 "service_areas": [{"spinr_pass_enabled": False}],
             }.get(table, [])
@@ -389,7 +389,7 @@ class TestRecurringSubscription:
             patch("backend.settings_loader.get_app_settings") as mock_get_settings,
             patch("stripe.checkout.Session.create") as mock_session_create,
         ):
-            mock_get_rows.side_effect = lambda table, filters, limit=None: {
+            mock_get_rows.side_effect = lambda table, filters, columns=None, limit=None: {
                 "drivers": [mock_driver],
                 "service_areas": [{"spinr_pass_enabled": True}],
                 "subscription_plans": [recurring_plan],
@@ -512,3 +512,73 @@ class TestCancelSubscriptionEndpoint:
         assert result["success"] is True
         update_mock.assert_awaited_once()
         assert "cancelled_at" in update_mock.await_args.args[2]
+
+
+class TestActivationAndSuperseding:
+    """P2 follow-ups: only pending rows activate, and starting a new checkout
+    supersedes older pending sessions so a stale one can't activate late."""
+
+    async def test_activate_skips_non_pending_row(self):
+        from backend.routes.drivers import _activate_subscription
+
+        update_mock = AsyncMock()
+        with (
+            patch(
+                "backend.db_supabase.find_one",
+                AsyncMock(return_value={"id": "s1", "status": "superseded", "driver_id": "d1"}),
+            ),
+            patch("backend.db_supabase.update_one", update_mock),
+        ):
+            await _activate_subscription("s1", "plan-1")
+
+        update_mock.assert_not_awaited()
+
+    async def test_subscribe_supersedes_pending_sessions(self, mock_driver, mock_plan, mock_settings):
+        from fastapi import Request
+
+        from backend.routes.drivers import subscribe_to_plan
+
+        request = AsyncMock(spec=Request)
+        request.json = AsyncMock(return_value={"plan_id": "plan-premium"})
+
+        def _rows(table, filters, columns=None, limit=None):
+            if table == "drivers":
+                return [mock_driver]
+            if table == "service_areas":
+                return [{"spinr_pass_enabled": True}]
+            if table == "subscription_plans":
+                return [mock_plan]
+            if table == "driver_subscriptions":
+                # No existing active sub; one stale pending row to supersede.
+                if filters.get("status") == "pending":
+                    return [{"id": "stale-1"}]
+                return []
+            return []
+
+        update_mock = AsyncMock()
+        with (
+            patch("backend.db_supabase.get_rows") as mock_get_rows,
+            patch("backend.db_supabase.update_one", update_mock),
+            patch("backend.db_supabase.insert_one", AsyncMock()),
+            patch(
+                "backend.settings_loader.get_app_settings",
+                AsyncMock(return_value=mock_settings),
+            ),
+            patch("stripe.checkout.Session.create") as mock_session_create,
+        ):
+            mock_get_rows.side_effect = _rows
+            session = MagicMock()
+            session.url = "https://checkout.stripe.com/pay/x"
+            session.id = "cs_new"
+            mock_session_create.return_value = session
+
+            result = await subscribe_to_plan(request, {"id": "user-123"})
+
+        superseded = [
+            c
+            for c in update_mock.await_args_list
+            if c.args and c.args[0] == "driver_subscriptions" and c.args[2].get("status") == "superseded"
+        ]
+        assert superseded, "stale pending row should be superseded"
+        assert superseded[0].args[1] == {"id": "stale-1"}
+        assert result.get("checkout_url")

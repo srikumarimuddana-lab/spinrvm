@@ -26,6 +26,8 @@
 
 import { Platform } from 'react-native';
 import { setBackgroundMessageHandler } from '@shared/services/firebase';
+import { API_URL } from '@shared/config';
+import { getBackgroundAuthToken } from '../utils/backgroundLocation';
 
 // AsyncStorage keys shared with useDriverDashboard.ts (which consumes both)
 // and _layout.tsx (which writes PENDING_ACTION_KEY from foreground events).
@@ -153,24 +155,72 @@ export function registerBackgroundMessageHandlers(): void {
 
   // Notifee background event listener — fires when the user taps
   // Accept/Decline from the lock screen or notification shade while the app
-  // is killed. Stash the action so useDriverDashboard.ts can consume it on
-  // mount and call accept/decline against the backend.
+  // is killed or backgrounded.
+  //
+  // Accept (and a body tap) launch the app (launchActivity: 'default'), so we
+  // stash the action and let the mounted dashboard execute it.
+  //
+  // Decline does NOT launch the app (no launchActivity on Android, iOS
+  // foreground: false), so the dashboard never mounts to consume a stashed
+  // action — and its 60s stale guard would drop it anyway. The backend would
+  // then see no response and count the offer as a miss (3 misses auto-offline
+  // the driver). So execute the decline headlessly here; only fall back to
+  // stashing if we couldn't reach the backend, so it can retry on next open.
   if (notifee && parseRideOfferEvent) {
     notifee.onBackgroundEvent(async (event: any) => {
       const parsed = parseRideOfferEvent(event);
       if (!parsed || !parsed.ride_id) return;
       try {
-        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-        await AsyncStorage.setItem(
-          PENDING_ACTION_KEY,
-          JSON.stringify({ action: parsed.action, ride_id: parsed.ride_id, ts: Date.now() }),
-        );
-        // Dismiss the notification so the driver doesn't see stale "Accept"
+        if (parsed.action === 'decline') {
+          const delivered = await _declineHeadless(parsed.ride_id);
+          if (!delivered) await _stashAction(parsed.action, parsed.ride_id);
+        } else {
+          // accept / tap — the app launches; the dashboard consumes the stash.
+          await _stashAction(parsed.action, parsed.ride_id);
+        }
+        // Dismiss the notification so the driver doesn't see stale action
         // buttons while we open the app.
         if (dismissRideOfferNotification) await dismissRideOfferNotification();
       } catch (e) {
-        console.warn('[Notifee] background action persist failed:', e);
+        console.warn('[Notifee] background action handling failed:', e);
       }
     });
+  }
+}
+
+async function _stashAction(action: string, rideId: string): Promise<void> {
+  const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+  await AsyncStorage.setItem(
+    PENDING_ACTION_KEY,
+    JSON.stringify({ action, ride_id: rideId, ts: Date.now() }),
+  );
+}
+
+// Execute a ride-offer decline directly against the backend from the headless
+// background context. Returns true if the request reached the backend (the
+// decline is delivered, or the ride was already reassigned), false only when
+// we couldn't reach it (no token / network error) so the caller can stash for
+// retry. Mirrors the headless auth + fetch pattern in utils/backgroundLocation.
+async function _declineHeadless(rideId: string): Promise<boolean> {
+  if (!API_URL) return false;
+  let token: string | null = null;
+  try {
+    token = await getBackgroundAuthToken();
+  } catch {
+    return false;
+  }
+  if (!token) return false;
+  try {
+    await fetch(`${API_URL}/api/v1/drivers/rides/${rideId}/decline`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    return true;
+  } catch (e) {
+    console.warn('[Notifee] headless decline network error:', e);
+    return false;
   }
 }

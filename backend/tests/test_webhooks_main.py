@@ -133,6 +133,81 @@ class TestStripeWebhookSignatureFailure:
         assert exc.value.status_code == 400
 
 
+class TestStripeWebhookConnectSecret:
+    """Dual-secret verification: the Connected-accounts endpoint signs with
+    its own whsec_, so an event the platform secret can't verify must still
+    be accepted when the connect secret verifies it."""
+
+    def test_connect_secret_verifies_when_platform_fails(self):
+        from backend.routes import webhooks as wh
+
+        event = _make_stripe_event("some.unhandled.event", {}, event_id="evt_connect_1")
+        event_obj = MagicMock()
+        event_obj.get = lambda k, d=None: event.get(k, d)
+        event_obj.to_dict_recursive = lambda: event
+
+        async def mock_get_app_settings():
+            return {
+                "stripe_webhook_secret": "whsec_platform",
+                "stripe_connect_webhook_secret": "whsec_connect",
+                "stripe_secret_key": "sk_test",
+            }
+
+        req = MagicMock()
+        req.body = AsyncMock(return_value=b"payload")
+        req.headers = {"stripe-signature": "t=123,v1=sig"}
+
+        import stripe
+
+        def _construct(payload, sig, secret):
+            # Platform secret rejects (event came from the connect endpoint);
+            # connect secret verifies.
+            if secret == "whsec_platform":
+                raise stripe.error.SignatureVerificationError("wrong secret", "sig")
+            return event_obj
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", mock_get_app_settings),
+            patch.object(stripe.Webhook, "construct_event", side_effect=_construct),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=req))
+
+        # Verified via the connect secret → reaches dispatch (unhandled type
+        # acks 200 without processing).
+        assert result["received"] is True
+        assert result.get("unhandled") is True
+        assert result["event_id"] == "evt_connect_1"
+
+    def test_both_secrets_fail_returns_400(self):
+        from backend.routes import webhooks as wh
+
+        async def mock_get_app_settings():
+            return {
+                "stripe_webhook_secret": "whsec_platform",
+                "stripe_connect_webhook_secret": "whsec_connect",
+                "stripe_secret_key": "sk_test",
+            }
+
+        req = MagicMock()
+        req.body = AsyncMock(return_value=b"payload")
+        req.headers = {"stripe-signature": "forged"}
+
+        import stripe
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", mock_get_app_settings),
+            patch.object(
+                stripe.Webhook,
+                "construct_event",
+                side_effect=stripe.error.SignatureVerificationError("fail", "sig"),
+            ),
+        ):
+            with pytest.raises(Exception) as exc:
+                asyncio.run(wh.stripe_webhook(request=req))
+        assert exc.value.status_code == 400
+
+
 class TestStripeWebhookDuplicateEvent:
     def test_duplicate_event_returns_received_duplicate(self):
         from backend.routes import webhooks as wh

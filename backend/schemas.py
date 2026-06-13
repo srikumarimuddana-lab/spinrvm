@@ -122,6 +122,13 @@ class AppSettings(BaseModel):
     stripe_publishable_key: str = ""
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
+    # Separate signing secret for the Stripe Connect (Connected accounts)
+    # webhook endpoint. account.updated / payout.paid / payout.failed are
+    # delivered by an endpoint scoped to connected accounts, which Stripe
+    # gives its own whsec_. The platform endpoint's stripe_webhook_secret
+    # cannot verify those — see construct_event dual-secret logic in
+    # routes/webhooks.py.
+    stripe_connect_webhook_secret: str = ""
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
     twilio_from_number: str = ""

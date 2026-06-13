@@ -50,6 +50,44 @@ if (Platform.OS === 'android' || Platform.OS === 'ios') {
   }
 }
 
+// FCM data uses the same keys as the WS dispatch_payload, all stringified.
+const safeParse = <T,>(s: any): T | undefined => {
+  if (!s || s === 'null' || s === 'None') return undefined;
+  if (typeof s !== 'string') return s as T;
+  try { return JSON.parse(s) as T; } catch { return undefined; }
+};
+const toNum = (v: any): number | undefined => {
+  if (!v || v === '' || v === 'None') return undefined;
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? n : undefined;
+};
+
+/**
+ * Map a stringified `new_ride_assignment` FCM data payload to the shape
+ * displayRideOfferNotification expects. Shared by the killed/background
+ * handler below and the foreground onMessage listener in _layout.tsx.
+ * Returns null when the payload isn't a ride offer.
+ */
+export function offerDisplayDataFromFcm(data: any): Record<string, any> | null {
+  if (data?.type !== 'new_ride_assignment' || !data?.ride_id) return null;
+  const incentives = safeParse<any[]>(data.incentives);
+  return {
+    ride_id: data.ride_id,
+    booking_id: data.booking_id || data.ride_id,
+    pickup_address: data.pickup_address,
+    dropoff_address: data.dropoff_address,
+    fare: toNum(data.fare) ?? 0,
+    total_bonus: toNum(data.total_bonus) ?? 0,
+    distance_km: toNum(data.distance_km),
+    duration_minutes: toNum(data.duration_minutes),
+    surge_multiplier: toNum(data.surge_multiplier),
+    rider_name: data.rider_name,
+    incentives_count: Array.isArray(incentives) ? incentives.length : 0,
+    countdown_seconds: toNum(data.countdown_seconds),
+    offer_expires_at: data.offer_expires_at || undefined,
+  };
+}
+
 let registered = false;
 
 export function registerBackgroundMessageHandlers(): void {
@@ -60,17 +98,6 @@ export function registerBackgroundMessageHandlers(): void {
     const data = remoteMessage?.data || {};
     if (data?.type !== 'new_ride_assignment' || !data?.ride_id) return;
 
-    // FCM data uses the same keys as the WS dispatch_payload, all stringified.
-    const safeParse = <T,>(s: any): T | undefined => {
-      if (!s || s === 'null' || s === 'None') return undefined;
-      if (typeof s !== 'string') return s as T;
-      try { return JSON.parse(s) as T; } catch { return undefined; }
-    };
-    const toNum = (v: any): number | undefined => {
-      if (!v || v === '' || v === 'None') return undefined;
-      const n = parseFloat(v);
-      return Number.isFinite(n) ? n : undefined;
-    };
     const fare = toNum(data.fare) ?? 0;
     const totalBonus = toNum(data.total_bonus) ?? 0;
     const surgeMultiplier = toNum(data.surge_multiplier);
@@ -116,21 +143,8 @@ export function registerBackgroundMessageHandlers(): void {
     //    screen, with Accept/Decline buttons.
     if (displayRideOfferNotification) {
       try {
-        await displayRideOfferNotification({
-          ride_id: data.ride_id,
-          booking_id: data.booking_id || data.ride_id,
-          pickup_address: data.pickup_address,
-          dropoff_address: data.dropoff_address,
-          fare,
-          total_bonus: totalBonus,
-          distance_km: toNum(data.distance_km),
-          duration_minutes: toNum(data.duration_minutes),
-          surge_multiplier: surgeMultiplier,
-          rider_name: data.rider_name,
-          incentives_count: Array.isArray(incentives) ? incentives.length : 0,
-          countdown_seconds: toNum(data.countdown_seconds),
-          offer_expires_at: data.offer_expires_at || undefined,
-        });
+        const offer = offerDisplayDataFromFcm(data);
+        if (offer) await displayRideOfferNotification(offer);
       } catch (e) {
         console.warn('[Notifee] displayRideOfferNotification failed:', e);
       }

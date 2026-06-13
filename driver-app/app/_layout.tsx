@@ -37,16 +37,18 @@ import {
   initFirebaseServices,
   requestNotificationPermission,
   requestPushPermissionAndGetToken,
+  onForegroundMessage,
   onTokenRefresh,
   getAppCheckToken,
 } from '@shared/services/firebase';
-import { PENDING_ACTION_KEY } from '../services/backgroundMessaging';
+import { PENDING_ACTION_KEY, offerDisplayDataFromFcm } from '../services/backgroundMessaging';
 import { setAppCheckTokenProvider } from '@shared/api/client';
 // Notifee — rich notifications (heads-up + full-screen intent + Accept/Decline
 // action buttons). Lazy-required because the native module isn't linked in
 // Expo Go / web; we treat the import failure the same as Expo Go: no-op.
 let notifee: any = null;
 let parseRideOfferEvent: any = null;
+let displayRideOfferNotification: any = null;
 let dismissRideOfferNotification: any = null;
 let ensureNotifeeReady: any = null;
 if (Platform.OS === 'android' || Platform.OS === 'ios') {
@@ -54,6 +56,7 @@ if (Platform.OS === 'android' || Platform.OS === 'ios') {
     notifee = require('@notifee/react-native').default;
     const svc = require('../services/notifeeService');
     parseRideOfferEvent = svc.parseRideOfferEvent;
+    displayRideOfferNotification = svc.displayRideOfferNotification;
     dismissRideOfferNotification = svc.dismissRideOfferNotification;
     ensureNotifeeReady = svc.ensureNotifeeReady;
   } catch (e) {
@@ -398,6 +401,29 @@ function RootLayout() {
       }
     })();
   }, [isAuthInitialized, authToken]);
+
+  // ── Foreground ride-offer banner ──
+  // When the app is OPEN, the offer arrives via WebSocket and shows as the
+  // in-app panel + MP3 loop. This listener additionally surfaces the Notifee
+  // heads-up banner (silent variant — no channel sound, no full-screen
+  // intent) so a driver who is on another in-app screen (chat, earnings)
+  // still sees the offer with APPROVE/Decline at hand. The dashboard
+  // dismisses it the moment the offer is accepted/declined/expired.
+  useEffect(() => {
+    if (!displayRideOfferNotification) return;
+    const unsub = onForegroundMessage(async (remoteMessage: any) => {
+      const offer = offerDisplayDataFromFcm(remoteMessage?.data || {});
+      if (!offer) return;
+      try {
+        await displayRideOfferNotification(offer, { silent: true });
+      } catch (e) {
+        console.warn('[Notifee] foreground offer banner failed:', e);
+      }
+    });
+    return () => {
+      if (typeof unsub === 'function') unsub();
+    };
+  }, []);
 
   // ── FCM token rotation listener (permanent, not gated on auth token) ──
   // onTokenRefresh must live in its OWN effect with empty deps. If it

@@ -32,7 +32,7 @@ type LocationTaskData = {
  * shared memory, so we MUST refresh via the refresh_token (which is persisted
  * to SecureStore) to get a fresh access token.
  */
-async function getBackgroundAuthToken(): Promise<string | null> {
+export async function getBackgroundAuthToken(): Promise<string | null> {
   if (!API_URL) return null;
 
   // First try the in-memory persisted access token (set by setTokens flow below)

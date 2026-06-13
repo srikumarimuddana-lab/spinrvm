@@ -170,37 +170,47 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   const offerSound = useRideOfferSound();
 
   // Consume any Accept/Decline action the user tapped from the Notifee
-  // notification while the app was killed/backgrounded. _layout.tsx
-  // stashed it in AsyncStorage; we replay it here on the next mount /
-  // focus so the backend call actually fires.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-        const raw = await AsyncStorage.getItem(PENDING_ACTION_KEY);
-        if (!raw) return;
-        await AsyncStorage.removeItem(PENDING_ACTION_KEY);
-        if (cancelled) return;
-        const { action, ride_id, ts } = JSON.parse(raw) as {
-          action: 'accept' | 'decline' | 'tap';
-          ride_id: string;
-          ts: number;
-        };
-        // Stale guard — Notifee actions older than 60s are likely from a
-        // ride already resolved on another channel (WS / offer expiry).
-        if (Date.now() - ts > 60_000) return;
-        if (action === 'accept') {
-          await storeAcceptRide(ride_id);
-        } else if (action === 'decline') {
-          await storeDeclineRide(ride_id);
-        }
-      } catch (e) {
-        console.warn('[Notifee] pending action consume failed:', e);
+  // notification while the app was killed/backgrounded. The background
+  // handler stashed it in AsyncStorage; we replay it so the backend call
+  // actually fires.
+  const consumePendingAction = useCallback(async () => {
+    try {
+      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+      const raw = await AsyncStorage.getItem(PENDING_ACTION_KEY);
+      if (!raw) return;
+      // Remove first so concurrent runs (mount + resume firing together)
+      // can't double-process the same action.
+      await AsyncStorage.removeItem(PENDING_ACTION_KEY);
+      const { action, ride_id, ts } = JSON.parse(raw) as {
+        action: 'accept' | 'decline' | 'tap';
+        ride_id: string;
+        ts: number;
+      };
+      // Stale guard — Notifee actions older than 60s are likely from a
+      // ride already resolved on another channel (WS / offer expiry).
+      if (Date.now() - ts > 60_000) return;
+      if (action === 'accept') {
+        await storeAcceptRide(ride_id);
+      } else if (action === 'decline') {
+        await storeDeclineRide(ride_id);
       }
-    })();
-    return () => { cancelled = true; };
+    } catch (e) {
+      console.warn('[Notifee] pending action consume failed:', e);
+    }
   }, [storeAcceptRide, storeDeclineRide]);
+
+  // Run on mount AND on every foreground resume. The Accept action sets
+  // launchActivity, which brings an already-mounted activity back to the
+  // foreground WITHOUT remounting this hook — so a mount-only check would
+  // never fire on the common background→resume path and the accepted offer
+  // would time out as missed.
+  useEffect(() => {
+    consumePendingAction();
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') consumePendingAction();
+    });
+    return () => sub.remove();
+  }, [consumePendingAction]);
 
   // Dismiss the Notifee ride-offer notification once we're no longer in
   // the offer state (accepted, declined, expired, or cancelled). Without

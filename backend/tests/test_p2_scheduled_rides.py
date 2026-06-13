@@ -45,16 +45,6 @@ def _scheduled_ride(status: str = "scheduled", **extra) -> dict:
     }
 
 
-class _SimpleCursor:
-    """Minimal cursor stub — mirrors the pattern used in other P2 tests."""
-
-    def __init__(self, items):
-        self._items = items
-
-    async def to_list(self, length=None):
-        return self._items
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # GET /rides/scheduled
 # ─────────────────────────────────────────────────────────────────────────────

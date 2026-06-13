@@ -5315,72 +5315,85 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
 
     now = datetime.now(timezone.utc)
     expires = now + timedelta(days=plan.get("duration_days", 30))
-
-    # Attempt Stripe charge if configured; fall back gracefully if not.
-    payment_status = "paid"
-    stripe_charge_id = None
     plan_price = Decimal(str(plan.get("price", 0) or 0))
-    if plan_price > 0:
-        try:
-            from ..settings_loader import get_app_settings
+    subscription_id = str(uuid.uuid4())
 
-            _settings = await get_app_settings()
-            _stripe_secret = _settings.get("stripe_secret_key", "")
-            if _stripe_secret:
-                # Use the driver's saved default payment method via their Stripe customer
-                _user = await db.find_one("users", {"id": current_user["id"]})
-                _customer_id = _user.get("stripe_customer_id") if _user else None
-                if _customer_id:
-                    _amount_cents = dollars_to_cents(plan_price)
-                    _charge = stripe.PaymentIntent.create(
-                        amount=_amount_cents,
-                        currency="cad",
-                        customer=_customer_id,
-                        confirm=True,
-                        off_session=True,
-                        metadata={
-                            "driver_id": driver["id"],
-                            "plan_id": plan["id"],
-                            "scope": "driver_subscription",
+    # Try Stripe Checkout if configured; otherwise dev-mode instant activation.
+    checkout_url = None
+    stripe_session_id = None
+    payment_status = "pending"
+
+    try:
+        from ..settings_loader import get_app_settings
+
+        _settings = await get_app_settings()
+        _stripe_secret = _settings.get("stripe_secret_key", "")
+        _base_url = _settings.get("base_url", "http://localhost:8000")
+
+        if _stripe_secret and plan_price > 0:
+            # Create a Checkout Session for the driver to complete payment.
+            # The webhook (checkout.session.completed) will activate the subscription.
+            _amount_cents = int(plan_price * 100)
+            _session = stripe.checkout.Session.create(
+                payment_method_types=["card"],
+                mode="payment",
+                customer_creation="always",
+                line_items=[
+                    {
+                        "price_data": {
+                            "currency": "cad",
+                            "product_data": {
+                                "name": plan.get("name", "Spinr Pass"),
+                                "description": plan.get("description", ""),
+                            },
+                            "unit_amount": _amount_cents,
                         },
-                        api_key=_stripe_secret,
-                        idempotency_key=f"sub-charge-{driver['id']}-{plan['id']}-{now.strftime('%Y%m%d')}",
-                    )
-                    stripe_charge_id = _charge.id
-                    payment_status = _charge.status  # "succeeded" | "requires_action" | …
-                    logger.info(f"Stripe charge {stripe_charge_id} status={payment_status} for driver {driver['id']}")
-                else:
-                    logger.info(f"No Stripe customer for driver {driver['id']}, marking paid without charge")
-            else:
-                logger.info("Stripe not configured; marking subscription paid without charge")
-        except Exception as _stripe_err:
-            # B-P2-1: NEVER interpolate the underlying exception into the
-            # client-facing detail. Stripe error strings carry charge IDs
-            # (ch_…), customer IDs (cus_…), decline codes, and sometimes
-            # last-4-digits — none of which the rider/driver app should
-            # see. logger.exception captures the full traceback server-
-            # side; the request_id in the response body lets support
-            # correlate against the log entry. This is the canonical
-            # pattern referenced by docs/runbooks/error-responses.md.
-            logger.exception(f"Stripe subscription charge failed for driver {driver['id']}")
-            raise HTTPException(
-                status_code=402,
-                detail="Payment failed. Please try another payment method or contact support.",
-            ) from _stripe_err
+                        "quantity": 1,
+                    }
+                ],
+                metadata={
+                    "driver_id": driver["id"],
+                    "subscription_id": subscription_id,
+                    "plan_id": plan_id,
+                },
+                success_url=f"{_base_url}/api/v1/drivers/subscription/verify-session?session_id={{CHECKOUT_SESSION_ID}}",
+                cancel_url=f"{_base_url}/drivers/subscription",
+                api_key=_stripe_secret,
+            )
+            checkout_url = _session.url
+            stripe_session_id = _session.id
+            payment_status = "pending"
+            logger.info(
+                f"[SUBSCRIBE] Checkout session created: session={stripe_session_id} "
+                f"subscription={subscription_id} driver={driver['id']}"
+            )
+        else:
+            # Dev/demo mode: no Stripe or free plan — activate immediately.
+            payment_status = "paid"
+            logger.info(
+                f"[SUBSCRIBE] Dev mode (no Stripe/free plan): subscription {subscription_id} for driver {driver['id']}"
+            )
+    except Exception as _stripe_err:
+        logger.exception(f"[SUBSCRIBE] Stripe Checkout creation failed for driver {driver['id']}")
+        raise HTTPException(
+            status_code=502,
+            detail="Payment service unavailable. Please try again later.",
+        ) from _stripe_err
 
+    # Create the subscription row (pending payment if Checkout, or paid in dev mode)
     subscription = {
-        "id": str(uuid.uuid4()),
+        "id": subscription_id,
         "driver_id": driver["id"],
-        "plan_id": plan["id"],
-        "plan_name": plan["name"],
-        "price": plan["price"],
+        "plan_id": plan_id,
+        "plan_name": plan.get("name"),
+        "price": plan.get("price"),
         "rides_per_day": plan.get("rides_per_day", -1),
-        "duration_days": plan.get("duration_days", 30),
-        "status": "active",
+        "status": "active" if payment_status == "paid" else "pending",
         "started_at": now.isoformat(),
         "expires_at": expires.isoformat(),
         "payment_status": payment_status,
-        "stripe_charge_id": stripe_charge_id,
+        "stripe_session_id": stripe_session_id,
+        "expiry_warned": False,
         "created_at": now.isoformat(),
     }
 
@@ -5393,9 +5406,11 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
         {"subscriber_count": (plan.get("subscriber_count", 0) or 0) + 1},
     )
 
-    logger.info(f"[SUBSCRIBE] Dev mode: driver {driver['id']} subscribed to {plan['name']} (${plan['price']})")
-
-    return {"success": True, "subscription": subscription, "mode": "dev"}
+    if checkout_url:
+        return {"success": True, "checkout_url": checkout_url, "subscription_id": subscription_id}
+    else:
+        # Dev mode: subscription is already active
+        return {"success": True, "subscription": subscription, "mode": "dev"}
 
 
 @api_router.get("/subscription/verify-session")

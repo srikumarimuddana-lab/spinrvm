@@ -322,3 +322,113 @@ class TestVerifySession:
             result = await verify_subscription_session("cs_test_123", current_user)
 
             assert result["status"] == "pending"
+
+
+class TestRecurringSubscription:
+    """B3/B5: plans with a stripe_price_id use mode=subscription Checkout, and
+    cancelling stops Stripe billing (not just the DB row)."""
+
+    async def test_subscribe_recurring_uses_subscription_mode(
+        self, mock_driver, mock_settings
+    ):
+        from backend.routes.drivers import subscribe_to_plan
+        from fastapi import Request
+
+        recurring_plan = {
+            "id": "plan-recurring",
+            "name": "Pro Pass",
+            "price": 49.99,
+            "duration_days": 30,
+            "rides_per_day": -1,
+            "description": "Auto-renew",
+            "is_active": True,
+            "subscriber_count": 0,
+            "stripe_price_id": "price_abc123",
+        }
+
+        request = AsyncMock(spec=Request)
+        request.json = AsyncMock(return_value={"plan_id": "plan-recurring"})
+        current_user = {"id": "user-123"}
+
+        with (
+            patch("backend.db_supabase.get_rows") as mock_get_rows,
+            patch("backend.db_supabase.update_one"),
+            patch("backend.db_supabase.insert_one"),
+            patch("backend.settings_loader.get_app_settings") as mock_get_settings,
+            patch("stripe.checkout.Session.create") as mock_session_create,
+        ):
+            mock_get_rows.side_effect = lambda table, filters, limit=None: {
+                "drivers": [[mock_driver]],
+                "service_areas": [[{"spinr_pass_enabled": True}]],
+                "subscription_plans": [[recurring_plan]],
+                "driver_subscriptions": [[]],
+            }.get(table, [[]])
+            mock_get_settings.return_value = mock_settings
+
+            session = MagicMock()
+            session.url = "https://checkout.stripe.com/pay/recurring"
+            session.id = "cs_recurring_1"
+            mock_session_create.return_value = session
+
+            result = await subscribe_to_plan(request, current_user)
+
+        call_kwargs = mock_session_create.call_args[1]
+        assert call_kwargs["mode"] == "subscription"
+        assert call_kwargs["line_items"][0]["price"] == "price_abc123"
+        # ids mirrored onto the Stripe Subscription for renewal-event matching
+        assert call_kwargs["subscription_data"]["metadata"]["plan_id"] == "plan-recurring"
+        assert result["checkout_url"] == "https://checkout.stripe.com/pay/recurring"
+
+
+class TestCancelStripeSubscription:
+    """_cancel_stripe_subscription stops recurring billing; no-ops otherwise."""
+
+    async def test_cancels_when_configured(self):
+        from backend.routes.drivers import _cancel_stripe_subscription
+
+        with (
+            patch(
+                "backend.settings_loader.get_app_settings",
+                AsyncMock(return_value={"stripe_secret_key": "sk_test"}),
+            ),
+            patch("stripe.Subscription.delete") as del_mock,
+        ):
+            await _cancel_stripe_subscription("sub_123")
+
+        del_mock.assert_called_once()
+        assert del_mock.call_args[0][0] == "sub_123"
+
+    async def test_noop_without_subscription_id(self):
+        from backend.routes.drivers import _cancel_stripe_subscription
+
+        with patch("stripe.Subscription.delete") as del_mock:
+            await _cancel_stripe_subscription(None)
+
+        del_mock.assert_not_called()
+
+    async def test_noop_without_stripe_secret(self):
+        from backend.routes.drivers import _cancel_stripe_subscription
+
+        with (
+            patch(
+                "backend.settings_loader.get_app_settings",
+                AsyncMock(return_value={}),
+            ),
+            patch("stripe.Subscription.delete") as del_mock,
+        ):
+            await _cancel_stripe_subscription("sub_123")
+
+        del_mock.assert_not_called()
+
+    async def test_stripe_failure_does_not_raise(self):
+        from backend.routes.drivers import _cancel_stripe_subscription
+
+        with (
+            patch(
+                "backend.settings_loader.get_app_settings",
+                AsyncMock(return_value={"stripe_secret_key": "sk_test"}),
+            ),
+            patch("stripe.Subscription.delete", side_effect=Exception("stripe down")),
+        ):
+            # Best-effort: must swallow so the DB-side cancel still proceeds.
+            await _cancel_stripe_subscription("sub_123")

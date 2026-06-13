@@ -5,6 +5,10 @@
  * status line, action bubbles (support deep-link; the booking card lands in
  * M5.4), and a persistent disclaimer footer. All AI inference is
  * server-side (/ai/chat) — this screen only renders frames.
+ *
+ * Not reachable during an active ride: a focus guard redirects to the live
+ * ride screen (same policy as the home tab), so in-ride tracking happens on
+ * the map screens, never in chat.
  */
 import React, { useCallback, useEffect, useRef } from 'react';
 import {
@@ -12,7 +16,6 @@ import {
   FlatList,
   KeyboardAvoidingView,
   Platform,
-  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -20,10 +23,10 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
-import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import type { AiChatMessage, LocationSuggestionCandidate } from '@shared/types/ai';
@@ -31,6 +34,7 @@ import BookingProposalCard from '../components/BookingProposalCard';
 import FareQuoteCard from '../components/FareQuoteCard';
 import { useAiChatStore } from '../store/aiChatStore';
 import { useRideStore } from '../store/rideStore';
+import { activeRideRouteFor } from '../utils/activeRideRoute';
 
 const QUICK_PROMPTS = [
   "Where's my driver?",
@@ -39,80 +43,6 @@ const QUICK_PROMPTS = [
   'Do I have any promos?',
   'Book me a ride home',
 ];
-
-const ACTIVE_STATUSES = ['searching', 'driver_assigned', 'driver_accepted', 'driver_arrived', 'in_progress'];
-
-/** Where "Track ride" lands per ride status (mirrors payment-confirm.tsx). */
-const TRACK_ROUTES: Record<string, string> = {
-  searching: '/(tabs)',
-  driver_assigned: '/driver-arriving',
-  driver_accepted: '/driver-arriving',
-  driver_arrived: '/driver-arrived',
-  in_progress: '/ride-in-progress',
-};
-
-/**
- * Live ride status inside the chat — fed by rideStore via the global
- * useRiderSocket mount, zero AI involvement. Answers "searching… / driver
- * found" and offers the trip-share link + tracking deep-link.
- */
-function RideStatusBanner({ colors, styles }: { colors: ThemeColors; styles: ReturnType<typeof createStyles> }) {
-  const router = useRouter();
-  const currentRide = useRideStore((s) => s.currentRide);
-  const currentDriver = useRideStore((s) => s.currentDriver);
-
-  const status = currentRide?.status ?? '';
-  if (!currentRide || !ACTIVE_STATUSES.includes(status)) return null;
-
-  let statusText = 'Trip in progress';
-  if (status === 'searching') statusText = 'Searching for a driver…';
-  else if (status === 'driver_assigned' || status === 'driver_accepted') {
-    statusText = currentDriver
-      ? `Driver found: ${currentDriver.name} — ${[currentDriver.vehicle_color, currentDriver.vehicle_make, currentDriver.vehicle_model].filter(Boolean).join(' ')}${currentDriver.license_plate ? `, plate ${currentDriver.license_plate}` : ''}`
-      : 'Driver found — on the way!';
-  } else if (status === 'driver_arrived') statusText = 'Your driver has arrived!';
-
-  const handleShare = async () => {
-    try {
-      const res = await api.get<{ share_url?: string }>(`/rides/${currentRide.id}/share`);
-      const url = res.data?.share_url;
-      if (url) await Share.share({ message: `Follow my Spinr trip live: ${url}` });
-    } catch (error) {
-      console.error('[ai-assistant] share link failed:', error);
-    }
-  };
-
-  return (
-    <View style={styles.rideBanner}>
-      <View style={styles.rideBannerTextRow}>
-        {status === 'searching' ? (
-          <ActivityIndicator size="small" color={colors.primary} />
-        ) : (
-          <Ionicons name="car" size={16} color={colors.primary} />
-        )}
-        <Text style={styles.rideBannerText} numberOfLines={2}>
-          {statusText}
-        </Text>
-      </View>
-      <View style={styles.rideBannerButtons}>
-        {status !== 'searching' && (
-          <TouchableOpacity style={styles.rideBannerButton} onPress={handleShare} accessibilityLabel="Share trip">
-            <Ionicons name="share-outline" size={14} color={colors.primary} />
-            <Text style={styles.rideBannerButtonText}>Share trip</Text>
-          </TouchableOpacity>
-        )}
-        <TouchableOpacity
-          style={styles.rideBannerButton}
-          onPress={() => router.push((TRACK_ROUTES[status] ?? '/(tabs)') as never)}
-          accessibilityLabel="Track ride"
-        >
-          <Ionicons name="navigate-outline" size={14} color={colors.primary} />
-          <Text style={styles.rideBannerButtonText}>Track ride</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-}
 
 function LocationSuggestionsCard({
   item,
@@ -189,6 +119,18 @@ export default function AiAssistantScreen() {
   const loadConfig = useAiChatStore((s) => s.loadConfig);
 
   const [input, setInput] = React.useState('');
+  const currentRide = useRideStore((s) => s.currentRide);
+
+  // An active ride owns the screen: bounce to the live ride flow (same
+  // guard as the home tab) so the chat never sits on top of a trip.
+  useFocusEffect(
+    useCallback(() => {
+      const pathname = activeRideRouteFor(currentRide?.status);
+      if (pathname && currentRide?.id) {
+        router.replace({ pathname, params: { rideId: currentRide.id } } as never);
+      }
+    }, [currentRide?.status, currentRide?.id, router]),
+  );
 
   useEffect(() => {
     loadConfig();
@@ -331,8 +273,6 @@ export default function AiAssistantScreen() {
             onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
           />
         )}
-
-        <RideStatusBanner colors={colors} styles={styles} />
 
         {toolStatus ? (
           <View style={styles.toolStatusRow}>
@@ -486,21 +426,6 @@ const createStyles = (colors: ThemeColors) =>
     locationCopy: { flex: 1 },
     locationPrimary: { fontSize: 14, fontWeight: '700', color: colors.text },
     locationSecondary: { fontSize: 12, color: colors.textDim, lineHeight: 16 },
-    rideBanner: {
-      marginHorizontal: 12,
-      marginTop: 4,
-      padding: 12,
-      borderRadius: 12,
-      backgroundColor: colors.surfaceLight,
-      borderWidth: 1,
-      borderColor: colors.border,
-      gap: 8,
-    },
-    rideBannerTextRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    rideBannerText: { flex: 1, fontSize: 13, fontWeight: '600', color: colors.text },
-    rideBannerButtons: { flexDirection: 'row', gap: 14, paddingLeft: 24 },
-    rideBannerButton: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-    rideBannerButtonText: { fontSize: 13, fontWeight: '600', color: colors.primary },
     toolStatusRow: {
       flexDirection: 'row',
       alignItems: 'center',

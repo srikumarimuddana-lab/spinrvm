@@ -704,6 +704,8 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           rider_name: data.rider_name,
           rider_rating: data.rider_rating,
           requires_wav: data.requires_wav === true,
+          is_scheduled: data.is_scheduled === true,
+          scheduled_time: typeof data.scheduled_time === 'string' ? data.scheduled_time : undefined,
           countdown_seconds: typeof data.countdown_seconds === 'number' ? data.countdown_seconds : undefined,
           offer_expires_at: data.offer_expires_at,
           surge_multiplier: typeof data.surge_multiplier === 'number' ? data.surge_multiplier : undefined,

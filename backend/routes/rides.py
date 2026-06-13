@@ -920,6 +920,14 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             "rider_rating": (rider_user or {}).get("rating"),
             "rider_profile_image": (rider_user or {}).get("profile_image"),
             "requires_wav": bool(ride.get("requires_wav")),
+            # Scheduled-ride context: a pre-booked ride is dispatched at its
+            # scheduled_time as a normal offer, so without these flags the
+            # driver-app shows it as an ad-hoc "now" request. Surface them so
+            # the offer panel (and the driver's upcoming list) can label it as
+            # a scheduled pickup. scheduled_time is the rider's requested
+            # pickup time (UTC ISO); the driver-app converts to local.
+            "is_scheduled": bool(ride.get("is_scheduled")),
+            "scheduled_time": ride.get("scheduled_time"),
             "countdown_seconds": offer_timeout,
             "offer_expires_at": _offer_expires_at,
             "surge_multiplier": _surge_mult if _surge_mult > 1.0 else None,
@@ -4578,6 +4586,19 @@ async def cancel_scheduled_ride(
             status_code=400,
             message_key=ErrorKeys.RIDE_ALREADY_CANCELLED,
         )
+
+    # Race: the scheduled-ride dispatcher loop (utils/scheduled_rides.py) can
+    # flip a ride scheduled → searching → driver_assigned at its scheduled_time
+    # in the same window the rider taps cancel. Once the ride has left
+    # 'scheduled' it has (or is about to have) a claimed driver and live
+    # ride_offers rows. The lightweight DB-only cancel below would strand that
+    # driver as unavailable, leave phantom offer panels open on other drivers'
+    # screens, and never emit the mandatory ride_cancelled WS event. Delegate to
+    # the live-ride cancel path, which releases the driver, cancels pending
+    # offers, fans out ride_cancelled to driver/rider/admins, and applies the
+    # standard cancellation-fee policy — exactly as for an immediate booking.
+    if ride.get("status") != RideStatus.SCHEDULED:
+        return await cancel_ride_rider(ride_id, request=request, current_user=current_user)
 
     _now = datetime.now(timezone.utc)
     _base = {

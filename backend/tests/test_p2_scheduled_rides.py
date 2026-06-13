@@ -32,7 +32,7 @@ RIDER_ID = "rider_p2_17"
 RIDE_ID = "ride_p2_17_001"
 
 
-def _scheduled_ride(status: str = "searching", **extra) -> dict:
+def _scheduled_ride(status: str = "scheduled", **extra) -> dict:
     return {
         "id": RIDE_ID,
         "rider_id": RIDER_ID,
@@ -128,6 +128,33 @@ class TestCancelScheduledRide:
         assert result["success"] is True
         assert updates, "Ride was not updated"
         assert updates[0]["status"] == "cancelled"
+
+    async def test_dispatched_scheduled_ride_delegates_to_full_cancel(self):
+        """Race guard: if the dispatcher already flipped the ride out of
+        'scheduled' (searching / driver_assigned) the lightweight DB-only
+        cancel would strand the claimed driver and leave phantom ride_offers.
+        cancel_scheduled_ride must delegate to cancel_ride_rider, which
+        releases the driver, cancels offers, and fans out ride_cancelled."""
+        from backend.routes import rides as rides_mod
+
+        ride = _scheduled_ride(status="driver_assigned", driver_id="drv-1")
+        delegated = AsyncMock(return_value={"success": True, "cancellation_fee": 0})
+
+        with (
+            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[ride])),
+            patch("backend.routes.rides.cancel_ride_rider", delegated),
+            patch("backend.routes.rides.db_supabase.update_ride", AsyncMock()) as upd,
+        ):
+            result = await rides_mod.cancel_scheduled_ride(
+                ride_id=RIDE_ID,
+                request=None,
+                current_user={"id": RIDER_ID},
+            )
+
+        assert result["success"] is True
+        delegated.assert_awaited_once()
+        # The dispatched path must NOT take the lightweight DB-only branch.
+        upd.assert_not_called()
 
     async def test_non_owner_or_non_scheduled_returns_404(self):
         """Ride lookup includes rider_id + is_scheduled filter;

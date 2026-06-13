@@ -268,6 +268,11 @@ interface IncomingRide {
     // flag in the ride offer panel; non-WAV drivers should not receive
     // these offers at all (backend filters dispatch).
     requires_wav?: boolean;
+    // Pre-booked ride dispatched at its scheduled_time. The offer otherwise
+    // looks identical to an immediate request, so the panel labels it and
+    // shows the rider's requested pickup time (UTC ISO; convert to local).
+    is_scheduled?: boolean;
+    scheduled_time?: string;
     // Per-offer countdown sourced from the dispatch payload — overrides
     // the cached configuredCountdownSeconds so an admin-changed timeout
     // takes effect on the very next offer, not the next cold start.

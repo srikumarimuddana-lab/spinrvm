@@ -38,11 +38,31 @@ interface IncomingRide {
     rider_rating?: number;
     rider_profile_image?: string;
     requires_wav?: boolean;
+    is_scheduled?: boolean;
+    scheduled_time?: string;
     surge_multiplier?: number;
     incentives?: IncentiveItem[];
     total_bonus?: number;
     quest_hint?: QuestHint | null;
     payment_method?: string;
+}
+
+const SCHEDULED_BLUE = '#2563EB';
+
+/** Format a UTC ISO scheduled_time to a short local "Mon 2:30 PM" label. */
+function formatScheduledTime(iso?: string): string | null {
+    if (!iso) return null;
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return null;
+    try {
+        return d.toLocaleString(undefined, {
+            weekday: 'short',
+            hour: 'numeric',
+            minute: '2-digit',
+        });
+    } catch {
+        return d.toLocaleTimeString();
+    }
 }
 
 interface RideOfferPanelProps {
@@ -117,6 +137,8 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
     const hasIncentives = (incomingRide.incentives?.length ?? 0) > 0;
     const hasBonus = totalBonus > 0;
     const quest = incomingRide.quest_hint;
+    const isScheduled = incomingRide.is_scheduled === true;
+    const scheduledLabel = isScheduled ? formatScheduledTime(incomingRide.scheduled_time) : null;
 
     const vibrateForActionTap = () => {
         if (Platform.OS !== 'web') {
@@ -173,8 +195,10 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                     <View style={styles.header}>
                         <View style={styles.headerLeft}>
                             <View style={styles.liveIndicator}>
-                                <View style={[styles.liveDot, { backgroundColor: ACCENT }]} />
-                                <Text style={styles.liveText}>NEW RIDE</Text>
+                                <View style={[styles.liveDot, { backgroundColor: isScheduled ? SCHEDULED_BLUE : ACCENT }]} />
+                                <Text style={[styles.liveText, isScheduled && { color: SCHEDULED_BLUE }]}>
+                                    {isScheduled ? 'SCHEDULED RIDE' : 'NEW RIDE'}
+                                </Text>
                             </View>
                             {incomingRide.rider_name ? (
                                 <View style={styles.riderInfo}>
@@ -253,9 +277,17 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                         </View>
                     </View>
 
-                    {/* Badges row: surge, wav, cash, payment */}
-                    {(hasSurge || incomingRide.requires_wav || incomingRide.payment_method === 'cash') && (
+                    {/* Badges row: scheduled, surge, wav, cash, payment */}
+                    {(isScheduled || hasSurge || incomingRide.requires_wav || incomingRide.payment_method === 'cash') && (
                         <View style={styles.badgesRow}>
+                            {isScheduled && (
+                                <View style={[styles.badge, { backgroundColor: SCHEDULED_BLUE + '20' }]}>
+                                    <Ionicons name="calendar" size={13} color={SCHEDULED_BLUE} />
+                                    <Text style={[styles.badgeText, { color: SCHEDULED_BLUE }]}>
+                                        {scheduledLabel ? `Scheduled · ${scheduledLabel}` : 'Scheduled'}
+                                    </Text>
+                                </View>
+                            )}
                             {hasSurge && (
                                 <View style={[styles.badge, { backgroundColor: SURGE_ORANGE + '20' }]}>
                                     <Ionicons name="flame" size={13} color={SURGE_ORANGE} />

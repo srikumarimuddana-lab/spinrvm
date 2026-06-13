@@ -208,6 +208,115 @@ class TestStripeWebhookConnectSecret:
         assert exc.value.status_code == 400
 
 
+class TestStripeWebhookPayoutSettlement:
+    """payout.paid / payout.failed reconcile the payouts row to the true
+    bank-settlement outcome (A2)."""
+
+    def _event(self, event_type, data_object, event_id="evt_payout_1"):
+        raw = _make_stripe_event(event_type, data_object, event_id=event_id)
+        obj = MagicMock()
+        obj.get = lambda k, d=None: raw.get(k, d)
+        obj.to_dict_recursive = lambda: raw
+        return obj
+
+    def _settings(self):
+        async def f():
+            return {
+                "stripe_webhook_secret": "ws",
+                "stripe_secret_key": "sk",
+                "stripe_connect_webhook_secret": "wc",
+            }
+
+        return f
+
+    def _req(self):
+        req = MagicMock()
+        req.body = AsyncMock(return_value=b"payload")
+        req.headers = {"stripe-signature": "sig"}
+        return req
+
+    def test_payout_paid_marks_completed(self):
+        import stripe
+
+        from backend.routes import webhooks as wh
+
+        event_obj = self._event("payout.paid", {"id": "po_123"})
+        update_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch(
+                "backend.routes.webhooks.db_supabase.find_one",
+                AsyncMock(return_value={"id": "payout_row_1", "driver_id": "d1"}),
+            ),
+            patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._req()))
+
+        assert result["received"] is True
+        update_mock.assert_awaited_once()
+        assert update_mock.await_args.args[0] == "payouts"
+        assert update_mock.await_args.args[2]["status"] == "completed"
+
+    def test_payout_failed_flags_and_notifies(self):
+        import stripe
+
+        from backend.routes import webhooks as wh
+
+        event_obj = self._event("payout.failed", {"id": "po_456", "failure_message": "account_closed"})
+        update_mock = AsyncMock()
+        push_mock = AsyncMock()
+        # find_one is called twice: the payouts row, then the drivers row.
+        find_mock = AsyncMock(
+            side_effect=[
+                {"id": "payout_row_2", "driver_id": "d2"},
+                {"id": "d2", "user_id": "u2"},
+            ]
+        )
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.find_one", find_mock),
+            patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
+            patch("backend.routes.webhooks.send_push_notification", push_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._req()))
+
+        assert result["received"] is True
+        upd = update_mock.await_args.args[2]
+        assert upd["status"] == "failed"
+        assert upd["requires_manual_review"] is True
+        assert "account_closed" in upd["failure_reason"]
+        push_mock.assert_awaited_once()
+
+    def test_payout_no_matching_row_acks_without_update(self):
+        import stripe
+
+        from backend.routes import webhooks as wh
+
+        event_obj = self._event("payout.paid", {"id": "po_orphan"})
+        update_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.find_one", AsyncMock(return_value=None)),
+            patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._req()))
+
+        assert result["received"] is True
+        update_mock.assert_not_awaited()
+
+
 class TestStripeWebhookDuplicateEvent:
     def test_duplicate_event_returns_received_duplicate(self):
         from backend.routes import webhooks as wh

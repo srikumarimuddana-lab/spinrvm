@@ -55,6 +55,7 @@ async def stripe_webhook(request: Request):
 
     settings = await get_app_settings()
     webhook_secret = settings.get("stripe_webhook_secret", "")
+    connect_webhook_secret = settings.get("stripe_connect_webhook_secret", "")
     stripe_secret = settings.get("stripe_secret_key", "")
 
     if not webhook_secret:
@@ -68,15 +69,36 @@ async def stripe_webhook(request: Request):
         logger.error("Stripe secret key not configured in app settings")
         raise HTTPException(status_code=500, detail="Stripe not configured")
 
-    try:
-        import stripe
+    import stripe
 
-        event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid payload") from None
-    except Exception as e:
-        logger.error(f"Stripe webhook signature verification failed: {e}")
-        raise HTTPException(status_code=400, detail="Invalid signature") from e
+    # Both the platform endpoint and the Connected-accounts endpoint POST to
+    # this same URL, but Stripe signs each with that endpoint's own whsec_.
+    # We can't tell them apart before verifying, so try the platform secret
+    # first, then the connect secret (if configured). A SignatureVerification
+    # failure on one is expected for events from the other — only reject when
+    # BOTH fail. ValueError = malformed payload, reject immediately.
+    candidate_secrets = [webhook_secret]
+    if connect_webhook_secret:
+        candidate_secrets.append(connect_webhook_secret)
+
+    event = None
+    last_sig_error: Exception | None = None
+    for secret in candidate_secrets:
+        try:
+            event = stripe.Webhook.construct_event(payload, sig_header, secret)
+            break
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid payload") from None
+        except stripe.error.SignatureVerificationError as e:
+            last_sig_error = e
+            continue
+        except Exception as e:
+            last_sig_error = e
+            continue
+
+    if event is None:
+        logger.error(f"Stripe webhook signature verification failed: {last_sig_error}")
+        raise HTTPException(status_code=400, detail="Invalid signature") from last_sig_error
 
     event_id = event.get("id", "")
     event_type = event.get("type", "")

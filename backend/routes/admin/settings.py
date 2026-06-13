@@ -43,6 +43,7 @@ _CREDENTIAL_FIELDS = frozenset(
     {
         "stripe_secret_key",
         "stripe_webhook_secret",
+        "stripe_connect_webhook_secret",
         "twilio_auth_token",
         "google_maps_api_key",
         # Resend API key is a credential too — without masking it would
@@ -101,6 +102,8 @@ class SettingsUpdateRequest(BaseModel):
     stripe_publishable_key: Optional[str] = None
     stripe_secret_key: Optional[str] = None
     stripe_webhook_secret: Optional[str] = None
+    # Connected-accounts endpoint signing secret (account.updated, payout.*).
+    stripe_connect_webhook_secret: Optional[str] = None
     twilio_account_sid: Optional[str] = None
     twilio_auth_token: Optional[str] = None
     twilio_from_number: Optional[str] = None

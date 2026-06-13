@@ -3,6 +3,7 @@ import * as TaskManager from 'expo-task-manager';
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 import { API_URL } from '@shared/config';
+import { getAppCheckToken } from '@shared/services/firebase';
 
 const TASK_NAME = 'spinr-background-location';
 
@@ -58,9 +59,15 @@ export async function getBackgroundAuthToken(): Promise<string | null> {
   }
 
   try {
+    // App Check is enforced on /api/* in production. Best-effort: attach a
+    // token when the SDK can mint one (null → omit, same as the shared client).
+    const appCheckToken = await getAppCheckToken();
     const resp = await fetch(`${API_URL}/api/v1/auth/refresh`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(appCheckToken ? { 'X-Firebase-AppCheck': appCheckToken } : {}),
+      },
       body: JSON.stringify({ refresh_token: refreshToken }),
     });
     if (!resp.ok) {

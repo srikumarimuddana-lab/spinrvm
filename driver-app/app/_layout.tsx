@@ -40,7 +40,6 @@ import {
   onTokenRefresh,
   getAppCheckToken,
 } from '@shared/services/firebase';
-import { PENDING_ACTION_KEY } from '../services/backgroundMessaging';
 import { setAppCheckTokenProvider } from '@shared/api/client';
 // Notifee — rich notifications (heads-up + full-screen intent + Accept/Decline
 // action buttons). Lazy-required because the native module isn't linked in
@@ -181,18 +180,22 @@ function usePushNotificationRouter() {
     const unsub = notifee.onForegroundEvent(async (event: any) => {
       const parsed = parseRideOfferEvent(event);
       if (!parsed || !parsed.ride_id) return;
-      // Always route to the driver home so the offer panel is on screen;
-      // accept/decline execution happens inside the dashboard which polls
-      // the pending-action AsyncStorage key on mount + on focus.
+      // The app is foreground/active here, so execute accept/decline
+      // immediately. Stashing would NOT be replayed: the dashboard's
+      // pending-action consumer only runs on mount or an AppState→active
+      // transition, and an already-mounted, already-active dashboard sees
+      // neither — so a foreground action tap would otherwise sit unread and
+      // the offer would time out. A body tap just routes to the offer panel.
       try {
-        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-        await AsyncStorage.setItem(
-          PENDING_ACTION_KEY,
-          JSON.stringify({ action: parsed.action, ride_id: parsed.ride_id, ts: Date.now() }),
-        );
+        const store = useDriverStore.getState();
+        if (parsed.action === 'accept') {
+          await store.acceptRide(parsed.ride_id);
+        } else if (parsed.action === 'decline') {
+          await store.declineRide(parsed.ride_id);
+        }
         if (dismissRideOfferNotification) await dismissRideOfferNotification();
       } catch (e) {
-        console.warn('[Notifee] foreground action persist failed:', e);
+        console.warn('[Notifee] foreground action failed:', e);
       }
       router.push('/driver/' as any);
     });

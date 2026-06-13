@@ -25,7 +25,7 @@
  */
 
 import { Platform } from 'react-native';
-import { setBackgroundMessageHandler } from '@shared/services/firebase';
+import { setBackgroundMessageHandler, getAppCheckToken } from '@shared/services/firebase';
 import { API_URL } from '@shared/config';
 import { getBackgroundAuthToken } from '../utils/backgroundLocation';
 
@@ -183,8 +183,17 @@ export function registerBackgroundMessageHandlers(): void {
           await _clearPendingOffer();
           const delivered = await _declineHeadless(parsed.ride_id);
           if (!delivered) await _stashAction(parsed.action, parsed.ride_id);
+        } else if (parsed.action === 'accept') {
+          // Clear the stashed offer before launching: on cold start the
+          // dashboard consumes the accept AND hydrates PENDING_OFFER_KEY
+          // concurrently — if hydration sets rideState='ride_offered' after
+          // the accept lands, fetchActiveRide() short-circuits and strands the
+          // driver on the offer panel instead of pickup navigation.
+          await _clearPendingOffer();
+          await _stashAction(parsed.action, parsed.ride_id);
         } else {
-          // accept / tap — the app launches; the dashboard consumes the stash.
+          // Body tap — keep PENDING_OFFER_KEY so the dashboard hydrates the
+          // offer panel for the driver to act on.
           await _stashAction(parsed.action, parsed.ride_id);
         }
         // Dismiss the notification so the driver doesn't see stale action
@@ -231,11 +240,17 @@ async function _declineHeadless(rideId: string): Promise<boolean> {
   }
   if (!token) return false;
   try {
+    // App Check is enforced on /api/* in production. Attach a token when the
+    // SDK can mint one (best-effort: getAppCheckToken returns null if App
+    // Check isn't initialized in this headless context, matching how the
+    // shared client omits the header).
+    const appCheckToken = await getAppCheckToken();
     const resp = await fetch(`${API_URL}/api/v1/drivers/rides/${rideId}/decline`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
+        ...(appCheckToken ? { 'X-Firebase-AppCheck': appCheckToken } : {}),
       },
     });
     if (resp.ok) return true;

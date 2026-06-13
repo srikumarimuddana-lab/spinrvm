@@ -22,7 +22,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // 'fingerprint'/'appVersion' rejected by EAS CLI). Bump manually when
     // shipping native changes that break JS-bundle compatibility. Pre-launch
     // with no production users, OTA compatibility risk is zero.
-    runtimeVersion: '2.0.0', // bumped from 1.0.0: New Architecture is a native/JS-bundle break — old-arch installs must not pull this OTA
+    runtimeVersion: '2.1.0', // bump from 2.0.0: withRideOfferSound adds native res/raw + iOS bundle resources and a new Notifee channel — old 2.0.0 binaries lack them, so this JS must not reach them via OTA
     splash: {
         image: './assets/images/splash-blank.png',
         resizeMode: 'contain',

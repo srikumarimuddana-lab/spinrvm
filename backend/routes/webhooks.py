@@ -575,75 +575,70 @@ async def stripe_webhook(request: Request):
 
     elif event_type == "customer.subscription.deleted":
         subscription = data_object
+        stripe_sub_id = subscription.get("id")
         stripe_customer_id = subscription.get("customer")
-        if stripe_customer_id:
-            # Look up the user by their Stripe customer ID, then find the linked driver
+
+        # Primary: match our row by the Stripe Subscription id, which we persist
+        # for recurring plans. Checkout-created subs may not have
+        # users.stripe_customer_id populated, so the customer lookup below can
+        # miss them — without this match the row would stay active and the
+        # driver would keep subscription-gated access after Stripe stopped.
+        active_sub = None
+        if stripe_sub_id:
+            active_sub = await db_supabase.find_one("driver_subscriptions", {"stripe_subscription_id": stripe_sub_id})
+
+        # Fallback: legacy customer-based lookup.
+        if not active_sub and stripe_customer_id:
             user_row = await db_supabase.find_one("users", {"stripe_customer_id": stripe_customer_id})
             if user_row:
-                user_id = user_row["id"]
-                driver_row = await db_supabase.find_one("drivers", {"user_id": user_id})
+                driver_row = await db_supabase.find_one("drivers", {"user_id": user_row["id"]})
                 if driver_row:
-                    driver_id = driver_row["id"]
-                    # Cancel the active driver_subscriptions row for this driver
                     active_sub = await db_supabase.find_one(
                         "driver_subscriptions",
-                        {"driver_id": driver_id, "status": "active"},
+                        {"driver_id": driver_row["id"], "status": "active"},
                     )
-                    if active_sub:
-                        await db_supabase.update_one(
-                            "driver_subscriptions",
-                            {"id": active_sub["id"]},
-                            {
-                                "status": "cancelled",
-                                "cancelled_at": datetime.now(timezone.utc).isoformat(),
-                                "updated_at": datetime.now(timezone.utc).isoformat(),
-                            },
-                        )
-                        logger.info(
-                            f"Stripe subscription cancelled for driver {driver_id} "
-                            f"(subscription row {active_sub['id']})",
-                            extra={
-                                "domain": "drivers",
-                                "driver_id": driver_id,
-                                "event_id": event_id,
-                            },
-                        )
-                    else:
-                        logger.info(
-                            f"customer.subscription.deleted: no active subscription row for driver {driver_id}",
-                            extra={
-                                "domain": "drivers",
-                                "driver_id": driver_id,
-                                "event_id": event_id,
-                            },
-                        )
-                    try:
-                        await send_push_notification(
-                            user_id,
-                            "Subscription cancelled",
-                            "Your Spinr subscription has been cancelled. Renew to continue accepting rides.",
-                            data={
-                                "type": "subscription_cancelled",
-                                "deeplink": "/driver/subscription",
-                            },
-                        )
-                    except Exception as _e:
-                        logger.debug(f"Subscription cancel push failed: {_e}")
-                else:
-                    logger.warning(
-                        f"customer.subscription.deleted: no driver found for user {user_id}",
-                        extra={"domain": "drivers", "event_id": event_id},
-                    )
-            else:
-                logger.warning(
-                    "customer.subscription.deleted: no user found for stripe_customer_id",
-                    extra={"domain": "drivers", "event_id": event_id},
-                )
-        else:
+
+        if not active_sub:
             logger.warning(
-                "customer.subscription.deleted: event has no customer field — skipping",
+                "customer.subscription.deleted: no matching subscription row (sub=%s customer=%s)",
+                stripe_sub_id,
+                stripe_customer_id,
                 extra={"domain": "drivers", "event_id": event_id},
             )
+        else:
+            if active_sub.get("status") != "cancelled":
+                await db_supabase.update_one(
+                    "driver_subscriptions",
+                    {"id": active_sub["id"]},
+                    {
+                        "status": "cancelled",
+                        "cancelled_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+            logger.info(
+                "Stripe subscription cancelled: row=%s sub=%s",
+                active_sub["id"],
+                stripe_sub_id,
+                extra={
+                    "domain": "drivers",
+                    "driver_id": active_sub.get("driver_id") or "",
+                    "event_id": event_id,
+                },
+            )
+            driver_row = await db_supabase.find_one("drivers", {"id": active_sub.get("driver_id")})
+            if driver_row and driver_row.get("user_id"):
+                try:
+                    await send_push_notification(
+                        driver_row["user_id"],
+                        "Subscription cancelled",
+                        "Your Spinr subscription has been cancelled. Renew to continue accepting rides.",
+                        data={
+                            "type": "subscription_cancelled",
+                            "deeplink": "/driver/subscription",
+                        },
+                    )
+                except Exception as _e:
+                    logger.debug(f"Subscription cancel push failed: {_e}")
 
     elif event_type == "account.updated":
         # Stripe Connect Express KYC mirror. Fires whenever the driver

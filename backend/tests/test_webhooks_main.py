@@ -1119,3 +1119,58 @@ class TestStripeWebhookRecurringSubscription:
 
         assert result["received"] is True
         update_mock.assert_not_awaited()
+
+
+class TestStripeWebhookSubscriptionDeleted:
+    """customer.subscription.deleted now matches our row by
+    stripe_subscription_id (recurring Checkout subs may lack a
+    users.stripe_customer_id link) — comment 1."""
+
+    def _event(self, data_object, event_id="evt_del_1"):
+        raw = _make_stripe_event("customer.subscription.deleted", data_object, event_id=event_id)
+        obj = MagicMock()
+        obj.get = lambda k, d=None: raw.get(k, d)
+        obj.to_dict_recursive = lambda: raw
+        return obj
+
+    def _settings(self):
+        async def f():
+            return {"stripe_webhook_secret": "ws", "stripe_secret_key": "sk"}
+
+        return f
+
+    def _req(self):
+        req = MagicMock()
+        req.body = AsyncMock(return_value=b"payload")
+        req.headers = {"stripe-signature": "sig"}
+        return req
+
+    def test_deleted_matches_by_subscription_id(self):
+        from backend.routes import webhooks as wh
+        import stripe
+
+        event_obj = self._event({"id": "sub_del_1", "customer": "cus_x"})
+        update_mock = AsyncMock()
+        push_mock = AsyncMock()
+        # find_one: the row matched by stripe_subscription_id, then drivers for push.
+        find_mock = AsyncMock(
+            side_effect=[
+                {"id": "row1", "driver_id": "d1", "status": "active"},
+                {"id": "d1", "user_id": "u1"},
+            ]
+        )
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.find_one", find_mock),
+            patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
+            patch("backend.routes.webhooks.send_push_notification", push_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._req()))
+
+        assert result["received"] is True
+        assert update_mock.await_args.args[2]["status"] == "cancelled"
+        push_mock.assert_awaited_once()

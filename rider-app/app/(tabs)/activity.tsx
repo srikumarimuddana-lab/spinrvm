@@ -40,12 +40,16 @@ interface RideHistory {
   created_at: string;
   corporate_account_id?: string | null;
   scheduled_time?: string;
+  is_scheduled?: boolean;
   fare_breakdown?: FareBreakdownLine[];
 }
 
 type FilterType = 'all' | 'personal' | 'business';
-type TabType = 'history' | 'upcoming';
 type Period = 'week' | 'month' | 'all';
+
+// Distinct accent for upcoming/scheduled rides so they read differently from
+// the completed/cancelled history rows below them.
+const SCHEDULED_BLUE = '#3B82F6';
 
 interface RiderStats {
   period: string;
@@ -64,7 +68,6 @@ export default function ActivityScreen() {
   const [rides, setRides] = useState<RideHistory[]>([]);
   const [vehicleTypes, setVehicleTypes] = useState<Record<string, string>>({});
   const [filter, setFilter] = useState<FilterType>('all');
-  const [activeTab, setActiveTab] = useState<TabType>('history');
   const [period, setPeriod] = useState<Period>('all');
   const [stats, setStats] = useState<RiderStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
@@ -258,20 +261,72 @@ export default function ActivityScreen() {
 
   type ListItem =
     | { type: 'header'; key: string; title: string }
-    | { type: 'ride'; key: string; ride: RideHistory };
+    | { type: 'ride'; key: string; ride: RideHistory }
+    | { type: 'scheduled'; key: string; ride: any };
+
+  // Upcoming scheduled rides are merged onto the TOP of the single activity
+  // list (a blue "UPCOMING" section) instead of living behind a separate tab,
+  // so the rider sees their next pre-booked trips above their past ones.
+  // Honour the personal/business filter so the two views stay consistent.
+  const filteredScheduled = useMemo(() => scheduledRides.filter((ride: any) => {
+    if (filter === 'all') return true;
+    if (filter === 'business') return !!ride.corporate_account_id;
+    if (filter === 'personal') return !ride.corporate_account_id;
+    return true;
+  }), [scheduledRides, filter]);
 
   const listItems = useMemo((): ListItem[] => {
     const items: ListItem[] = [];
+    if (filteredScheduled.length > 0) {
+      items.push({ type: 'header', key: 'h-upcoming', title: t('activity.upcoming_tab').toUpperCase() });
+      filteredScheduled.forEach((ride: any) =>
+        items.push({ type: 'scheduled', key: `sched-${ride.id}`, ride })
+      );
+    }
     sections.forEach(section => {
       items.push({ type: 'header', key: `h-${section.title}`, title: section.title });
       section.data.forEach(ride => items.push({ type: 'ride', key: ride.id, ride }));
     });
     return items;
-  }, [sections]);
+  }, [sections, filteredScheduled, t]);
 
   const renderItem = useCallback(({ item }: { item: ListItem }) => {
     if (item.type === 'header') {
       return <Text style={styles.monthHeader}>{item.title}</Text>;
+    }
+    if (item.type === 'scheduled') {
+      const ride = item.ride;
+      return (
+        <TouchableOpacity
+          style={[styles.rideCard, styles.scheduledCard]}
+          onPress={() => handleRidePress(ride)}
+          accessibilityRole="button"
+          accessibilityLabel={`Scheduled ride to ${ride.dropoff_address || 'unknown destination'}`}
+        >
+          <View style={[styles.rideIcon, { backgroundColor: '#EFF6FF' }]}>
+            <Ionicons name="calendar" size={20} color={SCHEDULED_BLUE} />
+          </View>
+          <View style={styles.rideDetails}>
+            <Text style={styles.rideDestination} numberOfLines={1}>
+              {ride.dropoff_address || 'Unknown destination'}
+            </Text>
+            <Text style={styles.rideInfo}>
+              {ride.scheduled_time ? formatDate(ride.scheduled_time) : 'Scheduled'} · {getVehicleType(ride.vehicle_type_id)}
+            </Text>
+          </View>
+          <View style={styles.rideFareContainer}>
+            <Text style={[styles.rideFare, { color: SCHEDULED_BLUE }]} allowFontScaling={false}>
+              ${parseFloat(String(ride.grand_total ?? ride.total_fare ?? 0)).toFixed(2)}
+            </Text>
+            <View style={styles.rideStatusContainer}>
+              <View style={[styles.statusDot, { backgroundColor: SCHEDULED_BLUE }]} />
+              <Text style={[styles.rideStatus, { color: SCHEDULED_BLUE }]} allowFontScaling={false}>
+                {t('activity.scheduled')}
+              </Text>
+            </View>
+          </View>
+        </TouchableOpacity>
+      );
     }
     const { ride } = item;
     const fb = ride.fare_breakdown || [];
@@ -303,9 +358,14 @@ export default function ActivityScreen() {
           <Text style={styles.rideDestination} numberOfLines={1}>
             {ride.dropoff_address || 'Unknown destination'}
           </Text>
-          <Text style={styles.rideInfo}>
-            {formatDate(ride.created_at)} · {getVehicleType(ride.vehicle_type_id)}
-          </Text>
+          <View style={styles.rideInfoRow}>
+            {ride.is_scheduled && (
+              <Ionicons name="calendar-outline" size={12} color={SCHEDULED_BLUE} style={styles.rideInfoIcon} />
+            )}
+            <Text style={styles.rideInfo} numberOfLines={1}>
+              {formatDate(ride.created_at)} · {getVehicleType(ride.vehicle_type_id)}
+            </Text>
+          </View>
           {(ride.ride_code || ride.id) && (
             <Text style={styles.rideBookingId} numberOfLines={1}>
               {ride.ride_code || ride.id.slice(0, 8).toUpperCase()}
@@ -363,29 +423,7 @@ export default function ActivityScreen() {
         <Text style={styles.title}>{t('activity.title')}</Text>
       </View>
 
-      <View style={styles.tabRow} accessibilityRole="tablist">
-        <TouchableOpacity
-          style={[styles.tab, activeTab === 'history' && styles.tabActive]}
-          onPress={() => setActiveTab('history')}
-          accessibilityRole="tab"
-          accessibilityState={{ selected: activeTab === 'history' }}
-        >
-          <Text style={[styles.tabText, activeTab === 'history' && styles.tabTextActive]}>{t('activity.history_tab')}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tab, activeTab === 'upcoming' && styles.tabActive]}
-          onPress={() => setActiveTab('upcoming')}
-          accessibilityRole="tab"
-          accessibilityState={{ selected: activeTab === 'upcoming' }}
-        >
-          <Text style={[styles.tabText, activeTab === 'upcoming' && styles.tabTextActive]}>
-            {t('activity.upcoming_tab')}{scheduledRides.length > 0 ? ` (${scheduledRides.length})` : ''}
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {activeTab === 'history' && (
-        <>
+      <>
           {/* Period pills — ordered broadest-first so riders see lifetime impact first */}
           <View style={styles.periodPillRow}>
             {([
@@ -491,7 +529,7 @@ export default function ActivityScreen() {
                 </View>
               ))}
             </View>
-          ) : rides.length === 0 && !loading ? (
+          ) : rides.length === 0 && filteredScheduled.length === 0 && !loading ? (
             <ScrollView
               style={styles.content}
               contentContainerStyle={styles.emptyState}
@@ -519,58 +557,7 @@ export default function ActivityScreen() {
               }
             />
           )}
-        </>
-      )}
-
-      {activeTab === 'upcoming' && (
-        <ScrollView
-          style={styles.content}
-          contentContainerStyle={styles.contentContainer}
-          showsVerticalScrollIndicator={false}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        >
-          {scheduledRides.length === 0 ? (
-            <View style={styles.emptyState}>
-              <View style={styles.emptyIconContainer}>
-                <Ionicons name="calendar-outline" size={48} color="#CCC" />
-              </View>
-              <Text style={styles.emptyTitle}>{t('activity.no_upcoming')}</Text>
-              <Text style={styles.emptyText}>{t('activity.no_upcoming_subtitle')}</Text>
-            </View>
-          ) : (
-            scheduledRides.map((ride: any) => (
-              <TouchableOpacity
-                key={ride.id}
-                style={styles.rideCard}
-                onPress={() => handleRidePress(ride)}
-                accessibilityRole="button"
-                accessibilityLabel={`Scheduled ride to ${ride.dropoff_address || 'unknown destination'}`}
-              >
-                <View style={[styles.rideIcon, { backgroundColor: '#EFF6FF' }]}>
-                  <Ionicons name="calendar" size={20} color="#3B82F6" />
-                </View>
-                <View style={styles.rideDetails}>
-                  <Text style={styles.rideDestination} numberOfLines={1}>
-                    {ride.dropoff_address || 'Unknown destination'}
-                  </Text>
-                  <Text style={styles.rideInfo}>
-                    {ride.scheduled_time ? formatDate(ride.scheduled_time) : 'Scheduled'} · {getVehicleType(ride.vehicle_type_id)}
-                  </Text>
-                </View>
-                <View style={styles.rideFareContainer}>
-                  <Text style={styles.rideFare} allowFontScaling={false}>
-                    ${parseFloat(String(ride.grand_total ?? ride.total_fare ?? 0)).toFixed(2)}
-                  </Text>
-                  <View style={styles.rideStatusContainer}>
-                    <View style={[styles.statusDot, { backgroundColor: '#3B82F6' }]} />
-                    <Text style={[styles.rideStatus, { color: '#3B82F6' }]} allowFontScaling={false}>{t('activity.scheduled')}</Text>
-                  </View>
-                </View>
-              </TouchableOpacity>
-            ))
-          )}
-        </ScrollView>
-      )}
+      </>
     </SafeAreaView>
   );
 }
@@ -582,22 +569,6 @@ function createStyles(colors: ThemeColors, isCompactFilterLayout: boolean) { ret
     paddingHorizontal: 24, paddingVertical: 16,
   },
   title: { fontSize: 28, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text },
-  tabRow: {
-    flexDirection: 'row',
-    paddingHorizontal: 20,
-    marginBottom: 4,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  tab: {
-    paddingHorizontal: 16, paddingVertical: 12,
-    marginRight: 8,
-    borderBottomWidth: 2,
-    borderBottomColor: 'transparent',
-  },
-  tabActive: { borderBottomColor: colors.primary },
-  tabText: { fontSize: 15, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.textDim },
-  tabTextActive: { color: colors.primary },
   periodPillRow: {
     flexDirection: 'row', paddingHorizontal: 20, paddingTop: 12, gap: 8, flexWrap: 'wrap',
   },
@@ -661,10 +632,17 @@ function createStyles(colors: ThemeColors, isCompactFilterLayout: boolean) { ret
     paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: colors.border,
   },
   rideIcon: { width: 48, height: 48, borderRadius: 24, justifyContent: 'center', alignItems: 'center', marginRight: 14 },
+  scheduledCard: {
+    borderLeftWidth: 3,
+    borderLeftColor: SCHEDULED_BLUE,
+    paddingLeft: 8,
+  },
   rideDetails: { flex: 1 },
   rideDestination: {
     fontSize: 16, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text, marginBottom: 4,
   },
+  rideInfoRow: { flexDirection: 'row', alignItems: 'center' },
+  rideInfoIcon: { marginRight: 4 },
   rideInfo: { fontSize: 13, fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim },
   rideBookingId: {
     fontSize: 11, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.textDim,

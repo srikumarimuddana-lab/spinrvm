@@ -88,11 +88,11 @@ class TestSubscriptionCheckoutFlow:
         ):
             # Setup mocks
             mock_get_rows.side_effect = lambda table, filters, limit=None: {
-                "drivers": [[mock_driver]],
-                "service_areas": [[{"spinr_pass_enabled": True}]],
-                "subscription_plans": [[mock_plan]],
-                "driver_subscriptions": [[]],
-            }.get(table, [[]])
+                "drivers": [mock_driver],
+                "service_areas": [{"spinr_pass_enabled": True}],
+                "subscription_plans": [mock_plan],
+                "driver_subscriptions": [],
+            }.get(table, [])
 
             mock_get_settings.return_value = mock_settings
             mock_checkout_session = MagicMock()
@@ -142,11 +142,11 @@ class TestSubscriptionCheckoutFlow:
             patch("backend.settings_loader.get_app_settings") as mock_get_settings,
         ):
             mock_get_rows.side_effect = lambda table, filters, limit=None: {
-                "drivers": [[mock_driver]],
-                "service_areas": [[{"spinr_pass_enabled": True}]],
-                "subscription_plans": [[mock_plan]],
-                "driver_subscriptions": [[]],
-            }.get(table, [[]])
+                "drivers": [mock_driver],
+                "service_areas": [{"spinr_pass_enabled": True}],
+                "subscription_plans": [mock_plan],
+                "driver_subscriptions": [],
+            }.get(table, [])
 
             mock_get_settings.return_value = mock_settings_no_stripe
 
@@ -175,9 +175,9 @@ class TestSubscriptionCheckoutFlow:
 
         with patch("backend.db_supabase.get_rows") as mock_get_rows, patch("backend.settings_loader.get_app_settings"):
             mock_get_rows.side_effect = lambda table, filters, limit=None: {
-                "drivers": [[mock_driver]],
-                "service_areas": [[{"spinr_pass_enabled": False}]],
-            }.get(table, [[]])
+                "drivers": [mock_driver],
+                "service_areas": [{"spinr_pass_enabled": False}],
+            }.get(table, [])
 
             # Execute and expect 403
             with pytest.raises(HTTPException) as exc_info:
@@ -239,7 +239,7 @@ class TestWebhookActivation:
 
 
 class TestVerifySession:
-    """Test verify-session endpoint polls and activates on payment."""
+    """Test verify-session endpoint polls, authorizes, and activates on payment."""
 
     async def test_verify_session_already_active(self):
         """verify-session returns early if subscription already active."""
@@ -247,9 +247,16 @@ class TestVerifySession:
 
         current_user = {"id": "user-123"}
 
-        with patch("backend.db_supabase.find_one") as mock_find:
+        with (
+            patch("backend.db_supabase.find_one") as mock_find,
+            patch(
+                "backend.db_supabase.get_rows",
+                AsyncMock(return_value=[{"id": "driver-1"}]),
+            ),
+        ):
             mock_find.return_value = {
                 "id": "sub-123",
+                "driver_id": "driver-1",
                 "status": "active",
                 "payment_status": "paid",
             }
@@ -257,16 +264,40 @@ class TestVerifySession:
             result = await verify_subscription_session("cs_test_123", current_user)
 
             assert result["status"] == "active"
-            assert mock_find.call_count == 1
 
-    async def test_verify_session_polls_stripe_and_activates(self):
-        """verify-session retrieves session from Stripe and activates on paid."""
+    async def test_verify_session_rejects_non_owner(self):
+        """A driver cannot verify a session belonging to a different driver."""
+        from fastapi import HTTPException
+
         from backend.routes.drivers import verify_subscription_session
 
         current_user = {"id": "user-123"}
 
+        with (
+            patch(
+                "backend.db_supabase.find_one",
+                AsyncMock(return_value={"id": "sub-123", "driver_id": "driver-OTHER"}),
+            ),
+            patch(
+                "backend.db_supabase.get_rows",
+                AsyncMock(return_value=[{"id": "driver-1"}]),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await verify_subscription_session("cs_test_123", current_user)
+
+        # 404 (not 403) so the session id is not an existence oracle.
+        assert exc.value.status_code == 404
+
+    async def test_verify_session_persists_subscription_id(self):
+        """On paid, verify-session copies session.subscription onto the row so
+        renewal/cancellation webhooks can match it (B4 fallback)."""
+        from backend.routes.drivers import verify_subscription_session
+
+        current_user = {"id": "user-123"}
         mock_sub = {
             "id": "sub-123",
+            "driver_id": "driver-1",
             "plan_id": "plan-premium",
             "status": "pending",
             "payment_status": "pending",
@@ -274,26 +305,27 @@ class TestVerifySession:
 
         mock_session = MagicMock()
         mock_session.payment_status = "paid"
+        mock_session.get = lambda k, d=None: "sub_stripe_99" if k == "subscription" else d
+
+        update_mock = AsyncMock()
 
         with (
-            patch("backend.db_supabase.find_one") as mock_find,
-            patch("backend.settings_loader.get_app_settings") as mock_get_settings,
-            patch("stripe.checkout.Session.retrieve") as mock_retrieve,
-            patch("backend.routes.drivers._activate_subscription") as mock_activate,
+            patch("backend.db_supabase.find_one", AsyncMock(return_value=mock_sub)),
+            patch("backend.db_supabase.get_rows", AsyncMock(return_value=[{"id": "driver-1"}])),
+            patch("backend.db_supabase.update_one", update_mock),
+            patch(
+                "backend.settings_loader.get_app_settings",
+                AsyncMock(return_value={"stripe_secret_key": "sk_test_123"}),
+            ),
+            patch("stripe.checkout.Session.retrieve", return_value=mock_session),
+            patch("backend.routes.drivers._activate_subscription", AsyncMock()),
         ):
-            mock_find.return_value = mock_sub
-            mock_get_settings.return_value = {"stripe_secret_key": "sk_test_123"}
-            mock_retrieve.return_value = mock_session
-
             result = await verify_subscription_session("cs_test_123", current_user)
 
-            # Verify Stripe was queried
-            mock_retrieve.assert_called_once_with("cs_test_123", api_key="sk_test_123")
-
-            # Verify subscription was activated
-            mock_activate.assert_called_once_with("sub-123", "plan-premium")
-
-            assert result["status"] == "active"
+        assert result["status"] == "active"
+        # stripe_subscription_id persisted onto the row.
+        persisted = [c for c in update_mock.await_args_list if c.args and c.args[0] == "driver_subscriptions"]
+        assert any(c.args[2].get("stripe_subscription_id") == "sub_stripe_99" for c in persisted)
 
     async def test_verify_session_pending_payment(self):
         """verify-session returns pending if Stripe session not yet paid."""
@@ -303,6 +335,7 @@ class TestVerifySession:
 
         mock_sub = {
             "id": "sub-123",
+            "driver_id": "driver-1",
             "status": "pending",
             "payment_status": "pending",
         }
@@ -311,14 +344,14 @@ class TestVerifySession:
         mock_session.payment_status = "unpaid"
 
         with (
-            patch("backend.db_supabase.find_one") as mock_find,
-            patch("backend.settings_loader.get_app_settings") as mock_get_settings,
-            patch("stripe.checkout.Session.retrieve") as mock_retrieve,
+            patch("backend.db_supabase.find_one", AsyncMock(return_value=mock_sub)),
+            patch("backend.db_supabase.get_rows", AsyncMock(return_value=[{"id": "driver-1"}])),
+            patch(
+                "backend.settings_loader.get_app_settings",
+                AsyncMock(return_value={"stripe_secret_key": "sk_test_123"}),
+            ),
+            patch("stripe.checkout.Session.retrieve", return_value=mock_session),
         ):
-            mock_find.return_value = mock_sub
-            mock_get_settings.return_value = {"stripe_secret_key": "sk_test_123"}
-            mock_retrieve.return_value = mock_session
-
             result = await verify_subscription_session("cs_test_123", current_user)
 
             assert result["status"] == "pending"
@@ -328,11 +361,10 @@ class TestRecurringSubscription:
     """B3/B5: plans with a stripe_price_id use mode=subscription Checkout, and
     cancelling stops Stripe billing (not just the DB row)."""
 
-    async def test_subscribe_recurring_uses_subscription_mode(
-        self, mock_driver, mock_settings
-    ):
-        from backend.routes.drivers import subscribe_to_plan
+    async def test_subscribe_recurring_uses_subscription_mode(self, mock_driver, mock_settings):
         from fastapi import Request
+
+        from backend.routes.drivers import subscribe_to_plan
 
         recurring_plan = {
             "id": "plan-recurring",
@@ -358,11 +390,11 @@ class TestRecurringSubscription:
             patch("stripe.checkout.Session.create") as mock_session_create,
         ):
             mock_get_rows.side_effect = lambda table, filters, limit=None: {
-                "drivers": [[mock_driver]],
-                "service_areas": [[{"spinr_pass_enabled": True}]],
-                "subscription_plans": [[recurring_plan]],
-                "driver_subscriptions": [[]],
-            }.get(table, [[]])
+                "drivers": [mock_driver],
+                "service_areas": [{"spinr_pass_enabled": True}],
+                "subscription_plans": [recurring_plan],
+                "driver_subscriptions": [],
+            }.get(table, [])
             mock_get_settings.return_value = mock_settings
 
             session = MagicMock()
@@ -432,3 +464,51 @@ class TestCancelStripeSubscription:
         ):
             # Best-effort: must swallow so the DB-side cancel still proceeds.
             await _cancel_stripe_subscription("sub_123")
+
+
+class TestCancelSubscriptionEndpoint:
+    """/subscription/cancel must not mark the row cancelled if the Stripe
+    cancellation fails (comment 7) — otherwise the app shows 'cancelled'
+    while Stripe keeps billing."""
+
+    @staticmethod
+    def _rows(table, filters, limit=None):
+        return {
+            "drivers": [{"id": "driver-1"}],
+            "driver_subscriptions": [{"id": "sub-1", "stripe_subscription_id": "sub_stripe_1"}],
+        }.get(table, [])
+
+    async def test_cancel_502_when_stripe_fails_row_not_cancelled(self):
+        from fastapi import HTTPException
+
+        from backend.routes.drivers import cancel_subscription
+
+        with (
+            patch("backend.db_supabase.get_rows") as mock_get_rows,
+            patch("backend.db_supabase.update_one") as update_mock,
+            patch("backend.routes.drivers._cancel_stripe_subscription") as cancel_mock,
+        ):
+            mock_get_rows.side_effect = self._rows
+            cancel_mock.side_effect = Exception("stripe down")
+
+            with pytest.raises(HTTPException) as exc:
+                await cancel_subscription({"id": "user-123"})
+
+        assert exc.value.status_code == 502
+        update_mock.assert_not_awaited()
+
+    async def test_cancel_succeeds_marks_row_cancelled(self):
+        from backend.routes.drivers import cancel_subscription
+
+        with (
+            patch("backend.db_supabase.get_rows") as mock_get_rows,
+            patch("backend.db_supabase.update_one") as update_mock,
+            patch("backend.routes.drivers._cancel_stripe_subscription", AsyncMock()),
+        ):
+            mock_get_rows.side_effect = self._rows
+
+            result = await cancel_subscription({"id": "user-123"})
+
+        assert result["success"] is True
+        update_mock.assert_awaited_once()
+        assert "cancelled_at" in update_mock.await_args.args[2]

@@ -236,6 +236,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // show the ride-offer panel like an incoming call when the app is
         // backgrounded or killed. See plugins/withNotifeePermissions.js.
         './plugins/withNotifeePermissions',
+        // Copies the ride-offer notification sound into the native builds:
+        // ride_offer.mp3 → Android res/raw (Notifee channel sound), and
+        // ride_offer.caf → iOS bundle (APNs/Notifee sound). Without this the
+        // ride-offer channel referenced a nonexistent resource and rang silent.
+        './plugins/withRideOfferSound',
         // Android Auto is provided by @iternio/react-native-auto-play, which ships
         // its own merged AndroidManifest (CarAppService + permissions) and needs no
         // app-side config plugin. iOS CarPlay stays dormant: it requires an

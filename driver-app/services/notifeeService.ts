@@ -26,7 +26,13 @@ import notifee, {
 } from '@notifee/react-native';
 import { Platform } from 'react-native';
 
-const RIDE_OFFER_CHANNEL_ID = 'ride-offers-v2';
+// v3: Android channel settings (incl. sound) are IMMUTABLE once created on a
+// device. v2 was created pointing at a `ride_offer` raw resource that was
+// never bundled (no config plugin copied it), so v2 rings silent forever on
+// existing installs. v3 + the withRideOfferSound plugin = audible offers.
+// Bump this suffix again any time the channel config changes.
+const RIDE_OFFER_CHANNEL_ID = 'ride-offers-v3';
+const STALE_CHANNEL_IDS = ['ride-offers-v2'];
 const RIDE_OFFER_NOTIFICATION_ID = 'ride-offer-current';
 const RIDE_OFFER_CATEGORY_ID = 'ride-offer';
 const DEFAULT_RIDE_OFFER_TIMEOUT_MS = 15_000;
@@ -105,6 +111,12 @@ export async function ensureNotifeeReady(): Promise<void> {
                 bypassDnd: true,
                 visibility: AndroidVisibility.PUBLIC,
             });
+
+            // Remove superseded channels so drivers don't see dead duplicates
+            // under Settings → Notifications.
+            for (const staleId of STALE_CHANNEL_IDS) {
+                await notifee.deleteChannel(staleId).catch(() => undefined);
+            }
 
             // Ask for POST_NOTIFICATIONS on Android 13+. No-op on older OS.
             await notifee.requestPermission();

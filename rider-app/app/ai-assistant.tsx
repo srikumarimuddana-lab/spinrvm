@@ -5,10 +5,17 @@
  * status line, action bubbles (support deep-link; the booking card lands in
  * M5.4), and a persistent disclaimer footer. All AI inference is
  * server-side (/ai/chat) — this screen only renders frames.
+ *
+ * Stays reachable during an active ride (the rider can ask "where's my
+ * driver?" — the ride banner below mirrors live status), but leaving the
+ * chat always lands on the screen that owns the ride, never home: both the
+ * header back button and Android hardware back route through
+ * activeRideRouteFor while a ride is active.
  */
 import React, { useCallback, useEffect, useRef } from 'react';
 import {
   ActivityIndicator,
+  BackHandler,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -31,6 +38,7 @@ import BookingProposalCard from '../components/BookingProposalCard';
 import FareQuoteCard from '../components/FareQuoteCard';
 import { useAiChatStore } from '../store/aiChatStore';
 import { useRideStore } from '../store/rideStore';
+import { activeRideRouteFor } from '../utils/activeRideRoute';
 
 const QUICK_PROMPTS = [
   "Where's my driver?",
@@ -39,17 +47,6 @@ const QUICK_PROMPTS = [
   'Do I have any promos?',
   'Book me a ride home',
 ];
-
-const ACTIVE_STATUSES = ['searching', 'driver_assigned', 'driver_accepted', 'driver_arrived', 'in_progress'];
-
-/** Where "Track ride" lands per ride status (mirrors payment-confirm.tsx). */
-const TRACK_ROUTES: Record<string, string> = {
-  searching: '/(tabs)',
-  driver_assigned: '/driver-arriving',
-  driver_accepted: '/driver-arriving',
-  driver_arrived: '/driver-arrived',
-  in_progress: '/ride-in-progress',
-};
 
 /**
  * Live ride status inside the chat — fed by rideStore via the global
@@ -62,7 +59,8 @@ function RideStatusBanner({ colors, styles }: { colors: ThemeColors; styles: Ret
   const currentDriver = useRideStore((s) => s.currentDriver);
 
   const status = currentRide?.status ?? '';
-  if (!currentRide || !ACTIVE_STATUSES.includes(status)) return null;
+  const trackRoute = activeRideRouteFor(status);
+  if (!currentRide || !trackRoute) return null;
 
   let statusText = 'Trip in progress';
   if (status === 'searching') statusText = 'Searching for a driver…';
@@ -103,7 +101,9 @@ function RideStatusBanner({ colors, styles }: { colors: ThemeColors; styles: Ret
         )}
         <TouchableOpacity
           style={styles.rideBannerButton}
-          onPress={() => router.push((TRACK_ROUTES[status] ?? '/(tabs)') as never)}
+          onPress={() =>
+            router.replace({ pathname: trackRoute, params: { rideId: currentRide.id } } as never)
+          }
           accessibilityLabel="Track ride"
         >
           <Ionicons name="navigate-outline" size={14} color={colors.primary} />
@@ -189,6 +189,24 @@ export default function AiAssistantScreen() {
   const loadConfig = useAiChatStore((s) => s.loadConfig);
 
   const [input, setInput] = React.useState('');
+
+  // Leaving the chat during an active ride lands on the screen that owns
+  // the ride — never home. replace (not back/pop) so the chat doesn't
+  // linger under the ride flow.
+  const handleBack = useCallback(() => {
+    const { currentRide: ride } = useRideStore.getState();
+    const pathname = activeRideRouteFor(ride?.status);
+    if (pathname && ride?.id) {
+      router.replace({ pathname, params: { rideId: ride.id } } as never);
+      return true;
+    }
+    return false;
+  }, [router]);
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', handleBack);
+    return () => sub.remove();
+  }, [handleBack]);
 
   useEffect(() => {
     loadConfig();
@@ -284,7 +302,13 @@ export default function AiAssistantScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.headerButton} accessibilityLabel="Back">
+        <TouchableOpacity
+          onPress={() => {
+            if (!handleBack()) router.back();
+          }}
+          style={styles.headerButton}
+          accessibilityLabel="Back"
+        >
           <Ionicons name="chevron-back" size={24} color={colors.text} />
         </TouchableOpacity>
         <View style={styles.headerTitleWrap}>

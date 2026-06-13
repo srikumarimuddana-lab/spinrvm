@@ -23,6 +23,7 @@ import {
   mapBookingError,
   paymentMethodForProposal,
   pickEstimate,
+  postBookingRoute,
   promoForProposal,
   scheduledDateForProposal,
   type BookingErrorDescriptor,
@@ -88,14 +89,16 @@ export default function BookingProposalCard({ proposal }: Props) {
       selectVehicle(estimate.vehicle_type as never);
       applyPromo(proposedPromo);
       setScheduledTime(scheduledDate);
-      await createRide(paymentMethod);
+      const ride = await createRide(paymentMethod);
       bookedRef.current = true;
       setPhase('booked');
+      const route = postBookingRoute(ride?.id, scheduledDate);
+      if (route) router.replace(route as never);
     } catch (error: unknown) {
       setErrorInfo(mapBookingError(error));
       setPhase('error');
     }
-  }, [estimate, selectVehicle, applyPromo, proposedPromo, setScheduledTime, scheduledDate, createRide, paymentMethod]);
+  }, [estimate, selectVehicle, applyPromo, proposedPromo, setScheduledTime, scheduledDate, createRide, paymentMethod, router]);
 
   return (
     <View style={styles.card}>
@@ -191,7 +194,9 @@ export default function BookingProposalCard({ proposal }: Props) {
       {phase === 'booked' && (
         <View style={styles.bookedRow}>
           <Ionicons name="checkmark-circle" size={18} color={colors.success} />
-          <Text style={styles.bookedText}>Booked! Searching for your driver…</Text>
+          <Text style={styles.bookedText}>
+            {scheduledDate ? 'Booked! Your ride is scheduled.' : 'Booked! Searching for your driver…'}
+          </Text>
         </View>
       )}
 

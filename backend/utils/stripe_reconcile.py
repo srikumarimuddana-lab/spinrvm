@@ -222,11 +222,20 @@ async def _run_reconciliation_tick() -> None:
                 pi.get("amount_received", 0),
             )
 
+    # ── 3c. Payout settlement backstop ──────────────────────────────────
+    # The payout.paid/payout.failed webhooks are the primary settlement
+    # signal; this catches payouts whose webhook never arrived and money
+    # that is stranded (transfer succeeded but payout + reversal both
+    # failed). Detection only — never moves money.
+    payout_discrepancies = await _reconcile_payouts()
+    discrepancies.extend(payout_discrepancies)
+
     # ── 4. Write summary to audit_logs ──────────────────────────────────
     summary = {
         "date": yesterday.isoformat(),
         "stripe_pis_checked": len(stripe_pis),
         "db_rides_checked": len(db_rides),
+        "payouts_flagged": len(payout_discrepancies),
         "discrepancies": len(discrepancies),
         "discrepancy_detail": discrepancies[:50],  # cap at 50 to avoid huge rows
     }
@@ -256,6 +265,75 @@ async def _run_reconciliation_tick() -> None:
             len(stripe_pis),
             len(db_rides),
         )
+
+
+async def _reconcile_payouts() -> List[Dict[str, Any]]:
+    """Detect driver payouts stuck in a non-terminal state or flagged for review.
+
+    Two concerning sets:
+      - requires_manual_review=true → instant payout where the payout step
+        AND the compensating reversal both failed; money is stranded in the
+        connected account and an operator must intervene.
+      - status='transfer_completed' → instant payout whose payout step never
+        completed (crash between transfer and payout, or a missed
+        payout.paid/payout.failed webhook).
+
+    Rows newer than one hour are skipped — they may still be resolving in
+    flight. Detection only: we surface to logs + the audit summary, never
+    move money, so a hiccup here cannot double-pay or reverse a driver.
+    """
+    discrepancies: List[Dict[str, Any]] = []
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
+    cols = "id,driver_id,amount,status,requires_manual_review,stripe_payout_id,stripe_transfer_id,created_at"
+
+    candidates: Dict[str, Dict[str, Any]] = {}
+    for flt in ({"requires_manual_review": True}, {"status": "transfer_completed"}):
+        try:
+            rows = await db_supabase.get_rows("payouts", flt, columns=cols, limit=500) or []
+        except Exception:
+            logger.error("stripe_reconcile: payouts query failed for %s", flt, exc_info=True)
+            continue
+        for r in rows:
+            candidates[r["id"]] = r
+
+    for row in candidates.values():
+        # Defensive: only flag rows actually in a concerning state, never
+        # trusting the query filter alone — a terminal payout must never be
+        # surfaced as stuck.
+        review = bool(row.get("requires_manual_review"))
+        stuck = row.get("status") == "transfer_completed"
+        if not (review or stuck):
+            continue
+        created = row.get("created_at")
+        if created and not _is_older_than(created, cutoff):
+            continue  # still in-flight
+        kind = "PAYOUT_STRANDED" if review else "PAYOUT_STUCK"
+        discrepancies.append(
+            {
+                "type": kind,
+                "payout_id": row["id"],
+                "driver_id": row.get("driver_id"),
+                "status": row.get("status"),
+            }
+        )
+        logger.error(
+            "stripe_reconcile: %s payout=%s driver=%s status=%s",
+            kind,
+            row["id"],
+            row.get("driver_id"),
+            row.get("status"),
+            extra={"domain": "payments"},
+        )
+    return discrepancies
+
+
+def _is_older_than(created_at: str, cutoff: datetime) -> bool:
+    """Return True if the created_at ISO string is at or before cutoff."""
+    try:
+        dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        return dt <= cutoff
+    except Exception:
+        return True  # unparseable timestamp → surface it rather than hide it
 
 
 def _in_window(completed_at: str, window_start: int, window_end: int) -> bool:

@@ -5257,6 +5257,36 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
     }
 
 
+async def _cancel_stripe_subscription(stripe_subscription_id: str | None) -> None:
+    """Cancel a Stripe Subscription so a recurring plan stops billing.
+
+    No-op when there's no Stripe subscription (one-off / dev-mode rows) or
+    Stripe isn't configured. Best-effort: a Stripe failure is logged but never
+    blocks the DB-side cancellation — the customer.subscription.* webhooks and
+    the reconcile loop are the backstop. Critical for plan changes: without
+    this, switching a driver from one recurring plan to another would leave
+    the old Stripe subscription billing alongside the new one.
+    """
+    if not stripe_subscription_id:
+        return
+    try:
+        from ..settings_loader import get_app_settings
+    except ImportError:
+        from settings_loader import get_app_settings
+    settings = await get_app_settings()
+    stripe_secret = settings.get("stripe_secret_key", "")
+    if not stripe_secret:
+        return
+    try:
+        stripe.Subscription.delete(stripe_subscription_id, api_key=stripe_secret)
+        logger.info(f"[SUBSCRIBE] Stripe subscription {stripe_subscription_id} cancelled")
+    except Exception:
+        logger.exception(
+            f"[SUBSCRIBE] Failed to cancel Stripe subscription {stripe_subscription_id}; "
+            "DB row still cancelled — webhook/reconcile will backstop"
+        )
+
+
 @api_router.post("/subscription/subscribe")
 async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_current_user)):
     """Subscribe driver to a plan.
@@ -5310,7 +5340,9 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
         )
     )
     if existing:
-        # Cancel old subscription
+        # Cancel old subscription — stop Stripe billing first so switching
+        # between recurring plans doesn't double-charge, then update our row.
+        await _cancel_stripe_subscription(existing.get("stripe_subscription_id"))
         await db_supabase.update_one(
             "driver_subscriptions",
             {"id": existing["id"]},
@@ -5579,6 +5611,8 @@ async def cancel_subscription(current_user: dict = Depends(get_current_user)):
     if not sub:
         raise HTTPException(status_code=400, detail="No active subscription")
 
+    # Stop Stripe billing for recurring plans before cancelling our row.
+    await _cancel_stripe_subscription(sub.get("stripe_subscription_id"))
     await db_supabase.update_one(
         "driver_subscriptions",
         {"id": sub["id"]},

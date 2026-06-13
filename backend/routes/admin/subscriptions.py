@@ -37,6 +37,10 @@ class SubscriptionPlanCreate(BaseModel):
     vehicle_types: Optional[List[str]] = None  # restrict to vehicle type IDs, null=all
     service_areas: Optional[List[str]] = None  # restrict to area IDs, null=all
     is_active: bool = True
+    # Recurring Stripe Price (price_...) created in the Stripe dashboard.
+    # When set, subscribe_to_plan uses mode="subscription" auto-renew Checkout;
+    # when null the plan stays on the one-off Checkout-per-period flow.
+    stripe_price_id: Optional[str] = None
 
 
 class SubscriptionPlanUpdate(BaseModel):
@@ -49,6 +53,7 @@ class SubscriptionPlanUpdate(BaseModel):
     vehicle_types: Optional[List[str]] = None
     service_areas: Optional[List[str]] = None
     is_active: Optional[bool] = None
+    stripe_price_id: Optional[str] = None
 
 
 @router.get("/subscription-plans")
@@ -59,9 +64,7 @@ async def list_subscription_plans():
 
 
 @router.post("/subscription-plans")
-async def create_subscription_plan(
-    req: SubscriptionPlanCreate, admin: dict = Depends(get_admin_user)
-):
+async def create_subscription_plan(req: SubscriptionPlanCreate, admin: dict = Depends(get_admin_user)):
     """Create a new driver subscription plan."""
     plan = {
         "id": str(uuid.uuid4()),
@@ -74,6 +77,7 @@ async def create_subscription_plan(
         "vehicle_types": req.vehicle_types,
         "service_areas": req.service_areas,
         "is_active": req.is_active,
+        "stripe_price_id": req.stripe_price_id,
         "subscriber_count": 0,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -89,9 +93,7 @@ async def create_subscription_plan(
 
 
 @router.put("/subscription-plans/{plan_id}")
-async def update_subscription_plan(
-    plan_id: str, req: SubscriptionPlanUpdate, admin: dict = Depends(get_admin_user)
-):
+async def update_subscription_plan(plan_id: str, req: SubscriptionPlanUpdate, admin: dict = Depends(get_admin_user)):
     """Update a subscription plan."""
     updates = {k: v for k, v in req.dict().items() if v is not None}
     if updates:
@@ -111,9 +113,7 @@ async def update_subscription_plan(
 async def delete_subscription_plan(plan_id: str, admin: dict = Depends(get_admin_user)):
     """Delete a subscription plan."""
     await db_supabase.delete_many("subscription_plans", {"id": plan_id})
-    await log_admin_action(
-        admin, "subscription_plan_deleted", "subscription_plans", plan_id, {}
-    )
+    await log_admin_action(admin, "subscription_plan_deleted", "subscription_plans", plan_id, {})
     return {"success": True}
 
 
@@ -145,17 +145,13 @@ async def admin_get_subscription_stats(
 
     now = datetime.now(timezone.utc)
     if start_date:
-        range_start = datetime.fromisoformat(
-            start_date.replace("Z", "").replace("+00:00", "")
-        )
+        range_start = datetime.fromisoformat(start_date.replace("Z", "").replace("+00:00", ""))
     else:
         range_start = now - timedelta(days=30)
     range_start = range_start.replace(hour=0, minute=0, second=0, microsecond=0)
 
     if end_date:
-        range_end = datetime.fromisoformat(
-            end_date.replace("Z", "").replace("+00:00", "")
-        )
+        range_end = datetime.fromisoformat(end_date.replace("Z", "").replace("+00:00", ""))
         range_end = range_end.replace(hour=23, minute=59, second=59)
     else:
         range_end = now
@@ -169,9 +165,7 @@ async def admin_get_subscription_stats(
 
     # Fetch drivers for name + area lookup (batch)
     driver_ids = list({s.get("driver_id") for s in all_subs if s.get("driver_id")})
-    raw_drivers_map, raw_users_map = await _batch_fetch_drivers_and_users(
-        [], driver_ids
-    )
+    raw_drivers_map, raw_users_map = await _batch_fetch_drivers_and_users([], driver_ids)
     drivers_map: Dict[str, str] = {}
     driver_area_map: Dict[str, str] = {}
     for did, d in raw_drivers_map.items():
@@ -183,11 +177,7 @@ async def admin_get_subscription_stats(
 
     # Filter by service area if requested
     if area_filter:
-        all_subs = [
-            s
-            for s in all_subs
-            if driver_area_map.get(s.get("driver_id", "")) in area_filter
-        ]
+        all_subs = [s for s in all_subs if driver_area_map.get(s.get("driver_id", "")) in area_filter]
 
     # Overall stats
     active = [s for s in all_subs if s.get("status") == "active"]
@@ -212,18 +202,12 @@ async def admin_get_subscription_stats(
     range_revenue = float(sum(Decimal(str(s.get("price") or 0)) for s in in_range))
 
     # Per-plan breakdown
-    plan_stats = defaultdict(
-        lambda: {"name": "", "count": 0, "revenue": 0.0, "active": 0}
-    )
+    plan_stats = defaultdict(lambda: {"name": "", "count": 0, "revenue": 0.0, "active": 0})
     for s in all_subs:
         pid = s.get("plan_id") or "unknown"
-        plan_stats[pid]["name"] = s.get("plan_name") or plan_map.get(pid, {}).get(
-            "name", "Unknown"
-        )
+        plan_stats[pid]["name"] = s.get("plan_name") or plan_map.get(pid, {}).get("name", "Unknown")
         plan_stats[pid]["count"] += 1
-        plan_stats[pid]["revenue"] = float(
-            Decimal(str(plan_stats[pid]["revenue"])) + Decimal(str(s.get("price") or 0))
-        )
+        plan_stats[pid]["revenue"] = float(Decimal(str(plan_stats[pid]["revenue"])) + Decimal(str(s.get("price") or 0)))
         if s.get("status") == "active":
             plan_stats[pid]["active"] += 1
 
@@ -235,9 +219,7 @@ async def admin_get_subscription_stats(
         dt = parse_dt(s.get("created_at") or s.get("started_at"))
         if dt:
             day_key = dt.strftime("%Y-%m-%d")
-            daily_revenue[day_key] = float(
-                Decimal(str(daily_revenue[day_key])) + Decimal(str(s.get("price") or 0))
-            )
+            daily_revenue[day_key] = float(Decimal(str(daily_revenue[day_key])) + Decimal(str(s.get("price") or 0)))
             daily_new_subs[day_key] += 1
 
     revenue_chart = []
@@ -268,11 +250,8 @@ async def admin_get_subscription_stats(
             {
                 "id": s.get("id"),
                 "driver_id": s.get("driver_id"),
-                "driver_name": drivers_map.get(
-                    s.get("driver_id"), s.get("driver_id", "")[:8]
-                ),
-                "plan_name": s.get("plan_name")
-                or plan_map.get(s.get("plan_id", ""), {}).get("name", "Unknown"),
+                "driver_name": drivers_map.get(s.get("driver_id"), s.get("driver_id", "")[:8]),
+                "plan_name": s.get("plan_name") or plan_map.get(s.get("plan_id", ""), {}).get("name", "Unknown"),
                 "price": float(s.get("price") or 0),
                 "status": s.get("status", "unknown"),
                 "started_at": s.get("started_at"),
@@ -300,9 +279,7 @@ async def admin_get_subscription_stats(
         "transactions": transactions,
         "service_areas": [
             {"id": a["id"], "name": a.get("name", "Unknown")}
-            for a in await db_supabase.get_rows(
-                "service_areas", order="name", limit=200
-            )
+            for a in await db_supabase.get_rows("service_areas", order="name", limit=200)
             if not a.get("parent_service_area_id")
         ],
     }

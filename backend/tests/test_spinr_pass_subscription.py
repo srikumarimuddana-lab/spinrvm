@@ -840,7 +840,24 @@ class TestSubscriptionPaymentsLedger:
 
 
 class TestSubscribeConcurrencyConflict:
-    """The partial unique index (migration 152) surfaces as a clean 409."""
+    """The partial unique index (migration 153) surfaces as a clean 409;
+    a genuine insert failure surfaces as 503."""
+
+    def _rows_factory(self, mock_driver, mock_plan, pending_after_conflict):
+        # pending_after_conflict simulates whether the post-failure pending
+        # re-query finds a row (concurrent winner exists → 409) or not (→ 503).
+        def _rows(table, filters, columns=None, limit=None):
+            if table == "driver_subscriptions":
+                if filters.get("status") == "pending":
+                    return [{"id": "other-pending"}] if pending_after_conflict else []
+                return []
+            return {
+                "drivers": [mock_driver],
+                "service_areas": [{"spinr_pass_enabled": True}],
+                "subscription_plans": [mock_plan],
+            }.get(table, [])
+
+        return _rows
 
     async def test_subscribe_insert_conflict_returns_409(self, mock_driver, mock_plan, mock_settings):
         from fastapi import HTTPException, Request
@@ -859,12 +876,7 @@ class TestSubscribeConcurrencyConflict:
             patch("stripe.checkout.Session.create") as mock_session_create,
             patch("stripe.checkout.Session.expire", expire_mock),
         ):
-            mock_get_rows.side_effect = lambda table, filters, columns=None, limit=None: {
-                "drivers": [mock_driver],
-                "service_areas": [{"spinr_pass_enabled": True}],
-                "subscription_plans": [mock_plan],
-                "driver_subscriptions": [],
-            }.get(table, [])
+            mock_get_rows.side_effect = self._rows_factory(mock_driver, mock_plan, pending_after_conflict=True)
             session = MagicMock()
             session.url = "https://checkout.stripe.com/pay/x"
             session.id = "cs_new"
@@ -877,3 +889,31 @@ class TestSubscribeConcurrencyConflict:
         # the race-loser's Stripe session is expired so it can't be paid
         expire_mock.assert_called_once()
         assert expire_mock.call_args[0][0] == "cs_new"
+
+    async def test_subscribe_insert_failure_without_conflict_returns_503(self, mock_driver, mock_plan, mock_settings):
+        from fastapi import HTTPException, Request
+
+        from backend.routes.drivers import subscribe_to_plan
+
+        request = AsyncMock(spec=Request)
+        request.json = AsyncMock(return_value={"plan_id": "plan-premium"})
+
+        with (
+            patch("backend.db_supabase.get_rows") as mock_get_rows,
+            patch("backend.db_supabase.update_one", AsyncMock()),
+            patch("backend.db_supabase.insert_one", AsyncMock(side_effect=Exception("network down"))),
+            patch("backend.settings_loader.get_app_settings", AsyncMock(return_value=mock_settings)),
+            patch("stripe.checkout.Session.create") as mock_session_create,
+            patch("stripe.checkout.Session.expire", MagicMock()),
+        ):
+            # No pending row exists after the failure → not a concurrency conflict.
+            mock_get_rows.side_effect = self._rows_factory(mock_driver, mock_plan, pending_after_conflict=False)
+            session = MagicMock()
+            session.url = "https://checkout.stripe.com/pay/x"
+            session.id = "cs_new"
+            mock_session_create.return_value = session
+
+            with pytest.raises(HTTPException) as exc:
+                await subscribe_to_plan(request, {"id": "user-123"})
+
+        assert exc.value.status_code == 503

@@ -199,6 +199,22 @@ export default function SettingsPage() {
                                     From Stripe Dashboard &rarr; Developers &rarr; Webhooks
                                 </p>
                             </div>
+                            <div className="space-y-2">
+                                <Label>Connect Webhook Secret</Label>
+                                <Input
+                                    type="password"
+                                    value={settings.stripe_connect_webhook_secret || ""}
+                                    onChange={(e) =>
+                                        update("stripe_connect_webhook_secret", e.target.value)
+                                    }
+                                    placeholder="whsec_..."
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    Signing secret for the separate Connected-accounts webhook
+                                    endpoint (account.updated, payout.paid, payout.failed). Leave
+                                    blank if you only use one Stripe webhook endpoint.
+                                </p>
+                            </div>
                         </CardContent>
                     </Card>
 

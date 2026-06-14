@@ -15,7 +15,7 @@ except ImportError:
     from settings_loader import get_app_settings
     from utils.money import cents_to_dollars
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 _TWO_PLACES = Decimal("0.01")
 
@@ -34,6 +34,11 @@ _STRIPE_HANDLED_EVENTS = frozenset(
         "charge.refunded",
         "charge.dispute.created",
         "charge.dispute.closed",
+        # Recurring Spinr Pass (mode="subscription" plans): renewal succeeded,
+        # renewal failed (dunning), and status changes (past_due → canceled).
+        "invoice.paid",
+        "invoice.payment_failed",
+        "customer.subscription.updated",
         "customer.subscription.deleted",
         # Connect Express KYC mirror — fired whenever the driver progresses
         # through Stripe's hosted onboarding (uploads ID, accepts ToS,
@@ -41,10 +46,36 @@ _STRIPE_HANDLED_EVENTS = frozenset(
         # the account's status. Drives the Payouts tab's Tax & Identity
         # section in the admin slideout.
         "account.updated",
+        # Connected-account bank settlement of a driver payout. Lets us
+        # reconcile the payouts row to the true outcome — an instant payout
+        # marked "completed" synchronously can still be rejected by the bank
+        # days later (closed account, etc.); payout.failed is how we learn.
+        "payout.paid",
+        "payout.failed",
     }
 )
 # Public alias exported for tests
 ALLOWED_STRIPE_EVENTS = _STRIPE_HANDLED_EVENTS
+
+
+def _invoice_period_end_iso(invoice: dict) -> str | None:
+    """Extract the billing-period end (ISO UTC) from a Stripe Invoice.
+
+    Stripe's invoice line carries the authoritative period end for the cycle
+    just paid. Returns None if the structure is missing so the caller can fall
+    back to plan duration. Defensive on every nested path — Stripe trims
+    fields and StripeObjects flatten to plain dicts via to_dict_recursive.
+    """
+    try:
+        lines = (invoice.get("lines") or {}).get("data") or []
+        if lines:
+            period = lines[0].get("period") or {}
+            end = period.get("end")
+            if end:
+                return datetime.fromtimestamp(int(end), tz=timezone.utc).isoformat()
+    except Exception:
+        pass
+    return None
 
 
 @api_router.post("/stripe")
@@ -55,6 +86,7 @@ async def stripe_webhook(request: Request):
 
     settings = await get_app_settings()
     webhook_secret = settings.get("stripe_webhook_secret", "")
+    connect_webhook_secret = settings.get("stripe_connect_webhook_secret", "")
     stripe_secret = settings.get("stripe_secret_key", "")
 
     if not webhook_secret:
@@ -68,15 +100,36 @@ async def stripe_webhook(request: Request):
         logger.error("Stripe secret key not configured in app settings")
         raise HTTPException(status_code=500, detail="Stripe not configured")
 
-    try:
-        import stripe
+    import stripe
 
-        event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid payload") from None
-    except Exception as e:
-        logger.error(f"Stripe webhook signature verification failed: {e}")
-        raise HTTPException(status_code=400, detail="Invalid signature") from e
+    # Both the platform endpoint and the Connected-accounts endpoint POST to
+    # this same URL, but Stripe signs each with that endpoint's own whsec_.
+    # We can't tell them apart before verifying, so try the platform secret
+    # first, then the connect secret (if configured). A SignatureVerification
+    # failure on one is expected for events from the other — only reject when
+    # BOTH fail. ValueError = malformed payload, reject immediately.
+    candidate_secrets = [webhook_secret]
+    if connect_webhook_secret:
+        candidate_secrets.append(connect_webhook_secret)
+
+    event = None
+    last_sig_error: Exception | None = None
+    for secret in candidate_secrets:
+        try:
+            event = stripe.Webhook.construct_event(payload, sig_header, secret)
+            break
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid payload") from None
+        except stripe.error.SignatureVerificationError as e:
+            last_sig_error = e
+            continue
+        except Exception as e:
+            last_sig_error = e
+            continue
+
+    if event is None:
+        logger.error(f"Stripe webhook signature verification failed: {last_sig_error}")
+        raise HTTPException(status_code=400, detail="Invalid signature") from last_sig_error
 
     event_id = event.get("id", "")
     event_type = event.get("type", "")
@@ -320,11 +373,48 @@ async def stripe_webhook(request: Request):
             except ImportError:
                 from routes.drivers import _activate_subscription  # type: ignore
 
-            await _activate_subscription(subscription_id, plan_id)
-            logger.info(
-                f"[WEBHOOK] Spinr Pass activated via checkout.session.completed: "
-                f"subscription={subscription_id} driver={driver_id} plan={plan_id}"
-            )
+            # Pass the session's actual mode so one-off vs recurring ledger
+            # recording is decided by what was created, not the plan's current
+            # stripe_price_id.
+            await _activate_subscription(subscription_id, plan_id, data_object.get("mode"))
+
+            # Re-read: _activate_subscription is a no-op for a row that was
+            # superseded by a newer checkout (or otherwise non-pending). Only
+            # link the Stripe Subscription id when the row actually activated —
+            # linking a superseded row would let a later invoice.paid /
+            # customer.subscription.updated flip it back to active.
+            row = await db_supabase.find_one("driver_subscriptions", {"id": subscription_id})
+            stripe_subscription_id = data_object.get("subscription")
+
+            if row and row.get("status") == "active":
+                if stripe_subscription_id:
+                    await db_supabase.update_one(
+                        "driver_subscriptions",
+                        {"id": subscription_id},
+                        {"stripe_subscription_id": stripe_subscription_id},
+                    )
+                logger.info(
+                    f"[WEBHOOK] Spinr Pass activated via checkout.session.completed: "
+                    f"subscription={subscription_id} driver={driver_id} plan={plan_id} "
+                    f"stripe_sub={stripe_subscription_id}"
+                )
+            else:
+                # Stale session paid after being superseded — don't activate or
+                # link. Cancel the orphaned Stripe subscription so the driver
+                # isn't billed for a plan they already replaced.
+                if stripe_subscription_id:
+                    try:
+                        from ..routes.drivers import _cancel_stripe_subscription  # type: ignore
+                    except ImportError:
+                        from routes.drivers import _cancel_stripe_subscription  # type: ignore
+                    await _cancel_stripe_subscription(stripe_subscription_id)
+                logger.warning(
+                    "[WEBHOOK] checkout.session.completed for non-active row %s "
+                    "(superseded?) — not linking; cancelled orphan Stripe sub %s",
+                    subscription_id,
+                    stripe_subscription_id,
+                    extra={"domain": "drivers", "event_id": event_id},
+                )
         else:
             logger.info(
                 f"[WEBHOOK] checkout.session.completed but payment not yet paid: "
@@ -509,75 +599,84 @@ async def stripe_webhook(request: Request):
 
     elif event_type == "customer.subscription.deleted":
         subscription = data_object
+        stripe_sub_id = subscription.get("id")
         stripe_customer_id = subscription.get("customer")
-        if stripe_customer_id:
-            # Look up the user by their Stripe customer ID, then find the linked driver
+
+        # Primary: match our row by the Stripe Subscription id, which we persist
+        # for recurring plans. Checkout-created subs may not have
+        # users.stripe_customer_id populated, so the customer lookup below can
+        # miss them — without this match the row would stay active and the
+        # driver would keep subscription-gated access after Stripe stopped.
+        active_sub = None
+        if stripe_sub_id:
+            active_sub = await db_supabase.find_one("driver_subscriptions", {"stripe_subscription_id": stripe_sub_id})
+
+        # Fallback: legacy customer-based lookup — only for rows that were never
+        # linked to a Stripe subscription. A live active row carrying a DIFFERENT
+        # stripe_subscription_id is a newer pass (e.g. after a plan switch on the
+        # same customer); deleting this older sub must not cancel it.
+        if not active_sub and stripe_customer_id:
             user_row = await db_supabase.find_one("users", {"stripe_customer_id": stripe_customer_id})
             if user_row:
-                user_id = user_row["id"]
-                driver_row = await db_supabase.find_one("drivers", {"user_id": user_id})
+                driver_row = await db_supabase.find_one("drivers", {"user_id": user_row["id"]})
                 if driver_row:
-                    driver_id = driver_row["id"]
-                    # Cancel the active driver_subscriptions row for this driver
-                    active_sub = await db_supabase.find_one(
+                    candidate = await db_supabase.find_one(
                         "driver_subscriptions",
-                        {"driver_id": driver_id, "status": "active"},
+                        {"driver_id": driver_row["id"], "status": "active"},
                     )
-                    if active_sub:
-                        await db_supabase.update_one(
-                            "driver_subscriptions",
-                            {"id": active_sub["id"]},
-                            {
-                                "status": "cancelled",
-                                "cancelled_at": datetime.now(timezone.utc).isoformat(),
-                                "updated_at": datetime.now(timezone.utc).isoformat(),
-                            },
+                    if candidate and not candidate.get("stripe_subscription_id"):
+                        active_sub = candidate
+                    elif candidate:
+                        logger.warning(
+                            "customer.subscription.deleted: active row %s is linked to a different "
+                            "stripe_sub (%s != %s) — not cancelling the newer pass",
+                            candidate["id"],
+                            candidate.get("stripe_subscription_id"),
+                            stripe_sub_id,
+                            extra={"domain": "drivers", "event_id": event_id},
                         )
-                        logger.info(
-                            f"Stripe subscription cancelled for driver {driver_id} "
-                            f"(subscription row {active_sub['id']})",
-                            extra={
-                                "domain": "drivers",
-                                "driver_id": driver_id,
-                                "event_id": event_id,
-                            },
-                        )
-                    else:
-                        logger.info(
-                            f"customer.subscription.deleted: no active subscription row for driver {driver_id}",
-                            extra={
-                                "domain": "drivers",
-                                "driver_id": driver_id,
-                                "event_id": event_id,
-                            },
-                        )
-                    try:
-                        await send_push_notification(
-                            user_id,
-                            "Subscription cancelled",
-                            "Your Spinr subscription has been cancelled. Renew to continue accepting rides.",
-                            data={
-                                "type": "subscription_cancelled",
-                                "deeplink": "/driver/subscription",
-                            },
-                        )
-                    except Exception as _e:
-                        logger.debug(f"Subscription cancel push failed: {_e}")
-                else:
-                    logger.warning(
-                        f"customer.subscription.deleted: no driver found for user {user_id}",
-                        extra={"domain": "drivers", "event_id": event_id},
-                    )
-            else:
-                logger.warning(
-                    "customer.subscription.deleted: no user found for stripe_customer_id",
-                    extra={"domain": "drivers", "event_id": event_id},
-                )
-        else:
+
+        if not active_sub:
             logger.warning(
-                "customer.subscription.deleted: event has no customer field — skipping",
+                "customer.subscription.deleted: no matching subscription row (sub=%s customer=%s)",
+                stripe_sub_id,
+                stripe_customer_id,
                 extra={"domain": "drivers", "event_id": event_id},
             )
+        else:
+            if active_sub.get("status") != "cancelled":
+                await db_supabase.update_one(
+                    "driver_subscriptions",
+                    {"id": active_sub["id"]},
+                    {
+                        "status": "cancelled",
+                        "cancelled_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+            logger.info(
+                "Stripe subscription cancelled: row=%s sub=%s",
+                active_sub["id"],
+                stripe_sub_id,
+                extra={
+                    "domain": "drivers",
+                    "driver_id": active_sub.get("driver_id") or "",
+                    "event_id": event_id,
+                },
+            )
+            driver_row = await db_supabase.find_one("drivers", {"id": active_sub.get("driver_id")})
+            if driver_row and driver_row.get("user_id"):
+                try:
+                    await send_push_notification(
+                        driver_row["user_id"],
+                        "Subscription cancelled",
+                        "Your Spinr subscription has been cancelled. Renew to continue accepting rides.",
+                        data={
+                            "type": "subscription_cancelled",
+                            "deeplink": "/driver/subscription",
+                        },
+                    )
+                except Exception as _e:
+                    logger.debug(f"Subscription cancel push failed: {_e}")
 
     elif event_type == "account.updated":
         # Stripe Connect Express KYC mirror. Fires whenever the driver
@@ -590,6 +689,293 @@ async def stripe_webhook(request: Request):
         except ImportError:
             from services.stripe_kyc_sync import apply_account_update
         await apply_account_update(data_object, event_id=event_id)
+
+    elif event_type == "invoice.paid":
+        # Recurring Spinr Pass renewal succeeded (also fires for the first
+        # invoice of a new subscription). Extend the driver's row to the
+        # invoice's period end — idempotent for both subscription_create and
+        # subscription_cycle.
+        invoice = data_object
+        stripe_sub_id = invoice.get("subscription")
+        if not stripe_sub_id:
+            logger.info(
+                "invoice.paid without subscription id — skipping",
+                extra={"domain": "drivers", "event_id": event_id},
+            )
+        else:
+            row = await db_supabase.find_one("driver_subscriptions", {"stripe_subscription_id": stripe_sub_id})
+            if not row and stripe_secret:
+                # Out-of-order delivery: checkout.session.completed / verify-session
+                # hasn't linked stripe_subscription_id onto the row yet. Recover it
+                # from the subscription's metadata (set via subscription_data.metadata
+                # at checkout) and link it, so the FIRST renewal charge still lands in
+                # the ledger instead of being silently dropped.
+                try:
+                    import stripe as _stripe
+
+                    _sub_obj = _stripe.Subscription.retrieve(stripe_sub_id, api_key=stripe_secret)
+                    _meta_sub_id = (_sub_obj.get("metadata") or {}).get("subscription_id")
+                    if _meta_sub_id:
+                        row = await db_supabase.find_one("driver_subscriptions", {"id": _meta_sub_id})
+                        if row and not row.get("stripe_subscription_id"):
+                            await db_supabase.update_one(
+                                "driver_subscriptions",
+                                {"id": row["id"]},
+                                {"stripe_subscription_id": stripe_sub_id},
+                            )
+                except Exception:
+                    logger.error(
+                        "invoice.paid: failed to recover subscription row from metadata for %s",
+                        stripe_sub_id,
+                        exc_info=True,
+                        extra={"domain": "drivers", "event_id": event_id},
+                    )
+            if not row:
+                logger.warning(
+                    "invoice.paid: no subscription row for stripe_sub %s",
+                    stripe_sub_id,
+                    extra={"domain": "drivers", "event_id": event_id},
+                )
+            elif row.get("status") in ("cancelled", "superseded") or row.get("cancelled_at"):
+                # Terminal row — a late/duplicate invoice.paid arriving after a
+                # local cancel, customer.subscription.deleted, or supersede must
+                # NOT flip the row back to active and restore gated access.
+                logger.warning(
+                    "invoice.paid ignored for cancelled subscription: row=%s stripe_sub=%s",
+                    row["id"],
+                    stripe_sub_id,
+                    extra={"domain": "drivers", "event_id": event_id},
+                )
+            else:
+                new_expires = _invoice_period_end_iso(invoice)
+                if not new_expires:
+                    duration_days = 30
+                    if row.get("plan_id"):
+                        plan = await db_supabase.find_one("subscription_plans", {"id": row["plan_id"]})
+                        if plan and plan.get("duration_days"):
+                            duration_days = plan["duration_days"]
+                    new_expires = (datetime.now(timezone.utc) + timedelta(days=duration_days)).isoformat()
+
+                await db_supabase.update_one(
+                    "driver_subscriptions",
+                    {"id": row["id"]},
+                    {
+                        "status": "active",
+                        "payment_status": "paid",
+                        "expires_at": new_expires,
+                        "expiry_warned": False,
+                    },
+                )
+                logger.info(
+                    "Spinr Pass renewed: row=%s stripe_sub=%s until=%s",
+                    row["id"],
+                    stripe_sub_id,
+                    new_expires,
+                    extra={"domain": "drivers", "event_id": event_id},
+                )
+
+                # Record this charge (first invoice + every renewal) in the
+                # subscription_payments ledger so admin revenue stats capture
+                # recurring renewals. Deduped on the unique stripe_invoice_id
+                # index, so a replay is a no-op.
+                try:
+                    from ..routes.drivers import _record_subscription_payment  # type: ignore
+                except ImportError:
+                    from routes.drivers import _record_subscription_payment  # type: ignore
+                # amount_paid is the authoritative charged amount; it can be a
+                # legitimate 0 (100% coupon / trial), which is falsy, so test
+                # for None rather than truthiness before falling back.
+                _amount_cents = invoice.get("amount_paid")
+                if _amount_cents is None:
+                    _amount_cents = invoice.get("amount_due") or 0
+                await _record_subscription_payment(
+                    driver_id=row.get("driver_id"),
+                    subscription_id=row["id"],
+                    plan_id=row.get("plan_id"),
+                    plan_name=row.get("plan_name"),
+                    amount=cents_to_dollars(_amount_cents),
+                    billing_reason=invoice.get("billing_reason") or "subscription_cycle",
+                    stripe_invoice_id=invoice.get("id"),
+                )
+
+                # Only notify on actual renewal cycles — the initial invoice's
+                # activation push already went out from the checkout handler.
+                if invoice.get("billing_reason") == "subscription_cycle":
+                    driver_row = await db_supabase.find_one("drivers", {"id": row.get("driver_id")})
+                    if driver_row and driver_row.get("user_id"):
+                        try:
+                            await send_push_notification(
+                                driver_row["user_id"],
+                                "Spinr Pass renewed",
+                                "Your Spinr Pass renewed. You're all set to keep accepting rides.",
+                                data={"type": "subscription_renewed", "deeplink": "/driver/subscription"},
+                            )
+                        except Exception:
+                            logger.warning(
+                                "Push notification failed for subscription_renewed; continuing",
+                                exc_info=True,
+                            )
+
+    elif event_type == "invoice.payment_failed":
+        # Recurring renewal charge failed. Flag the row past_due and nudge the
+        # driver to update their card. We don't terminate here — Stripe retries
+        # per its dunning settings, then fires customer.subscription.updated
+        # (past_due) / .deleted (canceled), which we handle separately.
+        invoice = data_object
+        stripe_sub_id = invoice.get("subscription")
+        row = None
+        if stripe_sub_id:
+            row = await db_supabase.find_one("driver_subscriptions", {"stripe_subscription_id": stripe_sub_id})
+        if not row:
+            logger.warning(
+                "invoice.payment_failed: no subscription row for stripe_sub %s",
+                stripe_sub_id,
+                extra={"domain": "drivers", "event_id": event_id},
+            )
+        else:
+            await db_supabase.update_one(
+                "driver_subscriptions",
+                {"id": row["id"]},
+                {"payment_status": "past_due"},
+            )
+            logger.warning(
+                "Spinr Pass renewal payment failed: row=%s stripe_sub=%s",
+                row["id"],
+                stripe_sub_id,
+                extra={"domain": "drivers", "event_id": event_id},
+            )
+            driver_row = await db_supabase.find_one("drivers", {"id": row.get("driver_id")})
+            if driver_row and driver_row.get("user_id"):
+                try:
+                    await send_push_notification(
+                        driver_row["user_id"],
+                        "Spinr Pass payment failed",
+                        "We couldn't renew your Spinr Pass. Please update your card to keep accepting rides.",
+                        data={"type": "subscription_past_due", "deeplink": "/driver/subscription"},
+                    )
+                except Exception:
+                    logger.warning(
+                        "Push notification failed for subscription_past_due; continuing",
+                        exc_info=True,
+                    )
+
+    elif event_type == "customer.subscription.updated":
+        # Mirror Stripe's authoritative subscription status onto our row.
+        # Fires often; we act only on meaningful transitions and ack the rest.
+        subscription = data_object
+        stripe_sub_id = subscription.get("id")
+        stripe_status = subscription.get("status")
+        row = None
+        if stripe_sub_id:
+            row = await db_supabase.find_one("driver_subscriptions", {"stripe_subscription_id": stripe_sub_id})
+        if not row:
+            logger.info(
+                "customer.subscription.updated: no row for stripe_sub %s — skipping",
+                stripe_sub_id,
+                extra={"domain": "drivers", "event_id": event_id},
+            )
+        else:
+            updates: dict = {}
+            if stripe_status in ("canceled", "unpaid", "incomplete_expired"):
+                updates = {
+                    "status": "cancelled",
+                    "cancelled_at": datetime.now(timezone.utc).isoformat(),
+                }
+            elif stripe_status == "past_due":
+                updates = {"payment_status": "past_due"}
+            elif stripe_status == "active":
+                # Don't resurrect a row already cancelled (driver/Stripe) or
+                # superseded by a newer checkout — a late "active" update must
+                # not restore gated access.
+                if row.get("status") not in ("cancelled", "superseded") and not row.get("cancelled_at"):
+                    updates = {"status": "active", "payment_status": "paid"}
+            if updates:
+                await db_supabase.update_one("driver_subscriptions", {"id": row["id"]}, updates)
+                logger.info(
+                    "Spinr Pass subscription updated: row=%s stripe_status=%s",
+                    row["id"],
+                    stripe_status,
+                    extra={"domain": "drivers", "event_id": event_id},
+                )
+
+    elif event_type in ("payout.paid", "payout.failed"):
+        # Connected-account bank settlement of a driver payout. Instant
+        # payouts (routes/drivers.py request_instant_payout) do an explicit
+        # Payout.create and store its po_ id in payouts.stripe_payout_id, so
+        # those reconcile here. Standard payouts only do a Transfer and store
+        # a tr_ id — those won't match a Payout event, and Stripe's automatic
+        # scheduled payouts of the connected balance also fire here with no
+        # tracked row. A no-match is therefore expected: log and ack, never
+        # 5xx (a 5xx would make Stripe retry a payout we don't track for days).
+        stripe_payout_id = data_object.get("id")
+        payout_row = None
+        if stripe_payout_id:
+            payout_row = await db_supabase.find_one("payouts", {"stripe_payout_id": stripe_payout_id})
+
+        if not payout_row:
+            logger.info(
+                "payout webhook %s: no tracked payout row for %s "
+                "(auto-scheduled connected-account payout or standard transfer) — acking",
+                event_type,
+                stripe_payout_id,
+                extra={"domain": "payments", "event_id": event_id},
+            )
+        elif event_type == "payout.paid":
+            await db_supabase.update_one(
+                "payouts",
+                {"id": payout_row["id"]},
+                {
+                    "status": "completed",
+                    "processed_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            logger.info(
+                "Payout settled to bank: payout_row=%s po=%s",
+                payout_row["id"],
+                stripe_payout_id,
+                extra={"domain": "payments", "event_id": event_id},
+            )
+        else:  # payout.failed
+            failure_message = (
+                data_object.get("failure_message") or data_object.get("failure_code") or "Bank payout failed"
+            )
+            await db_supabase.update_one(
+                "payouts",
+                {"id": payout_row["id"]},
+                {
+                    "status": "failed",
+                    "failure_reason": str(failure_message)[:500],
+                    "requires_manual_review": True,
+                    "processed_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            logger.error(
+                "PAYOUT FAILED at bank: payout_row=%s po=%s reason=%s",
+                payout_row["id"],
+                stripe_payout_id,
+                failure_message,
+                extra={
+                    "domain": "payments",
+                    "event_id": event_id,
+                    "driver_id": payout_row.get("driver_id") or "",
+                },
+            )
+            # Notify the driver their money didn't land so they can fix their
+            # bank details and retry.
+            driver_row = await db_supabase.find_one("drivers", {"id": payout_row.get("driver_id")})
+            if driver_row and driver_row.get("user_id"):
+                try:
+                    await send_push_notification(
+                        driver_row["user_id"],
+                        "Payout failed",
+                        "Your payout could not be deposited. Please check your bank details and try again.",
+                        data={"type": "payout_failed", "deeplink": "/driver/earnings"},
+                    )
+                except Exception:
+                    logger.warning(
+                        "Push notification failed for payout_failed event; continuing",
+                        exc_info=True,
+                    )
 
     else:
         if event_type in _STRIPE_HANDLED_EVENTS:

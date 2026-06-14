@@ -37,6 +37,10 @@ class SubscriptionPlanCreate(BaseModel):
     vehicle_types: Optional[List[str]] = None  # restrict to vehicle type IDs, null=all
     service_areas: Optional[List[str]] = None  # restrict to area IDs, null=all
     is_active: bool = True
+    # Recurring Stripe Price (price_...) created in the Stripe dashboard.
+    # When set, subscribe_to_plan uses mode="subscription" auto-renew Checkout;
+    # when null the plan stays on the one-off Checkout-per-period flow.
+    stripe_price_id: Optional[str] = None
 
 
 class SubscriptionPlanUpdate(BaseModel):
@@ -49,6 +53,7 @@ class SubscriptionPlanUpdate(BaseModel):
     vehicle_types: Optional[List[str]] = None
     service_areas: Optional[List[str]] = None
     is_active: Optional[bool] = None
+    stripe_price_id: Optional[str] = None
 
 
 @router.get("/subscription-plans")
@@ -59,9 +64,7 @@ async def list_subscription_plans():
 
 
 @router.post("/subscription-plans")
-async def create_subscription_plan(
-    req: SubscriptionPlanCreate, admin: dict = Depends(get_admin_user)
-):
+async def create_subscription_plan(req: SubscriptionPlanCreate, admin: dict = Depends(get_admin_user)):
     """Create a new driver subscription plan."""
     plan = {
         "id": str(uuid.uuid4()),
@@ -74,6 +77,7 @@ async def create_subscription_plan(
         "vehicle_types": req.vehicle_types,
         "service_areas": req.service_areas,
         "is_active": req.is_active,
+        "stripe_price_id": req.stripe_price_id,
         "subscriber_count": 0,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -89,9 +93,7 @@ async def create_subscription_plan(
 
 
 @router.put("/subscription-plans/{plan_id}")
-async def update_subscription_plan(
-    plan_id: str, req: SubscriptionPlanUpdate, admin: dict = Depends(get_admin_user)
-):
+async def update_subscription_plan(plan_id: str, req: SubscriptionPlanUpdate, admin: dict = Depends(get_admin_user)):
     """Update a subscription plan."""
     updates = {k: v for k, v in req.dict().items() if v is not None}
     if updates:
@@ -111,9 +113,7 @@ async def update_subscription_plan(
 async def delete_subscription_plan(plan_id: str, admin: dict = Depends(get_admin_user)):
     """Delete a subscription plan."""
     await db_supabase.delete_many("subscription_plans", {"id": plan_id})
-    await log_admin_action(
-        admin, "subscription_plan_deleted", "subscription_plans", plan_id, {}
-    )
+    await log_admin_action(admin, "subscription_plan_deleted", "subscription_plans", plan_id, {})
     return {"success": True}
 
 
@@ -145,17 +145,13 @@ async def admin_get_subscription_stats(
 
     now = datetime.now(timezone.utc)
     if start_date:
-        range_start = datetime.fromisoformat(
-            start_date.replace("Z", "").replace("+00:00", "")
-        )
+        range_start = datetime.fromisoformat(start_date.replace("Z", "").replace("+00:00", ""))
     else:
         range_start = now - timedelta(days=30)
     range_start = range_start.replace(hour=0, minute=0, second=0, microsecond=0)
 
     if end_date:
-        range_end = datetime.fromisoformat(
-            end_date.replace("Z", "").replace("+00:00", "")
-        )
+        range_end = datetime.fromisoformat(end_date.replace("Z", "").replace("+00:00", ""))
         range_end = range_end.replace(hour=23, minute=59, second=59)
     else:
         range_end = now
@@ -169,9 +165,7 @@ async def admin_get_subscription_stats(
 
     # Fetch drivers for name + area lookup (batch)
     driver_ids = list({s.get("driver_id") for s in all_subs if s.get("driver_id")})
-    raw_drivers_map, raw_users_map = await _batch_fetch_drivers_and_users(
-        [], driver_ids
-    )
+    raw_drivers_map, raw_users_map = await _batch_fetch_drivers_and_users([], driver_ids)
     drivers_map: Dict[str, str] = {}
     driver_area_map: Dict[str, str] = {}
     for did, d in raw_drivers_map.items():
@@ -183,62 +177,83 @@ async def admin_get_subscription_stats(
 
     # Filter by service area if requested
     if area_filter:
-        all_subs = [
-            s
-            for s in all_subs
-            if driver_area_map.get(s.get("driver_id", "")) in area_filter
-        ]
+        all_subs = [s for s in all_subs if driver_area_map.get(s.get("driver_id", "")) in area_filter]
 
-    # Overall stats
+    # ── Subscriber state (counts) — from driver_subscriptions ────────────
+    # A pending/superseded checkout row carries no realized subscriber; every
+    # other state is a real subscriber (incl. legacy pre-checkout rows whose
+    # payment_status defaults to "pending" after migration 148).
+    _UNPAID_STATUSES = {"pending", "superseded"}
+    real_subs = [s for s in all_subs if s.get("payment_status") == "paid" or s.get("status") not in _UNPAID_STATUSES]
     active = [s for s in all_subs if s.get("status") == "active"]
     expired = [s for s in all_subs if s.get("status") == "expired"]
     cancelled = [s for s in all_subs if s.get("status") == "cancelled"]
-    total_revenue = float(sum(Decimal(str(s.get("price") or 0)) for s in all_subs))
-    active_revenue = float(sum(Decimal(str(s.get("price") or 0)) for s in active))
 
-    # Filter to date range for transactions and charts
+    # Current MRR-ish: sum of active subscriptions' plan price.
+    # Money stays in Decimal through every aggregation; we convert to a clean
+    # 2-dp float only at the JSON boundary (the admin API contract is numeric).
+    def _money(v) -> float:
+        return float(Decimal(str(v or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+    # Current MRR-ish: sum of active subscriptions' plan price.
+    active_revenue = sum((Decimal(str(s.get("price") or 0)) for s in active), Decimal("0"))
+
     def parse_dt(s):
         try:
             return datetime.fromisoformat(str(s).replace("Z", "").replace("+00:00", ""))
         except Exception:
             return None
 
-    in_range = []
-    for s in all_subs:
+    # ── Realized revenue & transactions — from the subscription_payments
+    #    ledger, which records the first charge AND every recurring renewal
+    #    (driver_subscriptions only holds current state, so reading it would
+    #    miss renewals). Legacy rows were backfilled by migration 151. ───────
+    payments = await db_supabase.get_rows("subscription_payments", {}, limit=20000) or []
+    if area_filter:
+        payments = [p for p in payments if driver_area_map.get(p.get("driver_id", "")) in area_filter]
+
+    total_revenue = sum((Decimal(str(p.get("amount") or 0)) for p in payments), Decimal("0"))
+
+    payments_in_range = []
+    for p in payments:
+        dt = parse_dt(p.get("created_at"))
+        if dt and range_start <= dt <= range_end:
+            payments_in_range.append(p)
+    range_revenue = sum((Decimal(str(p.get("amount") or 0)) for p in payments_in_range), Decimal("0"))
+
+    # New-subscriber chart counts new subscriptions (state), not payments.
+    new_subs_in_range = []
+    for s in real_subs:
         dt = parse_dt(s.get("created_at") or s.get("started_at"))
         if dt and range_start <= dt <= range_end:
-            in_range.append(s)
+            new_subs_in_range.append(s)
 
-    range_revenue = float(sum(Decimal(str(s.get("price") or 0)) for s in in_range))
-
-    # Per-plan breakdown
-    plan_stats = defaultdict(
-        lambda: {"name": "", "count": 0, "revenue": 0.0, "active": 0}
-    )
-    for s in all_subs:
+    # Per-plan breakdown: revenue from the ledger, subscriber counts from subs.
+    plan_stats = defaultdict(lambda: {"name": "", "count": 0, "revenue": Decimal("0"), "active": 0})
+    for s in real_subs:
         pid = s.get("plan_id") or "unknown"
-        plan_stats[pid]["name"] = s.get("plan_name") or plan_map.get(pid, {}).get(
-            "name", "Unknown"
-        )
+        plan_stats[pid]["name"] = s.get("plan_name") or plan_map.get(pid, {}).get("name", "Unknown")
         plan_stats[pid]["count"] += 1
-        plan_stats[pid]["revenue"] = float(
-            Decimal(str(plan_stats[pid]["revenue"])) + Decimal(str(s.get("price") or 0))
-        )
         if s.get("status") == "active":
             plan_stats[pid]["active"] += 1
+    for p in payments:
+        pid = p.get("plan_id") or "unknown"
+        if not plan_stats[pid]["name"]:
+            plan_stats[pid]["name"] = p.get("plan_name") or plan_map.get(pid, {}).get("name", "Unknown")
+        plan_stats[pid]["revenue"] += Decimal(str(p.get("amount") or 0))
 
     # Daily charts (within date range)
     num_days = min((range_end - range_start).days + 1, 365)
-    daily_revenue = defaultdict(float)
+    daily_revenue: Dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     daily_new_subs = defaultdict(int)
-    for s in in_range:
+    for p in payments_in_range:
+        dt = parse_dt(p.get("created_at"))
+        if dt:
+            daily_revenue[dt.strftime("%Y-%m-%d")] += Decimal(str(p.get("amount") or 0))
+    for s in new_subs_in_range:
         dt = parse_dt(s.get("created_at") or s.get("started_at"))
         if dt:
-            day_key = dt.strftime("%Y-%m-%d")
-            daily_revenue[day_key] = float(
-                Decimal(str(daily_revenue[day_key])) + Decimal(str(s.get("price") or 0))
-            )
-            daily_new_subs[day_key] += 1
+            daily_new_subs[dt.strftime("%Y-%m-%d")] += 1
 
     revenue_chart = []
     subscribers_chart = []
@@ -246,53 +261,47 @@ async def admin_get_subscription_stats(
         day = range_start + timedelta(days=i)
         day_key = day.strftime("%Y-%m-%d")
         day_label = day.strftime("%b %d")
-        revenue_chart.append(
-            {
-                "date": day_label,
-                "date_raw": day_key,
-                "amount": round(daily_revenue.get(day_key, 0), 2),
-            }
-        )
-        subscribers_chart.append(
-            {
-                "date": day_label,
-                "date_raw": day_key,
-                "count": daily_new_subs.get(day_key, 0),
-            }
-        )
+        revenue_chart.append({"date": day_label, "date_raw": day_key, "amount": _money(daily_revenue.get(day_key, 0))})
+        subscribers_chart.append({"date": day_label, "date_raw": day_key, "count": daily_new_subs.get(day_key, 0)})
 
-    # Transaction list (in range, enriched)
+    # Transaction list = ledger payments in range (each a realized charge,
+    # including recurring renewals).
     transactions = []
-    for s in sorted(in_range, key=lambda x: x.get("created_at", ""), reverse=True):
+    for p in sorted(payments_in_range, key=lambda x: x.get("created_at", ""), reverse=True):
+        _did = p.get("driver_id") or ""
         transactions.append(
             {
-                "id": s.get("id"),
-                "driver_id": s.get("driver_id"),
-                "driver_name": drivers_map.get(
-                    s.get("driver_id"), s.get("driver_id", "")[:8]
-                ),
-                "plan_name": s.get("plan_name")
-                or plan_map.get(s.get("plan_id", ""), {}).get("name", "Unknown"),
-                "price": float(s.get("price") or 0),
-                "status": s.get("status", "unknown"),
-                "started_at": s.get("started_at"),
-                "expires_at": s.get("expires_at"),
-                "created_at": s.get("created_at"),
+                "id": p.get("id"),
+                "driver_id": _did,
+                "driver_name": drivers_map.get(_did, _did[:8]),
+                "plan_name": p.get("plan_name") or plan_map.get(p.get("plan_id", ""), {}).get("name", "Unknown"),
+                "price": _money(p.get("amount")),
+                "billing_reason": p.get("billing_reason"),
+                "created_at": p.get("created_at"),
             }
         )
 
     return {
         "stats": {
-            "total_subscribers": len(all_subs),
+            "total_subscribers": len(real_subs),
             "active": len(active),
             "expired": len(expired),
             "cancelled": len(cancelled),
-            "total_revenue": round(total_revenue, 2),
-            "active_mrr": round(active_revenue, 2),
-            "range_revenue": round(range_revenue, 2),
-            "range_transactions": len(in_range),
+            "total_revenue": _money(total_revenue),
+            "active_mrr": _money(active_revenue),
+            "range_revenue": _money(range_revenue),
+            "range_transactions": len(payments_in_range),
         },
-        "plan_breakdown": [{"plan_id": k, **v} for k, v in plan_stats.items()],
+        "plan_breakdown": [
+            {
+                "plan_id": k,
+                "name": v["name"],
+                "count": v["count"],
+                "active": v["active"],
+                "revenue": _money(v["revenue"]),
+            }
+            for k, v in plan_stats.items()
+        ],
         "charts": {
             "daily_revenue": revenue_chart,
             "daily_subscribers": subscribers_chart,
@@ -300,9 +309,7 @@ async def admin_get_subscription_stats(
         "transactions": transactions,
         "service_areas": [
             {"id": a["id"], "name": a.get("name", "Unknown")}
-            for a in await db_supabase.get_rows(
-                "service_areas", order="name", limit=200
-            )
+            for a in await db_supabase.get_rows("service_areas", order="name", limit=200)
             if not a.get("parent_service_area_id")
         ],
     }

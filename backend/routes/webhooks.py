@@ -739,12 +739,18 @@ async def stripe_webhook(request: Request):
                     from ..routes.drivers import _record_subscription_payment  # type: ignore
                 except ImportError:
                     from routes.drivers import _record_subscription_payment  # type: ignore
+                # amount_paid is the authoritative charged amount; it can be a
+                # legitimate 0 (100% coupon / trial), which is falsy, so test
+                # for None rather than truthiness before falling back.
+                _amount_cents = invoice.get("amount_paid")
+                if _amount_cents is None:
+                    _amount_cents = invoice.get("amount_due") or 0
                 await _record_subscription_payment(
                     driver_id=row.get("driver_id"),
                     subscription_id=row["id"],
                     plan_id=row.get("plan_id"),
                     plan_name=row.get("plan_name"),
-                    amount=cents_to_dollars(invoice.get("amount_paid") or invoice.get("amount_due") or 0),
+                    amount=cents_to_dollars(_amount_cents),
                     billing_reason=invoice.get("billing_reason") or "subscription_cycle",
                     stripe_invoice_id=invoice.get("id"),
                 )

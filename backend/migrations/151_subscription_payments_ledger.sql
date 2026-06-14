@@ -34,12 +34,18 @@ CREATE TABLE IF NOT EXISTS public.subscription_payments (
 );
 
 -- One ledger row per Stripe invoice — makes recurring renewal inserts idempotent.
+-- Plain (not CONCURRENTLY) indexes are correct here: the table is created EMPTY
+-- in this same transactional migration, so no concurrent session can touch it
+-- and the builds are instant + lock-free. CONCURRENTLY would also be illegal
+-- inside the transaction that creates the table.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_subscription_payments_invoice
     ON public.subscription_payments (stripe_invoice_id)
     WHERE stripe_invoice_id IS NOT NULL;
 
-CREATE INDEX IF NOT EXISTS idx_subscription_payments_driver
-    ON public.subscription_payments (driver_id);
+-- Compound index serves both the per-driver history read and the date-range
+-- aggregation the admin stats endpoint performs.
+CREATE INDEX IF NOT EXISTS idx_subscription_payments_driver_created
+    ON public.subscription_payments (driver_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_subscription_payments_created
     ON public.subscription_payments (created_at);
 
@@ -52,6 +58,17 @@ CREATE POLICY subscription_payments_select_own ON public.subscription_payments
     USING (
         driver_id IN (SELECT id FROM public.drivers WHERE user_id = auth.uid())
     );
+
+-- Financial table: all writes go through the backend service role (bypasses
+-- RLS). Block direct PostgREST write access from JWT roles, matching the
+-- lockdown pattern migration 142 applied to the other money tables. Without
+-- this, any authenticated anon-key JWT could INSERT/UPDATE/DELETE payment rows.
+REVOKE ALL ON public.subscription_payments FROM anon;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.subscription_payments FROM authenticated;
+GRANT SELECT ON public.subscription_payments TO authenticated;
+-- NOTE: no admin SELECT policy — the admin stats endpoint reads via the service
+-- role, which bypasses RLS. A direct authenticated-role admin read would see
+-- zero rows by design.
 
 -- Backfill realized revenue from existing subscriptions (idempotent via id).
 -- Excludes never-paid checkout rows (pending/superseded). Runs once (the runner

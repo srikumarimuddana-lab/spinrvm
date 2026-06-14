@@ -4,7 +4,7 @@ import logging
 import os
 import socket
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, List, Optional, Union
 from zoneinfo import ZoneInfo
 
@@ -98,7 +98,7 @@ _TWO_PLACES = Decimal("0.01")
 
 def _money_str(v) -> str:
     """Serialise a money value as an exact 2-dp Decimal string (never float)."""
-    from decimal import ROUND_HALF_UP, InvalidOperation
+    from decimal import InvalidOperation
 
     try:
         return str(Decimal(str(v)).quantize(_TWO_PLACES, rounding=ROUND_HALF_UP))
@@ -5549,22 +5549,42 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
     try:
         await db_supabase.insert_one("driver_subscriptions", subscription)
     except Exception as _insert_err:
-        # The partial unique index (migration 152) allows at most one pending
-        # checkout per driver. A concurrent subscribe request that races past the
-        # supersede step hits it here — surface a clean 409 rather than a 500,
-        # and expire the Stripe session we just created so it can't be paid.
+        # Distinguish the expected concurrency conflict from a real DB failure:
+        # the partial unique index (migration 153) allows at most one pending
+        # checkout per driver, so if a pending row already exists this was a
+        # concurrent subscribe → 409. Otherwise the insert genuinely failed
+        # (schema/network/RLS) → surface 503, not a misleading "checkout in
+        # progress". Either way, expire the Stripe session we just created so it
+        # can't be paid, and log at error (payment-path failure).
         if checkout_url and stripe_session_id and _stripe_secret:
             try:
                 stripe.checkout.Session.expire(stripe_session_id, api_key=_stripe_secret)
             except Exception:
                 logger.info(f"[SUBSCRIBE] Could not expire race-loser session {stripe_session_id}")
-        logger.warning(
-            f"[SUBSCRIBE] Subscription insert failed (concurrent pending checkout?) for driver {driver['id']}",
+        existing_pending = (
+            await db_supabase.get_rows(
+                "driver_subscriptions",
+                {"driver_id": driver["id"], "status": "pending"},
+                columns="id",
+                limit=1,
+            )
+            or []
+        )
+        if existing_pending:
+            logger.warning(
+                f"[SUBSCRIBE] Concurrent pending checkout for driver {driver['id']} — returning 409",
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="A checkout is already in progress. Please finish or cancel it first.",
+            ) from _insert_err
+        logger.error(
+            f"[SUBSCRIBE] Subscription insert failed for driver {driver['id']}",
             exc_info=True,
         )
         raise HTTPException(
-            status_code=409,
-            detail="A checkout is already in progress. Please finish or cancel it first.",
+            status_code=503,
+            detail="Could not start checkout. Please try again.",
         ) from _insert_err
 
     if checkout_url:
@@ -5713,7 +5733,7 @@ async def _record_subscription_payment(
     activation/webhook flow that already moved the money.
     """
     try:
-        amt = Decimal(str(amount or 0)).quantize(Decimal("0.01"))
+        amt = Decimal(str(amount or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         if amt <= 0:
             return  # nothing realized — don't clutter the ledger
         await db_supabase.insert_one(
@@ -5734,10 +5754,13 @@ async def _record_subscription_payment(
             },
         )
     except Exception:
-        # Duplicate recurring invoice (unique index) or any other write error —
-        # benign for the duplicate case; logged so a real failure is visible.
-        logger.warning(
-            "subscription_payments insert skipped (duplicate or error) driver=%s reason=%s invoice=%s",
+        # The only benign failure is the unique stripe_invoice_id collision on a
+        # recurring-invoice replay — but the event-claim gate already prevents
+        # webhook replays, so a failure almost always means a real lost ledger
+        # write. Log at error (not warning) per the payment-error rule; never
+        # raise — the money already moved.
+        logger.error(
+            "subscription_payments insert failed (lost ledger row?) driver=%s reason=%s invoice=%s",
             driver_id,
             billing_reason,
             stripe_invoice_id,

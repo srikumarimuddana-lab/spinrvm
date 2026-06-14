@@ -1,17 +1,17 @@
--- Migration 152: one pending checkout per driver
+-- Migration 152: collapse duplicate pending checkouts (prep for the unique index)
 --
--- Prevents two concurrent /drivers/subscription/subscribe requests from both
--- inserting a pending driver_subscriptions row (each backing a live Checkout
--- URL), which could let a stale session activate over a newer one. The endpoint
--- already supersedes its OWN prior pending rows before inserting, so this unique
--- index only bites the true simultaneous race; subscribe_to_plan catches the
--- resulting unique violation and returns 409.
+-- Repair step for migration 153's partial unique index `WHERE status='pending'`.
+-- Demotes all-but-the-newest pending row per driver to 'superseded' so the
+-- CONCURRENTLY index build in 153 can't fail on pre-existing duplicates. Split
+-- from the index build (separate file) because 153 must run CONCURRENTLY in
+-- autocommit, whereas this repair runs transactionally — same pattern as
+-- migrations 142 (repair) → 143 (CONCURRENTLY index).
 --
--- Rollback:
---   DROP INDEX IF EXISTS idx_driver_subscriptions_one_pending;
+-- Tie-break on id after created_at so two pending rows sharing a created_at
+-- still pick a single deterministic winner.
+--
+-- Rollback: none needed (data-only repair; superseded rows are terminal).
 
--- Collapse any pre-existing duplicate pending rows to one (keep the newest)
--- before the unique index is created, otherwise creation fails.
 UPDATE public.driver_subscriptions
 SET status = 'superseded'
 WHERE status = 'pending'
@@ -19,13 +19,5 @@ WHERE status = 'pending'
       SELECT DISTINCT ON (driver_id) id
       FROM public.driver_subscriptions
       WHERE status = 'pending'
-      ORDER BY driver_id, created_at DESC
+      ORDER BY driver_id, created_at DESC NULLS LAST, id DESC
   );
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_driver_subscriptions_one_pending
-    ON public.driver_subscriptions (driver_id)
-    WHERE status = 'pending';
-
-COMMENT ON INDEX idx_driver_subscriptions_one_pending IS
-    'At most one pending checkout per driver — closes the concurrent '
-    'double-checkout race in subscribe_to_plan.';

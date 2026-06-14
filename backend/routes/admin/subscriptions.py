@@ -188,8 +188,15 @@ async def admin_get_subscription_stats(
     active = [s for s in all_subs if s.get("status") == "active"]
     expired = [s for s in all_subs if s.get("status") == "expired"]
     cancelled = [s for s in all_subs if s.get("status") == "cancelled"]
+
     # Current MRR-ish: sum of active subscriptions' plan price.
-    active_revenue = float(sum(Decimal(str(s.get("price") or 0)) for s in active))
+    # Money stays in Decimal through every aggregation; we convert to a clean
+    # 2-dp float only at the JSON boundary (the admin API contract is numeric).
+    def _money(v) -> float:
+        return float(Decimal(str(v or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+    # Current MRR-ish: sum of active subscriptions' plan price.
+    active_revenue = sum((Decimal(str(s.get("price") or 0)) for s in active), Decimal("0"))
 
     def parse_dt(s):
         try:
@@ -205,14 +212,14 @@ async def admin_get_subscription_stats(
     if area_filter:
         payments = [p for p in payments if driver_area_map.get(p.get("driver_id", "")) in area_filter]
 
-    total_revenue = float(sum(Decimal(str(p.get("amount") or 0)) for p in payments))
+    total_revenue = sum((Decimal(str(p.get("amount") or 0)) for p in payments), Decimal("0"))
 
     payments_in_range = []
     for p in payments:
         dt = parse_dt(p.get("created_at"))
         if dt and range_start <= dt <= range_end:
             payments_in_range.append(p)
-    range_revenue = float(sum(Decimal(str(p.get("amount") or 0)) for p in payments_in_range))
+    range_revenue = sum((Decimal(str(p.get("amount") or 0)) for p in payments_in_range), Decimal("0"))
 
     # New-subscriber chart counts new subscriptions (state), not payments.
     new_subs_in_range = []
@@ -222,7 +229,7 @@ async def admin_get_subscription_stats(
             new_subs_in_range.append(s)
 
     # Per-plan breakdown: revenue from the ledger, subscriber counts from subs.
-    plan_stats = defaultdict(lambda: {"name": "", "count": 0, "revenue": 0.0, "active": 0})
+    plan_stats = defaultdict(lambda: {"name": "", "count": 0, "revenue": Decimal("0"), "active": 0})
     for s in real_subs:
         pid = s.get("plan_id") or "unknown"
         plan_stats[pid]["name"] = s.get("plan_name") or plan_map.get(pid, {}).get("name", "Unknown")
@@ -233,19 +240,16 @@ async def admin_get_subscription_stats(
         pid = p.get("plan_id") or "unknown"
         if not plan_stats[pid]["name"]:
             plan_stats[pid]["name"] = p.get("plan_name") or plan_map.get(pid, {}).get("name", "Unknown")
-        plan_stats[pid]["revenue"] = float(
-            Decimal(str(plan_stats[pid]["revenue"])) + Decimal(str(p.get("amount") or 0))
-        )
+        plan_stats[pid]["revenue"] += Decimal(str(p.get("amount") or 0))
 
     # Daily charts (within date range)
     num_days = min((range_end - range_start).days + 1, 365)
-    daily_revenue = defaultdict(float)
+    daily_revenue: Dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     daily_new_subs = defaultdict(int)
     for p in payments_in_range:
         dt = parse_dt(p.get("created_at"))
         if dt:
-            day_key = dt.strftime("%Y-%m-%d")
-            daily_revenue[day_key] = float(Decimal(str(daily_revenue[day_key])) + Decimal(str(p.get("amount") or 0)))
+            daily_revenue[dt.strftime("%Y-%m-%d")] += Decimal(str(p.get("amount") or 0))
     for s in new_subs_in_range:
         dt = parse_dt(s.get("created_at") or s.get("started_at"))
         if dt:
@@ -257,9 +261,7 @@ async def admin_get_subscription_stats(
         day = range_start + timedelta(days=i)
         day_key = day.strftime("%Y-%m-%d")
         day_label = day.strftime("%b %d")
-        revenue_chart.append(
-            {"date": day_label, "date_raw": day_key, "amount": round(daily_revenue.get(day_key, 0), 2)}
-        )
+        revenue_chart.append({"date": day_label, "date_raw": day_key, "amount": _money(daily_revenue.get(day_key, 0))})
         subscribers_chart.append({"date": day_label, "date_raw": day_key, "count": daily_new_subs.get(day_key, 0)})
 
     # Transaction list = ledger payments in range (each a realized charge,
@@ -273,7 +275,7 @@ async def admin_get_subscription_stats(
                 "driver_id": _did,
                 "driver_name": drivers_map.get(_did, _did[:8]),
                 "plan_name": p.get("plan_name") or plan_map.get(p.get("plan_id", ""), {}).get("name", "Unknown"),
-                "price": float(p.get("amount") or 0),
+                "price": _money(p.get("amount")),
                 "billing_reason": p.get("billing_reason"),
                 "created_at": p.get("created_at"),
             }
@@ -285,12 +287,21 @@ async def admin_get_subscription_stats(
             "active": len(active),
             "expired": len(expired),
             "cancelled": len(cancelled),
-            "total_revenue": round(total_revenue, 2),
-            "active_mrr": round(active_revenue, 2),
-            "range_revenue": round(range_revenue, 2),
+            "total_revenue": _money(total_revenue),
+            "active_mrr": _money(active_revenue),
+            "range_revenue": _money(range_revenue),
             "range_transactions": len(payments_in_range),
         },
-        "plan_breakdown": [{"plan_id": k, **v} for k, v in plan_stats.items()],
+        "plan_breakdown": [
+            {
+                "plan_id": k,
+                "name": v["name"],
+                "count": v["count"],
+                "active": v["active"],
+                "revenue": _money(v["revenue"]),
+            }
+            for k, v in plan_stats.items()
+        ],
         "charts": {
             "daily_revenue": revenue_chart,
             "daily_subscribers": subscribers_chart,

@@ -608,16 +608,30 @@ async def stripe_webhook(request: Request):
         if stripe_sub_id:
             active_sub = await db_supabase.find_one("driver_subscriptions", {"stripe_subscription_id": stripe_sub_id})
 
-        # Fallback: legacy customer-based lookup.
+        # Fallback: legacy customer-based lookup — only for rows that were never
+        # linked to a Stripe subscription. A live active row carrying a DIFFERENT
+        # stripe_subscription_id is a newer pass (e.g. after a plan switch on the
+        # same customer); deleting this older sub must not cancel it.
         if not active_sub and stripe_customer_id:
             user_row = await db_supabase.find_one("users", {"stripe_customer_id": stripe_customer_id})
             if user_row:
                 driver_row = await db_supabase.find_one("drivers", {"user_id": user_row["id"]})
                 if driver_row:
-                    active_sub = await db_supabase.find_one(
+                    candidate = await db_supabase.find_one(
                         "driver_subscriptions",
                         {"driver_id": driver_row["id"], "status": "active"},
                     )
+                    if candidate and not candidate.get("stripe_subscription_id"):
+                        active_sub = candidate
+                    elif candidate:
+                        logger.warning(
+                            "customer.subscription.deleted: active row %s is linked to a different "
+                            "stripe_sub (%s != %s) — not cancelling the newer pass",
+                            candidate["id"],
+                            candidate.get("stripe_subscription_id"),
+                            stripe_sub_id,
+                            extra={"domain": "drivers", "event_id": event_id},
+                        )
 
         if not active_sub:
             logger.warning(

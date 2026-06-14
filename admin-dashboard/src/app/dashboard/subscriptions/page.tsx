@@ -48,6 +48,9 @@ interface SubscriptionPlan {
     is_active: boolean;
     subscriber_count?: number;
     created_at?: string;
+    // Recurring Stripe Price (price_...). When set, the plan auto-renews via
+    // Stripe Billing; blank keeps it on one-off Checkout-per-period.
+    stripe_price_id?: string;
 }
 
 interface DriverSubscription {
@@ -80,6 +83,7 @@ const EMPTY_PLAN: Omit<SubscriptionPlan, "id" | "created_at"> = {
     description: "",
     features: [],
     is_active: true,
+    stripe_price_id: "",
 };
 
 const STATUS_CONFIG: Record<string, { label: string; variant: "default" | "secondary" | "destructive" }> = {
@@ -118,6 +122,7 @@ function PlanModal({ open, plan, onClose, onSave }: PlanModalProps) {
                 description: plan.description ?? "",
                 features: plan.features ?? [],
                 is_active: plan.is_active ?? true,
+                stripe_price_id: plan.stripe_price_id ?? "",
             });
             setFeaturesText((plan.features ?? []).join("\n"));
         } else {
@@ -232,6 +237,20 @@ function PlanModal({ open, plan, onClose, onSave }: PlanModalProps) {
                                 onChange={(e) => setFeaturesText(e.target.value)}
                                 placeholder={"Priority support\nSurge protection\nUnlimited rides"}
                             />
+                        </div>
+                        <div className="col-span-2 space-y-1">
+                            <Label htmlFor="plan-price-id">Stripe Price ID (recurring)</Label>
+                            <Input
+                                id="plan-price-id"
+                                value={form.stripe_price_id || ""}
+                                onChange={(e) => setForm((f) => ({ ...f, stripe_price_id: e.target.value }))}
+                                placeholder="price_... (leave blank for one-off per period)"
+                            />
+                            <p className="text-xs text-muted-foreground">
+                                Set a recurring Stripe Price to auto-renew this plan via Stripe
+                                Billing. Its amount/currency must match the price above. Blank =
+                                one-off Checkout each period.
+                            </p>
                         </div>
                     </div>
                     {error && <p className="text-sm text-red-500">{error}</p>}

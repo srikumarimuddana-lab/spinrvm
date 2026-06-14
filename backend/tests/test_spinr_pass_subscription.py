@@ -667,17 +667,18 @@ class TestActivationPeriodAndVerifySuperseded:
         from backend.routes import drivers as drv
 
         update_mock = AsyncMock()
-        # find_one order: pending sub, plan, prior-active (none), driver (none).
+        # find_one order: pending sub, plan, driver (none, no push). The prior-
+        # active lookup is now a get_rows (patched to no prior active).
         find_mock = AsyncMock(
             side_effect=[
                 {"id": "s1", "status": "pending", "driver_id": "d1"},
                 {"id": "plan-1", "duration_days": 7, "subscriber_count": 0},
                 None,
-                None,
             ]
         )
         with (
             patch("backend.db_supabase.find_one", find_mock),
+            patch("backend.db_supabase.get_rows", AsyncMock(return_value=[])),
             patch("backend.db_supabase.update_one", update_mock),
         ):
             await drv._activate_subscription("s1", "plan-1")
@@ -805,11 +806,11 @@ class TestSubscriptionPaymentsLedger:
                 {"id": "s1", "status": "pending", "driver_id": "d1", "plan_name": "Pro", "stripe_session_id": "cs1"},
                 {"id": "p1", "duration_days": 30, "price": 49.99, "subscriber_count": 0},
                 None,
-                None,
             ]
         )
         with (
             patch("backend.db_supabase.find_one", find_mock),
+            patch("backend.db_supabase.get_rows", AsyncMock(return_value=[])),
             patch("backend.db_supabase.update_one", AsyncMock()),
             patch("backend.routes.drivers._record_subscription_payment", record_mock),
         ):
@@ -826,11 +827,11 @@ class TestSubscriptionPaymentsLedger:
                 {"id": "s1", "status": "pending", "driver_id": "d1"},
                 {"id": "p1", "duration_days": 30, "price": 49.99, "stripe_price_id": "price_x", "subscriber_count": 0},
                 None,
-                None,
             ]
         )
         with (
             patch("backend.db_supabase.find_one", find_mock),
+            patch("backend.db_supabase.get_rows", AsyncMock(return_value=[])),
             patch("backend.db_supabase.update_one", AsyncMock()),
             patch("backend.routes.drivers._record_subscription_payment", record_mock),
         ):

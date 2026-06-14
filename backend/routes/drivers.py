@@ -5282,6 +5282,11 @@ async def _cancel_stripe_subscription(stripe_subscription_id: str | None, *, rai
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "")
     if not stripe_secret:
+        # There IS a Stripe subscription to cancel (guarded above) but no key —
+        # e.g. key removed mid-rotation. With raise_on_error the caller must NOT
+        # mark the row cancelled while Stripe keeps billing, so fail loudly.
+        if raise_on_error:
+            raise RuntimeError("stripe_secret_key not configured — cannot cancel Stripe subscription")
         return
     try:
         stripe.Subscription.delete(stripe_subscription_id, api_key=stripe_secret)
@@ -5812,8 +5817,15 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
         return
 
     # Cancel any prior active subscription for this driver (plan switch).
-    existing = await db.find_one("driver_subscriptions", {"driver_id": driver_id, "status": "active"})
-    if existing and existing["id"] != subscription_id:
+    # NOTE: the atomic claim above already flipped THIS row to active, so an
+    # unordered limit-1 lookup could return it. Fetch all active rows and pick
+    # one that isn't the row we just activated, so the prior pass is always
+    # retired.
+    _active_rows = (
+        await db.get_rows("driver_subscriptions", {"driver_id": driver_id, "status": "active"}, limit=10) or []
+    )
+    existing = next((r for r in _active_rows if r.get("id") != subscription_id), None)
+    if existing:
         try:
             # Durable cancel: raise on failure so we don't claim the old pass is
             # cancelled while Stripe keeps billing it.

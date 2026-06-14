@@ -558,3 +558,75 @@ async def test_ride_with_no_fare_skips_amount_check():
     audit_detail = db_mock.insert_one.call_args[0][1]["details"]
     types = [d["type"] for d in audit_detail["discrepancy_detail"]]
     assert "DB_PAID_AMOUNT_MISMATCH" not in types
+
+
+# ── Payout settlement backstop (A4) ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_reconcile_payouts_flags_stranded_and_stuck():
+    """Stranded (manual-review) and stuck (transfer_completed) payouts older
+    than 1h are surfaced as discrepancies."""
+    from utils import stripe_reconcile as sr
+
+    old_ts = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+    stranded = {
+        "id": "p1",
+        "driver_id": "d1",
+        "status": "stranded",
+        "requires_manual_review": True,
+        "created_at": old_ts,
+    }
+    stuck = {
+        "id": "p2",
+        "driver_id": "d2",
+        "status": "transfer_completed",
+        "requires_manual_review": False,
+        "created_at": old_ts,
+    }
+
+    def _rows(table, flt, columns=None, limit=None):
+        if flt.get("requires_manual_review"):
+            return [stranded]
+        if flt.get("status") == "transfer_completed":
+            return [stuck]
+        return []
+
+    db_mock = AsyncMock()
+    db_mock.get_rows.side_effect = _rows
+
+    with patch("utils.stripe_reconcile.db_supabase", db_mock):
+        result = await sr._reconcile_payouts()
+
+    types = sorted(d["type"] for d in result)
+    assert types == ["PAYOUT_STRANDED", "PAYOUT_STUCK"]
+
+
+@pytest.mark.asyncio
+async def test_reconcile_payouts_skips_recent_and_terminal():
+    """Recent rows (<1h) and terminal rows are never flagged, even if a
+    filter-agnostic query returns them."""
+    from utils import stripe_reconcile as sr
+
+    recent = {
+        "id": "p3",
+        "driver_id": "d3",
+        "status": "stranded",
+        "requires_manual_review": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    terminal = {
+        "id": "p4",
+        "driver_id": "d4",
+        "status": "completed",
+        "requires_manual_review": False,
+        "created_at": (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat(),
+    }
+
+    db_mock = AsyncMock()
+    db_mock.get_rows.return_value = [recent, terminal]
+
+    with patch("utils.stripe_reconcile.db_supabase", db_mock):
+        result = await sr._reconcile_payouts()
+
+    assert result == []

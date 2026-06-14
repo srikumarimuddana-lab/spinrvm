@@ -133,6 +133,190 @@ class TestStripeWebhookSignatureFailure:
         assert exc.value.status_code == 400
 
 
+class TestStripeWebhookConnectSecret:
+    """Dual-secret verification: the Connected-accounts endpoint signs with
+    its own whsec_, so an event the platform secret can't verify must still
+    be accepted when the connect secret verifies it."""
+
+    def test_connect_secret_verifies_when_platform_fails(self):
+        from backend.routes import webhooks as wh
+
+        event = _make_stripe_event("some.unhandled.event", {}, event_id="evt_connect_1")
+        event_obj = MagicMock()
+        event_obj.get = lambda k, d=None: event.get(k, d)
+        event_obj.to_dict_recursive = lambda: event
+
+        async def mock_get_app_settings():
+            return {
+                "stripe_webhook_secret": "whsec_platform",
+                "stripe_connect_webhook_secret": "whsec_connect",
+                "stripe_secret_key": "sk_test",
+            }
+
+        req = MagicMock()
+        req.body = AsyncMock(return_value=b"payload")
+        req.headers = {"stripe-signature": "t=123,v1=sig"}
+
+        import stripe
+
+        def _construct(payload, sig, secret):
+            # Platform secret rejects (event came from the connect endpoint);
+            # connect secret verifies.
+            if secret == "whsec_platform":
+                raise stripe.error.SignatureVerificationError("wrong secret", "sig")
+            return event_obj
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", mock_get_app_settings),
+            patch.object(stripe.Webhook, "construct_event", side_effect=_construct),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=req))
+
+        # Verified via the connect secret → reaches dispatch (unhandled type
+        # acks 200 without processing).
+        assert result["received"] is True
+        assert result.get("unhandled") is True
+        assert result["event_id"] == "evt_connect_1"
+
+    def test_both_secrets_fail_returns_400(self):
+        from backend.routes import webhooks as wh
+
+        async def mock_get_app_settings():
+            return {
+                "stripe_webhook_secret": "whsec_platform",
+                "stripe_connect_webhook_secret": "whsec_connect",
+                "stripe_secret_key": "sk_test",
+            }
+
+        req = MagicMock()
+        req.body = AsyncMock(return_value=b"payload")
+        req.headers = {"stripe-signature": "forged"}
+
+        import stripe
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", mock_get_app_settings),
+            patch.object(
+                stripe.Webhook,
+                "construct_event",
+                side_effect=stripe.error.SignatureVerificationError("fail", "sig"),
+            ),
+        ):
+            with pytest.raises(Exception) as exc:
+                asyncio.run(wh.stripe_webhook(request=req))
+        assert exc.value.status_code == 400
+
+
+class TestStripeWebhookPayoutSettlement:
+    """payout.paid / payout.failed reconcile the payouts row to the true
+    bank-settlement outcome (A2)."""
+
+    def _event(self, event_type, data_object, event_id="evt_payout_1"):
+        raw = _make_stripe_event(event_type, data_object, event_id=event_id)
+        obj = MagicMock()
+        obj.get = lambda k, d=None: raw.get(k, d)
+        obj.to_dict_recursive = lambda: raw
+        return obj
+
+    def _settings(self):
+        async def f():
+            return {
+                "stripe_webhook_secret": "ws",
+                "stripe_secret_key": "sk",
+                "stripe_connect_webhook_secret": "wc",
+            }
+
+        return f
+
+    def _req(self):
+        req = MagicMock()
+        req.body = AsyncMock(return_value=b"payload")
+        req.headers = {"stripe-signature": "sig"}
+        return req
+
+    def test_payout_paid_marks_completed(self):
+        import stripe
+
+        from backend.routes import webhooks as wh
+
+        event_obj = self._event("payout.paid", {"id": "po_123"})
+        update_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch(
+                "backend.routes.webhooks.db_supabase.find_one",
+                AsyncMock(return_value={"id": "payout_row_1", "driver_id": "d1"}),
+            ),
+            patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._req()))
+
+        assert result["received"] is True
+        update_mock.assert_awaited_once()
+        assert update_mock.await_args.args[0] == "payouts"
+        assert update_mock.await_args.args[2]["status"] == "completed"
+
+    def test_payout_failed_flags_and_notifies(self):
+        import stripe
+
+        from backend.routes import webhooks as wh
+
+        event_obj = self._event("payout.failed", {"id": "po_456", "failure_message": "account_closed"})
+        update_mock = AsyncMock()
+        push_mock = AsyncMock()
+        # find_one is called twice: the payouts row, then the drivers row.
+        find_mock = AsyncMock(
+            side_effect=[
+                {"id": "payout_row_2", "driver_id": "d2"},
+                {"id": "d2", "user_id": "u2"},
+            ]
+        )
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.find_one", find_mock),
+            patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
+            patch("backend.routes.webhooks.send_push_notification", push_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._req()))
+
+        assert result["received"] is True
+        upd = update_mock.await_args.args[2]
+        assert upd["status"] == "failed"
+        assert upd["requires_manual_review"] is True
+        assert "account_closed" in upd["failure_reason"]
+        push_mock.assert_awaited_once()
+
+    def test_payout_no_matching_row_acks_without_update(self):
+        import stripe
+
+        from backend.routes import webhooks as wh
+
+        event_obj = self._event("payout.paid", {"id": "po_orphan"})
+        update_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.find_one", AsyncMock(return_value=None)),
+            patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._req()))
+
+        assert result["received"] is True
+        update_mock.assert_not_awaited()
+
+
 class TestStripeWebhookDuplicateEvent:
     def test_duplicate_event_returns_received_duplicate(self):
         from backend.routes import webhooks as wh
@@ -794,3 +978,420 @@ class TestStripeWebhookCheckoutNotPaid:
             result = asyncio.run(wh.stripe_webhook(request=req))
 
         assert result["received"] is True
+
+
+class TestStripeWebhookRecurringSubscription:
+    """invoice.paid / invoice.payment_failed / customer.subscription.updated
+    reconcile recurring Spinr Pass state (B4)."""
+
+    def _event(self, event_type, data_object, event_id="evt_sub_1"):
+        raw = _make_stripe_event(event_type, data_object, event_id=event_id)
+        obj = MagicMock()
+        obj.get = lambda k, d=None: raw.get(k, d)
+        obj.to_dict_recursive = lambda: raw
+        return obj
+
+    def _settings(self):
+        async def f():
+            return {"stripe_webhook_secret": "ws", "stripe_secret_key": "sk"}
+
+        return f
+
+    def _req(self):
+        req = MagicMock()
+        req.body = AsyncMock(return_value=b"payload")
+        req.headers = {"stripe-signature": "sig"}
+        return req
+
+    def test_invoice_paid_renews_and_notifies_on_cycle(self):
+        from datetime import datetime, timedelta, timezone
+
+        from backend.routes import webhooks as wh
+        import stripe
+
+        period_end = int((datetime.now(timezone.utc) + timedelta(days=30)).timestamp())
+        data_obj = {
+            "id": "in_1",
+            "subscription": "sub_123",
+            "billing_reason": "subscription_cycle",
+            "lines": {"data": [{"period": {"end": period_end}}]},
+        }
+        event_obj = self._event("invoice.paid", data_obj)
+        update_mock = AsyncMock()
+        push_mock = AsyncMock()
+        # find_one: driver_subscriptions row, then drivers row (for the push).
+        find_mock = AsyncMock(
+            side_effect=[
+                {"id": "row1", "driver_id": "d1", "plan_id": "p1"},
+                {"id": "d1", "user_id": "u1"},
+            ]
+        )
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.find_one", find_mock),
+            patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
+            patch("backend.routes.webhooks.send_push_notification", push_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._req()))
+
+        assert result["received"] is True
+        upd = update_mock.await_args.args[2]
+        assert upd["status"] == "active"
+        assert upd["payment_status"] == "paid"
+        assert "expires_at" in upd
+        push_mock.assert_awaited_once()
+
+    def test_invoice_payment_failed_marks_past_due_and_notifies(self):
+        from backend.routes import webhooks as wh
+        import stripe
+
+        data_obj = {"id": "in_2", "subscription": "sub_456"}
+        event_obj = self._event("invoice.payment_failed", data_obj)
+        update_mock = AsyncMock()
+        push_mock = AsyncMock()
+        find_mock = AsyncMock(
+            side_effect=[
+                {"id": "row2", "driver_id": "d2"},
+                {"id": "d2", "user_id": "u2"},
+            ]
+        )
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.find_one", find_mock),
+            patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
+            patch("backend.routes.webhooks.send_push_notification", push_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._req()))
+
+        assert result["received"] is True
+        assert update_mock.await_args.args[2]["payment_status"] == "past_due"
+        push_mock.assert_awaited_once()
+
+    def test_subscription_updated_canceled_cancels_row(self):
+        from backend.routes import webhooks as wh
+        import stripe
+
+        data_obj = {"id": "sub_789", "status": "canceled"}
+        event_obj = self._event("customer.subscription.updated", data_obj)
+        update_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch(
+                "backend.routes.webhooks.db_supabase.find_one",
+                AsyncMock(return_value={"id": "row3", "driver_id": "d3"}),
+            ),
+            patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._req()))
+
+        assert result["received"] is True
+        assert update_mock.await_args.args[2]["status"] == "cancelled"
+
+    def test_invoice_paid_no_matching_row_acks(self):
+        from backend.routes import webhooks as wh
+        import stripe
+
+        data_obj = {"id": "in_3", "subscription": "sub_orphan", "lines": {"data": []}}
+        event_obj = self._event("invoice.paid", data_obj)
+        update_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.find_one", AsyncMock(return_value=None)),
+            patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._req()))
+
+        assert result["received"] is True
+        update_mock.assert_not_awaited()
+
+
+class TestStripeWebhookSubscriptionDeleted:
+    """customer.subscription.deleted now matches our row by
+    stripe_subscription_id (recurring Checkout subs may lack a
+    users.stripe_customer_id link) — comment 1."""
+
+    def _event(self, data_object, event_id="evt_del_1"):
+        raw = _make_stripe_event("customer.subscription.deleted", data_object, event_id=event_id)
+        obj = MagicMock()
+        obj.get = lambda k, d=None: raw.get(k, d)
+        obj.to_dict_recursive = lambda: raw
+        return obj
+
+    def _settings(self):
+        async def f():
+            return {"stripe_webhook_secret": "ws", "stripe_secret_key": "sk"}
+
+        return f
+
+    def _req(self):
+        req = MagicMock()
+        req.body = AsyncMock(return_value=b"payload")
+        req.headers = {"stripe-signature": "sig"}
+        return req
+
+    def test_deleted_matches_by_subscription_id(self):
+        from backend.routes import webhooks as wh
+        import stripe
+
+        event_obj = self._event({"id": "sub_del_1", "customer": "cus_x"})
+        update_mock = AsyncMock()
+        push_mock = AsyncMock()
+        # find_one: the row matched by stripe_subscription_id, then drivers for push.
+        find_mock = AsyncMock(
+            side_effect=[
+                {"id": "row1", "driver_id": "d1", "status": "active"},
+                {"id": "d1", "user_id": "u1"},
+            ]
+        )
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.find_one", find_mock),
+            patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
+            patch("backend.routes.webhooks.send_push_notification", push_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._req()))
+
+        assert result["received"] is True
+        assert update_mock.await_args.args[2]["status"] == "cancelled"
+        push_mock.assert_awaited_once()
+
+
+class TestStripeWebhookInvoicePaidCancelledGuard:
+    """invoice.paid must not resurrect a cancelled subscription (P2 follow-up)."""
+
+    def _event(self, data_object, event_id="evt_inv_c"):
+        raw = _make_stripe_event("invoice.paid", data_object, event_id=event_id)
+        obj = MagicMock()
+        obj.get = lambda k, d=None: raw.get(k, d)
+        obj.to_dict_recursive = lambda: raw
+        return obj
+
+    def _settings(self):
+        async def f():
+            return {"stripe_webhook_secret": "ws", "stripe_secret_key": "sk"}
+
+        return f
+
+    def _req(self):
+        req = MagicMock()
+        req.body = AsyncMock(return_value=b"payload")
+        req.headers = {"stripe-signature": "sig"}
+        return req
+
+    def test_invoice_paid_ignored_for_cancelled_row(self):
+        from backend.routes import webhooks as wh
+        import stripe
+
+        event_obj = self._event(
+            {"id": "in_x", "subscription": "sub_cancelled", "billing_reason": "subscription_cycle"}
+        )
+        update_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch(
+                "backend.routes.webhooks.db_supabase.find_one",
+                AsyncMock(return_value={"id": "row_c", "driver_id": "d1", "status": "cancelled"}),
+            ),
+            patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._req()))
+
+        assert result["received"] is True
+        update_mock.assert_not_awaited()
+
+
+class TestStripeWebhookSubscriptionUpdatedGuard:
+    """customer.subscription.updated with status=active must not resurrect a
+    cancelled/superseded row (P2 follow-up)."""
+
+    def _event(self, data_object, event_id="evt_upd_g"):
+        raw = _make_stripe_event("customer.subscription.updated", data_object, event_id=event_id)
+        obj = MagicMock()
+        obj.get = lambda k, d=None: raw.get(k, d)
+        obj.to_dict_recursive = lambda: raw
+        return obj
+
+    def _settings(self):
+        async def f():
+            return {"stripe_webhook_secret": "ws", "stripe_secret_key": "sk"}
+
+        return f
+
+    def _req(self):
+        req = MagicMock()
+        req.body = AsyncMock(return_value=b"payload")
+        req.headers = {"stripe-signature": "sig"}
+        return req
+
+    def test_active_update_does_not_reactivate_cancelled_row(self):
+        from backend.routes import webhooks as wh
+        import stripe
+
+        event_obj = self._event({"id": "sub_g", "status": "active"})
+        update_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch(
+                "backend.routes.webhooks.db_supabase.find_one",
+                AsyncMock(return_value={"id": "row_c", "status": "cancelled", "cancelled_at": "2026-01-01T00:00:00Z"}),
+            ),
+            patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._req()))
+
+        assert result["received"] is True
+        update_mock.assert_not_awaited()
+
+
+class TestStripeWebhookInvoiceLedger:
+    """invoice.paid records the charge in the subscription_payments ledger."""
+
+    def _event(self, data_object, event_id="evt_inv_l"):
+        raw = _make_stripe_event("invoice.paid", data_object, event_id=event_id)
+        obj = MagicMock()
+        obj.get = lambda k, d=None: raw.get(k, d)
+        obj.to_dict_recursive = lambda: raw
+        return obj
+
+    def _settings(self):
+        async def f():
+            return {"stripe_webhook_secret": "ws", "stripe_secret_key": "sk"}
+
+        return f
+
+    def _req(self):
+        req = MagicMock()
+        req.body = AsyncMock(return_value=b"payload")
+        req.headers = {"stripe-signature": "sig"}
+        return req
+
+    def test_invoice_paid_records_ledger_payment(self):
+        from datetime import datetime, timedelta, timezone
+
+        from backend.routes import webhooks as wh
+        import stripe
+
+        period_end = int((datetime.now(timezone.utc) + timedelta(days=30)).timestamp())
+        data_obj = {
+            "id": "in_99",
+            "subscription": "sub_1",
+            "billing_reason": "subscription_cycle",
+            "amount_paid": 4999,
+            "lines": {"data": [{"period": {"end": period_end}}]},
+        }
+        event_obj = self._event(data_obj)
+        record_mock = AsyncMock()
+        find_mock = AsyncMock(
+            side_effect=[
+                {"id": "row1", "driver_id": "d1", "plan_id": "p1", "plan_name": "Pro"},
+                {"id": "d1", "user_id": "u1"},
+            ]
+        )
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.find_one", find_mock),
+            patch("backend.routes.webhooks.db_supabase.update_one", AsyncMock()),
+            patch("backend.routes.webhooks.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers._record_subscription_payment", record_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._req()))
+
+        assert result["received"] is True
+        record_mock.assert_awaited_once()
+        assert record_mock.await_args.kwargs["stripe_invoice_id"] == "in_99"
+        assert record_mock.await_args.kwargs["billing_reason"] == "subscription_cycle"
+
+
+class TestStripeWebhookInvoiceRecovery:
+    """invoice.paid recovers the row from subscription metadata when it arrives
+    before checkout linked stripe_subscription_id (round-6 P2)."""
+
+    def _event(self, data_object, event_id="evt_inv_r"):
+        raw = _make_stripe_event("invoice.paid", data_object, event_id=event_id)
+        obj = MagicMock()
+        obj.get = lambda k, d=None: raw.get(k, d)
+        obj.to_dict_recursive = lambda: raw
+        return obj
+
+    def _settings(self):
+        async def f():
+            return {"stripe_webhook_secret": "ws", "stripe_secret_key": "sk"}
+
+        return f
+
+    def _req(self):
+        req = MagicMock()
+        req.body = AsyncMock(return_value=b"payload")
+        req.headers = {"stripe-signature": "sig"}
+        return req
+
+    def test_invoice_paid_recovers_row_via_subscription_metadata(self):
+        from datetime import datetime, timedelta, timezone
+
+        from backend.routes import webhooks as wh
+        import stripe
+
+        period_end = int((datetime.now(timezone.utc) + timedelta(days=30)).timestamp())
+        data_obj = {
+            "id": "in_r",
+            "subscription": "sub_unlinked",
+            "billing_reason": "subscription_create",
+            "amount_paid": 4999,
+            "lines": {"data": [{"period": {"end": period_end}}]},
+        }
+        event_obj = self._event(data_obj)
+        record_mock = AsyncMock()
+        # 1st find_one (by stripe_subscription_id) misses; 2nd (by metadata id) hits.
+        find_mock = AsyncMock(
+            side_effect=[None, {"id": "row1", "driver_id": "d1", "plan_id": "p1", "plan_name": "Pro"}]
+        )
+        sub_obj = MagicMock()
+        sub_obj.get = lambda k, d=None: {"metadata": {"subscription_id": "row1"}}.get(k, d)
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.find_one", find_mock),
+            patch("backend.routes.webhooks.db_supabase.update_one", AsyncMock()),
+            patch.object(stripe.Subscription, "retrieve", return_value=sub_obj),
+            patch("backend.routes.drivers._record_subscription_payment", record_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._req()))
+
+        assert result["received"] is True
+        record_mock.assert_awaited_once()
+        assert record_mock.await_args.kwargs["stripe_invoice_id"] == "in_r"

@@ -189,53 +189,86 @@ class TestSubscriptionCheckoutFlow:
 class TestWebhookActivation:
     """Test checkout.session.completed webhook activates subscription."""
 
-    async def test_webhook_activates_subscription(self):
-        """checkout.session.completed webhook activates pending subscription."""
+    def _webhook_event(self, with_subscription="sub_stripe_x"):
+        obj = {
+            "id": "cs_test_session456",
+            "payment_status": "paid",
+            "metadata": {
+                "subscription_id": "sub-id-123",
+                "plan_id": "plan-premium",
+                "driver_id": "driver-456",
+            },
+        }
+        if with_subscription:
+            obj["subscription"] = with_subscription
+        return {"id": "evt_test123", "type": "checkout.session.completed", "data": {"object": obj}}
+
+    async def _run(self, find_return, activate_mock, update_mock, cancel_mock=None):
         from fastapi import Request
 
         from backend.routes.webhooks import stripe_webhook
-
-        webhook_event = {
-            "id": "evt_test123",
-            "type": "checkout.session.completed",
-            "data": {
-                "object": {
-                    "id": "cs_test_session456",
-                    "payment_status": "paid",
-                    "metadata": {
-                        "subscription_id": "sub-id-123",
-                        "plan_id": "plan-premium",
-                        "driver_id": "driver-456",
-                    },
-                }
-            },
-        }
 
         request = AsyncMock(spec=Request)
         request.body = AsyncMock(return_value=b'{"dummy": "event"}')
         request.headers = {"stripe-signature": "sig_test"}
 
-        with (
-            patch("backend.settings_loader.get_app_settings") as mock_get_settings,
-            patch("stripe.Webhook.construct_event") as mock_construct,
-            patch("backend.db_supabase.claim_stripe_event") as mock_claim,
-            patch("backend.db_supabase.mark_stripe_event_processed") as mock_mark,
-            patch("backend.routes.drivers._activate_subscription") as mock_activate,
-        ):
-            mock_get_settings.return_value = {
-                "stripe_webhook_secret": "whsec_test123",
-                "stripe_secret_key": "sk_test_123",
-            }
-            mock_construct.return_value = webhook_event
-            mock_claim.return_value = True  # First time seeing this event
+        async def _settings():
+            return {"stripe_webhook_secret": "whsec_test123", "stripe_secret_key": "sk_test_123"}
 
-            # Execute
-            result = await stripe_webhook(request)
+        patches = [
+            patch("backend.routes.webhooks.get_app_settings", _settings),
+            patch("stripe.Webhook.construct_event", return_value=self._webhook_event()),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.drivers._activate_subscription", activate_mock),
+            patch("backend.routes.webhooks.db_supabase.find_one", AsyncMock(return_value=find_return)),
+            patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
+        ]
+        if cancel_mock is not None:
+            patches.append(patch("backend.routes.drivers._cancel_stripe_subscription", cancel_mock))
+        import contextlib
 
-            # Verify subscription was activated
-            mock_activate.assert_called_once_with("sub-id-123", "plan-premium")
-            mock_mark.assert_called_once_with("evt_test123")
-            assert result["received"] is True
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            return await stripe_webhook(request)
+
+    async def test_webhook_activates_and_links_active_row(self):
+        """checkout.session.completed activates a pending row and links the
+        Stripe Subscription id once the row is active."""
+        activate_mock = AsyncMock()
+        update_mock = AsyncMock()
+        result = await self._run(
+            find_return={"id": "sub-id-123", "status": "active"},
+            activate_mock=activate_mock,
+            update_mock=update_mock,
+        )
+        activate_mock.assert_called_once_with("sub-id-123", "plan-premium")
+        # stripe_subscription_id linked
+        linked = [
+            c
+            for c in update_mock.await_args_list
+            if c.args and c.args[2].get("stripe_subscription_id") == "sub_stripe_x"
+        ]
+        assert linked
+        assert result["received"] is True
+
+    async def test_webhook_superseded_row_not_linked_orphan_cancelled(self):
+        """If the row was superseded before this stale session paid, don't link
+        the id; cancel the orphaned Stripe subscription instead."""
+        activate_mock = AsyncMock()
+        update_mock = AsyncMock()
+        cancel_mock = AsyncMock()
+        result = await self._run(
+            find_return={"id": "sub-id-123", "status": "superseded"},
+            activate_mock=activate_mock,
+            update_mock=update_mock,
+            cancel_mock=cancel_mock,
+        )
+        # No stripe_subscription_id linked
+        assert not [c for c in update_mock.await_args_list if c.args and c.args[2].get("stripe_subscription_id")]
+        cancel_mock.assert_awaited_once_with("sub_stripe_x")
+        assert result["received"] is True
 
 
 class TestVerifySession:
@@ -582,3 +615,73 @@ class TestActivationAndSuperseding:
         assert superseded, "stale pending row should be superseded"
         assert superseded[0].args[1] == {"id": "stale-1"}
         assert result.get("checkout_url")
+
+
+class TestActivationPeriodAndVerifySuperseded:
+    """P2 follow-ups: activation recomputes the period; verify-session refuses
+    to activate/link a superseded row and cancels the orphan Stripe sub."""
+
+    async def test_activate_recomputes_period_for_pending_row(self):
+        from backend.routes import drivers as drv
+
+        update_mock = AsyncMock()
+        # find_one order: the pending sub, prior-active (none), plan, driver (none)
+        find_mock = AsyncMock(
+            side_effect=[
+                {"id": "s1", "status": "pending", "driver_id": "d1"},
+                None,
+                {"id": "plan-1", "duration_days": 7, "subscriber_count": 0},
+                None,
+            ]
+        )
+        with (
+            patch("backend.db_supabase.find_one", find_mock),
+            patch("backend.db_supabase.update_one", update_mock),
+        ):
+            await drv._activate_subscription("s1", "plan-1")
+
+        activates = [
+            c
+            for c in update_mock.await_args_list
+            if c.args and c.args[0] == "driver_subscriptions" and c.args[1] == {"id": "s1"}
+        ]
+        assert activates
+        payload = activates[0].args[2]["$set"]
+        assert payload["status"] == "active"
+        assert "started_at" in payload
+        assert "expires_at" in payload
+
+    async def test_verify_session_superseded_returns_superseded(self):
+        from backend.routes.drivers import verify_subscription_session
+
+        mock_sub = {
+            "id": "sub-123",
+            "driver_id": "driver-1",
+            "plan_id": "p1",
+            "status": "pending",
+            "payment_status": "pending",
+        }
+        find_mock = AsyncMock(
+            side_effect=[
+                mock_sub,
+                {"id": "sub-123", "status": "superseded", "driver_id": "driver-1"},
+            ]
+        )
+        session = MagicMock()
+        session.payment_status = "paid"
+        session.get = lambda k, d=None: "sub_y" if k == "subscription" else d
+        cancel_mock = AsyncMock()
+
+        with (
+            patch("backend.db_supabase.find_one", find_mock),
+            patch("backend.db_supabase.get_rows", AsyncMock(return_value=[{"id": "driver-1"}])),
+            patch("backend.db_supabase.update_one", AsyncMock()),
+            patch("backend.settings_loader.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk"})),
+            patch("stripe.checkout.Session.retrieve", return_value=session),
+            patch("backend.routes.drivers._activate_subscription", AsyncMock()),
+            patch("backend.routes.drivers._cancel_stripe_subscription", cancel_mock),
+        ):
+            result = await verify_subscription_session("cs_x", {"id": "user-123"})
+
+        assert result["status"] == "superseded"
+        cancel_mock.assert_awaited_once_with("sub_y")

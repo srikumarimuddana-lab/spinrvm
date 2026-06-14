@@ -5579,20 +5579,30 @@ async def verify_subscription_session(
         return {"status": "pending"}
 
     if session.payment_status == "paid":
-        # Persist the Stripe Subscription id (recurring plans) so renewal /
-        # dunning / cancellation webhooks can match this row even if the
-        # checkout webhook was delayed or missed.
-        stripe_subscription_id = session.get("subscription")
-        if stripe_subscription_id:
-            await db.update_one(
-                "driver_subscriptions",
-                {"id": sub["id"]},
-                {"stripe_subscription_id": stripe_subscription_id},
-            )
-        # Activate the subscription (same as webhook path, idempotent).
+        # Activate first (idempotent; a no-op if the row was superseded by a
+        # newer checkout), then re-read to decide whether to link.
         await _activate_subscription(sub["id"], sub.get("plan_id"))
         sub = await db.find_one("driver_subscriptions", {"id": sub["id"]})
-        return {"status": "active", "subscription": sub}
+        stripe_subscription_id = session.get("subscription")
+
+        if sub and sub.get("status") == "active":
+            # Persist the Stripe Subscription id (recurring plans) so renewal /
+            # dunning / cancellation webhooks can match this row even if the
+            # checkout webhook was delayed or missed. Only on an active row —
+            # never link a superseded one.
+            if stripe_subscription_id and not sub.get("stripe_subscription_id"):
+                await db.update_one(
+                    "driver_subscriptions",
+                    {"id": sub["id"]},
+                    {"stripe_subscription_id": stripe_subscription_id},
+                )
+            return {"status": "active", "subscription": sub}
+
+        # Superseded by a newer checkout — don't link/activate; cancel the
+        # orphaned Stripe subscription so the driver isn't billed for it.
+        if stripe_subscription_id:
+            await _cancel_stripe_subscription(stripe_subscription_id)
+        return {"status": "superseded"}
 
     return {"status": "pending"}
 
@@ -5632,22 +5642,33 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
             },
         )
 
-    # Activate.
+    # Activate. Recompute the period from activation time so a driver who
+    # completes Checkout hours after creating it (Stripe sessions live up to
+    # 24h) doesn't lose paid access — matters most on daily/weekly one-off
+    # plans. (Recurring plans get expires_at overwritten by invoice.paid's
+    # authoritative period end on the next event.)
+    plan = await db.find_one("subscription_plans", {"id": plan_id}) if plan_id else None
+    now = datetime.now(timezone.utc)
+    activate_updates = {
+        "status": "active",
+        "payment_status": "paid",
+        "started_at": now.isoformat(),
+    }
+    if plan and plan.get("duration_days"):
+        activate_updates["expires_at"] = (now + timedelta(days=plan["duration_days"])).isoformat()
     await db.update_one(
         "driver_subscriptions",
         {"id": subscription_id},
-        {"$set": {"status": "active", "payment_status": "paid"}},
+        {"$set": activate_updates},
     )
 
-    # Increment subscriber count.
-    if plan_id:
-        plan = await db.find_one("subscription_plans", {"id": plan_id})
-        if plan:
-            await db.update_one(
-                "subscription_plans",
-                {"id": plan_id},
-                {"$set": {"subscriber_count": (plan.get("subscriber_count", 0) or 0) + 1}},
-            )
+    # Increment subscriber count (reuse the plan already fetched above).
+    if plan:
+        await db.update_one(
+            "subscription_plans",
+            {"id": plan_id},
+            {"$set": {"subscriber_count": (plan.get("subscriber_count", 0) or 0) + 1}},
+        )
 
     logger.info(f"[SUBSCRIBE] Subscription {subscription_id} activated for driver {driver_id}")
 

@@ -179,10 +179,15 @@ async def admin_get_subscription_stats(
     if area_filter:
         all_subs = [s for s in all_subs if driver_area_map.get(s.get("driver_id", "")) in area_filter]
 
-    # Only paid rows represent realized revenue/subscribers. A pending or
-    # superseded checkout row carries a price but no cleared payment, so it
-    # must not inflate revenue, transaction, or subscriber metrics.
-    paid_subs = [s for s in all_subs if s.get("payment_status") == "paid"]
+    # Only realized-revenue rows count toward revenue/subscriber metrics.
+    # A pending/superseded checkout row carries a price but no cleared payment,
+    # so it's excluded. Everything else counts — including legacy pre-checkout
+    # rows whose payment_status defaults to "pending" after migration 148 but
+    # whose status is a real subscription state (active/expired/cancelled/
+    # cancel_pending) — otherwise admin totals would silently drop every
+    # subscriber created before the Checkout flow until they renew.
+    _UNPAID_STATUSES = {"pending", "superseded"}
+    paid_subs = [s for s in all_subs if s.get("payment_status") == "paid" or s.get("status") not in _UNPAID_STATUSES]
 
     # Overall stats
     active = [s for s in all_subs if s.get("status") == "active"]

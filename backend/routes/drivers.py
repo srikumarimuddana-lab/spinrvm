@@ -5389,6 +5389,36 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
         _cancel_url = "spinr-driver://subscription/cancel"
 
         if _stripe_secret and _price_id:
+            # Guard against a Stripe Price that disagrees with the DB price the
+            # driver was shown (admin edited plan.price after attaching a Price,
+            # or pasted the wrong Price id). Retrieve it and refuse on an
+            # amount/currency mismatch so we never bill a surprise amount.
+            try:
+                _price_obj = stripe.Price.retrieve(_price_id, api_key=_stripe_secret)
+            except Exception as _price_err:
+                logger.exception(f"[SUBSCRIBE] Could not retrieve Stripe Price {_price_id} for plan {plan_id}")
+                raise HTTPException(
+                    status_code=502,
+                    detail="Payment service unavailable. Please try again later.",
+                ) from _price_err
+            _expected_cents = dollars_to_cents(plan_price)
+            _price_cents = _price_obj.get("unit_amount")
+            _price_currency = (_price_obj.get("currency") or "").lower()
+            if _price_cents != _expected_cents or _price_currency != "cad":
+                logger.error(
+                    "[SUBSCRIBE] Stripe Price %s mismatch for plan %s: stripe=%s/%s plan=%s/cad — refusing to charge",
+                    _price_id,
+                    plan_id,
+                    _price_cents,
+                    _price_currency,
+                    _expected_cents,
+                    extra={"domain": "payments"},
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail="This subscription plan is misconfigured. Please contact support.",
+                )
+
             # Recurring billing: Stripe Subscription mode. Stripe auto-renews
             # the driver's card each period and fires invoice.paid (renewal)
             # / invoice.payment_failed (dunning) / customer.subscription.*
@@ -5416,7 +5446,7 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
             # One-off Checkout (no recurring Price on this plan). The webhook
             # (checkout.session.completed) activates the subscription; renewal
             # is expiry-driven (driver re-subscribes each period).
-            _amount_cents = int(plan_price * 100)
+            _amount_cents = dollars_to_cents(plan_price)
             _session = stripe.checkout.Session.create(
                 payment_method_types=["card"],
                 mode="payment",
@@ -5452,6 +5482,10 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
             logger.info(
                 f"[SUBSCRIBE] Dev mode (no Stripe/free plan): subscription {subscription_id} for driver {driver['id']}"
             )
+    except HTTPException:
+        # Intentional rejections (e.g. Price mismatch 409) must propagate with
+        # their own status, not be masked as a generic 502.
+        raise
     except Exception as _stripe_err:
         logger.exception(f"[SUBSCRIBE] Stripe Checkout creation failed for driver {driver['id']}")
         raise HTTPException(
@@ -5469,12 +5503,26 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
             await db_supabase.get_rows(
                 "driver_subscriptions",
                 {"driver_id": driver["id"], "status": "pending"},
-                columns="id",
+                columns="id,stripe_session_id",
                 limit=20,
             )
             or []
         )
         for row in stale_pending:
+            # Expire the stale Stripe Checkout Session first so it can never be
+            # paid — otherwise a superseded one-off session that completes later
+            # charges the driver's card for a pass they won't receive (one-off
+            # sessions carry no subscription to cancel). Best-effort: a session
+            # that's already completed/expired raises, which we ignore.
+            _stale_session = row.get("stripe_session_id")
+            if _stale_session and _stripe_secret:
+                try:
+                    stripe.checkout.Session.expire(_stale_session, api_key=_stripe_secret)
+                except Exception:
+                    logger.info(
+                        f"[SUBSCRIBE] Could not expire superseded checkout session {_stale_session} "
+                        "(already completed/expired?) — continuing",
+                    )
             await db_supabase.update_one(
                 "driver_subscriptions",
                 {"id": row["id"]},
@@ -5507,7 +5555,14 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
         # keeps their current pass valid if they abandon Checkout, and avoids
         # double-counting (abandoned sessions would otherwise inflate the count
         # and successful payments would count twice).
-        return {"success": True, "checkout_url": checkout_url, "subscription_id": subscription_id}
+        return {
+            "success": True,
+            "checkout_url": checkout_url,
+            "subscription_id": subscription_id,
+            # The driver app reads `session_id` to poll verify-session if the
+            # deep-link return is delayed/missed after openURL().
+            "session_id": stripe_session_id,
+        }
 
     # Dev/immediate-activation mode: no payment step, so the activation path
     # never runs — cancel the prior active subscription and bump the count here.
@@ -5623,30 +5678,11 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
 
     driver_id = sub.get("driver_id")
 
-    # Cancel any prior active subscription for this driver.
-    existing = await db.find_one("driver_subscriptions", {"driver_id": driver_id, "status": "active"})
-    if existing and existing["id"] != subscription_id:
-        # Stop the prior recurring Stripe subscription so a plan switch doesn't
-        # double-bill. Best-effort: we've already activated a paid replacement,
-        # so a Stripe failure here is logged (reconcile loop +
-        # customer.subscription.* webhooks backstop) but must not block.
-        await _cancel_stripe_subscription(existing.get("stripe_subscription_id"))
-        await db.update_one(
-            "driver_subscriptions",
-            {"id": existing["id"]},
-            {
-                "$set": {
-                    "status": RideStatus.CANCELLED,
-                    "cancelled_at": datetime.now(timezone.utc).isoformat(),
-                }
-            },
-        )
-
-    # Activate. Recompute the period from activation time so a driver who
-    # completes Checkout hours after creating it (Stripe sessions live up to
-    # 24h) doesn't lose paid access — matters most on daily/weekly one-off
-    # plans. (Recurring plans get expires_at overwritten by invoice.paid's
-    # authoritative period end on the next event.)
+    # Recompute the period from activation time so a driver who completes
+    # Checkout hours after creating it (Stripe sessions live up to 24h) doesn't
+    # lose paid access — matters most on daily/weekly one-off plans. (Recurring
+    # plans get expires_at overwritten by invoice.paid's authoritative period
+    # end on the next event.)
     plan = await db.find_one("subscription_plans", {"id": plan_id}) if plan_id else None
     now = datetime.now(timezone.utc)
     activate_updates = {
@@ -5656,11 +5692,49 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
     }
     if plan and plan.get("duration_days"):
         activate_updates["expires_at"] = (now + timedelta(days=plan["duration_days"])).isoformat()
-    await db.update_one(
+
+    # Atomic claim: flip pending→active filtering on status='pending'. Only the
+    # caller that wins (webhook vs verify-session can race) gets a row back and
+    # runs the one-time side effects below; the loser matches 0 rows and returns,
+    # so cancel-prior / count-increment / push never run twice.
+    claimed = await db.update_one(
         "driver_subscriptions",
-        {"id": subscription_id},
+        {"id": subscription_id, "status": "pending"},
         {"$set": activate_updates},
     )
+    if not claimed:
+        return
+
+    # Cancel any prior active subscription for this driver (plan switch).
+    existing = await db.find_one("driver_subscriptions", {"driver_id": driver_id, "status": "active"})
+    if existing and existing["id"] != subscription_id:
+        try:
+            # Durable cancel: raise on failure so we don't claim the old pass is
+            # cancelled while Stripe keeps billing it.
+            await _cancel_stripe_subscription(existing.get("stripe_subscription_id"), raise_on_error=True)
+            await db.update_one(
+                "driver_subscriptions",
+                {"id": existing["id"]},
+                {"$set": {"status": RideStatus.CANCELLED, "cancelled_at": now.isoformat()}},
+            )
+        except Exception:
+            # The new pass is already active (driver paid), so we can't block,
+            # but the old Stripe subscription may still bill. Mark the old row
+            # cancel_pending (terminal — won't be reactivated) and log loudly so
+            # ops can cancel it in Stripe. (No auto-retry yet — tracked follow-up.)
+            logger.error(
+                "[SUBSCRIBE] Prior Stripe subscription cancel failed on plan switch — "
+                "old row marked cancel_pending; manual Stripe cancel needed. driver=%s old_row=%s",
+                driver_id,
+                existing["id"],
+                exc_info=True,
+                extra={"domain": "payments", "driver_id": driver_id},
+            )
+            await db.update_one(
+                "driver_subscriptions",
+                {"id": existing["id"]},
+                {"$set": {"status": "cancel_pending", "cancelled_at": now.isoformat()}},
+            )
 
     # Increment subscriber count (reuse the plan already fetched above).
     if plan:

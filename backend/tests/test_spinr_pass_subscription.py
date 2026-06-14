@@ -116,6 +116,8 @@ class TestSubscriptionCheckoutFlow:
             assert result["success"] is True
             assert result["checkout_url"] == "https://checkout.stripe.com/pay/session123"
             assert result["subscription_id"] == str(sub_id)
+            # session_id returned so the app can poll verify-session as a fallback
+            assert result["session_id"] == "cs_test_session123"
 
             # Verify subscription row was inserted with pending status
             mock_insert.assert_called_once()
@@ -415,11 +417,15 @@ class TestRecurringSubscription:
         request.json = AsyncMock(return_value={"plan_id": "plan-recurring"})
         current_user = {"id": "user-123"}
 
+        # Stripe Price matches the plan price (49.99 → 4999 cents, cad).
+        price_obj = {"unit_amount": 4999, "currency": "cad"}
+
         with (
             patch("backend.db_supabase.get_rows") as mock_get_rows,
             patch("backend.db_supabase.update_one"),
             patch("backend.db_supabase.insert_one"),
             patch("backend.settings_loader.get_app_settings") as mock_get_settings,
+            patch("stripe.Price.retrieve", return_value=price_obj),
             patch("stripe.checkout.Session.create") as mock_session_create,
         ):
             mock_get_rows.side_effect = lambda table, filters, columns=None, limit=None: {
@@ -443,6 +449,37 @@ class TestRecurringSubscription:
         # ids mirrored onto the Stripe Subscription for renewal-event matching
         assert call_kwargs["subscription_data"]["metadata"]["plan_id"] == "plan-recurring"
         assert result["checkout_url"] == "https://checkout.stripe.com/pay/recurring"
+
+    async def test_subscribe_recurring_price_mismatch_rejected(self, mock_driver, mock_plan, mock_settings):
+        """A Stripe Price whose amount disagrees with the plan is refused (409)
+        rather than silently charging a surprise amount."""
+        from fastapi import HTTPException, Request
+
+        from backend.routes.drivers import subscribe_to_plan
+
+        recurring_plan = {**mock_plan, "id": "plan-recurring", "stripe_price_id": "price_wrong"}
+        request = AsyncMock(spec=Request)
+        request.json = AsyncMock(return_value={"plan_id": "plan-recurring"})
+
+        # Plan is 49.99 (4999) but the Stripe Price says 9999.
+        with (
+            patch("backend.db_supabase.get_rows") as mock_get_rows,
+            patch("backend.settings_loader.get_app_settings", AsyncMock(return_value=mock_settings)),
+            patch("stripe.Price.retrieve", return_value={"unit_amount": 9999, "currency": "cad"}),
+            patch("stripe.checkout.Session.create") as mock_session_create,
+        ):
+            mock_get_rows.side_effect = lambda table, filters, columns=None, limit=None: {
+                "drivers": [mock_driver],
+                "service_areas": [{"spinr_pass_enabled": True}],
+                "subscription_plans": [recurring_plan],
+                "driver_subscriptions": [],
+            }.get(table, [])
+
+            with pytest.raises(HTTPException) as exc:
+                await subscribe_to_plan(request, {"id": "user-123"})
+
+        assert exc.value.status_code == 409
+        mock_session_create.assert_not_called()
 
 
 class TestCancelStripeSubscription:
@@ -584,11 +621,12 @@ class TestActivationAndSuperseding:
             if table == "driver_subscriptions":
                 # No existing active sub; one stale pending row to supersede.
                 if filters.get("status") == "pending":
-                    return [{"id": "stale-1"}]
+                    return [{"id": "stale-1", "stripe_session_id": "cs_stale"}]
                 return []
             return []
 
         update_mock = AsyncMock()
+        expire_mock = MagicMock()
         with (
             patch("backend.db_supabase.get_rows") as mock_get_rows,
             patch("backend.db_supabase.update_one", update_mock),
@@ -598,6 +636,7 @@ class TestActivationAndSuperseding:
                 AsyncMock(return_value=mock_settings),
             ),
             patch("stripe.checkout.Session.create") as mock_session_create,
+            patch("stripe.checkout.Session.expire", expire_mock),
         ):
             mock_get_rows.side_effect = _rows
             session = MagicMock()
@@ -614,6 +653,9 @@ class TestActivationAndSuperseding:
         ]
         assert superseded, "stale pending row should be superseded"
         assert superseded[0].args[1] == {"id": "stale-1"}
+        # the stale Stripe Checkout Session is expired so it can't be paid later
+        expire_mock.assert_called_once()
+        assert expire_mock.call_args[0][0] == "cs_stale"
         assert result.get("checkout_url")
 
 
@@ -625,12 +667,12 @@ class TestActivationPeriodAndVerifySuperseded:
         from backend.routes import drivers as drv
 
         update_mock = AsyncMock()
-        # find_one order: the pending sub, prior-active (none), plan, driver (none)
+        # find_one order: pending sub, plan, prior-active (none), driver (none).
         find_mock = AsyncMock(
             side_effect=[
                 {"id": "s1", "status": "pending", "driver_id": "d1"},
-                None,
                 {"id": "plan-1", "duration_days": 7, "subscriber_count": 0},
+                None,
                 None,
             ]
         )
@@ -640,10 +682,11 @@ class TestActivationPeriodAndVerifySuperseded:
         ):
             await drv._activate_subscription("s1", "plan-1")
 
+        # The activation is an atomic claim filtered on status='pending'.
         activates = [
             c
             for c in update_mock.await_args_list
-            if c.args and c.args[0] == "driver_subscriptions" and c.args[1] == {"id": "s1"}
+            if c.args and c.args[0] == "driver_subscriptions" and c.args[1] == {"id": "s1", "status": "pending"}
         ]
         assert activates
         payload = activates[0].args[2]["$set"]
@@ -685,3 +728,31 @@ class TestActivationPeriodAndVerifySuperseded:
 
         assert result["status"] == "superseded"
         cancel_mock.assert_awaited_once_with("sub_y")
+
+
+class TestActivationAtomicClaim:
+    """P2 follow-up: activation is an atomic pending→active claim; the loser of
+    a webhook/verify race runs no side effects."""
+
+    async def test_activate_lost_race_skips_side_effects(self):
+        from backend.routes import drivers as drv
+
+        # The claim update_one returns None → another caller already flipped it.
+        update_mock = AsyncMock(return_value=None)
+        find_mock = AsyncMock(
+            side_effect=[
+                {"id": "s1", "status": "pending", "driver_id": "d1"},
+                {"id": "plan-1", "duration_days": 7, "subscriber_count": 0},
+            ]
+        )
+        push_mock = AsyncMock()
+        with (
+            patch("backend.db_supabase.find_one", find_mock),
+            patch("backend.db_supabase.update_one", update_mock),
+            patch("backend.routes.drivers.send_push_notification", push_mock),
+        ):
+            await drv._activate_subscription("s1", "plan-1")
+
+        # Only the claim ran — no count increment, no push.
+        assert update_mock.await_count == 1
+        push_mock.assert_not_awaited()

@@ -756,3 +756,124 @@ class TestActivationAtomicClaim:
         # Only the claim ran — no count increment, no push.
         assert update_mock.await_count == 1
         push_mock.assert_not_awaited()
+
+
+class TestSubscriptionPaymentsLedger:
+    """subscription_payments ledger (migration 151) records realized revenue."""
+
+    async def test_records_payment_when_amount_positive(self):
+        from backend.routes import drivers as drv
+
+        insert_mock = AsyncMock()
+        with patch("backend.db_supabase.insert_one", insert_mock):
+            await drv._record_subscription_payment(
+                driver_id="d1",
+                subscription_id="s1",
+                plan_id="p1",
+                plan_name="Pro",
+                amount=49.99,
+                billing_reason="one_off",
+            )
+        insert_mock.assert_awaited_once()
+        table, row = insert_mock.await_args.args[0], insert_mock.await_args.args[1]
+        assert table == "subscription_payments"
+        assert row["amount"] == "49.99"
+        assert row["billing_reason"] == "one_off"
+        assert row["driver_id"] == "d1"
+
+    async def test_skips_zero_amount(self):
+        from backend.routes import drivers as drv
+
+        insert_mock = AsyncMock()
+        with patch("backend.db_supabase.insert_one", insert_mock):
+            await drv._record_subscription_payment(
+                driver_id="d1",
+                subscription_id="s1",
+                plan_id="p1",
+                plan_name="Free",
+                amount=0,
+                billing_reason="dev",
+            )
+        insert_mock.assert_not_awaited()
+
+    async def test_activate_records_oneoff_payment(self):
+        from backend.routes import drivers as drv
+
+        record_mock = AsyncMock()
+        find_mock = AsyncMock(
+            side_effect=[
+                {"id": "s1", "status": "pending", "driver_id": "d1", "plan_name": "Pro", "stripe_session_id": "cs1"},
+                {"id": "p1", "duration_days": 30, "price": 49.99, "subscriber_count": 0},
+                None,
+                None,
+            ]
+        )
+        with (
+            patch("backend.db_supabase.find_one", find_mock),
+            patch("backend.db_supabase.update_one", AsyncMock()),
+            patch("backend.routes.drivers._record_subscription_payment", record_mock),
+        ):
+            await drv._activate_subscription("s1", "p1")
+        record_mock.assert_awaited_once()
+        assert record_mock.await_args.kwargs["billing_reason"] == "one_off"
+
+    async def test_activate_skips_ledger_for_recurring(self):
+        from backend.routes import drivers as drv
+
+        record_mock = AsyncMock()
+        find_mock = AsyncMock(
+            side_effect=[
+                {"id": "s1", "status": "pending", "driver_id": "d1"},
+                {"id": "p1", "duration_days": 30, "price": 49.99, "stripe_price_id": "price_x", "subscriber_count": 0},
+                None,
+                None,
+            ]
+        )
+        with (
+            patch("backend.db_supabase.find_one", find_mock),
+            patch("backend.db_supabase.update_one", AsyncMock()),
+            patch("backend.routes.drivers._record_subscription_payment", record_mock),
+        ):
+            await drv._activate_subscription("s1", "p1")
+        # Recurring is recorded by invoice.paid, not here.
+        record_mock.assert_not_awaited()
+
+
+class TestSubscribeConcurrencyConflict:
+    """The partial unique index (migration 152) surfaces as a clean 409."""
+
+    async def test_subscribe_insert_conflict_returns_409(self, mock_driver, mock_plan, mock_settings):
+        from fastapi import HTTPException, Request
+
+        from backend.routes.drivers import subscribe_to_plan
+
+        request = AsyncMock(spec=Request)
+        request.json = AsyncMock(return_value={"plan_id": "plan-premium"})
+
+        expire_mock = MagicMock()
+        with (
+            patch("backend.db_supabase.get_rows") as mock_get_rows,
+            patch("backend.db_supabase.update_one", AsyncMock()),
+            patch("backend.db_supabase.insert_one", AsyncMock(side_effect=Exception("unique violation"))),
+            patch("backend.settings_loader.get_app_settings", AsyncMock(return_value=mock_settings)),
+            patch("stripe.checkout.Session.create") as mock_session_create,
+            patch("stripe.checkout.Session.expire", expire_mock),
+        ):
+            mock_get_rows.side_effect = lambda table, filters, columns=None, limit=None: {
+                "drivers": [mock_driver],
+                "service_areas": [{"spinr_pass_enabled": True}],
+                "subscription_plans": [mock_plan],
+                "driver_subscriptions": [],
+            }.get(table, [])
+            session = MagicMock()
+            session.url = "https://checkout.stripe.com/pay/x"
+            session.id = "cs_new"
+            mock_session_create.return_value = session
+
+            with pytest.raises(HTTPException) as exc:
+                await subscribe_to_plan(request, {"id": "user-123"})
+
+        assert exc.value.status_code == 409
+        # the race-loser's Stripe session is expired so it can't be paid
+        expire_mock.assert_called_once()
+        assert expire_mock.call_args[0][0] == "cs_new"

@@ -730,6 +730,25 @@ async def stripe_webhook(request: Request):
                     new_expires,
                     extra={"domain": "drivers", "event_id": event_id},
                 )
+
+                # Record this charge (first invoice + every renewal) in the
+                # subscription_payments ledger so admin revenue stats capture
+                # recurring renewals. Deduped on the unique stripe_invoice_id
+                # index, so a replay is a no-op.
+                try:
+                    from ..routes.drivers import _record_subscription_payment  # type: ignore
+                except ImportError:
+                    from routes.drivers import _record_subscription_payment  # type: ignore
+                await _record_subscription_payment(
+                    driver_id=row.get("driver_id"),
+                    subscription_id=row["id"],
+                    plan_id=row.get("plan_id"),
+                    plan_name=row.get("plan_name"),
+                    amount=cents_to_dollars(invoice.get("amount_paid") or invoice.get("amount_due") or 0),
+                    billing_reason=invoice.get("billing_reason") or "subscription_cycle",
+                    stripe_invoice_id=invoice.get("id"),
+                )
+
                 # Only notify on actual renewal cycles — the initial invoice's
                 # activation push already went out from the checkout handler.
                 if invoice.get("billing_reason") == "subscription_cycle":

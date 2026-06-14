@@ -5546,7 +5546,26 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
         "created_at": now.isoformat(),
     }
 
-    await db_supabase.insert_one("driver_subscriptions", subscription)
+    try:
+        await db_supabase.insert_one("driver_subscriptions", subscription)
+    except Exception as _insert_err:
+        # The partial unique index (migration 152) allows at most one pending
+        # checkout per driver. A concurrent subscribe request that races past the
+        # supersede step hits it here — surface a clean 409 rather than a 500,
+        # and expire the Stripe session we just created so it can't be paid.
+        if checkout_url and stripe_session_id and _stripe_secret:
+            try:
+                stripe.checkout.Session.expire(stripe_session_id, api_key=_stripe_secret)
+            except Exception:
+                logger.info(f"[SUBSCRIBE] Could not expire race-loser session {stripe_session_id}")
+        logger.warning(
+            f"[SUBSCRIBE] Subscription insert failed (concurrent pending checkout?) for driver {driver['id']}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="A checkout is already in progress. Please finish or cancel it first.",
+        ) from _insert_err
 
     if checkout_url:
         # Payment pending — defer cancelling the driver's existing pass and
@@ -5580,6 +5599,16 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
         "subscription_plans",
         {"id": plan_id},
         {"subscriber_count": (plan.get("subscriber_count", 0) or 0) + 1},
+    )
+    # Dev/immediate activation realizes revenue without a Stripe invoice —
+    # record it in the ledger so admin stats see it.
+    await _record_subscription_payment(
+        driver_id=driver["id"],
+        subscription_id=subscription_id,
+        plan_id=plan_id,
+        plan_name=plan.get("name"),
+        amount=plan.get("price"),
+        billing_reason="dev",
     )
     return {"success": True, "subscription": subscription, "mode": "dev"}
 
@@ -5662,6 +5691,60 @@ async def verify_subscription_session(
     return {"status": "pending"}
 
 
+async def _record_subscription_payment(
+    *,
+    driver_id: str,
+    subscription_id: str | None,
+    plan_id: str | None,
+    plan_name: str | None,
+    amount,
+    billing_reason: str,
+    stripe_invoice_id: str | None = None,
+    stripe_session_id: str | None = None,
+    stripe_payment_intent_id: str | None = None,
+) -> None:
+    """Append a realized-payment row to the subscription_payments ledger.
+
+    The ledger (migration 151) is the source of truth for admin subscription
+    revenue/transaction stats — driver_subscriptions tracks current STATE, this
+    tracks money MOVED, so recurring renewals are captured (not just the first
+    charge). Recurring inserts dedupe on the unique stripe_invoice_id index, so
+    a replay is benign. Never raises — a ledger failure must not break the
+    activation/webhook flow that already moved the money.
+    """
+    try:
+        amt = Decimal(str(amount or 0)).quantize(Decimal("0.01"))
+        if amt <= 0:
+            return  # nothing realized — don't clutter the ledger
+        await db_supabase.insert_one(
+            "subscription_payments",
+            {
+                "id": str(uuid.uuid4()),
+                "driver_id": driver_id,
+                "subscription_id": subscription_id,
+                "plan_id": plan_id,
+                "plan_name": plan_name,
+                "amount": str(amt),
+                "currency": "cad",
+                "billing_reason": billing_reason,
+                "stripe_invoice_id": stripe_invoice_id,
+                "stripe_session_id": stripe_session_id,
+                "stripe_payment_intent_id": stripe_payment_intent_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except Exception:
+        # Duplicate recurring invoice (unique index) or any other write error —
+        # benign for the duplicate case; logged so a real failure is visible.
+        logger.warning(
+            "subscription_payments insert skipped (duplicate or error) driver=%s reason=%s invoice=%s",
+            driver_id,
+            billing_reason,
+            stripe_invoice_id,
+            exc_info=True,
+        )
+
+
 async def _activate_subscription(subscription_id: str, plan_id: str | None = None):
     """Activate a pending subscription after payment confirmation.
 
@@ -5742,6 +5825,21 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
             "subscription_plans",
             {"id": plan_id},
             {"$set": {"subscriber_count": (plan.get("subscriber_count", 0) or 0) + 1}},
+        )
+
+    # Record one-off Checkout revenue in the ledger. Recurring plans are NOT
+    # recorded here — their invoice.paid webhook (subscription_create + every
+    # renewal) writes the ledger, so recording here too would double-count the
+    # first charge.
+    if plan and not plan.get("stripe_price_id"):
+        await _record_subscription_payment(
+            driver_id=driver_id,
+            subscription_id=subscription_id,
+            plan_id=plan_id,
+            plan_name=sub.get("plan_name") or plan.get("name"),
+            amount=plan.get("price"),
+            billing_reason="one_off",
+            stripe_session_id=sub.get("stripe_session_id"),
         )
 
     logger.info(f"[SUBSCRIBE] Subscription {subscription_id} activated for driver {driver_id}")
@@ -5862,6 +5960,34 @@ async def check_expiring_subscriptions():
         try:
             now = datetime.now(timezone.utc)
             window = now + timedelta(hours=24)
+
+            # Retry subscriptions stuck in cancel_pending — a plan-switch Stripe
+            # cancel that failed transiently. On success, finalize as cancelled;
+            # a row still failing stays cancel_pending and is logged for ops.
+            try:
+                stuck_cancels = await db.get_rows("driver_subscriptions", {"status": "cancel_pending"}, limit=200) or []
+                for pc in stuck_cancels:
+                    try:
+                        await _cancel_stripe_subscription(pc.get("stripe_subscription_id"), raise_on_error=True)
+                        await db.update_one(
+                            "driver_subscriptions",
+                            {"id": pc["id"]},
+                            {"$set": {"status": "cancelled"}},
+                        )
+                        logger.info(
+                            "[SUB-EXPIRY] cancel_pending resolved row=%s",
+                            pc["id"],
+                            extra={"domain": "payments"},
+                        )
+                    except Exception:
+                        logger.error(
+                            "[SUB-EXPIRY] cancel_pending retry still failing row=%s — manual Stripe cancel needed",
+                            pc["id"],
+                            exc_info=True,
+                            extra={"domain": "payments"},
+                        )
+            except Exception:
+                logger.error("[SUB-EXPIRY] cancel_pending sweep query failed", exc_info=True)
 
             active_subs = await db.get_rows("driver_subscriptions", {"status": "active"}, limit=500)
 

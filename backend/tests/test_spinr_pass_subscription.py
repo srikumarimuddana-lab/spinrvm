@@ -417,8 +417,9 @@ class TestRecurringSubscription:
         request.json = AsyncMock(return_value={"plan_id": "plan-recurring"})
         current_user = {"id": "user-123"}
 
-        # Stripe Price matches the plan price (49.99 → 4999 cents, cad).
-        price_obj = {"unit_amount": 4999, "currency": "cad"}
+        # Stripe Price matches the plan price (49.99 → 4999 cents, cad) and the
+        # plan's 30-day cadence (monthly).
+        price_obj = {"unit_amount": 4999, "currency": "cad", "recurring": {"interval": "month", "interval_count": 1}}
 
         with (
             patch("backend.db_supabase.get_rows") as mock_get_rows,
@@ -918,3 +919,83 @@ class TestSubscribeConcurrencyConflict:
                 await subscribe_to_plan(request, {"id": "user-123"})
 
         assert exc.value.status_code == 503
+
+
+class TestRecurringIntervalAndModeLedger:
+    """Round-6 P2s: validate Price interval; one-off ledger keys on actual mode."""
+
+    async def test_subscribe_recurring_interval_mismatch_rejected(self, mock_driver, mock_plan, mock_settings):
+        from fastapi import HTTPException, Request
+
+        from backend.routes.drivers import subscribe_to_plan
+
+        # 30-day plan, but the Stripe Price bills weekly → reject even though the
+        # amount/currency match.
+        recurring_plan = {**mock_plan, "id": "plan-recurring", "duration_days": 30, "stripe_price_id": "price_wk"}
+        request = AsyncMock(spec=Request)
+        request.json = AsyncMock(return_value={"plan_id": "plan-recurring"})
+
+        with (
+            patch("backend.db_supabase.get_rows") as mock_get_rows,
+            patch("backend.settings_loader.get_app_settings", AsyncMock(return_value=mock_settings)),
+            patch(
+                "stripe.Price.retrieve",
+                return_value={"unit_amount": 4999, "currency": "cad", "recurring": {"interval": "week", "interval_count": 1}},
+            ),
+            patch("stripe.checkout.Session.create") as mock_session_create,
+        ):
+            mock_get_rows.side_effect = lambda table, filters, columns=None, limit=None: {
+                "drivers": [mock_driver],
+                "service_areas": [{"spinr_pass_enabled": True}],
+                "subscription_plans": [recurring_plan],
+                "driver_subscriptions": [],
+            }.get(table, [])
+
+            with pytest.raises(HTTPException) as exc:
+                await subscribe_to_plan(request, {"id": "user-123"})
+
+        assert exc.value.status_code == 409
+        mock_session_create.assert_not_called()
+
+    async def test_activate_records_oneoff_when_mode_payment_despite_price_id(self):
+        from backend.routes import drivers as drv
+
+        # Plan HAS a price_id now, but the session actually created was one-off
+        # (mode="payment") — the ledger write must follow the real mode.
+        record_mock = AsyncMock()
+        find_mock = AsyncMock(
+            side_effect=[
+                {"id": "s1", "status": "pending", "driver_id": "d1", "plan_name": "Pro", "stripe_session_id": "cs1"},
+                {"id": "p1", "duration_days": 30, "price": 49.99, "stripe_price_id": "price_x", "subscriber_count": 0},
+                None,
+            ]
+        )
+        with (
+            patch("backend.db_supabase.find_one", find_mock),
+            patch("backend.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.db_supabase.update_one", AsyncMock()),
+            patch("backend.routes.drivers._record_subscription_payment", record_mock),
+        ):
+            await drv._activate_subscription("s1", "p1", "payment")
+        record_mock.assert_awaited_once()
+        assert record_mock.await_args.kwargs["billing_reason"] == "one_off"
+
+    async def test_activate_skips_ledger_when_mode_subscription(self):
+        from backend.routes import drivers as drv
+
+        record_mock = AsyncMock()
+        find_mock = AsyncMock(
+            side_effect=[
+                {"id": "s1", "status": "pending", "driver_id": "d1"},
+                {"id": "p1", "duration_days": 30, "price": 49.99, "subscriber_count": 0},
+                None,
+            ]
+        )
+        with (
+            patch("backend.db_supabase.find_one", find_mock),
+            patch("backend.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.db_supabase.update_one", AsyncMock()),
+            patch("backend.routes.drivers._record_subscription_payment", record_mock),
+        ):
+            await drv._activate_subscription("s1", "p1", "subscription")
+        record_mock.assert_not_awaited()

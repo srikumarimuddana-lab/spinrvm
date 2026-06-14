@@ -56,7 +56,7 @@ DROP POLICY IF EXISTS subscription_payments_select_own ON public.subscription_pa
 CREATE POLICY subscription_payments_select_own ON public.subscription_payments
     FOR SELECT TO authenticated
     USING (
-        driver_id IN (SELECT id FROM public.drivers WHERE user_id = auth.uid())
+        driver_id IN (SELECT id FROM public.drivers WHERE user_id = auth.uid()::text)
     );
 
 -- Financial table: all writes go through the backend service role (bypasses

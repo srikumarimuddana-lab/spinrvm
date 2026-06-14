@@ -26,7 +26,18 @@ import notifee, {
 } from '@notifee/react-native';
 import { Platform } from 'react-native';
 
-const RIDE_OFFER_CHANNEL_ID = 'ride-offers-v2';
+// v3: Android channel settings (incl. sound) are IMMUTABLE once created on a
+// device. v2 was created pointing at a `ride_offer` raw resource that was
+// never bundled (no config plugin copied it), so v2 rings silent forever on
+// existing installs. v3 + the withRideOfferSound plugin = audible offers.
+// Bump this suffix again any time the channel config changes.
+const RIDE_OFFER_CHANNEL_ID = 'ride-offers-v3';
+// Foreground variant: shown while the app is OPEN, alongside the in-app
+// offer panel. Android sound is channel-level and the in-app MP3 loop
+// (useRideOfferSound) is already ringing, so this channel is silent —
+// otherwise the driver hears two overlapping loops.
+const RIDE_OFFER_SILENT_CHANNEL_ID = 'ride-offers-fg-v1';
+const STALE_CHANNEL_IDS = ['ride-offers-v2'];
 const RIDE_OFFER_NOTIFICATION_ID = 'ride-offer-current';
 const RIDE_OFFER_CATEGORY_ID = 'ride-offer';
 const DEFAULT_RIDE_OFFER_TIMEOUT_MS = 15_000;
@@ -106,6 +117,22 @@ export async function ensureNotifeeReady(): Promise<void> {
                 visibility: AndroidVisibility.PUBLIC,
             });
 
+            await notifee.createChannel({
+                id: RIDE_OFFER_SILENT_CHANNEL_ID,
+                name: 'Ride Offers (in-app)',
+                description: 'New ride requests while the app is open — sound comes from the app itself',
+                importance: AndroidImportance.HIGH,
+                vibration: true,
+                vibrationPattern: [300, 500, 300, 500],
+                visibility: AndroidVisibility.PUBLIC,
+            });
+
+            // Remove superseded channels so drivers don't see dead duplicates
+            // under Settings → Notifications.
+            for (const staleId of STALE_CHANNEL_IDS) {
+                await notifee.deleteChannel(staleId).catch(() => undefined);
+            }
+
             // Ask for POST_NOTIFICATIONS on Android 13+. No-op on older OS.
             await notifee.requestPermission();
         } else {
@@ -153,11 +180,17 @@ export async function ensureNotifeeReady(): Promise<void> {
  * the user straight into the offer panel.
  *
  * On iOS: shows a rich notification with Accept/Decline buttons.
+ *
+ * `silent: true` is the foreground variant (app open, in-app panel already
+ * visible and the MP3 loop already playing): banner + vibration only, no
+ * channel sound, no full-screen intent.
  */
 export async function displayRideOfferNotification(
     offer: RideOfferDisplayData,
+    opts?: { silent?: boolean },
 ): Promise<void> {
     await ensureNotifeeReady();
+    const silent = opts?.silent === true;
 
     const timeoutMs = getRideOfferTimeoutMs(offer);
     if (timeoutMs <= 0) {
@@ -193,7 +226,7 @@ export async function displayRideOfferNotification(
         body,
         data: dataPayload,
         android: {
-            channelId: RIDE_OFFER_CHANNEL_ID,
+            channelId: silent ? RIDE_OFFER_SILENT_CHANNEL_ID : RIDE_OFFER_CHANNEL_ID,
             category: AndroidCategory.CALL,
             importance: AndroidImportance.HIGH,
             visibility: AndroidVisibility.PUBLIC,
@@ -204,7 +237,7 @@ export async function displayRideOfferNotification(
             ongoing: true,
             autoCancel: false,
             showTimestamp: true,
-            sound: 'ride_offer',
+            ...(silent ? {} : { sound: 'ride_offer' }),
             vibrationPattern: [300, 500, 300, 500],
             style: {
                 type: 1, // BIG_TEXT
@@ -224,20 +257,22 @@ export async function displayRideOfferNotification(
             // Full-screen intent — wakes the screen and shows the app
             // immediately, even if the phone is locked. Requires
             // USE_FULL_SCREEN_INTENT permission (added by config plugin).
-            fullScreenAction: { id: 'default', launchActivity: 'default' },
+            // Skipped for the foreground variant: the app is already on
+            // screen and relaunching the activity would jolt the driver.
+            ...(silent ? {} : { fullScreenAction: { id: 'default', launchActivity: 'default' } }),
             // Heads-up takes priority over silent notifications
             asForegroundService: false,
-            loopSound: true,
+            loopSound: !silent,
             timeoutAfter: timeoutMs,
         },
         ios: {
             categoryId: RIDE_OFFER_CATEGORY_ID,
             critical: false, // requires special Apple entitlement
-            sound: 'ride_offer.caf',
+            ...(silent ? {} : { sound: 'ride_offer.caf' }),
             interruptionLevel: 'timeSensitive', // iOS 15+
             foregroundPresentationOptions: {
                 alert: true,
-                sound: true,
+                sound: !silent,
                 badge: true,
                 banner: true,
                 list: true,

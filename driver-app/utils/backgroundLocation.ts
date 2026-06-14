@@ -2,7 +2,15 @@ import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
-import { API_URL } from '@shared/config';
+import SpinrConfig from '@shared/config/spinr.config';
+import { getAppCheckToken, initFirebaseServices } from '@shared/services/firebase';
+
+// Use the same backend-URL resolver as the shared API client — it carries the
+// production fallback (api-spinr.spinr.ca) and the expoConfig.extra value.
+// @shared/config's API_URL is env-var-only and resolves to '' on production /
+// OTA builds that rely on the hardcoded fallback, which would make every
+// headless request (token refresh, location batch) a silent no-op.
+const API_URL = SpinrConfig.backendUrl;
 
 const TASK_NAME = 'spinr-background-location';
 
@@ -32,7 +40,7 @@ type LocationTaskData = {
  * shared memory, so we MUST refresh via the refresh_token (which is persisted
  * to SecureStore) to get a fresh access token.
  */
-async function getBackgroundAuthToken(): Promise<string | null> {
+export async function getBackgroundAuthToken(): Promise<string | null> {
   if (!API_URL) return null;
 
   // First try the in-memory persisted access token (set by setTokens flow below)
@@ -58,9 +66,18 @@ async function getBackgroundAuthToken(): Promise<string | null> {
   }
 
   try {
+    // App Check is enforced on /api/* in production. Initialize it here first —
+    // this headless task doesn't mount _layout, so initFirebaseServices() (which
+    // configures the App Check provider) hasn't run yet; without it
+    // getAppCheckToken() returns null. initFirebaseServices is idempotent.
+    await initFirebaseServices();
+    const appCheckToken = await getAppCheckToken();
     const resp = await fetch(`${API_URL}/api/v1/auth/refresh`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(appCheckToken ? { 'X-Firebase-AppCheck': appCheckToken } : {}),
+      },
       body: JSON.stringify({ refresh_token: refreshToken }),
     });
     if (!resp.ok) {
@@ -118,11 +135,18 @@ TaskManager.defineTask<LocationTaskData>(TASK_NAME, async ({ data, error }) => {
   }));
 
   try {
+    // App Check is enforced on /api/* in production. Initialize it (idempotent;
+    // this headless task doesn't mount _layout) and attach the token so the
+    // breadcrumb upload isn't 401'd — otherwise rider ETA / the period audit
+    // go stale while the task logs the points as sent.
+    await initFirebaseServices();
+    const appCheckToken = await getAppCheckToken();
     await fetch(`${API_URL}/api/v1/drivers/location-batch`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
+        ...(appCheckToken ? { 'X-Firebase-AppCheck': appCheckToken } : {}),
       },
       body: JSON.stringify({ points }),
     });

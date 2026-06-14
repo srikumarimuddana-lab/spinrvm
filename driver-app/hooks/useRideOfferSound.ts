@@ -7,7 +7,9 @@
  *
  * Sources, in order of preference:
  *   1. Admin-uploaded URL from /drivers/config → setOfferSoundUrl(url)
- *   2. Bundled placeholder at assets/sounds/ride-offer.mp3
+ *   2. Bundled placeholder at assets/sounds/ride_offer.mp3
+ *      (underscore name: the same file is copied into Android res/raw by
+ *      plugins/withRideOfferSound, and Android resource names forbid '-')
  *
  * The bundled file is `require()`d at module load so Metro bundles it.
  * If the remote URL fails to load (network down, 404), we silently keep
@@ -36,13 +38,13 @@ let _audioModeConfigured = false;
 
 function _createBundledPlayer(): AudioPlayer | null {
     try {
-        const src = require('../assets/sounds/ride-offer.mp3');
+        const src = require('../assets/sounds/ride_offer.mp3');
         return createAudioPlayer(src);
     } catch (e) {
         if (__DEV__) {
             console.warn(
-                '[useRideOfferSound] ride-offer.mp3 not found at ' +
-                'driver-app/assets/sounds/ride-offer.mp3 — alert will be silent. ' +
+                '[useRideOfferSound] ride_offer.mp3 not found at ' +
+                'driver-app/assets/sounds/ride_offer.mp3 — alert will be silent. ' +
                 'Drop a ~1.5s mp3 there to enable the audio cue.',
                 e,
             );

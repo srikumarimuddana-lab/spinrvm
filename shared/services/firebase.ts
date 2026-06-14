@@ -44,8 +44,23 @@ if (hasFirebaseNative) {
 
 /**
  * Initialize Firebase services. Call once on app startup.
+ *
+ * Idempotent — the work runs at most once and every caller awaits the same
+ * promise. This matters because it's now invoked from two entry points: the
+ * mounted root layout (app/_layout cold start) AND the headless FCM/Notifee
+ * background task (services/backgroundMessaging), which never mounts the
+ * layout. Without init here, App Check has no provider in the headless context
+ * and getAppCheckToken() returns null.
  */
-export async function initFirebaseServices() {
+let _initServicesPromise: Promise<void> | null = null;
+
+export function initFirebaseServices(): Promise<void> {
+  if (_initServicesPromise) return _initServicesPromise;
+  _initServicesPromise = _doInitFirebaseServices();
+  return _initServicesPromise;
+}
+
+async function _doInitFirebaseServices(): Promise<void> {
   // 1. Crashlytics — enable automatic crash reporting
   if (crashlytics) {
     try {

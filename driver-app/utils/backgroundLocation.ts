@@ -135,11 +135,18 @@ TaskManager.defineTask<LocationTaskData>(TASK_NAME, async ({ data, error }) => {
   }));
 
   try {
+    // App Check is enforced on /api/* in production. Initialize it (idempotent;
+    // this headless task doesn't mount _layout) and attach the token so the
+    // breadcrumb upload isn't 401'd — otherwise rider ETA / the period audit
+    // go stale while the task logs the points as sent.
+    await initFirebaseServices();
+    const appCheckToken = await getAppCheckToken();
     await fetch(`${API_URL}/api/v1/drivers/location-batch`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
+        ...(appCheckToken ? { 'X-Firebase-AppCheck': appCheckToken } : {}),
       },
       body: JSON.stringify({ points }),
     });

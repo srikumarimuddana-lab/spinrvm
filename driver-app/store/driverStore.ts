@@ -79,6 +79,10 @@ export interface RideInfo {
     pickup_otp?: string;
     surge_multiplier?: number;
     payment_method?: string;
+    // Present on a dispatched offer (status driver_assigned). Typed explicitly
+    // so consumers don't fall through to the `unknown` index signature.
+    requires_wav?: boolean;
+    offer_expires_at?: string;
     created_at: string;
     [key: string]: unknown;
 }
@@ -105,9 +109,21 @@ export interface ActiveRide {
     ride: RideInfo;
     rider: RiderInfo;
     vehicle_type: VehicleTypeInfo;
-    incentives?: Array<{ name: string; bonus_amount: number; incentive_type?: string }>;
+    // incentive_type is always present — both backend endpoints default it to
+    // "per_ride" (routes/rides.py, routes/drivers.py), matching IncomingRide
+    // and RideOfferPanel's IncentiveItem.
+    incentives?: Array<{ name: string; bonus_amount: number; incentive_type: string }>;
     total_bonus?: number;
-    quest_hint?: { title: string; progress: string; reward: number } | null;
+    // Matches the backend payload (routes/rides.py / routes/drivers.py) and what
+    // RideOfferPanel reads. The previous {progress, reward} shape was stale and
+    // never matched the data, so any code reading it got undefined fields.
+    quest_hint?: {
+        title: string;
+        current_value: number;
+        target_value: number;
+        progress_pct: number;
+        reward_amount: number;
+    } | null;
 }
 
 export interface CompletedRideData {
@@ -717,7 +733,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                             duration_minutes: ride.duration_minutes,
                             rider_name: riderName as string | undefined,
                             rider_rating: riderRating,
-                            surge_multiplier: ride.surge_multiplier > 1 ? ride.surge_multiplier : undefined,
+                            surge_multiplier: (ride.surge_multiplier ?? 0) > 1 ? ride.surge_multiplier : undefined,
                             incentives: apiIncentives ?? existing?.incentives,
                             total_bonus: apiTotalBonus ?? existing?.total_bonus,
                             quest_hint: apiQuestHint ?? existing?.quest_hint,

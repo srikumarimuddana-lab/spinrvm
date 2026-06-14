@@ -22,7 +22,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // 'fingerprint'/'appVersion' rejected by EAS CLI). Bump manually when
     // shipping native changes that break JS-bundle compatibility. Pre-launch
     // with no production users, OTA compatibility risk is zero.
-    runtimeVersion: '2.0.0', // bumped from 1.0.0: New Architecture is a native/JS-bundle break — old-arch installs must not pull this OTA
+    runtimeVersion: '2.1.0', // bump from 2.0.0: withRideOfferSound adds native res/raw + iOS bundle resources and a new Notifee channel — old 2.0.0 binaries lack them, so this JS must not reach them via OTA
     splash: {
         image: './assets/images/splash-blank.png',
         resizeMode: 'contain',
@@ -236,6 +236,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // show the ride-offer panel like an incoming call when the app is
         // backgrounded or killed. See plugins/withNotifeePermissions.js.
         './plugins/withNotifeePermissions',
+        // Copies the ride-offer notification sound into the native builds:
+        // ride_offer.mp3 → Android res/raw (Notifee channel sound), and
+        // ride_offer.caf → iOS bundle (APNs/Notifee sound). Without this the
+        // ride-offer channel referenced a nonexistent resource and rang silent.
+        './plugins/withRideOfferSound',
         // Android Auto is provided by @iternio/react-native-auto-play, which ships
         // its own merged AndroidManifest (CarAppService + permissions) and needs no
         // app-side config plugin. iOS CarPlay stays dormant: it requires an

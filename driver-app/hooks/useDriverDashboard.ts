@@ -11,6 +11,7 @@ import { router } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
 import { useDriverStore } from '../store/driverStore';
 import { useRideOfferSound, setOfferSoundUrl } from './useRideOfferSound';
+import { tKey } from '../i18n';
 import api from '@shared/api/client';
 import { useDriverConfig } from '@shared/hooks/queries';
 import { API_URL } from '@shared/config';
@@ -99,7 +100,7 @@ interface UseDriverDashboardReturn {
 // Lazy-load Notifee helpers; mirrors the gating in _layout.tsx so the
 // dashboard still mounts in Expo Go / web (where the native module is absent).
 let _dismissRideOfferNotification: (() => Promise<void>) | null = null;
-let _displayRideOfferNotification: ((o: any) => Promise<void>) | null = null;
+let _displayRideOfferNotification: ((o: any, opts?: { silent?: boolean }) => Promise<void>) | null = null;
 if (Platform.OS === 'android' || Platform.OS === 'ios') {
   try {
     const _notifee = require('../services/notifeeService');
@@ -125,6 +126,11 @@ function _surfaceOfferNotification(data: any): void {
     const n = typeof v === 'number' ? v : parseFloat(String(v));
     return Number.isFinite(n) ? n : undefined;
   };
+  // Silent when the app is foreground-active: the in-app offer panel is
+  // visible and useRideOfferSound is already looping the tone, so a channel
+  // sound here would double-ring. Backgrounded-but-alive (WS still connected)
+  // keeps the audible heads-up since the in-app loop can't be heard.
+  const silent = AppState.currentState === 'active';
   display({
     ride_id: data.ride_id,
     booking_id: data.booking_id || data.ride_id,
@@ -138,7 +144,7 @@ function _surfaceOfferNotification(data: any): void {
     rider_name: data.rider_name || undefined,
     countdown_seconds: _num(data.countdown_seconds),
     offer_expires_at: data.offer_expires_at || undefined,
-  }).catch((e: any) => console.warn('[Offer] Notifee surface failed:', e));
+  }, { silent }).catch((e: any) => console.warn('[Offer] Notifee surface failed:', e));
 }
 const PENDING_ACTION_KEY = 'spinr_pending_notifee_action';
 
@@ -164,37 +170,47 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   const offerSound = useRideOfferSound();
 
   // Consume any Accept/Decline action the user tapped from the Notifee
-  // notification while the app was killed/backgrounded. _layout.tsx
-  // stashed it in AsyncStorage; we replay it here on the next mount /
-  // focus so the backend call actually fires.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-        const raw = await AsyncStorage.getItem(PENDING_ACTION_KEY);
-        if (!raw) return;
-        await AsyncStorage.removeItem(PENDING_ACTION_KEY);
-        if (cancelled) return;
-        const { action, ride_id, ts } = JSON.parse(raw) as {
-          action: 'accept' | 'decline' | 'tap';
-          ride_id: string;
-          ts: number;
-        };
-        // Stale guard — Notifee actions older than 60s are likely from a
-        // ride already resolved on another channel (WS / offer expiry).
-        if (Date.now() - ts > 60_000) return;
-        if (action === 'accept') {
-          await storeAcceptRide(ride_id);
-        } else if (action === 'decline') {
-          await storeDeclineRide(ride_id);
-        }
-      } catch (e) {
-        console.warn('[Notifee] pending action consume failed:', e);
+  // notification while the app was killed/backgrounded. The background
+  // handler stashed it in AsyncStorage; we replay it so the backend call
+  // actually fires.
+  const consumePendingAction = useCallback(async () => {
+    try {
+      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+      const raw = await AsyncStorage.getItem(PENDING_ACTION_KEY);
+      if (!raw) return;
+      // Remove first so concurrent runs (mount + resume firing together)
+      // can't double-process the same action.
+      await AsyncStorage.removeItem(PENDING_ACTION_KEY);
+      const { action, ride_id, ts } = JSON.parse(raw) as {
+        action: 'accept' | 'decline' | 'tap';
+        ride_id: string;
+        ts: number;
+      };
+      // Stale guard — Notifee actions older than 60s are likely from a
+      // ride already resolved on another channel (WS / offer expiry).
+      if (Date.now() - ts > 60_000) return;
+      if (action === 'accept') {
+        await storeAcceptRide(ride_id);
+      } else if (action === 'decline') {
+        await storeDeclineRide(ride_id);
       }
-    })();
-    return () => { cancelled = true; };
+    } catch (e) {
+      console.warn('[Notifee] pending action consume failed:', e);
+    }
   }, [storeAcceptRide, storeDeclineRide]);
+
+  // Run on mount AND on every foreground resume. The Accept action sets
+  // launchActivity, which brings an already-mounted activity back to the
+  // foreground WITHOUT remounting this hook — so a mount-only check would
+  // never fire on the common background→resume path and the accepted offer
+  // would time out as missed.
+  useEffect(() => {
+    consumePendingAction();
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') consumePendingAction();
+    });
+    return () => sub.remove();
+  }, [consumePendingAction]);
 
   // Dismiss the Notifee ride-offer notification once we're no longer in
   // the offer state (accepted, declined, expired, or cancelled). Without
@@ -923,7 +939,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           if (msg.includes('token') || msg.includes('auth') || msg.includes('user_not_found')) {
             return;
           }
-          setWsError(t('dashboard.connectionLost'));
+          setWsError(tKey('dashboard.connectionLost'));
           return;
         }
         // auth_success is the definitive signal that the backend accepted
@@ -1227,38 +1243,49 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     if (url) Linking.openURL(url);
   };
 
+  // Consume a ride offer stashed by the background FCM handler
+  // (PENDING_OFFER_KEY) and surface it in the offer panel. Runs on mount AND
+  // on foreground resume: when an offer arrives while the app is backgrounded
+  // but still mounted and the driver taps the notification body, there's no
+  // remount, so a mount-only check would never hydrate the panel and the
+  // driver would see nothing. Guarded on rideState === 'idle' so it can't
+  // clobber an active ride, and on offer_expires_at so a stale offer is dropped.
+  // (Accept/Decline taps clear PENDING_OFFER_KEY in the background handler, so
+  // on resume this only fires for a body tap / a still-pending offer.)
+  const consumePendingOffer = useCallback(async () => {
+    try {
+      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+      const raw = await AsyncStorage.getItem('spinr_pending_ride_offer');
+      if (!raw) return;
+      await AsyncStorage.removeItem('spinr_pending_ride_offer');
+      if (useDriverStore.getState().rideState !== 'idle') return;
+      const offer = JSON.parse(raw);
+      const expiresAt = offer.offer_expires_at;
+      const isExpired = expiresAt && new Date(expiresAt) <= new Date();
+      if (!isExpired) {
+        Vibration.vibrate([0, 500, 200, 500]);
+        setIncomingRide(offer);
+      }
+    } catch (e) {
+      console.warn('[Push] Failed to hydrate pending ride offer:', e);
+    }
+  }, [setIncomingRide]);
+
   // ─── Crash recovery + background-push hydration ──────────────────
-  // 1. Check AsyncStorage for a ride offer received while the app was
-  //    backgrounded or killed. The background FCM handler in _layout.tsx
-  //    writes the full offer to PENDING_OFFER_KEY; we consume it here so
-  //    the offer panel appears instantly without a network round-trip.
+  // 1. Surface any offer received while backgrounded/killed — on mount AND on
+  //    every foreground resume (a tap on a backgrounded-but-mounted app
+  //    doesn't remount this hook).
   // 2. hydrateDriverRideState() restores any persisted active-ride state.
   // 3. fetchActiveRide() confirms live server state and may override both.
   useEffect(() => {
     if (!user) return;
-    (async () => {
-      try {
-        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-        const raw = await AsyncStorage.getItem('spinr_pending_ride_offer');
-        if (raw) {
-          await AsyncStorage.removeItem('spinr_pending_ride_offer');
-          const offer = JSON.parse(raw);
-          // Discard offers that already expired while the phone was off.
-          // offer_expires_at is included in the FCM payload since the
-          // dispatch fix; older payloads without the field pass through.
-          const expiresAt = offer.offer_expires_at;
-          const isExpired = expiresAt && new Date(expiresAt) <= new Date();
-          if (!isExpired) {
-            Vibration.vibrate([0, 500, 200, 500]);
-            setIncomingRide(offer);
-          }
-        }
-      } catch (e) {
-        console.warn('[Push] Failed to hydrate pending ride offer on mount:', e);
-      }
-      hydrateDriverRideState().then(() => fetchActiveRide());
-    })();
-  }, [user]);
+    consumePendingOffer();
+    hydrateDriverRideState().then(() => fetchActiveRide());
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') consumePendingOffer();
+    });
+    return () => sub.remove();
+  }, [user, consumePendingOffer]);
 
   // ─── Fetch earnings when online ─────────────────────────────────
   useEffect(() => {

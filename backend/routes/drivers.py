@@ -5383,6 +5383,9 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
             "driver_id": driver["id"],
             "subscription_id": subscription_id,
             "plan_id": plan_id,
+            # scope lets utils/stripe_reconcile.py recognise a subscription
+            # PaymentIntent and not flag it as a STRIPE_ORPHAN ride.
+            "scope": "driver_subscription",
         }
         # Stripe redirects the in-app browser back to the driver app via its
         # deep-link scheme (app.config.ts SCHEME = "spinr-driver"). The
@@ -5417,6 +5420,32 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
                     _price_cents,
                     _price_currency,
                     _expected_cents,
+                    extra={"domain": "payments"},
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail="This subscription plan is misconfigured. Please contact support.",
+                )
+
+            # Also validate the billing cadence: a same-price monthly Price on a
+            # weekly plan (or vice versa) would bill on a different period than
+            # the driver is shown. Compare the Price's recurring interval (in
+            # days) to the plan's duration_days with a small tolerance for the
+            # calendar-month/year approximations.
+            _INTERVAL_DAYS = {"day": 1, "week": 7, "month": 30, "year": 365}
+            _recurring = _price_obj.get("recurring") or {}
+            _price_days = _INTERVAL_DAYS.get(_recurring.get("interval"), 0) * (_recurring.get("interval_count") or 1)
+            _plan_days = plan.get("duration_days") or 0
+            if not _recurring.get("interval") or abs(_price_days - _plan_days) > 3:
+                logger.error(
+                    "[SUBSCRIBE] Stripe Price %s interval mismatch for plan %s: "
+                    "stripe=%sx%s (~%sd) plan=%sd — refusing to charge",
+                    _price_id,
+                    plan_id,
+                    _recurring.get("interval"),
+                    _recurring.get("interval_count"),
+                    _price_days,
+                    _plan_days,
                     extra={"domain": "payments"},
                 )
                 raise HTTPException(
@@ -5470,6 +5499,11 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
                     }
                 ],
                 metadata=_metadata,
+                # Propagate our ids onto the underlying PaymentIntent so the
+                # nightly reconciler (stripe_reconcile.py) can identify a
+                # subscription charge instead of flagging it STRIPE_ORPHAN if
+                # checkout.session.completed is ever missed.
+                payment_intent_data={"metadata": _metadata},
                 success_url=_success_url,
                 cancel_url=_cancel_url,
                 api_key=_stripe_secret,
@@ -5689,8 +5723,9 @@ async def verify_subscription_session(
 
     if session.payment_status == "paid":
         # Activate first (idempotent; a no-op if the row was superseded by a
-        # newer checkout), then re-read to decide whether to link.
-        await _activate_subscription(sub["id"], sub.get("plan_id"))
+        # newer checkout), then re-read to decide whether to link. Pass the
+        # session's actual mode so ledger recording matches what was created.
+        await _activate_subscription(sub["id"], sub.get("plan_id"), session.get("mode"))
         sub = await db.find_one("driver_subscriptions", {"id": sub["id"]})
         stripe_subscription_id = session.get("subscription")
 
@@ -5758,26 +5793,41 @@ async def _record_subscription_payment(
                 "created_at": datetime.now(timezone.utc).isoformat(),
             },
         )
-    except Exception:
-        # The only benign failure is the unique stripe_invoice_id collision on a
-        # recurring-invoice replay — but the event-claim gate already prevents
-        # webhook replays, so a failure almost always means a real lost ledger
-        # write. Log at error (not warning) per the payment-error rule; never
-        # raise — the money already moved.
-        logger.error(
-            "subscription_payments insert failed (lost ledger row?) driver=%s reason=%s invoice=%s",
-            driver_id,
-            billing_reason,
-            stripe_invoice_id,
-            exc_info=True,
-        )
+    except Exception as _ledger_err:
+        # Distinguish a benign duplicate (unique stripe_invoice_id replay) from a
+        # real write failure. A duplicate means the row already exists — nothing
+        # lost — so log at debug. Any other error means the ledger row that drives
+        # admin revenue/stats is now missing, which must be surfaced at error so
+        # ops/reconciliation can repair it. Never raise — the money already moved.
+        _msg = str(_ledger_err).lower()
+        _is_duplicate = "duplicate" in _msg or "unique" in _msg or "23505" in _msg
+        if _is_duplicate:
+            logger.debug(
+                "subscription_payments duplicate ignored driver=%s invoice=%s",
+                driver_id,
+                stripe_invoice_id,
+            )
+        else:
+            logger.error(
+                "subscription_payments insert FAILED (revenue row lost — repair needed) driver=%s reason=%s invoice=%s",
+                driver_id,
+                billing_reason,
+                stripe_invoice_id,
+                exc_info=True,
+            )
 
 
-async def _activate_subscription(subscription_id: str, plan_id: str | None = None):
+async def _activate_subscription(subscription_id: str, plan_id: str | None = None, checkout_mode: str | None = None):
     """Activate a pending subscription after payment confirmation.
 
     Called by both the webhook handler and the verify-session endpoint
     (whichever runs first). Idempotent — skips if already active.
+
+    ``checkout_mode`` is the Stripe Checkout Session's actual mode
+    ("payment" for one-off, "subscription" for recurring). It decides whether
+    to write the one-off ledger row here — based on what was actually created,
+    NOT the plan's current stripe_price_id, which an admin could flip between
+    checkout start and payment completion.
     """
     sub = await db.find_one("driver_subscriptions", {"id": subscription_id})
     # Only a still-pending checkout row activates. A row that is already
@@ -5862,11 +5912,17 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
             {"$set": {"subscriber_count": (plan.get("subscriber_count", 0) or 0) + 1}},
         )
 
-    # Record one-off Checkout revenue in the ledger. Recurring plans are NOT
-    # recorded here — their invoice.paid webhook (subscription_create + every
-    # renewal) writes the ledger, so recording here too would double-count the
-    # first charge.
-    if plan and not plan.get("stripe_price_id"):
+    # Record one-off Checkout revenue in the ledger. Recurring (mode=subscription)
+    # checkouts are NOT recorded here — their invoice.paid webhook writes the
+    # ledger, so recording here too would double-count the first charge.
+    # Decide from the ACTUAL session mode when known (not the plan's current
+    # stripe_price_id, which an admin could flip mid-checkout); fall back to the
+    # plan flag only when the mode wasn't passed.
+    if checkout_mode is not None:
+        _is_one_off = checkout_mode == "payment"
+    else:
+        _is_one_off = bool(plan) and not plan.get("stripe_price_id")
+    if plan and _is_one_off:
         await _record_subscription_payment(
             driver_id=driver_id,
             subscription_id=subscription_id,

@@ -208,6 +208,11 @@ async def _run_reconciliation_tick() -> None:
     for pi_id, pi in stripe_pis.items():
         if pi["status"] != "succeeded":
             continue
+        # Spinr Pass charges (one-off subscription Checkout, corporate/wallet
+        # top-ups) are not rides — skip them so they aren't flagged as orphans.
+        _scope = (pi.get("metadata") or {}).get("scope")
+        if _scope in ("driver_subscription", "corporate_topup", "wallet_topup"):
+            continue
         if pi_id not in db_pi_to_ride:
             discrepancies.append(
                 {

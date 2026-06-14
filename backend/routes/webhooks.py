@@ -373,7 +373,10 @@ async def stripe_webhook(request: Request):
             except ImportError:
                 from routes.drivers import _activate_subscription  # type: ignore
 
-            await _activate_subscription(subscription_id, plan_id)
+            # Pass the session's actual mode so one-off vs recurring ledger
+            # recording is decided by what was created, not the plan's current
+            # stripe_price_id.
+            await _activate_subscription(subscription_id, plan_id, data_object.get("mode"))
 
             # Re-read: _activate_subscription is a no-op for a row that was
             # superseded by a newer checkout (or otherwise non-pending). Only
@@ -701,6 +704,32 @@ async def stripe_webhook(request: Request):
             )
         else:
             row = await db_supabase.find_one("driver_subscriptions", {"stripe_subscription_id": stripe_sub_id})
+            if not row and stripe_secret:
+                # Out-of-order delivery: checkout.session.completed / verify-session
+                # hasn't linked stripe_subscription_id onto the row yet. Recover it
+                # from the subscription's metadata (set via subscription_data.metadata
+                # at checkout) and link it, so the FIRST renewal charge still lands in
+                # the ledger instead of being silently dropped.
+                try:
+                    import stripe as _stripe
+
+                    _sub_obj = _stripe.Subscription.retrieve(stripe_sub_id, api_key=stripe_secret)
+                    _meta_sub_id = (_sub_obj.get("metadata") or {}).get("subscription_id")
+                    if _meta_sub_id:
+                        row = await db_supabase.find_one("driver_subscriptions", {"id": _meta_sub_id})
+                        if row and not row.get("stripe_subscription_id"):
+                            await db_supabase.update_one(
+                                "driver_subscriptions",
+                                {"id": row["id"]},
+                                {"stripe_subscription_id": stripe_sub_id},
+                            )
+                except Exception:
+                    logger.error(
+                        "invoice.paid: failed to recover subscription row from metadata for %s",
+                        stripe_sub_id,
+                        exc_info=True,
+                        extra={"domain": "drivers", "event_id": event_id},
+                    )
             if not row:
                 logger.warning(
                     "invoice.paid: no subscription row for stripe_sub %s",

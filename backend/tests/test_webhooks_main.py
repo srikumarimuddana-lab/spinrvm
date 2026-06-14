@@ -1222,3 +1222,50 @@ class TestStripeWebhookInvoicePaidCancelledGuard:
 
         assert result["received"] is True
         update_mock.assert_not_awaited()
+
+
+class TestStripeWebhookSubscriptionUpdatedGuard:
+    """customer.subscription.updated with status=active must not resurrect a
+    cancelled/superseded row (P2 follow-up)."""
+
+    def _event(self, data_object, event_id="evt_upd_g"):
+        raw = _make_stripe_event("customer.subscription.updated", data_object, event_id=event_id)
+        obj = MagicMock()
+        obj.get = lambda k, d=None: raw.get(k, d)
+        obj.to_dict_recursive = lambda: raw
+        return obj
+
+    def _settings(self):
+        async def f():
+            return {"stripe_webhook_secret": "ws", "stripe_secret_key": "sk"}
+
+        return f
+
+    def _req(self):
+        req = MagicMock()
+        req.body = AsyncMock(return_value=b"payload")
+        req.headers = {"stripe-signature": "sig"}
+        return req
+
+    def test_active_update_does_not_reactivate_cancelled_row(self):
+        from backend.routes import webhooks as wh
+        import stripe
+
+        event_obj = self._event({"id": "sub_g", "status": "active"})
+        update_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch(
+                "backend.routes.webhooks.db_supabase.find_one",
+                AsyncMock(return_value={"id": "row_c", "status": "cancelled", "cancelled_at": "2026-01-01T00:00:00Z"}),
+            ),
+            patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._req()))
+
+        assert result["received"] is True
+        update_mock.assert_not_awaited()

@@ -15,7 +15,7 @@ except ImportError:
     from settings_loader import get_app_settings
     from utils.money import cents_to_dollars
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 _TWO_PLACES = Decimal("0.01")
 
@@ -375,22 +375,43 @@ async def stripe_webhook(request: Request):
 
             await _activate_subscription(subscription_id, plan_id)
 
-            # Recurring plans (mode="subscription") return a Stripe
-            # Subscription id on the session — persist it so the renewal /
-            # dunning / cancellation webhooks can match this row.
+            # Re-read: _activate_subscription is a no-op for a row that was
+            # superseded by a newer checkout (or otherwise non-pending). Only
+            # link the Stripe Subscription id when the row actually activated —
+            # linking a superseded row would let a later invoice.paid /
+            # customer.subscription.updated flip it back to active.
+            row = await db_supabase.find_one("driver_subscriptions", {"id": subscription_id})
             stripe_subscription_id = data_object.get("subscription")
-            if stripe_subscription_id:
-                await db_supabase.update_one(
-                    "driver_subscriptions",
-                    {"id": subscription_id},
-                    {"stripe_subscription_id": stripe_subscription_id},
-                )
 
-            logger.info(
-                f"[WEBHOOK] Spinr Pass activated via checkout.session.completed: "
-                f"subscription={subscription_id} driver={driver_id} plan={plan_id} "
-                f"stripe_sub={stripe_subscription_id}"
-            )
+            if row and row.get("status") == "active":
+                if stripe_subscription_id:
+                    await db_supabase.update_one(
+                        "driver_subscriptions",
+                        {"id": subscription_id},
+                        {"stripe_subscription_id": stripe_subscription_id},
+                    )
+                logger.info(
+                    f"[WEBHOOK] Spinr Pass activated via checkout.session.completed: "
+                    f"subscription={subscription_id} driver={driver_id} plan={plan_id} "
+                    f"stripe_sub={stripe_subscription_id}"
+                )
+            else:
+                # Stale session paid after being superseded — don't activate or
+                # link. Cancel the orphaned Stripe subscription so the driver
+                # isn't billed for a plan they already replaced.
+                if stripe_subscription_id:
+                    try:
+                        from ..routes.drivers import _cancel_stripe_subscription  # type: ignore
+                    except ImportError:
+                        from routes.drivers import _cancel_stripe_subscription  # type: ignore
+                    await _cancel_stripe_subscription(stripe_subscription_id)
+                logger.warning(
+                    "[WEBHOOK] checkout.session.completed for non-active row %s "
+                    "(superseded?) — not linking; cancelled orphan Stripe sub %s",
+                    subscription_id,
+                    stripe_subscription_id,
+                    extra={"domain": "drivers", "event_id": event_id},
+                )
         else:
             logger.info(
                 f"[WEBHOOK] checkout.session.completed but payment not yet paid: "
@@ -672,10 +693,10 @@ async def stripe_webhook(request: Request):
                     stripe_sub_id,
                     extra={"domain": "drivers", "event_id": event_id},
                 )
-            elif row.get("status") == "cancelled" or row.get("cancelled_at"):
+            elif row.get("status") in ("cancelled", "superseded") or row.get("cancelled_at"):
                 # Terminal row — a late/duplicate invoice.paid arriving after a
-                # local cancel or customer.subscription.deleted must NOT flip
-                # the row back to active and restore gated access.
+                # local cancel, customer.subscription.deleted, or supersede must
+                # NOT flip the row back to active and restore gated access.
                 logger.warning(
                     "invoice.paid ignored for cancelled subscription: row=%s stripe_sub=%s",
                     row["id"],
@@ -795,7 +816,11 @@ async def stripe_webhook(request: Request):
             elif stripe_status == "past_due":
                 updates = {"payment_status": "past_due"}
             elif stripe_status == "active":
-                updates = {"status": "active", "payment_status": "paid"}
+                # Don't resurrect a row already cancelled (driver/Stripe) or
+                # superseded by a newer checkout — a late "active" update must
+                # not restore gated access.
+                if row.get("status") not in ("cancelled", "superseded") and not row.get("cancelled_at"):
+                    updates = {"status": "active", "payment_status": "paid"}
             if updates:
                 await db_supabase.update_one("driver_subscriptions", {"id": row["id"]}, updates)
                 logger.info(

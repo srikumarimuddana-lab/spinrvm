@@ -179,11 +179,16 @@ async def admin_get_subscription_stats(
     if area_filter:
         all_subs = [s for s in all_subs if driver_area_map.get(s.get("driver_id", "")) in area_filter]
 
+    # Only paid rows represent realized revenue/subscribers. A pending or
+    # superseded checkout row carries a price but no cleared payment, so it
+    # must not inflate revenue, transaction, or subscriber metrics.
+    paid_subs = [s for s in all_subs if s.get("payment_status") == "paid"]
+
     # Overall stats
     active = [s for s in all_subs if s.get("status") == "active"]
     expired = [s for s in all_subs if s.get("status") == "expired"]
     cancelled = [s for s in all_subs if s.get("status") == "cancelled"]
-    total_revenue = float(sum(Decimal(str(s.get("price") or 0)) for s in all_subs))
+    total_revenue = float(sum(Decimal(str(s.get("price") or 0)) for s in paid_subs))
     active_revenue = float(sum(Decimal(str(s.get("price") or 0)) for s in active))
 
     # Filter to date range for transactions and charts
@@ -194,7 +199,7 @@ async def admin_get_subscription_stats(
             return None
 
     in_range = []
-    for s in all_subs:
+    for s in paid_subs:
         dt = parse_dt(s.get("created_at") or s.get("started_at"))
         if dt and range_start <= dt <= range_end:
             in_range.append(s)
@@ -203,7 +208,7 @@ async def admin_get_subscription_stats(
 
     # Per-plan breakdown
     plan_stats = defaultdict(lambda: {"name": "", "count": 0, "revenue": 0.0, "active": 0})
-    for s in all_subs:
+    for s in paid_subs:
         pid = s.get("plan_id") or "unknown"
         plan_stats[pid]["name"] = s.get("plan_name") or plan_map.get(pid, {}).get("name", "Unknown")
         plan_stats[pid]["count"] += 1
@@ -262,7 +267,7 @@ async def admin_get_subscription_stats(
 
     return {
         "stats": {
-            "total_subscribers": len(all_subs),
+            "total_subscribers": len(paid_subs),
             "active": len(active),
             "expired": len(expired),
             "cancelled": len(cancelled),

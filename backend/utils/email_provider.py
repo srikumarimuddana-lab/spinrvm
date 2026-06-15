@@ -126,16 +126,17 @@ async def _try_ses(
     text: Optional[str],
     default_from: str,
     log_id: str,
-) -> bool:
-    """Attempt delivery via AWS SES. Returns True on success.
+) -> Optional[str]:
+    """Attempt delivery via AWS SES.
 
-    Returns False when SES is unconfigured (so the caller falls through to the
-    Resend guardrail) and also on a runtime failure (already logged here).
+    Returns the SES MessageId (possibly "") on success, or None when SES is
+    unconfigured (so the caller falls through to the Resend guardrail) or a
+    runtime failure occurs (already logged here).
     """
     access_key_id = (settings.get("aws_ses_access_key_id") or "").strip()
     secret_access_key = (settings.get("aws_ses_secret_access_key") or "").strip()
     if not access_key_id or not secret_access_key:
-        return False  # unconfigured — fall through to Resend
+        return None  # unconfigured — fall through to Resend
 
     region = (settings.get("aws_ses_region") or "").strip() or _DEFAULT_SES_REGION
     from_email = (settings.get("aws_ses_from_email") or "").strip() or default_from
@@ -159,7 +160,7 @@ async def _try_ses(
             subject,
             message_id,
         )
-        return True
+        return message_id or ""
     except Exception:
         # Do not swallow — SES failures must surface so the root cause is
         # fixed. We log .error and let the Resend guardrail take over.
@@ -169,7 +170,7 @@ async def _try_ses(
             subject,
             exc_info=True,
         )
-        return False
+        return None
 
 
 async def _try_resend(
@@ -181,11 +182,15 @@ async def _try_resend(
     text: Optional[str],
     default_from: str,
     log_id: str,
-) -> bool:
-    """Attempt delivery via Resend (the guardrail). Returns True on 2xx."""
+) -> Optional[str]:
+    """Attempt delivery via Resend (the guardrail).
+
+    Returns the Resend message id (possibly "") on a 2xx, or None when Resend
+    is unconfigured or the call fails (already logged here).
+    """
     resend_key = (settings.get("resend_api_key") or "").strip()
     if not resend_key:
-        return False  # unconfigured
+        return None  # unconfigured
 
     from_email = (settings.get("resend_from_email") or "").strip() or default_from
     payload: Dict[str, Any] = {
@@ -218,15 +223,18 @@ async def _try_resend(
                 subject,
                 response.status_code,
             )
-        else:
-            logger.error(
-                "[EMAIL] Resend (guardrail) returned %s log_id=%s subject=%r body=%s",
-                response.status_code,
-                log_id,
-                subject,
-                response.text[:200],
-            )
-        return ok
+            try:
+                return (response.json() or {}).get("id", "") or ""
+            except Exception:
+                return ""
+        logger.error(
+            "[EMAIL] Resend (guardrail) returned %s log_id=%s subject=%r body=%s",
+            response.status_code,
+            log_id,
+            subject,
+            response.text[:200],
+        )
+        return None
     except Exception:
         logger.error(
             "[EMAIL] Resend (guardrail) send failed log_id=%s subject=%r",
@@ -234,7 +242,68 @@ async def _try_resend(
             subject,
             exc_info=True,
         )
+        return None
+
+
+def normalize_email(email: str) -> str:
+    """Canonical form for suppression-list comparison: trimmed + lowercased.
+
+    Used by both the sender (before a suppression check) and the SES webhook
+    (before writing a suppression) so the two always agree.
+    """
+    return (email or "").strip().lower()
+
+
+async def _is_suppressed(email: str) -> bool:
+    """True if the address is on the suppression list (hard bounce/complaint).
+
+    Fail-open: if the suppression lookup itself errors we log .error and return
+    False (send anyway). Blocking a receipt on a transient DB hiccup is worse
+    than the rare extra send to a freshly-suppressed address — the SES
+    account-level suppression list is the backstop for that.
+    """
+    try:
+        try:
+            from .. import db_supabase
+        except ImportError:
+            import db_supabase  # type: ignore
+        row = await db_supabase.find_one("email_suppressions", {"email": normalize_email(email)})
+        return row is not None
+    except Exception:
+        logger.error("[EMAIL] suppression lookup failed — sending anyway", exc_info=True)
         return False
+
+
+async def _log_send(
+    *,
+    provider: str,
+    message_id: Optional[str],
+    status: str,
+    email_type: Optional[str],
+    recipient_user_id: Optional[str],
+) -> None:
+    """Best-effort append to email_send_log. Never raises (observability only).
+
+    PIPEDA: stores recipient_user_id, never the email address.
+    """
+    try:
+        try:
+            from .. import db_supabase
+        except ImportError:
+            import db_supabase  # type: ignore
+        await db_supabase.insert_one(
+            "email_send_log",
+            {
+                "provider": provider,
+                "message_id": message_id or None,
+                "status": status,
+                "email_type": email_type,
+                "recipient_user_id": recipient_user_id,
+            },
+        )
+    except Exception:
+        # A logging failure must never break email delivery.
+        logger.error("[EMAIL] email_send_log write failed status=%s provider=%s", status, provider, exc_info=True)
 
 
 async def send_transactional_email(
@@ -245,8 +314,13 @@ async def send_transactional_email(
     text: Optional[str] = None,
     default_from: str = _DEFAULT_FROM,
     log_id: str = "-",
+    email_type: Optional[str] = "transactional",
+    recipient_user_id: Optional[str] = None,
 ) -> bool:
     """Send one transactional email: AWS SES primary, Resend guardrail.
+
+    Skips addresses on the suppression list (hard bounce/complaint) and records
+    every attempt in email_send_log.
 
     Args:
         to: Recipient address (single recipient).
@@ -257,6 +331,8 @@ async def send_transactional_email(
             configured (each provider prefers its own configured sender).
         log_id: PII-safe identifier (rider_id, "safety", …) for log correlation.
             The recipient address is never logged.
+        email_type: Category recorded in email_send_log (receipt, dsar, …).
+        recipient_user_id: PIPEDA-safe user id recorded in email_send_log.
 
     Returns:
         True if either provider accepted the message, False otherwise.
@@ -268,10 +344,22 @@ async def send_transactional_email(
         logger.error("[EMAIL] send skipped log_id=%s — empty body", log_id)
         return False
 
+    # Suppression gate — never send to a hard-bounced / complained address.
+    if await _is_suppressed(to):
+        logger.warning("[EMAIL] suppressed recipient log_id=%s subject=%r — not sent", log_id, subject)
+        await _log_send(
+            provider="none",
+            message_id=None,
+            status="suppressed",
+            email_type=email_type,
+            recipient_user_id=recipient_user_id,
+        )
+        return False
+
     settings = await _load_settings()
 
     # 1. Primary: AWS SES.
-    if await _try_ses(
+    ses_id = await _try_ses(
         settings,
         to=to,
         subject=subject,
@@ -279,11 +367,19 @@ async def send_transactional_email(
         text=text,
         default_from=default_from,
         log_id=log_id,
-    ):
+    )
+    if ses_id is not None:
+        await _log_send(
+            provider="ses",
+            message_id=ses_id,
+            status="sent",
+            email_type=email_type,
+            recipient_user_id=recipient_user_id,
+        )
         return True
 
     # 2. Guardrail: Resend (fires when SES unconfigured OR SES failed).
-    if await _try_resend(
+    resend_id = await _try_resend(
         settings,
         to=to,
         subject=subject,
@@ -291,7 +387,15 @@ async def send_transactional_email(
         text=text,
         default_from=default_from,
         log_id=log_id,
-    ):
+    )
+    if resend_id is not None:
+        await _log_send(
+            provider="resend",
+            message_id=resend_id,
+            status="sent",
+            email_type=email_type,
+            recipient_user_id=recipient_user_id,
+        )
         return True
 
     # 3. Neither provider sent it.
@@ -299,5 +403,12 @@ async def send_transactional_email(
         "[EMAIL] no provider configured/succeeded log_id=%s subject=%r — not sent",
         log_id,
         subject,
+    )
+    await _log_send(
+        provider="none",
+        message_id=None,
+        status="failed",
+        email_type=email_type,
+        recipient_user_id=recipient_user_id,
     )
     return False

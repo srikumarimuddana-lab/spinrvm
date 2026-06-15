@@ -24,6 +24,11 @@ from cryptography.x509.oid import NameOID
 from fastapi.testclient import TestClient
 
 try:
+    from utils.error_handling import DatabaseError, DuplicateRecordError
+except ImportError:
+    from backend.utils.error_handling import DatabaseError, DuplicateRecordError  # type: ignore[no-redef]
+
+try:
     from utils.sns_verify import _fetch_cert, _string_to_sign, is_trusted_sns_url, verify_sns_signature
 except ImportError:
     from backend.utils.sns_verify import (  # type: ignore[no-redef]
@@ -307,3 +312,58 @@ def test_webhook_transient_bounce_not_suppressed(test_client: TestClient):
     assert r.status_code == 200
     assert r.json()["suppressed"] == 0
     assert inserts == []
+
+
+def test_webhook_rejects_unexpected_topic(test_client: TestClient):
+    payload = {
+        "Type": "Notification",
+        "TopicArn": "arn:aws:sns:ca-central-1:1:ATTACKER",
+        "Message": _bounce_message("x@example.com"),
+    }
+    with (
+        patch("utils.sns_verify.verify_sns_signature", return_value=True),
+        patch("routes.webhooks.get_app_settings", AsyncMock(return_value={"aws_ses_sns_topic_arn": "arn:expected"})),
+    ):
+        r = test_client.post(_SES_URL, json=payload)
+    assert r.status_code == 403
+
+
+def test_webhook_accepts_matching_topic(test_client: TestClient):
+    payload = {
+        "Type": "Notification",
+        "TopicArn": "arn:expected",
+        "Message": _bounce_message("ok@example.com"),
+    }
+    with (
+        patch("utils.sns_verify.verify_sns_signature", return_value=True),
+        patch("routes.webhooks.get_app_settings", AsyncMock(return_value={"aws_ses_sns_topic_arn": "arn:expected"})),
+        patch("db_supabase.find_one", AsyncMock(return_value=None)),
+        patch("db_supabase.insert_one", AsyncMock(return_value=None)),
+    ):
+        r = test_client.post(_SES_URL, json=payload)
+    assert r.status_code == 200
+    assert r.json()["suppressed"] == 1
+
+
+def test_webhook_duplicate_insert_race_is_ok(test_client: TestClient):
+    payload = {"Type": "Notification", "Message": _bounce_message("race@example.com")}
+    with (
+        patch("utils.sns_verify.verify_sns_signature", return_value=True),
+        patch("db_supabase.find_one", AsyncMock(return_value=None)),
+        patch("db_supabase.insert_one", AsyncMock(side_effect=DuplicateRecordError())),
+    ):
+        r = test_client.post(_SES_URL, json=payload)
+    # Lost the insert race to a concurrent redelivery → still a success.
+    assert r.status_code == 200
+    assert r.json()["suppressed"] == 1
+
+
+def test_webhook_db_error_returns_503(test_client: TestClient):
+    payload = {"Type": "Notification", "Message": _bounce_message("err@example.com")}
+    with (
+        patch("utils.sns_verify.verify_sns_signature", return_value=True),
+        patch("db_supabase.find_one", AsyncMock(side_effect=DatabaseError(details={"original": "boom"}))),
+    ):
+        r = test_client.post(_SES_URL, json=payload)
+    # DB unavailable → 503 so SNS retries rather than dropping the bounce.
+    assert r.status_code == 503

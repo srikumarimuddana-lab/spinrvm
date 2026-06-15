@@ -59,11 +59,23 @@ def _send_ses_sync(
     html: Optional[str],
     text: Optional[str],
 ) -> str:
-    """Blocking SES SendEmail. Returns the SES MessageId. Raises on failure.
+    """Blocking SES SendRawEmail. Returns the SES MessageId. Raises on failure.
+
+    Uses SendRawEmail (not SendEmail) so the integration works with the
+    common ``AmazonSesSendingAccess`` IAM policy, which grants only
+    ``ses:SendRawEmail``. We build a MIME message ourselves: a
+    multipart/alternative when both text and html are supplied, otherwise a
+    single text or html part.
 
     Runs inside asyncio.to_thread — keep it free of awaitables.
     """
     import boto3
+
+    if not html and not text:
+        # SES rejects an empty body; guard so we surface a clear error.
+        raise ValueError("send_transactional_email requires html or text")
+
+    message = _build_mime(source=source, to=to, subject=subject, html=html, text=text)
 
     client = boto3.client(
         "ses",
@@ -72,24 +84,37 @@ def _send_ses_sync(
         aws_secret_access_key=secret_access_key,
     )
 
-    body: Dict[str, Any] = {}
-    if html:
-        body["Html"] = {"Data": html, "Charset": "UTF-8"}
-    if text:
-        body["Text"] = {"Data": text, "Charset": "UTF-8"}
-    if not body:
-        # SES rejects an empty body; guard so we surface a clear error.
-        raise ValueError("send_transactional_email requires html or text")
-
-    resp = client.send_email(
+    resp = client.send_raw_email(
         Source=source,
-        Destination={"ToAddresses": [to]},
-        Message={
-            "Subject": {"Data": subject, "Charset": "UTF-8"},
-            "Body": body,
-        },
+        Destinations=[to],
+        RawMessage={"Data": message.as_string()},
     )
     return resp.get("MessageId", "")
+
+
+def _build_mime(*, source: str, to: str, subject: str, html: Optional[str], text: Optional[str]):
+    """Build the MIME message SES SendRawEmail expects.
+
+    multipart/alternative with both parts when text+html are present (clients
+    prefer html, fall back to text); a single MIMEText otherwise.
+    """
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    if html and text:
+        msg = MIMEMultipart("alternative")
+        # Plain part first — RFC 2046 says the most-preferred alternative goes last.
+        msg.attach(MIMEText(text, "plain", "utf-8"))
+        msg.attach(MIMEText(html, "html", "utf-8"))
+    elif html:
+        msg = MIMEText(html, "html", "utf-8")
+    else:
+        msg = MIMEText(text or "", "plain", "utf-8")
+
+    msg["Subject"] = subject
+    msg["From"] = source
+    msg["To"] = to
+    return msg
 
 
 async def _try_ses(

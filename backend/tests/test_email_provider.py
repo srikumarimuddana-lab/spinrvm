@@ -72,9 +72,9 @@ def _boto3_mock(send_side_effect=None) -> MagicMock:
     """Return a fake boto3 module-level client() factory and the SES client."""
     ses_client = MagicMock()
     if send_side_effect is not None:
-        ses_client.send_email = MagicMock(side_effect=send_side_effect)
+        ses_client.send_raw_email = MagicMock(side_effect=send_side_effect)
     else:
-        ses_client.send_email = MagicMock(return_value={"MessageId": "msg-123"})
+        ses_client.send_raw_email = MagicMock(return_value={"MessageId": "msg-123"})
     factory = MagicMock(return_value=ses_client)
     return factory, ses_client
 
@@ -97,7 +97,7 @@ async def test_ses_used_when_configured_and_resend_not_called():
         ok = await send_transactional_email(to="rider@example.com", subject="Receipt", html="<p>hi</p>")
 
     assert ok is True
-    ses_client.send_email.assert_called_once()
+    ses_client.send_raw_email.assert_called_once()
     resend_client.post.assert_not_awaited()  # guardrail must not fire on SES success
 
 
@@ -123,11 +123,22 @@ async def test_ses_receives_body_and_from_address():
     assert kwargs["region_name"] == "ca-central-1"
     assert kwargs["aws_access_key_id"] == "AKIATEST"
     assert kwargs["aws_secret_access_key"] == "secret-shh"
-    # SES uses its own verified from address, both body parts present
-    _, send_kwargs = ses_client.send_email.call_args
+    # SendRawEmail with the verified SES from address as Source + envelope dest.
+    _, send_kwargs = ses_client.send_raw_email.call_args
     assert send_kwargs["Source"] == "Spinr <ses@spinr.ca>"
-    assert send_kwargs["Message"]["Body"]["Html"]["Data"] == "<p>hi</p>"
-    assert send_kwargs["Message"]["Body"]["Text"]["Data"] == "hi"
+    assert send_kwargs["Destinations"] == ["rider@example.com"]
+    # Raw MIME carries both alternatives + the headers (parse, don't substring:
+    # MIMEText base64-encodes the payloads under a utf-8 charset).
+    import email as _email
+
+    parsed = _email.message_from_string(send_kwargs["RawMessage"]["Data"])
+    assert parsed.get_content_type() == "multipart/alternative"
+    assert parsed["Subject"] == "Receipt"
+    assert parsed["From"] == "Spinr <ses@spinr.ca>"
+    assert parsed["To"] == "rider@example.com"
+    parts = {p.get_content_type(): p.get_payload(decode=True).decode("utf-8") for p in parsed.get_payload()}
+    assert parts["text/plain"] == "hi"
+    assert parts["text/html"] == "<p>hi</p>"
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +159,7 @@ async def test_ses_failure_falls_back_to_resend():
         ok = await send_transactional_email(to="rider@example.com", subject="Receipt", text="hi")
 
     assert ok is True
-    ses_client.send_email.assert_called_once()
+    ses_client.send_raw_email.assert_called_once()
     resend_client.post.assert_awaited_once()  # guardrail caught the SES failure
 
 

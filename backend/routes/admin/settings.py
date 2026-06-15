@@ -49,6 +49,10 @@ _CREDENTIAL_FIELDS = frozenset(
         # Resend API key is a credential too — without masking it would
         # otherwise round-trip in plaintext on every settings GET.
         "resend_api_key",
+        # AWS SES secret (primary email provider, migration 154). The access
+        # key id is left visible (identifier, unusable without the secret —
+        # same treatment as twilio_account_sid); only the secret is masked.
+        "aws_ses_secret_access_key",
         # Legacy SendGrid key: no longer read for sending, but migration 110
         # leaves the column in place, so a still-populated value would round-
         # trip in plaintext on GET unless it stays masked here. Keeps the
@@ -114,6 +118,13 @@ class SettingsUpdateRequest(BaseModel):
     # api_key is a credential (masked on GET); from_email is plain.
     resend_api_key: Optional[str] = None
     resend_from_email: Optional[str] = None
+    # AWS SES is the PRIMARY transactional-email provider (migration 154);
+    # Resend above is the guardrail fallback. secret_access_key is a
+    # credential (masked on GET); the rest are plain.
+    aws_ses_region: Optional[str] = None
+    aws_ses_access_key_id: Optional[str] = None
+    aws_ses_secret_access_key: Optional[str] = None
+    aws_ses_from_email: Optional[str] = None
     # Company info shown on rider receipts + driver T4A slips + the
     # admin dashboard footer. Edited via the Settings page → Company tab.
     company_name: Optional[str] = None

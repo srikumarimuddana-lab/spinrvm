@@ -1,9 +1,10 @@
 """
 Send ride receipt emails with Canadian GST/PST tax line items.
 
-Uses the Resend REST API via httpx (same pattern as features.send_email and
-utils.email_receipt.send_receipt_email). Settings are loaded from the
-app_settings Supabase table via settings_loader.get_app_settings().
+Delivery goes through utils.email_provider.send_transactional_email, which
+sends via AWS SES (primary) and falls back to Resend (guardrail) when SES is
+unconfigured or fails. Provider credentials live in the app_settings Supabase
+table (loaded via settings_loader.get_app_settings()).
 
 PIPEDA: rider email address is never written to logs. Use rider_id only.
 """
@@ -120,22 +121,6 @@ async def send_ride_receipt_email(ride: dict, rider: dict) -> None:
         return
 
     try:
-        try:
-            from ..settings_loader import get_app_settings
-        except ImportError:
-            from settings_loader import get_app_settings
-
-        settings = await get_app_settings()
-        resend_key = settings.get("resend_api_key", "")
-        from_email = settings.get("resend_from_email") or settings.get("email_from") or "receipts@spinr.ca"
-
-        if not resend_key:
-            logger.warning(
-                "[receipt_email] resend_api_key not configured — receipt not sent for rider %s",
-                rider_id,
-            )
-            return
-
         plain_body = _build_plain_text(ride, rider)
         subtotal = _d(ride.get("total_fare"))
         gst = (subtotal * _GST_RATE).quantize(_CENT, rounding=ROUND_HALF_UP)
@@ -143,24 +128,22 @@ async def send_ride_receipt_email(ride: dict, rider: dict) -> None:
         grand_total = _d(ride.get("grand_total")) if ride.get("grand_total") is not None else subtotal + gst + pst
         subject = f"Your Spinr ride receipt — {_fmt(grand_total)} CAD"
 
-        import httpx
+        try:
+            from .email_provider import send_transactional_email
+        except ImportError:
+            from utils.email_provider import send_transactional_email  # type: ignore
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(
-                "https://api.resend.com/emails",
-                headers={
-                    "Authorization": f"Bearer {resend_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "from": f"Spinr <{from_email}>",
-                    "to": [email],
-                    "subject": subject,
-                    "text": plain_body,
-                },
-            )
+        sent = await send_transactional_email(
+            to=email,
+            subject=subject,
+            text=plain_body,
+            default_from="receipts@spinr.ca",
+            log_id=str(rider_id),
+            email_type="receipt",
+            recipient_user_id=str(rider_id) if rider_id and rider_id != "unknown" else None,
+        )
 
-        if response.status_code in (200, 201, 202):
+        if sent:
             logger.info(
                 "[receipt_email] Receipt sent successfully for rider %s (ride %s)",
                 rider_id,
@@ -168,10 +151,9 @@ async def send_ride_receipt_email(ride: dict, rider: dict) -> None:
             )
         else:
             logger.error(
-                "[receipt_email] Resend returned %s for rider %s — body: %s",
-                response.status_code,
+                "[receipt_email] No email provider sent receipt for rider %s (ride %s)",
                 rider_id,
-                response.text[:200],
+                ride.get("id"),
             )
 
     except Exception:

@@ -4,16 +4,19 @@ from fastapi import APIRouter, HTTPException, Request
 
 try:
     from .. import db_supabase
-    from ..db_supabase import claim_stripe_event, mark_stripe_event_processed
+    from ..db_supabase import DatabaseError, DuplicateRecordError, claim_stripe_event, mark_stripe_event_processed
     from ..features import send_push_notification
     from ..settings_loader import get_app_settings
     from ..utils.money import cents_to_dollars
+    from ..utils.rate_limiter import default_limiter
 except ImportError:
     import db_supabase
-    from db_supabase import claim_stripe_event, mark_stripe_event_processed
+    from db_supabase import DatabaseError, DuplicateRecordError, claim_stripe_event, mark_stripe_event_processed
     from features import send_push_notification
     from settings_loader import get_app_settings
     from utils.money import cents_to_dollars
+    from utils.rate_limiter import default_limiter
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -1002,3 +1005,182 @@ async def stripe_webhook(request: Request):
     await mark_stripe_event_processed(event_id)
 
     return {"received": True, "event_id": event_id}
+
+
+# ---------------------------------------------------------------------------
+# Amazon SES bounce/complaint feedback (via SNS)
+# ---------------------------------------------------------------------------
+#
+# SES publishes Bounce/Complaint/Delivery notifications to an SNS topic; SNS
+# POSTs them here. We verify the SNS signature (the endpoint is public), then
+# on a *permanent* bounce or a complaint we add the address to
+# email_suppressions so email_provider stops sending to it — that's what keeps
+# our SES bounce/complaint rate (and thus our sending reputation) healthy.
+
+
+async def _confirm_sns_subscription(payload: dict) -> None:
+    """Confirm an SNS subscription by GETting its SubscribeURL.
+
+    The URL host is validated (https + sns.*.amazonaws.com) first so a forged
+    confirmation can't make us issue a request to an arbitrary host.
+    """
+    try:
+        from ..utils.sns_verify import is_trusted_sns_url
+    except ImportError:
+        from utils.sns_verify import is_trusted_sns_url  # type: ignore
+
+    url = payload.get("SubscribeURL") or ""
+    if not is_trusted_sns_url(url):
+        logger.error("[SES] refusing to confirm subscription — untrusted SubscribeURL")
+        return
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(url)
+        if resp.status_code >= 400:
+            logger.error("[SES] subscription confirm returned %s — not confirmed", resp.status_code)
+            return
+        logger.info("[SES] SNS subscription confirmed topic=%s", payload.get("TopicArn"))
+    except Exception:
+        logger.error("[SES] subscription confirm request failed", exc_info=True)
+
+
+async def _topic_arn_allowed(topic_arn) -> bool:
+    """True if this SNS message's TopicArn is the one we expect.
+
+    A valid AWS signature only proves the message came from *some* SNS topic;
+    without this check an attacker could subscribe our endpoint to a foreign
+    topic and suppress our addresses. Blank setting = allow + warn (dev).
+    """
+    settings = await get_app_settings()
+    expected = (settings.get("aws_ses_sns_topic_arn") or "").strip()
+    if not expected:
+        logger.warning("[SES] aws_ses_sns_topic_arn not configured — accepting SNS topic without allowlist")
+        return True
+    if topic_arn != expected:
+        logger.error("[SES] rejected SNS message from unexpected topic")
+        return False
+    return True
+
+
+async def _suppress_address(email: str, *, reason: str, detail, message_id) -> None:
+    """Idempotently add one address to email_suppressions.
+
+    PIPEDA: the email address itself is never logged — only the reason and the
+    SES message id (which carries no PII). DuplicateRecordError (a concurrent
+    SNS redelivery losing the insert race) is treated as success; any other
+    DatabaseError propagates so the webhook returns 503 and SNS retries.
+    """
+    try:
+        from ..utils.email_provider import normalize_email
+    except ImportError:
+        from utils.email_provider import normalize_email  # type: ignore
+
+    norm = normalize_email(email)
+    if not norm:
+        return
+    try:
+        # SNS may redeliver — skip if we already suppressed this address.
+        existing = await db_supabase.find_one("email_suppressions", {"email": norm})
+        if existing:
+            return
+        await db_supabase.insert_one(
+            "email_suppressions",
+            {"email": norm, "reason": reason, "detail": detail, "source": "ses", "message_id": message_id},
+        )
+        logger.warning("[SES] address suppressed reason=%s message_id=%s", reason, message_id or "-")
+    except DuplicateRecordError:
+        # Concurrent redelivery already inserted it — idempotent success.
+        logger.info("[SES] suppression already present (insert race) reason=%s message_id=%s", reason, message_id or "-")
+    except DatabaseError as e:
+        logger.error(
+            "[SES] suppression write failed reason=%s: %s",
+            reason,
+            (e.details or {}).get("original", str(e)),
+            exc_info=True,
+        )
+        raise
+
+
+async def _handle_ses_notification(payload: dict) -> dict:
+    """Parse an SES notification and suppress hard-bounced/complained recipients."""
+    import json
+
+    try:
+        inner = json.loads(payload.get("Message") or "{}")
+    except (ValueError, TypeError):
+        logger.error("[SES] notification Message was not valid JSON — ignoring")
+        return {"received": True, "ignored": "bad_message"}
+
+    ntype = inner.get("notificationType") or inner.get("eventType")
+    message_id = (inner.get("mail") or {}).get("messageId")
+    suppressed = 0
+
+    if ntype == "Bounce":
+        bounce = inner.get("bounce") or {}
+        # Only PERMANENT (hard) bounces suppress; transient bounces may recover.
+        if bounce.get("bounceType") == "Permanent":
+            for r in bounce.get("bouncedRecipients") or []:
+                await _suppress_address(
+                    r.get("emailAddress"),
+                    reason="bounce",
+                    detail=bounce.get("bounceSubType"),
+                    message_id=message_id,
+                )
+                suppressed += 1
+    elif ntype == "Complaint":
+        complaint = inner.get("complaint") or {}
+        for r in complaint.get("complainedRecipients") or []:
+            await _suppress_address(
+                r.get("emailAddress"),
+                reason="complaint",
+                detail=complaint.get("complaintFeedbackType"),
+                message_id=message_id,
+            )
+            suppressed += 1
+    # Delivery / transient bounce / other: acknowledged, no suppression.
+
+    return {"received": True, "type": ntype, "suppressed": suppressed}
+
+
+@api_router.post("/ses")
+@default_limiter.limit("100/minute")
+async def ses_sns_webhook(request: Request):
+    """Receive SES bounce/complaint feedback via SNS. Signature-verified."""
+    import json
+
+    raw = await request.body()
+    try:
+        payload = json.loads(raw)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="invalid JSON") from None
+
+    try:
+        from ..utils.sns_verify import verify_sns_signature
+    except ImportError:
+        from utils.sns_verify import verify_sns_signature  # type: ignore
+
+    # Verification fetches the signing cert + does an RSA verify — both
+    # blocking — so run it off the event loop.
+    if not await asyncio.to_thread(verify_sns_signature, payload):
+        # 403: do not act on an unverified message.
+        raise HTTPException(status_code=403, detail="invalid SNS signature")
+
+    # Even a validly-signed message must be from our expected topic.
+    if not await _topic_arn_allowed(payload.get("TopicArn")):
+        raise HTTPException(status_code=403, detail="unexpected SNS topic")
+
+    msg_type = payload.get("Type")
+    if msg_type == "SubscriptionConfirmation":
+        await _confirm_sns_subscription(payload)
+        return {"received": True, "confirmed": True}
+    if msg_type == "Notification":
+        try:
+            return await _handle_ses_notification(payload)
+        except DatabaseError as e:
+            # Surface as 503 so SNS retries rather than dropping the bounce.
+            raise HTTPException(status_code=503, detail="suppression store unavailable") from e
+
+    # UnsubscribeConfirmation / unknown — acknowledge without action.
+    return {"received": True, "ignored": msg_type}

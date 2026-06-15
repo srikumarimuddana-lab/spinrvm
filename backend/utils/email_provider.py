@@ -227,12 +227,13 @@ async def _try_resend(
                 return (response.json() or {}).get("id", "") or ""
             except Exception:
                 return ""
+        # PIPEDA: never log response.text — Resend's 4xx validation errors echo
+        # the recipient address back in the body. Status code is enough to act.
         logger.error(
-            "[EMAIL] Resend (guardrail) returned %s log_id=%s subject=%r body=%s",
+            "[EMAIL] Resend (guardrail) returned %s log_id=%s subject=%r",
             response.status_code,
             log_id,
             subject,
-            response.text[:200],
         )
         return None
     except Exception:

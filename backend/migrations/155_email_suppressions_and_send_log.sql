@@ -31,10 +31,18 @@
 --   DROP TABLE IF EXISTS public.email_suppressions;
 
 -- ── Suppression list ─────────────────────────────────────────────────────
+-- PIPEDA note (conscious trade-off): email is stored in PLAINTEXT, not via the
+-- pgsodium/vault pattern used for driver PII. A suppression check runs on the
+-- hot path of every send and must do an exact-match lookup by address; vault
+-- encryption is non-deterministic (decrypt-on-read) so it cannot be indexed
+-- for equality, and decrypt-all-on-each-send is untenable. The table is
+-- service-role-only (RLS enabled, no policies) and the address never appears
+-- in logs. This plaintext storage is therefore a deliberate, documented
+-- decision — not an oversight.
 CREATE TABLE IF NOT EXISTS public.email_suppressions (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    email       TEXT        NOT NULL,                 -- stored normalized (lower/trim)
-    reason      TEXT        NOT NULL,                 -- 'bounce' | 'complaint' | 'manual'
+    email       TEXT        NOT NULL,                 -- stored normalized (lower/trim); plaintext by design (see note above)
+    reason      TEXT        NOT NULL CHECK (reason IN ('bounce', 'complaint', 'manual')),
     detail      TEXT,                                 -- bounce subtype / diagnostic, optional
     source      TEXT        NOT NULL DEFAULT 'ses',   -- 'ses' | 'manual'
     message_id  TEXT,                                 -- SES MessageId that triggered it, if any
@@ -57,10 +65,13 @@ COMMENT ON TABLE public.email_suppressions IS
 CREATE TABLE IF NOT EXISTS public.email_send_log (
     id                 UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     message_id         TEXT,                              -- provider message id (SES MessageId / Resend id)
-    email_type         TEXT,                              -- 'receipt' | 'safety_alert' | 'dsar' | 'corporate_low_balance' | 'transactional'
+    -- email_type is free-form (new categories ship without a migration) but
+    -- DEFAULTs to 'transactional' so it matches the Python default and never
+    -- lands NULL, which would silently drop rows from GROUP BY email_type.
+    email_type         TEXT        NOT NULL DEFAULT 'transactional',
     recipient_user_id  UUID,                              -- PIPEDA: user id only, never the email address; NULL for non-user recipients
     provider           TEXT,                              -- 'ses' | 'resend' | 'none'
-    status             TEXT        NOT NULL,              -- 'sent' | 'failed' | 'suppressed'
+    status             TEXT        NOT NULL CHECK (status IN ('sent', 'failed', 'suppressed')),
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

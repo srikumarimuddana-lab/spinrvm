@@ -1444,46 +1444,22 @@ async def send_push_notification(
 
 
 async def send_email(*, to: str, subject: str, body: str) -> bool:
-    """Send a plain-text email via Resend when configured, log otherwise.
+    """Send a plain-text email: AWS SES primary, Resend guardrail.
 
-    Mirrors the fallback behaviour of utils.email_receipt.send_receipt_email —
-    in dev/test we don't require Resend credentials and the message is just
-    logged. Returns True if delivery was attempted against Resend and
-    accepted (2xx), False otherwise.
+    Delegates to utils.email_provider.send_transactional_email, which tries
+    AWS SES first and falls back to Resend when SES is unconfigured or fails.
+    In dev/test (neither provider configured) the message is log-only.
+    Returns True if either provider accepted the message, False otherwise.
     """
     if not to:
         return False
 
     try:
-        from settings_loader import get_app_settings
+        from .utils.email_provider import send_transactional_email
+    except ImportError:
+        from utils.email_provider import send_transactional_email  # type: ignore
 
-        settings = await get_app_settings()
-        resend_key = settings.get("resend_api_key", "")
-        from_email = settings.get("resend_from_email") or "noreply@spinr.ca"
-
-        if resend_key:
-            import httpx
-
-            response = await httpx.AsyncClient().post(
-                "https://api.resend.com/emails",
-                headers={
-                    "Authorization": f"Bearer {resend_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "from": f"Spinr <{from_email}>",
-                    "to": [to],
-                    "subject": subject,
-                    "text": body,
-                },
-            )
-            logger.info(f"[EMAIL] Resend sent subject={subject!r} status={response.status_code}")
-            return response.status_code in (200, 201, 202)
-    except Exception as e:
-        logger.warning(f"[EMAIL] Resend failed: {e}")
-
-    logger.info(f"[EMAIL] (fallback log) subject={subject!r}")
-    return False
+    return await send_transactional_email(to=to, subject=subject, text=body)
 
 
 async def notify_safety_team(incident: dict) -> dict:

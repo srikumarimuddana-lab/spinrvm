@@ -23,7 +23,7 @@
     "./utils/responsive": "./utils/responsive.ts",
     "./cache": "./cache/index.ts",
     "./types": "./types/index.ts",
-    "./types/*": "./types/*",
+    "./types/*": "./types/*.ts",
     "./components/*": "./components/*"
   },
   "scripts": {

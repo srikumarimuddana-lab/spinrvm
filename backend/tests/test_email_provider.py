@@ -46,6 +46,21 @@ _RESEND_SETTINGS = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _stub_email_db():
+    """Stub the suppression lookup + send-log write for every test.
+
+    email_provider does `import db_supabase` (fallback path) and calls
+    db_supabase.find_one / insert_one, so we patch them there. Defaults:
+    not suppressed, log write is a no-op. Individual tests re-patch to assert.
+    """
+    with (
+        patch("db_supabase.find_one", AsyncMock(return_value=None)),
+        patch("db_supabase.insert_one", AsyncMock(return_value=None)),
+    ):
+        yield
+
+
 def _settings(**overrides):
     return AsyncMock(return_value=dict(overrides))
 
@@ -231,3 +246,117 @@ async def test_empty_body_returns_false_without_loading_settings():
         ok = await send_transactional_email(to="r@example.com", subject="x")
     assert ok is False
     load.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Suppression list + send log
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_suppressed_recipient_skips_send_and_logs():
+    resend_client = _async_client_mock()
+    inserts: list = []
+
+    with (
+        patch("settings_loader.get_app_settings", _settings(**_SES_SETTINGS, **_RESEND_SETTINGS)) as load,
+        patch("db_supabase.find_one", AsyncMock(return_value={"email": "rider@example.com"})),
+        patch("db_supabase.insert_one", AsyncMock(side_effect=lambda t, d: inserts.append((t, d)))),
+        patch("boto3.client", MagicMock()) as boto_factory,
+        patch("httpx.AsyncClient", return_value=resend_client),
+    ):
+        ok = await send_transactional_email(
+            to="rider@example.com", subject="x", text="hi", email_type="receipt", recipient_user_id="u1"
+        )
+
+    assert ok is False
+    # Neither provider is touched, and settings aren't even loaded.
+    load.assert_not_awaited()
+    boto_factory.assert_not_called()
+    resend_client.post.assert_not_awaited()
+    # Logged as suppressed.
+    assert inserts and inserts[0][0] == "email_send_log"
+    assert inserts[0][1]["status"] == "suppressed"
+    assert inserts[0][1]["email_type"] == "receipt"
+    assert inserts[0][1]["recipient_user_id"] == "u1"
+
+
+@pytest.mark.anyio
+async def test_send_log_written_on_ses_success():
+    factory, _ses = _boto3_mock()
+    inserts: list = []
+
+    with (
+        patch("settings_loader.get_app_settings", _settings(**_SES_SETTINGS)),
+        patch("boto3.client", factory),
+        patch("db_supabase.find_one", AsyncMock(return_value=None)),
+        patch("db_supabase.insert_one", AsyncMock(side_effect=lambda t, d: inserts.append((t, d)))),
+    ):
+        ok = await send_transactional_email(
+            to="r@example.com", subject="x", html="<p>h</p>", email_type="receipt", recipient_user_id="u1"
+        )
+
+    assert ok is True
+    assert inserts and inserts[0][0] == "email_send_log"
+    row = inserts[0][1]
+    assert row["provider"] == "ses"
+    assert row["status"] == "sent"
+    assert row["message_id"] == "msg-123"
+    assert row["email_type"] == "receipt"
+    assert row["recipient_user_id"] == "u1"
+
+
+@pytest.mark.anyio
+async def test_send_log_records_resend_provider_on_fallback():
+    factory, _ses = _boto3_mock(send_side_effect=RuntimeError("SES down"))
+    resend_client = _async_client_mock()
+    resend_client.post = AsyncMock(return_value=_mock_resp(202))
+    resend_client.post.return_value.json = lambda: {"id": "resend-abc"}
+    inserts: list = []
+
+    with (
+        patch("settings_loader.get_app_settings", _settings(**_SES_SETTINGS, **_RESEND_SETTINGS)),
+        patch("boto3.client", factory),
+        patch("db_supabase.find_one", AsyncMock(return_value=None)),
+        patch("db_supabase.insert_one", AsyncMock(side_effect=lambda t, d: inserts.append((t, d)))),
+        patch("httpx.AsyncClient", return_value=resend_client),
+    ):
+        ok = await send_transactional_email(to="r@example.com", subject="x", text="hi")
+
+    assert ok is True
+    row = inserts[0][1]
+    assert row["provider"] == "resend"
+    assert row["status"] == "sent"
+    assert row["message_id"] == "resend-abc"
+
+
+@pytest.mark.anyio
+async def test_failed_send_logged_as_failed():
+    inserts: list = []
+    with (
+        patch("settings_loader.get_app_settings", _settings()),  # nothing configured
+        patch("db_supabase.find_one", AsyncMock(return_value=None)),
+        patch("db_supabase.insert_one", AsyncMock(side_effect=lambda t, d: inserts.append((t, d)))),
+    ):
+        ok = await send_transactional_email(to="r@example.com", subject="x", text="hi")
+
+    assert ok is False
+    row = inserts[0][1]
+    assert row["provider"] == "none"
+    assert row["status"] == "failed"
+
+
+@pytest.mark.anyio
+async def test_suppression_lookup_error_fails_open():
+    factory, ses_client = _boto3_mock()
+    with (
+        patch("settings_loader.get_app_settings", _settings(**_SES_SETTINGS)),
+        patch("boto3.client", factory),
+        patch("db_supabase.find_one", AsyncMock(side_effect=RuntimeError("db down"))),
+        patch("db_supabase.insert_one", AsyncMock(return_value=None)),
+    ):
+        ok = await send_transactional_email(to="r@example.com", subject="x", text="hi")
+
+    # Fail-open: a suppression-lookup error must not block the send.
+    assert ok is True
+    ses_client.send_raw_email.assert_called_once()

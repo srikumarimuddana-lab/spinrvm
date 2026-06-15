@@ -218,16 +218,78 @@ export default function SettingsPage() {
                         </CardContent>
                     </Card>
 
-                    {/* Email / Resend */}
+                    {/* Email — AWS SES (primary) */}
                     <Card className="border-border/50">
                         <CardHeader>
-                            <CardTitle className="text-base">Email (Resend)</CardTitle>
+                            <CardTitle className="text-base">Email — AWS SES (primary)</CardTitle>
                         </CardHeader>
                         <Separator />
                         <CardContent className="pt-4 space-y-4">
                             <p className="text-xs text-muted-foreground">
-                                Used to send ride receipt emails to riders. If <strong>From Email</strong> is
-                                blank, the <code>email_from</code> setting is used as a fallback.
+                                Primary provider for ride receipts, T4A links, DSAR exports and
+                                safety/corporate alerts. When the access key and secret are set,
+                                email is sent via SES; if SES is blank or a send fails, Spinr falls
+                                back to Resend below. The <strong>From Email</strong> must be a
+                                verified identity in the SES account.
+                            </p>
+                            <div className="space-y-2">
+                                <Label>Region</Label>
+                                <Input
+                                    type="text"
+                                    value={settings.aws_ses_region || ""}
+                                    onChange={(e) =>
+                                        update("aws_ses_region", e.target.value)
+                                    }
+                                    placeholder="ca-central-1"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Access Key ID</Label>
+                                <Input
+                                    type="text"
+                                    value={settings.aws_ses_access_key_id || ""}
+                                    onChange={(e) =>
+                                        update("aws_ses_access_key_id", e.target.value)
+                                    }
+                                    placeholder="AKIA...."
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Secret Access Key</Label>
+                                <Input
+                                    type="password"
+                                    value={settings.aws_ses_secret_access_key || ""}
+                                    onChange={(e) =>
+                                        update("aws_ses_secret_access_key", e.target.value)
+                                    }
+                                    placeholder="••••••••"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>From Email</Label>
+                                <Input
+                                    type="email"
+                                    value={settings.aws_ses_from_email || ""}
+                                    onChange={(e) =>
+                                        update("aws_ses_from_email", e.target.value)
+                                    }
+                                    placeholder="receipts@spinr.ca"
+                                />
+                            </div>
+                        </CardContent>
+                    </Card>
+
+                    {/* Email — Resend (fallback guardrail) */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">Email — Resend (fallback)</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <p className="text-xs text-muted-foreground">
+                                Guardrail provider. Used only when AWS SES above is unconfigured or a
+                                send fails. If <strong>From Email</strong> is blank, the SES from
+                                address (then a code default) is used as a fallback.
                             </p>
                             <div className="space-y-2">
                                 <Label>API Key</Label>

@@ -316,10 +316,13 @@ async def send_receipt_email(ride: dict, rider: dict, driver: dict = None, tip: 
     except ImportError:
         from utils.email_provider import send_transactional_email  # type: ignore
 
+    recipient_user_id = rider.get("id") or ride.get("rider_id")
     return await send_transactional_email(
         to=email,
         subject=f"Your Spinr ride receipt — ${total:.2f}",
         html=html,
         default_from="receipts@spinr.ca",
-        log_id=str(rider.get("id") or ride.get("rider_id") or "-"),
+        log_id=str(recipient_user_id or "-"),
+        email_type="receipt",
+        recipient_user_id=str(recipient_user_id) if recipient_user_id else None,
     )

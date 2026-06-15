@@ -139,6 +139,8 @@ async def send_ride_receipt_email(ride: dict, rider: dict) -> None:
             text=plain_body,
             default_from="receipts@spinr.ca",
             log_id=str(rider_id),
+            email_type="receipt",
+            recipient_user_id=str(rider_id) if rider_id and rider_id != "unknown" else None,
         )
 
         if sent:

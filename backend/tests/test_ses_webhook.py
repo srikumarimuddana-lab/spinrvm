@@ -24,9 +24,10 @@ from cryptography.x509.oid import NameOID
 from fastapi.testclient import TestClient
 
 try:
-    from utils.sns_verify import _string_to_sign, is_trusted_sns_url, verify_sns_signature
+    from utils.sns_verify import _fetch_cert, _string_to_sign, is_trusted_sns_url, verify_sns_signature
 except ImportError:
     from backend.utils.sns_verify import (  # type: ignore[no-redef]
+        _fetch_cert,
         _string_to_sign,
         is_trusted_sns_url,
         verify_sns_signature,
@@ -171,6 +172,34 @@ def test_verify_signature_rejects_untrusted_cert_url():
 
     assert verify_sns_signature(payload, fetch=_fetch) is False
     assert called["n"] == 0
+
+
+def test_verify_signature_accepts_lowercase_cert_url_key():
+    key, pem = _make_cert_and_key()
+    payload = {
+        "Type": "Notification",
+        "MessageId": "m1",
+        "TopicArn": "arn:aws:sns:ca-central-1:1:ses",
+        "Message": _bounce_message("a@b.com"),
+        "Timestamp": "2026-06-15T00:00:00.000Z",
+        "SigningCertUrl": _CERT_URL,  # non-canonical lowercase-url key
+        "SignatureVersion": "1",
+    }
+    sig = key.sign(_string_to_sign(payload), padding.PKCS1v15(), hashes.SHA1())
+    payload["Signature"] = base64.b64encode(sig).decode()
+    assert verify_sns_signature(payload, fetch=lambda _u: pem) is True
+
+
+def test_fetch_cert_is_cached():
+    _fetch_cert.cache_clear()
+    url = "https://sns.ca-central-1.amazonaws.com/unique-cache-test.pem"
+    resp = MagicMock(content=b"PEMDATA")
+    with patch("httpx.get", return_value=resp) as mock_get:
+        a = _fetch_cert(url)
+        b = _fetch_cert(url)
+    assert a == b == b"PEMDATA"
+    mock_get.assert_called_once()  # second call served from cache
+    _fetch_cert.cache_clear()
 
 
 # ---------------------------------------------------------------------------

@@ -1002,3 +1002,133 @@ async def stripe_webhook(request: Request):
     await mark_stripe_event_processed(event_id)
 
     return {"received": True, "event_id": event_id}
+
+
+# ---------------------------------------------------------------------------
+# Amazon SES bounce/complaint feedback (via SNS)
+# ---------------------------------------------------------------------------
+#
+# SES publishes Bounce/Complaint/Delivery notifications to an SNS topic; SNS
+# POSTs them here. We verify the SNS signature (the endpoint is public), then
+# on a *permanent* bounce or a complaint we add the address to
+# email_suppressions so email_provider stops sending to it — that's what keeps
+# our SES bounce/complaint rate (and thus our sending reputation) healthy.
+
+
+async def _confirm_sns_subscription(payload: dict) -> None:
+    """Confirm an SNS subscription by GETting its SubscribeURL.
+
+    The URL host is validated (https + sns.*.amazonaws.com) first so a forged
+    confirmation can't make us issue a request to an arbitrary host.
+    """
+    try:
+        from ..utils.sns_verify import is_trusted_sns_url
+    except ImportError:
+        from utils.sns_verify import is_trusted_sns_url  # type: ignore
+
+    url = payload.get("SubscribeURL") or ""
+    if not is_trusted_sns_url(url):
+        logger.error("[SES] refusing to confirm subscription — untrusted SubscribeURL")
+        return
+    import httpx
+
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        await client.get(url)
+    logger.info("[SES] SNS subscription confirmed topic=%s", payload.get("TopicArn"))
+
+
+async def _suppress_address(email: str, *, reason: str, detail, message_id) -> None:
+    """Idempotently add one address to email_suppressions.
+
+    PIPEDA: the email address itself is never logged — only the reason and the
+    SES message id (which carries no PII).
+    """
+    try:
+        from ..utils.email_provider import normalize_email
+    except ImportError:
+        from utils.email_provider import normalize_email  # type: ignore
+
+    norm = normalize_email(email)
+    if not norm:
+        return
+    # SNS may redeliver — skip if we already suppressed this address.
+    existing = await db_supabase.find_one("email_suppressions", {"email": norm})
+    if existing:
+        return
+    await db_supabase.insert_one(
+        "email_suppressions",
+        {"email": norm, "reason": reason, "detail": detail, "source": "ses", "message_id": message_id},
+    )
+    logger.warning("[SES] address suppressed reason=%s message_id=%s", reason, message_id or "-")
+
+
+async def _handle_ses_notification(payload: dict) -> dict:
+    """Parse an SES notification and suppress hard-bounced/complained recipients."""
+    import json
+
+    try:
+        inner = json.loads(payload.get("Message") or "{}")
+    except (ValueError, TypeError):
+        logger.error("[SES] notification Message was not valid JSON — ignoring")
+        return {"received": True, "ignored": "bad_message"}
+
+    ntype = inner.get("notificationType") or inner.get("eventType")
+    message_id = (inner.get("mail") or {}).get("messageId")
+    suppressed = 0
+
+    if ntype == "Bounce":
+        bounce = inner.get("bounce") or {}
+        # Only PERMANENT (hard) bounces suppress; transient bounces may recover.
+        if bounce.get("bounceType") == "Permanent":
+            for r in bounce.get("bouncedRecipients") or []:
+                await _suppress_address(
+                    r.get("emailAddress"),
+                    reason="bounce",
+                    detail=bounce.get("bounceSubType"),
+                    message_id=message_id,
+                )
+                suppressed += 1
+    elif ntype == "Complaint":
+        complaint = inner.get("complaint") or {}
+        for r in complaint.get("complainedRecipients") or []:
+            await _suppress_address(
+                r.get("emailAddress"),
+                reason="complaint",
+                detail=complaint.get("complaintFeedbackType"),
+                message_id=message_id,
+            )
+            suppressed += 1
+    # Delivery / transient bounce / other: acknowledged, no suppression.
+
+    return {"received": True, "type": ntype, "suppressed": suppressed}
+
+
+@api_router.post("/ses")
+async def ses_sns_webhook(request: Request):
+    """Receive SES bounce/complaint feedback via SNS. Signature-verified."""
+    import json
+
+    raw = await request.body()
+    try:
+        payload = json.loads(raw)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="invalid JSON") from None
+
+    try:
+        from ..utils.sns_verify import verify_sns_signature
+    except ImportError:
+        from utils.sns_verify import verify_sns_signature  # type: ignore
+
+    if not verify_sns_signature(payload):
+        # 403: do not act on an unverified message.
+        raise HTTPException(status_code=403, detail="invalid SNS signature")
+
+    msg_type = payload.get("Type")
+    if msg_type == "SubscriptionConfirmation":
+        await _confirm_sns_subscription(payload)
+        return {"received": True, "confirmed": True}
+    if msg_type == "Notification":
+        return await _handle_ses_notification(payload)
+
+    # UnsubscribeConfirmation / unknown — acknowledge without action.
+    return {"received": True, "ignored": msg_type}

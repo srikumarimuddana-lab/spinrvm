@@ -125,6 +125,9 @@ class SettingsUpdateRequest(BaseModel):
     aws_ses_access_key_id: Optional[str] = None
     aws_ses_secret_access_key: Optional[str] = None
     aws_ses_from_email: Optional[str] = None
+    # Expected SNS topic ARN for the SES bounce/complaint webhook. When set,
+    # /webhooks/ses rejects SNS messages from any other topic.
+    aws_ses_sns_topic_arn: Optional[str] = None
     # Company info shown on rider receipts + driver T4A slips + the
     # admin dashboard footer. Edited via the Settings page → Company tab.
     company_name: Optional[str] = None

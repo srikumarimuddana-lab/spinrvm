@@ -1,6 +1,7 @@
 """
 Receipt generator for Spinr rides.
-Generates HTML receipt and sends via email (Resend when configured, logs otherwise).
+Generates HTML receipt and sends via email through utils.email_provider
+(AWS SES primary, Resend guardrail; logs only when neither is configured).
 
 Line items
 ----------
@@ -29,10 +30,8 @@ from typing import Any, Dict
 
 try:
     from .datetime_utils import parse_iso_utc
-    from .pii import redact_email
 except ImportError:
     from utils.datetime_utils import parse_iso_utc
-    from utils.pii import redact_email
 
 logger = logging.getLogger(__name__)
 
@@ -298,7 +297,12 @@ def _receipt_total(ride: dict, tip: float = 0) -> Decimal:
 
 
 async def send_receipt_email(ride: dict, rider: dict, driver: dict = None, tip: float = 0):
-    """Send receipt email. Uses Resend when configured, logs otherwise."""
+    """Send an HTML receipt email: AWS SES primary, Resend guardrail.
+
+    Delegates to utils.email_provider.send_transactional_email, which tries
+    AWS SES first and falls back to Resend when SES is unconfigured or fails.
+    Returns True if either provider accepted the message, False otherwise.
+    """
     email = rider.get("email", "")
     if not email:
         logger.warning(f"No email for rider {rider.get('id')} — skipping receipt")
@@ -307,34 +311,15 @@ async def send_receipt_email(ride: dict, rider: dict, driver: dict = None, tip: 
     html = generate_receipt_html(ride, rider, driver, tip)
     total = _receipt_total(ride, tip)
 
-    # Try Resend
     try:
-        from ..settings_loader import get_app_settings
-
-        settings = await get_app_settings()
-        resend_key = settings.get("resend_api_key", "")
-        from_email = settings.get("resend_from_email") or "receipts@spinr.ca"
-
-        if resend_key:
-            import httpx
-
-            response = await httpx.AsyncClient().post(
-                "https://api.resend.com/emails",
-                headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
-                json={
-                    "from": f"Spinr <{from_email}>",
-                    "to": [email],
-                    "subject": f"Your Spinr ride receipt — ${total:.2f}",
-                    "html": html,
-                },
-            )
-            logger.info(f"[EMAIL] Resend receipt sent to {redact_email(email)} (status: {response.status_code})")
-            return response.status_code in (200, 201, 202)
+        from .email_provider import send_transactional_email
     except ImportError:
-        pass
-    except Exception as e:
-        logger.warning(f"[EMAIL] Resend failed: {e}")
+        from utils.email_provider import send_transactional_email  # type: ignore
 
-    # Fallback: log only (PII-safe: email + total amount redacted)
-    logger.info(f"[EMAIL] Receipt for ride {ride.get('id')} → {redact_email(email)} (Resend not configured)")
-    return False
+    return await send_transactional_email(
+        to=email,
+        subject=f"Your Spinr ride receipt — ${total:.2f}",
+        html=html,
+        default_from="receipts@spinr.ca",
+        log_id=str(rider.get("id") or ride.get("rider_id") or "-"),
+    )

@@ -12,10 +12,25 @@ addresses (a denial-of-email attack) or forge confirmations.
 """
 
 import base64
+import functools
 import logging
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
+
+
+@functools.lru_cache(maxsize=16)
+def _fetch_cert(cert_url: str) -> bytes:
+    """Fetch (and cache) the SNS signing certificate PEM.
+
+    AWS reuses the same per-region SigningCertURL for weeks, so caching turns
+    a burst of bounce notifications into a single outbound fetch instead of one
+    per message. Caller must have already host-validated ``cert_url``.
+    """
+    import httpx
+
+    return httpx.get(cert_url, timeout=5.0).content
+
 
 # Fields included in the SNS signature, in this order, keyed by message Type.
 # (See "Verifying the signatures of Amazon SNS messages" in the AWS docs.)
@@ -81,7 +96,12 @@ def verify_sns_signature(payload: dict, *, fetch=None) -> bool:
             the (host-validated) SigningCertURL.
     """
     try:
-        cert_url = payload.get("SigningCertURL") or payload.get("SigningCertUrl") or ""
+        cert_url = payload.get("SigningCertURL") or ""
+        if not cert_url and payload.get("SigningCertUrl"):
+            # AWS's canonical field is SigningCertURL; accept the lowercase-url
+            # variant defensively but surface it so a malformed payload is visible.
+            logger.warning("[SNS] payload used non-canonical SigningCertUrl key")
+            cert_url = payload.get("SigningCertUrl") or ""
         if not is_trusted_sns_url(cert_url):
             logger.error("[SNS] untrusted SigningCertURL host — rejecting message")
             return False
@@ -90,12 +110,7 @@ def verify_sns_signature(payload: dict, *, fetch=None) -> bool:
         message = _string_to_sign(payload)
         version = str(payload.get("SignatureVersion", "1"))
 
-        if fetch is None:
-            import httpx
-
-            pem = httpx.get(cert_url, timeout=5.0).content
-        else:
-            pem = fetch(cert_url)
+        pem = _fetch_cert(cert_url) if fetch is None else fetch(cert_url)
 
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.asymmetric import padding

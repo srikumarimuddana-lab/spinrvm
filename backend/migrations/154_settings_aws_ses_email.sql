@@ -38,12 +38,18 @@
 --   ALTER TABLE public.settings DROP COLUMN IF EXISTS aws_ses_access_key_id;
 --   ALTER TABLE public.settings DROP COLUMN IF EXISTS aws_ses_secret_access_key;
 --   ALTER TABLE public.settings DROP COLUMN IF EXISTS aws_ses_from_email;
+--   ALTER TABLE public.settings DROP COLUMN IF EXISTS aws_ses_sns_topic_arn;
 
 ALTER TABLE public.settings
     ADD COLUMN IF NOT EXISTS aws_ses_region            TEXT DEFAULT 'ca-central-1',
     ADD COLUMN IF NOT EXISTS aws_ses_access_key_id     TEXT,
     ADD COLUMN IF NOT EXISTS aws_ses_secret_access_key TEXT,
-    ADD COLUMN IF NOT EXISTS aws_ses_from_email        TEXT;
+    ADD COLUMN IF NOT EXISTS aws_ses_from_email        TEXT,
+    -- Expected SNS topic ARN for the SES bounce/complaint webhook. When set,
+    -- /webhooks/ses rejects any (otherwise validly signed) SNS message whose
+    -- TopicArn differs — closing a denial-of-email vector where an attacker
+    -- subscribes our endpoint to a foreign topic. Blank = allow + warn (dev).
+    ADD COLUMN IF NOT EXISTS aws_ses_sns_topic_arn     TEXT;
 
 -- Carry the verified Resend sender forward as the SES default so operators
 -- only have to verify the same address in SES — keeps receipts sending from

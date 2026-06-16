@@ -292,7 +292,11 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     except Exception as e:
         # Never log the signing secret, even partially — it's a credential.
         logger.error(f"JWT verification failed: {e}")
-        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}") from e
+        # Static client message (C4): interpolating the PyJWT reason lets an
+        # attacker fingerprint which claim failed (alg/aud/exp/sig). The real
+        # cause is in the server log above; the client only learns the token is
+        # invalid — matching every other auth path.
+        raise HTTPException(status_code=401, detail="Invalid token") from e
 
     # Full admin verification (aud, JTI revocation, staff active/version/idle) is
     # delegated to _verify_admin_payload — the WS path calls the same function so

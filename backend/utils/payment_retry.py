@@ -376,10 +376,15 @@ async def payment_retry_loop():
     """Background loop that retries failed payments every RETRY_INTERVAL_SECONDS."""
     logger.info(f"Payment retry service started (interval={RETRY_INTERVAL_SECONDS}s)")
     while True:
-        # Single-replica enforcement: only the pod that claims the lock runs
-        # the retry; others sleep the full interval. Prevents N simultaneous
-        # Stripe retries on multi-replica deploys. TTL is 1.5× interval so
-        # the lock expires cleanly before the next tick's election.
+        # Best-effort throttle (C5): when a real Redis backs redis_set_nx, only
+        # one pod runs a tick, avoiding N simultaneous Stripe-retry scans. But
+        # the in-process fallback (REDIS_URL unset) gives every replica its own
+        # dict, so SET NX returns True everywhere and this is NOT mutual
+        # exclusion. That is acceptable because it is NOT the correctness guard:
+        # double-charge is prevented by the atomic DB claim (payment_status →
+        # 'retrying') + the Stripe idempotency key (see module docstring). The
+        # lock only reduces redundant work; it is never relied on for safety.
+        # TTL is 1.5× interval so a real lock expires before the next election.
         lock_ttl = int(RETRY_INTERVAL_SECONDS * 1.5)
         if not await redis_set_nx("spinr:payment:retry:lock", _pod_id(), lock_ttl):
             _record_heartbeat("payment_retry (5min)")

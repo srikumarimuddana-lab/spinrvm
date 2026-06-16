@@ -58,10 +58,10 @@ from typing import Any, Dict, Optional, Union
 
 try:
     from ..settings_loader import get_app_settings
-    from .money import dollars_to_cents
+    from .money import dollars_to_cents, to_decimal
 except ImportError:
     from settings_loader import get_app_settings
-    from utils.money import dollars_to_cents
+    from utils.money import dollars_to_cents, to_decimal
 
 try:
     import stripe
@@ -284,4 +284,333 @@ async def charge_ride(
         status="failed",
         payment_intent_id=pi_id,
         error_message=f"Unhandled PaymentIntent status: {status}",
+    )
+
+
+async def _resolve_stripe_secret(ride_id: str) -> Optional[str]:
+    """Shared secret lookup for the authorize/capture helpers.
+
+    Returns the configured ``stripe_secret_key`` or ``None`` when Stripe is not
+    wired up (dev/test). Callers map ``None`` → ``unconfigured`` so the system
+    doesn't wedge when Stripe isn't configured yet.
+    """
+    if stripe is None:
+        logger.error("stripe package not installed; cannot reach Stripe")
+        return None
+    settings = await get_app_settings()
+    secret = settings.get("stripe_secret_key", "") or ""
+    if not secret:
+        logger.error("stripe_secret_key not configured; ride=%s", ride_id)
+        return None
+    return secret
+
+
+async def authorize_ride(
+    *,
+    ride: Dict[str, Any],
+    rider_id: str,
+    amount: Union[Decimal, int],
+    payment_method_id: Optional[str] = None,
+    stripe_customer_id: Optional[str] = None,
+    off_session: bool = False,
+) -> ChargeOutcome:
+    """Place a manual-capture authorization HOLD on the rider's card at booking.
+
+    This is the front-of-ride counterpart to ``charge_ride``: instead of
+    capturing immediately, it creates a PaymentIntent with
+    ``capture_method="manual"`` so the funds are *held* (estimated fare +
+    buffer) without moving money. The hold is captured later, once at
+    settlement, by ``capture_ride`` — letting a post-trip tip ride on the SAME
+    PaymentIntent (one Stripe fee) and surfacing a dead card BEFORE dispatch.
+
+    ``off_session`` defaults to ``False`` because authorization happens while
+    the rider is present at booking (Apple Pay / 3DS can prompt live). A
+    ``requires_action`` outcome hands the client_secret back so the rider-app
+    runs the SCA / biometric sheet and re-confirms.
+
+    ``ChargeOutcome.status`` for this path:
+        "authorized"       hold placed (Stripe PI status ``requires_capture``);
+                           ``charged_amount`` carries the held amount
+        "requires_action"  SCA / 3DS challenge; return client_secret to app
+        "declined"         card declined (insufficient_funds, card_declined, …);
+                           caller may retry at a smaller amount (fare-only)
+        "failed"           non-decline Stripe/ops error
+        "unconfigured"     Stripe not installed/configured (dev/test)
+
+    Never raises — callers switch on ``outcome.status``.
+    """
+    if amount <= 0:
+        # Nothing to hold. Treat as a no-op success so booking proceeds; the
+        # settlement path handles a genuinely $0 ride without a Stripe round-trip.
+        return ChargeOutcome(status="authorized", charged_amount=Decimal("0.00"))
+
+    secret = await _resolve_stripe_secret(ride.get("id") or "")
+    if secret is None:
+        return ChargeOutcome(status="unconfigured", error_message="Payment processing is not configured")
+    if not stripe_customer_id:
+        return ChargeOutcome(status="failed", error_message="No Stripe customer on file for rider")
+    if not payment_method_id:
+        return ChargeOutcome(status="failed", error_message="No default payment method on file")
+
+    ride_id = ride.get("id") or ""
+    amount_cents = dollars_to_cents(amount)
+    # Amount is part of the key so a re-auth at a different hold (e.g. a revised
+    # fare estimate) gets a fresh key instead of an IdempotencyError; identical
+    # retries (double-tap / dropped response) dedupe to the original hold.
+    idempotency_key = f"ride-auth-{ride_id}-{amount_cents}"
+
+    params: Dict[str, Any] = {
+        "amount": amount_cents,
+        "currency": CURRENCY,
+        "customer": stripe_customer_id,
+        "payment_method": payment_method_id,
+        "capture_method": "manual",
+        "confirm": True,
+        "off_session": off_session,
+        "metadata": {
+            "ride_id": ride_id,
+            "rider_id": rider_id,
+            "authorized_amount": str(to_decimal(amount)),
+            "payment_method_type": ride.get("payment_method") or "card",
+            "source": "ride_booking_authorization",
+        },
+    }
+
+    try:
+        intent = stripe.PaymentIntent.create(
+            **params,
+            api_key=secret,
+            idempotency_key=idempotency_key,
+        )
+    except _StripeCardError as e:
+        err = getattr(e, "error", None)
+        decline_code = getattr(err, "decline_code", None) or getattr(err, "code", None)
+        logger.info("Auth declined for ride=%s rider=%s code=%s", ride_id, rider_id, decline_code)
+        return ChargeOutcome(
+            status="declined",
+            decline_code=decline_code,
+            error_message=str(getattr(err, "message", None) or e),
+        )
+    except _StripeBaseError as e:
+        logger.error("Stripe error authorizing ride=%s rider=%s: %s", ride_id, rider_id, e)
+        return ChargeOutcome(status="failed", error_message=str(e))
+    except Exception as e:  # pragma: no cover — defence-in-depth
+        logger.exception("Unexpected error authorizing ride=%s: %s", ride_id, e)
+        return ChargeOutcome(status="failed", error_message=str(e))
+
+    status = getattr(intent, "status", "") or ""
+    pi_id = getattr(intent, "id", None)
+    client_secret = getattr(intent, "client_secret", None)
+
+    if status == "requires_capture":
+        # Hold placed successfully — funds reserved, nothing captured yet.
+        return ChargeOutcome(
+            status="authorized",
+            payment_intent_id=pi_id,
+            charged_amount=to_decimal(amount),
+        )
+    if status in ("requires_action", "requires_source_action"):
+        return ChargeOutcome(status="requires_action", payment_intent_id=pi_id, client_secret=client_secret)
+    if status in ("requires_payment_method", "requires_confirmation"):
+        return ChargeOutcome(
+            status="declined",
+            payment_intent_id=pi_id,
+            error_message=f"PaymentIntent unexpectedly in state: {status}",
+        )
+
+    logger.error("Unhandled auth PaymentIntent status=%s for ride=%s pi=%s", status, ride_id, pi_id)
+    return ChargeOutcome(
+        status="failed",
+        payment_intent_id=pi_id,
+        error_message=f"Unhandled auth PaymentIntent status: {status}",
+    )
+
+
+async def verify_authorization(
+    *,
+    ride_id: str,
+    payment_intent_id: str,
+    expected_customer_id: Optional[str] = None,
+    min_amount_cents: Optional[int] = None,
+) -> ChargeOutcome:
+    """Verify an on-device-confirmed authorization hold (SCA two-step at booking).
+
+    After ``authorize_ride`` returns ``requires_action`` and the rider-app runs
+    the Stripe confirm sheet (3DS / Apple Pay biometric), the PaymentIntent
+    should land in ``requires_capture``. This re-reads it from Stripe to confirm
+    the hold is real before create_ride attaches it — we never trust the client's
+    word that authentication succeeded.
+
+    SECURITY — the client supplies the PI id, so we never attach it blindly:
+      - ``expected_customer_id``: the PI's ``customer`` MUST match the requesting
+        rider's Stripe customer, else a rider could attach someone else's hold.
+      - ``min_amount_cents``: the held amount MUST cover this ride's fare, else a
+        rider could replay a smaller hold from a cancelled/cheaper booking.
+    A mismatch on either is treated as ``declined`` (logged as a security event).
+
+    ``ChargeOutcome.status``:
+        "authorized"    PI is requires_capture, owned by this rider, large enough
+        "declined"      auth not completed / wrong owner / too small / wrong PM
+        "failed"        Stripe ops error / unexpected PI status
+        "unconfigured"  Stripe not installed/configured (dev/test)
+
+    Never raises — callers switch on ``outcome.status``.
+    """
+    if not payment_intent_id:
+        return ChargeOutcome(status="failed", error_message="No PaymentIntent to verify")
+
+    secret = await _resolve_stripe_secret(ride_id)
+    if secret is None:
+        return ChargeOutcome(status="unconfigured", error_message="Payment processing is not configured")
+
+    try:
+        intent = stripe.PaymentIntent.retrieve(payment_intent_id, api_key=secret)
+    except _StripeBaseError as e:
+        logger.error("Stripe error verifying auth ride=%s pi=%s: %s", ride_id, payment_intent_id, e)
+        return ChargeOutcome(status="failed", payment_intent_id=payment_intent_id, error_message=str(e))
+    except Exception as e:  # pragma: no cover — defence-in-depth
+        logger.exception("Unexpected error verifying auth ride=%s: %s", ride_id, e)
+        return ChargeOutcome(status="failed", payment_intent_id=payment_intent_id, error_message=str(e))
+
+    status = getattr(intent, "status", "") or ""
+    pi_id = getattr(intent, "id", None) or payment_intent_id
+
+    # Ownership: the PI must belong to THIS rider's Stripe customer.
+    if expected_customer_id is not None:
+        pi_customer = getattr(intent, "customer", None)
+        if pi_customer != expected_customer_id:
+            logger.error(
+                "[preauth][security] PI customer mismatch ride=%s pi=%s (declining attach)",
+                ride_id,
+                pi_id,
+            )
+            return ChargeOutcome(
+                status="declined",
+                payment_intent_id=pi_id,
+                error_message="Authorization does not belong to this account",
+            )
+
+    # Amount: the hold must be at least the ride's fare (no replay of a smaller
+    # hold from a cancelled/cheaper booking).
+    if min_amount_cents is not None:
+        pi_amount = int(getattr(intent, "amount", 0) or 0)
+        if pi_amount < int(min_amount_cents):
+            logger.error(
+                "[preauth][security] PI amount too small ride=%s pi=%s held=%s need=%s (declining attach)",
+                ride_id,
+                pi_id,
+                pi_amount,
+                min_amount_cents,
+            )
+            return ChargeOutcome(
+                status="declined",
+                payment_intent_id=pi_id,
+                error_message="Authorization amount is insufficient for this ride",
+            )
+
+    if status == "requires_capture":
+        amount_cents = getattr(intent, "amount", 0) or 0
+        return ChargeOutcome(
+            status="authorized",
+            payment_intent_id=pi_id,
+            charged_amount=to_decimal(Decimal(int(amount_cents)) / Decimal("100")),
+        )
+    if status in ("requires_action", "requires_source_action", "requires_payment_method", "requires_confirmation"):
+        # Authentication not completed (rider abandoned the sheet, or it failed).
+        return ChargeOutcome(
+            status="declined",
+            payment_intent_id=pi_id,
+            error_message=f"Authorization not completed (PI status: {status})",
+        )
+    if status == "succeeded":
+        # Already captured — treat as authorized so the caller attaches it and
+        # settlement's idempotent capture is a no-op rather than a double charge.
+        return ChargeOutcome(
+            status="authorized",
+            payment_intent_id=pi_id,
+            charged_amount=to_decimal(Decimal(int(getattr(intent, "amount", 0) or 0)) / Decimal("100")),
+        )
+
+    logger.error("Unexpected verify PI status=%s for ride=%s pi=%s", status, ride_id, pi_id)
+    return ChargeOutcome(
+        status="failed",
+        payment_intent_id=pi_id,
+        error_message=f"Unexpected PaymentIntent status: {status}",
+    )
+
+
+async def capture_ride(
+    *,
+    ride_id: str,
+    payment_intent_id: str,
+    amount: Union[Decimal, int],
+) -> ChargeOutcome:
+    """Capture a previously-authorized hold for ``amount`` (fare + tip).
+
+    Captures against the manual-capture PaymentIntent created by
+    ``authorize_ride``. ``amount`` MUST be ≤ the originally authorized hold —
+    Stripe rejects a capture larger than the authorization, which is why a tip
+    beyond the buffer is charged separately rather than folded into this call.
+
+    ``ChargeOutcome.status``:
+        "captured"      funds captured (terminal success)
+        "declined"      card declined at capture (rare — e.g. issuer reversal)
+        "failed"        hold expired / amount_too_large / Stripe-ops error;
+                        caller falls back to a fresh ``charge_ride``
+        "unconfigured"  Stripe not installed/configured (dev/test)
+
+    Never raises — callers switch on ``outcome.status``.
+    """
+    if amount <= 0:
+        return ChargeOutcome(status="captured", charged_amount=Decimal("0.00"))
+    if not payment_intent_id:
+        return ChargeOutcome(status="failed", error_message="No authorization PaymentIntent to capture")
+
+    secret = await _resolve_stripe_secret(ride_id)
+    if secret is None:
+        return ChargeOutcome(status="unconfigured", error_message="Payment processing is not configured")
+
+    amount_cents = dollars_to_cents(amount)
+    try:
+        intent = stripe.PaymentIntent.capture(
+            payment_intent_id,
+            amount_to_capture=amount_cents,
+            api_key=secret,
+            # Same PI + same captured amount must not double-capture if two
+            # replicas race past the DB claim; Stripe dedupes the identical key.
+            idempotency_key=f"ride-capture-{ride_id}-{amount_cents}",
+        )
+    except _StripeCardError as e:
+        err = getattr(e, "error", None)
+        decline_code = getattr(err, "decline_code", None) or getattr(err, "code", None)
+        logger.info("Capture declined for ride=%s pi=%s code=%s", ride_id, payment_intent_id, decline_code)
+        return ChargeOutcome(
+            status="declined",
+            payment_intent_id=payment_intent_id,
+            decline_code=decline_code,
+            error_message=str(getattr(err, "message", None) or e),
+        )
+    except _StripeBaseError as e:
+        # Hold expired, amount_too_large, already-captured, etc. Not a card
+        # decline — caller re-drives via a fresh charge_ride.
+        logger.error("Stripe error capturing ride=%s pi=%s: %s", ride_id, payment_intent_id, e)
+        return ChargeOutcome(status="failed", payment_intent_id=payment_intent_id, error_message=str(e))
+    except Exception as e:  # pragma: no cover — defence-in-depth
+        logger.exception("Unexpected error capturing ride=%s: %s", ride_id, e)
+        return ChargeOutcome(status="failed", payment_intent_id=payment_intent_id, error_message=str(e))
+
+    status = getattr(intent, "status", "") or ""
+    pi_id = getattr(intent, "id", None) or payment_intent_id
+    if status == "succeeded":
+        return ChargeOutcome(
+            status="captured",
+            payment_intent_id=pi_id,
+            charged_amount=to_decimal(amount),
+        )
+
+    logger.error("Unhandled capture PaymentIntent status=%s for ride=%s pi=%s", status, ride_id, pi_id)
+    return ChargeOutcome(
+        status="failed",
+        payment_intent_id=pi_id,
+        error_message=f"Unhandled capture PaymentIntent status: {status}",
     )

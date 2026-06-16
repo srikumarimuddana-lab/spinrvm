@@ -104,7 +104,7 @@ interface Driver {
   heading?: number | null;
 }
 
-interface Ride {
+export interface Ride {
   id: string;
   rider_id: string;
   driver_id?: string;
@@ -163,6 +163,13 @@ interface Promo {
   [key: string]: unknown;
 }
 
+/** SCA two-step: create_ride returns this (instead of a Ride) when the card
+ *  hold needs an on-device 3DS / Apple Pay confirm before booking can proceed. */
+export interface RideRequiresAction {
+  requires_action: true;
+  payment_authorization: { client_secret: string; payment_intent_id: string };
+}
+
 export interface ChatMessage {
   id: string;
   ride_id: string;
@@ -218,7 +225,12 @@ interface RideState {
   fetchEstimates: () => Promise<void>;
   fetchNearbyDrivers: () => Promise<void>;
   selectVehicle: (vehicle: VehicleType) => void;
-  createRide: (paymentMethod: string, corporateAccountId?: string | null, paymentMethodId?: string) => Promise<Ride>;
+  createRide: (
+    paymentMethod: string,
+    corporateAccountId?: string | null,
+    paymentMethodId?: string,
+    preauthorizedPaymentIntentId?: string,
+  ) => Promise<Ride | RideRequiresAction>;
   fetchRide: (rideId: string) => Promise<void>;
   cancelRide: (reason?: string) => Promise<void>;
   simulateDriverArrival: () => Promise<void>;
@@ -553,7 +565,7 @@ export const useRideStore = create<RideState>((set, get) => ({
     }
   },
 
-  createRide: async (paymentMethod, corporateAccountId, paymentMethodId) => {
+  createRide: async (paymentMethod, corporateAccountId, paymentMethodId, preauthorizedPaymentIntentId) => {
     const { pickup, dropoff, selectedVehicle, stops, scheduledTime, estimates, requiresWav, quietMode, riderNotes, routePolyline } = get();
     if (!pickup || !dropoff || !selectedVehicle) {
       throw new Error('Missing ride details');
@@ -593,6 +605,9 @@ export const useRideStore = create<RideState>((set, get) => ({
         stops: stops,
         payment_method: paymentMethod,
         payment_method_id: paymentMethodId ?? null,
+        // SCA two-step: a hold the app already confirmed on-device after a prior
+        // create_ride returned requires_action. Backend verifies + attaches it.
+        preauthorized_payment_intent_id: preauthorizedPaymentIntentId ?? null,
         corporate_account_id: corporateAccountId || null,
         estimate_token: selectedEstimate?.estimate_token,
         requires_wav: requiresWav,
@@ -610,12 +625,20 @@ export const useRideStore = create<RideState>((set, get) => ({
 
       const userId = useAuthStore.getState().user?.id ?? 'anon';
       const idempotencyKey = `ride-${userId}-${Date.now()}`;
-      const response = await api.post<Ride>('/rides', rideData, {
+      const response = await api.post<Ride | RideRequiresAction>('/rides', rideData, {
         headers: { 'Idempotency-Key': idempotencyKey },
       });
-      set({ currentRide: response.data, isLoading: false, scheduledTime: null, requiresWav: false, quietMode: false, riderNotes: '', routePolyline: [], appliedPromo: null, _clearedRideId: null });
-      _persistRide(response.data, null);
-      return response.data;
+      // SCA two-step, first leg: the card hold needs an on-device confirm. No
+      // ride was created — surface it to the caller (it runs the Stripe sheet
+      // then re-books with the confirmed PI). Do NOT set currentRide.
+      if ((response.data as RideRequiresAction).requires_action) {
+        set({ isLoading: false });
+        return response.data as RideRequiresAction;
+      }
+      const ride = response.data as Ride;
+      set({ currentRide: ride, isLoading: false, scheduledTime: null, requiresWav: false, quietMode: false, riderNotes: '', routePolyline: [], appliedPromo: null, _clearedRideId: null });
+      _persistRide(ride, null);
+      return ride;
     } catch (error: unknown) {
       recordNonFatal(error, { store: 'rideStore', action: 'createRide' });
       set({ isLoading: false, error: isErrorLike(error) ? error.message : 'Failed to create ride' });

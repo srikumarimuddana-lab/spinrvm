@@ -93,6 +93,7 @@ export function offerDisplayDataFromFcm(data: any): Record<string, any> | null {
     incentives_count: Array.isArray(incentives) ? incentives.length : 0,
     countdown_seconds: toNum(data.countdown_seconds),
     offer_expires_at: data.offer_expires_at || undefined,
+    offer_card_url: data.offer_card_url || undefined,
   };
 }
 

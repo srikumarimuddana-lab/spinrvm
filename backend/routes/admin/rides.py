@@ -1071,18 +1071,22 @@ async def admin_get_ride_stats():
     )
     month_revenue = float(sum(Decimal(str(r.get("total_fare") or 0)) for r in completed_month))
 
-    # Daily chart data for last 14 days
-    daily_chart = []
-    for i in range(13, -1, -1):
-        day_start = today_start - timedelta(days=i)
-        day_end = day_start + timedelta(days=1)
-        count = await db_supabase.get_ride_count_by_date_range(day_start.isoformat(), day_end.isoformat())
-        daily_chart.append(
-            {
-                "date": day_start.strftime("%b %d"),
-                "rides": count,
-            }
-        )
+    # Daily chart data for last 14 days — one grouped query instead of 14
+    # sequential COUNT round-trips.
+    chart_start = today_start - timedelta(days=13)
+    chart_end = today_start + timedelta(days=1)
+    count_rows = await db_supabase.rpc(
+        "admin_ride_daily_counts",
+        {"p_start": chart_start.isoformat(), "p_end": chart_end.isoformat()},
+    )
+    chart_buckets: Dict[str, int] = {str(r.get("day")): int(r.get("rides") or 0) for r in (count_rows or [])}
+    daily_chart = [
+        {
+            "date": (chart_start + timedelta(days=i)).strftime("%b %d"),
+            "rides": chart_buckets.get((chart_start + timedelta(days=i)).strftime("%Y-%m-%d"), 0),
+        }
+        for i in range(14)
+    ]
 
     return {
         "today_count": today_count,
@@ -1107,32 +1111,19 @@ async def admin_get_ride_trend(
 ):
     """Daily ride counts for the trend chart.
 
-    Single DB round-trip: fetches only the created_at column for rides in the
-    window, then buckets in Python. Replaces the 14-sequential-query pattern
-    in /rides/stats daily_chart.
+    One grouped query in Postgres (admin_ride_daily_counts) instead of fetching
+    every created_at in the window and bucketing in Python.
     """
     now = datetime.now(timezone.utc)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     window_start = today_start - timedelta(days=days - 1)
+    window_end = today_start + timedelta(days=1)  # through end of today
 
-    rows = await db_supabase.get_rows(
-        "rides",
-        {"created_at": {"$gte": window_start.isoformat()}},
-        columns="created_at",
-        limit=50000,
+    count_rows = await db_supabase.rpc(
+        "admin_ride_daily_counts",
+        {"p_start": window_start.isoformat(), "p_end": window_end.isoformat()},
     )
-
-    buckets: Dict[str, int] = {}
-    for i in range(days):
-        d = (window_start + timedelta(days=i)).strftime("%Y-%m-%d")
-        buckets[d] = 0
-    for r in rows:
-        ca = r.get("created_at")
-        if not ca:
-            continue
-        day_key = ca[:10]
-        if day_key in buckets:
-            buckets[day_key] += 1
+    buckets: Dict[str, int] = {str(r.get("day")): int(r.get("rides") or 0) for r in (count_rows or [])}
 
     daily_chart = [
         {

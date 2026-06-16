@@ -4,7 +4,9 @@
 **Status:** Android Auto implemented on **@iternio/react-native-auto-play** (Nitro / New
 Architecture). Committed: the dependency, the JS entry registration, and the car-UI layer
 (`driver-app/lib/androidAuto/`) — an always-on live map (the driver's current location shown
-as a car marker, with zoom buttons) that overlays the stored route during a ride.
+as a car marker, with zoom buttons) that overlays the stored route during a ride, plus a
+Lyft-style branded trip card and in-car ride actions (Accept/Decline offer alert, Arrived,
+Complete) driven from the same `useDriverStore`.
 **Still unproven on hardware:** it must be confirmed by an **EAS dev build** on an
 Android Auto DHU (Nitro codegen under Expo prebuild + the on-surface map render are the two
 open unknowns). No release branch should merge until that build passes.
@@ -66,23 +68,42 @@ store and hand turn-by-turn to the driver's own Google Maps / Waze.
     `Polyline` + destination `Marker` during a ride. Lazy-requires maps so it degrades to `null`
     off-device.
   - `carScreen.ts` — pure status-row model (title + 1–4 rows). No longer on the live Android
-    path (the map now covers idle too); retained for the dormant iOS CarPlay path + its tests.
-  - `register.ts` — `registerAutoPlay()`: on `HybridAutoPlay` `didConnect`, pushes an iternio
-    `MapTemplate` (surface `component`) in **every** state. Map buttons: zoom-out / zoom-in
-    always, plus Google/Waze hand-off during `navigating_to_pickup` / `arrived_at_pickup` /
-    `trip_in_progress`. Leg+ride-id-keyed root swaps (idle is its own key); `isConnected()`
-    guard; camera reset on connect. Registered from `driver-app/index.js` at bundle load
-    (car-only cold launch never mounts the phone route layout).
-- **Interaction model:** Android Auto routes taps through template **map buttons**, not
-  in-surface touchables (driver-distraction rules). iternio's per-button `onPress` callbacks
-  drive zoom (`→ useCarMapCamera`) and nav hand-off (`nav-google` / `nav-waze` →
-  `Linking.openURL`, web-Maps fallback), replacing the old fork's cross-platform emitter
-  juggling. Up to 4 map buttons during a ride (2 nav + 2 zoom) — at Android Auto's action-strip
-  ceiling, so confirm on the DHU.
+    path (the card + map now cover idle too); retained for the dormant iOS CarPlay path + tests.
+  - `carCard.ts` — pure presentation model mapping the ride state to the glanceable trip card
+    (status label + accent, rider + rating, destination + ETA/distance, fare + surge/WAV,
+    phone-only hints). Shared by the surface card and the ride-offer alert. Fully unit-tested.
+  - `CarTripCard.tsx` — the branded, display-only card drawn over the map surface from that model.
+  - `register.ts` — `registerAutoPlay()`: on `HybridAutoPlay` `didConnect`, builds **one**
+    persistent iternio `MapTemplate` (surface `component`) and then drives it per state via
+    `setMapButtons` / `setHeaderActions` / `showAlert` — never rebuilding it (no flicker). Map
+    buttons: zoom always, plus Google/Waze hand-off while navigating; header carries the leg's
+    progress action; offers raise an Accept/Decline alert. State+leg+ride-id-keyed chrome
+    de-duping; `isConnected()` guard; idempotent connect; camera reset on connect. Registered
+    from `driver-app/index.js` at bundle load (car-only cold launch never mounts the phone route
+    layout).
+- **Interaction model:** Android Auto routes taps through template **map buttons** + the
+  **header action** + **navigation alerts**, never in-surface touchables (driver-distraction
+  rules). iternio's per-button `onPress` callbacks drive zoom (`→ useCarMapCamera`) and nav
+  hand-off (`nav-google` / `nav-waze` → `Linking.openURL`, web-Maps fallback). Up to 4 map
+  buttons during a ride (2 nav + 2 zoom) — at Android Auto's action-strip ceiling, so confirm
+  on the DHU.
+- **Lyft-style UX (`carCard.ts` + `CarTripCard.tsx`):** the surface draws a branded **trip
+  card** over the map — status pill, rider + rating, the current destination with ETA/distance,
+  fare with surge/WAV chips, and phone-only hints. One persistent `MapTemplate` is updated via
+  `setHeaderActions` / `setMapButtons` / `showAlert` (never rebuilt — no flicker):
+  - **Ride offer** → a high-priority `showAlert` with **Accept / Decline** (the iconic request
+    card), auto-dismissed when the offer state is left; the store keeps its own countdown, so a
+    visual timeout never double-declines.
+  - **Heading to pickup** → header **Arrived** (`arriveAtPickup`) + Google/Waze + zoom buttons.
+  - **At pickup** → header **Start on phone** (OTP start-trip is distraction-sensitive and stays
+    phone-only per CLAUDE.md).
+  - **In trip** → header **Complete trip** (`completeRide`) + nav + zoom.
+  All car actions call the SAME `useDriverStore` actions the phone calls, so every dispatch /
+  insurance-period / settlement invariant is preserved for free.
 - **Still unproven on hardware:** Nitro codegen building under Expo prebuild, the on-surface
-  map render, and the map-button icons need the EAS dev build + DHU. The JS contract is covered
-  by **38 unit tests** (`lib/androidAuto/__tests__/`).
-- **Not yet wired:** accept/decline from the car, online toggle, OTP/rating (stay on phone).
+  map + card render, the alert/header rendering, and the map-button icons need the EAS dev build
+  + DHU. The JS contract is covered by **54 unit tests** (`lib/androidAuto/__tests__/`).
+- **Not yet wired:** online/offline toggle, OTP start-trip + rider rating (stay on phone).
 
 ### iOS CarPlay — dormant
 
@@ -174,7 +195,7 @@ launch path (iternio's `CarAppService` is a new `<service>` merged from its libr
 ## What's committed vs what the build must validate
 
 Committed on this branch (verifiable without a device): the dependency swap to iternio, the
-entry registration, and the `lib/androidAuto/` car-UI layer with 38 unit tests (lint/tsc clean
+entry registration, and the `lib/androidAuto/` car-UI layer with 54 unit tests (lint/tsc clean
 on the new files; pure logic fully covered).
 
 **Not yet validated** (needs an EAS build + head unit, which this environment can't run): that

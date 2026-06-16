@@ -1,5 +1,6 @@
 # backend/routes/admin/monitoring.py
 import asyncio
+import logging
 import os
 import time as _time
 from typing import Any, Dict, List, Optional
@@ -8,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 try:
+    from ... import db_supabase
     from ...db_supabase import _DB_EXECUTOR as _db_executor_pool
     from ...db_supabase import _breaker as _db_breaker
     from ...db_supabase import _rows_from_res, count_documents, get_rows, run_sync
@@ -23,6 +25,7 @@ try:
         redis_delete_pattern,
     )
 except ImportError:
+    import db_supabase  # type: ignore
     from db_supabase import _DB_EXECUTOR as _db_executor_pool  # type: ignore
     from db_supabase import _breaker as _db_breaker  # type: ignore
     from db_supabase import _rows_from_res, count_documents, get_rows, run_sync
@@ -38,6 +41,7 @@ except ImportError:
         redis_delete_pattern,
     )
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/monitoring", tags=["Monitoring"])
 
 ACTIVE_RIDE_STATUSES = ["searching", "driver_assigned", "driver_arrived", "in_progress"]
@@ -246,6 +250,65 @@ async def get_monitoring_drivers(
     return await fetch_monitoring_drivers()
 
 
+@router.post("/migrate-profile-images")
+async def migrate_profile_images(
+    limit: int = 25,
+    current_admin: dict = Depends(get_admin_user),
+) -> Dict[str, Any]:
+    """Backfill: move existing base64 profile photos to object storage.
+
+    New uploads already store a URL; this migrates the legacy base64 blobs in
+    users.profile_image to the `profile-photos` bucket in batches. Call
+    repeatedly until ``remaining`` is 0. Idempotent (only touches data: URIs).
+    """
+    import asyncio
+    import base64 as _b64
+    import uuid as _uuid
+
+    sb = getattr(db_supabase, "supabase", None)
+    if not sb:
+        raise HTTPException(status_code=503, detail="Object storage not configured")
+
+    limit = max(1, min(int(limit or 25), 100))
+    # ilike '%data:%' narrows to base64 blobs; the startswith guard below is the
+    # source of truth (skips anything already migrated to a URL).
+    rows = await get_rows("users", {"profile_image": {"$regex": "data:"}}, limit=limit)
+
+    _ext = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}
+    migrated = 0
+    failed = 0
+    for u in rows:
+        data_uri = u.get("profile_image") or ""
+        if not data_uri.startswith("data:"):
+            continue
+        try:
+            header, b64 = data_uri.split(",", 1)
+            ctype = header.split(":", 1)[1].split(";", 1)[0] if ":" in header else "image/jpeg"
+            content = _b64.b64decode(b64)
+            path = f"{u['id']}/{_uuid.uuid4()}.{_ext.get(ctype, 'jpg')}"
+
+            def _up(c=content, p=path, ct=ctype):
+                sb.storage.from_("profile-photos").upload(
+                    file=c, path=p, file_options={"content-type": ct, "upsert": "true"}
+                )
+                res = sb.storage.from_("profile-photos").get_public_url(p)
+                return res if isinstance(res, str) else getattr(res, "public_url", None)
+
+            url = await asyncio.to_thread(_up)
+            if url:
+                await db_supabase.update_one("users", {"id": u["id"]}, {"profile_image": url})
+                migrated += 1
+            else:
+                failed += 1
+        except Exception:
+            # PII-safe: user id only, never the image/address.
+            logger.error("[migrate-profile-images] failed for user %s", u.get("id"), exc_info=True)
+            failed += 1
+
+    remaining = await count_documents("users", {"profile_image": {"$regex": "data:"}})
+    return {"migrated": migrated, "failed": failed, "remaining": remaining}
+
+
 @router.get("/email-deliverability")
 async def get_email_deliverability(
     days: int = 7,
@@ -263,9 +326,7 @@ async def get_email_deliverability(
     days = max(1, min(int(days or 7), 90))
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
-    rows = await get_rows(
-        "email_send_log", {"created_at": {"$gte": since}}, order="created_at", desc=True, limit=5000
-    )
+    rows = await get_rows("email_send_log", {"created_at": {"$gte": since}}, order="created_at", desc=True, limit=5000)
     by_status = Counter((r.get("status") or "unknown") for r in rows)
     by_provider = Counter((r.get("provider") or "none") for r in rows)
     by_type = Counter((r.get("email_type") or "unknown") for r in rows)

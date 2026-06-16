@@ -16,9 +16,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
+import { useStripe } from '@stripe/stripe-react-native';
 import { useWalletStore } from '../store/walletStore';
 import { useWorkProfileStore } from '../store/workProfileStore';
 import { showToast } from '../store/toastStore';
+import type { Ride, RideRequiresAction } from '../store/rideStore';
 import ConfirmSheet from '../components/ConfirmSheet';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -44,6 +46,7 @@ interface SavedCard {
 function PaymentConfirmScreenContent() {
   const router = useRouter();
   const { pickup, dropoff, selectedVehicle, estimates, createRide, isLoading, scheduledTime, appliedPromo } = useRideStore();
+  const { confirmPayment } = useStripe();
   const { wallet, fetchWallet } = useWalletStore();
   const [selectedPayment, setSelectedPayment] = useState('card');
   const [savedCards, setSavedCards] = useState<SavedCard[]>([]);
@@ -118,9 +121,36 @@ function PaymentConfirmScreenContent() {
     try {
       const corpId = useCorporate && selectedCorporateId ? selectedCorporateId : null;
       const pmId = selectedPayment === 'card' ? (selectedCardId ?? undefined) : undefined;
-      const ride = await createRide(selectedPayment, corpId, pmId);
-      if ((ride as any).promo_error) {
-        showToast('Promo not applied', (ride as any).promo_error, 'warning');
+      let ride = await createRide(selectedPayment, corpId, pmId);
+
+      // SCA two-step: the card hold needs an on-device 3DS / Apple Pay confirm.
+      // Run the Stripe sheet, then re-book passing the now-confirmed hold. The
+      // manual-capture PaymentIntent lands in `requires_capture` (not
+      // `succeeded`) after authentication — accept both.
+      if ((ride as RideRequiresAction).requires_action) {
+        const auth = (ride as RideRequiresAction).payment_authorization;
+        const { error: confirmError, paymentIntent } = await confirmPayment(auth.client_secret);
+        if (confirmError) {
+          showToast('Authentication needed', confirmError.message || 'Card authentication was not completed.', 'danger');
+          return;
+        }
+        const piStatus = (paymentIntent?.status || '').toString().toLowerCase();
+        if (piStatus !== 'requirescapture' && piStatus !== 'requires_capture' && piStatus !== 'succeeded') {
+          showToast('Authentication needed', 'Card authentication was not completed. Please try again.', 'danger');
+          return;
+        }
+        ride = await createRide(selectedPayment, corpId, pmId, auth.payment_intent_id);
+      }
+
+      // After the (optional) SCA step, booking must have produced a real ride.
+      if ((ride as RideRequiresAction).requires_action) {
+        showToast('Booking failed', 'Card authorization could not be completed. Please try again.', 'danger');
+        return;
+      }
+      const bookedRide = ride as Ride;
+
+      if ((bookedRide as any).promo_error) {
+        showToast('Promo not applied', (bookedRide as any).promo_error, 'warning');
       }
       Analytics.rideRequested({
         vehicle_type: selectedVehicle?.name ?? 'unknown',
@@ -131,14 +161,14 @@ function PaymentConfirmScreenContent() {
       // Schedule a local 15-min reminder if this is a scheduled ride.
       // The backend cron also fires an FCM `scheduled_ride_reminder`; this
       // local notification is a client-side fallback.
-      if (scheduledTime && ride.id) {
-        scheduleReminder(ride.id, scheduledTime).catch(() => {});
+      if (scheduledTime && bookedRide.id) {
+        scheduleReminder(bookedRide.id, scheduledTime).catch(() => {});
       }
 
       if (scheduledTime) {
         router.replace('/(tabs)');
       } else {
-        router.replace({ pathname: '/driver-arriving', params: { rideId: ride.id } } as any);
+        router.replace({ pathname: '/driver-arriving', params: { rideId: bookedRide.id } } as any);
       }
     } catch (error: any) {
       const is409 = error?.response?.status === 409 || error?.message?.includes('already active');

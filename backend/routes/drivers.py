@@ -4486,7 +4486,11 @@ async def get_driver_referral_info(current_user: dict = Depends(get_current_user
     referral_code = driver.get("referral_code", f"DRIVER{driver['id'][:8].upper()}")
 
     # Find users who used this referral code
-    referred_users_cursor = db_supabase.get_rows("users", {"referral_code_used": referral_code}, limit=100)
+    # Only the id is used below (to look up each referred user's driver row),
+    # so project it and keep base64 profile_image out of the read.
+    referred_users_cursor = db_supabase.get_rows(
+        "users", {"referral_code_used": referral_code}, columns="id", limit=100
+    )
     referred_users = (
         await referred_users_cursor.to_list(100)
         if hasattr(referred_users_cursor, "to_list")

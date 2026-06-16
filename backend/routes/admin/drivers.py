@@ -168,7 +168,9 @@ async def admin_get_drivers(
                     {"last_name": {"$regex": re.escape(term), "$options": "i"}},
                 ]
             }
-            matching_users = await db_supabase.get_rows("users", user_filters, limit=100)
+            # Only the matched ids feed the driver $or filter below — project
+            # id so the name search doesn't pull base64 profile_image rows.
+            matching_users = await db_supabase.get_rows("users", user_filters, columns="id", limit=100)
             matching_uids = [u["id"] for u in matching_users if u.get("id")]
 
             # Match driver rows by phone/plate directly OR by user_id from user search above.

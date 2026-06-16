@@ -19,8 +19,30 @@ const CARD_BG = 'rgba(20,20,22,0.92)';
 const ON_DARK = '#ffffff';
 const MUTED = '#b8b8bf';
 const SURGE_BG = '#ff8a00';
+const BONUS_BG = '#0f9d58';
 
 const LOGO = require('../../assets/images/spinr-logo.png');
+
+/** Round rider avatar — photo when present, else a coloured initial. */
+function Avatar({
+  photo,
+  name,
+  accent,
+}: {
+  photo: string | null;
+  name: string | null;
+  accent: string;
+}): React.ReactElement {
+  if (photo) {
+    return <Image source={{ uri: photo }} style={styles.avatar} />;
+  }
+  const initial = (name?.trim()?.[0] ?? '?').toUpperCase();
+  return (
+    <View style={[styles.avatar, styles.avatarFallback, { backgroundColor: accent }]}>
+      <Text style={styles.avatarInitial}>{initial}</Text>
+    </View>
+  );
+}
 
 /** A small rounded chip (rating, WAV, surge). */
 function Chip({
@@ -58,9 +80,10 @@ export function CarTripCard({ card }: { card: TripCard }): React.ReactElement {
           <Image source={LOGO} style={styles.logo} resizeMode="contain" />
         </View>
 
-        {/* Rider row */}
-        {(card.riderName || card.riderRating) && (
+        {/* Rider row — avatar (photo or initial) + name + rating/WAV/surge chips */}
+        {(card.riderName || card.riderRating || card.riderPhoto) && (
           <View style={styles.row}>
+            <Avatar photo={card.riderPhoto} name={card.riderName} accent={card.accent} />
             {card.riderName && (
               <Text style={styles.rider} numberOfLines={1}>
                 {card.riderName}
@@ -69,6 +92,18 @@ export function CarTripCard({ card }: { card: TripCard }): React.ReactElement {
             {card.riderRating && <Chip label={`★ ${card.riderRating}`} bg="#2c2c2e" color="#ffd23f" />}
             {card.wav && <Chip label="WAV" bg="#0a84ff" />}
             {card.surgeLabel && <Chip label={card.surgeLabel} bg={SURGE_BG} />}
+          </View>
+        )}
+
+        {/* Earnings perks — bonus + active incentive/quest */}
+        {(card.bonusLabel || card.perkLabel) && (
+          <View style={styles.row}>
+            {card.bonusLabel && <Chip label={card.bonusLabel} bg={BONUS_BG} />}
+            {card.perkLabel && (
+              <Text style={styles.perk} numberOfLines={1}>
+                {card.perkLabel}
+              </Text>
+            )}
           </View>
         )}
 
@@ -141,7 +176,11 @@ const styles = StyleSheet.create({
   pillText: { color: ON_DARK, fontSize: 16, fontWeight: '700' },
   logo: { width: 56, height: 20, opacity: 0.9 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  avatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#2c2c2e' },
+  avatarFallback: { alignItems: 'center', justifyContent: 'center' },
+  avatarInitial: { color: ON_DARK, fontSize: 20, fontWeight: '800' },
   rider: { color: ON_DARK, fontSize: 22, fontWeight: '700', flexShrink: 1 },
+  perk: { color: '#7ee2a8', fontSize: 14, fontWeight: '600', flexShrink: 1 },
   chip: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
   chipText: { fontSize: 13, fontWeight: '700' },
   destRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },

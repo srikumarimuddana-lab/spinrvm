@@ -24,6 +24,8 @@ import React from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useDriverStore } from '../../store/driverStore';
 import { selectCarRoute } from './carRoute';
+import { buildTripCard, type OfferLike } from './carCard';
+import { CarTripCard } from './CarTripCard';
 import { useCarMapCamera } from './carMapCamera';
 import { useCarLocation } from './useCarLocation';
 
@@ -36,9 +38,12 @@ export function CarMapSurface(): React.ReactElement | null {
   // Hooks first — unconditional, before any early return (rules-of-hooks).
   const rideState = useDriverStore((s) => s.rideState);
   const activeRide = useDriverStore((s) => s.activeRide);
+  const incomingRide = useDriverStore((s) => s.incomingRide);
   const delta = useCarMapCamera((s) => s.delta);
   const here = useCarLocation();
   const route = selectCarRoute(rideState, activeRide);
+  // The same glanceable card the offer alert is built from, drawn over the map.
+  const card = buildTripCard(rideState, activeRide, incomingRide as OfferLike | null);
 
   let Maps: typeof import('react-native-maps') | null = null;
   try {
@@ -101,6 +106,11 @@ export function CarMapSurface(): React.ReactElement | null {
           />
         )}
       </MapView>
+      {/* Branded trip card overlay (display-only; interaction is via template
+          header actions / map buttons / the ride-offer alert). Hidden on the
+          bare idle map so the screen stays an uncluttered live map until there
+          is something to show. */}
+      {card.leg !== 'idle' && <CarTripCard card={card} />}
     </View>
   );
 }

@@ -557,7 +557,12 @@ export default function DriversPage() {
                                         <TableCell className="py-3">
                                             <div className="flex items-center gap-3">
                                                 <div className="relative">
-                                                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center text-sm font-bold text-primary ring-1 ring-border shadow-sm">{(driver.first_name?.[0] || "")}{(driver.last_name?.[0] || "")}</div>
+                                                    {driver.photo_url ? (
+                                                        // eslint-disable-next-line @next/next/no-img-element
+                                                        <img src={driver.photo_url} alt="" className="w-10 h-10 rounded-full object-cover ring-1 ring-border shadow-sm" />
+                                                    ) : (
+                                                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center text-sm font-bold text-primary ring-1 ring-border shadow-sm">{(driver.first_name?.[0] || "")}{(driver.last_name?.[0] || "")}</div>
+                                                    )}
                                                     <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-card ${driver.is_online ? "bg-emerald-500" : "bg-gray-300"}`} />
                                                 </div>
                                                 <div className="flex-1 min-w-0">
@@ -651,7 +656,12 @@ export default function DriversPage() {
                                 <div className="flex items-start justify-between">
                                     <div className="flex items-center gap-4">
                                         <div className="relative">
-                                            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center text-xl font-bold text-primary">{(selected.first_name?.[0] || "")}{(selected.last_name?.[0] || "")}</div>
+                                            {selected.photo_url ? (
+                                                // eslint-disable-next-line @next/next/no-img-element
+                                                <img src={selected.photo_url} alt="" className="w-16 h-16 rounded-2xl object-cover" />
+                                            ) : (
+                                                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center text-xl font-bold text-primary">{(selected.first_name?.[0] || "")}{(selected.last_name?.[0] || "")}</div>
+                                            )}
                                             <span className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-background ${selected.is_online ? "bg-emerald-500" : "bg-gray-300"}`} />
                                         </div>
                                         <div>

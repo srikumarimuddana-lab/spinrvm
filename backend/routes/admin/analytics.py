@@ -40,17 +40,6 @@ def _parse_date_range(date_range: str) -> datetime:
     return now - delta
 
 
-def _parse_iso(value) -> Optional[datetime]:
-    """Best-effort parse of an ISO-8601 timestamp string to an aware datetime."""
-    if not value or not isinstance(value, str):
-        return None
-    try:
-        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-
-
 async def _fetch_rows_in_chunks(table: str, ids: list, chunk_size: int = 200) -> list:
     """Fetch rows by id in bounded `IN (...)` batches.
 
@@ -486,58 +475,38 @@ async def get_driver_offer_stats(
     """
     start_date = _parse_date_range(date_range)
 
+    # Per-driver rollup is done in Postgres (admin_driver_offer_stats) over the
+    # append-only ride_offers ledger, instead of streaming up to 100k offer rows
+    # into Python. Area scoping is applied inside the function.
     try:
-        offers = await db.get_rows(
-            "ride_offers",
-            {"offered_at": {"$gte": start_date.isoformat()}},
-            limit=100000,
+        rows = await db.rpc(
+            "admin_driver_offer_stats",
+            {"p_start": start_date.isoformat(), "p_service_area_id": service_area_id},
         )
     except Exception as e:
         logger.error(
-            f"Failed to fetch ride_offers for offer stats: {e}",
+            f"Failed to aggregate ride_offers for offer stats: {e}",
             exc_info=True,
             extra={"domain": "admin"},
         )
         raise HTTPException(status_code=503, detail="analytics_unavailable") from e
 
-    # Roll up per driver.
-    by_driver: dict = defaultdict(
-        lambda: {
-            "offered": 0,
-            "accepted": 0,
-            "declined": 0,
-            "ignored": 0,
-            "preempted": 0,
-            "pending": 0,
-            "_response_secs": [],
-        }
-    )
-    for o in offers:
-        did = o.get("driver_id")
+    by_driver: dict = {}
+    for r in rows or []:
+        did = r.get("driver_id")
         if not did:
             continue
-        agg = by_driver[did]
-        agg["offered"] += 1
-        status = o.get("status")
-        if status == "accepted":
-            agg["accepted"] += 1
-        elif status == "declined":
-            agg["declined"] += 1
-        elif status == "expired":
-            # Genuine timeout — the driver received the offer and never responded.
-            agg["ignored"] += 1
-        elif status == "preempted":
-            # Another driver accepted first — NOT an ignore; tracked separately
-            # and excluded from the decided-rate denominators below.
-            agg["preempted"] += 1
-        elif status == "pending":
-            agg["pending"] += 1
-        # Response latency for the offers the driver actually answered.
-        if status in ("accepted", "declined"):
-            offered_at = _parse_iso(o.get("offered_at"))
-            responded_at = _parse_iso(o.get("responded_at"))
-            if offered_at and responded_at and responded_at >= offered_at:
-                agg["_response_secs"].append((responded_at - offered_at).total_seconds())
+        by_driver[did] = {
+            "offered": int(r.get("offered") or 0),
+            "accepted": int(r.get("accepted") or 0),
+            "declined": int(r.get("declined") or 0),
+            "ignored": int(r.get("ignored") or 0),
+            "preempted": int(r.get("preempted") or 0),
+            "pending": int(r.get("pending") or 0),
+            "avg_response_secs": (
+                round(float(r["avg_response_secs"]), 1) if r.get("avg_response_secs") is not None else None
+            ),
+        }
 
     driver_ids = list(by_driver.keys())
     drivers_list: list = []
@@ -584,7 +553,6 @@ async def get_driver_offer_stats(
             if user
             else (driver.get("name") if driver else None)
         ) or did[:12]
-        response_secs = agg.pop("_response_secs")
         result.append(
             {
                 "driver_id": did,
@@ -598,7 +566,7 @@ async def get_driver_offer_stats(
                 "accept_rate": round(agg["accepted"] / decided * 100, 1) if decided else 0.0,
                 "decline_rate": round(agg["declined"] / decided * 100, 1) if decided else 0.0,
                 "ignore_rate": round(agg["ignored"] / decided * 100, 1) if decided else 0.0,
-                "avg_response_seconds": (round(sum(response_secs) / len(response_secs), 1) if response_secs else None),
+                "avg_response_seconds": agg["avg_response_secs"],
                 "rating": driver.get("rating") if driver else None,
                 "is_online": driver.get("is_online", False) if driver else False,
             }
@@ -639,51 +607,37 @@ async def get_driver_offer_trends(
     """
     start_date = _parse_date_range(date_range)
 
-    filters: dict = {"offered_at": {"$gte": start_date.isoformat()}}
-    if driver_id:
-        filters["driver_id"] = driver_id
+    # Per-day bucketing done in Postgres (admin_driver_offer_trends) instead of
+    # scanning up to 100k offer rows. A driver_id filter takes precedence; else
+    # an optional service-area scope is applied inside the function.
     try:
-        offers = await db.get_rows("ride_offers", filters, limit=100000)
+        rows = await db.rpc(
+            "admin_driver_offer_trends",
+            {
+                "p_start": start_date.isoformat(),
+                "p_driver_id": driver_id,
+                "p_service_area_id": service_area_id,
+            },
+        )
     except Exception as e:
         logger.error(
-            f"Failed to fetch ride_offers for offer trends: {e}",
+            f"Failed to aggregate ride_offers for offer trends: {e}",
             exc_info=True,
             extra={"domain": "admin"},
         )
         raise HTTPException(status_code=503, detail="analytics_unavailable") from e
 
-    # Scope to a service area by intersecting with that area's drivers.
-    if service_area_id and not driver_id:
-        try:
-            area_drivers = await db.get_rows("drivers", {"service_area_id": service_area_id}, limit=10000)
-        except Exception as e:
-            logger.error(
-                f"Failed to fetch area drivers for offer trends: {e}",
-                exc_info=True,
-                extra={"domain": "admin"},
-            )
-            raise HTTPException(status_code=503, detail="analytics_unavailable") from e
-        area_ids = {d["id"] for d in area_drivers if d.get("id")}
-        offers = [o for o in offers if o.get("driver_id") in area_ids]
-
-    daily: dict = defaultdict(lambda: {"offered": 0, "accepted": 0, "declined": 0, "ignored": 0, "preempted": 0})
-    for o in offers:
-        day = (o.get("offered_at") or "")[:10]
-        if not day:
-            continue
-        b = daily[day]
-        b["offered"] += 1
-        status = o.get("status")
-        if status == "accepted":
-            b["accepted"] += 1
-        elif status == "declined":
-            b["declined"] += 1
-        elif status == "expired":
-            b["ignored"] += 1
-        elif status == "preempted":
-            b["preempted"] += 1
-
-    daily_chart = [{"date": d, **counts} for d, counts in sorted(daily.items())]
+    daily_chart = [
+        {
+            "date": str(r.get("day")),
+            "offered": int(r.get("offered") or 0),
+            "accepted": int(r.get("accepted") or 0),
+            "declined": int(r.get("declined") or 0),
+            "ignored": int(r.get("ignored") or 0),
+            "preempted": int(r.get("preempted") or 0),
+        }
+        for r in (rows or [])
+    ]
     return {
         "date_range": date_range,
         "driver_id": driver_id,

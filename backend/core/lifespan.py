@@ -196,6 +196,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to import payment retry service: {e}", exc_info=True)
 
+    # Pre-auth capture sweeper — captures booking-time card holds whose tip
+    # window has elapsed, so a hold never lapses uncaptured. Every 5 minutes.
+    try:
+        from utils.preauth_capture import preauth_capture_loop
+
+        _spawn("preauth_capture (5min)", preauth_capture_loop)
+    except Exception as e:
+        logger.error(f"Failed to import pre-auth capture sweeper: {e}", exc_info=True)
+
     # Document expiry alerts — notifies drivers about expiring docs every 12h
     try:
         from utils.document_expiry import document_expiry_loop

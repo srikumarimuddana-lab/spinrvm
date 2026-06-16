@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 try:
     from ...db_supabase import _DB_EXECUTOR as _db_executor_pool
     from ...db_supabase import _breaker as _db_breaker
-    from ...db_supabase import _rows_from_res, run_sync
+    from ...db_supabase import _rows_from_res, count_documents, get_rows, run_sync
     from ...dependencies import get_admin_user
     from ...supabase_client import supabase
     from ...utils.driver_online import intent_online
@@ -25,7 +25,7 @@ try:
 except ImportError:
     from db_supabase import _DB_EXECUTOR as _db_executor_pool  # type: ignore
     from db_supabase import _breaker as _db_breaker  # type: ignore
-    from db_supabase import _rows_from_res, run_sync
+    from db_supabase import _rows_from_res, count_documents, get_rows, run_sync
     from dependencies import get_admin_user
     from supabase_client import supabase
     from utils.driver_online import intent_online  # type: ignore
@@ -244,6 +244,71 @@ async def get_monitoring_drivers(
 ) -> List[Dict[str, Any]]:
     """Return all drivers with current location and status for the live map."""
     return await fetch_monitoring_drivers()
+
+
+@router.get("/email-deliverability")
+async def get_email_deliverability(
+    days: int = 7,
+    current_admin: dict = Depends(get_admin_user),
+) -> Dict[str, Any]:
+    """Transactional-email health from email_send_log + email_suppressions.
+
+    PIPEDA: never returns recipient email addresses — send rows carry
+    recipient_user_id only, and suppression rows expose reason/source, not the
+    address.
+    """
+    from collections import Counter
+    from datetime import datetime, timedelta, timezone
+
+    days = max(1, min(int(days or 7), 90))
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+    rows = await get_rows(
+        "email_send_log", {"created_at": {"$gte": since}}, order="created_at", desc=True, limit=5000
+    )
+    by_status = Counter((r.get("status") or "unknown") for r in rows)
+    by_provider = Counter((r.get("provider") or "none") for r in rows)
+    by_type = Counter((r.get("email_type") or "unknown") for r in rows)
+    total = len(rows)
+    failed = by_status.get("failed", 0)
+
+    recent_failures = [
+        {
+            "email_type": r.get("email_type"),
+            "provider": r.get("provider"),
+            "status": r.get("status"),
+            "recipient_user_id": r.get("recipient_user_id"),
+            "created_at": r.get("created_at"),
+        }
+        for r in rows
+        if r.get("status") == "failed"
+    ][:25]
+
+    suppression_list_size = await count_documents("email_suppressions", {})
+    recent_supp = await get_rows("email_suppressions", {}, order="created_at", desc=True, limit=25)
+    recent_suppressions = [
+        {
+            "reason": s.get("reason"),
+            "detail": s.get("detail"),
+            "source": s.get("source"),
+            "message_id": s.get("message_id"),
+            "created_at": s.get("created_at"),
+        }
+        for s in (recent_supp or [])
+    ]
+
+    return {
+        "window_days": days,
+        "total": total,
+        "by_status": dict(by_status),
+        "by_provider": dict(by_provider),
+        "by_type": dict(by_type),
+        "failure_rate": round(failed / total, 4) if total else 0.0,
+        "suppressed_in_window": by_status.get("suppressed", 0),
+        "suppression_list_size": suppression_list_size,
+        "recent_failures": recent_failures,
+        "recent_suppressions": recent_suppressions,
+    }
 
 
 @router.get("/rides")

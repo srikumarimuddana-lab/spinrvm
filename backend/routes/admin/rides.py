@@ -1786,141 +1786,73 @@ async def admin_get_earnings_overview(
     # Pull current + previous window in two queries. Bounded by completed-only
     # so cancellation rows don't inflate GBV.
     # ── Rides — completed (the GBV / trips / net rev numerator) ──────────
-    base_filter: Dict[str, Any] = {"status": "completed"}
-    if service_area_id:
-        base_filter["service_area_id"] = service_area_id
+    # ── Window aggregates via SQL ────────────────────────────────────────
+    # Completed + cancelled ride metrics for the current and previous windows,
+    # and refund totals, are aggregated in Postgres (admin_earnings_overview_agg
+    # / admin_earnings_refunds) instead of pulling four 50k ride windows + two
+    # 10k dispute windows into Python.
+    import asyncio  # noqa: PLC0415
 
-    current_rides = await db_supabase.get_rows(
-        "rides",
-        {**base_filter, "ride_completed_at": {"$gte": start.isoformat(), "$lte": end.isoformat()}},
-        limit=50000,
-    )
-    previous_rides = await db_supabase.get_rows(
-        "rides",
-        {**base_filter, "ride_completed_at": {"$gte": prev_start.isoformat(), "$lte": prev_end.isoformat()}},
-        limit=50000,
-    )
-
-    # ── Rides — cancelled (cancellation rate denominator + fee revenue) ──
-    # Cancelled rides have null ride_completed_at, so filter on created_at
-    # for the window. Same service-area scoping as completed rides above.
-    cancelled_filter: Dict[str, Any] = {"status": "cancelled"}
-    if service_area_id:
-        cancelled_filter["service_area_id"] = service_area_id
-    current_cancelled = await db_supabase.get_rows(
-        "rides",
-        {**cancelled_filter, "created_at": {"$gte": start.isoformat(), "$lte": end.isoformat()}},
-        limit=50000,
-    )
-    previous_cancelled = await db_supabase.get_rows(
-        "rides",
-        {**cancelled_filter, "created_at": {"$gte": prev_start.isoformat(), "$lte": prev_end.isoformat()}},
-        limit=50000,
+    current_agg, previous_agg, current_ref, previous_ref = await asyncio.gather(
+        db_supabase.rpc(
+            "admin_earnings_overview_agg",
+            {"p_start": start.isoformat(), "p_end": end.isoformat(), "p_service_area_id": service_area_id},
+        ),
+        db_supabase.rpc(
+            "admin_earnings_overview_agg",
+            {"p_start": prev_start.isoformat(), "p_end": prev_end.isoformat(), "p_service_area_id": service_area_id},
+        ),
+        db_supabase.rpc(
+            "admin_earnings_refunds",
+            {"p_start": start.isoformat(), "p_end": end.isoformat(), "p_service_area_id": service_area_id},
+        ),
+        db_supabase.rpc(
+            "admin_earnings_refunds",
+            {"p_start": prev_start.isoformat(), "p_end": prev_end.isoformat(), "p_service_area_id": service_area_id},
+        ),
     )
 
-    # ── Disputes / refunds (resolved within window) ──────────────────────
-    # Refunds are persisted on `disputes.refund_amount` — service area
-    # isn't on the dispute row, so when a service-area filter is set we
-    # narrow to disputes whose ride_id is in the current ride set.
-    refunded_filter: Dict[str, Any] = {
-        "resolved_at": {"$gte": start.isoformat(), "$lte": end.isoformat()},
-    }
-    refunded_filter_prev: Dict[str, Any] = {
-        "resolved_at": {"$gte": prev_start.isoformat(), "$lte": prev_end.isoformat()},
-    }
-    current_refunds = await db_supabase.get_rows("disputes", refunded_filter, limit=10000)
-    previous_refunds = await db_supabase.get_rows("disputes", refunded_filter_prev, limit=10000)
-    if service_area_id:
-        # Cross-reference against the ride set; cheaper than a join.
-        current_ride_ids = {r.get("id") for r in current_rides + current_cancelled}
-        previous_ride_ids = {r.get("id") for r in previous_rides + previous_cancelled}
-        current_refunds = [d for d in current_refunds if d.get("ride_id") in current_ride_ids]
-        previous_refunds = [d for d in previous_refunds if d.get("ride_id") in previous_ride_ids]
+    def _obj(res: Any) -> Dict[str, Any]:
+        row = res[0] if isinstance(res, list) and res else res
+        return row if isinstance(row, dict) else {}
 
-    def _agg(rides: list) -> Dict[str, Any]:
-        gbv = sum((Decimal(str(r.get("total_fare") or 0)) for r in rides), Decimal("0"))
-        platform = sum((Decimal(str(r.get("admin_earnings") or 0)) for r in rides), Decimal("0"))
-        rider_ids = {r.get("rider_id") for r in rides if r.get("rider_id")}
-        driver_ids = {r.get("driver_id") for r in rides if r.get("driver_id")}
-        # Surge revenue: portion of total_fare attributable to the
-        # surge multiplier. base = total / surge_mult → surge = total -
-        # base. Only counts rides where surge actually applied (>1.0).
-        surge_rev = Decimal("0")
-        for r in rides:
-            mult = Decimal(str(r.get("surge_multiplier") or 1.0))
-            if mult > 1:
-                fare = Decimal(str(r.get("total_fare") or 0))
-                surge_rev += fare - (fare / mult)
-        # Promo spend: discount_amount on completed rides — what we
-        # gave away to acquire/retain the ride.
-        promo = sum((Decimal(str(r.get("discount_amount") or 0)) for r in rides), Decimal("0"))
-        promo_count = sum(1 for r in rides if Decimal(str(r.get("discount_amount") or 0)) > 0)
-        # Tax decomposition from rides.tax_breakdown JSONB — defensive
-        # because tax_name keys vary by service area config.
-        gst = Decimal("0")
-        pst = Decimal("0")
-        for r in rides:
-            breakdown = r.get("tax_breakdown") or {}
-            if isinstance(breakdown, dict):
-                for tax_name, info in breakdown.items():
-                    amount = Decimal("0")
-                    if isinstance(info, dict):
-                        amount = Decimal(str(info.get("amount") or 0))
-                    name_l = str(tax_name).lower()
-                    if "gst" in name_l or name_l == "hst":
-                        gst += amount
-                    elif "pst" in name_l or "qst" in name_l:
-                        pst += amount
-        return {
-            "gbv": float(gbv),
-            "platform": float(platform),
-            "trips": len(rides),
-            "riders": len(rider_ids),
-            "drivers": len(driver_ids),
-            "surge_revenue": float(surge_rev),
-            "promo_spend": float(promo),
-            "promo_count": promo_count,
-            "gst_collected": float(gst),
-            "pst_collected": float(pst),
+    def _f(d: Dict[str, Any], k: str) -> float:
+        return float(Decimal(str(d.get(k) or 0)))
+
+    def _i(d: Dict[str, Any], k: str) -> int:
+        return int(d.get(k) or 0)
+
+    def _win(res: Any) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        a = _obj(res)
+        completed = {
+            "gbv": _f(a, "gbv"),
+            "platform": _f(a, "platform"),
+            "trips": _i(a, "trips"),
+            "riders": _i(a, "riders"),
+            "drivers": _i(a, "drivers"),
+            "surge_revenue": _f(a, "surge_revenue"),
+            "promo_spend": _f(a, "promo_spend"),
+            "promo_count": _i(a, "promo_count"),
+            "gst_collected": _f(a, "gst_collected"),
+            "pst_collected": _f(a, "pst_collected"),
         }
-
-    def _agg_cancelled(rides: list) -> Dict[str, Any]:
-        """Cancellation-only aggregator. cancellation_fee_admin is the
-        platform's share of the cancel fee — that's the revenue side."""
-        cancel_revenue = sum(
-            (Decimal(str(r.get("cancellation_fee_admin") or 0)) for r in rides),
-            Decimal("0"),
-        )
-        # Rider vs driver vs system cancel breakdown — pulled from the
-        # cancellation_reason text field with a simple keyword match.
-        # Same convention the admin analytics page already uses.
-        rider_cancels = 0
-        driver_cancels = 0
-        for r in rides:
-            reason = (r.get("cancellation_reason") or "").lower()
-            if "driver" in reason:
-                driver_cancels += 1
-            elif "rider" in reason or "user" in reason:
-                rider_cancels += 1
-        return {
-            "count": len(rides),
-            "revenue": float(cancel_revenue),
-            "rider_cancels": rider_cancels,
-            "driver_cancels": driver_cancels,
+        cancelled = {
+            "count": _i(a, "cx_count"),
+            "revenue": _f(a, "cx_revenue"),
+            "rider_cancels": _i(a, "cx_rider_cancels"),
+            "driver_cancels": _i(a, "cx_driver_cancels"),
         }
+        return completed, cancelled
 
-    cur = _agg(current_rides)
-    prev = _agg(previous_rides)
-    cur_cx = _agg_cancelled(current_cancelled)
-    prev_cx = _agg_cancelled(previous_cancelled)
+    cur, cur_cx = _win(current_agg)
+    prev, prev_cx = _win(previous_agg)
 
-    # Refund $ in window — disputes resolved during the period with a
-    # non-zero refund_amount. We don't distinguish full vs partial here;
-    # any payout to the rider counts as refund leakage.
-    cur_refund_amt = float(sum((Decimal(str(d.get("refund_amount") or 0)) for d in current_refunds), Decimal("0")))
-    prev_refund_amt = float(sum((Decimal(str(d.get("refund_amount") or 0)) for d in previous_refunds), Decimal("0")))
-    cur_refund_count = sum(1 for d in current_refunds if Decimal(str(d.get("refund_amount") or 0)) > 0)
-    prev_refund_count = sum(1 for d in previous_refunds if Decimal(str(d.get("refund_amount") or 0)) > 0)
+    cur_ref_obj = _obj(current_ref)
+    prev_ref_obj = _obj(previous_ref)
+    cur_refund_amt = _f(cur_ref_obj, "refund_amount")
+    prev_refund_amt = _f(prev_ref_obj, "refund_amount")
+    cur_refund_count = _i(cur_ref_obj, "refund_count")
+    prev_refund_count = _i(prev_ref_obj, "refund_count")
 
     # Cancellation rate: cancelled / (completed + cancelled). Same
     # formula the ops cancellation-rate KPI uses across the codebase.
@@ -1957,22 +1889,25 @@ async def admin_get_earnings_overview(
     prev_avg_fare = round(prev["gbv"] / prev["trips"], 2) if prev["trips"] > 0 else 0.0
 
     # ── Daily series for the line chart ───────────────────────────────────
+    # Per-day GBV/trips/net-revenue grouped in Postgres; gaps filled with zero.
+    series_rows = await db_supabase.rpc(
+        "admin_earnings_daily_series",
+        {"p_start": start.isoformat(), "p_end": end.isoformat(), "p_service_area_id": service_area_id},
+    )
+    by_day = {str(r.get("day")): r for r in (series_rows or [])}
     daily: Dict[str, Dict[str, Any]] = {}
     cursor = start.date()
     end_date = end.date()
     while cursor <= end_date:
-        daily[cursor.isoformat()] = {"date": cursor.isoformat(), "gbv": 0.0, "trips": 0, "net_revenue": 0.0}
+        key = cursor.isoformat()
+        sr = by_day.get(key) or {}
+        daily[key] = {
+            "date": key,
+            "gbv": round(float(Decimal(str(sr.get("gbv") or 0))), 2),
+            "trips": int(sr.get("trips") or 0),
+            "net_revenue": round(float(Decimal(str(sr.get("net_revenue") or 0))), 2),
+        }
         cursor += timedelta(days=1)
-    for r in current_rides:
-        completed = r.get("ride_completed_at") or r.get("created_at") or ""
-        day = completed[:10]
-        if day in daily:
-            daily[day]["gbv"] = round(daily[day]["gbv"] + float(Decimal(str(r.get("total_fare") or 0))), 2)
-            daily[day]["trips"] += 1
-            daily[day]["net_revenue"] = round(
-                daily[day]["net_revenue"] + float(Decimal(str(r.get("admin_earnings") or 0))),
-                2,
-            )
     daily_series = list(daily.values())
 
     return {

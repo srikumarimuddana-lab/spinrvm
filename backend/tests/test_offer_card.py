@@ -94,7 +94,6 @@ def test_render_returns_png():
         rider_rating=4.9,
         pickup_area="Victoria Ave, Regina",
         dropoff_area="4th Ave N, Saskatoon",
-        surge_multiplier=1.5,
         total_bonus=2.50,
     )
     assert png is not None

@@ -92,7 +92,6 @@ async def _build_offer_card_response(ride_id: str, t: str) -> Response:
         except (TypeError, ValueError):
             return None
 
-    surge = _num(ride.get("surge_multiplier"))
     png = render_offer_card(
         fare=_num(ride.get("driver_earnings")) or 0.0,
         distance_km=_num(ride.get("distance_km")),
@@ -101,7 +100,6 @@ async def _build_offer_card_response(ride_id: str, t: str) -> Response:
         rider_rating=_num((rider or {}).get("rating")),
         pickup_area=coarsen_address(ride.get("pickup_address")),
         dropoff_area=coarsen_address(ride.get("dropoff_address")),
-        surge_multiplier=surge if (surge and surge > 1) else None,
     )
 
     if not png:

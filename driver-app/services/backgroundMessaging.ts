@@ -89,6 +89,7 @@ export function offerDisplayDataFromFcm(data: any): Record<string, any> | null {
     duration_minutes: toNum(data.duration_minutes),
     surge_multiplier: toNum(data.surge_multiplier),
     rider_name: data.rider_name,
+    rider_rating: toNum(data.rider_rating),
     incentives_count: Array.isArray(incentives) ? incentives.length : 0,
     countdown_seconds: toNum(data.countdown_seconds),
     offer_expires_at: data.offer_expires_at || undefined,

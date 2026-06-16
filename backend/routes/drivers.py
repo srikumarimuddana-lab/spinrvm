@@ -571,7 +571,6 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
         "gst_registered",
         "gst_bn",
         "preferred_language",
-        "photo_url",
         "is_wav",
     }
     # Vehicle/doc fields — changing these on a verified driver triggers re-review
@@ -779,7 +778,6 @@ async def register_driver(
         "background_check_expiry_date",
         "work_eligibility_expiry_date",
         "documents",
-        "photo_url",
     }
     payload = {k: v for k, v in body.items() if k in allowed and v is not None}
 

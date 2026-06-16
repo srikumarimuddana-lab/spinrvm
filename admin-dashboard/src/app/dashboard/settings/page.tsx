@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getSettings, updateSettings, mfaStatus, mfaDisable, adminUploadRideOfferSound, getAiCatalog, type AiCatalogProvider } from "@/lib/api";
+import { getSettings, updateSettings, mfaStatus, mfaDisable, adminUploadRideOfferSound, getAiCatalog, getEmailDeliverability, type AiCatalogProvider } from "@/lib/api";
 import { MfaEnrollDialog } from "@/components/mfa-enroll-dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -65,6 +65,11 @@ export default function SettingsPage() {
         // stores it; driver-app falls back to the bundled placeholder.
         setSettings({ ...settings, ride_offer_sound_url: "" });
     };
+
+    const [deliverability, setDeliverability] = useState<any>(null);
+    useEffect(() => {
+        getEmailDeliverability(7).then(setDeliverability).catch(() => setDeliverability(null));
+    }, []);
 
     useEffect(() => {
         getSettings()
@@ -313,6 +318,56 @@ export default function SettingsPage() {
                                     placeholder="receipts@spinr.ca"
                                 />
                             </div>
+                        </CardContent>
+                    </Card>
+
+                    {/* Email deliverability */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">Email deliverability (last 7 days)</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            {!deliverability ? (
+                                <p className="text-xs text-muted-foreground">No send data yet.</p>
+                            ) : (
+                                <>
+                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                        <div className="rounded-lg border border-border/50 p-3">
+                                            <p className="text-xs text-muted-foreground">Sent</p>
+                                            <p className="text-lg font-bold">{deliverability.by_status?.sent ?? 0}</p>
+                                        </div>
+                                        <div className="rounded-lg border border-border/50 p-3">
+                                            <p className="text-xs text-muted-foreground">Failed</p>
+                                            <p className={`text-lg font-bold ${deliverability.failure_rate > 0.01 ? "text-red-600" : ""}`}>{deliverability.by_status?.failed ?? 0}</p>
+                                        </div>
+                                        <div className="rounded-lg border border-border/50 p-3">
+                                            <p className="text-xs text-muted-foreground">Failure rate</p>
+                                            <p className="text-lg font-bold">{((deliverability.failure_rate ?? 0) * 100).toFixed(1)}%</p>
+                                        </div>
+                                        <div className="rounded-lg border border-border/50 p-3">
+                                            <p className="text-xs text-muted-foreground">Suppressed (total)</p>
+                                            <p className="text-lg font-bold">{deliverability.suppression_list_size ?? 0}</p>
+                                        </div>
+                                    </div>
+                                    <p className="text-xs text-muted-foreground">
+                                        By provider:{" "}
+                                        {Object.entries(deliverability.by_provider || {}).map(([k, v]) => `${k} ${v}`).join(" · ") || "—"}
+                                    </p>
+                                    {deliverability.recent_failures?.length > 0 && (
+                                        <div className="space-y-1">
+                                            <p className="text-xs font-semibold">Recent failures</p>
+                                            {deliverability.recent_failures.slice(0, 8).map((f: any, i: number) => (
+                                                <div key={i} className="text-xs text-muted-foreground flex gap-2">
+                                                    <span className="whitespace-nowrap">{new Date(f.created_at).toLocaleDateString()}</span>
+                                                    <span className="font-medium">{f.email_type}</span>
+                                                    <span>via {f.provider}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </>
+                            )}
                         </CardContent>
                     </Card>
 

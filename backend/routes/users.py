@@ -269,10 +269,38 @@ async def upload_profile_image(file: UploadFile = File(...), current_user: dict 
     if len(content) > 5 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Image must be smaller than 5MB")
 
-    # Convert to base64
-    base64_image = base64.b64encode(content).decode("utf-8")
-    # Store as data URI
-    data_uri = f"data:{file.content_type};base64,{base64_image}"
+    # Prefer object storage (Supabase Storage bucket `profile-photos`) so the
+    # photo is a small URL rather than a base64 blob bloating every API
+    # response that returns it. Fall back to an inline base64 data URI when
+    # storage is unavailable/unconfigured so uploads never hard-fail (and dev
+    # without a bucket still works). Both forms render in the apps unchanged.
+    _ext = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}.get(
+        file.content_type, "jpg"
+    )
+    object_path = f"{current_user['id']}/{uuid.uuid4()}.{_ext}"
+    profile_value: Optional[str] = None
+    try:
+        import asyncio
+
+        sb = getattr(db_supabase, "supabase", None)
+        if sb:
+
+            def _upload() -> Optional[str]:
+                sb.storage.from_("profile-photos").upload(
+                    file=content,
+                    path=object_path,
+                    file_options={"content-type": file.content_type, "upsert": "true"},
+                )
+                res = sb.storage.from_("profile-photos").get_public_url(object_path)
+                return res if isinstance(res, str) else getattr(res, "public_url", None)
+
+            profile_value = await asyncio.to_thread(_upload)
+    except Exception:
+        logger.warning("[profile-image] storage upload failed — falling back to base64", exc_info=True)
+        profile_value = None
+
+    if not profile_value:
+        profile_value = f"data:{file.content_type};base64,{base64.b64encode(content).decode('utf-8')}"
 
     # Riders' profile photos are visible immediately; only driver photos
     # go to the admin review queue (identity/safety check before going online).
@@ -282,7 +310,7 @@ async def upload_profile_image(file: UploadFile = File(...), current_user: dict 
         "users",
         {"id": current_user["id"]},
         {
-            "profile_image": data_uri,
+            "profile_image": profile_value,
             "profile_image_status": image_status,
         },
     )

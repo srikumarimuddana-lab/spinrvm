@@ -45,11 +45,20 @@ def _ride(
     ride_id: str = "ride1",
     pi_id: str = "pi_abc",
     fare: str = "25.00",
+    grand_total: str = "25.00",
+    tip_amount: str = "0.00",
+    authorized_amount: str | None = None,
 ) -> dict:
     return {
         "id": ride_id,
         "payment_intent_id": pi_id,
+        # C2: reconcile compares against grand_total + tip (the authoritative
+        # charge), not the fare-side subtotal. `fare` is retained only so legacy
+        # callers don't break; the reconcile no longer reads it.
         "fare": fare,
+        "grand_total": grand_total,
+        "tip_amount": tip_amount,
+        "authorized_amount": authorized_amount,
         "status": "completed",
         "payment_status": "paid",
         "completed_at": _ts_yesterday(),
@@ -295,7 +304,7 @@ async def test_failed_stripe_pi_not_flagged_as_orphan():
 @pytest.mark.asyncio
 async def test_clean_run_writes_zero_discrepancies():
     """Matched ride + succeeded PI with correct amount → zero discrepancies in audit log."""
-    ride = _ride(fare="10.50")
+    ride = _ride(grand_total="10.50")
     pi = _pi(status="succeeded", amount_received=1050)
     db_mock = AsyncMock()
     db_mock.get_rows.return_value = [ride]
@@ -630,3 +639,81 @@ async def test_reconcile_payouts_skips_recent_and_terminal():
         result = await sr._reconcile_payouts()
 
     assert result == []
+
+
+# ── C2 regression: authoritative basis (grand_total + tip), underpay-only ────
+
+
+@pytest.mark.asyncio
+async def test_amount_basis_includes_fees_tax_and_tip():
+    """C2: expected = grand_total + tip (not the fare subtotal). A PI that paid
+    only the fare while grand_total includes fees/GST/PST + tip is UNDERPAYMENT."""
+    ride = _ride(grand_total="30.00", tip_amount="5.00")  # expect 3500
+    pi = _pi(status="succeeded", amount_received=2500)  # paid only the fare
+    db_mock = AsyncMock()
+    db_mock.get_rows.return_value = [ride]
+    db_mock.insert_one.return_value = {"id": "log1"}
+    stripe_mock = _make_stripe_mock([pi])
+
+    with (
+        patch("utils.stripe_reconcile.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test"})),
+        patch("utils.stripe_reconcile.db_supabase", db_mock),
+        patch.dict(sys.modules, {"stripe": stripe_mock}),
+    ):
+        from utils.stripe_reconcile import _run_reconciliation_tick
+
+        await _run_reconciliation_tick()
+
+    audit_detail = db_mock.insert_one.call_args[0][1]["details"]
+    mismatch = next(d for d in audit_detail["discrepancy_detail"] if d["type"] == "DB_PAID_AMOUNT_MISMATCH")
+    assert mismatch["db_cents"] == 3500
+    assert mismatch["stripe_cents"] == 2500
+
+
+@pytest.mark.asyncio
+async def test_overpayment_is_not_flagged():
+    """C2: only UNDERPAYMENT is a revenue risk. Stripe amount >= expected → clean
+    (no false positive, unlike the old strict != check)."""
+    ride = _ride(grand_total="25.00")
+    pi = _pi(status="succeeded", amount_received=2600)  # 1.00 over
+    db_mock = AsyncMock()
+    db_mock.get_rows.return_value = [ride]
+    db_mock.insert_one.return_value = {"id": "log1"}
+    stripe_mock = _make_stripe_mock([pi])
+
+    with (
+        patch("utils.stripe_reconcile.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test"})),
+        patch("utils.stripe_reconcile.db_supabase", db_mock),
+        patch.dict(sys.modules, {"stripe": stripe_mock}),
+    ):
+        from utils.stripe_reconcile import _run_reconciliation_tick
+
+        await _run_reconciliation_tick()
+
+    audit_detail = db_mock.insert_one.call_args[0][1]["details"]
+    assert all(d["type"] != "DB_PAID_AMOUNT_MISMATCH" for d in audit_detail["discrepancy_detail"])
+
+
+@pytest.mark.asyncio
+async def test_over_buffer_tip_capped_at_authorized_amount():
+    """C2 + pre-auth: when tip exceeds the hold, only authorized_amount is
+    captured on THIS PI (overflow is a separate PI), so expected is capped and
+    the primary PI is not falsely flagged."""
+    ride = _ride(grand_total="25.00", tip_amount="20.00", authorized_amount="35.00")  # cap 3500
+    pi = _pi(status="succeeded", amount_received=3500)
+    db_mock = AsyncMock()
+    db_mock.get_rows.return_value = [ride]
+    db_mock.insert_one.return_value = {"id": "log1"}
+    stripe_mock = _make_stripe_mock([pi])
+
+    with (
+        patch("utils.stripe_reconcile.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test"})),
+        patch("utils.stripe_reconcile.db_supabase", db_mock),
+        patch.dict(sys.modules, {"stripe": stripe_mock}),
+    ):
+        from utils.stripe_reconcile import _run_reconciliation_tick
+
+        await _run_reconciliation_tick()
+
+    audit_detail = db_mock.insert_one.call_args[0][1]["details"]
+    assert all(d["type"] != "DB_PAID_AMOUNT_MISMATCH" for d in audit_detail["discrepancy_detail"])

@@ -18,13 +18,13 @@ try:
     from ..services import corporate_allowance_service, corporate_wallet_service
     from ..services.corporate_policy_service import evaluate_policy
     from ..socket_manager import manager
-    from ..utils.stripe_charge import charge_ride
+    from ..utils.stripe_charge import capture_ride, charge_ride
 except ImportError:
     import db_supabase  # type: ignore
     from services import corporate_allowance_service, corporate_wallet_service  # type: ignore
     from services.corporate_policy_service import evaluate_policy  # type: ignore
     from socket_manager import manager  # type: ignore
-    from utils.stripe_charge import charge_ride  # type: ignore
+    from utils.stripe_charge import capture_ride, charge_ride  # type: ignore
 
 try:
     from ..features import send_push_notification
@@ -376,6 +376,163 @@ async def settle_corporate(
 # ── Card (Stripe) settlement ─────────────────────────────────────────
 
 
+async def _settle_against_hold(
+    ride: dict,
+    ride_id: str,
+    rider_id: str,
+    total_charge: Decimal,
+    tip_amount: Decimal,
+    *,
+    held_pi: str,
+    authorized: Decimal,
+    stripe_customer_id: Optional[str],
+    payment_method_id: Optional[str],
+) -> Optional[PaymentResult]:
+    """Capture a booking-time hold for (fare + tip) in a single Stripe fee.
+
+    Captures ``min(total_charge, authorized)`` against the manual-capture
+    PaymentIntent placed at booking. When the tip pushes the total OVER the
+    authorized hold (a tip beyond the buffer), the overflow is charged on a
+    fresh PaymentIntent — Stripe forbids capturing more than was authorized.
+
+    Returns:
+        PaymentResult — terminal outcome (captured-and-paid, or capture
+            declined by the issuer).
+        ``None`` — the hold is unusable (expired / amount_too_large / Stripe
+            ops error); the caller falls back to a fresh full charge.
+    """
+    capture_amount = _round(min(total_charge, authorized))
+    cap = await capture_ride(ride_id=ride_id, payment_intent_id=held_pi, amount=capture_amount)
+
+    if cap.status == "failed":
+        # Hold lapsed or otherwise uncapturable — re-drive via a fresh charge so
+        # the rider is still settled. error (not warning): a dropped hold is a
+        # payment-path anomaly we must surface, per CLAUDE.md. No exc_info — we
+        # are not inside an except block; the Stripe message is in error_message.
+        logger.error(
+            "[PAYMENT] capture of hold pi=%s failed for ride %s (%s) — falling back to fresh charge",
+            held_pi,
+            ride_id,
+            cap.error_message,
+        )
+        return None
+
+    if cap.status == "declined":
+        await db_supabase.update_ride(
+            ride_id,
+            {
+                "payment_status": "failed",
+                "payment_intent_id": held_pi,
+                "auth_status": "released",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        return PaymentResult(
+            success=False,
+            error_code="card_declined",
+            decline_code=cap.decline_code,
+            error=cap.error_message or "Your card was declined.",
+            status_code=402,
+            extra={"suggested_action": "change_card"},
+        )
+
+    if cap.status == "unconfigured":
+        # DEV/TEST ONLY: reached only when stripe_secret_key is unset. Production
+        # fails fast on a missing Stripe key at startup (core/config), so this
+        # branch is unreachable in prod and intentionally writes no
+        # financial_events row — mirroring the existing fresh-charge
+        # `unconfigured` branch below, which also marks paid without a ledger
+        # entry so dev flows don't wedge when Stripe isn't wired up.
+        logger.error("Stripe unconfigured — marking ride %s paid (held) without real capture", ride_id)
+        await db_supabase.update_ride(
+            ride_id,
+            {
+                "payment_status": "paid",
+                "auth_status": "captured",
+                "tip_amount": _f(tip_amount),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        return PaymentResult(success=True, charged_amount=_money_str(total_charge))
+
+    # cap.status == "captured" — the hold is now real money.
+    remainder = _round(total_charge - capture_amount)
+    tip_collected = _round(tip_amount)
+    extra_charged = Decimal("0")
+    if remainder > 0:
+        # Tip exceeded the buffer; charge the overflow on a fresh PaymentIntent.
+        over = await charge_ride(
+            ride=ride,
+            total_amount=remainder,
+            rider_id=rider_id,
+            payment_method_id=payment_method_id,
+            stripe_customer_id=stripe_customer_id,
+        )
+        if over.status == "succeeded":
+            extra_charged = remainder
+        else:
+            # Fare + within-buffer tip are captured; only the EXCESS tip failed.
+            # Settle what we actually collected rather than stranding a paid
+            # ride. Log loudly — never silently drop the shortfall.
+            fare = _round(total_charge - _round(tip_amount))
+            tip_collected = _round(authorized - fare)
+            if tip_collected < 0:
+                tip_collected = Decimal("0")
+            logger.error(
+                "[PAYMENT] over-buffer tip charge failed for ride %s (%s); captured %s, "
+                "tip collected %s, excess %s uncollected",
+                ride_id,
+                over.error_message,
+                _money_str(capture_amount),
+                _money_str(tip_collected),
+                _money_str(remainder),
+            )
+
+    settled_amount = _round(capture_amount + extra_charged)
+    await record_payment_event(
+        ride_id=ride_id,
+        user_id=rider_id,
+        amount_cents=int(_round(settled_amount * Decimal("100"))),
+        payment_intent_id=cap.payment_intent_id,
+        ride=ride,
+        tip_amount=tip_collected,
+    )
+    try:
+        await db_supabase.update_ride(
+            ride_id,
+            {
+                "payment_status": "paid",
+                "payment_intent_id": cap.payment_intent_id,
+                "auth_status": "captured",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                **_tip_ride_update(ride, tip_collected),
+            },
+        )
+    except Exception as db_err:
+        logger.error(
+            "[PAYMENT] Capture %s succeeded but ride %s DB update failed — "
+            "ride stuck in 'processing'; financial_events written for recovery. err=%s",
+            cap.payment_intent_id,
+            ride_id,
+            db_err,
+            exc_info=True,
+        )
+        return PaymentResult(
+            success=False,
+            error="Payment was captured but confirmation failed. Do not retry — our team has been notified.",
+            status_code=503,
+        )
+    await manager.send_personal_message(
+        {
+            "type": "payment_completed",
+            "ride_id": ride_id,
+            "charged_amount": _money_str(settled_amount),
+        },
+        f"rider_{rider_id}",
+    )
+    return PaymentResult(success=True, charged_amount=_money_str(settled_amount))
+
+
 async def settle_card(
     ride: dict,
     ride_id: str,
@@ -383,10 +540,41 @@ async def settle_card(
     total_charge: Decimal,
     tip_amount: Decimal,
 ) -> PaymentResult:
-    """Charge rider's card via Stripe."""
+    """Charge rider's card via Stripe.
+
+    Prefers capturing a booking-time pre-authorization hold (one Stripe fee,
+    lets a within-buffer tip ride on the same PaymentIntent). Falls back to a
+    fresh charge when there is no usable hold or the hold could not be captured.
+    """
     rider_user = await db_supabase.get_user_by_id(rider_id)
     stripe_customer_id = (rider_user or {}).get("stripe_customer_id")
     payment_method_id = ride.get("payment_method_id") or (rider_user or {}).get("default_payment_method")
+
+    # Settle against a pre-authorized hold when one is open. ``auth_status``
+    # distinguishes a manual-capture hold from a prior 3DS auto-capture PI that
+    # also lives in ``payment_intent_id`` — only the former is captured here.
+    held_pi = ride.get("payment_intent_id")
+    auth_status = (ride.get("auth_status") or "").lower()
+    authorized = _round(_d(ride.get("authorized_amount") or 0))
+    # Default fresh-charge confirm target: a stored PI is only reused for the
+    # 3DS-retry case (no open hold). After an unusable hold we must NOT reconfirm
+    # the dead hold PI — pass None so charge_ride creates a fresh PaymentIntent.
+    confirm_pi = held_pi
+    if held_pi and auth_status in ("authorized", "fare_only") and authorized > 0:
+        held_result = await _settle_against_hold(
+            ride,
+            ride_id,
+            rider_id,
+            total_charge,
+            tip_amount,
+            held_pi=held_pi,
+            authorized=authorized,
+            stripe_customer_id=stripe_customer_id,
+            payment_method_id=payment_method_id,
+        )
+        if held_result is not None:
+            return held_result
+        confirm_pi = None  # hold unusable → fresh charge, not a reconfirm
 
     if not payment_method_id:
         await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
@@ -404,7 +592,7 @@ async def settle_card(
         rider_id=rider_id,
         payment_method_id=payment_method_id,
         stripe_customer_id=stripe_customer_id,
-        payment_intent_id=ride.get("payment_intent_id"),
+        payment_intent_id=confirm_pi,
     )
 
     if outcome.status == "succeeded":

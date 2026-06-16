@@ -107,8 +107,7 @@ async def _dispatch_scheduled_ride(ride: dict):
             msg = str(claim_exc).lower()
             if "rides_one_active_per_rider" in msg or "23505" in msg or "duplicate" in msg or "unique" in msg:
                 logger.warning(
-                    "scheduled dispatch deferred: rider has an active ride; "
-                    f"ride {ride_id} stays 'scheduled' for retry"
+                    f"scheduled dispatch deferred: rider has an active ride; ride {ride_id} stays 'scheduled' for retry"
                 )
                 await _notify_schedule_delayed(ride_id, rider_id, ride)
                 return
@@ -119,6 +118,45 @@ async def _dispatch_scheduled_ride(ride: dict):
             return
 
         logger.info(f"Dispatched scheduled ride {ride_id}: scheduled → searching")
+
+        # Pre-authorize the card hold NOW (at dispatch), not at booking: a
+        # scheduled ride may be booked days out, beyond Stripe's ~7-day auth
+        # lifetime, so the hold is placed when the ride actually goes live.
+        # Card source only, and only if no hold exists yet. The rider isn't
+        # present, so a decline must NOT strand the ride (block_on_decline=False)
+        # — it degrades to post-trip settlement like any un-held ride.
+        try:
+            if claimed.get("payment_method") == "card" and not claimed.get("auth_status"):
+                from decimal import Decimal as _Decimal
+
+                try:
+                    from ..routes.rides import _preauthorize_ride_card
+                except ImportError:
+                    from routes.rides import _preauthorize_ride_card  # type: ignore
+
+                _rider_row = await db.get_user_by_id(rider_id) if rider_id else None
+                _grand = claimed.get("grand_total")
+                if _grand is None:
+                    _grand = claimed.get("total_fare") or 0
+                _preauth = await _preauthorize_ride_card(
+                    ride_id=ride_id,
+                    rider_id=rider_id,
+                    grand_total=_Decimal(str(_grand)),
+                    stripe_customer_id=(_rider_row or {}).get("stripe_customer_id"),
+                    payment_method_id=claimed.get("payment_method_id"),
+                    block_on_decline=False,
+                )
+                if _preauth.fields:
+                    await db.update_one("rides", {"id": ride_id}, {"$set": _preauth.fields})
+        except Exception as _auth_err:
+            # Never let a pre-auth hiccup block dispatch; post-trip settlement
+            # remains the safety net. Surface loudly — it's a payment path.
+            logger.error(
+                "scheduled dispatch: pre-auth at dispatch failed for %s: %s",
+                ride_id,
+                _auth_err,
+                exc_info=True,
+            )
 
         # Mandatory state-change WS event (rider + admins). Drives the rider
         # app's status update and patches any admin dashboard that already has

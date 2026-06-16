@@ -402,6 +402,11 @@ class CreateRideRequest(BaseModel):
     # the confirmed fare can't bait-and-switch from the estimate.
     estimate_token: Optional[str] = None
     payment_method_id: Optional[str] = None
+    # SCA two-step: a manual-capture PaymentIntent the rider-app already confirmed
+    # on-device (3DS / Apple Pay biometric) after a prior create_ride returned
+    # requires_action. When present, create_ride verifies + attaches this hold
+    # instead of authorizing afresh — so the SCA challenge completes at BOOKING.
+    preauthorized_payment_intent_id: Optional[str] = None
     work_profile: Optional[bool] = None
     promo_code: Optional[str] = None
     requires_wav: bool = False

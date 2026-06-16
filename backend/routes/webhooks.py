@@ -17,6 +17,7 @@ except ImportError:
     from utils.money import cents_to_dollars
     from utils.rate_limiter import default_limiter
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -81,6 +82,39 @@ def _invoice_period_end_iso(invoice: dict) -> str | None:
     return None
 
 
+def _event_to_plain_dict(event):
+    """Normalize a verified Stripe webhook Event to a plain, recursively-plain dict.
+
+    stripe-python v15 Events are NOT dict subclasses and lack ``.get()`` /
+    ``.to_dict_recursive()`` — calling either AttributeError'd and 500'd every
+    webhook. ``_to_dict_recursive()`` yields plain nested dicts on v15. Test
+    fixtures and legacy StripeObjects are already dicts. Last resort: a JSON
+    round-trip via ``str()`` (a StripeObject's ``__str__`` is JSON).
+    """
+    if isinstance(event, dict):
+        return event
+    # Only the v15 Event needs conversion. Detect it precisely: accessing ``.get``
+    # on a v15 Event raises AttributeError (via __getattr__), whereas a dict-like
+    # object or a configured test mock exposes a usable ``.get`` — leave those
+    # untouched so we don't transform an object that already works.
+    try:
+        getter = event.get
+    except AttributeError:
+        getter = None
+    if callable(getter):
+        return event
+    fn = getattr(event, "_to_dict_recursive", None) or getattr(event, "to_dict_recursive", None)
+    if callable(fn):
+        try:
+            return fn()
+        except Exception:  # pragma: no cover — fall through to JSON
+            pass
+    try:
+        return json.loads(str(event))
+    except Exception:  # pragma: no cover — last-ditch shallow dict
+        return dict(event)
+
+
 @api_router.post("/stripe")
 async def stripe_webhook(request: Request):
     """Handle Stripe webhook events for server-side payment confirmation."""
@@ -134,6 +168,12 @@ async def stripe_webhook(request: Request):
         logger.error(f"Stripe webhook signature verification failed: {last_sig_error}")
         raise HTTPException(status_code=400, detail="Invalid signature") from last_sig_error
 
+    # stripe-python v15: the returned Event is NOT a dict subclass — it has no
+    # ``.get()`` or ``.to_dict_recursive()`` (both raise AttributeError via
+    # __getattr__, which 500'd every webhook). Normalize it to a plain,
+    # recursively-plain dict for all field access + jsonb storage.
+    event = _event_to_plain_dict(event)
+
     event_id = event.get("id", "")
     event_type = event.get("type", "")
     data_object = event.get("data", {}).get("object", {})
@@ -148,19 +188,27 @@ async def stripe_webhook(request: Request):
     # Stripe retries every event (network blip, >20s handler, any non-2xx)
     # so we MUST treat a replay of the same event.id as a no-op. The
     # stripe_events table (migration 22) has event_id as PRIMARY KEY;
-    # claim_stripe_event returns False on a unique-violation replay.
-    # Stripe objects are dict subclasses but nested values (e.g. data.object)
-    # remain as StripeObject instances. to_dict_recursive() flattens the whole
-    # tree into plain dicts so it can be stored in jsonb without surprises.
-    try:
-        event_payload = event.to_dict_recursive()  # type: ignore[attr-defined]
-    except AttributeError:
-        event_payload = dict(event)
+    # claim_stripe_event returns False on a unique-violation replay. event is
+    # already a plain (json.loads) dict, safe to store directly in jsonb.
+    event_payload = event
 
     try:
         is_new = await claim_stripe_event(event_id, event_type, event_payload)
     except Exception as e:
-        logger.error(f"Failed to persist stripe event {event_id}: {e}")
+        # Surface the REAL cause: for DatabaseError, str(e) is only
+        # "Database operation failed" — the underlying Postgres error (e.g.
+        # "relation stripe_events does not exist") lives in details["original"].
+        # Without this the webhook just logs a generic message and the root cause
+        # (missing table / RLS / schema drift) stays invisible.
+        _orig = e.details.get("original") if isinstance(e, DatabaseError) else None
+        logger.error(
+            "Failed to persist stripe event %s (type=%s): %s | original=%s",
+            event_id,
+            event_type,
+            e,
+            _orig,
+            exc_info=True,
+        )
         # Let Stripe retry — 5xx keeps the event in their queue.
         raise HTTPException(status_code=500, detail="Event persistence failed") from e
 
@@ -1092,7 +1140,9 @@ async def _suppress_address(email: str, *, reason: str, detail, message_id) -> N
         logger.warning("[SES] address suppressed reason=%s message_id=%s", reason, message_id or "-")
     except DuplicateRecordError:
         # Concurrent redelivery already inserted it — idempotent success.
-        logger.info("[SES] suppression already present (insert race) reason=%s message_id=%s", reason, message_id or "-")
+        logger.info(
+            "[SES] suppression already present (insert race) reason=%s message_id=%s", reason, message_id or "-"
+        )
     except DatabaseError as e:
         logger.error(
             "[SES] suppression write failed reason=%s: %s",

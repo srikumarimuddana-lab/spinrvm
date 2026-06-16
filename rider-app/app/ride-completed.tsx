@@ -94,6 +94,10 @@ function RideCompletedScreenContent() {
   const fare = toNum((currentRide as any)?.grand_total || currentRide?.total_fare);
   const duration = currentRide?.duration_minutes || 0;
   const distance = currentRide?.distance_km || 0;
+  // A card hold placed at booking is captured on submit — the payment method is
+  // already chosen, so we don't show a payment picker (Google Pay) at the end.
+  const hasHold =
+    (currentRide as any)?.auth_status === 'authorized' || (currentRide as any)?.auth_status === 'fare_only';
 
   useEffect(() => {
     if (rideId) fetchRide(rideId);
@@ -632,8 +636,14 @@ function RideCompletedScreenContent() {
 
       {/* Submit Button */}
       <View style={styles.bottomBar}>
-        {/* Google Pay button — Android only, card payments, not yet paid */}
-        {Platform.OS === 'android' && !alreadyPaid && currentRide?.payment_method === 'card' && (
+        {hasHold && !alreadyPaid && (
+          <Text style={styles.holdHint}>
+            Charged to the card you chose at booking. Any tip is included in the same charge.
+          </Text>
+        )}
+        {/* Google Pay button — Android card rides with NO pre-auth hold (the held
+            method is captured on submit, so no payment picker is shown then). */}
+        {Platform.OS === 'android' && !alreadyPaid && !hasHold && currentRide?.payment_method === 'card' && (
           <TouchableOpacity
             style={[styles.submitBtn, styles.googlePayBtn]}
             onPress={handleGooglePay}
@@ -1005,6 +1015,11 @@ function createStyles(colors: ThemeColors) {
     },
     googlePayBtn: {
       backgroundColor: '#3C4043', marginBottom: 10,
+    },
+    holdHint: {
+      fontSize: 12, lineHeight: 16, color: colors.textDim,
+      fontFamily: 'PlusJakartaSans_400Regular',
+      textAlign: 'center', marginBottom: 10,
     },
     submitBtnText: {
       fontSize: 16, fontFamily: 'PlusJakartaSans_700Bold', color: '#FFF',

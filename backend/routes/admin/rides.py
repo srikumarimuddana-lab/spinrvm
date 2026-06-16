@@ -955,7 +955,9 @@ async def admin_get_stats():
     today_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     month_start = now_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
 
-    # Parallelise all independent DB calls (F-49: previously 11 sequential round-trips).
+    # Parallelise all independent DB calls (F-49: previously 11 sequential
+    # round-trips). The two money rollups (today + month) are aggregated in
+    # Postgres now instead of fetching up to 5,000 completed rides each.
     (
         total_drivers,
         online_drivers,
@@ -966,8 +968,8 @@ async def admin_get_stats():
         total_users,
         rides_today,
         pending_applications,
-        completed_today,
-        completed_month,
+        today_money,
+        month_money,
     ) = await asyncio.gather(
         db_supabase.count_documents("drivers", {}),
         db_supabase.count_documents("drivers", {"is_online": True}),
@@ -990,26 +992,24 @@ async def admin_get_stats():
         db_supabase.count_documents("users", {}),
         db_supabase.count_documents("rides", {"created_at": {"$gte": today_start}}),
         db_supabase.count_documents("drivers", {"is_verified": False}),
-        db_supabase.get_rows(
-            "rides",
-            {"status": "completed", "ride_completed_at": {"$gte": today_start}},
-            limit=5000,
-        ),
-        db_supabase.get_rows(
-            "rides",
-            {"status": "completed", "ride_completed_at": {"$gte": month_start}},
-            limit=5000,
-        ),
+        db_supabase.rpc("admin_ride_money_rollup", {"p_start": today_start, "p_end": None}),
+        db_supabase.rpc("admin_ride_money_rollup", {"p_start": month_start, "p_end": None}),
     )
 
-    revenue_today = float(sum(Decimal(str(r.get("total_fare") or 0)) for r in (completed_today or [])))
-    revenue_month = float(sum(Decimal(str(r.get("total_fare") or 0)) for r in completed_month))
+    def _rollup_dec(rollup: Any, key: str) -> Decimal:
+        row = rollup[0] if isinstance(rollup, list) and rollup else rollup
+        if not isinstance(row, dict):
+            return Decimal("0")
+        return Decimal(str(row.get(key) or 0))
+
+    revenue_today = float(_rollup_dec(today_money, "sum_total_fare"))
+    revenue_month = float(_rollup_dec(month_money, "sum_total_fare"))
     # Earnings + tip totals are aggregated over completed rides in the
     # current month; upstream's stats API never wired these up so we compute
     # them here rather than returning stale zeroes.
-    total_driver_earnings = float(sum(Decimal(str(r.get("driver_earnings") or 0)) for r in completed_month))
-    total_admin_earnings = float(sum(Decimal(str(r.get("admin_earnings") or 0)) for r in completed_month))
-    total_tips = float(sum(Decimal(str(r.get("tip_amount") or 0)) for r in completed_month))
+    total_driver_earnings = float(_rollup_dec(month_money, "sum_driver_earnings"))
+    total_admin_earnings = float(_rollup_dec(month_money, "sum_admin_earnings"))
+    total_tips = float(_rollup_dec(month_money, "sum_tip"))
     return {
         # Fields the dashboard page expects
         "total_rides": total_rides,
@@ -1053,23 +1053,24 @@ async def admin_get_ride_stats():
     this_week_count = await db_supabase.get_ride_count_by_date_range(week_start.isoformat(), week_end.isoformat())
     this_month_count = await db_supabase.get_ride_count_by_date_range(month_start.isoformat(), next_month.isoformat())
 
-    # Revenue stats from completed rides
-    completed_today = await db_supabase.get_rows(
-        "rides",
-        {"status": "completed", "ride_completed_at": {"$gte": today_start.isoformat()}},
-        limit=10000,
+    # Revenue stats from completed rides — aggregated in Postgres (today +
+    # month) instead of fetching up to 10,000 rides per window and summing.
+    today_money = await db_supabase.rpc(
+        "admin_ride_money_rollup", {"p_start": today_start.isoformat(), "p_end": None}
     )
-    total_revenue = float(sum(Decimal(str(r.get("total_fare") or 0)) for r in completed_today))
-    total_tips = float(sum(Decimal(str(r.get("tip_amount") or 0)) for r in completed_today))
-    completed_count = len(completed_today)
+    month_money = await db_supabase.rpc(
+        "admin_ride_money_rollup", {"p_start": month_start.isoformat(), "p_end": None}
+    )
 
-    # Monthly completed rides for revenue
-    completed_month = await db_supabase.get_rows(
-        "rides",
-        {"status": "completed", "ride_completed_at": {"$gte": month_start.isoformat()}},
-        limit=10000,
-    )
-    month_revenue = float(sum(Decimal(str(r.get("total_fare") or 0)) for r in completed_month))
+    def _rollup(rollup: Any) -> Dict[str, Any]:
+        row = rollup[0] if isinstance(rollup, list) and rollup else rollup
+        return row if isinstance(row, dict) else {}
+
+    today_row = _rollup(today_money)
+    total_revenue = float(Decimal(str(today_row.get("sum_total_fare") or 0)))
+    total_tips = float(Decimal(str(today_row.get("sum_tip") or 0)))
+    completed_count = int(today_row.get("completed_count") or 0)
+    month_revenue = float(Decimal(str(_rollup(month_money).get("sum_total_fare") or 0)))
 
     # Daily chart data for last 14 days — one grouped query instead of 14
     # sequential COUNT round-trips.
@@ -1173,39 +1174,28 @@ async def admin_get_ride_financials(
 
     rides_count = await db_supabase.get_ride_count_by_date_range(start.isoformat(), end.isoformat())
 
-    completed = await db_supabase.get_rows(
-        "rides",
-        {"status": "completed", "ride_completed_at": {"$gte": start.isoformat(), "$lt": end.isoformat()}},
-        limit=10000,
+    # Completed-ride money is summed in Postgres (admin_ride_money_rollup) over
+    # the [start, end) window instead of fetching up to 10,000 rides and summing
+    # in Python. rider_paid uses COALESCE(grand_total, total_fare, 0) inside the
+    # function so a comped $0 ride isn't counted at full fare.
+    money = await db_supabase.rpc(
+        "admin_ride_money_rollup", {"p_start": start.isoformat(), "p_end": end.isoformat()}
     )
+    money_row = money[0] if isinstance(money, list) and money else money
+    if not isinstance(money_row, dict):
+        money_row = {}
 
-    def _s(rows, key):
-        return float(sum(Decimal(str(r.get(key) or 0)) for r in rows))
+    def _m(key: str) -> float:
+        return float(Decimal(str(money_row.get(key) or 0)))
 
-    def _rider_paid(r):
-        # A free-ride promo persists grand_total = 0 (intentional) while
-        # total_fare keeps the pre-promo subtotal. Use an explicit None check so
-        # comped $0 rides aren't counted at full fare.
-        gt = r.get("grand_total")
-        if gt is None:
-            gt = r.get("total_fare")
-        return Decimal(str(gt or 0))
-
-    rider_paid = float(sum(_rider_paid(r) for r in completed))
-    gross_fare = _s(completed, "total_fare")
-    driver_revenue = float(
-        sum(
-            Decimal(str(r.get("base_fare") or 0))
-            + Decimal(str(r.get("distance_fare") or 0))
-            + Decimal(str(r.get("time_fare") or 0))
-            for r in completed
-        )
-    )
-    tips = _s(completed, "tip_amount")
-    gst_collected = _s(completed, "tax_amount")
-    promo_applied = _s(completed, "discount_amount")
-    area_fees = _s(completed, "area_fees_total")
-    booking_airport = _s(completed, "admin_earnings")
+    rider_paid = _m("sum_rider_paid")
+    gross_fare = _m("sum_total_fare")
+    driver_revenue = _m("sum_driver_revenue")
+    tips = _m("sum_tip")
+    gst_collected = _m("sum_tax")
+    promo_applied = _m("sum_discount")
+    area_fees = _m("sum_area_fees")
+    booking_airport = _m("sum_admin_earnings")
 
     # Incentives paid out in the window (platform-funded; ride_incentive_claims
     # is append-only, keyed by claimed_at).
@@ -1229,7 +1219,7 @@ async def admin_get_ride_financials(
         "period": period,
         "label": label,
         "rides_count": rides_count,
-        "completed_count": len(completed),
+        "completed_count": int(money_row.get("completed_count") or 0),
         "rider_paid": round(rider_paid, 2),
         "gross_fare": round(gross_fare, 2),
         "driver_revenue": round(driver_revenue, 2),

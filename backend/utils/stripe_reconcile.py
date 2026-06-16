@@ -36,8 +36,14 @@ import os
 import socket
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, List
+
+
+def _q2(v: Any) -> Decimal:
+    """Quantize a money value to 2dp (HALF_UP). Decimal-only — never float."""
+    return Decimal(str(v or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
 
 try:
     from utils.loop_monitor import record_heartbeat as _record_heartbeat
@@ -125,7 +131,7 @@ async def _run_reconciliation_tick() -> None:
                 {
                     "payment_status": "paid",
                 },
-                columns="id,payment_intent_id,fare,status,completed_at",
+                columns="id,payment_intent_id,grand_total,total_fare,tip_amount,authorized_amount,status,completed_at",
                 limit=2000,
             )
             or []
@@ -182,11 +188,27 @@ async def _run_reconciliation_tick() -> None:
                 pi["status"],
             )
 
-        # Amount check — Stripe amount_received is in cents; DB fare is CAD dollars
-        if ride.get("fare") is not None:
-            expected_cents = int(Decimal(str(ride["fare"])) * 100)
+        # Amount check (C2) — the authoritative charge is grand_total + tip (the
+        # SAME total /process-payment settles), NOT the fare-side subtotal. Using
+        # `fare` excluded fees/GST/PST/tip and — since rides has no `fare` column —
+        # never even ran. We compare against grand_total + tip and ONLY flag
+        # UNDERPAYMENT (actual < expected): overpayment is not a revenue risk, and
+        # a strict `!=` false-flags rounding + the buffered-preauth split where a
+        # tip beyond the hold is captured on a SEPARATE PI (so this PI legitimately
+        # holds only up to authorized_amount).
+        _grand = ride.get("grand_total")
+        if _grand is None:
+            _grand = ride.get("total_fare")
+        if _grand is not None:
+            expected = _q2(_grand) + _q2(ride.get("tip_amount") or 0)
+            # If the tip exceeded the pre-auth hold, only up to authorized_amount
+            # could be captured on THIS PI; the overflow lives on another PI.
+            _authorized = ride.get("authorized_amount")
+            if _authorized is not None and _q2(_authorized) < expected:
+                expected = _q2(_authorized)
+            expected_cents = int((expected * 100).to_integral_value())
             actual_cents = pi.get("amount_received", 0)
-            if expected_cents != actual_cents:
+            if actual_cents < expected_cents:
                 discrepancies.append(
                     {
                         "type": "DB_PAID_AMOUNT_MISMATCH",

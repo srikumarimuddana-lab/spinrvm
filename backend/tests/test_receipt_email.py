@@ -28,6 +28,21 @@ except ImportError:
     from backend.utils.receipt_email import send_ride_receipt_email  # type: ignore[no-redef]
 
 
+@pytest.fixture(autouse=True)
+def _no_suppression_or_log():
+    """Receipts now route through send_transactional_email, which checks the
+    suppression list (db_supabase.find_one) and writes email_send_log
+    (insert_one). Neutralise both so these provider-body tests are isolated
+    from leaked global DB-mock state (otherwise a "suppressed" lookup skips
+    the send and the assertions on the POST body fail under cross-test order).
+    """
+    with (
+        patch("db_supabase.find_one", AsyncMock(return_value=None)),
+        patch("db_supabase.insert_one", AsyncMock(return_value=None)),
+    ):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

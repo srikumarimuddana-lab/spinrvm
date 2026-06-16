@@ -63,6 +63,7 @@ def _send_ses_sync(
     subject: str,
     html: Optional[str],
     text: Optional[str],
+    attachments: Optional[list] = None,
 ) -> str:
     """Blocking SES SendRawEmail. Returns the SES MessageId. Raises on failure.
 
@@ -80,7 +81,7 @@ def _send_ses_sync(
         # SES rejects an empty body; guard so we surface a clear error.
         raise ValueError("send_transactional_email requires html or text")
 
-    message = _build_mime(source=source, to=to, subject=subject, html=html, text=text)
+    message = _build_mime(source=source, to=to, subject=subject, html=html, text=text, attachments=attachments)
 
     client = boto3.client(
         "ses",
@@ -97,24 +98,48 @@ def _send_ses_sync(
     return resp.get("MessageId", "")
 
 
-def _build_mime(*, source: str, to: str, subject: str, html: Optional[str], text: Optional[str]):
+def _build_mime(
+    *,
+    source: str,
+    to: str,
+    subject: str,
+    html: Optional[str],
+    text: Optional[str],
+    attachments: Optional[list] = None,
+):
     """Build the MIME message SES SendRawEmail expects.
 
-    multipart/alternative with both parts when text+html are present (clients
-    prefer html, fall back to text); a single MIMEText otherwise.
+    The body is multipart/alternative when both text+html are present (clients
+    prefer html, fall back to text), or a single MIMEText. When attachments are
+    supplied the whole thing is wrapped in multipart/mixed.
     """
+    from email.mime.application import MIMEApplication
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
 
     if html and text:
-        msg = MIMEMultipart("alternative")
+        body = MIMEMultipart("alternative")
         # Plain part first — RFC 2046 says the most-preferred alternative goes last.
-        msg.attach(MIMEText(text, "plain", "utf-8"))
-        msg.attach(MIMEText(html, "html", "utf-8"))
+        body.attach(MIMEText(text, "plain", "utf-8"))
+        body.attach(MIMEText(html, "html", "utf-8"))
     elif html:
-        msg = MIMEText(html, "html", "utf-8")
+        body = MIMEText(html, "html", "utf-8")
     else:
-        msg = MIMEText(text or "", "plain", "utf-8")
+        body = MIMEText(text or "", "plain", "utf-8")
+
+    if attachments:
+        msg: Any = MIMEMultipart("mixed")
+        msg.attach(body)
+        for att in attachments:
+            content = att.get("content")
+            if not content:
+                continue
+            subtype = (att.get("mime") or "application/octet-stream").partition("/")[2] or "octet-stream"
+            part = MIMEApplication(content, _subtype=subtype)
+            part.add_header("Content-Disposition", "attachment", filename=att.get("filename", "attachment"))
+            msg.attach(part)
+    else:
+        msg = body
 
     msg["Subject"] = subject
     msg["From"] = source
@@ -131,6 +156,7 @@ async def _try_ses(
     text: Optional[str],
     default_from: str,
     log_id: str,
+    attachments: Optional[list] = None,
 ) -> Optional[str]:
     """Attempt delivery via AWS SES.
 
@@ -158,6 +184,7 @@ async def _try_ses(
             subject=subject,
             html=html,
             text=text,
+            attachments=attachments,
         )
         logger.info(
             "[EMAIL] SES sent log_id=%s subject=%r message_id=%s",
@@ -192,12 +219,15 @@ async def _try_resend(
     text: Optional[str],
     default_from: str,
     log_id: str,
+    attachments: Optional[list] = None,
 ) -> Optional[str]:
     """Attempt delivery via Resend (the guardrail).
 
     Returns the Resend message id (possibly "") on a 2xx, or None when Resend
     is unconfigured or the call fails (already logged here).
     """
+    import base64
+
     resend_key = (settings.get("resend_api_key") or "").strip()
     if not resend_key:
         return None  # unconfigured
@@ -212,6 +242,13 @@ async def _try_resend(
         payload["html"] = html
     if text:
         payload["text"] = text
+    if attachments:
+        # Resend wants base64-encoded content per attachment.
+        payload["attachments"] = [
+            {"filename": a.get("filename", "attachment"), "content": base64.b64encode(a["content"]).decode()}
+            for a in attachments
+            if a.get("content")
+        ]
 
     try:
         import httpx
@@ -327,6 +364,7 @@ async def send_transactional_email(
     log_id: str = "-",
     email_type: Optional[str] = "transactional",
     recipient_user_id: Optional[str] = None,
+    attachments: Optional[list] = None,
 ) -> bool:
     """Send one transactional email: AWS SES primary, Resend guardrail.
 
@@ -378,6 +416,7 @@ async def send_transactional_email(
         text=text,
         default_from=default_from,
         log_id=log_id,
+        attachments=attachments,
     )
     if ses_id is not None:
         await _log_send(
@@ -398,6 +437,7 @@ async def send_transactional_email(
         text=text,
         default_from=default_from,
         log_id=log_id,
+        attachments=attachments,
     )
     if resend_id is not None:
         await _log_send(

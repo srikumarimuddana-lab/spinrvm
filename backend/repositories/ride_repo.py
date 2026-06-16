@@ -29,6 +29,21 @@ except ImportError:
 # ============ Ride Helpers ============
 
 
+async def _driver_profile_image(user_id: Optional[str]) -> str:
+    """Driver avatar = the driver's users.profile_image (base64). Empty if none.
+
+    The drivers table has no photo column; the photo is on the linked user row.
+    """
+    if not user_id or not supabase:
+        return ""
+    row = await run_sync(
+        lambda uid=user_id: _single_row_from_res(
+            supabase.table("users").select("profile_image").eq("id", uid).execute()
+        )
+    )
+    return (row or {}).get("profile_image", "") or ""
+
+
 async def get_ride(ride_id: str) -> Optional[Dict[str, Any]]:
     if not supabase:
         return None
@@ -213,7 +228,7 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
             lambda did=driver_id: _single_row_from_res(
                 supabase.table("drivers")
                 .select(
-                    "name,phone,vehicle_make,vehicle_model,vehicle_color,vehicle_year,vehicle_vin,license_plate,rating,status,photo_url,vehicle_type_id,total_rides,service_area_id"
+                    "user_id,driver_code,name,phone,vehicle_make,vehicle_model,vehicle_color,vehicle_year,vehicle_vin,license_plate,rating,status,photo_url,vehicle_type_id,total_rides,service_area_id"
                 )
                 .eq("id", did)
                 .execute()
@@ -389,6 +404,7 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
 
     # --- Assemble driver fields ---
     if driver_id and driver:
+        ride["driver_code"] = driver.get("driver_code", "")
         ride["driver_name"] = driver.get("name", driver_id[:12])
         ride["driver_phone"] = driver.get("phone", "")
         ride["driver_vehicle_make"] = driver.get("vehicle_make", "")
@@ -399,7 +415,9 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
         ride["driver_license_plate"] = driver.get("license_plate", "")
         ride["driver_rating"] = driver.get("rating", 0)
         ride["driver_status"] = driver.get("status", "active")
-        ride["driver_photo_url"] = driver.get("photo_url", "")
+        # Driver photo lives on the user row (users.profile_image), not the
+        # non-existent drivers.photo_url column.
+        ride["driver_photo_url"] = await _driver_profile_image(driver.get("user_id"))
         ride["driver_region"] = d_area.get("name", "") if d_area else ""
         ride["driver_city"] = d_area.get("city", "") if d_area else ""
         ride["driver_vehicle"] = f"{driver.get('vehicle_make', '')} {driver.get('vehicle_model', '')}".strip()
@@ -609,7 +627,7 @@ async def get_live_ride_data(ride_id: str) -> Optional[Dict[str, Any]]:
         driver = await run_sync(
             lambda did=driver_id: _single_row_from_res(
                 supabase.table("drivers")
-                .select("name,phone,lat,lng,vehicle_make,vehicle_model,vehicle_color,license_plate,rating,photo_url")
+                .select("user_id,name,phone,lat,lng,vehicle_make,vehicle_model,vehicle_color,license_plate,rating,photo_url")
                 .eq("id", did)
                 .execute()
             )
@@ -622,7 +640,7 @@ async def get_live_ride_data(ride_id: str) -> Optional[Dict[str, Any]]:
             ride["driver_vehicle"] = f"{driver.get('vehicle_make', '')} {driver.get('vehicle_model', '')}".strip()
             ride["driver_license_plate"] = driver.get("license_plate", "")
             ride["driver_rating"] = driver.get("rating", 0)
-            ride["driver_photo_url"] = driver.get("photo_url", "")
+            ride["driver_photo_url"] = await _driver_profile_image(driver.get("user_id"))
 
     rider_id = ride.get("rider_id")
     if rider_id:

@@ -170,10 +170,15 @@ def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: Dec
 
     rider_name = f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip() or "Rider"
     driver_name = "Unknown"
+    driver_subtitle = "Your driver"
     if driver:
         driver_name = f"{driver.get('first_name', '')} {driver.get('last_name', '')}".strip() or driver.get(
             "name", "Driver"
         )
+        # PIPEDA-safe driver reference (+ vehicle) instead of personal contact.
+        _bits = [b for b in (driver.get("driver_code", ""), driver.get("driver_vehicle", "")) if b]
+        if _bits:
+            driver_subtitle = " · ".join(_bits)
 
     ride_date_raw = ride.get("ride_completed_at") or ride.get("created_at") or ""
     dt = parse_iso_utc(ride_date_raw)
@@ -261,7 +266,7 @@ def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: Dec
             <td style="width:40px;"><div style="width:36px;height:36px;border-radius:18px;background:#e8e8e8;text-align:center;line-height:36px;color:#888;font-weight:700;">{driver_name[0] if driver_name else "?"}</div></td>
               <td style="padding-left:12px;">
                 <p style="margin:0;font-size:14px;font-weight:600;color:#1a1a1a;">{driver_name}</p>
-                <p style="margin:2px 0 0;font-size:12px;color:#999;">Your driver</p>
+                <p style="margin:2px 0 0;font-size:12px;color:#999;">{driver_subtitle}</p>
                 </td>
             </tr>
             </table>
@@ -316,6 +321,20 @@ async def send_receipt_email(ride: dict, rider: dict, driver: dict = None, tip: 
     except ImportError:
         from utils.email_provider import send_transactional_email  # type: ignore
 
+    # Attach a PDF copy of the receipt. Best-effort: a PDF-generation failure
+    # must never block the receipt email itself.
+    attachments = None
+    try:
+        try:
+            from .receipt_pdf import generate_receipt_pdf
+        except ImportError:
+            from utils.receipt_pdf import generate_receipt_pdf  # type: ignore
+        pdf_bytes = generate_receipt_pdf(ride, rider, driver, tip)
+        ref = ride.get("ride_code") or str(ride.get("id", ""))[:8].upper() or "receipt"
+        attachments = [{"filename": f"Spinr-receipt-{ref}.pdf", "content": pdf_bytes, "mime": "application/pdf"}]
+    except Exception:
+        logger.error("Receipt PDF generation failed — sending receipt without attachment", exc_info=True)
+
     recipient_user_id = rider.get("id") or ride.get("rider_id")
     return await send_transactional_email(
         to=email,
@@ -325,4 +344,5 @@ async def send_receipt_email(ride: dict, rider: dict, driver: dict = None, tip: 
         log_id=str(recipient_user_id or "-"),
         email_type="receipt",
         recipient_user_id=str(recipient_user_id) if recipient_user_id else None,
+        attachments=attachments,
     )

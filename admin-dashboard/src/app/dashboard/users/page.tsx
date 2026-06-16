@@ -38,7 +38,7 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { Pagination } from "@/components/ui/pagination";
-import { Users, Search, Mail, Phone, MapPin, Star, Calendar, Car, ShieldCheck, Download, RefreshCw, Ban, CheckCircle, AlertTriangle, Wallet, Plus, Minus, Eye, EyeOff } from "lucide-react";
+import { Users, Search, Mail, Phone, Calendar, Car, ShieldCheck, Download, RefreshCw, Ban, CheckCircle, AlertTriangle, Wallet, Plus, Minus, Eye, EyeOff } from "lucide-react";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatDate } from "@/lib/utils";
 import { getUsersPaginated, updateUserStatus, updateUserFlags, getStats, getUserWallet, creditUserWallet, debitUserWallet, exportUsers, logPiiReveal } from "@/lib/api";
@@ -159,12 +159,8 @@ export default function UsersPage() {
                 phone: u.phone,
                 role: u.role,
                 created_at: u.created_at,
-                total_rides: u.total_rides || 0,
-                rating: u.rating || null,
-                is_verified: u.is_verified ?? true,
                 is_rider: u.is_rider,
                 is_driver: u.is_driver,
-                city: u.city,
                 status: u.status || "active",
             }));
             setUsers(transformed);
@@ -208,10 +204,7 @@ export default function UsersPage() {
                 { key: 'name', label: 'Name' },
                 { key: 'email', label: 'Email' },
                 { key: 'phone', label: 'Phone' },
-                { value: (u: any) => u.city || 'N/A', label: 'City' },
-                { value: (u: any) => u.total_rides || 0, label: 'Total Rides' },
-                { value: (u: any) => u.rating || 'N/A', label: 'Rating' },
-                { value: (u: any) => u.is_verified ? 'Yes' : 'No', label: 'Verified' },
+                { value: (u: any) => (u.is_rider ? 'Rider' : '') + (u.is_rider && u.is_driver ? ' / ' : '') + (u.is_driver ? 'Driver' : ''), label: 'Role' },
                 { value: (u: any) => formatDate(u.created_at), label: 'Joined Date' },
             ]);
             toast({ title: "Export complete", description: `${res.count ?? 0} users exported.` });
@@ -276,28 +269,10 @@ export default function UsersPage() {
                 <Card>
                     <CardContent className="pt-4 pb-3">
                         <div className="flex items-center gap-2">
-                            <ShieldCheck className="h-5 w-5 text-emerald-500" />
+                            <Users className="h-5 w-5 text-emerald-500" />
                             <div>
-                                <p className="text-xs text-muted-foreground">Verified (page)</p>
-                                <p className="text-2xl font-bold">{users.filter(u => u.is_verified).length}</p>
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardContent className="pt-4 pb-3">
-                        <div className="flex items-center gap-2">
-                            <Star className="h-5 w-5 text-amber-400 fill-amber-400" />
-                            <div>
-                                <p className="text-xs text-muted-foreground">Avg Rating (page)</p>
-                                <p className="text-2xl font-bold">
-                                    {(() => {
-                                        const rated = users.filter(u => u.rating != null);
-                                        return rated.length > 0
-                                            ? (rated.reduce((s, u) => s + u.rating, 0) / rated.length).toFixed(1)
-                                            : "N/A";
-                                    })()}
-                                </p>
+                                <p className="text-xs text-muted-foreground">Riders (page)</p>
+                                <p className="text-2xl font-bold">{users.filter(u => u.is_rider).length}</p>
                             </div>
                         </div>
                     </CardContent>
@@ -307,10 +282,19 @@ export default function UsersPage() {
                         <div className="flex items-center gap-2">
                             <Car className="h-5 w-5 text-violet-500" />
                             <div>
-                                <p className="text-xs text-muted-foreground">Total Rides (page)</p>
-                                <p className="text-2xl font-bold">
-                                    {users.reduce((s, u) => s + (u.total_rides || 0), 0)}
-                                </p>
+                                <p className="text-xs text-muted-foreground">Drivers (page)</p>
+                                <p className="text-2xl font-bold">{users.filter(u => u.is_driver).length}</p>
+                            </div>
+                        </div>
+                    </CardContent>
+                </Card>
+                <Card>
+                    <CardContent className="pt-4 pb-3">
+                        <div className="flex items-center gap-2">
+                            <ShieldCheck className="h-5 w-5 text-sky-500" />
+                            <div>
+                                <p className="text-xs text-muted-foreground">Dual-role (page)</p>
+                                <p className="text-2xl font-bold">{users.filter(u => u.is_rider && u.is_driver).length}</p>
                             </div>
                         </div>
                     </CardContent>
@@ -380,10 +364,7 @@ export default function UsersPage() {
                                     <TableRow>
                                         <TableHead>Name</TableHead>
                                         <TableHead>Contact</TableHead>
-                                        <TableHead>City</TableHead>
-                                        <TableHead>Rides</TableHead>
-                                        <TableHead>Rating</TableHead>
-                                        <TableHead>Status</TableHead>
+                                        <TableHead>Role</TableHead>
                                         <TableHead>Joined</TableHead>
                                         <TableHead className="text-right">Actions</TableHead>
                                     </TableRow>
@@ -391,7 +372,7 @@ export default function UsersPage() {
                                 <TableBody>
                                     {users.length === 0 ? (
                                         <TableRow>
-                                            <TableCell colSpan={8} className="text-center text-muted-foreground py-12">
+                                            <TableCell colSpan={5} className="text-center text-muted-foreground py-12">
                                                 No users found.
                                             </TableCell>
                                         </TableRow>
@@ -417,33 +398,17 @@ export default function UsersPage() {
                                                     </div>
                                                 </TableCell>
                                                 <TableCell>
-                                                    <div className="flex items-center gap-1">
-                                                        <MapPin className="h-3 w-3 text-muted-foreground" />
-                                                        {user.city || "N/A"}
+                                                    <div className="flex flex-wrap items-center gap-1">
+                                                        {user.is_rider && (
+                                                            <Badge variant="secondary" className="bg-sky-500/15 text-sky-600">Rider</Badge>
+                                                        )}
+                                                        {user.is_driver && (
+                                                            <Badge variant="secondary" className="bg-violet-500/15 text-violet-600">Driver</Badge>
+                                                        )}
+                                                        {!user.is_rider && !user.is_driver && (
+                                                            <span className="text-muted-foreground">—</span>
+                                                        )}
                                                     </div>
-                                                </TableCell>
-                                                <TableCell>
-                                                    <div className="flex items-center gap-1">
-                                                        <Car className="h-3 w-3 text-muted-foreground" />
-                                                        {user.total_rides || 0}
-                                                    </div>
-                                                </TableCell>
-                                                <TableCell>
-                                                    <div className="flex items-center gap-1">
-                                                        <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
-                                                        {user.rating != null ? user.rating.toFixed(1) : "N/A"}
-                                                    </div>
-                                                </TableCell>
-                                                <TableCell>
-                                                    <Badge className={
-                                                        user.status === "banned" ? "bg-red-500/15 text-red-600"
-                                                        : user.status === "suspended" ? "bg-amber-500/15 text-amber-600"
-                                                        : "bg-emerald-500/15 text-emerald-600"
-                                                    }>
-                                                        {user.status === "banned" ? "Banned"
-                                                        : user.status === "suspended" ? "Suspended"
-                                                        : "Active"}
-                                                    </Badge>
                                                 </TableCell>
                                                 <TableCell className="text-xs text-muted-foreground">
                                                     {formatDate(user.created_at)}
@@ -489,9 +454,14 @@ export default function UsersPage() {
                                 </div>
                                 <div>
                                     <p className="text-lg font-semibold">{selectedUser.name}</p>
-                                    <Badge variant={selectedUser.is_verified ? "default" : "secondary"} className={selectedUser.is_verified ? "bg-emerald-500" : ""}>
-                                        {selectedUser.is_verified ? "Verified" : "Unverified"}
-                                    </Badge>
+                                    <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                                        {selectedUser.is_rider && (
+                                            <Badge variant="secondary" className="bg-sky-500/15 text-sky-600">Rider</Badge>
+                                        )}
+                                        {selectedUser.is_driver && (
+                                            <Badge variant="secondary" className="bg-violet-500/15 text-violet-600">Driver</Badge>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
 
@@ -510,31 +480,9 @@ export default function UsersPage() {
                                 </div>
                                 <div className="space-y-1">
                                     <Label className="text-xs text-muted-foreground flex items-center gap-1">
-                                        <MapPin className="h-3 w-3" /> City
-                                    </Label>
-                                    <p className="text-sm">{selectedUser.city || "N/A"}</p>
-                                </div>
-                                <div className="space-y-1">
-                                    <Label className="text-xs text-muted-foreground flex items-center gap-1">
                                         <Calendar className="h-3 w-3" /> Joined
                                     </Label>
                                     <p className="text-sm">{formatDate(selectedUser.created_at)}</p>
-                                </div>
-                            </div>
-
-                            <div className="border-t pt-4">
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div className="rounded-lg bg-muted/50 p-3 text-center">
-                                        <p className="text-xs text-muted-foreground">Total Rides</p>
-                                        <p className="text-2xl font-bold">{selectedUser.total_rides || 0}</p>
-                                    </div>
-                                    <div className="rounded-lg bg-muted/50 p-3 text-center">
-                                        <p className="text-xs text-muted-foreground">Rating</p>
-                                        <p className="text-2xl font-bold flex items-center justify-center gap-1">
-                                            <Star className="h-4 w-4 fill-amber-400 text-amber-400" />
-                                            {selectedUser.rating != null ? selectedUser.rating.toFixed(1) : "N/A"}
-                                        </p>
-                                    </div>
                                 </div>
                             </div>
 

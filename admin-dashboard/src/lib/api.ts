@@ -444,9 +444,8 @@ export const resolveLostItem = (itemId: string, data: { status: string; admin_no
         body: JSON.stringify(data),
     });
 export const sendRideInvoice = (rideId: string) =>
-    request<any>(`/api/v1/rides/${rideId}/process-payment`, {
+    request<any>(`/api/admin/rides/${rideId}/send-receipt`, {
         method: "POST",
-        body: JSON.stringify({ tip_amount: 0 }),
     });
 export const getFlags = (opts: {
     limit?: number;

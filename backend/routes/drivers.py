@@ -353,7 +353,17 @@ async def _generate_and_store_ride_snapshot(
         if not base:
             logger.error("SUPABASE_URL not configured; cannot build public snapshot URL")
             return
-        url = f"{base}/storage/v1/object/public/{bucket}/{storage_path}"
+        # Cache-bust: the object is upserted to a STABLE filename with a 1-year
+        # immutable cache-control, so a regenerated snapshot (e.g. the accurate
+        # completion render replacing an earlier planned/buggy one) would never
+        # be re-fetched by clients/CDNs that cached the old bytes — the stale
+        # image (including a pre-fix duplicate-line render) would persist. A
+        # content-hash query param changes only when the bytes change, forcing
+        # a fresh fetch on regeneration while staying stable across identical
+        # re-renders. Supabase Storage ignores the query string for object
+        # resolution, so this resolves to the same upserted file.
+        digest = hashlib.sha256(png_bytes).hexdigest()[:12]
+        url = f"{base}/storage/v1/object/public/{bucket}/{storage_path}?v={digest}"
 
         # Persist the URL. Wrap in try/except so if migration 41 hasn't
         # landed yet the write fails gracefully instead of raising.

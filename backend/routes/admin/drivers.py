@@ -133,6 +133,7 @@ async def admin_get_drivers(
     is_available: Optional[bool] = None,
     status: Optional[str] = None,
     service_area_id: Optional[str] = None,
+    photo_status: Optional[str] = None,
 ):
     """Get drivers with filters, enriched with user name/email/phone.
 
@@ -179,6 +180,15 @@ async def admin_get_drivers(
             ]
             if matching_uids:
                 filters["$or"].append({"user_id": {"$in": matching_uids}})
+
+    # Filter by profile-photo moderation status (photo lives on users). Used by
+    # the admin "Pending photos" queue. No matching users → no drivers.
+    if photo_status:
+        photo_users = await db_supabase.get_rows("users", {"profile_image_status": photo_status}, limit=1000)
+        photo_uids = [u["id"] for u in photo_users if u.get("id")]
+        if not photo_uids:
+            return []
+        filters["user_id"] = {"$in": photo_uids}
 
     drivers = await db_supabase.get_rows("drivers", filters, order="created_at", desc=True, limit=limit, offset=offset)
 
@@ -452,6 +462,10 @@ async def admin_get_driver_stats(
             "total_rides": total_rides_sum,
             "total_earnings": total_earnings_sum,
             "avg_rating": avg_rating,
+            # Drivers whose profile photo is awaiting admin approval.
+            "pending_photos": sum(
+                1 for u in users_map.values() if u.get("profile_image_status") == "pending_review"
+            ),
         },
         "area_stats": list(area_stats.values()),
         "charts": {

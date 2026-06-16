@@ -35,6 +35,7 @@ const STATUS_TABS = [
     { value: "suspended", label: "Suspended", icon: Pause },
     { value: "banned", label: "Banned", icon: Ban },
     { value: "online", label: "Online", icon: Wifi },
+    { value: "photos_pending", label: "Pending photos", icon: Image },
 ];
 
 const PAGE_SIZE = 50;
@@ -166,6 +167,7 @@ export default function DriversPage() {
         const opts: any = { limit: PAGE_SIZE + 1, offset: page * PAGE_SIZE };
         if (serviceAreaId) opts.service_area_id = serviceAreaId;
         if (statusFilter === "online") opts.is_online = true;
+        else if (statusFilter === "photos_pending") opts.photo_status = "pending_review";
         else if (["active", "pending", "needs_review", "suspended", "banned"].includes(statusFilter)) opts.status = statusFilter;
         getDrivers(opts)
             .then((rows) => {
@@ -365,6 +367,7 @@ export default function DriversPage() {
         if (statusFilter === "needs_review") matchStatus = d.status === "needs_review";
         if (statusFilter === "suspended") matchStatus = d.status === "suspended";
         if (statusFilter === "banned") matchStatus = d.status === "banned";
+        if (statusFilter === "photos_pending") matchStatus = d.profile_image_status === "pending_review";
         const matchVehicleType = !vehicleTypeFilter || d.vehicle_type_id === vehicleTypeFilter;
         return matchSearch && matchStatus && matchVehicleType;
     });
@@ -403,6 +406,7 @@ export default function DriversPage() {
         if (!stats) return 0;
         if (s === "all") return stats.total ?? 0;
         if (s === "online") return stats.online ?? 0;
+        if (s === "photos_pending") return stats.pending_photos ?? 0;
         return stats[s] ?? 0;
     };
     const fmtDate = (d: string) => { if (!d) return "\u2014"; try { return new Date(d).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }); } catch { return d; } };

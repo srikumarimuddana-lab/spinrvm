@@ -4,7 +4,7 @@ Provides aggregated operational intelligence for the admin dashboard.
 """
 
 import logging
-from collections import Counter, defaultdict
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
@@ -67,79 +67,43 @@ async def get_cancellation_breakdown(
     """Aggregated cancellation reason breakdown by date range and optionally service area."""
     start_date = _parse_date_range(date_range)
 
+    # Reason / party / hour classification is done in Postgres
+    # (admin_cancellation_breakdown) instead of fetching up to 5,000 cancelled
+    # rides and bucketing in Python.
     try:
-        filters: dict = {
-            "status": "cancelled",
-            "created_at": {"$gte": start_date.isoformat()},
-        }
-        if service_area_id:
-            filters["service_area_id"] = service_area_id
-        filtered = await db.get_rows("rides", filters, limit=5000, order="created_at")
+        bd = await db.rpc(
+            "admin_cancellation_breakdown",
+            {"p_start": start_date.isoformat(), "p_service_area_id": service_area_id},
+        )
     except Exception as e:
-        logger.error(f"Failed to fetch cancelled rides: {e}", exc_info=True)
+        logger.error(f"Failed to aggregate cancelled rides: {e}", exc_info=True)
         from fastapi import HTTPException as _HTTPException
 
         raise _HTTPException(status_code=503, detail="Analytics data unavailable — database error") from e
 
-    # Categorize cancellation reasons
-    reason_counter = Counter()
-    cancelled_by_counter = Counter()
-    hourly_cancellations = defaultdict(int)
+    bd = bd[0] if isinstance(bd, list) and bd else bd
+    if not isinstance(bd, dict):
+        bd = {}
 
-    for r in filtered:
-        raw_reason = r.get("cancellation_reason", "")
-        cancelled_by = "unknown"
-
-        if not raw_reason:
-            reason = "unspecified"
-        elif "no nearby drivers" in raw_reason.lower() or "no driver" in raw_reason.lower():
-            reason = "no_drivers_available"
-        elif "rider" in raw_reason.lower() or "cancelled by rider" in raw_reason.lower():
-            reason = "rider_cancelled"
-            cancelled_by = "rider"
-        elif "driver" in raw_reason.lower():
-            reason = "driver_cancelled"
-            cancelled_by = "driver"
-        elif "timeout" in raw_reason.lower() or "expired" in raw_reason.lower():
-            reason = "search_timeout"
-        elif "scheduled" in raw_reason.lower():
-            reason = "scheduled_cancelled"
-            cancelled_by = "rider"
-        else:
-            reason = "other"
-
-        reason_counter[reason] += 1
-        cancelled_by_counter[cancelled_by] += 1
-
-        # Hourly distribution
-        created = r.get("cancelled_at") or r.get("updated_at") or r.get("created_at", "")
-        if isinstance(created, str) and len(created) >= 13:
-            try:
-                hour = int(created[11:13])
-                hourly_cancellations[hour] += 1
-            except (ValueError, IndexError):
-                pass
-
-    total = len(filtered)
+    total = int(bd.get("total") or 0)
     reasons = [
         {
-            "reason": reason,
-            "count": count,
-            "pct": round(count / total * 100, 1) if total > 0 else 0,
+            "reason": row.get("reason"),
+            "count": int(row.get("count") or 0),
+            "pct": round(int(row.get("count") or 0) / total * 100, 1) if total > 0 else 0,
         }
-        for reason, count in reason_counter.most_common()
+        for row in (bd.get("reasons") or [])
     ]
-
     by_party = [
         {
-            "party": party,
-            "count": count,
-            "pct": round(count / total * 100, 1) if total > 0 else 0,
+            "party": row.get("party"),
+            "count": int(row.get("count") or 0),
+            "pct": round(int(row.get("count") or 0) / total * 100, 1) if total > 0 else 0,
         }
-        for party, count in cancelled_by_counter.most_common()
+        for row in (bd.get("by_party") or [])
     ]
-
-    hourly = [{"hour": h, "count": hourly_cancellations.get(h, 0)} for h in range(24)]
+    hourly_map = bd.get("hourly") or {}
+    hourly = [{"hour": h, "count": int(hourly_map.get(str(h), 0) or 0)} for h in range(24)]
 
     return {
         "total_cancellations": total,
@@ -175,25 +139,28 @@ async def get_driver_acceptance_rates(
     driver_ids = [d["id"] for d in drivers]
     user_ids = [d["user_id"] for d in drivers if d.get("user_id")]
 
-    # Batch-fetch all rides and users in 2 queries instead of 2N (F-48).
-    all_rides: list = []
+    # Per-driver ride counts are aggregated in Postgres (admin_driver_acceptance_rates)
+    # over the window instead of fetching up to 10,000 rides and rolling up in
+    # Python. Drivers with no rides in the window simply aren't returned; we
+    # default them to zero from the `drivers` list below.
+    acc_by_driver: dict = {}
     if driver_ids:
         try:
-            all_rides = await db.get_rows(
-                "rides",
-                {
-                    "driver_id": {"$in": driver_ids},
-                    "created_at": {"$gte": start_date.isoformat()},
-                },
-                limit=10000,
+            acc_rows = await db.rpc(
+                "admin_driver_acceptance_rates",
+                {"p_start": start_date.isoformat(), "p_service_area_id": service_area_id},
             )
         except Exception as e:
             logger.error(
-                f"Failed to fetch rides for acceptance stats: {e}",
+                f"Failed to aggregate rides for acceptance stats: {e}",
                 exc_info=True,
                 extra={"domain": "admin"},
             )
             raise HTTPException(status_code=503, detail="analytics_unavailable") from e
+        for r in acc_rows or []:
+            did = r.get("driver_id")
+            if did:
+                acc_by_driver[did] = r
 
     users_list: list = []
     if user_ids:
@@ -211,25 +178,15 @@ async def get_driver_acceptance_rates(
             )
             raise HTTPException(status_code=503, detail="analytics_unavailable") from e
 
-    rides_by_driver: dict = {}
-    for r in all_rides:
-        did = r.get("driver_id")
-        if did:
-            rides_by_driver.setdefault(did, []).append(r)
-
     users_map = {u["id"]: u for u in users_list if u.get("id")}
 
     result = []
     for driver in drivers:
         driver_id = driver["id"]
-        period_rides = rides_by_driver.get(driver_id, [])
-        total_assigned = len(period_rides)
-        completed = sum(1 for r in period_rides if r.get("status") == "completed")
-        cancelled_by_driver = sum(
-            1
-            for r in period_rides
-            if r.get("status") == "cancelled" and "driver" in (r.get("cancellation_reason") or "").lower()
-        )
+        agg = acc_by_driver.get(driver_id) or {}
+        total_assigned = int(agg.get("total_rides") or 0)
+        completed = int(agg.get("completed") or 0)
+        cancelled_by_driver = int(agg.get("cancelled_by_driver") or 0)
 
         acceptance_rate = round((completed / total_assigned * 100), 1) if total_assigned > 0 else 0
         cancellation_rate = round((cancelled_by_driver / total_assigned * 100), 1) if total_assigned > 0 else 0

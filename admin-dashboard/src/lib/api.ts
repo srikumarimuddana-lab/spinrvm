@@ -809,6 +809,20 @@ export const getSubscriptionStats = (params?: { start_date?: string; end_date?: 
 };
 
 /* ── Settings ─────────────────────────────── */
+export const getEmailDeliverability = (days = 7) =>
+    request<{
+        window_days: number;
+        total: number;
+        by_status: Record<string, number>;
+        by_provider: Record<string, number>;
+        by_type: Record<string, number>;
+        failure_rate: number;
+        suppressed_in_window: number;
+        suppression_list_size: number;
+        recent_failures: Array<{ email_type: string; provider: string; status: string; recipient_user_id: string | null; created_at: string }>;
+        recent_suppressions: Array<{ reason: string; detail: string | null; source: string; message_id: string | null; created_at: string }>;
+    }>(`/api/admin/monitoring/email-deliverability?days=${days}`);
+
 export const getSettings = () => request<any>("/api/admin/settings");
 export const updateSettings = (data: any) =>
     request<{ message: string; audit_log_id?: string }>("/api/admin/settings", {

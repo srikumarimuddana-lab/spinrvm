@@ -1302,6 +1302,11 @@ async def _deliver_push_now(
                 channel_id=android_channel,
             ),
         )
+        # iOS rich image: surface the offer-card banner URL via fcm_options.image
+        # so the Notification Service Extension (driver app) downloads + attaches
+        # it. mutable_content (set below) is what lets the NSE run. Harmless when
+        # no NSE is installed — iOS just ignores the image.
+        _apns_image = (data or {}).get("offer_card_url") if is_dispatch else None
         message = messaging.Message(
             notification=None if is_dispatch else messaging.Notification(title=title, body=body),
             data=data or {},
@@ -1312,6 +1317,7 @@ async def _deliver_push_now(
                     "apns-priority": "10",
                     "apns-push-type": "alert",
                 },
+                fcm_options=messaging.APNSFCMOptions(image=_apns_image) if _apns_image else None,
                 # iOS has no full-screen intent — a dispatch offer rides on a
                 # time-sensitive alert payload (custom sound + category for the
                 # Accept/Decline actions). Without this aps block, iOS shows

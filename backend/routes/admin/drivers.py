@@ -617,7 +617,8 @@ async def admin_get_approval_queue(
                 "name": _user_display_name(u) or drow.get("name") or "",
                 "email": (u or {}).get("email"),
                 "phone": (u or {}).get("phone") or drow.get("phone"),
-                "profile_photo_url": drow.get("profile_photo_url"),
+                # Driver photo = users.profile_image (no drivers photo column).
+                "profile_photo_url": (u or {}).get("profile_image"),
                 "status": drow.get("status", "pending"),
                 "created_at": drow.get("created_at"),
                 "queue_started_at": queue_started_at,
@@ -765,7 +766,8 @@ async def admin_get_expiring_documents(
                 "last_name": (u or {}).get("last_name") or "",
                 "email": (u or {}).get("email"),
                 "phone": (u or {}).get("phone") or d.get("phone"),
-                "profile_photo_url": d.get("profile_photo_url"),
+                # Driver photo = users.profile_image (no drivers photo column).
+                "profile_photo_url": (u or {}).get("profile_image"),
                 "status": d.get("status"),
                 "service_area_id": d.get("service_area_id"),
                 "service_area_name": areas_map.get(d.get("service_area_id")),

@@ -30,11 +30,17 @@ router = APIRouter()
 # client-side. They must NOT be listed here — projecting a non-existent column
 # makes Postgres raise 42703 ("column does not exist") and the endpoint 503s.
 # The single-user detail endpoint (admin_get_user_details) still selects *.
-_USER_LIST_COLUMNS = "id,first_name,last_name,email,phone,role,created_at,is_rider,is_driver"
+_USER_LIST_COLUMNS = "id,first_name,last_name,email,phone,role,created_at,is_rider,is_driver,status,suspended_until"
 
 
 class UserStatusRequest(BaseModel):
     status: Literal["active", "suspended", "banned"]
+    # Moderation note — required when suspending or banning so the action is
+    # auditable (and shown back to the rider). Ignored when reactivating.
+    reason: Optional[str] = None
+    # Optional auto-lift time for a *temporary* suspension (ISO-8601). Omit for
+    # an indefinite suspension (admin must reactivate). Only used for 'suspended'.
+    suspended_until: Optional[str] = None
 
 
 # ---------- Users (riders) ----------
@@ -129,19 +135,54 @@ async def admin_get_user_details(user_id: str):
 
 @router.put("/users/{user_id}/status")
 async def admin_update_user_status(user_id: str, status_data: UserStatusRequest, admin: dict = Depends(get_admin_user)):
-    """Update user status (e.g., suspend, activate)."""
+    """Suspend, ban, or reactivate a rider account (Uber/Lyft-style moderation).
+
+    - suspended / banned require a `reason` (stored + audited + shown to the rider).
+    - `suspended_until` makes a suspension temporary (auto-lifts at booking time);
+      omit it for an indefinite suspension that an admin must reactivate.
+    - reactivating (status='active') clears the reason and the suspension timer.
+
+    Enforcement lives at booking time (routes/rides.py): suspended/banned riders
+    cannot request a ride.
+    """
     new_status = status_data.status
+    reason = (status_data.reason or "").strip()
 
     user = await db_supabase.get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    old_status = user.get("status")
 
-    await db_supabase.update_one(
-        "users",
-        {"id": user_id},
-        {"status": new_status, "updated_at": datetime.now(timezone.utc).isoformat()},
-    )
+    if new_status in ("suspended", "banned") and not reason:
+        verb = "ban" if new_status == "banned" else "suspend"
+        raise HTTPException(status_code=422, detail=f"A reason is required to {verb} an account.")
+
+    old_status = user.get("status") or "active"
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    update: Dict[str, Any] = {
+        "status": new_status,
+        "status_changed_at": now_iso,
+        "status_changed_by": admin["id"],
+        "updated_at": now_iso,
+    }
+    if new_status == "active":
+        # Reactivation clears the moderation context.
+        update["status_reason"] = None
+        update["suspended_until"] = None
+    else:
+        update["status_reason"] = reason
+        # suspended_until only applies to a temporary suspension.
+        update["suspended_until"] = status_data.suspended_until if new_status == "suspended" else None
+
+    try:
+        await db_supabase.update_one("users", {"id": user_id}, update)
+    except Exception as e:
+        logger.error(
+            "Failed to update user status",
+            exc_info=True,
+            extra={"domain": "admin", "user_id": user_id, "new_status": new_status},
+        )
+        raise HTTPException(status_code=503, detail="Could not update account status.") from e
 
     await db_supabase.insert_one(
         "audit_logs",
@@ -149,15 +190,43 @@ async def admin_update_user_status(user_id: str, status_data: UserStatusRequest,
             "id": str(uuid.uuid4()),
             "actor_id": admin["id"],
             "actor_role": admin.get("role"),
-            "action": "status_change",
+            "action": "user_status_change",
             "entity_type": "user",
             "entity_id": user_id,
-            "details": {"old_status": old_status, "new_status": new_status},
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "details": {
+                "old_status": old_status,
+                "new_status": new_status,
+                "reason": reason or None,
+                "suspended_until": update.get("suspended_until"),
+            },
+            "created_at": now_iso,
         },
     )
 
-    return {"message": f"User status updated to {new_status}"}
+    # Best-effort: tell the rider their account state changed (never blocks the
+    # admin action if push delivery fails).
+    if new_status != old_status:
+        try:
+            try:
+                from ...features import send_push_notification
+            except ImportError:
+                from features import send_push_notification  # type: ignore
+            if new_status == "banned":
+                title, body = "Account deactivated", reason or "Your account has been deactivated. Contact support."
+            elif new_status == "suspended":
+                title, body = "Account suspended", reason or "Your account has been suspended. Contact support."
+            else:
+                title, body = "Account reactivated", "Your account is active again. Welcome back!"
+            await send_push_notification(user_id, title, body, data={"type": "account_status", "status": new_status})
+        except Exception:
+            logger.warning("account status push failed", exc_info=True, extra={"domain": "admin", "user_id": user_id})
+
+    return {
+        "message": f"User status updated to {new_status}",
+        "status": new_status,
+        "status_reason": update.get("status_reason"),
+        "suspended_until": update.get("suspended_until"),
+    }
 
 
 class UserFlagsRequest(BaseModel):

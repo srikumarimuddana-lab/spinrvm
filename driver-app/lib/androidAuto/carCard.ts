@@ -1,0 +1,247 @@
+/**
+ * Pure presentation model for the Lyft-style trip card drawn on the Android Auto
+ * map surface (carSurface.tsx) and reused for the ride-offer alert (register.ts).
+ *
+ * Framework-free and side-effect-free so the whole card — every label the driver
+ * reads at a glance in the car — is unit-testable without a head unit or the
+ * native module. The surface turns this into a branded overlay; register turns
+ * the `offer` variant into a NavigationAlert with Accept / Decline actions.
+ *
+ * Single source of truth: it reads the SAME `useDriverStore` shapes the phone
+ * uses (ActiveRide for an engaged ride, the incoming-offer payload for a fresh
+ * request) — it never fetches or derives anything the phone doesn't already have.
+ */
+import type { ActiveRide, RideState } from '../../store/driverStore';
+
+/** Spinr brand red — the card accent + status pill. */
+export const SPINR_RED = '#ee2b2b';
+const NEUTRAL = '#1c1c1e';
+const GO = '#0f9d58';
+
+/** Which trip leg the card represents — also picks the destination + accent. */
+export type TripCardLeg = 'idle' | 'offer' | 'pickup' | 'dropoff' | 'complete';
+
+/**
+ * The minimal shape of a fresh dispatch offer the card reads. Kept structural
+ * (not the store's private `IncomingRide`) so this module stays decoupled — the
+ * surface passes `useDriverStore(s => s.incomingRide)` straight in.
+ */
+export interface OfferLike {
+  ride_id: string;
+  pickup_address?: string;
+  dropoff_address?: string;
+  fare?: string;
+  distance_km?: number;
+  duration_minutes?: number;
+  rider_name?: string;
+  rider_rating?: number;
+  requires_wav?: boolean;
+  surge_multiplier?: number;
+}
+
+/** Everything the head-unit card renders. All fields pre-formatted for display. */
+export interface TripCard {
+  leg: TripCardLeg;
+  /** Short state headline shown in the status pill, e.g. "Heading to pickup". */
+  statusLabel: string;
+  /** Pill / accent colour. */
+  accent: string;
+  /** Rider first name, or null when there is no engaged/offered rider. */
+  riderName: string | null;
+  /** Rider rating formatted to one decimal ("4.9"), or null. */
+  riderRating: string | null;
+  /** The address the driver is currently headed to (pickup or dropoff). */
+  destinationLabel: string | null;
+  /** "Pick-up" / "Drop-off" caption for the destination row. */
+  destinationCaption: string | null;
+  /** Trip ETA ("8 min") — duration_minutes rounded, or null. */
+  etaLabel: string | null;
+  /** Trip distance ("3.2 km"), or null. */
+  distanceLabel: string | null;
+  /** Fare ("$14.50"), or null. */
+  fareLabel: string | null;
+  /** Surge badge ("1.5×") when above 1.0, else null. */
+  surgeLabel: string | null;
+  /** Wheelchair-accessible vehicle requested. */
+  wav: boolean;
+  /** Secondary guidance line, e.g. the phone-only start-trip prompt. */
+  hint: string | null;
+}
+
+const firstName = (full?: string): string | null => {
+  const t = full?.trim();
+  if (!t) return null;
+  return t.split(/\s+/)[0];
+};
+
+const money = (v?: string | null): string | null => {
+  const t = (v ?? '').toString().trim();
+  return t.length > 0 ? `$${t}` : null;
+};
+
+const km = (v?: number | null): string | null =>
+  typeof v === 'number' && Number.isFinite(v) ? `${v.toFixed(1)} km` : null;
+
+const mins = (v?: number | null): string | null =>
+  typeof v === 'number' && Number.isFinite(v) ? `${Math.max(1, Math.round(v))} min` : null;
+
+const rating = (v?: number | null): string | null =>
+  typeof v === 'number' && Number.isFinite(v) ? v.toFixed(1) : null;
+
+/** Surge badge only above the 1.0 baseline; trims trailing zeros (1.50 → "1.5×"). */
+export const surgeBadge = (v?: number | null): string | null => {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v <= 1.0001) return null;
+  const s = v.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+  return `${s}×`;
+};
+
+/** The fresh-offer card (state === 'ride_offered'), sourced from the dispatch payload. */
+export function buildOfferCard(offer: OfferLike | null): TripCard {
+  return {
+    leg: 'offer',
+    statusLabel: 'New ride request',
+    accent: SPINR_RED,
+    riderName: firstName(offer?.rider_name),
+    riderRating: rating(offer?.rider_rating),
+    destinationLabel: offer?.pickup_address?.trim() || null,
+    destinationCaption: 'Pick-up',
+    etaLabel: mins(offer?.duration_minutes),
+    distanceLabel: km(offer?.distance_km),
+    fareLabel: money(offer?.fare),
+    surgeLabel: surgeBadge(offer?.surge_multiplier),
+    wav: offer?.requires_wav === true,
+    hint: 'Accept or decline on the request card',
+  };
+}
+
+/**
+ * Build the trip card for the current ride state. For `ride_offered` it prefers
+ * the live offer payload (richer, present on the push path); otherwise it reads
+ * the engaged ActiveRide. Returns an idle card when there is nothing to show.
+ */
+export function buildTripCard(
+  state: RideState,
+  activeRide: ActiveRide | null,
+  offer: OfferLike | null = null,
+): TripCard {
+  if (state === 'ride_offered') {
+    // Prefer the dispatch offer; fall back to ActiveRide fields when only the
+    // fetched-active path populated the store (no incoming push payload).
+    if (offer) return buildOfferCard(offer);
+    const ride = activeRide?.ride;
+    return buildOfferCard(
+      ride
+        ? {
+            ride_id: ride.id,
+            pickup_address: ride.pickup_address,
+            dropoff_address: ride.dropoff_address,
+            fare: ride.total_fare,
+            distance_km: ride.distance_km,
+            duration_minutes: ride.duration_minutes,
+            rider_name: activeRide?.rider?.first_name,
+            rider_rating: activeRide?.rider?.rating,
+            requires_wav: ride.requires_wav,
+            surge_multiplier: ride.surge_multiplier,
+          }
+        : null,
+    );
+  }
+
+  const ride = activeRide?.ride ?? null;
+  const riderName = firstName(activeRide?.rider?.first_name);
+  const riderRating = rating(activeRide?.rider?.rating);
+  const fareLabel = money(ride?.total_fare);
+  const surgeLabel = surgeBadge(ride?.surge_multiplier);
+  const wav = ride?.requires_wav === true;
+  const etaLabel = mins(ride?.duration_minutes);
+  const distanceLabel = km(ride?.distance_km);
+
+  switch (state) {
+    case 'navigating_to_pickup':
+      return {
+        leg: 'pickup',
+        statusLabel: 'Heading to pickup',
+        accent: SPINR_RED,
+        riderName,
+        riderRating,
+        destinationLabel: ride?.pickup_address?.trim() || null,
+        destinationCaption: 'Pick-up',
+        etaLabel,
+        distanceLabel,
+        fareLabel,
+        surgeLabel,
+        wav,
+        hint: null,
+      };
+
+    case 'arrived_at_pickup':
+      return {
+        leg: 'pickup',
+        statusLabel: 'Arrived at pickup',
+        accent: GO,
+        riderName,
+        riderRating,
+        destinationLabel: ride?.pickup_address?.trim() || null,
+        destinationCaption: 'Pick-up',
+        etaLabel: null,
+        distanceLabel,
+        fareLabel,
+        surgeLabel,
+        wav,
+        // OTP start-trip is distraction-sensitive — stays on the phone (CLAUDE.md).
+        hint: 'Verify the rider’s PIN on your phone to start the trip',
+      };
+
+    case 'trip_in_progress':
+      return {
+        leg: 'dropoff',
+        statusLabel: 'Trip in progress',
+        accent: SPINR_RED,
+        riderName,
+        riderRating,
+        destinationLabel: ride?.dropoff_address?.trim() || null,
+        destinationCaption: 'Drop-off',
+        etaLabel,
+        distanceLabel,
+        fareLabel,
+        surgeLabel,
+        wav,
+        hint: null,
+      };
+
+    case 'trip_completed':
+      return {
+        leg: 'complete',
+        statusLabel: 'Trip complete',
+        accent: GO,
+        riderName,
+        riderRating: null,
+        destinationLabel: null,
+        destinationCaption: null,
+        etaLabel: null,
+        distanceLabel: null,
+        fareLabel,
+        surgeLabel: null,
+        wav: false,
+        hint: 'Open Spinr on your phone for your next ride',
+      };
+
+    case 'idle':
+    default:
+      return {
+        leg: 'idle',
+        statusLabel: 'No active ride',
+        accent: NEUTRAL,
+        riderName: null,
+        riderRating: null,
+        destinationLabel: null,
+        destinationCaption: null,
+        etaLabel: null,
+        distanceLabel: null,
+        fareLabel: null,
+        surgeLabel: null,
+        wav: false,
+        hint: 'Ride requests will appear here',
+      };
+  }
+}

@@ -640,6 +640,16 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
 
     updates["updated_at"] = datetime.now(timezone.utc).isoformat()
     await db_supabase.update_one("drivers", {"id": driver["id"]}, await _encrypt_driver_pii(updates))
+    # Append-only vehicle/identity change history (SGI/insurance audit). Uses
+    # the pre-update `driver` row as the "before" snapshot.
+    if changed_vehicle:
+        try:
+            from ..utils.vehicle_history import record_vehicle_changes
+        except ImportError:
+            from utils.vehicle_history import record_vehicle_changes  # type: ignore
+        await record_vehicle_changes(
+            driver["id"], driver, updates, changed_by_user_id=current_user["id"], role="driver"
+        )
     # M-5: SGI insurance period audit — vehicle/document edits flip an
     # active driver to needs_review and force them offline. If they were
     # actually online before this update, that's a 1→0 transition.

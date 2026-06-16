@@ -167,36 +167,79 @@ class TestPreauthorizeRideCard:
         auth.assert_not_called()
 
 
-def _patch_verify(outcome):
-    return patch("backend.routes.rides.verify_authorization", AsyncMock(return_value=outcome))
+def _patch_verify(outcome, *, existing_rows=None):
+    """Patch verify_authorization and the PI-reuse lookup (db_supabase.get_rows)."""
+    return [
+        patch("backend.routes.rides.verify_authorization", AsyncMock(return_value=outcome)),
+        patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=existing_rows or [])),
+    ]
+
+
+_ATTACH_KW = dict(
+    ride_id="r",
+    rider_id="rider_book_1",
+    payment_intent_id="pi_sca",
+    stripe_customer_id="cus_book",
+    min_amount=Decimal("25.00"),
+)
 
 
 @pytest.mark.asyncio
 class TestAttachPreauthorizedHold:
     async def test_authorized_attaches_amount_from_stripe(self):
+        from contextlib import ExitStack
+
         from backend.routes.rides import _attach_preauthorized_hold
 
-        with _patch_verify(_outcome(status="authorized", payment_intent_id="pi_sca", charged_amount=Decimal("35.00"))):
-            fields = await _attach_preauthorized_hold(ride_id="r", payment_intent_id="pi_sca")
+        out = _outcome(status="authorized", payment_intent_id="pi_sca", charged_amount=Decimal("35.00"))
+        with ExitStack() as st:
+            verify = st.enter_context(_patch_verify(out)[0])
+            st.enter_context(_patch_verify(out)[1])
+            fields = await _attach_preauthorized_hold(**_ATTACH_KW)
 
         assert fields == {
             "payment_intent_id": "pi_sca",
             "authorized_amount": 35.0,
             "auth_status": "authorized",
         }
+        # ownership + amount checks are threaded to verify_authorization
+        assert verify.call_args.kwargs["expected_customer_id"] == "cus_book"
+        assert verify.call_args.kwargs["min_amount_cents"] == 2500
 
     async def test_declined_raises_402(self):
+        from contextlib import ExitStack
+
         from backend.routes.rides import _attach_preauthorized_hold
 
-        with _patch_verify(_outcome(status="declined")):
+        with ExitStack() as st:
+            for p in _patch_verify(_outcome(status="declined")):
+                st.enter_context(p)
             with pytest.raises(HTTPException) as ei:
-                await _attach_preauthorized_hold(ride_id="r", payment_intent_id="pi_x")
+                await _attach_preauthorized_hold(**_ATTACH_KW)
         assert ei.value.status_code == 402
         assert ei.value.detail["code"] == "CARD_DECLINED"
 
     async def test_failed_degrades_to_no_hold(self):
+        from contextlib import ExitStack
+
         from backend.routes.rides import _attach_preauthorized_hold
 
-        with _patch_verify(_outcome(status="failed", error_message="ops")):
-            fields = await _attach_preauthorized_hold(ride_id="r", payment_intent_id="pi_x")
+        with ExitStack() as st:
+            for p in _patch_verify(_outcome(status="failed", error_message="ops")):
+                st.enter_context(p)
+            fields = await _attach_preauthorized_hold(**_ATTACH_KW)
         assert fields == {}
+
+    async def test_pi_already_attached_to_other_ride_blocks(self):
+        """SECURITY: a PI already on a DIFFERENT ride can't be re-attached."""
+        from contextlib import ExitStack
+
+        from backend.routes.rides import _attach_preauthorized_hold
+
+        out = _outcome(status="authorized", payment_intent_id="pi_sca", charged_amount=Decimal("35.00"))
+        with ExitStack() as st:
+            for p in _patch_verify(out, existing_rows=[{"id": "some_other_ride"}]):
+                st.enter_context(p)
+            with pytest.raises(HTTPException) as ei:
+                await _attach_preauthorized_hold(**_ATTACH_KW)
+        assert ei.value.status_code == 402

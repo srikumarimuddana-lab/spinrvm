@@ -346,3 +346,39 @@ class TestVerifyAuthorization:
         ):
             outcome = await verify_authorization(ride_id="r", payment_intent_id="pi_e")
         assert outcome.status == "failed"
+
+    async def test_customer_mismatch_is_declined(self):
+        """SECURITY: a PI owned by a different Stripe customer must not attach."""
+        from backend.utils.stripe_charge import verify_authorization
+
+        intent = MagicMock(id="pi_o", status="requires_capture", amount=3500, customer="cus_OTHER")
+        stripe_patch, _ = _patch_stripe(retrieve_return=intent)
+        with _patch_settings(), stripe_patch:
+            outcome = await verify_authorization(ride_id="r", payment_intent_id="pi_o", expected_customer_id="cus_MINE")
+        assert outcome.status == "declined"
+        assert "account" in (outcome.error_message or "").lower()
+
+    async def test_amount_too_small_is_declined(self):
+        """SECURITY: a hold smaller than the fare (replayed cheaper booking) is declined."""
+        from backend.utils.stripe_charge import verify_authorization
+
+        intent = MagicMock(id="pi_s", status="requires_capture", amount=1000, customer="cus_MINE")
+        stripe_patch, _ = _patch_stripe(retrieve_return=intent)
+        with _patch_settings(), stripe_patch:
+            outcome = await verify_authorization(
+                ride_id="r", payment_intent_id="pi_s", expected_customer_id="cus_MINE", min_amount_cents=2500
+            )
+        assert outcome.status == "declined"
+        assert "insufficient" in (outcome.error_message or "").lower()
+
+    async def test_owner_and_amount_ok_is_authorized(self):
+        from backend.utils.stripe_charge import verify_authorization
+
+        intent = MagicMock(id="pi_ok", status="requires_capture", amount=3500, customer="cus_MINE")
+        stripe_patch, _ = _patch_stripe(retrieve_return=intent)
+        with _patch_settings(), stripe_patch:
+            outcome = await verify_authorization(
+                ride_id="r", payment_intent_id="pi_ok", expected_customer_id="cus_MINE", min_amount_cents=2500
+            )
+        assert outcome.status == "authorized"
+        assert outcome.charged_amount == Decimal("35.00")

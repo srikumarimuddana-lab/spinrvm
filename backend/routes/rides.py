@@ -1815,14 +1815,49 @@ def _card_declined_result(decline_code: Optional[str], block_on_decline: bool) -
 async def _attach_preauthorized_hold(
     *,
     ride_id: str,
+    rider_id: str,
     payment_intent_id: str,
+    stripe_customer_id: Optional[str],
+    min_amount: Decimal,
 ) -> dict:
     """Verify a PaymentIntent the rider-app already confirmed on-device (SCA /
     Apple Pay two-step) and return the ride fields to persist. A failed/abandoned
     authentication raises 402 so the rider re-tries — we never attach an
     unconfirmed hold, and we re-read the PI from Stripe rather than trusting the
-    client. ``authorized_amount`` is taken from Stripe (the true held amount)."""
-    outcome = await verify_authorization(ride_id=ride_id, payment_intent_id=payment_intent_id)
+    client. ``authorized_amount`` is taken from Stripe (the true held amount).
+
+    SECURITY: the PI must (a) belong to this rider's Stripe customer, (b) hold at
+    least the ride fare, and (c) not already be attached to another ride — so a
+    client cannot attach someone else's hold, replay a cheaper one, or reuse a PI
+    across rides."""
+    # (c) Reuse guard: a PI already on another ride must not be re-attached.
+    try:
+        existing = await db_supabase.get_rows(
+            "rides",
+            {"payment_intent_id": payment_intent_id},
+            limit=1,
+            columns="id",
+        )
+    except Exception as e:
+        logger.error("[preauth] PI-reuse lookup failed for ride=%s pi=%s: %s", ride_id, payment_intent_id, e)
+        existing = []
+    if existing and existing[0].get("id") != ride_id:
+        logger.error("[preauth][security] PI already attached to ride=%s (declining)", existing[0].get("id"))
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "code": "CARD_DECLINED",
+                "message": "This authorization can't be reused. Please try booking again.",
+            },
+        )
+
+    min_cents = int((_round(_d(min_amount)) * Decimal("100")).to_integral_value(rounding=ROUND_HALF_UP))
+    outcome = await verify_authorization(
+        ride_id=ride_id,
+        payment_intent_id=payment_intent_id,
+        expected_customer_id=stripe_customer_id,
+        min_amount_cents=min_cents,
+    )
     if outcome.status == "authorized":
         return {
             "payment_intent_id": outcome.payment_intent_id,
@@ -2482,7 +2517,10 @@ async def create_ride(
             ride_data.update(
                 await _attach_preauthorized_hold(
                     ride_id=ride_data["id"],
+                    rider_id=current_user["id"],
                     payment_intent_id=body.preauthorized_payment_intent_id,
+                    stripe_customer_id=(rider_row or {}).get("stripe_customer_id"),
+                    min_amount=_d(grand_total),
                 )
             )
         else:

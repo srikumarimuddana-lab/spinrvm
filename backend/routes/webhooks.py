@@ -306,7 +306,7 @@ async def stripe_webhook(request: Request):
                 {
                     "payment_status": "paid",
                     "payment_intent_id": payment_intent_id,
-                    "paid_at": datetime.now(timezone.utc),
+                    "paid_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
             if updated is None:

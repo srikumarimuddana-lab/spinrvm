@@ -135,14 +135,17 @@ async def admin_send_cloud_message(
 
     target_users: list = []
     if not is_scheduled:
+        # Only the id is needed for fan-out (_fan_out_push reads u["id"]). Project
+        # it explicitly so a broadcast doesn't drag up to 10k base64 profile_image
+        # blobs out of the DB and into memory.
         if audience in ("particular_customer", "particular_driver"):
             target_users = [{"id": uid} for uid in particular_ids]
         elif audience == "customers":
-            target_users = await db.get_rows("users", {"is_rider": True}, limit=10000)
+            target_users = await db.get_rows("users", {"is_rider": True}, columns="id", limit=10000)
         elif audience == "drivers":
-            target_users = await db.get_rows("users", {"is_driver": True}, limit=10000)
+            target_users = await db.get_rows("users", {"is_driver": True}, columns="id", limit=10000)
         elif audience == "all":
-            target_users = await db.get_rows("users", {}, limit=10000)
+            target_users = await db.get_rows("users", {}, columns="id", limit=10000)
 
     doc = {
         "id": str(uuid.uuid4()),

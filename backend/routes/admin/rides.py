@@ -955,7 +955,9 @@ async def admin_get_stats():
     today_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     month_start = now_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
 
-    # Parallelise all independent DB calls (F-49: previously 11 sequential round-trips).
+    # Parallelise all independent DB calls (F-49: previously 11 sequential
+    # round-trips). The two money rollups (today + month) are aggregated in
+    # Postgres now instead of fetching up to 5,000 completed rides each.
     (
         total_drivers,
         online_drivers,
@@ -966,8 +968,8 @@ async def admin_get_stats():
         total_users,
         rides_today,
         pending_applications,
-        completed_today,
-        completed_month,
+        today_money,
+        month_money,
     ) = await asyncio.gather(
         db_supabase.count_documents("drivers", {}),
         db_supabase.count_documents("drivers", {"is_online": True}),
@@ -990,26 +992,24 @@ async def admin_get_stats():
         db_supabase.count_documents("users", {}),
         db_supabase.count_documents("rides", {"created_at": {"$gte": today_start}}),
         db_supabase.count_documents("drivers", {"is_verified": False}),
-        db_supabase.get_rows(
-            "rides",
-            {"status": "completed", "ride_completed_at": {"$gte": today_start}},
-            limit=5000,
-        ),
-        db_supabase.get_rows(
-            "rides",
-            {"status": "completed", "ride_completed_at": {"$gte": month_start}},
-            limit=5000,
-        ),
+        db_supabase.rpc("admin_ride_money_rollup", {"p_start": today_start, "p_end": None}),
+        db_supabase.rpc("admin_ride_money_rollup", {"p_start": month_start, "p_end": None}),
     )
 
-    revenue_today = float(sum(Decimal(str(r.get("total_fare") or 0)) for r in (completed_today or [])))
-    revenue_month = float(sum(Decimal(str(r.get("total_fare") or 0)) for r in completed_month))
+    def _rollup_dec(rollup: Any, key: str) -> Decimal:
+        row = rollup[0] if isinstance(rollup, list) and rollup else rollup
+        if not isinstance(row, dict):
+            return Decimal("0")
+        return Decimal(str(row.get(key) or 0))
+
+    revenue_today = float(_rollup_dec(today_money, "sum_total_fare"))
+    revenue_month = float(_rollup_dec(month_money, "sum_total_fare"))
     # Earnings + tip totals are aggregated over completed rides in the
     # current month; upstream's stats API never wired these up so we compute
     # them here rather than returning stale zeroes.
-    total_driver_earnings = float(sum(Decimal(str(r.get("driver_earnings") or 0)) for r in completed_month))
-    total_admin_earnings = float(sum(Decimal(str(r.get("admin_earnings") or 0)) for r in completed_month))
-    total_tips = float(sum(Decimal(str(r.get("tip_amount") or 0)) for r in completed_month))
+    total_driver_earnings = float(_rollup_dec(month_money, "sum_driver_earnings"))
+    total_admin_earnings = float(_rollup_dec(month_money, "sum_admin_earnings"))
+    total_tips = float(_rollup_dec(month_money, "sum_tip"))
     return {
         # Fields the dashboard page expects
         "total_rides": total_rides,
@@ -1053,36 +1053,37 @@ async def admin_get_ride_stats():
     this_week_count = await db_supabase.get_ride_count_by_date_range(week_start.isoformat(), week_end.isoformat())
     this_month_count = await db_supabase.get_ride_count_by_date_range(month_start.isoformat(), next_month.isoformat())
 
-    # Revenue stats from completed rides
-    completed_today = await db_supabase.get_rows(
-        "rides",
-        {"status": "completed", "ride_completed_at": {"$gte": today_start.isoformat()}},
-        limit=10000,
-    )
-    total_revenue = float(sum(Decimal(str(r.get("total_fare") or 0)) for r in completed_today))
-    total_tips = float(sum(Decimal(str(r.get("tip_amount") or 0)) for r in completed_today))
-    completed_count = len(completed_today)
+    # Revenue stats from completed rides — aggregated in Postgres (today +
+    # month) instead of fetching up to 10,000 rides per window and summing.
+    today_money = await db_supabase.rpc("admin_ride_money_rollup", {"p_start": today_start.isoformat(), "p_end": None})
+    month_money = await db_supabase.rpc("admin_ride_money_rollup", {"p_start": month_start.isoformat(), "p_end": None})
 
-    # Monthly completed rides for revenue
-    completed_month = await db_supabase.get_rows(
-        "rides",
-        {"status": "completed", "ride_completed_at": {"$gte": month_start.isoformat()}},
-        limit=10000,
-    )
-    month_revenue = float(sum(Decimal(str(r.get("total_fare") or 0)) for r in completed_month))
+    def _rollup(rollup: Any) -> Dict[str, Any]:
+        row = rollup[0] if isinstance(rollup, list) and rollup else rollup
+        return row if isinstance(row, dict) else {}
 
-    # Daily chart data for last 14 days
-    daily_chart = []
-    for i in range(13, -1, -1):
-        day_start = today_start - timedelta(days=i)
-        day_end = day_start + timedelta(days=1)
-        count = await db_supabase.get_ride_count_by_date_range(day_start.isoformat(), day_end.isoformat())
-        daily_chart.append(
-            {
-                "date": day_start.strftime("%b %d"),
-                "rides": count,
-            }
-        )
+    today_row = _rollup(today_money)
+    total_revenue = float(Decimal(str(today_row.get("sum_total_fare") or 0)))
+    total_tips = float(Decimal(str(today_row.get("sum_tip") or 0)))
+    completed_count = int(today_row.get("completed_count") or 0)
+    month_revenue = float(Decimal(str(_rollup(month_money).get("sum_total_fare") or 0)))
+
+    # Daily chart data for last 14 days — one grouped query instead of 14
+    # sequential COUNT round-trips.
+    chart_start = today_start - timedelta(days=13)
+    chart_end = today_start + timedelta(days=1)
+    count_rows = await db_supabase.rpc(
+        "admin_ride_daily_counts",
+        {"p_start": chart_start.isoformat(), "p_end": chart_end.isoformat()},
+    )
+    chart_buckets: Dict[str, int] = {str(r.get("day")): int(r.get("rides") or 0) for r in (count_rows or [])}
+    daily_chart = [
+        {
+            "date": (chart_start + timedelta(days=i)).strftime("%b %d"),
+            "rides": chart_buckets.get((chart_start + timedelta(days=i)).strftime("%Y-%m-%d"), 0),
+        }
+        for i in range(14)
+    ]
 
     return {
         "today_count": today_count,
@@ -1107,32 +1108,19 @@ async def admin_get_ride_trend(
 ):
     """Daily ride counts for the trend chart.
 
-    Single DB round-trip: fetches only the created_at column for rides in the
-    window, then buckets in Python. Replaces the 14-sequential-query pattern
-    in /rides/stats daily_chart.
+    One grouped query in Postgres (admin_ride_daily_counts) instead of fetching
+    every created_at in the window and bucketing in Python.
     """
     now = datetime.now(timezone.utc)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     window_start = today_start - timedelta(days=days - 1)
+    window_end = today_start + timedelta(days=1)  # through end of today
 
-    rows = await db_supabase.get_rows(
-        "rides",
-        {"created_at": {"$gte": window_start.isoformat()}},
-        columns="created_at",
-        limit=50000,
+    count_rows = await db_supabase.rpc(
+        "admin_ride_daily_counts",
+        {"p_start": window_start.isoformat(), "p_end": window_end.isoformat()},
     )
-
-    buckets: Dict[str, int] = {}
-    for i in range(days):
-        d = (window_start + timedelta(days=i)).strftime("%Y-%m-%d")
-        buckets[d] = 0
-    for r in rows:
-        ca = r.get("created_at")
-        if not ca:
-            continue
-        day_key = ca[:10]
-        if day_key in buckets:
-            buckets[day_key] += 1
+    buckets: Dict[str, int] = {str(r.get("day")): int(r.get("rides") or 0) for r in (count_rows or [])}
 
     daily_chart = [
         {
@@ -1182,39 +1170,26 @@ async def admin_get_ride_financials(
 
     rides_count = await db_supabase.get_ride_count_by_date_range(start.isoformat(), end.isoformat())
 
-    completed = await db_supabase.get_rows(
-        "rides",
-        {"status": "completed", "ride_completed_at": {"$gte": start.isoformat(), "$lt": end.isoformat()}},
-        limit=10000,
-    )
+    # Completed-ride money is summed in Postgres (admin_ride_money_rollup) over
+    # the [start, end) window instead of fetching up to 10,000 rides and summing
+    # in Python. rider_paid uses COALESCE(grand_total, total_fare, 0) inside the
+    # function so a comped $0 ride isn't counted at full fare.
+    money = await db_supabase.rpc("admin_ride_money_rollup", {"p_start": start.isoformat(), "p_end": end.isoformat()})
+    money_row = money[0] if isinstance(money, list) and money else money
+    if not isinstance(money_row, dict):
+        money_row = {}
 
-    def _s(rows, key):
-        return float(sum(Decimal(str(r.get(key) or 0)) for r in rows))
+    def _m(key: str) -> float:
+        return float(Decimal(str(money_row.get(key) or 0)))
 
-    def _rider_paid(r):
-        # A free-ride promo persists grand_total = 0 (intentional) while
-        # total_fare keeps the pre-promo subtotal. Use an explicit None check so
-        # comped $0 rides aren't counted at full fare.
-        gt = r.get("grand_total")
-        if gt is None:
-            gt = r.get("total_fare")
-        return Decimal(str(gt or 0))
-
-    rider_paid = float(sum(_rider_paid(r) for r in completed))
-    gross_fare = _s(completed, "total_fare")
-    driver_revenue = float(
-        sum(
-            Decimal(str(r.get("base_fare") or 0))
-            + Decimal(str(r.get("distance_fare") or 0))
-            + Decimal(str(r.get("time_fare") or 0))
-            for r in completed
-        )
-    )
-    tips = _s(completed, "tip_amount")
-    gst_collected = _s(completed, "tax_amount")
-    promo_applied = _s(completed, "discount_amount")
-    area_fees = _s(completed, "area_fees_total")
-    booking_airport = _s(completed, "admin_earnings")
+    rider_paid = _m("sum_rider_paid")
+    gross_fare = _m("sum_total_fare")
+    driver_revenue = _m("sum_driver_revenue")
+    tips = _m("sum_tip")
+    gst_collected = _m("sum_tax")
+    promo_applied = _m("sum_discount")
+    area_fees = _m("sum_area_fees")
+    booking_airport = _m("sum_admin_earnings")
 
     # Incentives paid out in the window (platform-funded; ride_incentive_claims
     # is append-only, keyed by claimed_at).
@@ -1238,7 +1213,7 @@ async def admin_get_ride_financials(
         "period": period,
         "label": label,
         "rides_count": rides_count,
-        "completed_count": len(completed),
+        "completed_count": int(money_row.get("completed_count") or 0),
         "rider_paid": round(rider_paid, 2),
         "gross_fare": round(gross_fare, 2),
         "driver_revenue": round(driver_revenue, 2),
@@ -1589,26 +1564,19 @@ async def admin_get_earnings(period: str = Query("month")):
     else:  # month
         start_date = now - timedelta(days=30)
 
-    start_date_str = start_date.isoformat()
-
-    # Get completed rides since start_date
-    completed_rides = await db_supabase.get_rows(
-        "rides",
-        {"status": "completed", "ride_completed_at": {"$gte": start_date_str}},
-        limit=10000,
-    )
-
-    # Calculate totals
-    total_revenue = float(sum(Decimal(str(r.get("total_fare") or 0)) for r in completed_rides))
-    driver_earnings = float(sum(Decimal(str(r.get("driver_earnings") or 0)) for r in completed_rides))
-    platform_fees = float(sum(Decimal(str(r.get("admin_earnings") or 0)) for r in completed_rides))
+    # Totals aggregated in Postgres (admin_ride_money_rollup) over completed
+    # rides since start_date, instead of fetching up to 10,000 rides and summing.
+    rollup = await db_supabase.rpc("admin_ride_money_rollup", {"p_start": start_date.isoformat(), "p_end": None})
+    row = rollup[0] if isinstance(rollup, list) and rollup else rollup
+    if not isinstance(row, dict):
+        row = {}
 
     return {
         "period": period,
-        "total_revenue": total_revenue,
-        "total_rides": len(completed_rides),
-        "driver_earnings": driver_earnings,
-        "platform_fees": platform_fees,
+        "total_revenue": float(Decimal(str(row.get("sum_total_fare") or 0))),
+        "total_rides": int(row.get("completed_count") or 0),
+        "driver_earnings": float(Decimal(str(row.get("sum_driver_earnings") or 0))),
+        "platform_fees": float(Decimal(str(row.get("sum_admin_earnings") or 0))),
     }
 
 
@@ -1818,141 +1786,73 @@ async def admin_get_earnings_overview(
     # Pull current + previous window in two queries. Bounded by completed-only
     # so cancellation rows don't inflate GBV.
     # ── Rides — completed (the GBV / trips / net rev numerator) ──────────
-    base_filter: Dict[str, Any] = {"status": "completed"}
-    if service_area_id:
-        base_filter["service_area_id"] = service_area_id
+    # ── Window aggregates via SQL ────────────────────────────────────────
+    # Completed + cancelled ride metrics for the current and previous windows,
+    # and refund totals, are aggregated in Postgres (admin_earnings_overview_agg
+    # / admin_earnings_refunds) instead of pulling four 50k ride windows + two
+    # 10k dispute windows into Python.
+    import asyncio  # noqa: PLC0415
 
-    current_rides = await db_supabase.get_rows(
-        "rides",
-        {**base_filter, "ride_completed_at": {"$gte": start.isoformat(), "$lte": end.isoformat()}},
-        limit=50000,
-    )
-    previous_rides = await db_supabase.get_rows(
-        "rides",
-        {**base_filter, "ride_completed_at": {"$gte": prev_start.isoformat(), "$lte": prev_end.isoformat()}},
-        limit=50000,
-    )
-
-    # ── Rides — cancelled (cancellation rate denominator + fee revenue) ──
-    # Cancelled rides have null ride_completed_at, so filter on created_at
-    # for the window. Same service-area scoping as completed rides above.
-    cancelled_filter: Dict[str, Any] = {"status": "cancelled"}
-    if service_area_id:
-        cancelled_filter["service_area_id"] = service_area_id
-    current_cancelled = await db_supabase.get_rows(
-        "rides",
-        {**cancelled_filter, "created_at": {"$gte": start.isoformat(), "$lte": end.isoformat()}},
-        limit=50000,
-    )
-    previous_cancelled = await db_supabase.get_rows(
-        "rides",
-        {**cancelled_filter, "created_at": {"$gte": prev_start.isoformat(), "$lte": prev_end.isoformat()}},
-        limit=50000,
+    current_agg, previous_agg, current_ref, previous_ref = await asyncio.gather(
+        db_supabase.rpc(
+            "admin_earnings_overview_agg",
+            {"p_start": start.isoformat(), "p_end": end.isoformat(), "p_service_area_id": service_area_id},
+        ),
+        db_supabase.rpc(
+            "admin_earnings_overview_agg",
+            {"p_start": prev_start.isoformat(), "p_end": prev_end.isoformat(), "p_service_area_id": service_area_id},
+        ),
+        db_supabase.rpc(
+            "admin_earnings_refunds",
+            {"p_start": start.isoformat(), "p_end": end.isoformat(), "p_service_area_id": service_area_id},
+        ),
+        db_supabase.rpc(
+            "admin_earnings_refunds",
+            {"p_start": prev_start.isoformat(), "p_end": prev_end.isoformat(), "p_service_area_id": service_area_id},
+        ),
     )
 
-    # ── Disputes / refunds (resolved within window) ──────────────────────
-    # Refunds are persisted on `disputes.refund_amount` — service area
-    # isn't on the dispute row, so when a service-area filter is set we
-    # narrow to disputes whose ride_id is in the current ride set.
-    refunded_filter: Dict[str, Any] = {
-        "resolved_at": {"$gte": start.isoformat(), "$lte": end.isoformat()},
-    }
-    refunded_filter_prev: Dict[str, Any] = {
-        "resolved_at": {"$gte": prev_start.isoformat(), "$lte": prev_end.isoformat()},
-    }
-    current_refunds = await db_supabase.get_rows("disputes", refunded_filter, limit=10000)
-    previous_refunds = await db_supabase.get_rows("disputes", refunded_filter_prev, limit=10000)
-    if service_area_id:
-        # Cross-reference against the ride set; cheaper than a join.
-        current_ride_ids = {r.get("id") for r in current_rides + current_cancelled}
-        previous_ride_ids = {r.get("id") for r in previous_rides + previous_cancelled}
-        current_refunds = [d for d in current_refunds if d.get("ride_id") in current_ride_ids]
-        previous_refunds = [d for d in previous_refunds if d.get("ride_id") in previous_ride_ids]
+    def _obj(res: Any) -> Dict[str, Any]:
+        row = res[0] if isinstance(res, list) and res else res
+        return row if isinstance(row, dict) else {}
 
-    def _agg(rides: list) -> Dict[str, Any]:
-        gbv = sum((Decimal(str(r.get("total_fare") or 0)) for r in rides), Decimal("0"))
-        platform = sum((Decimal(str(r.get("admin_earnings") or 0)) for r in rides), Decimal("0"))
-        rider_ids = {r.get("rider_id") for r in rides if r.get("rider_id")}
-        driver_ids = {r.get("driver_id") for r in rides if r.get("driver_id")}
-        # Surge revenue: portion of total_fare attributable to the
-        # surge multiplier. base = total / surge_mult → surge = total -
-        # base. Only counts rides where surge actually applied (>1.0).
-        surge_rev = Decimal("0")
-        for r in rides:
-            mult = Decimal(str(r.get("surge_multiplier") or 1.0))
-            if mult > 1:
-                fare = Decimal(str(r.get("total_fare") or 0))
-                surge_rev += fare - (fare / mult)
-        # Promo spend: discount_amount on completed rides — what we
-        # gave away to acquire/retain the ride.
-        promo = sum((Decimal(str(r.get("discount_amount") or 0)) for r in rides), Decimal("0"))
-        promo_count = sum(1 for r in rides if Decimal(str(r.get("discount_amount") or 0)) > 0)
-        # Tax decomposition from rides.tax_breakdown JSONB — defensive
-        # because tax_name keys vary by service area config.
-        gst = Decimal("0")
-        pst = Decimal("0")
-        for r in rides:
-            breakdown = r.get("tax_breakdown") or {}
-            if isinstance(breakdown, dict):
-                for tax_name, info in breakdown.items():
-                    amount = Decimal("0")
-                    if isinstance(info, dict):
-                        amount = Decimal(str(info.get("amount") or 0))
-                    name_l = str(tax_name).lower()
-                    if "gst" in name_l or name_l == "hst":
-                        gst += amount
-                    elif "pst" in name_l or "qst" in name_l:
-                        pst += amount
-        return {
-            "gbv": float(gbv),
-            "platform": float(platform),
-            "trips": len(rides),
-            "riders": len(rider_ids),
-            "drivers": len(driver_ids),
-            "surge_revenue": float(surge_rev),
-            "promo_spend": float(promo),
-            "promo_count": promo_count,
-            "gst_collected": float(gst),
-            "pst_collected": float(pst),
+    def _f(d: Dict[str, Any], k: str) -> float:
+        return float(Decimal(str(d.get(k) or 0)))
+
+    def _i(d: Dict[str, Any], k: str) -> int:
+        return int(d.get(k) or 0)
+
+    def _win(res: Any) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        a = _obj(res)
+        completed = {
+            "gbv": _f(a, "gbv"),
+            "platform": _f(a, "platform"),
+            "trips": _i(a, "trips"),
+            "riders": _i(a, "riders"),
+            "drivers": _i(a, "drivers"),
+            "surge_revenue": _f(a, "surge_revenue"),
+            "promo_spend": _f(a, "promo_spend"),
+            "promo_count": _i(a, "promo_count"),
+            "gst_collected": _f(a, "gst_collected"),
+            "pst_collected": _f(a, "pst_collected"),
         }
-
-    def _agg_cancelled(rides: list) -> Dict[str, Any]:
-        """Cancellation-only aggregator. cancellation_fee_admin is the
-        platform's share of the cancel fee — that's the revenue side."""
-        cancel_revenue = sum(
-            (Decimal(str(r.get("cancellation_fee_admin") or 0)) for r in rides),
-            Decimal("0"),
-        )
-        # Rider vs driver vs system cancel breakdown — pulled from the
-        # cancellation_reason text field with a simple keyword match.
-        # Same convention the admin analytics page already uses.
-        rider_cancels = 0
-        driver_cancels = 0
-        for r in rides:
-            reason = (r.get("cancellation_reason") or "").lower()
-            if "driver" in reason:
-                driver_cancels += 1
-            elif "rider" in reason or "user" in reason:
-                rider_cancels += 1
-        return {
-            "count": len(rides),
-            "revenue": float(cancel_revenue),
-            "rider_cancels": rider_cancels,
-            "driver_cancels": driver_cancels,
+        cancelled = {
+            "count": _i(a, "cx_count"),
+            "revenue": _f(a, "cx_revenue"),
+            "rider_cancels": _i(a, "cx_rider_cancels"),
+            "driver_cancels": _i(a, "cx_driver_cancels"),
         }
+        return completed, cancelled
 
-    cur = _agg(current_rides)
-    prev = _agg(previous_rides)
-    cur_cx = _agg_cancelled(current_cancelled)
-    prev_cx = _agg_cancelled(previous_cancelled)
+    cur, cur_cx = _win(current_agg)
+    prev, prev_cx = _win(previous_agg)
 
-    # Refund $ in window — disputes resolved during the period with a
-    # non-zero refund_amount. We don't distinguish full vs partial here;
-    # any payout to the rider counts as refund leakage.
-    cur_refund_amt = float(sum((Decimal(str(d.get("refund_amount") or 0)) for d in current_refunds), Decimal("0")))
-    prev_refund_amt = float(sum((Decimal(str(d.get("refund_amount") or 0)) for d in previous_refunds), Decimal("0")))
-    cur_refund_count = sum(1 for d in current_refunds if Decimal(str(d.get("refund_amount") or 0)) > 0)
-    prev_refund_count = sum(1 for d in previous_refunds if Decimal(str(d.get("refund_amount") or 0)) > 0)
+    cur_ref_obj = _obj(current_ref)
+    prev_ref_obj = _obj(previous_ref)
+    cur_refund_amt = _f(cur_ref_obj, "refund_amount")
+    prev_refund_amt = _f(prev_ref_obj, "refund_amount")
+    cur_refund_count = _i(cur_ref_obj, "refund_count")
+    prev_refund_count = _i(prev_ref_obj, "refund_count")
 
     # Cancellation rate: cancelled / (completed + cancelled). Same
     # formula the ops cancellation-rate KPI uses across the codebase.
@@ -1989,22 +1889,25 @@ async def admin_get_earnings_overview(
     prev_avg_fare = round(prev["gbv"] / prev["trips"], 2) if prev["trips"] > 0 else 0.0
 
     # ── Daily series for the line chart ───────────────────────────────────
+    # Per-day GBV/trips/net-revenue grouped in Postgres; gaps filled with zero.
+    series_rows = await db_supabase.rpc(
+        "admin_earnings_daily_series",
+        {"p_start": start.isoformat(), "p_end": end.isoformat(), "p_service_area_id": service_area_id},
+    )
+    by_day = {str(r.get("day")): r for r in (series_rows or [])}
     daily: Dict[str, Dict[str, Any]] = {}
     cursor = start.date()
     end_date = end.date()
     while cursor <= end_date:
-        daily[cursor.isoformat()] = {"date": cursor.isoformat(), "gbv": 0.0, "trips": 0, "net_revenue": 0.0}
+        key = cursor.isoformat()
+        sr = by_day.get(key) or {}
+        daily[key] = {
+            "date": key,
+            "gbv": round(float(Decimal(str(sr.get("gbv") or 0))), 2),
+            "trips": int(sr.get("trips") or 0),
+            "net_revenue": round(float(Decimal(str(sr.get("net_revenue") or 0))), 2),
+        }
         cursor += timedelta(days=1)
-    for r in current_rides:
-        completed = r.get("ride_completed_at") or r.get("created_at") or ""
-        day = completed[:10]
-        if day in daily:
-            daily[day]["gbv"] = round(daily[day]["gbv"] + float(Decimal(str(r.get("total_fare") or 0))), 2)
-            daily[day]["trips"] += 1
-            daily[day]["net_revenue"] = round(
-                daily[day]["net_revenue"] + float(Decimal(str(r.get("admin_earnings") or 0))),
-                2,
-            )
     daily_series = list(daily.values())
 
     return {
@@ -2127,8 +2030,17 @@ async def admin_export_drivers(
 
     drivers = await db_supabase.get_rows("drivers", order="created_at", desc=True, limit=limit)
     user_ids = list({d.get("user_id") for d in drivers if d.get("user_id")})
+    # Export rows only carry name/email/phone from the user row — project those
+    # so the export doesn't read base64 profile_image for every driver.
     users_list = (
-        await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
+        await db_supabase.get_rows(
+            "users",
+            {"id": {"$in": user_ids}},
+            columns="id,first_name,last_name,email,phone",
+            limit=max(len(user_ids), 1),
+        )
+        if user_ids
+        else []
     )
     users_map = {u["id"]: u for u in users_list if u.get("id")}
     out = []
@@ -2225,59 +2137,44 @@ async def admin_get_payouts_overview(
     def _in_scope(row: Dict[str, Any]) -> bool:
         return driver_id_filter is None or row.get("driver_id") in driver_id_filter
 
-    # ── Outstanding payable balance ──────────────────────────────────────
-    # Lifetime sum of driver_earnings on completed rides minus payouts
-    # that have either completed or are mid-flight. NOT scoped to the
-    # period — this is a "right now" snapshot. Showing PoP delta against
-    # "same number of days ago" so the operator can see whether the
-    # backlog is growing or shrinking.
-    def _sum(rows: list, key: str) -> Decimal:
-        return sum((Decimal(str(r.get(key) or 0)) for r in rows if _in_scope(r)), Decimal("0"))
-
-    all_completed_rides = await db_supabase.get_rows("rides", {"status": "completed"}, limit=200000)
-    all_payouts = await db_supabase.get_rows("payouts", {}, limit=200000)
-
-    earned_total = _sum(all_completed_rides, "driver_earnings")
-    paid_or_in_flight = sum(
-        (
-            Decimal(str(p.get("amount") or 0))
-            for p in all_payouts
-            if _in_scope(p) and p.get("status") in ("completed", "pending", "processing")
-        ),
-        Decimal("0"),
+    # ── Cumulative aggregates via SQL (one round-trip) ───────────────────
+    # Outstanding payable, the stuck/blocked queues, and the T4A YTD snapshot
+    # are all-time aggregates. They used to require streaming the whole rides +
+    # payouts history into Python (two limit=200000 scans); now Postgres sums
+    # them for us. Money is summed as NUMERIC server-side to stay cent-faithful.
+    year_start_iso = datetime(now.year, 1, 1, tzinfo=timezone.utc).isoformat()
+    stuck_before_iso = (now - timedelta(hours=48)).isoformat()
+    agg_rows = await db_supabase.rpc(
+        "admin_payouts_overview_aggregates",
+        {
+            "p_end": end.isoformat(),
+            "p_prev_end": prev_end.isoformat(),
+            "p_year_start": year_start_iso,
+            "p_stuck_before": stuck_before_iso,
+            "p_service_area_id": service_area_id,
+        },
     )
-    outstanding_now = max(earned_total - paid_or_in_flight, Decimal("0"))  # noqa: F841
+    agg = agg_rows[0] if isinstance(agg_rows, list) and agg_rows else agg_rows
+    if not isinstance(agg, dict):
+        agg = {}
 
-    # Same calculation snapshot at prev_end so we can show delta.
-    end_iso = end.isoformat()
-    prev_end_iso = prev_end.isoformat()
+    def _agg_dec(key: str) -> Decimal:
+        return Decimal(str(agg.get(key) or 0))
 
-    def _completed_up_to(rows: list, ts: str) -> Decimal:
-        return sum(
-            (
-                Decimal(str(r.get("driver_earnings") or 0))
-                for r in rows
-                if _in_scope(r) and (r.get("ride_completed_at") or r.get("updated_at") or "") <= ts
-            ),
-            Decimal("0"),
-        )
+    outstanding_now_calc = max(_agg_dec("earned_up_to_end") - _agg_dec("paid_up_to_end"), Decimal("0"))
+    outstanding_prev = max(_agg_dec("earned_up_to_prev") - _agg_dec("paid_up_to_prev"), Decimal("0"))
 
-    def _paid_up_to(rows: list, ts: str) -> Decimal:
-        return sum(
-            (
-                Decimal(str(p.get("amount") or 0))
-                for p in rows
-                if _in_scope(p)
-                and p.get("status") in ("completed", "pending", "processing")
-                and (p.get("created_at") or "") <= ts
-            ),
-            Decimal("0"),
-        )
-
-    outstanding_now_calc = _completed_up_to(all_completed_rides, end_iso) - _paid_up_to(all_payouts, end_iso)
-    outstanding_prev = _completed_up_to(all_completed_rides, prev_end_iso) - _paid_up_to(all_payouts, prev_end_iso)
-    outstanding_now_calc = max(outstanding_now_calc, Decimal("0"))
-    outstanding_prev = max(outstanding_prev, Decimal("0"))
+    # ── Period-windowed payouts ──────────────────────────────────────────
+    # The per-row metrics below only look at the current + previous windows, so
+    # fetch just that slice rather than the entire payouts table. A payout's
+    # effective timestamp is processed_at when present else created_at, so a row
+    # qualifies if either is at/after the earliest window bound (prev_start).
+    window_lo = prev_start.isoformat()
+    all_payouts = await db_supabase.get_rows(
+        "payouts",
+        {"$or": [{"created_at": {"$gte": window_lo}}, {"processed_at": {"$gte": window_lo}}]},
+        limit=200000,
+    )
 
     # ── Period-windowed payout metrics ───────────────────────────────────
     def _in_window(p: Dict[str, Any], lo: datetime, hi: datetime) -> bool:
@@ -2391,46 +2288,19 @@ async def admin_get_payouts_overview(
         key=lambda x: (-x["count"], -x["amount"]),
     )[:8]
 
-    # Stuck pending payouts — anything still pending more than 48h after
-    # creation. These are the manual-intervention queue: Stripe webhook
-    # didn't return or the rebalance is held up. NOT period-scoped —
-    # this is a "right now" signal regardless of the selected window.
-    stuck_threshold = (now - timedelta(hours=48)).isoformat()
-    stuck_rows = [
-        p
-        for p in all_payouts
-        if _in_scope(p)
-        and p.get("status") in ("pending", "processing")
-        and (p.get("created_at") or "") < stuck_threshold
-    ]
+    # Stuck pending payouts — pending/processing more than 48h after creation
+    # (manual-intervention queue). All-time signal, computed in SQL above.
     stuck_over_48h = {
-        "count": len(stuck_rows),
-        "amount": round(float(sum((Decimal(str(p.get("amount") or 0)) for p in stuck_rows), Decimal("0"))), 2),
+        "count": int(agg.get("stuck_count") or 0),
+        "amount": round(float(_agg_dec("stuck_amount")), 2),
     }
 
-    # Blocked drivers — Stripe Connect KYC mirror says payouts are
-    # disabled. Uses the partial index from migration 92. Outstanding
-    # balance for these drivers is the operational "we can't pay
-    # them yet" number.
-    blocked_drivers_rows = await db_supabase.get_rows(
-        "drivers",
-        {"stripe_payouts_enabled": False, "stripe_account_id": {"$ne": None}},
-        limit=500,
-    )
-    if driver_id_filter is not None:
-        blocked_drivers_rows = [d for d in blocked_drivers_rows if d.get("id") in driver_id_filter]
-    blocked_driver_ids = {d.get("id") for d in blocked_drivers_rows if d.get("id")}
-    blocked_outstanding = Decimal("0")
-    if blocked_driver_ids:
-        for r in all_completed_rides:
-            if r.get("driver_id") in blocked_driver_ids:
-                blocked_outstanding += Decimal(str(r.get("driver_earnings") or 0))
-        for p in all_payouts:
-            if p.get("driver_id") in blocked_driver_ids and p.get("status") in ("completed", "pending", "processing"):
-                blocked_outstanding -= Decimal(str(p.get("amount") or 0))
+    # Blocked drivers — Stripe Connect KYC mirror says payouts are disabled.
+    # Their count + the outstanding "we can't pay them yet" balance are
+    # all-time aggregates, computed in SQL above (scoped to the selected area).
     blocked_drivers = {
-        "count": len(blocked_driver_ids),
-        "outstanding_balance": round(float(max(blocked_outstanding, Decimal("0"))), 2),
+        "count": int(agg.get("blocked_count") or 0),
+        "outstanding_balance": round(float(_agg_dec("blocked_outstanding")), 2),
     }
 
     # Top earning drivers in window — sum of completed payout amounts
@@ -2497,41 +2367,16 @@ async def admin_get_payouts_overview(
     )[:10]
 
     # ── Pass 4: T4A snapshot ─────────────────────────────────────────────
-    # CRA T4A threshold for self-employed contractor reporting in Canada
-    # is $500 to the same payee in a tax year. The GST/HST mandatory
-    # registration threshold is $30,000 — that's the more operationally
-    # interesting line because it's when a driver MUST register their
-    # GST account. Bucket per driver against both numbers.
-    year_start = datetime(now.year, 1, 1, tzinfo=timezone.utc).isoformat()
-    ytd_completed = [
-        r
-        for r in all_completed_rides
-        if _in_scope(r) and (r.get("ride_completed_at") or r.get("updated_at") or "") >= year_start
-    ]
-    ytd_earnings_by_driver: Dict[str, Decimal] = {}
-    for r in ytd_completed:
-        did = r.get("driver_id")
-        if not did:
-            continue
-        ytd_earnings_by_driver[did] = ytd_earnings_by_driver.get(did, Decimal("0")) + Decimal(
-            str(r.get("driver_earnings") or 0)
-        )
-
+    # CRA T4A threshold for self-employed contractor reporting in Canada is
+    # $500 to the same payee in a tax year; the GST/HST mandatory registration
+    # threshold is $30,000. Per-driver YTD earnings are bucketed against both
+    # in SQL above (the bucketing is a GROUP BY, not a per-row Python loop).
     t4a_buckets = {
-        "under_500": 0,  # below T4A reporting threshold (CRA $500)
-        "from_500_to_10k": 0,  # T4A required, GST registration not required
-        "from_10k_to_30k": 0,  # T4A required, GST elective
-        "over_30k": 0,  # T4A required, GST registration MANDATORY
+        "under_500": int(agg.get("t4a_under_500") or 0),  # below T4A reporting threshold (CRA $500)
+        "from_500_to_10k": int(agg.get("t4a_500_10k") or 0),  # T4A required, GST registration not required
+        "from_10k_to_30k": int(agg.get("t4a_10k_30k") or 0),  # T4A required, GST elective
+        "over_30k": int(agg.get("t4a_over_30k") or 0),  # T4A required, GST registration MANDATORY
     }
-    for amt in ytd_earnings_by_driver.values():
-        if amt < Decimal("500"):
-            t4a_buckets["under_500"] += 1
-        elif amt < Decimal("10000"):
-            t4a_buckets["from_500_to_10k"] += 1
-        elif amt < Decimal("30000"):
-            t4a_buckets["from_10k_to_30k"] += 1
-        else:
-            t4a_buckets["over_30k"] += 1
 
     # Period locks — derived from audit_log entries written by
     # admin_close_payout_period. Surface the most recent N so the UI
@@ -2593,11 +2438,11 @@ async def admin_get_payouts_overview(
         # Pass 4 — compliance.
         "t4a_snapshot": {
             "tax_year": now.year,
-            "drivers_with_earnings": len(ytd_earnings_by_driver),
+            "drivers_with_earnings": int(agg.get("t4a_drivers_with_earnings") or 0),
             "buckets": t4a_buckets,
             # Sum of YTD driver_earnings — the gross-side of the T4A
             # generation pipeline, not what's been paid out.
-            "ytd_gross_earnings": round(float(sum(ytd_earnings_by_driver.values(), Decimal("0"))), 2),
+            "ytd_gross_earnings": round(float(_agg_dec("t4a_ytd_gross")), 2),
         },
         "period_locks": period_locks,
     }
@@ -2920,18 +2765,21 @@ async def admin_close_payout_period(
 async def admin_get_payout_stats():
     """Get payout stats: total paid, pending, failed."""
     try:
-        all_payouts = await db.get_rows("payouts", {}, limit=10000)
+        stats = await db.rpc("admin_payout_stats", {})
     except Exception:
-        all_payouts = []
+        logger.error("payout stats query failed", exc_info=True)
+        stats = None
+    row = stats[0] if isinstance(stats, list) and stats else stats
+    if not isinstance(row, dict):
+        row = {}
 
-    total_paid = float(sum(Decimal(str(p.get("amount", 0))) for p in all_payouts if p.get("status") == "completed"))
-    total_pending = float(sum(Decimal(str(p.get("amount", 0))) for p in all_payouts if p.get("status") == "pending"))
-    total_failed = float(sum(Decimal(str(p.get("amount", 0))) for p in all_payouts if p.get("status") == "failed"))
+    def _d(key: str) -> float:
+        return round(float(Decimal(str(row.get(key) or 0))), 2)
 
     return {
-        "total_paid": round(total_paid, 2),
-        "total_pending": round(total_pending, 2),
-        "total_failed": round(total_failed, 2),
-        "payout_count": len(all_payouts),
-        "pending_count": sum(1 for p in all_payouts if p.get("status") == "pending"),
+        "total_paid": _d("total_paid"),
+        "total_pending": _d("total_pending"),
+        "total_failed": _d("total_failed"),
+        "payout_count": int(row.get("payout_count") or 0),
+        "pending_count": int(row.get("pending_count") or 0),
     }

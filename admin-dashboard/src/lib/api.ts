@@ -567,6 +567,9 @@ export interface DriverLiveStats {
     acceptance_rate: number | null;
     cancelled_by_driver: number;
     total_assigned: number;
+    // Driver avatar, loaded lazily here so the bulk drivers list no longer
+    // has to ship profile_image (a base64 blob for legacy accounts).
+    photo_url: string | null;
 }
 export const getDriverLiveStats = (id: string) =>
     request<DriverLiveStats>(`/api/admin/drivers/${id}/live-stats`);
@@ -885,7 +888,10 @@ export interface Venue {
     is_active: boolean;
 }
 export type VenueUpsert = Omit<Venue, "id">;
-export const getVenues = () => request<{ venues: Venue[] }>("/api/admin/venues");
+export const getVenues = (params?: { service_area_id?: string }) => {
+    const qs = params?.service_area_id ? `?service_area_id=${encodeURIComponent(params.service_area_id)}` : "";
+    return request<{ venues: Venue[] }>(`/api/admin/venues${qs}`);
+};
 export const createVenue = (body: VenueUpsert) =>
     request<Venue>("/api/admin/venues", { method: "POST", body: JSON.stringify(body) });
 export const updateVenue = (id: string, body: VenueUpsert) =>

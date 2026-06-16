@@ -18,6 +18,17 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Columns the admin Users list / search / export actually render. We project
+# explicitly to keep users.profile_image OUT of these bulk reads: for accounts
+# created before the `profile-photos` storage bucket, profile_image holds a full
+# base64 data URI, so `SELECT *` shipped ~one image blob per row — that's the
+# multi-MB payload (and the slow DB read on the 1000-row export). The Users page
+# never displays an avatar, so the column is pure dead weight here. The single-
+# user detail endpoint (admin_get_user_details) still selects everything.
+_USER_LIST_COLUMNS = (
+    "id,first_name,last_name,email,phone,role,created_at,total_rides,rating,is_verified,city,status,is_rider,is_driver"
+)
+
 
 class UserStatusRequest(BaseModel):
     status: Literal["active", "suspended", "banned"]
@@ -69,7 +80,15 @@ async def admin_get_users(
                 {"first_name": {"$regex": re.escape(term), "$options": "i"}},
                 {"last_name": {"$regex": re.escape(term), "$options": "i"}},
             ]
-    users = await db_supabase.get_rows("users", filters, order="created_at", desc=True, limit=limit, offset=offset)
+    users = await db_supabase.get_rows(
+        "users",
+        filters,
+        columns=_USER_LIST_COLUMNS,
+        order="created_at",
+        desc=True,
+        limit=limit,
+        offset=offset,
+    )
     return users
 
 
@@ -233,6 +252,7 @@ async def admin_export_users(
     users = await db_supabase.get_rows(
         "users",
         {"role": {"$ne": "admin"}},
+        columns=_USER_LIST_COLUMNS,
         order="created_at",
         desc=True,
         limit=limit,

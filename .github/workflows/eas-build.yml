@@ -27,7 +27,7 @@ on:
       profile:
         description: "OTA channel"
         required: true
-        default: "production"
+        default: "preview"
         type: choice
         options: [test, preview, production]
 

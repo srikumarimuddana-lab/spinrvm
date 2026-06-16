@@ -1916,6 +1916,12 @@ export const driverAction = (driverId: string, action: string, reason?: string) 
         body: JSON.stringify({ action, reason }),
     });
 
+export const reviewDriverPhoto = (driverId: string, action: "approve" | "reject") =>
+    request<{ message: string; profile_image_status: string }>(`/api/admin/drivers/${driverId}/photo-review`, {
+        method: "POST",
+        body: JSON.stringify({ action }),
+    });
+
 export const overrideDriverStatus = (driverId: string, status: string, reason?: string) =>
     request<any>(`/api/admin/drivers/${driverId}/status-override`, {
         method: "PUT",

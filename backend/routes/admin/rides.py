@@ -1055,12 +1055,8 @@ async def admin_get_ride_stats():
 
     # Revenue stats from completed rides — aggregated in Postgres (today +
     # month) instead of fetching up to 10,000 rides per window and summing.
-    today_money = await db_supabase.rpc(
-        "admin_ride_money_rollup", {"p_start": today_start.isoformat(), "p_end": None}
-    )
-    month_money = await db_supabase.rpc(
-        "admin_ride_money_rollup", {"p_start": month_start.isoformat(), "p_end": None}
-    )
+    today_money = await db_supabase.rpc("admin_ride_money_rollup", {"p_start": today_start.isoformat(), "p_end": None})
+    month_money = await db_supabase.rpc("admin_ride_money_rollup", {"p_start": month_start.isoformat(), "p_end": None})
 
     def _rollup(rollup: Any) -> Dict[str, Any]:
         row = rollup[0] if isinstance(rollup, list) and rollup else rollup
@@ -1178,9 +1174,7 @@ async def admin_get_ride_financials(
     # the [start, end) window instead of fetching up to 10,000 rides and summing
     # in Python. rider_paid uses COALESCE(grand_total, total_fare, 0) inside the
     # function so a comped $0 ride isn't counted at full fare.
-    money = await db_supabase.rpc(
-        "admin_ride_money_rollup", {"p_start": start.isoformat(), "p_end": end.isoformat()}
-    )
+    money = await db_supabase.rpc("admin_ride_money_rollup", {"p_start": start.isoformat(), "p_end": end.isoformat()})
     money_row = money[0] if isinstance(money, list) and money else money
     if not isinstance(money_row, dict):
         money_row = {}
@@ -1570,26 +1564,19 @@ async def admin_get_earnings(period: str = Query("month")):
     else:  # month
         start_date = now - timedelta(days=30)
 
-    start_date_str = start_date.isoformat()
-
-    # Get completed rides since start_date
-    completed_rides = await db_supabase.get_rows(
-        "rides",
-        {"status": "completed", "ride_completed_at": {"$gte": start_date_str}},
-        limit=10000,
-    )
-
-    # Calculate totals
-    total_revenue = float(sum(Decimal(str(r.get("total_fare") or 0)) for r in completed_rides))
-    driver_earnings = float(sum(Decimal(str(r.get("driver_earnings") or 0)) for r in completed_rides))
-    platform_fees = float(sum(Decimal(str(r.get("admin_earnings") or 0)) for r in completed_rides))
+    # Totals aggregated in Postgres (admin_ride_money_rollup) over completed
+    # rides since start_date, instead of fetching up to 10,000 rides and summing.
+    rollup = await db_supabase.rpc("admin_ride_money_rollup", {"p_start": start_date.isoformat(), "p_end": None})
+    row = rollup[0] if isinstance(rollup, list) and rollup else rollup
+    if not isinstance(row, dict):
+        row = {}
 
     return {
         "period": period,
-        "total_revenue": total_revenue,
-        "total_rides": len(completed_rides),
-        "driver_earnings": driver_earnings,
-        "platform_fees": platform_fees,
+        "total_revenue": float(Decimal(str(row.get("sum_total_fare") or 0))),
+        "total_rides": int(row.get("completed_count") or 0),
+        "driver_earnings": float(Decimal(str(row.get("sum_driver_earnings") or 0))),
+        "platform_fees": float(Decimal(str(row.get("sum_admin_earnings") or 0))),
     }
 
 
@@ -2843,18 +2830,21 @@ async def admin_close_payout_period(
 async def admin_get_payout_stats():
     """Get payout stats: total paid, pending, failed."""
     try:
-        all_payouts = await db.get_rows("payouts", {}, limit=10000)
+        stats = await db.rpc("admin_payout_stats", {})
     except Exception:
-        all_payouts = []
+        logger.error("payout stats query failed", exc_info=True)
+        stats = None
+    row = stats[0] if isinstance(stats, list) and stats else stats
+    if not isinstance(row, dict):
+        row = {}
 
-    total_paid = float(sum(Decimal(str(p.get("amount", 0))) for p in all_payouts if p.get("status") == "completed"))
-    total_pending = float(sum(Decimal(str(p.get("amount", 0))) for p in all_payouts if p.get("status") == "pending"))
-    total_failed = float(sum(Decimal(str(p.get("amount", 0))) for p in all_payouts if p.get("status") == "failed"))
+    def _d(key: str) -> float:
+        return round(float(Decimal(str(row.get(key) or 0))), 2)
 
     return {
-        "total_paid": round(total_paid, 2),
-        "total_pending": round(total_pending, 2),
-        "total_failed": round(total_failed, 2),
-        "payout_count": len(all_payouts),
-        "pending_count": sum(1 for p in all_payouts if p.get("status") == "pending"),
+        "total_paid": _d("total_paid"),
+        "total_pending": _d("total_pending"),
+        "total_failed": _d("total_failed"),
+        "payout_count": int(row.get("payout_count") or 0),
+        "pending_count": int(row.get("pending_count") or 0),
     }

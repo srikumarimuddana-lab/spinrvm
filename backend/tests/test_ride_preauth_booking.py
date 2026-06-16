@@ -192,9 +192,10 @@ class TestAttachPreauthorizedHold:
         from backend.routes.rides import _attach_preauthorized_hold
 
         out = _outcome(status="authorized", payment_intent_id="pi_sca", charged_amount=Decimal("35.00"))
+        patches = _patch_verify(out)
         with ExitStack() as st:
-            verify = st.enter_context(_patch_verify(out)[0])
-            st.enter_context(_patch_verify(out)[1])
+            verify = st.enter_context(patches[0])
+            st.enter_context(patches[1])
             fields = await _attach_preauthorized_hold(**_ATTACH_KW)
 
         assert fields == {
@@ -205,6 +206,33 @@ class TestAttachPreauthorizedHold:
         # ownership + amount checks are threaded to verify_authorization
         assert verify.call_args.kwargs["expected_customer_id"] == "cus_book"
         assert verify.call_args.kwargs["min_amount_cents"] == 2500
+
+    async def test_same_ride_reattach_is_allowed(self):
+        """Idempotent retry: a PI already on THIS ride re-attaches, not blocks."""
+        from contextlib import ExitStack
+
+        from backend.routes.rides import _attach_preauthorized_hold
+
+        out = _outcome(status="authorized", payment_intent_id="pi_sca", charged_amount=Decimal("35.00"))
+        with ExitStack() as st:
+            for p in _patch_verify(out, existing_rows=[{"id": _ATTACH_KW["ride_id"]}]):
+                st.enter_context(p)
+            fields = await _attach_preauthorized_hold(**_ATTACH_KW)
+        assert fields["auth_status"] == "authorized"
+
+    async def test_no_stripe_customer_blocks(self):
+        """SECURITY: without a customer to verify ownership against, reject (fail closed)."""
+        from contextlib import ExitStack
+
+        from backend.routes.rides import _attach_preauthorized_hold
+
+        out = _outcome(status="authorized", payment_intent_id="pi_sca", charged_amount=Decimal("35.00"))
+        with ExitStack() as st:
+            for p in _patch_verify(out):
+                st.enter_context(p)
+            with pytest.raises(HTTPException) as ei:
+                await _attach_preauthorized_hold(**{**_ATTACH_KW, "stripe_customer_id": None})
+        assert ei.value.status_code == 402
 
     async def test_declined_raises_402(self):
         from contextlib import ExitStack

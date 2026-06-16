@@ -144,6 +144,11 @@ except ImportError:
     from core.config import settings as _settings  # noqa: F401 — dual-import pattern
 
 try:
+    from ..utils.offer_card_token import sign_offer_card_token
+except ImportError:
+    from utils.offer_card_token import sign_offer_card_token
+
+try:
     from ..services.cancellation_service import (
         calculate_cancellation_fee,
         pay_driver_cancellation_fee,
@@ -919,9 +924,26 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
         except Exception as e:
             logger.warning(f"Failed to fetch quest progress for driver {driver['id']}: {e}")
 
+        # Per-driver signed URL for the notification's BigPicture fare banner.
+        # Bound to this ride + driver and short-lived; rendered on demand by
+        # routes/offer_card.py (never here, to keep the dispatch hot path fast).
+        _offer_card_url = None
+        try:
+            _oc_token = sign_offer_card_token(
+                ride_id=ride_id,
+                driver_id=str(driver.get("user_id") or driver.get("id") or ""),
+            )
+            _offer_card_url = (
+                f"{_settings.PUBLIC_API_BASE_URL.rstrip('/')}"
+                f"/api/v1/offer-cards/{ride_id}.png?t={_oc_token}"
+            )
+        except Exception as e:
+            logger.warning("[DISPATCH] offer-card URL build failed for ride %s: %s", ride_id, e)
+
         dispatch_payload = {
             "type": "new_ride_assignment",
             "ride_id": ride_id,
+            "offer_card_url": _offer_card_url,
             "pickup_address": ride.get("pickup_address"),
             "dropoff_address": ride.get("dropoff_address"),
             "pickup_lat": ride.get("pickup_lat"),

@@ -133,18 +133,20 @@ async def admin_send_notification(request: Request, notification: NotificationRe
     if user_id:
         await db_supabase.insert_one("notifications", notification_doc)
         logger.info(f"Notification sent to user {user_id}: {title}")
+    # Broadcasts only need the user id for the push fan-out — project it so we
+    # don't pull up to 10k base64 profile_image blobs out of the DB.
     elif audience == "all":
-        all_users = await db.get_rows("users", {}, limit=10000)
+        all_users = await db.get_rows("users", {}, columns="id", limit=10000)
         for u in all_users or []:
             await send_push_notification(u["id"], title, body)
         logger.info(f"Broadcast notification to all users: {title}")
     elif audience == "riders":
-        riders = await db.get_rows("users", {"is_rider": True}, limit=10000)
+        riders = await db.get_rows("users", {"is_rider": True}, columns="id", limit=10000)
         for u in riders or []:
             await send_push_notification(u["id"], title, body)
         logger.info(f"Broadcast notification to all riders: {title}")
     elif audience == "drivers":
-        drivers = await db.get_rows("users", {"is_driver": True}, limit=10000)
+        drivers = await db.get_rows("users", {"is_driver": True}, columns="id", limit=10000)
         for u in drivers or []:
             await send_push_notification(u["id"], title, body)
         logger.info(f"Broadcast notification to all drivers: {title}")

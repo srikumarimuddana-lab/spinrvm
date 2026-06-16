@@ -41,6 +41,11 @@ router = APIRouter(prefix="/safety", tags=["Admin · Safety"])
 # default scope when no explicit status filter is passed.
 _OPEN_STATUSES = ("open", "in_progress")
 
+# Columns the queue table actually renders. Project these instead of SELECT *
+# so the list query only pulls what the page needs; the single-incident detail
+# endpoint returns the full row for the triage drawer.
+_LIST_COLUMNS = "id,reported_by_user_id,role,category,status,severity,ride_id,assigned_to_admin_id,reported_at"
+
 
 @router.get("/incidents")
 async def admin_list_safety_incidents(
@@ -77,30 +82,41 @@ async def admin_list_safety_incidents(
         filters["category"] = category
     if ride_id:
         filters["ride_id"] = ride_id
+    if search and search.strip():
+        # Push search into the DB filter (case-insensitive substring on
+        # description) so it matches across the whole result set, not just the
+        # rows that happened to land on the current page.
+        filters["description"] = {"$regex": re.escape(search.strip()), "$options": "i"}
 
     try:
-        rows = await db_supabase.get_rows(
+        # Fetch exactly one page via the DB's native offset — project only the
+        # columns the queue renders. (Previously this fetched limit+offset rows
+        # and sliced in Python, so deeper pages read ever-larger result sets.)
+        page = await db_supabase.get_rows(
             "safety_incidents",
             filters,
+            columns=_LIST_COLUMNS,
             order="reported_at",
             desc=True,
-            limit=limit + offset,
+            limit=limit,
+            offset=offset,
         )
     except Exception:
         logger.error("safety_incidents list query failed", exc_info=True)
         raise HTTPException(status_code=503, detail="Could not load safety queue.") from None
 
-    page = rows[offset : offset + limit]
-
-    if search:
-        needle = search.strip().lower()
-        page = [r for r in page if needle in (r.get("description") or "").lower()]
-
     # Batch-fetch reporter names so the queue table doesn't have to N+1.
     reporter_ids = list({r.get("reported_by_user_id") for r in page if r.get("reported_by_user_id")})
     _drivers_map, users_map = await _batch_fetch_drivers_and_users([], [])
     if reporter_ids:
-        users_list = await db_supabase.get_rows("users", {"id": {"$in": reporter_ids}}, limit=len(reporter_ids))
+        # Only the reporter's display name is used — project the columns
+        # _user_display_name reads so base64 profile_image stays out of the read.
+        users_list = await db_supabase.get_rows(
+            "users",
+            {"id": {"$in": reporter_ids}},
+            columns="id,first_name,last_name,email,phone",
+            limit=len(reporter_ids),
+        )
         users_map = {u["id"]: u for u in users_list if u.get("id")}
 
     enriched: List[Dict[str, Any]] = []
@@ -113,21 +129,25 @@ async def admin_list_safety_incidents(
             }
         )
 
-    # Open count is useful for the sidebar badge and headline stat —
-    # cheap because we only query in the open status set.
+    # Total rows matching the current filters — drives the pagination control.
+    # Exact COUNT, never a row fetch.
     try:
-        open_rows = await db_supabase.get_rows(
-            "safety_incidents",
-            {"status": {"$in": list(_OPEN_STATUSES)}},
-            limit=1000,
-        )
-        open_count = len(open_rows)
+        total = await db_supabase.count_documents("safety_incidents", filters)
+    except Exception:
+        logger.error("safety_incidents count query failed", exc_info=True)
+        total = offset + len(page)
+
+    # Open count for the sidebar badge / headline stat — a COUNT over the open
+    # status set, independent of the current filters (previously this fetched up
+    # to 1000 full rows just to len() them).
+    try:
+        open_count = await db_supabase.count_documents("safety_incidents", {"status": {"$in": list(_OPEN_STATUSES)}})
     except Exception:
         open_count = None
 
     return {
         "items": enriched,
-        "total": len(rows),
+        "total": total,
         "offset": offset,
         "limit": limit,
         "open_count": open_count,

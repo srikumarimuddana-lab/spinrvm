@@ -357,6 +357,43 @@ class TestAdminSendReceipt:
             resp = client.post("/api/admin/rides/ride-1/send-receipt")
         assert resp.status_code == 422
 
+
+# ---------------------------------------------------------------------------
+# Spinr Pass subscription stats (regression: _money() used ROUND_HALF_UP
+# without importing it, so /subscription-stats 500'd on every call with a
+# NameError — the earnings "Spinr Pass" tab showed "Failed to load stats").
+# ---------------------------------------------------------------------------
+
+
+class TestAdminSubscriptionStats:
+    def test_subscription_stats_empty_ok(self, client):
+        # Even with no data the daily-chart loop calls _money(), so an
+        # empty-data request exercises the formerly-broken path. Must be 200.
+        with patch("db_supabase.get_rows", new_callable=AsyncMock, return_value=[]):
+            resp = client.get("/api/admin/subscription-stats")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["stats"]["total_subscribers"] == 0
+        assert body["stats"]["total_revenue"] == 0
+        assert body["stats"]["active_mrr"] == 0
+
+    def test_subscription_stats_money_rounding(self, client):
+        # A paid subscription + a ledger payment must round to 2dp and surface
+        # in the totals (exercises _money on real amounts, not just zero).
+        async def _rows(table, *args, **kwargs):
+            if table == "driver_subscriptions":
+                return [{"driver_id": "d1", "plan_id": "p1", "status": "active", "price": "19.99", "payment_status": "paid"}]
+            if table == "subscription_payments":
+                return [{"id": "pay1", "driver_id": "d1", "plan_id": "p1", "amount": "19.999", "created_at": "2999-01-01T00:00:00"}]
+            return []
+
+        with patch("db_supabase.get_rows", new_callable=AsyncMock, side_effect=_rows):
+            resp = client.get("/api/admin/subscription-stats")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["stats"]["active_mrr"] == 19.99
+        assert body["stats"]["total_revenue"] == 20.0
+
     def test_send_receipt_happy_path(self, client):
         with (
             patch("db_supabase.get_ride", new_callable=AsyncMock, return_value=_FAKE_RIDE),

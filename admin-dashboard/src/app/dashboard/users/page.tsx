@@ -153,6 +153,8 @@ export default function UsersPage() {
             const transformed = slice.map((u: any) => ({
                 id: u.id,
                 name: `${u.first_name || ""} ${u.last_name || ""}`.trim() || u.email || u.phone,
+                first_name: u.first_name,
+                last_name: u.last_name,
                 email: u.email,
                 phone: u.phone,
                 role: u.role,
@@ -160,6 +162,8 @@ export default function UsersPage() {
                 total_rides: u.total_rides || 0,
                 rating: u.rating || null,
                 is_verified: u.is_verified ?? true,
+                is_rider: u.is_rider,
+                is_driver: u.is_driver,
                 city: u.city,
                 status: u.status || "active",
             }));

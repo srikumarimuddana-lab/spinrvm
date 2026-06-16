@@ -213,14 +213,12 @@ export async function displayRideOfferNotification(
     }
 
     const totalEarnings = offer.fare + (offer.total_bonus || 0);
-    const surgeBadge = offer.surge_multiplier && offer.surge_multiplier > 1
-        ? `  ⚡ ${offer.surge_multiplier.toFixed(1)}×` : '';
 
     // Title = the always-visible line (collapsed shade + heads-up header). Lead
-    // with the money and surge — that's the driver's accept/decline signal.
-    // NEVER the booking UUID; it's opaque noise to a human and was burying the
-    // addresses on the single collapsed line.
-    const title = `New ride · $${totalEarnings.toFixed(2)}${surgeBadge}`;
+    // with the money — that's the driver's accept/decline signal. Surge is
+    // deliberately not shown; the fare already reflects it. NEVER the booking
+    // UUID; it's opaque noise that was burying the addresses on the one line.
+    const title = `New ride · $${totalEarnings.toFixed(2)}`;
 
     // Trip summary: distance • time • rider (with rating when known).
     const tripStats = [

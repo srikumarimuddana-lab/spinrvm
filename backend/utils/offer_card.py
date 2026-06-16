@@ -38,7 +38,6 @@ _BG = (11, 18, 32)            # deep navy
 _PANEL = (19, 28, 46)         # slightly lighter card panel
 _GREEN = (0, 210, 106)        # brand green / pickup marker
 _RED = (255, 59, 48)          # dropoff marker
-_ORANGE = (255, 149, 0)       # surge
 _WHITE = (245, 247, 250)
 _MUTED = (148, 163, 184)      # slate-400
 
@@ -111,10 +110,13 @@ def render_offer_card(
     rider_rating: Optional[float] = None,
     pickup_area: Optional[str] = None,
     dropoff_area: Optional[str] = None,
-    surge_multiplier: Optional[float] = None,
     total_bonus: Optional[float] = None,
 ) -> Optional[bytes]:
-    """Render the offer banner to PNG bytes. Returns None on any failure."""
+    """Render the offer banner to PNG bytes. Returns None on any failure.
+
+    Surge is intentionally never drawn — it is not surfaced to drivers on the
+    offer card. The fare already reflects any surge.
+    """
     try:
         from PIL import Image, ImageDraw
     except Exception as exc:  # noqa: BLE001
@@ -142,19 +144,12 @@ def render_offer_card(
         d.text((margin, 78), fare_text, font=f_fare, fill=_GREEN)
         fare_right = margin + d.textlength(fare_text, font=f_fare)
 
-        # Surge / bonus pills — right-anchored and stacked beside the fare so
-        # they never collide with a long fare or clip the right edge.
-        _ = fare_right  # fare width computed for layout symmetry; pills are right-aligned
-        pill_y = 112
-        if surge_multiplier and surge_multiplier > 1:
-            h = _pill_right(
-                d, _W - margin, pill_y, f"{surge_multiplier:.1f}x SURGE", f_pill,
-                fg=_BG, bg=_ORANGE,
-            )
-            pill_y += h + 14
+        # Bonus pill — right-anchored beside the fare. Surge is deliberately
+        # not shown to drivers; only the (already surge-inclusive) fare is.
+        _ = fare_right  # fare width computed for layout symmetry; pill is right-aligned
         if total_bonus and total_bonus > 0:
             _pill_right(
-                d, _W - margin, pill_y, f"+${float(total_bonus):.2f} BONUS", f_pill,
+                d, _W - margin, 112, f"+${float(total_bonus):.2f} BONUS", f_pill,
                 fg=_BG, bg=_GREEN,
             )
 

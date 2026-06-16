@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, retryPayout, refreshDriverStripeKyc, revealDriverSin, logPiiReveal, type DriverLiveStats, type DriverPayoutSummary } from "@/lib/api";
+import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, reviewDriverPhoto, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, retryPayout, refreshDriverStripeKyc, revealDriverSin, logPiiReveal, type DriverLiveStats, type DriverPayoutSummary } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
@@ -332,6 +332,23 @@ export default function DriversPage() {
         if (Object.keys(changes).length === 0) { setEditing(false); return; }
         setSaving(true);
         try { await updateDriver(selected.id, changes); const updated = { ...selected, ...changes }; setSelected(updated); setDrivers(prev => prev.map(d => d.id === selected.id ? { ...d, ...changes } : d)); setEditing(false); } catch (e: any) { toast({ title: "Failed to save driver", description: e?.message || "Unknown error", variant: "destructive" }); } finally { setSaving(false); }
+    };
+
+    const [photoReviewing, setPhotoReviewing] = useState(false);
+    const handlePhotoReview = async (action: "approve" | "reject") => {
+        if (!selected || photoReviewing) return;
+        setPhotoReviewing(true);
+        try {
+            const res = await reviewDriverPhoto(selected.id, action);
+            const next = res.profile_image_status;
+            setSelected({ ...selected, profile_image_status: next });
+            setDrivers(prev => prev.map(d => d.id === selected.id ? { ...d, profile_image_status: next } : d));
+            toast({ title: `Photo ${next}` });
+        } catch (e: any) {
+            toast({ title: "Photo review failed", description: e?.message || "Unknown error", variant: "destructive" });
+        } finally {
+            setPhotoReviewing(false);
+        }
     };
 
     const ef = (field: string) => editForm[field] ?? "";
@@ -678,6 +695,20 @@ export default function DriversPage() {
                                                     </button>
                                                 )}
                                             </div>
+                                            {selected.profile_image_status === "pending_review" && (
+                                                <div className="flex items-center gap-2 mt-2 p-2 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
+                                                    {selected.photo_url && (
+                                                        // eslint-disable-next-line @next/next/no-img-element
+                                                        <img src={selected.photo_url} alt="" className="w-9 h-9 rounded-full object-cover" />
+                                                    )}
+                                                    <span className="text-xs text-amber-700 dark:text-amber-400 flex-1">Profile photo pending review</span>
+                                                    <button disabled={photoReviewing} onClick={() => handlePhotoReview("approve")} className="text-xs font-semibold px-2 py-1 rounded bg-emerald-600 text-white disabled:opacity-50">Approve</button>
+                                                    <button disabled={photoReviewing} onClick={() => handlePhotoReview("reject")} className="text-xs font-semibold px-2 py-1 rounded bg-red-600 text-white disabled:opacity-50">Reject</button>
+                                                </div>
+                                            )}
+                                            {selected.profile_image_status === "rejected" && (
+                                                <div className="mt-2 text-xs text-red-600 dark:text-red-400">Profile photo rejected — driver must re-upload.</div>
+                                            )}
                                             <div className="flex items-center gap-2 mt-2">
                                                 {selected.status === "active" ? <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"><ShieldCheck className="h-3 w-3" /> Active</Badge>
                                                 : selected.status === "needs_review" ? <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"><AlertTriangle className="h-3 w-3" /> Needs Review</Badge>

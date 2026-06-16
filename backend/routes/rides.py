@@ -152,9 +152,11 @@ try:
         settle_corporate,
         settle_wallet,
     )
+    from ..utils.stripe_charge import authorize_ride
 except ImportError:
     from services.cancellation_service import calculate_cancellation_fee, pay_driver_cancellation_fee  # type: ignore
     from services.payment_service import send_ride_receipt, settle_card, settle_corporate, settle_wallet  # type: ignore
+    from utils.stripe_charge import authorize_ride  # type: ignore
 
 db = db_supabase  # legacy alias
 
@@ -1766,6 +1768,125 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
         logger.error(f"Ride timeout handler error for {r_id}: {e}", exc_info=True)
 
 
+# Decline codes where re-authorizing at a LOWER amount (fare without the buffer)
+# can still succeed — the card is fundable, the buffer just tipped a thin balance
+# over. Any other decline (lost/stolen/generic) is the card itself being bad, so
+# a smaller hold won't help and we block instead of retrying.
+_RETRYABLE_AT_LOWER_AMOUNT = frozenset({"insufficient_funds"})
+
+
+async def _preauthorize_ride_card(
+    *,
+    ride_id: str,
+    rider_id: str,
+    grand_total: Decimal,
+    stripe_customer_id: Optional[str],
+    payment_method_id: Optional[str],
+) -> dict:
+    """Place a buffered card hold at booking; return ride fields to persist.
+
+    Holds ``grand_total + RIDE_AUTH_BUFFER_CAD`` via a manual-capture
+    PaymentIntent so a post-trip tip can later be captured on the SAME intent
+    (one Stripe fee) and a dead card is surfaced BEFORE a driver is dispatched.
+    The held PaymentIntent id reuses the existing ``payment_intent_id`` column.
+
+    Returns a (possibly empty) dict merged into ``ride_data``:
+        {"payment_intent_id", "authorized_amount", "auth_status"} on a hold,
+        {} when no hold was placed (ride proceeds on the post-trip settlement
+        path exactly as it does today).
+
+    Raises ``HTTPException(402)`` in EXACTLY ONE case — the card genuinely
+    cannot pay (both the buffered hold AND the fare-only fallback were
+    declined). Every other non-success degrades to "no hold, proceed":
+      - ``requires_action`` (SCA/3DS at booking) — handled by the dedicated
+        SCA-at-booking flow later; for now fall back to post-trip settlement.
+      - ``failed`` (Stripe ops error) — never block a rider over our outage.
+      - ``unconfigured`` (dev/test, no Stripe key) — proceed.
+      - missing customer / payment method — proceed (post-trip settlement
+        still validates a card is on file before dispatch in create_ride).
+    The buffer must never block a ride the rider could otherwise take.
+    """
+    if not stripe_customer_id or not payment_method_id:
+        # No saved card to hold against — leave settlement to the post-trip path.
+        return {}
+
+    buffer = _round(_d(_settings.RIDE_AUTH_BUFFER_CAD))
+    hold_amount = _round(_d(grand_total) + buffer)
+    _ride_stub = {"id": ride_id, "payment_method": "card"}
+
+    outcome = await authorize_ride(
+        ride=_ride_stub,
+        rider_id=rider_id,
+        amount=hold_amount,
+        payment_method_id=payment_method_id,
+        stripe_customer_id=stripe_customer_id,
+    )
+
+    if outcome.status == "authorized":
+        return {
+            "payment_intent_id": outcome.payment_intent_id,
+            "authorized_amount": _f(hold_amount),
+            "auth_status": "authorized",
+        }
+
+    if outcome.status == "declined":
+        if outcome.decline_code in _RETRYABLE_AT_LOWER_AMOUNT:
+            # Buffer tipped a thin balance over — retry holding the fare only so
+            # a rider who can afford the ride still rides (loses single-fee tips).
+            fare_outcome = await authorize_ride(
+                ride=_ride_stub,
+                rider_id=rider_id,
+                amount=_round(_d(grand_total)),
+                payment_method_id=payment_method_id,
+                stripe_customer_id=stripe_customer_id,
+            )
+            if fare_outcome.status == "authorized":
+                logger.info(
+                    "[preauth] buffered hold declined (insufficient_funds); fare-only hold placed for ride=%s",
+                    ride_id,
+                )
+                return {
+                    "payment_intent_id": fare_outcome.payment_intent_id,
+                    "authorized_amount": _f(_round(_d(grand_total))),
+                    "auth_status": "fare_only",
+                }
+            if fare_outcome.status == "declined":
+                logger.info("[preauth] fare-only hold also declined for ride=%s — blocking", ride_id)
+                raise HTTPException(
+                    status_code=402,
+                    detail={
+                        "code": "CARD_DECLINED",
+                        "message": ("Your card was declined. Please update your payment method and try booking again."),
+                        "decline_code": fare_outcome.decline_code,
+                    },
+                )
+            # fare-only hit SCA / ops / unconfigured — degrade to no hold.
+            return {}
+
+        # Hard decline (lost/stolen/generic) — a smaller hold won't help.
+        logger.info(
+            "[preauth] hard card decline (code=%s) for ride=%s — blocking",
+            outcome.decline_code,
+            ride_id,
+        )
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "code": "CARD_DECLINED",
+                "message": ("Your card was declined. Please update your payment method and try booking again."),
+                "decline_code": outcome.decline_code,
+            },
+        )
+
+    # requires_action / failed / unconfigured — proceed without a hold; the
+    # post-trip settlement path (and its retry loop) remains the safety net.
+    if outcome.status == "requires_action":
+        logger.info("[preauth] card requires SCA at booking for ride=%s — deferring to post-trip settlement", ride_id)
+    elif outcome.status == "failed":
+        logger.error("[preauth] authorization ops error for ride=%s: %s", ride_id, outcome.error_message)
+    return {}
+
+
 @api_router.post("")
 @ride_request_limit
 @idempotent_endpoint(scope="ride_create")
@@ -2272,6 +2393,25 @@ async def create_ride(
         # 6. Tag ride as corporate
         ride_data["corporate_account_id"] = _corp_company_id
         ride_data["payment_method"] = "company_allowance"
+
+    # ── Card pre-authorization (buffered hold) ────────────────────────────────
+    # For an immediate CARD ride, place a manual-capture hold of
+    # (grand_total + RIDE_AUTH_BUFFER_CAD) BEFORE the ride is inserted/dispatched.
+    # This catches a dead card up front (a true decline raises 402 here, before a
+    # driver is disturbed) and reserves headroom so a post-trip tip captures on
+    # the same PaymentIntent. Skipped for wallet/corporate (different settlement)
+    # and for scheduled rides (authorized at dispatch time — see scheduled_rides).
+    # Any non-decline failure degrades to "no hold" and the existing post-trip
+    # settlement path; the buffer never blocks a ride the rider could take.
+    if ride_data.get("payment_method") == "card" and not _is_deferred_schedule:
+        _auth_fields = await _preauthorize_ride_card(
+            ride_id=ride_data["id"],
+            rider_id=current_user["id"],
+            grand_total=_d(grand_total),
+            stripe_customer_id=(rider_row or {}).get("stripe_customer_id"),
+            payment_method_id=body.payment_method_id,
+        )
+        ride_data.update(_auth_fields)
 
     # ``insert_ride`` returns the row Supabase just wrote — use it directly
     # instead of a follow-up ``get_ride`` round-trip. Fall back to the

@@ -58,7 +58,7 @@ class TestScheduledDispatchPreauth:
 
         from backend.utils.scheduled_rides import _dispatch_scheduled_ride
 
-        fields = {"payment_intent_id": "pi_hold", "authorized_amount": 40.0, "auth_status": "authorized"}
+        fields = {"payment_intent_id": "pi_hold", "authorized_amount": "40.00", "auth_status": "authorized"}
         # update_one calls: [0]=claim (returns the claimed ride), [1]=persist hold
         patches, update_mock, preauth_mock = _dispatch_patches(
             preauth_fields=fields,

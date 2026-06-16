@@ -295,6 +295,9 @@ export default function ProfileScreen() {
           <Text style={styles.name}>
             {driverData?.name || (user?.first_name ? `${user.first_name} ${user.last_name || ''}` : 'Driver')}
           </Text>
+          {!!driverData?.driver_code && (
+            <Text style={styles.driverCode}>{driverData.driver_code}</Text>
+          )}
           <Text style={styles.subtitle}>
             {driverData?.is_verified ? 'Verified Driver' : 'Pending Verification'}
           </Text>
@@ -945,6 +948,14 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
     fontSize: 26,
     fontWeight: '900',
     letterSpacing: 0.5,
+  },
+  driverCode: {
+    color: 'rgba(255,255,255,0.95)',
+    fontSize: 13,
+    marginTop: 4,
+    fontWeight: '700',
+    letterSpacing: 1,
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
   },
   subtitle: {
     color: 'rgba(255,255,255,0.8)',

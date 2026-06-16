@@ -111,6 +111,7 @@ const storage = {
 export interface Driver {
   id: string;
   user_id: string;
+  driver_code?: string;
   name: string;
   phone: string;
   vehicle_type_id: string;

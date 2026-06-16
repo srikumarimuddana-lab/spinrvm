@@ -31,6 +31,11 @@ import asyncio
 import logging
 from typing import Any, Dict, Optional
 
+try:
+    from .pii import redact_email
+except ImportError:
+    from utils.pii import redact_email  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 # Default SES region — Canada, for PIPEDA data-residency alignment. Overridden
@@ -161,14 +166,19 @@ async def _try_ses(
             message_id,
         )
         return message_id or ""
-    except Exception:
-        # Do not swallow — SES failures must surface so the root cause is
-        # fixed. We log .error and let the Resend guardrail take over.
+    except Exception as e:
+        # Do not swallow — SES failures must surface so the root cause is fixed.
+        # PIPEDA: botocore's MessageRejected echoes the recipient address in its
+        # message (e.g. "identities failed the check ... rider@x.com"). Scrub the
+        # address out and DON'T emit exc_info (the traceback re-includes it).
+        safe = str(e)
+        if to:
+            safe = safe.replace(to, redact_email(to)).replace(to.lower(), redact_email(to))
         logger.error(
-            "[EMAIL] SES send failed log_id=%s subject=%r — falling back to Resend",
+            "[EMAIL] SES send failed log_id=%s subject=%r err=%s — falling back to Resend",
             log_id,
             subject,
-            exc_info=True,
+            safe,
         )
         return None
 

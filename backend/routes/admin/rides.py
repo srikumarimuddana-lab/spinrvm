@@ -1322,6 +1322,10 @@ async def admin_get_ride_invoice(ride_id: str):
         "driver_license_plate": ride.get("driver_license_plate", ""),
         "actual_distance_km": ride.get("actual_distance_km"),
         "fare_locked": fare_locked,
+        # Tax + area-fee breakdowns (migration 46) so the invoice PDF can render
+        # GST/PST as separate line items — a Saskatchewan regulatory requirement.
+        "tax_breakdown": ride.get("tax_breakdown") or {},
+        "area_fees_breakdown": ride.get("area_fees_breakdown") or [],
     }
 
     if fare_locked and snapshot:

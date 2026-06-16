@@ -2610,12 +2610,18 @@ async def get_active_ride(request: Request = None, current_user: dict = Depends(
             user = await db_supabase.get_user_by_id(driver.get("user_id"))
             driver = {
                 "id": driver["id"],
+                "driver_code": driver.get("driver_code"),
                 "name": (f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "Driver"),
                 "rating": driver.get("rating", 4.8),
                 "total_rides": driver.get("total_rides", 0),
+                # photo_url was omitted here — the rider's active-ride screens
+                # read currentDriver.photo_url, so the driver photo never showed
+                # during driver-arrived / in-progress.
+                "photo_url": driver.get("photo_url"),
                 "vehicle_make": driver.get("vehicle_make"),
                 "vehicle_model": driver.get("vehicle_model"),
                 "vehicle_color": driver.get("vehicle_color"),
+                "vehicle_year": driver.get("vehicle_year"),
                 "license_plate": driver.get("license_plate"),
                 "lat": driver.get("lat"),
                 "lng": driver.get("lng"),

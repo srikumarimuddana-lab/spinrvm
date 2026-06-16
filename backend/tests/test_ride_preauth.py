@@ -43,12 +43,14 @@ def _patch_settings(secret: str = "sk_test_xxx"):
     )
 
 
-def _patch_stripe(create_return=None, capture_return=None):
+def _patch_stripe(create_return=None, capture_return=None, retrieve_return=None):
     mock_stripe = MagicMock()
     if create_return is not None:
         mock_stripe.PaymentIntent.create.return_value = create_return
     if capture_return is not None:
         mock_stripe.PaymentIntent.capture.return_value = capture_return
+    if retrieve_return is not None:
+        mock_stripe.PaymentIntent.retrieve.return_value = retrieve_return
     return patch("backend.utils.stripe_charge.stripe", mock_stripe), mock_stripe
 
 
@@ -279,3 +281,68 @@ class TestCapture:
 
         assert outcome.status == "declined"
         assert outcome.decline_code == "issuer_not_available"
+
+
+# --------------------------------------------------------------------------- #
+# verify_authorization (SCA two-step: confirm an on-device-authed hold)
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+class TestVerifyAuthorization:
+    async def test_requires_capture_is_authorized(self):
+        """The PI the app confirmed on-device landed in requires_capture →
+        hold is real; charged_amount comes from Stripe's cents."""
+        from backend.utils.stripe_charge import verify_authorization
+
+        intent = MagicMock(id="pi_sca", status="requires_capture", amount=3500)
+        stripe_patch, _ = _patch_stripe(retrieve_return=intent)
+
+        with _patch_settings(), stripe_patch:
+            outcome = await verify_authorization(ride_id="r", payment_intent_id="pi_sca")
+
+        assert outcome.status == "authorized"
+        assert outcome.payment_intent_id == "pi_sca"
+        assert outcome.charged_amount == Decimal("35.00")
+
+    async def test_succeeded_treated_as_authorized(self):
+        """Already captured (e.g. duplicate) → authorized so the caller attaches
+        it; settlement's idempotent capture is a no-op, never a double charge."""
+        from backend.utils.stripe_charge import verify_authorization
+
+        intent = MagicMock(id="pi_s", status="succeeded", amount=2500)
+        stripe_patch, _ = _patch_stripe(retrieve_return=intent)
+        with _patch_settings(), stripe_patch:
+            outcome = await verify_authorization(ride_id="r", payment_intent_id="pi_s")
+        assert outcome.status == "authorized"
+        assert outcome.charged_amount == Decimal("25.00")
+
+    async def test_unconfirmed_pi_is_declined(self):
+        """Rider abandoned/failed the SCA sheet → PI still needs action/method."""
+        from backend.utils.stripe_charge import verify_authorization
+
+        intent = MagicMock(id="pi_x", status="requires_payment_method", amount=3500)
+        stripe_patch, _ = _patch_stripe(retrieve_return=intent)
+        with _patch_settings(), stripe_patch:
+            outcome = await verify_authorization(ride_id="r", payment_intent_id="pi_x")
+        assert outcome.status == "declined"
+
+    async def test_missing_pi_returns_failed(self):
+        from backend.utils.stripe_charge import verify_authorization
+
+        outcome = await verify_authorization(ride_id="r", payment_intent_id="")
+        assert outcome.status == "failed"
+
+    async def test_stripe_error_returns_failed(self):
+        from backend.utils.stripe_charge import verify_authorization
+
+        class _FakeStripeError(Exception):
+            pass
+
+        mock_stripe = MagicMock()
+        mock_stripe.PaymentIntent.retrieve.side_effect = _FakeStripeError("api_error")
+        with (
+            _patch_settings(),
+            patch("backend.utils.stripe_charge.stripe", mock_stripe),
+            patch("backend.utils.stripe_charge._StripeBaseError", _FakeStripeError),
+        ):
+            outcome = await verify_authorization(ride_id="r", payment_intent_id="pi_e")
+        assert outcome.status == "failed"

@@ -426,6 +426,77 @@ async def authorize_ride(
     )
 
 
+async def verify_authorization(
+    *,
+    ride_id: str,
+    payment_intent_id: str,
+) -> ChargeOutcome:
+    """Verify an on-device-confirmed authorization hold (SCA two-step at booking).
+
+    After ``authorize_ride`` returns ``requires_action`` and the rider-app runs
+    the Stripe confirm sheet (3DS / Apple Pay biometric), the PaymentIntent
+    should land in ``requires_capture``. This re-reads it from Stripe to confirm
+    the hold is real before create_ride attaches it — we never trust the client's
+    word that authentication succeeded.
+
+    ``ChargeOutcome.status``:
+        "authorized"    PI is requires_capture — hold confirmed; charged_amount
+                        carries the held amount (dollars, from Stripe cents)
+        "declined"      authentication failed / PI needs a payment method again
+        "failed"        Stripe ops error / unexpected PI status
+        "unconfigured"  Stripe not installed/configured (dev/test)
+
+    Never raises — callers switch on ``outcome.status``.
+    """
+    if not payment_intent_id:
+        return ChargeOutcome(status="failed", error_message="No PaymentIntent to verify")
+
+    secret = await _resolve_stripe_secret(ride_id)
+    if secret is None:
+        return ChargeOutcome(status="unconfigured", error_message="Payment processing is not configured")
+
+    try:
+        intent = stripe.PaymentIntent.retrieve(payment_intent_id, api_key=secret)
+    except _StripeBaseError as e:
+        logger.error("Stripe error verifying auth ride=%s pi=%s: %s", ride_id, payment_intent_id, e)
+        return ChargeOutcome(status="failed", payment_intent_id=payment_intent_id, error_message=str(e))
+    except Exception as e:  # pragma: no cover — defence-in-depth
+        logger.exception("Unexpected error verifying auth ride=%s: %s", ride_id, e)
+        return ChargeOutcome(status="failed", payment_intent_id=payment_intent_id, error_message=str(e))
+
+    status = getattr(intent, "status", "") or ""
+    pi_id = getattr(intent, "id", None) or payment_intent_id
+    if status == "requires_capture":
+        amount_cents = getattr(intent, "amount", 0) or 0
+        return ChargeOutcome(
+            status="authorized",
+            payment_intent_id=pi_id,
+            charged_amount=to_decimal(Decimal(int(amount_cents)) / Decimal("100")),
+        )
+    if status in ("requires_action", "requires_source_action", "requires_payment_method", "requires_confirmation"):
+        # Authentication not completed (rider abandoned the sheet, or it failed).
+        return ChargeOutcome(
+            status="declined",
+            payment_intent_id=pi_id,
+            error_message=f"Authorization not completed (PI status: {status})",
+        )
+    if status == "succeeded":
+        # Already captured — treat as authorized so the caller attaches it and
+        # settlement's idempotent capture is a no-op rather than a double charge.
+        return ChargeOutcome(
+            status="authorized",
+            payment_intent_id=pi_id,
+            charged_amount=to_decimal(Decimal(int(getattr(intent, "amount", 0) or 0)) / Decimal("100")),
+        )
+
+    logger.error("Unexpected verify PI status=%s for ride=%s pi=%s", status, ride_id, pi_id)
+    return ChargeOutcome(
+        status="failed",
+        payment_intent_id=pi_id,
+        error_message=f"Unexpected PaymentIntent status: {status}",
+    )
+
+
 async def capture_ride(
     *,
     ride_id: str,

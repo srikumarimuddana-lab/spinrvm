@@ -203,12 +203,18 @@ async def admin_get_drivers(
     out = []
     for d in deduped:
         u = users_map.get(d.get("user_id"))
+        # Driver avatar lives on the user row (users.profile_image); the drivers
+        # table has no photo column. Expose it as photo_url (canonical) +
+        # profile_photo_url (the key the existing UI presence-dot reads).
+        _img = u.get("profile_image") if u else None
         out.append(
             {
                 **d,
                 "name": _user_display_name(u) or d.get("name"),
                 "email": u.get("email") if u else None,
                 "phone": u.get("phone") if u else d.get("phone"),
+                "photo_url": _img,
+                "profile_photo_url": _img,
             }
         )
     return out

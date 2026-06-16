@@ -1,0 +1,64 @@
+name: Sync mobile lockfiles
+
+# Why this exists
+# ---------------
+# The EAS Mobile Update (OTA) action runs `yarn install --frozen-lockfile`.
+# When a PR bumps rider-app/ or driver-app/ package.json but forgets to update
+# the matching yarn.lock, frozen install aborts and the post-merge OTA never
+# publishes. This workflow heals that drift ON THE PR — before it reaches main —
+# by regenerating the lockfile and committing it back to the PR branch.
+#
+# It triggers only on package.json changes; the lockfile-only commit it pushes
+# does NOT match the path filter, so it can't retrigger itself (no [skip ci]
+# needed — which means the PR's other required checks still run on the final
+# commit). Fork PRs can't be pushed to, so they're skipped (the mobile-dep-check
+# workflow's --frozen-lockfile step still surfaces the drift as a red check).
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - rider-app/package.json
+      - driver-app/package.json
+      - .github/workflows/sync-mobile-lockfiles.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    # Only same-repo PRs (and manual runs) can be pushed to; forks lack write.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Regenerate lockfiles
+        # --ignore-scripts: we only need yarn to resolve and write the lock, not
+        # to run patch-package / native postinstalls. An unchanged app's lock
+        # stays byte-identical (yarn keeps satisfying versions), so no churn.
+        run: |
+          yarn --cwd rider-app install --ignore-scripts --non-interactive
+          yarn --cwd driver-app install --ignore-scripts --non-interactive
+
+      - name: Commit refreshed lockfiles (if changed)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- rider-app/yarn.lock driver-app/yarn.lock; then
+            echo "lockfiles already in sync — nothing to commit."
+          else
+            git add rider-app/yarn.lock driver-app/yarn.lock
+            git commit -m "chore(mobile): sync yarn.lock to package.json"
+            git push origin HEAD:"${{ github.head_ref }}"
+          fi

@@ -567,6 +567,9 @@ export interface DriverLiveStats {
     acceptance_rate: number | null;
     cancelled_by_driver: number;
     total_assigned: number;
+    // Driver avatar, loaded lazily here so the bulk drivers list no longer
+    // has to ship profile_image (a base64 blob for legacy accounts).
+    photo_url: string | null;
 }
 export const getDriverLiveStats = (id: string) =>
     request<DriverLiveStats>(`/api/admin/drivers/${id}/live-stats`);

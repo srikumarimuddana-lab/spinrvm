@@ -677,9 +677,12 @@ export default function DriversPage() {
                                 <div className="flex items-start justify-between">
                                     <div className="flex items-center gap-4">
                                         <div className="relative">
-                                            {selected.photo_url ? (
+                                            {/* Photo comes from live-stats (loaded on open) — the drivers
+                                                list no longer ships profile_image. Falls back to selected
+                                                in case an older list payload still carries it. */}
+                                            {(liveStats?.photo_url || selected.photo_url) ? (
                                                 // eslint-disable-next-line @next/next/no-img-element
-                                                <img src={selected.photo_url} alt="" className="w-16 h-16 rounded-2xl object-cover" />
+                                                <img src={liveStats?.photo_url || selected.photo_url} alt="" className="w-16 h-16 rounded-2xl object-cover" />
                                             ) : (
                                                 <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center text-xl font-bold text-primary">{(selected.first_name?.[0] || "")}{(selected.last_name?.[0] || "")}</div>
                                             )}
@@ -701,9 +704,9 @@ export default function DriversPage() {
                                             </div>
                                             {selected.profile_image_status === "pending_review" && (
                                                 <div className="flex items-center gap-2 mt-2 p-2 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
-                                                    {selected.photo_url && (
+                                                    {(liveStats?.photo_url || selected.photo_url) && (
                                                         // eslint-disable-next-line @next/next/no-img-element
-                                                        <img src={selected.photo_url} alt="" className="w-9 h-9 rounded-full object-cover" />
+                                                        <img src={liveStats?.photo_url || selected.photo_url} alt="" className="w-9 h-9 rounded-full object-cover" />
                                                     )}
                                                     <span className="text-xs text-amber-700 dark:text-amber-400 flex-1">Profile photo pending review</span>
                                                     <button disabled={photoReviewing} onClick={() => handlePhotoReview("approve")} className="text-xs font-semibold px-2 py-1 rounded bg-emerald-600 text-white disabled:opacity-50">Approve</button>
@@ -1339,7 +1342,7 @@ function VerificationSummaryCard({
                 </div>
                 <div className="flex items-center justify-between pt-1 text-xs border-t border-border">
                     <div className="flex items-center gap-2">
-                        <div className={`w-2 h-2 rounded-full ${driver.profile_photo_url ? "bg-emerald-500" : "bg-muted-foreground/30"}`} />
+                        <div className={`w-2 h-2 rounded-full ${driver.profile_image_status ? "bg-emerald-500" : "bg-muted-foreground/30"}`} />
                         <span className="text-muted-foreground">Profile photo</span>
                     </div>
                     <div className="flex items-center gap-2">

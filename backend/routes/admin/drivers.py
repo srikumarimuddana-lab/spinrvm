@@ -210,25 +210,33 @@ async def admin_get_drivers(
     deduped.sort(key=lambda r: r.get("created_at") or "", reverse=True)
 
     user_ids = list({d.get("user_id") for d in deduped if d.get("user_id")})
+    # Project only the columns the list renders. users.profile_image is
+    # deliberately excluded: for accounts predating the `profile-photos` storage
+    # bucket it holds a full base64 data URI, so pulling N of them into a bulk
+    # list response bloated the payload (and shipped a face photo — PII — in a
+    # list endpoint). The avatar now loads lazily from the per-driver live-stats
+    # endpoint when the detail slideout opens. profile_image_status is kept so
+    # the status badges and "Pending photos" tab keep working.
     users_list = (
-        await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
+        await db_supabase.get_rows(
+            "users",
+            {"id": {"$in": user_ids}},
+            columns="id,first_name,last_name,email,phone,profile_image_status",
+            limit=max(len(user_ids), 1),
+        )
+        if user_ids
+        else []
     )
     users_map = {u["id"]: u for u in users_list if u.get("id")}
     out = []
     for d in deduped:
         u = users_map.get(d.get("user_id"))
-        # Driver avatar lives on the user row (users.profile_image); the drivers
-        # table has no photo column. Expose it as photo_url (canonical) +
-        # profile_photo_url (the key the existing UI presence-dot reads).
-        _img = u.get("profile_image") if u else None
         out.append(
             {
                 **d,
                 "name": _user_display_name(u) or d.get("name"),
                 "email": u.get("email") if u else None,
                 "phone": u.get("phone") if u else d.get("phone"),
-                "photo_url": _img,
-                "profile_photo_url": _img,
                 "profile_image_status": (u.get("profile_image_status") if u else None),
             }
         )
@@ -463,9 +471,7 @@ async def admin_get_driver_stats(
             "total_earnings": total_earnings_sum,
             "avg_rating": avg_rating,
             # Drivers whose profile photo is awaiting admin approval.
-            "pending_photos": sum(
-                1 for u in users_map.values() if u.get("profile_image_status") == "pending_review"
-            ),
+            "pending_photos": sum(1 for u in users_map.values() if u.get("profile_image_status") == "pending_review"),
         },
         "area_stats": list(area_stats.values()),
         "charts": {
@@ -1474,6 +1480,16 @@ async def admin_get_driver_live_stats(driver_id: str):
         1 for r in rides if r.get("status") == "cancelled" and "driver" in (r.get("cancellation_reason") or "").lower()
     )
 
+    # The detail slideout reads the driver's avatar from here rather than the
+    # bulk drivers list, which no longer ships profile_image (see
+    # admin_get_drivers). One targeted lookup on open keeps the heavy
+    # base64/URL blob off the list payload while still showing the photo.
+    photo_url = None
+    drv = await db_supabase.get_driver_by_id(driver_id)
+    if drv and drv.get("user_id"):
+        user = await db_supabase.get_user_by_id(drv["user_id"])
+        photo_url = (user or {}).get("profile_image")
+
     return {
         "total_rides": completed_count,
         "total_earnings": total_earnings,
@@ -1481,6 +1497,7 @@ async def admin_get_driver_live_stats(driver_id: str):
         "acceptance_rate": acceptance_rate,
         "cancelled_by_driver": cancelled_by_driver,
         "total_assigned": total_assigned,
+        "photo_url": photo_url,
     }
 
 

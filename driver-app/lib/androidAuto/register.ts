@@ -39,10 +39,9 @@ import { useCarMapCamera } from './carMapCamera';
 const NAV_TEMPLATE_ID = 'spinr-aa-nav';
 const FALLBACK_OFFER_MS = 15_000;
 
-// Map-button icons. iternio's AutoImage accepts a bundled asset. The nav-handoff
-// glyph still reuses the car marker (swap for proper nav glyphs before release);
-// the zoom glyphs are purpose-built +/- template icons.
-const NAV_ICON = require('../../assets/images/car_marker.png');
+// Map-button icons (iternio's AutoImage takes a bundled asset). Purpose-built
+// monochrome glyphs: a navigation arrow for the hand-off, +/- for zoom.
+const NAV_ICON = require('../../assets/images/nav_arrow.png');
 const ZOOM_IN_ICON = require('../../assets/images/zoom_in.png');
 const ZOOM_OUT_ICON = require('../../assets/images/zoom_out.png');
 
@@ -93,8 +92,10 @@ export default function registerAutoPlay(): void {
   const autoPlay = require('@iternio/react-native-auto-play');
   const { HybridAutoPlay, MapTemplate, Flag } = autoPlay;
 
-  // Android Auto: Google + Waze hand-off buttons (both ~always present).
-  const navButtons = defaultNavButtons(Platform.OS);
+  // A single "Navigate" hand-off on Android Auto — the platform default nav app
+  // (Google), matching Lyft's one in-car navigate affordance rather than two
+  // ambiguous icon-only buttons. Waze stays wired for the dormant CarPlay path.
+  const navProvider: NavProvider = defaultNavButtons(Platform.OS)[0]?.provider ?? 'google';
 
   // Hand live turn-by-turn to the driver's nav app for the current destination.
   const handoffToNav = (provider: NavProvider) => {
@@ -130,14 +131,16 @@ export default function registerAutoPlay(): void {
     },
   ];
 
-  // Nav hand-off buttons only while navigating; zoom buttons in every state.
+  // Navigate button only while navigating; zoom buttons in every state.
   const mapButtonsFor = (hasRoute: boolean) => {
     const navHandoffButtons = hasRoute
-      ? navButtons.map((b) => ({
-          type: 'custom' as const,
-          image: { type: 'asset' as const, image: NAV_ICON },
-          onPress: () => handoffToNav(b.provider),
-        }))
+      ? [
+          {
+            type: 'custom' as const,
+            image: { type: 'asset' as const, image: NAV_ICON },
+            onPress: () => handoffToNav(navProvider),
+          },
+        ]
       : [];
     return [...navHandoffButtons, ...zoomButtons];
   };
@@ -229,6 +232,7 @@ export default function registerAutoPlay(): void {
     const card = buildOfferCard(offer);
     const sub = [
       card.fareLabel,
+      card.bonusLabel,
       card.etaLabel ? `${card.etaLabel} away` : null,
       card.surgeLabel ? `${card.surgeLabel} surge` : null,
     ]

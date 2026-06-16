@@ -111,7 +111,7 @@ const lastMapButtons = (t: MockTpl) =>
   t.setMapButtons.mock.calls.at(-1)?.[0] as { onPress: () => void }[];
 const lastHeader = (t: MockTpl) =>
   t.setHeaderActions.mock.calls.at(-1)?.[0] as
-    | { android?: Array<{ title: string; onPress: () => void }> }
+    | { android?: { title: string; onPress: () => void }[] }
     | undefined;
 
 beforeEach(() => {
@@ -161,7 +161,7 @@ it('creates ONE live MapTemplate with zoom-only buttons and no header action whe
   expect(mockSubscribe).toHaveBeenCalled();
 });
 
-it('adds Google + Waze hand-off buttons (before zoom) and a Complete action while in trip', () => {
+it('adds a single Navigate hand-off (before zoom) and a Complete action while in trip', () => {
   mockState.rideState = 'trip_in_progress';
   mockState.activeRide = navRide();
   registerAutoPlay();
@@ -169,9 +169,9 @@ it('adds Google + Waze hand-off buttons (before zoom) and a Complete action whil
 
   const t = lastTpl();
   const buttons = lastMapButtons(t);
-  expect(buttons).toHaveLength(4); // google, waze, zoom out, zoom in
+  expect(buttons).toHaveLength(3); // navigate, zoom out, zoom in
 
-  buttons[0].onPress(); // Google hand-off
+  buttons[0].onPress(); // Navigate → Google hand-off (platform default)
   expect(Linking.openURL).toHaveBeenCalledWith(
     expect.stringContaining('google.navigation:q=52.2,-106.6'),
   );

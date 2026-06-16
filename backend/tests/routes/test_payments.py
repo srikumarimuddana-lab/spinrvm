@@ -144,3 +144,115 @@ async def test_create_intent_non_owner_gets_403_not_500():
             )
 
     assert exc_info.value.status_code == 403
+
+
+# ── C1: confirm must bind the PI to this ride and verify amount ──────────────
+
+_RIDE_BASIS = {"id": _RIDE_ID, "rider_id": _OWNER_ID, "payment_status": "pending", "grand_total": "30.00"}
+
+
+def _patch_confirm_env(metadata, *, status="succeeded", amount_received=3000):
+    from unittest.mock import MagicMock
+
+    intent = MagicMock()
+    intent.metadata = metadata
+    intent.status = status
+    intent.amount_received = amount_received
+    stripe_mock = MagicMock()
+    stripe_mock.PaymentIntent.retrieve.return_value = intent
+    return stripe_mock
+
+
+@pytest.mark.anyio
+async def test_confirm_rejects_pi_for_different_ride():
+    """C1: a PaymentIntent whose metadata.ride_id is a DIFFERENT ride is rejected
+    (owning the PI + the ride is not enough)."""
+    from fastapi import HTTPException
+
+    from backend.routes.payments import ConfirmPaymentRequest, confirm_payment
+
+    stripe_mock = _patch_confirm_env({"user_id": _OWNER_ID, "ride_id": "ride-OTHER"})
+    with (
+        patch("backend.routes.payments.db_supabase") as mock_db,
+        patch(
+            "backend.routes.payments.get_app_settings",
+            new_callable=AsyncMock,
+            return_value={"stripe_secret_key": "sk_test"},
+        ),
+        patch("backend.routes.payments.stripe", stripe_mock),
+    ):
+        mock_db.get_ride = AsyncMock(return_value=_RIDE_BASIS)
+        mock_db.claim_ride_payment_processing = AsyncMock(return_value=True)
+        mock_db.update_ride = AsyncMock()
+
+        with pytest.raises(HTTPException) as exc:
+            await confirm_payment(
+                body=ConfirmPaymentRequest(**{"payment_intent_id": "pi_x", "ride_id": _RIDE_ID}),
+                request=None,
+                current_user=_OWNER_USER,
+            )
+    assert exc.value.status_code == 403
+    mock_db.update_ride.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_confirm_rejects_underpayment():
+    """C1: a succeeded PI whose amount_received is below the owed total (a cheap
+    intent confirmed against an expensive ride) is rejected with 402."""
+    from fastapi import HTTPException
+
+    from backend.routes.payments import ConfirmPaymentRequest, confirm_payment
+
+    stripe_mock = _patch_confirm_env({"user_id": _OWNER_ID, "ride_id": _RIDE_ID}, amount_received=1000)
+    with (
+        patch("backend.routes.payments.db_supabase") as mock_db,
+        patch(
+            "backend.routes.payments.get_app_settings",
+            new_callable=AsyncMock,
+            return_value={"stripe_secret_key": "sk_test"},
+        ),
+        patch("backend.routes.payments.stripe", stripe_mock),
+    ):
+        mock_db.get_ride = AsyncMock(return_value=_RIDE_BASIS)
+        mock_db.claim_ride_payment_processing = AsyncMock(return_value=True)
+        mock_db.update_ride = AsyncMock()
+
+        with pytest.raises(HTTPException) as exc:
+            await confirm_payment(
+                body=ConfirmPaymentRequest(**{"payment_intent_id": "pi_x", "ride_id": _RIDE_ID}),
+                request=None,
+                current_user=_OWNER_USER,
+            )
+    assert exc.value.status_code == 402
+    assert exc.value.detail["code"] == "AMOUNT_MISMATCH"
+    mock_db.update_ride.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_confirm_marks_paid_when_bound_and_sufficient():
+    """C1: matching ride_id + sufficient amount → the ride is settled."""
+    from backend.routes.payments import ConfirmPaymentRequest, confirm_payment
+
+    stripe_mock = _patch_confirm_env({"user_id": _OWNER_ID, "ride_id": _RIDE_ID}, amount_received=3000)
+    with (
+        patch("backend.routes.payments.db_supabase") as mock_db,
+        patch(
+            "backend.routes.payments.get_app_settings",
+            new_callable=AsyncMock,
+            return_value={"stripe_secret_key": "sk_test"},
+        ),
+        patch("backend.routes.payments.stripe", stripe_mock),
+    ):
+        mock_db.get_ride = AsyncMock(return_value=_RIDE_BASIS)
+        mock_db.claim_ride_payment_processing = AsyncMock(return_value=True)
+        mock_db.update_ride = AsyncMock()
+
+        result = await confirm_payment(
+            body=ConfirmPaymentRequest(**{"payment_intent_id": "pi_x", "ride_id": _RIDE_ID}),
+            request=None,
+            current_user=_OWNER_USER,
+        )
+    assert result["status"] == "succeeded"
+    mock_db.update_ride.assert_awaited_once()
+    written = mock_db.update_ride.call_args[0][1]
+    assert written["payment_status"] == "succeeded"

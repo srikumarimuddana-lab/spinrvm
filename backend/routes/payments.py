@@ -389,6 +389,46 @@ async def confirm_payment(
                         status_code=403,
                         detail="Not authorized to confirm payment for this ride",
                     )
+
+                # SECURITY (C1): ownership alone is insufficient — a rider owns
+                # many PaymentIntents. Bind the PI to THIS ride and verify it
+                # actually covers the owed total, or a rider could confirm a
+                # cheap / other-ride intent against an expensive ride and underpay.
+                pi_ride_id = (intent.metadata or {}).get("ride_id")
+                if pi_ride_id and pi_ride_id != ride_id:
+                    logger.error(
+                        "[confirm][security] PI %s metadata ride_id=%s != ride %s",
+                        payment_intent_id,
+                        pi_ride_id,
+                        ride_id,
+                    )
+                    raise HTTPException(status_code=403, detail="Payment does not match this ride")
+
+                # Only a genuinely succeeded charge can mark a ride paid, and only
+                # when the captured amount covers the authoritative owed total
+                # (grand_total). amount_received is 0 until the PI succeeds.
+                if intent.status == "succeeded":
+                    _grand = _ride.get("grand_total")
+                    if _grand is None:
+                        _grand = _ride.get("total_fare", 0)
+                    owed_cents = int((_q2(_grand) * 100).to_integral_value())
+                    received = int(getattr(intent, "amount_received", 0) or 0)
+                    if received < owed_cents:
+                        logger.error(
+                            "[confirm][security] underpay ride=%s pi=%s received=%d owed=%d",
+                            ride_id,
+                            payment_intent_id,
+                            received,
+                            owed_cents,
+                        )
+                        raise HTTPException(
+                            status_code=402,
+                            detail={
+                                "code": "AMOUNT_MISMATCH",
+                                "message": "Payment amount does not cover the fare.",
+                            },
+                        )
+
                 await db_supabase.update_ride(
                     ride_id,
                     {

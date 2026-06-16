@@ -29,6 +29,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Pagination } from "@/components/ui/pagination";
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
@@ -121,6 +122,8 @@ export default function SafetyPage() {
 
     const [items, setItems] = useState<SafetyIncident[]>([]);
     const [openCount, setOpenCount] = useState<number | null>(null);
+    const [total, setTotal] = useState(0);
+    const [page, setPage] = useState(0);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
 
@@ -145,10 +148,12 @@ export default function SafetyPage() {
                 role: roleFilter !== "all" ? roleFilter : undefined,
                 search: search.trim() || undefined,
                 limit: PAGE_SIZE,
+                offset: page * PAGE_SIZE,
             });
             // Drop stale responses if the user re-filtered while a fetch was in flight.
             if (id !== reqIdRef.current) return;
             setItems(res.items || []);
+            setTotal(res.total ?? 0);
             setOpenCount(res.open_count ?? null);
         } catch (e: any) {
             toast({
@@ -160,12 +165,18 @@ export default function SafetyPage() {
             setLoading(false);
             setRefreshing(false);
         }
-    }, [statusFilter, severityFilter, roleFilter, search, toast]);
+    }, [statusFilter, severityFilter, roleFilter, search, page, toast]);
 
     useEffect(() => {
         if (!allowed) return;
         load();
     }, [allowed, load]);
+
+    // Any filter/search change resets to the first page so the user never lands
+    // on an out-of-range offset (e.g. page 3 of a now-shorter result set).
+    useEffect(() => {
+        setPage(0);
+    }, [statusFilter, severityFilter, roleFilter, search]);
 
     // Live updates: when an admin WS broadcast announces a new incident,
     // refresh the list. We don't optimistically prepend because the
@@ -379,6 +390,17 @@ export default function SafetyPage() {
                     </Table>
                 )}
             </div>
+
+            {/* Pagination — server-side offset; only the current page is fetched. */}
+            {!loading && total > 0 && (
+                <Pagination
+                    page={page}
+                    pageSize={PAGE_SIZE}
+                    hasNextPage={(page + 1) * PAGE_SIZE < total}
+                    totalCount={total}
+                    onPageChange={setPage}
+                />
+            )}
 
             {/* Detail / triage drawer */}
             <Sheet open={!!selectedId} onOpenChange={(open) => { if (!open) { setSelectedId(null); setDetail(null); } }}>

@@ -593,3 +593,114 @@ class TestDispatchPushIsImmediate:
                 )
 
         assert enqueued == [], "normal pushes must not be enqueued for retry"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /notifications/debug-ride-offer — admin tool that reproduces the exact
+# dispatch path against a driver's device (token column, data-only payload,
+# priority=dispatch) without dispatching a real ride.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestDebugRideOffer:
+    """Pins admin_debug_ride_offer.
+
+    Code under test: backend/routes/notifications.py::admin_debug_ride_offer.
+    """
+
+    async def _run(self, user_row, send_result=True):
+        from backend.routes.notifications import DebugRideOfferRequest, admin_debug_ride_offer
+
+        captured: dict = {}
+
+        async def _send(user_id, title, body, data=None, priority="normal", target_app=None):
+            captured.update(
+                user_id=user_id,
+                title=title,
+                body=body,
+                data=data,
+                priority=priority,
+                target_app=target_app,
+            )
+            return send_result
+
+        with (
+            patch("backend.routes.notifications.db.find_one", AsyncMock(return_value=user_row)),
+            patch("backend.routes.notifications.send_push_notification", AsyncMock(side_effect=_send)),
+        ):
+            result = await admin_debug_ride_offer(
+                body=DebugRideOfferRequest(user_id=USER_ID),
+                admin={"id": "admin-1"},
+            )
+
+        return result, captured
+
+    async def test_uses_driver_token_column_and_dispatch_path(self):
+        """A registered driver token routes through target_app='driver' with a
+        data-only new_ride_assignment payload at priority='dispatch'."""
+        user_row = {
+            "id": USER_ID,
+            "fcm_token_driver": "android-fcm-driver-token-1234567890",
+            "fcm_token": "legacy-generic-token",
+            "is_online": True,
+            "is_driver": True,
+        }
+
+        result, captured = await self._run(user_row, send_result=True)
+
+        assert result["success"] is True
+        assert result["token_column_used"] == "fcm_token_driver"
+        assert result["routing"] == "fcm"
+        assert captured["priority"] == "dispatch"
+        assert captured["target_app"] == "driver"
+        assert captured["data"]["type"] == "new_ride_assignment"
+        assert captured["data"]["ride_id"].startswith("debug-")
+        # FCM data must be string-only (no raw floats/bools/None).
+        assert all(isinstance(v, str) for v in captured["data"].values())
+
+    async def test_falls_back_to_generic_token_when_no_driver_token(self):
+        user_row = {
+            "id": USER_ID,
+            "fcm_token": "legacy-generic-token-abc",
+        }
+
+        result, captured = await self._run(user_row, send_result=True)
+
+        assert result["success"] is True
+        assert result["token_column_used"] == "fcm_token"
+        assert captured["target_app"] == "driver"
+
+    async def test_no_token_short_circuits_without_send(self):
+        """No driver/generic token → diagnostic response, no push attempted."""
+        user_row = {"id": USER_ID, "is_online": False, "is_driver": True}
+
+        result, captured = await self._run(user_row)
+
+        assert result["success"] is False
+        assert result["reason"] == "no_driver_token"
+        assert captured == {}, "must not attempt a send when no token is on file"
+
+    async def test_tokens_are_masked_never_raw(self):
+        """The response must never echo a raw, device-routable token."""
+        raw = "android-fcm-driver-token-1234567890"
+        user_row = {"id": USER_ID, "fcm_token_driver": raw}
+
+        result, _ = await self._run(user_row)
+
+        assert result["tokens"]["fcm_token_driver"] != raw
+        assert "..." in result["tokens"]["fcm_token_driver"]
+
+    async def test_user_not_found_raises_404(self):
+        from fastapi import HTTPException
+
+        from backend.routes.notifications import DebugRideOfferRequest, admin_debug_ride_offer
+
+        with patch("backend.routes.notifications.db.find_one", AsyncMock(return_value=None)):
+            with pytest.raises(HTTPException) as exc:
+                await admin_debug_ride_offer(
+                    body=DebugRideOfferRequest(user_id="ghost"),
+                    admin={"id": "admin-1"},
+                )
+
+        assert exc.value.status_code == 404

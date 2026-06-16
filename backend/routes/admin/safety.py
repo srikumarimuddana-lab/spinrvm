@@ -100,7 +100,14 @@ async def admin_list_safety_incidents(
     reporter_ids = list({r.get("reported_by_user_id") for r in page if r.get("reported_by_user_id")})
     _drivers_map, users_map = await _batch_fetch_drivers_and_users([], [])
     if reporter_ids:
-        users_list = await db_supabase.get_rows("users", {"id": {"$in": reporter_ids}}, limit=len(reporter_ids))
+        # Only the reporter's display name is used — project the columns
+        # _user_display_name reads so base64 profile_image stays out of the read.
+        users_list = await db_supabase.get_rows(
+            "users",
+            {"id": {"$in": reporter_ids}},
+            columns="id,first_name,last_name,email,phone",
+            limit=len(reporter_ids),
+        )
         users_map = {u["id"]: u for u in users_list if u.get("id")}
 
     enriched: List[Dict[str, Any]] = []

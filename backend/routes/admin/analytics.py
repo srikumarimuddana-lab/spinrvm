@@ -209,7 +209,11 @@ async def get_driver_acceptance_rates(
     users_list: list = []
     if user_ids:
         try:
-            users_list = await db.get_rows("users", {"id": {"$in": user_ids}}, limit=len(user_ids))
+            # Only the driver's display name is read from these rows — project
+            # the name columns so we don't pull base64 profile_image blobs.
+            users_list = await db.get_rows(
+                "users", {"id": {"$in": user_ids}}, columns="id,first_name,last_name", limit=len(user_ids)
+            )
         except Exception as e:
             logger.error(
                 f"Failed to fetch users for acceptance stats: {e}",

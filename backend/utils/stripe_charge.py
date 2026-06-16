@@ -430,6 +430,8 @@ async def verify_authorization(
     *,
     ride_id: str,
     payment_intent_id: str,
+    expected_customer_id: Optional[str] = None,
+    min_amount_cents: Optional[int] = None,
 ) -> ChargeOutcome:
     """Verify an on-device-confirmed authorization hold (SCA two-step at booking).
 
@@ -439,10 +441,16 @@ async def verify_authorization(
     the hold is real before create_ride attaches it — we never trust the client's
     word that authentication succeeded.
 
+    SECURITY — the client supplies the PI id, so we never attach it blindly:
+      - ``expected_customer_id``: the PI's ``customer`` MUST match the requesting
+        rider's Stripe customer, else a rider could attach someone else's hold.
+      - ``min_amount_cents``: the held amount MUST cover this ride's fare, else a
+        rider could replay a smaller hold from a cancelled/cheaper booking.
+    A mismatch on either is treated as ``declined`` (logged as a security event).
+
     ``ChargeOutcome.status``:
-        "authorized"    PI is requires_capture — hold confirmed; charged_amount
-                        carries the held amount (dollars, from Stripe cents)
-        "declined"      authentication failed / PI needs a payment method again
+        "authorized"    PI is requires_capture, owned by this rider, large enough
+        "declined"      auth not completed / wrong owner / too small / wrong PM
         "failed"        Stripe ops error / unexpected PI status
         "unconfigured"  Stripe not installed/configured (dev/test)
 
@@ -466,6 +474,40 @@ async def verify_authorization(
 
     status = getattr(intent, "status", "") or ""
     pi_id = getattr(intent, "id", None) or payment_intent_id
+
+    # Ownership: the PI must belong to THIS rider's Stripe customer.
+    if expected_customer_id is not None:
+        pi_customer = getattr(intent, "customer", None)
+        if pi_customer != expected_customer_id:
+            logger.error(
+                "[preauth][security] PI customer mismatch ride=%s pi=%s (declining attach)",
+                ride_id,
+                pi_id,
+            )
+            return ChargeOutcome(
+                status="declined",
+                payment_intent_id=pi_id,
+                error_message="Authorization does not belong to this account",
+            )
+
+    # Amount: the hold must be at least the ride's fare (no replay of a smaller
+    # hold from a cancelled/cheaper booking).
+    if min_amount_cents is not None:
+        pi_amount = int(getattr(intent, "amount", 0) or 0)
+        if pi_amount < int(min_amount_cents):
+            logger.error(
+                "[preauth][security] PI amount too small ride=%s pi=%s held=%s need=%s (declining attach)",
+                ride_id,
+                pi_id,
+                pi_amount,
+                min_amount_cents,
+            )
+            return ChargeOutcome(
+                status="declined",
+                payment_intent_id=pi_id,
+                error_message="Authorization amount is insufficient for this ride",
+            )
+
     if status == "requires_capture":
         amount_cents = getattr(intent, "amount", 0) or 0
         return ChargeOutcome(

@@ -125,13 +125,13 @@ def generate_receipt_pdf(
 
     driver_name = ""
     vehicle = ""
+    driver_code = ""
     if driver:
         driver_name = (
-            f"{driver.get('first_name', '')} {driver.get('last_name', '')}".strip()
-            or driver.get("name")
-            or ""
+            f"{driver.get('first_name', '')} {driver.get('last_name', '')}".strip() or driver.get("name") or ""
         )
         vehicle = driver.get("driver_vehicle") or driver.get("vehicle") or ""
+        driver_code = driver.get("driver_code") or ""
 
     pdf = FPDF(orientation="P", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -211,7 +211,8 @@ def generate_receipt_pdf(
         pdf.cell(W, 6, driver_name, ln=True)
         pdf.set_font("Helvetica", "", 9)
         pdf.set_text_color(150, 150, 150)
-        pdf.cell(W, 5, vehicle or "Your driver", ln=True)
+        detail = " - ".join(p for p in (driver_code, vehicle) if p) or "Your driver"
+        pdf.cell(W, 5, detail, ln=True)
         pdf.set_text_color(0, 0, 0)
         pdf.ln(2)
 

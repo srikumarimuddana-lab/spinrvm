@@ -42,6 +42,16 @@ const RIDE_OFFER_NOTIFICATION_ID = 'ride-offer-current';
 const RIDE_OFFER_CATEGORY_ID = 'ride-offer';
 const DEFAULT_RIDE_OFFER_TIMEOUT_MS = 15_000;
 
+// Android REJECTS a notification whose small icon can't be resolved — it does
+// NOT fall back to the app icon. 'ic_launcher' is the one drawable Expo
+// generates into every Android build (Notifee resolves the name against both
+// mipmap and drawable), so it's the only small-icon name guaranteed to exist.
+// The previous 'ic_notification' was never produced by any config plugin, so
+// every displayNotification() threw and ride offers silently failed to appear.
+// (Swap in a dedicated monochrome glyph later via the expo-notifications
+// plugin — that's cosmetic; this is what makes the offer render at all.)
+const RIDE_OFFER_SMALL_ICON = 'ic_launcher';
+
 export const NOTIFEE_RIDE_OFFER_CHANNEL_ID = RIDE_OFFER_CHANNEL_ID;
 export const NOTIFEE_RIDE_OFFER_NOTIFICATION_ID = RIDE_OFFER_NOTIFICATION_ID;
 
@@ -220,7 +230,7 @@ export async function displayRideOfferNotification(
         type: 'new_ride_assignment',
     };
 
-    await notifee.displayNotification({
+    const request = {
         id: RIDE_OFFER_NOTIFICATION_ID,
         title,
         body,
@@ -232,7 +242,7 @@ export async function displayRideOfferNotification(
             visibility: AndroidVisibility.PUBLIC,
             color: AndroidColor.GREEN,
             colorized: true,
-            smallIcon: 'ic_notification', // fallback to app icon if missing
+            smallIcon: RIDE_OFFER_SMALL_ICON,
             largeIcon: undefined,
             ongoing: true,
             autoCancel: false,
@@ -278,7 +288,51 @@ export async function displayRideOfferNotification(
                 list: true,
             },
         },
-    });
+    };
+
+    try {
+        await notifee.displayNotification(request);
+    } catch (e) {
+        // Guardrail: a single unresolved resource (small icon, custom sound,
+        // BIG_TEXT style, full-screen intent) makes Android reject the WHOLE
+        // notification — the driver would see nothing and miss the fare. Never
+        // let that happen silently. Log loudly, then retry with a minimal,
+        // dependency-free notification that still carries Accept/Decline so the
+        // offer stays actionable. Channel sound (set at channel creation) still
+        // rings; we just drop the per-notification overrides that can throw.
+        console.error(
+            '[Notifee] rich ride-offer render failed — falling back to a basic notification:',
+            e,
+        );
+        try {
+            await notifee.displayNotification({
+                id: RIDE_OFFER_NOTIFICATION_ID,
+                title,
+                body,
+                data: dataPayload,
+                android: {
+                    channelId: silent ? RIDE_OFFER_SILENT_CHANNEL_ID : RIDE_OFFER_CHANNEL_ID,
+                    importance: AndroidImportance.HIGH,
+                    smallIcon: RIDE_OFFER_SMALL_ICON,
+                    pressAction: { id: 'default', launchActivity: 'default' },
+                    actions: [
+                        { title: 'APPROVE', pressAction: { id: 'accept', launchActivity: 'default' } },
+                        { title: 'Decline', pressAction: { id: 'decline' } },
+                    ],
+                    timeoutAfter: timeoutMs,
+                },
+                ios: {
+                    categoryId: RIDE_OFFER_CATEGORY_ID,
+                    interruptionLevel: 'timeSensitive',
+                },
+            });
+        } catch (e2) {
+            // Both renders failed — surface it; the WS in-app panel is the only
+            // remaining channel and the backend offer-timeout still protects the
+            // driver's miss streak.
+            console.error('[Notifee] basic ride-offer render also failed:', e2);
+        }
+    }
     scheduleRideOfferDismiss(timeoutMs);
 }
 

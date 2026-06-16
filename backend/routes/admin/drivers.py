@@ -975,6 +975,16 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
             status_code=500,
             detail="Failed to update driver.",
         ) from e
+    # Append-only vehicle/identity change history (SGI/insurance audit).
+    if driver_updates:
+        try:
+            from ...utils.vehicle_history import record_vehicle_changes
+        except ImportError:
+            from utils.vehicle_history import record_vehicle_changes  # type: ignore
+        await record_vehicle_changes(
+            driver_id, existing, driver_updates, changed_by_user_id=admin.get("id"), role="admin"
+        )
+
     await log_admin_action(
         admin,
         "driver_updated",
@@ -1079,6 +1089,15 @@ async def admin_review_driver_photo(
 
     await log_admin_action(admin, "driver_photo_review", "drivers", driver_id, {"status": new_status})
     return {"message": f"Photo {new_status}", "profile_image_status": new_status}
+
+
+@router.get("/drivers/{driver_id}/vehicle-history")
+async def admin_driver_vehicle_history(driver_id: str, admin: dict = Depends(get_admin_user)):
+    """Append-only before/after history of this driver's vehicle/identity changes."""
+    rows = await db_supabase.get_rows(
+        "driver_vehicle_history", {"driver_id": driver_id}, order="created_at", desc=True, limit=200
+    )
+    return {"history": rows or []}
 
 
 @router.post("/drivers/{driver_id}/action")

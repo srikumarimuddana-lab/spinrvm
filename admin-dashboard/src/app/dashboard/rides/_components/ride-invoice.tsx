@@ -18,6 +18,16 @@ const fmt = (n: any, digits = 1): string =>
 const fmtMoney = (n: any): string =>
     typeof n === "number" && Number.isFinite(n) ? `$${n.toFixed(2)}` : "—";
 
+// Coerce to a finite number (the backend serializes Decimal money as strings).
+const num = (n: any): number => {
+    if (typeof n === "number" && Number.isFinite(n)) return n;
+    const p = parseFloat(String(n));
+    return Number.isFinite(p) ? p : 0;
+};
+
+// Spinr brand red (#ee2b2b) as an RGB triple for jsPDF fills/text.
+const BRAND: [number, number, number] = [238, 43, 43];
+
 export default function RideInvoice({ rideId, status }: Props) {
     const { toast } = useToast();
     const [sending, setSending] = useState(false);
@@ -59,15 +69,21 @@ export default function RideInvoice({ rideId, status }: Props) {
                 }
             };
 
-            // Header
-            doc.setFontSize(22);
+            // Branded header band (matches the red Spinr email receipt)
+            doc.setFillColor(...BRAND);
+            doc.rect(0, 0, pageW, 30, "F");
+            doc.setTextColor(255, 255, 255);
+            doc.setFontSize(24);
             doc.setFont("helvetica", "bold");
-            doc.text("SPINR", margin, y);
-            doc.setFontSize(12);
+            doc.text("Spinr", margin, 15);
+            doc.setFontSize(11);
             doc.setFont("helvetica", "normal");
-            doc.setTextColor(100);
-            doc.text("Ride Invoice", margin + 50, y);
-            y += 14;
+            doc.text("Ride Receipt", margin, 23);
+            doc.setFontSize(8);
+            doc.text("Spinr Technologies Inc.", pageW - margin, 13, { align: "right" });
+            doc.text("Saskatoon, SK", pageW - margin, 18, { align: "right" });
+            doc.text("support@spinr.ca · www.spinr.ca", pageW - margin, 23, { align: "right" });
+            y = 40;
 
             // Ride info
             doc.setFontSize(9);
@@ -80,11 +96,17 @@ export default function RideInvoice({ rideId, status }: Props) {
                 { align: "right" }
             );
             y += 6;
-            doc.text(`Status: ${(data.status ?? "—").toUpperCase()}`, margin, y);
+            doc.text(
+                `Status: ${(data.status ?? "—").toUpperCase()}   ·   Payment: ${(
+                    data.payment_method || "card"
+                ).toUpperCase()} (${(data.payment_status || "pending").toUpperCase()})`,
+                margin,
+                y
+            );
             y += 2;
 
             // Separator
-            doc.setDrawColor(200);
+            doc.setDrawColor(225);
             doc.line(margin, y + 3, pageW - margin, y + 3);
             y += 10;
 
@@ -274,39 +296,69 @@ export default function RideInvoice({ rideId, status }: Props) {
                 y += lineH;
             }
 
-            // Total
-            ensureSpace(lineH * 2);
+            // Subtotal + taxes (GST/PST as separate line items — SK regulatory)
+            ensureSpace(lineH * 4);
             y += 2;
-            doc.setDrawColor(200);
+            doc.setDrawColor(225);
             doc.line(margin, y, pageW - margin, y);
             y += 6;
-            doc.setFont("helvetica", "bold");
-            doc.setFontSize(12);
-            doc.setTextColor(0);
-            doc.text("Total", margin, y);
-            doc.text(fmtMoney(data.total_fare), pageW - margin, y, { align: "right" });
+            doc.setFontSize(9);
+            doc.setFont("helvetica", "normal");
+            doc.setTextColor(80);
+            doc.text("Subtotal", margin, y);
+            doc.text(fmtMoney(num(data.total_fare)), pageW - margin, y, { align: "right" });
             y += lineH;
 
-            if (typeof data.tip_amount === "number" && data.tip_amount > 0) {
-                doc.setFontSize(9);
-                doc.setFont("helvetica", "normal");
-                doc.setTextColor(180, 130, 0);
-                doc.text("Tip", margin, y);
-                doc.text(fmtMoney(data.tip_amount), pageW - margin, y, { align: "right" });
+            // Prefer the persisted tax_breakdown so the lines reconcile to what
+            // was charged; fall back to the grand_total gap for legacy rides.
+            const taxBreakdown =
+                data.tax_breakdown && typeof data.tax_breakdown === "object" ? data.tax_breakdown : {};
+            const taxLines: [string, string][] = [];
+            for (const [label, payload] of Object.entries(taxBreakdown)) {
+                const amount = num((payload as any)?.amount);
+                const rate = num((payload as any)?.rate);
+                if (amount === 0) continue;
+                taxLines.push([`${label}${rate ? ` (${rate.toFixed(0)}%)` : ""}`, fmtMoney(amount)]);
+            }
+            if (taxLines.length === 0) {
+                const gap = num(data.grand_total) - num(data.total_fare);
+                if (gap > 0.005) taxLines.push(["Tax", fmtMoney(gap)]);
+            }
+            for (const [label, val] of taxLines) {
+                ensureSpace(lineH);
+                doc.text(label, margin, y);
+                doc.text(val, pageW - margin, y, { align: "right" });
                 y += lineH;
             }
 
-            y += 4;
-            doc.setFontSize(9);
+            if (num(data.tip_amount) > 0) {
+                ensureSpace(lineH);
+                doc.setTextColor(16, 130, 90);
+                doc.text("Tip", margin, y);
+                doc.text(fmtMoney(num(data.tip_amount)), pageW - margin, y, { align: "right" });
+                doc.setTextColor(80);
+                y += lineH;
+            }
+
+            // Grand total — red highlighted box (tax-inclusive, plus tip).
+            const grandTotal = num(data.grand_total) + num(data.tip_amount);
+            ensureSpace(15);
+            y += 2;
+            doc.setFillColor(...BRAND);
+            doc.roundedRect(margin, y, pageW - 2 * margin, 11, 1.5, 1.5, "F");
+            doc.setTextColor(255, 255, 255);
+            doc.setFont("helvetica", "bold");
+            doc.setFontSize(12);
+            doc.text("Total Paid", margin + 4, y + 7.4);
+            doc.text(`${fmtMoney(grandTotal)} CAD`, pageW - margin - 4, y + 7.4, { align: "right" });
+            doc.setTextColor(0);
+            y += 18;
+
+            // GST/PST registration + thank-you note
             doc.setFont("helvetica", "normal");
-            doc.setTextColor(100);
-            doc.text(
-                `Payment: ${(data.payment_method || "card").toUpperCase()}  |  Status: ${(
-                    data.payment_status || "pending"
-                ).toUpperCase()}`,
-                margin,
-                y
-            );
+            doc.setFontSize(8);
+            doc.setTextColor(140);
+            doc.text("Taxes shown are GST/PST collected by the driver and remitted as required.", margin, y);
 
             // Phase distance log
             if (Array.isArray(data.location_trail) && data.location_trail.length > 1) {

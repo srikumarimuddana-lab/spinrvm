@@ -1573,6 +1573,36 @@ class TestSnapshotTrailSelection:
         assert "path=" not in url
         assert "markers=color:green" in url and "markers=color:red" in url
 
+    def test_outlier_hop_not_bridged_by_straight_chord(self, monkeypatch):
+        # A GPS dropout / OSRM multi-matching jump leaves one giant hop in the
+        # middle of an otherwise dense trail. The renderer must split there and
+        # NOT draw the bridging chord — otherwise it reads as a second straight
+        # red line across the map (the "duplicate route line" artifact).
+        import re
+
+        from backend.utils.route_snapshot import _haversine_km
+
+        dense_a = [[50.45 + i * 0.0005, -104.61 - i * 0.0005, "t"] for i in range(15)]
+        jump = [[50.52, -104.70, "t"]]  # ~9 km from the previous point
+        dense_b = [[50.52 + i * 0.0005, -104.70 - i * 0.0005, "t"] for i in range(15)]
+        url = self._render(
+            monkeypatch,
+            phase_polylines={"trip_in_progress": dense_a + jump + dense_b},
+        )
+        # No single drawn segment may span the giant jump.
+        for seg in re.findall(r"path=color:0x[0-9A-F]{8}\|weight:4\|([^&]+)", url):
+            pts = [tuple(map(float, p.split(","))) for p in seg.split("|")]
+            for a, b in zip(pts, pts[1:]):
+                assert _haversine_km(a, b) <= 5.0, f"chord bridges a {_haversine_km(a, b):.1f} km gap"
+
+    def test_dense_route_is_one_unbroken_run(self, monkeypatch):
+        # A normal road trail (no outlier hop) must stay a single continuous
+        # line — the gap guard must not fragment ordinary routes.
+        from backend.utils.route_snapshot import _split_on_gaps
+
+        coords = [(50.45 + i * 0.0008, -104.61 - i * 0.0008) for i in range(40)]
+        assert len(_split_on_gaps(coords)) == 1
+
 
 # ===========================================================================
 # utils/subprocessor_audit.py — _fetch_page and _sha256 coverage

@@ -443,6 +443,15 @@ function PaymentConfirmScreenContent() {
             <View style={[styles.fareDivider, { marginTop: 12 }]} />
           </>
         )}
+        {selectedPayment === 'card' && (
+          <View style={styles.holdNote}>
+            <Ionicons name="lock-closed-outline" size={15} color={colors.textDim} style={{ marginRight: 8, marginTop: 1 }} />
+            <Text style={styles.holdNoteText}>
+              A temporary hold of ${(totalFare + 10).toFixed(2)} (estimated fare + $10) is placed on your card.
+              You're only charged the final fare plus any tip you add after the ride.
+            </Text>
+          </View>
+        )}
         {scheduledTime && (
           <View style={styles.scheduledBadge}>
             <Ionicons name="calendar-outline" size={16} color={colors.primary} />
@@ -664,6 +673,22 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number = (s) =>
       fontFamily: 'PlusJakartaSans_500Medium',
       color: colors.textDim,
       marginTop: 2,
+    },
+    holdNote: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      backgroundColor: '#F3F4F6',
+      borderRadius: 10,
+      paddingVertical: 10,
+      paddingHorizontal: 12,
+      marginTop: 12,
+    },
+    holdNoteText: {
+      flex: 1,
+      fontSize: sf(12),
+      lineHeight: 17,
+      fontFamily: 'PlusJakartaSans_400Regular',
+      color: colors.textDim,
     },
     paymentCheck: {
       width: 28,

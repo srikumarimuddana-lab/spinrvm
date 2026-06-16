@@ -1317,9 +1317,11 @@ async def admin_get_ride_invoice(ride_id: str):
         "rider_phone": ride.get("rider_phone", ""),
         "rider_email": ride.get("rider_email", ""),
         "driver_name": ride.get("driver_name", ""),
-        "driver_phone": ride.get("driver_phone", ""),
+        # PIPEDA: the driver's personal phone and plate are NOT placed on the
+        # invoice (a distributable document). A short masked driver id gives
+        # admins a support reference without exposing driver PII.
+        "driver_id": ride.get("driver_id", ""),
         "driver_vehicle": ride.get("driver_vehicle", ""),
-        "driver_license_plate": ride.get("driver_license_plate", ""),
         "actual_distance_km": ride.get("actual_distance_km"),
         "fare_locked": fare_locked,
         # Tax + area-fee breakdowns (migration 46) so the invoice PDF can render

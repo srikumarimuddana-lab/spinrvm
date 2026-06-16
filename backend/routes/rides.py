@@ -934,8 +934,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
                 driver_id=str(driver.get("user_id") or driver.get("id") or ""),
             )
             _offer_card_url = (
-                f"{_settings.PUBLIC_API_BASE_URL.rstrip('/')}"
-                f"/api/v1/offer-cards/{ride_id}.png?t={_oc_token}"
+                f"{_settings.PUBLIC_API_BASE_URL.rstrip('/')}/api/v1/offer-cards/{ride_id}.png?t={_oc_token}"
             )
         except Exception as e:
             logger.warning("[DISPATCH] offer-card URL build failed for ride %s: %s", ride_id, e)
@@ -1002,8 +1001,8 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
                 asyncio.create_task(
                     send_push_notification(
                         driver["user_id"],
-                        f"{earnings_label} ride offer",
-                        f"Booking {ride_id} • {pickup_label} → {dropoff_label}",
+                        f"New ride · {earnings_label}",
+                        f"{pickup_label} → {dropoff_label}",
                         fcm_data,
                         priority="dispatch",
                         target_app="driver",

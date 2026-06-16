@@ -291,6 +291,50 @@ class TestAdminRideCancel:
 
 
 # ---------------------------------------------------------------------------
+# Admin "Send Invoice" → resend receipt (regression: used to 403 by hitting
+# the rider-owned /process-payment endpoint instead of an admin endpoint)
+# ---------------------------------------------------------------------------
+
+
+class TestAdminSendReceipt:
+    _RIDER = {"id": "usr-1", "email": "rider@example.com", "first_name": "Al", "last_name": "R"}
+
+    def test_send_receipt_nonexistent_ride_404(self, client):
+        with patch("db_supabase.get_ride", new_callable=AsyncMock, return_value=None):
+            resp = client.post("/api/admin/rides/no-ride/send-receipt")
+        assert resp.status_code == 404
+
+    def test_send_receipt_rider_without_email_422(self, client):
+        with (
+            patch("db_supabase.get_ride", new_callable=AsyncMock, return_value=_FAKE_RIDE),
+            patch("db_supabase.get_user_by_id", new_callable=AsyncMock, return_value={"id": "usr-1", "email": ""}),
+        ):
+            resp = client.post("/api/admin/rides/ride-1/send-receipt")
+        assert resp.status_code == 422
+
+    def test_send_receipt_happy_path(self, client):
+        with (
+            patch("db_supabase.get_ride", new_callable=AsyncMock, return_value=_FAKE_RIDE),
+            patch("db_supabase.get_user_by_id", new_callable=AsyncMock, return_value=self._RIDER),
+            patch("routes.admin.rides.log_admin_action", new_callable=AsyncMock, return_value="audit-1"),
+            patch("services.payment_service.send_ride_receipt", new_callable=AsyncMock, return_value=True),
+        ):
+            resp = client.post("/api/admin/rides/ride-1/send-receipt")
+        assert resp.status_code == 200
+        assert resp.json()["sent"] is True
+
+    def test_send_receipt_provider_failure_502(self, client):
+        with (
+            patch("db_supabase.get_ride", new_callable=AsyncMock, return_value=_FAKE_RIDE),
+            patch("db_supabase.get_user_by_id", new_callable=AsyncMock, return_value=self._RIDER),
+            patch("routes.admin.rides.log_admin_action", new_callable=AsyncMock, return_value="audit-1"),
+            patch("services.payment_service.send_ride_receipt", new_callable=AsyncMock, return_value=False),
+        ):
+            resp = client.post("/api/admin/rides/ride-1/send-receipt")
+        assert resp.status_code == 502
+
+
+# ---------------------------------------------------------------------------
 # Settings validation (A-P2-6 regression)
 # ---------------------------------------------------------------------------
 

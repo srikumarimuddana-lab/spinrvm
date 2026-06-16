@@ -1333,6 +1333,50 @@ async def admin_get_ride_invoice(ride_id: str):
     return invoice_data
 
 
+@router.post("/rides/{ride_id}/send-receipt")
+async def admin_send_ride_receipt(
+    ride_id: str,
+    admin_user: dict = Depends(get_admin_user),
+):
+    """Re-send the ride receipt email to the rider (admin "Send Invoice").
+
+    This only emails the receipt — it never charges or re-settles the ride
+    (that is the rider-owned /process-payment endpoint, which an admin token
+    is not authorized to call). Delivery goes through email_provider
+    (AWS SES primary, Resend guardrail).
+    """
+    ride = await db_supabase.get_ride(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    rider_id = ride.get("rider_id")
+    rider = await db_supabase.get_user_by_id(rider_id) if rider_id else None
+    if not rider or not rider.get("email"):
+        # No address on file — surface clearly instead of a silent failure.
+        raise HTTPException(status_code=422, detail="Rider has no email address on file")
+
+    try:
+        from ...services.payment_service import send_ride_receipt
+    except ImportError:
+        from services.payment_service import send_ride_receipt  # type: ignore
+
+    tip_amount = Decimal(str(ride.get("tip_amount") or 0))
+    sent = await send_ride_receipt(ride, rider_id, tip_amount)
+
+    await log_admin_action(
+        admin_user,
+        "send_ride_receipt",
+        "ride",
+        ride_id,
+        {"sent": bool(sent)},
+    )
+
+    if not sent:
+        # Email provider rejected/failed — 502 so the operator knows it didn't go.
+        raise HTTPException(status_code=502, detail="Receipt could not be sent — email provider unavailable")
+    return {"sent": True, "ride_id": ride_id}
+
+
 @router.get("/rides/{ride_id}/route-map.png")
 async def admin_get_ride_route_map(
     ride_id: str,

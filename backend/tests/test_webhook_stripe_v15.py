@@ -9,7 +9,8 @@ Event to a plain dict so field access + jsonb storage work again.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -59,3 +60,42 @@ def test_configured_mock_with_get_is_not_transformed():
     out = _event_to_plain_dict(m)
     assert out is m
     assert out.get("id") == "evt_3"
+
+
+def test_handler_processes_real_stripe_event_end_to_end():
+    """CI GUARD: drive a REAL stripe.Event (from the installed library) through
+    the actual stripe_webhook handler. If a future stripe version bump changes
+    the Event API so the webhook can't read/normalize it, this fails in CI
+    instead of 500'ing every webhook in production (as stripe v15 did)."""
+    stripe = pytest.importorskip("stripe")
+    from backend.routes import webhooks as wh
+
+    raw = {"id": "evt_ci_1", "type": "balance.available", "data": {"object": {"id": "ba_1"}}}
+    real_event = stripe.Event.construct_from(raw, "sk_test")
+    # Sanity: the not-a-dict, no-.get shape the handler must survive.
+    assert not isinstance(real_event, dict)
+
+    async def _settings():
+        return {"stripe_webhook_secret": "ws", "stripe_secret_key": "sk"}
+
+    req = MagicMock()
+    req.body = AsyncMock(return_value=b'{"id":"evt_ci_1"}')
+    req.headers = {"stripe-signature": "sig"}
+
+    claim = AsyncMock(return_value=True)
+    with (
+        patch("backend.routes.webhooks.get_app_settings", _settings),
+        patch.object(stripe.Webhook, "construct_event", return_value=real_event),
+        patch("backend.routes.webhooks.claim_stripe_event", claim),
+        patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+    ):
+        result = asyncio.run(wh.stripe_webhook(request=req))
+
+    # Processed without AttributeError (the v15 crash) and acknowledged.
+    assert result["received"] is True
+    # Event was normalized to a PLAIN dict before persistence, and id/type were
+    # read via .get() (the exact calls that crashed on a raw v15 Event).
+    event_id_arg, event_type_arg, payload_arg = claim.call_args.args[:3]
+    assert event_id_arg == "evt_ci_1"
+    assert event_type_arg == "balance.available"
+    assert isinstance(payload_arg, dict) and payload_arg["id"] == "evt_ci_1"

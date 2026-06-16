@@ -110,6 +110,25 @@ class TestPreauthorizeRideCard:
             fields = await _preauthorize_ride_card(**_BASE)
         assert fields == {}
 
+    async def test_block_on_decline_false_hard_decline_returns_empty(self):
+        """Scheduled dispatch (rider absent): a hard decline must NOT raise —
+        it degrades to no hold so the scheduled ride is never stranded."""
+        from backend.routes.rides import _preauthorize_ride_card
+
+        with _patch_authorize(_outcome(status="declined", decline_code="lost_card")):
+            fields = await _preauthorize_ride_card(**_BASE, block_on_decline=False)
+        assert fields == {}
+
+    async def test_block_on_decline_false_both_declined_returns_empty(self):
+        from backend.routes.rides import _preauthorize_ride_card
+
+        with _patch_authorize(
+            _outcome(status="declined", decline_code="insufficient_funds"),
+            _outcome(status="declined", decline_code="insufficient_funds"),
+        ):
+            fields = await _preauthorize_ride_card(**_BASE, block_on_decline=False)
+        assert fields == {}
+
     async def test_ops_failure_degrades_to_no_hold(self):
         from backend.routes.rides import _preauthorize_ride_card
 

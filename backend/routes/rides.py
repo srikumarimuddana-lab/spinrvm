@@ -1775,6 +1775,25 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
 _RETRYABLE_AT_LOWER_AMOUNT = frozenset({"insufficient_funds"})
 
 
+def _card_declined_result(decline_code: Optional[str], block_on_decline: bool) -> dict:
+    """Terminal decline of a pre-auth hold. At interactive booking
+    (``block_on_decline=True``) raise 402 so the rider fixes their card before a
+    driver is disturbed. At scheduled dispatch (``block_on_decline=False``) the
+    rider is not present, so degrade to no hold and let post-trip settlement +
+    the retry/unpaid-block safety net handle it — never strand a scheduled ride.
+    """
+    if not block_on_decline:
+        return {}
+    raise HTTPException(
+        status_code=402,
+        detail={
+            "code": "CARD_DECLINED",
+            "message": "Your card was declined. Please update your payment method and try booking again.",
+            "decline_code": decline_code,
+        },
+    )
+
+
 async def _preauthorize_ride_card(
     *,
     ride_id: str,
@@ -1782,6 +1801,7 @@ async def _preauthorize_ride_card(
     grand_total: Decimal,
     stripe_customer_id: Optional[str],
     payment_method_id: Optional[str],
+    block_on_decline: bool = True,
 ) -> dict:
     """Place a buffered card hold at booking; return ride fields to persist.
 
@@ -1795,9 +1815,11 @@ async def _preauthorize_ride_card(
         {} when no hold was placed (ride proceeds on the post-trip settlement
         path exactly as it does today).
 
-    Raises ``HTTPException(402)`` in EXACTLY ONE case — the card genuinely
-    cannot pay (both the buffered hold AND the fare-only fallback were
-    declined). Every other non-success degrades to "no hold, proceed":
+    Raises ``HTTPException(402)`` when ``block_on_decline`` (the default, for
+    interactive booking) and the card genuinely cannot pay (both the buffered
+    hold AND the fare-only fallback declined). With ``block_on_decline=False``
+    (scheduled dispatch, rider not present) a decline returns {} instead of
+    raising. Every other non-success degrades to "no hold, proceed":
       - ``requires_action`` (SCA/3DS at booking) — handled by the dedicated
         SCA-at-booking flow later; for now fall back to post-trip settlement.
       - ``failed`` (Stripe ops error) — never block a rider over our outage.
@@ -1851,32 +1873,14 @@ async def _preauthorize_ride_card(
                     "auth_status": "fare_only",
                 }
             if fare_outcome.status == "declined":
-                logger.info("[preauth] fare-only hold also declined for ride=%s — blocking", ride_id)
-                raise HTTPException(
-                    status_code=402,
-                    detail={
-                        "code": "CARD_DECLINED",
-                        "message": ("Your card was declined. Please update your payment method and try booking again."),
-                        "decline_code": fare_outcome.decline_code,
-                    },
-                )
+                logger.info("[preauth] fare-only hold also declined for ride=%s", ride_id)
+                return _card_declined_result(fare_outcome.decline_code, block_on_decline)
             # fare-only hit SCA / ops / unconfigured — degrade to no hold.
             return {}
 
         # Hard decline (lost/stolen/generic) — a smaller hold won't help.
-        logger.info(
-            "[preauth] hard card decline (code=%s) for ride=%s — blocking",
-            outcome.decline_code,
-            ride_id,
-        )
-        raise HTTPException(
-            status_code=402,
-            detail={
-                "code": "CARD_DECLINED",
-                "message": ("Your card was declined. Please update your payment method and try booking again."),
-                "decline_code": outcome.decline_code,
-            },
-        )
+        logger.info("[preauth] hard card decline (code=%s) for ride=%s", outcome.decline_code, ride_id)
+        return _card_declined_result(outcome.decline_code, block_on_decline)
 
     # requires_action / failed / unconfigured — proceed without a hold; the
     # post-trip settlement path (and its retry loop) remains the safety net.

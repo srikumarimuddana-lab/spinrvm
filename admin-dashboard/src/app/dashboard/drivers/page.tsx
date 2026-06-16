@@ -580,12 +580,10 @@ export default function DriversPage() {
                                         <TableCell className="py-3">
                                             <div className="flex items-center gap-3">
                                                 <div className="relative">
-                                                    {driver.photo_url ? (
-                                                        // eslint-disable-next-line @next/next/no-img-element
-                                                        <img src={driver.photo_url} alt="" className="w-10 h-10 rounded-full object-cover ring-1 ring-border shadow-sm" />
-                                                    ) : (
-                                                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center text-sm font-bold text-primary ring-1 ring-border shadow-sm">{(driver.first_name?.[0] || "")}{(driver.last_name?.[0] || "")}</div>
-                                                    )}
+                                                    {/* Profile photo intentionally omitted from the list — loading
+                                                        one image per row slowed the page down. Initials stand in here;
+                                                        the real photo still renders in the detail slideout. */}
+                                                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center text-sm font-bold text-primary ring-1 ring-border shadow-sm">{(driver.first_name?.[0] || "")}{(driver.last_name?.[0] || "")}</div>
                                                     <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-card ${driver.is_online ? "bg-emerald-500" : "bg-gray-300"}`} />
                                                 </div>
                                                 <div className="flex-1 min-w-0">

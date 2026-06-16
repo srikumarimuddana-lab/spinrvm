@@ -1,5 +1,6 @@
 import logging
 import os
+from decimal import Decimal
 from typing import Optional
 
 import bcrypt
@@ -136,6 +137,13 @@ class Settings(BaseSettings):
 
     # Fare cache TTL (PERF-001)
     FARE_CACHE_TTL_SECONDS: int = 300  # 5-minute cache per lat/lng grid cell
+
+    # Card pre-authorization buffer (PAY pre-auth). At booking we place a manual-
+    # capture hold of (estimated_fare + this buffer) on the rider's card/Apple Pay
+    # so a post-trip tip can be captured on the SAME PaymentIntent (one Stripe fee)
+    # and a dead card is caught BEFORE dispatch. Tunable via env without redeploy;
+    # money value so it is a Decimal, never a float. Applies to card source only.
+    RIDE_AUTH_BUFFER_CAD: Decimal = Decimal("10.00")
 
     # Public tracking page base URL — used when generating shareable trip links.
     # Customer links are clean: "{TRACKING_BASE_URL}/{token}". The tracking

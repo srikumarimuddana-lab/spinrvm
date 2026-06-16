@@ -18,16 +18,19 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Columns the admin Users list / search / export actually render. We project
-# explicitly to keep users.profile_image OUT of these bulk reads: for accounts
-# created before the `profile-photos` storage bucket, profile_image holds a full
-# base64 data URI, so `SELECT *` shipped ~one image blob per row — that's the
-# multi-MB payload (and the slow DB read on the 1000-row export). The Users page
-# never displays an avatar, so the column is pure dead weight here. The single-
-# user detail endpoint (admin_get_user_details) still selects everything.
-_USER_LIST_COLUMNS = (
-    "id,first_name,last_name,email,phone,role,created_at,total_rides,rating,is_verified,city,status,is_rider,is_driver"
-)
+# Columns the admin Users list / search / export read that ACTUALLY EXIST on
+# the users table. We project explicitly to keep users.profile_image OUT of
+# these bulk reads: for accounts created before the `profile-photos` storage
+# bucket, profile_image holds a full base64 data URI, so `SELECT *` shipped ~one
+# image blob per row — that's the multi-MB payload (and the slow DB read on the
+# 1000-row export). The Users page never displays an avatar.
+#
+# NB: total_rides, rating, is_verified, city and status are NOT columns on the
+# users table (they're driver/derived fields); the frontend defaults them
+# client-side. They must NOT be listed here — projecting a non-existent column
+# makes Postgres raise 42703 ("column does not exist") and the endpoint 503s.
+# The single-user detail endpoint (admin_get_user_details) still selects *.
+_USER_LIST_COLUMNS = "id,first_name,last_name,email,phone,role,created_at,is_rider,is_driver"
 
 
 class UserStatusRequest(BaseModel):

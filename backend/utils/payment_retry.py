@@ -75,7 +75,8 @@ async def _alert_admins_payment_exhausted(ride: dict) -> None:
         logger.error(f"Admin WS broadcast failed for exhausted payment ride {ride_id}: {exc}")
 
     try:
-        admin_users = await db.get_rows("users", {"role": "admin"}, limit=50)
+        # Only the admin id is needed to target the push — project it.
+        admin_users = await db.get_rows("users", {"role": "admin"}, columns="id", limit=50)
         for admin in admin_users:
             try:
                 await send_push_notification(

@@ -160,7 +160,20 @@ async def stripe_webhook(request: Request):
     try:
         is_new = await claim_stripe_event(event_id, event_type, event_payload)
     except Exception as e:
-        logger.error(f"Failed to persist stripe event {event_id}: {e}")
+        # Surface the REAL cause: for DatabaseError, str(e) is only
+        # "Database operation failed" — the underlying Postgres error (e.g.
+        # "relation stripe_events does not exist") lives in details["original"].
+        # Without this the webhook just logs a generic message and the root cause
+        # (missing table / RLS / schema drift) stays invisible.
+        _orig = e.details.get("original") if isinstance(e, DatabaseError) else None
+        logger.error(
+            "Failed to persist stripe event %s (type=%s): %s | original=%s",
+            event_id,
+            event_type,
+            e,
+            _orig,
+            exc_info=True,
+        )
         # Let Stripe retry — 5xx keeps the event in their queue.
         raise HTTPException(status_code=500, detail="Event persistence failed") from e
 

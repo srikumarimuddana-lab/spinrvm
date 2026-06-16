@@ -2614,10 +2614,10 @@ async def get_active_ride(request: Request = None, current_user: dict = Depends(
                 "name": (f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "Driver"),
                 "rating": driver.get("rating", 4.8),
                 "total_rides": driver.get("total_rides", 0),
-                # photo_url was omitted here — the rider's active-ride screens
-                # read currentDriver.photo_url, so the driver photo never showed
-                # during driver-arrived / in-progress.
-                "photo_url": driver.get("photo_url"),
+                # Driver photo lives on the USER row (users.profile_image,
+                # base64), not drivers.photo_url (which doesn't exist). The
+                # rider's active-ride screens read currentDriver.photo_url.
+                "photo_url": (user.get("profile_image") if user else None),
                 "vehicle_make": driver.get("vehicle_make"),
                 "vehicle_model": driver.get("vehicle_model"),
                 "vehicle_color": driver.get("vehicle_color"),
@@ -2850,12 +2850,15 @@ async def get_ride(
     if ride.get("driver_id"):
         assigned_driver = await db_supabase.get_driver_by_id(ride["driver_id"])
         if assigned_driver:
+            # Driver photo lives on the user row (users.profile_image), not the
+            # (non-existent) drivers.photo_url column.
+            _drv_user = await db_supabase.get_user_by_id(assigned_driver.get("user_id"))
             ride["driver"] = DriverPublicView(
                 id=assigned_driver.get("id", ""),
                 name=assigned_driver.get("name", ""),
                 rating=assigned_driver.get("rating"),
                 total_rides=assigned_driver.get("total_rides"),
-                photo_url=assigned_driver.get("photo_url"),
+                photo_url=(_drv_user.get("profile_image") if _drv_user else None),
                 vehicle_make=assigned_driver.get("vehicle_make"),
                 vehicle_model=assigned_driver.get("vehicle_model"),
                 vehicle_color=assigned_driver.get("vehicle_color"),
@@ -3597,6 +3600,7 @@ async def track_shared_ride(share_token: str):
     if ride.get("driver_id"):
         driver = await db_supabase.get_driver_by_id(ride["driver_id"])
         if driver:
+            _drv_user = await db_supabase.get_user_by_id(driver.get("user_id"))
             driver_info = {
                 "name": driver.get("name", "Driver"),
                 "lat": driver.get("lat"),
@@ -3607,7 +3611,8 @@ async def track_shared_ride(share_token: str):
                 "vehicle_year": driver.get("vehicle_year"),
                 "license_plate": driver.get("license_plate"),
                 "rating": driver.get("rating"),
-                "photo_url": driver.get("photo_url"),
+                # users.profile_image (base64), not the non-existent drivers.photo_url.
+                "photo_url": (_drv_user.get("profile_image") if _drv_user else None),
             }
             # Cheap ETA: straight-line driver→dropoff at 30 km/h city speed.
             # Same formula used at /rides/estimate so the number stays consistent.

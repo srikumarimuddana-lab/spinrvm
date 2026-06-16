@@ -610,3 +610,29 @@ class TestServiceAreaValidation:
         assert captured["surge_enabled"] is False
         assert captured["surge_active"] is False
         assert captured["surge_multiplier"] == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Admin Users list projection (regression: _USER_LIST_COLUMNS listed columns
+# that don't exist on the users table — total_rides/rating/is_verified/city/
+# status — so the projected SELECT raised Postgres 42703 and /users 503'd).
+# ---------------------------------------------------------------------------
+
+
+class TestAdminUsersProjection:
+    def test_projection_has_no_nonexistent_columns(self):
+        from routes.admin.users import _USER_LIST_COLUMNS
+
+        cols = set(_USER_LIST_COLUMNS.split(","))
+        # These are driver/derived fields the frontend defaults client-side;
+        # they are NOT columns on the users table and must never be projected.
+        forbidden = {"total_rides", "rating", "is_verified", "city", "status"}
+        assert not (cols & forbidden), f"non-existent users columns projected: {cols & forbidden}"
+        # profile_image (the heavy base64 blob) must stay excluded.
+        assert "profile_image" not in cols
+
+    def test_users_list_returns_200(self, client):
+        rows = [{"id": "u1", "first_name": "A", "last_name": "B", "phone": "+13065550001", "role": "rider"}]
+        with patch("db_supabase.get_rows", new_callable=AsyncMock, return_value=rows):
+            resp = client.get("/api/admin/users?role=all&limit=51&offset=0")
+        assert resp.status_code == 200

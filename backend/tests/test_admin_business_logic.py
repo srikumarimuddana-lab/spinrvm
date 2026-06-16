@@ -221,10 +221,11 @@ class TestAdminUserStatus:
             patch("db_supabase.get_user_by_id", new_callable=AsyncMock, return_value=_FAKE_USER),
             patch("db_supabase.update_one", new_callable=AsyncMock, return_value=None),
             patch("db_supabase.insert_one", new_callable=AsyncMock, return_value={}),
+            patch("features.send_push_notification", new_callable=AsyncMock, create=True),
         ):
             resp = client.put(
                 "/api/admin/users/usr-1/status",
-                json={"status": "suspended"},
+                json={"status": "suspended", "reason": "Policy violation"},
             )
         assert resp.status_code == 200
 
@@ -239,16 +240,17 @@ class TestAdminUserStatus:
             patch("db_supabase.get_user_by_id", new_callable=AsyncMock, return_value=_FAKE_USER),
             patch("db_supabase.update_one", new_callable=AsyncMock, return_value=None),
             patch("db_supabase.insert_one", side_effect=_capture_insert),
+            patch("features.send_push_notification", new_callable=AsyncMock, create=True),
         ):
             resp = client.put(
                 "/api/admin/users/usr-1/status",
-                json={"status": "banned"},
+                json={"status": "banned", "reason": "Fraudulent chargebacks"},
             )
 
         assert resp.status_code == 200
         audit_rows = [r for r in inserted if r["table"] == "audit_logs"]
         assert len(audit_rows) == 1
-        assert audit_rows[0]["doc"]["action"] == "status_change"
+        assert audit_rows[0]["doc"]["action"] == "user_status_change"
         assert audit_rows[0]["doc"]["entity_id"] == "usr-1"
 
 
@@ -636,3 +638,64 @@ class TestAdminUsersProjection:
         with patch("db_supabase.get_rows", new_callable=AsyncMock, return_value=rows):
             resp = client.get("/api/admin/users?role=all&limit=51&offset=0")
         assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Rider account moderation (suspend / ban / reactivate). Feature added once the
+# users.status column existed (migration 167); enforced at booking in rides.py.
+# ---------------------------------------------------------------------------
+
+
+class TestAdminUserModeration:
+    _USER = {"id": "usr-1", "status": "active", "first_name": "Al", "last_name": "R"}
+
+    def test_suspend_without_reason_422(self, client):
+        with patch("db_supabase.get_user_by_id", new_callable=AsyncMock, return_value=self._USER):
+            resp = client.put("/api/admin/users/usr-1/status", json={"status": "suspended"})
+        assert resp.status_code == 422
+
+    def test_ban_without_reason_422(self, client):
+        with patch("db_supabase.get_user_by_id", new_callable=AsyncMock, return_value=self._USER):
+            resp = client.put("/api/admin/users/usr-1/status", json={"status": "banned"})
+        assert resp.status_code == 422
+
+    def test_suspend_with_reason_writes_metadata(self, client):
+        captured: dict = {}
+
+        async def _update(table, filt, payload):
+            captured.update(payload)
+
+        with (
+            patch("db_supabase.get_user_by_id", new_callable=AsyncMock, return_value=self._USER),
+            patch("db_supabase.update_one", new=AsyncMock(side_effect=_update)),
+            patch("db_supabase.insert_one", new_callable=AsyncMock, return_value={}),
+            patch("features.send_push_notification", new_callable=AsyncMock, create=True),
+        ):
+            resp = client.put(
+                "/api/admin/users/usr-1/status",
+                json={"status": "suspended", "reason": "Multiple chargebacks", "suspended_until": "2099-01-01T00:00:00+00:00"},
+            )
+        assert resp.status_code == 200
+        assert captured["status"] == "suspended"
+        assert captured["status_reason"] == "Multiple chargebacks"
+        assert captured["status_changed_by"] == _SUPER_ADMIN["id"]
+        assert captured["suspended_until"] == "2099-01-01T00:00:00+00:00"
+
+    def test_reactivate_clears_moderation(self, client):
+        captured: dict = {}
+
+        async def _update(table, filt, payload):
+            captured.update(payload)
+
+        suspended = {**self._USER, "status": "suspended", "status_reason": "x"}
+        with (
+            patch("db_supabase.get_user_by_id", new_callable=AsyncMock, return_value=suspended),
+            patch("db_supabase.update_one", new=AsyncMock(side_effect=_update)),
+            patch("db_supabase.insert_one", new_callable=AsyncMock, return_value={}),
+            patch("features.send_push_notification", new_callable=AsyncMock, create=True),
+        ):
+            resp = client.put("/api/admin/users/usr-1/status", json={"status": "active"})
+        assert resp.status_code == 200
+        assert captured["status"] == "active"
+        assert captured["status_reason"] is None
+        assert captured["suspended_until"] is None

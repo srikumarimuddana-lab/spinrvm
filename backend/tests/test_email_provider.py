@@ -179,6 +179,47 @@ async def test_ses_failure_falls_back_to_resend():
 
 
 @pytest.mark.anyio
+async def test_ses_attachment_in_mixed_mime():
+    factory, ses_client = _boto3_mock()
+    att = [{"filename": "receipt.pdf", "content": b"%PDF-1.4 fake", "mime": "application/pdf"}]
+    with (
+        patch("settings_loader.get_app_settings", _settings(**_SES_SETTINGS)),
+        patch("boto3.client", factory),
+    ):
+        ok = await send_transactional_email(
+            to="rider@example.com", subject="Receipt", html="<p>hi</p>", attachments=att
+        )
+    assert ok is True
+    _, send_kwargs = ses_client.send_raw_email.call_args
+    import email as _email
+
+    parsed = _email.message_from_string(send_kwargs["RawMessage"]["Data"])
+    assert parsed.get_content_type() == "multipart/mixed"
+    pdf_parts = [p for p in parsed.walk() if p.get_content_type() == "application/pdf"]
+    assert len(pdf_parts) == 1
+    assert pdf_parts[0].get_filename() == "receipt.pdf"
+    assert pdf_parts[0].get_payload(decode=True) == b"%PDF-1.4 fake"
+
+
+@pytest.mark.anyio
+async def test_resend_attachment_base64():
+    import base64
+
+    resend_client = _async_client_mock()
+    att = [{"filename": "receipt.pdf", "content": b"%PDF-1.4 fake", "mime": "application/pdf"}]
+    with (
+        patch("settings_loader.get_app_settings", _settings(**_RESEND_SETTINGS)),
+        patch("httpx.AsyncClient", return_value=resend_client),
+    ):
+        ok = await send_transactional_email(to="rider@example.com", subject="Receipt", text="hi", attachments=att)
+    assert ok is True
+    _, post_kwargs = resend_client.post.call_args
+    sent = post_kwargs["json"]["attachments"]
+    assert sent[0]["filename"] == "receipt.pdf"
+    assert base64.b64decode(sent[0]["content"]) == b"%PDF-1.4 fake"
+
+
+@pytest.mark.anyio
 async def test_ses_failure_log_does_not_leak_recipient(caplog):
     """PIPEDA: SES MessageRejected echoes the recipient — it must not hit logs."""
     addr = "mkkreddy52@gmail.com"

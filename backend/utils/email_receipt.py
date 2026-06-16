@@ -316,6 +316,20 @@ async def send_receipt_email(ride: dict, rider: dict, driver: dict = None, tip: 
     except ImportError:
         from utils.email_provider import send_transactional_email  # type: ignore
 
+    # Attach a PDF copy of the receipt. Best-effort: a PDF-generation failure
+    # must never block the receipt email itself.
+    attachments = None
+    try:
+        try:
+            from .receipt_pdf import generate_receipt_pdf
+        except ImportError:
+            from utils.receipt_pdf import generate_receipt_pdf  # type: ignore
+        pdf_bytes = generate_receipt_pdf(ride, rider, driver, tip)
+        ref = ride.get("ride_code") or str(ride.get("id", ""))[:8].upper() or "receipt"
+        attachments = [{"filename": f"Spinr-receipt-{ref}.pdf", "content": pdf_bytes, "mime": "application/pdf"}]
+    except Exception:
+        logger.error("Receipt PDF generation failed — sending receipt without attachment", exc_info=True)
+
     recipient_user_id = rider.get("id") or ride.get("rider_id")
     return await send_transactional_email(
         to=email,
@@ -325,4 +339,5 @@ async def send_receipt_email(ride: dict, rider: dict, driver: dict = None, tip: 
         log_id=str(recipient_user_id or "-"),
         email_type="receipt",
         recipient_user_id=str(recipient_user_id) if recipient_user_id else None,
+        attachments=attachments,
     )

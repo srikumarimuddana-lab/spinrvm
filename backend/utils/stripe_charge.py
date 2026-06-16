@@ -367,6 +367,14 @@ async def authorize_ride(
         "capture_method": "manual",
         "confirm": True,
         "off_session": off_session,
+        # Card only + SDK-driven 3DS. Restricting to "card" stops Stripe from
+        # adding redirect-based methods (the account default is automatic methods
+        # with redirects), which would otherwise REQUIRE a return_url at
+        # confirmation and fail the authorization. Any 3DS challenge comes back as
+        # a use_stripe_sdk next_action that the rider-app completes on-device via
+        # the SCA two-step (client_secret) — no redirect, no return_url needed.
+        "payment_method_types": ["card"],
+        "use_stripe_sdk": True,
         "metadata": {
             "ride_id": ride_id,
             "rider_id": rider_id,

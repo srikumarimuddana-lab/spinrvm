@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { MapPin, Plus, Trash2, Save, X, RefreshCw } from "lucide-react";
+import { MapPin, Plus, Trash2, Save, X, RefreshCw, Ruler } from "lucide-react";
 import {
-  getVenues, createVenue, updateVenue, deleteVenue,
+  getVenues, createVenue, updateVenue, deleteVenue, getServiceAreas,
   type Venue, type VenueUpsert, type VenuePickupPoint,
 } from "@/lib/api";
 
@@ -16,6 +16,8 @@ const EMPTY: VenueUpsert = {
 
 export default function VenuesPage() {
   const [venues, setVenues] = useState<Venue[]>([]);
+  const [serviceAreas, setServiceAreas] = useState<{ id: string; name: string }[]>([]);
+  const [areaFilter, setAreaFilter] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<{ id: string | null; data: VenueUpsert } | null>(null);
   const [saving, setSaving] = useState(false);
@@ -24,16 +26,29 @@ export default function VenuesPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await getVenues();
+      const res = await getVenues(areaFilter ? { service_area_id: areaFilter } : undefined);
       setVenues(res.venues || []);
     } catch (e: any) {
       setError(e?.message || "Failed to load venues");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [areaFilter]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Service areas drive both the list filter and the per-venue area label.
+  useEffect(() => {
+    getServiceAreas()
+      .then((rows) => setServiceAreas((rows || []).map((a: any) => ({ id: a.id, name: a.name }))))
+      .catch(() => {});
+  }, []);
+
+  const areaNameById = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const a of serviceAreas) m[a.id] = a.name;
+    return m;
+  }, [serviceAreas]);
 
   const startNew = () => setEditing({ id: null, data: { ...EMPTY, pickup_points: [] } });
   const startEdit = (v: Venue) => setEditing({
@@ -92,6 +107,17 @@ export default function VenuesPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <select
+            value={areaFilter}
+            onChange={(e) => setAreaFilter(e.target.value)}
+            className="text-sm border rounded-lg px-3 py-2 bg-background hover:bg-muted"
+            aria-label="Filter by service area"
+          >
+            <option value="">All service areas</option>
+            {serviceAreas.map((a) => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </select>
           <button onClick={load} className="flex items-center gap-1.5 text-sm border rounded-lg px-3 py-2 hover:bg-muted">
             <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
           </button>
@@ -113,6 +139,18 @@ export default function VenuesPage() {
               <label className="text-sm">Center latitude<Input type="number" value={d.center_lat} onChange={(e) => patch({ center_lat: parseFloat(e.target.value) || 0 })} /></label>
               <label className="text-sm">Center longitude<Input type="number" value={d.center_lng} onChange={(e) => patch({ center_lng: parseFloat(e.target.value) || 0 })} /></label>
               <label className="text-sm">Detection radius (m)<Input type="number" value={d.radius_m} onChange={(e) => patch({ radius_m: parseInt(e.target.value) || 0 })} /></label>
+              <label className="text-sm">Service area
+                <select
+                  value={d.service_area_id ?? ""}
+                  onChange={(e) => patch({ service_area_id: e.target.value || null })}
+                  className="mt-1 w-full text-sm border rounded-md px-3 py-2 bg-background h-10"
+                >
+                  <option value="">Unassigned</option>
+                  {serviceAreas.map((a) => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+                </select>
+              </label>
             </div>
             <div className="flex items-center gap-2">
               <Switch checked={d.is_active} onCheckedChange={(v) => patch({ is_active: v })} />
@@ -164,12 +202,20 @@ export default function VenuesPage() {
               {venues.map((v) => (
                 <div key={v.id} className="flex items-center justify-between py-3 gap-4">
                   <div className="min-w-0">
-                    <p className="font-medium flex items-center gap-2">
+                    <p className="font-medium flex items-center gap-2 flex-wrap">
                       {v.name}
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 inline-flex items-center gap-1">
+                        <MapPin className="h-2.5 w-2.5" />
+                        {v.service_area_id ? (areaNameById[v.service_area_id] || "Unknown area") : "Unassigned"}
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-foreground/80 inline-flex items-center gap-1 tabular-nums">
+                        <Ruler className="h-2.5 w-2.5" />
+                        {v.radius_m} m
+                      </span>
                       {!v.is_active && <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">inactive</span>}
                     </p>
                     <p className="text-xs text-muted-foreground tabular-nums">
-                      {v.center_lat.toFixed(5)}, {v.center_lng.toFixed(5)} · {v.radius_m}m · {(v.pickup_points || []).length} point{(v.pickup_points || []).length === 1 ? "" : "s"}
+                      {v.center_lat.toFixed(5)}, {v.center_lng.toFixed(5)} · {(v.pickup_points || []).length} point{(v.pickup_points || []).length === 1 ? "" : "s"}
                     </p>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">

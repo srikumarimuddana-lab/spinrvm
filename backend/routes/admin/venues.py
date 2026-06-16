@@ -44,9 +44,17 @@ class VenueRequest(BaseModel):
 
 
 @router.get("")
-async def list_venues(admin: dict = Depends(get_admin_user)):
+async def list_venues(
+    service_area_id: Optional[str] = None,
+    admin: dict = Depends(get_admin_user),
+):
+    # Filter server-side when an area is selected so we only fetch the venues
+    # that belong to it rather than the whole table.
+    filters: dict = {}
+    if service_area_id:
+        filters["service_area_id"] = service_area_id
     try:
-        rows = await db_supabase.get_rows(_TABLE, {}, order="created_at", desc=True, limit=2000)
+        rows = await db_supabase.get_rows(_TABLE, filters, order="created_at", desc=True, limit=2000)
     except Exception as e:
         logger.error(f"Failed to list venues: {e}", exc_info=True, extra={"domain": "admin"})
         raise HTTPException(status_code=503, detail="venues_unavailable") from e

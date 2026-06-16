@@ -888,7 +888,10 @@ export interface Venue {
     is_active: boolean;
 }
 export type VenueUpsert = Omit<Venue, "id">;
-export const getVenues = () => request<{ venues: Venue[] }>("/api/admin/venues");
+export const getVenues = (params?: { service_area_id?: string }) => {
+    const qs = params?.service_area_id ? `?service_area_id=${encodeURIComponent(params.service_area_id)}` : "";
+    return request<{ venues: Venue[] }>(`/api/admin/venues${qs}`);
+};
 export const createVenue = (body: VenueUpsert) =>
     request<Venue>("/api/admin/venues", { method: "POST", body: JSON.stringify(body) });
 export const updateVenue = (id: string, body: VenueUpsert) =>

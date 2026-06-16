@@ -244,14 +244,11 @@ export default function RideInvoice({ rideId, status }: Props) {
             doc.text(data.driver_name || "—", pageW / 2, y);
             y += 5;
             doc.text(data.rider_phone || "—", margin, y);
-            doc.text(data.driver_phone || "—", pageW / 2, y);
+            // PIPEDA: the driver's personal phone is NOT printed on the invoice.
+            // Show the vehicle here instead (driver_code is added once available).
+            doc.text(data.driver_vehicle || "—", pageW / 2, y);
             y += 5;
             doc.text(data.rider_email || "—", margin, y);
-            doc.text(
-                `${data.driver_vehicle || ""} ${data.driver_license_plate || ""}`.trim() || "—",
-                pageW / 2,
-                y
-            );
             y += 10;
 
             ensureSpace(50);

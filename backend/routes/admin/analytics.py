@@ -4,7 +4,6 @@ Provides aggregated operational intelligence for the admin dashboard.
 """
 
 import logging
-from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
@@ -247,64 +246,50 @@ async def get_analytics_overview(
 
     start_date = _parse_date_range(date_range)
 
+    # Status counts, completed revenue/tips, and the daily/hourly buckets are
+    # aggregated in Postgres (admin_analytics_overview) instead of fetching up to
+    # 10,000 rides and summing in Python.
     try:
-        period_rides = await db.get_rows(
-            "rides",
-            {"created_at": {"$gte": start_date.isoformat()}},
-            limit=10000,
-            order="created_at",
-        )
+        ov = await db.rpc("admin_analytics_overview", {"p_start": start_date.isoformat()})
     except Exception as e:
-        logger.error(f"Failed to fetch rides: {e}", exc_info=True)
+        logger.error(f"Failed to aggregate rides for overview: {e}", exc_info=True)
         from fastapi import HTTPException as _HTTPException
 
         raise _HTTPException(status_code=503, detail="Analytics data unavailable — database error") from e
 
-    total = len(period_rides)
-    completed = sum(1 for r in period_rides if r.get("status") == "completed")
-    cancelled = sum(1 for r in period_rides if r.get("status") == "cancelled")
-    in_progress = sum(
-        1 for r in period_rides if r.get("status") in ("in_progress", "driver_arrived", "driver_accepted")
-    )
-    searching = sum(1 for r in period_rides if r.get("status") == "searching")
-    scheduled = sum(1 for r in period_rides if r.get("is_scheduled"))
+    ov = ov[0] if isinstance(ov, list) and ov else ov
+    if not isinstance(ov, dict):
+        ov = {}
+
+    total = int(ov.get("total") or 0)
+    completed = int(ov.get("completed") or 0)
+    cancelled = int(ov.get("cancelled") or 0)
+    in_progress = int(ov.get("in_progress") or 0)
+    searching = int(ov.get("searching") or 0)
+    scheduled = int(ov.get("scheduled") or 0)
 
     completion_rate = round(completed / total * 100, 1) if total > 0 else 0
     cancellation_rate = round(cancelled / total * 100, 1) if total > 0 else 0
 
-    total_revenue = float(
-        sum(Decimal(str(r.get("total_fare") or 0)) for r in period_rides if r.get("status") == "completed")
-    )
-    total_tips = float(
-        sum(Decimal(str(r.get("tip_amount") or 0)) for r in period_rides if r.get("status") == "completed")
-    )
+    total_revenue = float(Decimal(str(ov.get("total_revenue") or 0)))
+    total_tips = float(Decimal(str(ov.get("total_tips") or 0)))
     avg_fare = round(total_revenue / completed, 2) if completed > 0 else 0
 
-    # Daily ride counts for chart
-    daily = defaultdict(lambda: {"completed": 0, "cancelled": 0, "total": 0})
-    for r in period_rides:
-        date_str = (r.get("created_at") or "")[:10]
-        if date_str:
-            daily[date_str]["total"] += 1
-            if r.get("status") == "completed":
-                daily[date_str]["completed"] += 1
-            elif r.get("status") == "cancelled":
-                daily[date_str]["cancelled"] += 1
+    # Daily ride counts for chart (date -> {completed, cancelled, total}).
+    daily_map = ov.get("daily") or {}
+    daily_chart = [
+        {
+            "date": date,
+            "completed": int((counts or {}).get("completed") or 0),
+            "cancelled": int((counts or {}).get("cancelled") or 0),
+            "total": int((counts or {}).get("total") or 0),
+        }
+        for date, counts in sorted(daily_map.items())
+    ]
 
-    daily_chart = [{"date": date, **counts} for date, counts in sorted(daily.items())]
-
-    # Peak hours
-    hourly = defaultdict(int)
-    for r in period_rides:
-        created = r.get("created_at", "")
-        if isinstance(created, str) and len(created) >= 13:
-            try:
-                hour = int(created[11:13])
-                hourly[hour] += 1
-            except (ValueError, IndexError):
-                pass
-
-    peak_hours = sorted(hourly.items(), key=lambda x: x[1], reverse=True)[:5]
+    # Peak hours — top 5 by ride count.
+    hourly_map = ov.get("hourly") or {}
+    peak_hours = sorted(((int(h), int(c or 0)) for h, c in hourly_map.items()), key=lambda x: x[1], reverse=True)[:5]
 
     result = {
         "date_range": date_range,

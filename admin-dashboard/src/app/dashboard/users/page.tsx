@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import {
     Table,
@@ -66,6 +67,9 @@ export default function UsersPage() {
     const [showPii, setShowPii] = useState(false);
 
     const [pendingStatusChange, setPendingStatusChange] = useState<{ id: string; status: "suspended" | "banned"; name: string } | null>(null);
+    // Moderation note (required) + optional suspension length (days; "" = indefinite).
+    const [moderationReason, setModerationReason] = useState("");
+    const [moderationDays, setModerationDays] = useState<string>("");
     const [pendingWalletAction, setPendingWalletAction] = useState<{ action: "credit" | "debit"; amount: number; reason: string } | null>(null);
 
     // Wallet state for the user-details dialog
@@ -162,6 +166,8 @@ export default function UsersPage() {
                 is_rider: u.is_rider,
                 is_driver: u.is_driver,
                 status: u.status || "active",
+                status_reason: u.status_reason ?? null,
+                suspended_until: u.suspended_until ?? null,
             }));
             setUsers(transformed);
         } catch (err: any) {
@@ -365,6 +371,7 @@ export default function UsersPage() {
                                         <TableHead>Name</TableHead>
                                         <TableHead>Contact</TableHead>
                                         <TableHead>Role</TableHead>
+                                        <TableHead>Status</TableHead>
                                         <TableHead>Joined</TableHead>
                                         <TableHead className="text-right">Actions</TableHead>
                                     </TableRow>
@@ -372,7 +379,7 @@ export default function UsersPage() {
                                 <TableBody>
                                     {users.length === 0 ? (
                                         <TableRow>
-                                            <TableCell colSpan={5} className="text-center text-muted-foreground py-12">
+                                            <TableCell colSpan={6} className="text-center text-muted-foreground py-12">
                                                 No users found.
                                             </TableCell>
                                         </TableRow>
@@ -409,6 +416,17 @@ export default function UsersPage() {
                                                             <span className="text-muted-foreground">—</span>
                                                         )}
                                                     </div>
+                                                </TableCell>
+                                                <TableCell>
+                                                    <Badge className={
+                                                        user.status === "banned" ? "bg-red-500/15 text-red-600"
+                                                        : user.status === "suspended" ? "bg-amber-500/15 text-amber-600"
+                                                        : "bg-emerald-500/15 text-emerald-600"
+                                                    }>
+                                                        {user.status === "banned" ? "Banned"
+                                                        : user.status === "suspended" ? "Suspended"
+                                                        : "Active"}
+                                                    </Badge>
                                                 </TableCell>
                                                 <TableCell className="text-xs text-muted-foreground">
                                                     {formatDate(user.created_at)}
@@ -500,6 +518,20 @@ export default function UsersPage() {
                                         : "Active"}
                                     </Badge>
                                 </div>
+                                {selectedUser.status !== "active" && (selectedUser.status_reason || selectedUser.suspended_until) && (
+                                    <div className="mb-3 rounded-md bg-muted/50 p-2 text-xs space-y-0.5">
+                                        {selectedUser.status_reason && (
+                                            <p><span className="text-muted-foreground">Reason: </span>{selectedUser.status_reason}</p>
+                                        )}
+                                        {selectedUser.status === "suspended" && (
+                                            <p className="text-muted-foreground">
+                                                {selectedUser.suspended_until
+                                                    ? `Auto-lifts ${formatDate(selectedUser.suspended_until)}`
+                                                    : "Indefinite — until reactivated"}
+                                            </p>
+                                        )}
+                                    </div>
+                                )}
                                 <div className="flex gap-2">
                                     {selectedUser.status !== "active" && (
                                         <Button
@@ -774,7 +806,7 @@ export default function UsersPage() {
                 </AlertDialogContent>
             </AlertDialog>
 
-            <AlertDialog open={!!pendingStatusChange} onOpenChange={(open) => !open && setPendingStatusChange(null)}>
+            <AlertDialog open={!!pendingStatusChange} onOpenChange={(open) => { if (!open) { setPendingStatusChange(null); setModerationReason(""); setModerationDays(""); } }}>
                 <AlertDialogContent>
                     <AlertDialogHeader>
                         <AlertDialogTitle>
@@ -782,22 +814,70 @@ export default function UsersPage() {
                         </AlertDialogTitle>
                         <AlertDialogDescription>
                             {pendingStatusChange?.status === "banned"
-                                ? `${pendingStatusChange?.name} will be permanently banned and unable to book rides or log in.`
-                                : `${pendingStatusChange?.name} will be suspended and unable to book rides until reactivated.`}
+                                ? `${pendingStatusChange?.name} will be deactivated and unable to book rides until an admin reactivates the account.`
+                                : `${pendingStatusChange?.name} will be unable to book rides for the chosen period.`}
                         </AlertDialogDescription>
                     </AlertDialogHeader>
+
+                    <div className="space-y-3 py-1">
+                        <div className="space-y-1.5">
+                            <Label className="text-xs">Reason <span className="text-red-500">*</span></Label>
+                            <div className="flex flex-wrap gap-1.5">
+                                {["Payment / chargeback", "Safety report", "Policy violation", "Fraud / abuse"].map((r) => (
+                                    <button
+                                        key={r}
+                                        type="button"
+                                        onClick={() => setModerationReason(r)}
+                                        className="text-[11px] rounded-full border px-2 py-0.5 hover:bg-muted"
+                                    >
+                                        {r}
+                                    </button>
+                                ))}
+                            </div>
+                            <Textarea
+                                value={moderationReason}
+                                onChange={(e) => setModerationReason(e.target.value)}
+                                placeholder="Shown to the rider and recorded in the audit log."
+                                className="min-h-[72px] text-sm"
+                            />
+                        </div>
+                        {pendingStatusChange?.status === "suspended" && (
+                            <div className="space-y-1.5">
+                                <Label className="text-xs">Duration</Label>
+                                <Select value={moderationDays || "0"} onValueChange={(v) => setModerationDays(v === "0" ? "" : v)}>
+                                    <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="0">Indefinite (until reactivated)</SelectItem>
+                                        <SelectItem value="1">24 hours</SelectItem>
+                                        <SelectItem value="7">7 days</SelectItem>
+                                        <SelectItem value="30">30 days</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                        )}
+                    </div>
+
                     <AlertDialogFooter>
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
                         <AlertDialogAction
                             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                            onClick={async () => {
+                            disabled={!moderationReason.trim() || statusUpdating === pendingStatusChange?.id}
+                            onClick={async (e) => {
                                 if (!pendingStatusChange) return;
-                                setStatusUpdating(pendingStatusChange.id);
+                                if (!moderationReason.trim()) { e.preventDefault(); return; }
+                                const change = pendingStatusChange;
+                                const reason = moderationReason.trim();
+                                const suspended_until =
+                                    change.status === "suspended" && moderationDays
+                                        ? new Date(Date.now() + Number(moderationDays) * 86400000).toISOString()
+                                        : undefined;
+                                setStatusUpdating(change.id);
                                 try {
-                                    await updateUserStatus(pendingStatusChange.id, { status: pendingStatusChange.status });
-                                    setSelectedUser((prev: any) => prev ? { ...prev, status: pendingStatusChange.status } : prev);
-                                    setUsers(prev => prev.map(u => u.id === pendingStatusChange.id ? { ...u, status: pendingStatusChange.status } : u));
-                                    toast({ title: `User ${pendingStatusChange.status === "banned" ? "banned" : "suspended"}` });
+                                    await updateUserStatus(change.id, { status: change.status, reason, suspended_until });
+                                    const patch = { status: change.status, status_reason: reason, suspended_until: suspended_until ?? null };
+                                    setSelectedUser((prev: any) => prev ? { ...prev, ...patch } : prev);
+                                    setUsers(prev => prev.map(u => u.id === change.id ? { ...u, ...patch } : u));
+                                    toast({ title: `User ${change.status === "banned" ? "banned" : "suspended"}` });
                                 } catch (err: any) {
                                     console.error('[UsersPage] Failed to update user status:', err);
                                     toast({ title: "Failed to update user status", description: err?.message, variant: "destructive" });
@@ -805,6 +885,8 @@ export default function UsersPage() {
                                     setStatusUpdating(null);
                                 }
                                 setPendingStatusChange(null);
+                                setModerationReason("");
+                                setModerationDays("");
                             }}
                         >
                             {pendingStatusChange?.status === "banned" ? "Ban user" : "Suspend user"}

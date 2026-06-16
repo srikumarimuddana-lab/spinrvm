@@ -2,9 +2,10 @@
 notifications.py – In-app notification system for Spinr.
 """
 
+import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -52,6 +53,14 @@ class TestPushRequest(BaseModel):
     user_id: Optional[str] = None  # None → send to the admin's own account
     title: str = "Spinr test push"
     body: str = "If you can see this, push notifications are wired up correctly."
+
+
+class DebugRideOfferRequest(BaseModel):
+    user_id: str  # target driver's user id — debugging a specific device
+    pickup_address: str = "Test pickup — 8th St E, Saskatoon"
+    dropoff_address: str = "Test dropoff — Stonebridge, Saskatoon"
+    fare: float = 12.50
+    countdown_seconds: int = 30
 
 
 def _mask_token(token: Optional[str]) -> Optional[str]:
@@ -108,6 +117,142 @@ async def admin_send_test_push(body: TestPushRequest, admin: dict = Depends(get_
         "token_on_file": bool(token),
         "token_preview": _mask_token(token),
         "platform_hint": platform_hint,
+    }
+
+
+def _stringify_fcm(payload: Dict[str, Any]) -> Dict[str, str]:
+    """Coerce a dispatch payload into FCM's string-only data map.
+
+    Mirrors the stringification the live ride-offer path applies in
+    routes/rides.py: dicts/lists become JSON, scalars become str, None → "".
+    """
+    return {
+        k: json.dumps(v) if isinstance(v, (dict, list)) else (str(v) if v is not None else "")
+        for k, v in payload.items()
+    }
+
+
+@api_router.post("/debug-ride-offer")
+async def admin_debug_ride_offer(body: DebugRideOfferRequest, admin: dict = Depends(get_admin_user)):
+    """Simulate a real ride-offer push end-to-end against a driver's device.
+
+    Unlike /test-push (a plain notification on the generic ``fcm_token``), this
+    reproduces the EXACT path a live ride offer takes:
+
+      * reads the driver-specific token (``users.fcm_token_driver`` → falls
+        back to ``fcm_token``), the same column dispatch reads via
+        ``target_app="driver"``;
+      * sends a data-only ``new_ride_assignment`` FCM message at
+        ``priority="dispatch"`` so the driver app's headless handler + Notifee
+        render the full-screen offer with the ride-offer sound, and iOS gets
+        the ``ride_offer.caf`` APNs alert;
+      * returns which token column was used, masked previews of all three
+        token columns, and whether Firebase accepted the send.
+
+    Use when a driver reports "no offer push / no sound". The response isolates
+    the failure stage:
+      * ``no_driver_token`` → the driver app never registered a token (token
+        problem, not a build problem);
+      * ``success=true`` but device shows nothing → the installed binary lacks
+        the merged native code (needs an EAS rebuild — OTA can't ship native
+        changes) or OS notifications are disabled;
+      * ``success=false`` → Firebase rejected the send (stale token purged, or
+        FIREBASE_SERVICE_ACCOUNT_JSON misconfigured — check server logs).
+
+    No real ride is dispatched; the synthetic ``ride_id`` is a ``debug-`` value,
+    so Accept/Decline from the device resolve to a harmless 404.
+    """
+    user = await db.find_one("users", {"id": body.user_id})
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User {body.user_id} not found")
+
+    driver_token = user.get("fcm_token_driver")
+    rider_token = user.get("fcm_token_rider")
+    generic_token = user.get("fcm_token")
+
+    # Mirror send_push_notification(target_app="driver") token selection so the
+    # response reports the exact column the dispatch send will read.
+    used_token = driver_token or generic_token
+    used_column = "fcm_token_driver" if driver_token else ("fcm_token" if generic_token else None)
+
+    token_previews = {
+        "fcm_token_driver": _mask_token(driver_token),
+        "fcm_token_rider": _mask_token(rider_token),
+        "fcm_token": _mask_token(generic_token),
+    }
+
+    if not used_token:
+        return {
+            "success": False,
+            "reason": "no_driver_token",
+            "detail": (
+                "No fcm_token_driver or fcm_token on file. The driver app has "
+                "not registered a push token for this account. Re-open the "
+                "driver app, grant the notification permission, and confirm "
+                "POST /notifications/register-token ran with client_type=driver."
+            ),
+            "target_user_id": body.user_id,
+            "tokens": token_previews,
+            "is_online": user.get("is_online"),
+            "is_driver": user.get("is_driver"),
+        }
+
+    routing = "expo" if used_token.startswith(("ExponentPushToken", "ExpoPushToken")) else "fcm"
+
+    ride_id = f"debug-{uuid.uuid4().hex[:12]}"
+    now = datetime.now(timezone.utc)
+    offer_expires_at = (now + timedelta(seconds=body.countdown_seconds)).isoformat()
+
+    # Minimal but realistic dispatch payload — same shape/keys the live offer
+    # uses in routes/rides.py (spatial fields are excluded there too).
+    offer_payload = {
+        "type": "new_ride_assignment",
+        "ride_id": ride_id,
+        "booking_id": ride_id,
+        "pickup_address": body.pickup_address,
+        "dropoff_address": body.dropoff_address,
+        "pickup_lat": 52.1332,
+        "pickup_lng": -106.6700,
+        "dropoff_lat": 52.1100,
+        "dropoff_lng": -106.6300,
+        "fare": body.fare,
+        "distance_km": 4.2,
+        "duration_minutes": 11,
+        "rider_name": "Debug Rider",
+        "requires_wav": False,
+        "countdown_seconds": body.countdown_seconds,
+        "offer_expires_at": offer_expires_at,
+        "deeplink": "/driver/",
+    }
+    fcm_data = _stringify_fcm(offer_payload)
+
+    earnings_label = f"${body.fare:.2f}"
+    delivered = await send_push_notification(
+        body.user_id,
+        f"{earnings_label} ride offer",
+        f"Booking {ride_id} • {body.pickup_address} → {body.dropoff_address}",
+        fcm_data,
+        priority="dispatch",
+        target_app="driver",
+    )
+
+    return {
+        "success": bool(delivered),
+        "target_user_id": body.user_id,
+        "token_column_used": used_column,
+        "routing": routing,
+        "ride_id": ride_id,
+        "tokens": token_previews,
+        "is_online": user.get("is_online"),
+        "is_driver": user.get("is_driver"),
+        "note": (
+            "success=true means Firebase accepted the message for delivery. If "
+            "the device still shows no offer or plays no sound, the installed "
+            "binary lacks the merged native code (rebuild via EAS — an OTA "
+            "update cannot ship native changes) or OS notifications are off. A "
+            "data-only dispatch renders only through the app's Notifee handler, "
+            "so an outdated build shows nothing even on a successful send."
+        ),
     }
 
 

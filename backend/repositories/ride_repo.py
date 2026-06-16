@@ -213,7 +213,7 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
             lambda did=driver_id: _single_row_from_res(
                 supabase.table("drivers")
                 .select(
-                    "name,phone,vehicle_make,vehicle_model,vehicle_color,vehicle_year,vehicle_vin,license_plate,rating,status,photo_url,vehicle_type_id,total_rides,service_area_id"
+                    "driver_code,name,phone,vehicle_make,vehicle_model,vehicle_color,vehicle_year,vehicle_vin,license_plate,rating,status,photo_url,vehicle_type_id,total_rides,service_area_id"
                 )
                 .eq("id", did)
                 .execute()
@@ -389,6 +389,7 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
 
     # --- Assemble driver fields ---
     if driver_id and driver:
+        ride["driver_code"] = driver.get("driver_code", "")
         ride["driver_name"] = driver.get("name", driver_id[:12])
         ride["driver_phone"] = driver.get("phone", "")
         ride["driver_vehicle_make"] = driver.get("vehicle_make", "")

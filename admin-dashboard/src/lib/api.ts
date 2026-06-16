@@ -516,6 +516,7 @@ export const getDrivers = (opts: {
     status?: string;
     service_area_id?: string;
     search?: string;
+    photo_status?: string;
 } = {}) => {
     const sp = new URLSearchParams();
     if (opts.limit != null) sp.set("limit", String(opts.limit));
@@ -526,6 +527,7 @@ export const getDrivers = (opts: {
     if (opts.status) sp.set("status", opts.status);
     if (opts.service_area_id) sp.set("service_area_id", opts.service_area_id);
     if (opts.search) sp.set("search", opts.search);
+    if (opts.photo_status) sp.set("photo_status", opts.photo_status);
     const qs = sp.toString();
     return request<any[]>(`/api/admin/drivers${qs ? `?${qs}` : ""}`);
 };

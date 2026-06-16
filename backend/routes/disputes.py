@@ -159,7 +159,15 @@ async def admin_get_disputes(
     # user_phone intentionally omitted from response — P1-9 (PIPEDA: no PII in bulk list).
     user_ids = list({d["user_id"] for d in disputes if d.get("user_id")})
     ride_ids = list({d["ride_id"] for d in disputes if d.get("ride_id")})
-    users = await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=len(user_ids)) if user_ids else []
+    # Only first/last name are surfaced (user_phone is intentionally omitted —
+    # P1-9). Project name columns to keep base64 profile_image out of the read.
+    users = (
+        await db_supabase.get_rows(
+            "users", {"id": {"$in": user_ids}}, columns="id,first_name,last_name", limit=len(user_ids)
+        )
+        if user_ids
+        else []
+    )
     rides = await db_supabase.get_rows("rides", {"id": {"$in": ride_ids}}, limit=len(ride_ids)) if ride_ids else []
     users_by_id = {u["id"]: u for u in (users or [])}
     rides_by_id = {r["id"]: r for r in (rides or [])}

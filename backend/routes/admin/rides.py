@@ -1318,9 +1318,9 @@ async def admin_get_ride_invoice(ride_id: str):
         "rider_email": ride.get("rider_email", ""),
         "driver_name": ride.get("driver_name", ""),
         # PIPEDA: the driver's personal phone and plate are NOT placed on the
-        # invoice (a distributable document). A short masked driver id gives
-        # admins a support reference without exposing driver PII.
-        "driver_id": ride.get("driver_id", ""),
+        # invoice (a distributable document). The app-wide driver_code gives
+        # admins/support a reference without exposing driver PII.
+        "driver_code": ride.get("driver_code", ""),
         "driver_vehicle": ride.get("driver_vehicle", ""),
         "actual_distance_km": ride.get("actual_distance_km"),
         "fare_locked": fare_locked,

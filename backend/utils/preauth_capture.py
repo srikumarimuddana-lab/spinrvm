@@ -12,9 +12,12 @@ triggered themselves.
 
 Replay-safety contract (CLAUDE.md, Background loops):
   Runs on every replica. Two replays must not double-capture. Three layers:
-    1. Redis leader lock (SET NX) — only one pod runs a tick.
+    1. Redis leader lock (SET NX) — normally one pod runs a tick; this is a
+       best-effort throttle, not a guarantee. When Redis is unavailable the
+       in-process fallback lets every replica run, so it is NOT the safety net.
     2. Atomic DB claim — flip payment_status 'pending' → 'processing' asserting
        auth_status unchanged; only the replica whose UPDATE returns a row acts.
+       This is the real double-capture guard and holds even with Redis down.
     3. Stripe idempotency_key on capture (ride-capture-{ride_id}-{cents}) — even
        if two replicas both win a claim race, Stripe dedupes the capture.
 
@@ -159,7 +162,10 @@ async def preauth_capture_loop() -> None:
         f"Pre-auth capture sweeper started (interval={CAPTURE_INTERVAL_SECONDS}s, window={TIP_WINDOW_MINUTES}m)"
     )
     while True:
-        lock_ttl = int(CAPTURE_INTERVAL_SECONDS * 1.5)
+        # TTL = 2× interval so the lock outlives a slow tick (50 rides × Stripe
+        # latency) even after the +10% sleep jitter; the atomic DB claim is the
+        # real double-capture guard if a second replica ever races in.
+        lock_ttl = int(CAPTURE_INTERVAL_SECONDS * 2)
         if not await redis_set_nx("spinr:preauth:capture:lock", _pod_id(), lock_ttl):
             _record_heartbeat(_LOOP_NAME)
             await asyncio.sleep(CAPTURE_INTERVAL_SECONDS)

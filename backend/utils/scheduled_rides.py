@@ -138,7 +138,7 @@ async def _dispatch_scheduled_ride(ride: dict):
                 _grand = claimed.get("grand_total")
                 if _grand is None:
                     _grand = claimed.get("total_fare") or 0
-                _auth_fields = await _preauthorize_ride_card(
+                _preauth = await _preauthorize_ride_card(
                     ride_id=ride_id,
                     rider_id=rider_id,
                     grand_total=_Decimal(str(_grand)),
@@ -146,8 +146,8 @@ async def _dispatch_scheduled_ride(ride: dict):
                     payment_method_id=claimed.get("payment_method_id"),
                     block_on_decline=False,
                 )
-                if _auth_fields:
-                    await db.update_one("rides", {"id": ride_id}, {"$set": _auth_fields})
+                if _preauth.fields:
+                    await db.update_one("rides", {"id": ride_id}, {"$set": _preauth.fields})
         except Exception as _auth_err:
             # Never let a pre-auth hiccup block dispatch; post-trip settlement
             # remains the safety net. Surface loudly — it's a payment path.

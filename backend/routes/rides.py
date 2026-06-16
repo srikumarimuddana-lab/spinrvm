@@ -3,6 +3,8 @@ import json
 import secrets
 import time as _time_mod
 import uuid
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import List, Optional
@@ -152,11 +154,11 @@ try:
         settle_corporate,
         settle_wallet,
     )
-    from ..utils.stripe_charge import authorize_ride
+    from ..utils.stripe_charge import authorize_ride, verify_authorization
 except ImportError:
     from services.cancellation_service import calculate_cancellation_fee, pay_driver_cancellation_fee  # type: ignore
     from services.payment_service import send_ride_receipt, settle_card, settle_corporate, settle_wallet  # type: ignore
-    from utils.stripe_charge import authorize_ride  # type: ignore
+    from utils.stripe_charge import authorize_ride, verify_authorization  # type: ignore
 
 db = db_supabase  # legacy alias
 
@@ -1775,7 +1777,23 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
 _RETRYABLE_AT_LOWER_AMOUNT = frozenset({"insufficient_funds"})
 
 
-def _card_declined_result(decline_code: Optional[str], block_on_decline: bool) -> dict:
+@dataclass
+class _PreauthOutcome:
+    """Result of a booking-time card pre-authorization attempt.
+
+    ``fields`` are merged into ``ride_data`` (empty when no hold was placed).
+    ``requires_action`` signals the rider-app must complete an on-device SCA /
+    Apple Pay confirm for ``client_secret`` and then re-book passing
+    ``payment_intent_id`` back as ``preauthorized_payment_intent_id``.
+    """
+
+    fields: dict = dataclass_field(default_factory=dict)
+    requires_action: bool = False
+    client_secret: Optional[str] = None
+    payment_intent_id: Optional[str] = None
+
+
+def _card_declined_result(decline_code: Optional[str], block_on_decline: bool) -> _PreauthOutcome:
     """Terminal decline of a pre-auth hold. At interactive booking
     (``block_on_decline=True``) raise 402 so the rider fixes their card before a
     driver is disturbed. At scheduled dispatch (``block_on_decline=False``) the
@@ -1783,7 +1801,7 @@ def _card_declined_result(decline_code: Optional[str], block_on_decline: bool) -
     the retry/unpaid-block safety net handle it — never strand a scheduled ride.
     """
     if not block_on_decline:
-        return {}
+        return _PreauthOutcome()
     raise HTTPException(
         status_code=402,
         detail={
@@ -1794,6 +1812,39 @@ def _card_declined_result(decline_code: Optional[str], block_on_decline: bool) -
     )
 
 
+async def _attach_preauthorized_hold(
+    *,
+    ride_id: str,
+    payment_intent_id: str,
+) -> dict:
+    """Verify a PaymentIntent the rider-app already confirmed on-device (SCA /
+    Apple Pay two-step) and return the ride fields to persist. A failed/abandoned
+    authentication raises 402 so the rider re-tries — we never attach an
+    unconfirmed hold, and we re-read the PI from Stripe rather than trusting the
+    client. ``authorized_amount`` is taken from Stripe (the true held amount)."""
+    outcome = await verify_authorization(ride_id=ride_id, payment_intent_id=payment_intent_id)
+    if outcome.status == "authorized":
+        return {
+            "payment_intent_id": outcome.payment_intent_id,
+            "authorized_amount": _f(outcome.charged_amount),
+            "auth_status": "authorized",
+        }
+    if outcome.status == "declined":
+        logger.info("[preauth] on-device auth not completed for ride=%s pi=%s", ride_id, payment_intent_id)
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "code": "CARD_DECLINED",
+                "message": "Card authentication wasn't completed. Please try booking again.",
+            },
+        )
+    # unconfigured (dev) / failed (ops) — degrade to no hold; post-trip settles.
+    logger.error(
+        "[preauth] verify hold failed for ride=%s pi=%s: %s", ride_id, payment_intent_id, outcome.error_message
+    )
+    return {}
+
+
 async def _preauthorize_ride_card(
     *,
     ride_id: str,
@@ -1802,35 +1853,27 @@ async def _preauthorize_ride_card(
     stripe_customer_id: Optional[str],
     payment_method_id: Optional[str],
     block_on_decline: bool = True,
-) -> dict:
-    """Place a buffered card hold at booking; return ride fields to persist.
+) -> _PreauthOutcome:
+    """Place a buffered card hold at booking; return a ``_PreauthOutcome``.
 
     Holds ``grand_total + RIDE_AUTH_BUFFER_CAD`` via a manual-capture
     PaymentIntent so a post-trip tip can later be captured on the SAME intent
     (one Stripe fee) and a dead card is surfaced BEFORE a driver is dispatched.
     The held PaymentIntent id reuses the existing ``payment_intent_id`` column.
 
-    Returns a (possibly empty) dict merged into ``ride_data``:
-        {"payment_intent_id", "authorized_amount", "auth_status"} on a hold,
-        {} when no hold was placed (ride proceeds on the post-trip settlement
-        path exactly as it does today).
-
-    Raises ``HTTPException(402)`` when ``block_on_decline`` (the default, for
-    interactive booking) and the card genuinely cannot pay (both the buffered
-    hold AND the fare-only fallback declined). With ``block_on_decline=False``
-    (scheduled dispatch, rider not present) a decline returns {} instead of
-    raising. Every other non-success degrades to "no hold, proceed":
-      - ``requires_action`` (SCA/3DS at booking) — handled by the dedicated
-        SCA-at-booking flow later; for now fall back to post-trip settlement.
-      - ``failed`` (Stripe ops error) — never block a rider over our outage.
-      - ``unconfigured`` (dev/test, no Stripe key) — proceed.
-      - missing customer / payment method — proceed (post-trip settlement
-        still validates a card is on file before dispatch in create_ride).
-    The buffer must never block a ride the rider could otherwise take.
+    Outcomes:
+      - hold placed → ``fields`` populated (authorized / fare_only).
+      - ``requires_action`` → ``requires_action=True`` with client_secret +
+        payment_intent_id so the caller drives the on-device SCA / Apple Pay
+        two-step (interactive booking only).
+      - genuine decline → raises 402 when ``block_on_decline`` (interactive
+        booking); returns empty when not (scheduled dispatch — never strand it).
+      - ``failed`` / ``unconfigured`` / no card on file → empty fields, ride
+        proceeds on the post-trip settlement path.
     """
     if not stripe_customer_id or not payment_method_id:
         # No saved card to hold against — leave settlement to the post-trip path.
-        return {}
+        return _PreauthOutcome()
 
     buffer = _round(_d(_settings.RIDE_AUTH_BUFFER_CAD))
     hold_amount = _round(_d(grand_total) + buffer)
@@ -1845,11 +1888,27 @@ async def _preauthorize_ride_card(
     )
 
     if outcome.status == "authorized":
-        return {
-            "payment_intent_id": outcome.payment_intent_id,
-            "authorized_amount": _f(hold_amount),
-            "auth_status": "authorized",
-        }
+        return _PreauthOutcome(
+            fields={
+                "payment_intent_id": outcome.payment_intent_id,
+                "authorized_amount": _f(hold_amount),
+                "auth_status": "authorized",
+            }
+        )
+
+    if outcome.status == "requires_action":
+        # 3DS / Apple Pay biometric needed — hand the client_secret to the app to
+        # confirm on-device, then re-book passing the PI back. Scheduled dispatch
+        # (block_on_decline=False) can't drive an on-device sheet → degrade.
+        if not block_on_decline:
+            logger.info("[preauth] SCA needed at scheduled dispatch for ride=%s — degrading to post-trip", ride_id)
+            return _PreauthOutcome()
+        logger.info("[preauth] card requires SCA at booking for ride=%s — returning client_secret", ride_id)
+        return _PreauthOutcome(
+            requires_action=True,
+            client_secret=outcome.client_secret,
+            payment_intent_id=outcome.payment_intent_id,
+        )
 
     if outcome.status == "declined":
         if outcome.decline_code in _RETRYABLE_AT_LOWER_AMOUNT:
@@ -1867,28 +1926,36 @@ async def _preauthorize_ride_card(
                     "[preauth] buffered hold declined (insufficient_funds); fare-only hold placed for ride=%s",
                     ride_id,
                 )
-                return {
-                    "payment_intent_id": fare_outcome.payment_intent_id,
-                    "authorized_amount": _f(_round(_d(grand_total))),
-                    "auth_status": "fare_only",
-                }
+                return _PreauthOutcome(
+                    fields={
+                        "payment_intent_id": fare_outcome.payment_intent_id,
+                        "authorized_amount": _f(_round(_d(grand_total))),
+                        "auth_status": "fare_only",
+                    }
+                )
+            if fare_outcome.status == "requires_action":
+                if not block_on_decline:
+                    return _PreauthOutcome()
+                return _PreauthOutcome(
+                    requires_action=True,
+                    client_secret=fare_outcome.client_secret,
+                    payment_intent_id=fare_outcome.payment_intent_id,
+                )
             if fare_outcome.status == "declined":
                 logger.info("[preauth] fare-only hold also declined for ride=%s", ride_id)
                 return _card_declined_result(fare_outcome.decline_code, block_on_decline)
-            # fare-only hit SCA / ops / unconfigured — degrade to no hold.
-            return {}
+            # fare-only hit ops / unconfigured — degrade to no hold.
+            return _PreauthOutcome()
 
         # Hard decline (lost/stolen/generic) — a smaller hold won't help.
         logger.info("[preauth] hard card decline (code=%s) for ride=%s", outcome.decline_code, ride_id)
         return _card_declined_result(outcome.decline_code, block_on_decline)
 
-    # requires_action / failed / unconfigured — proceed without a hold; the
-    # post-trip settlement path (and its retry loop) remains the safety net.
-    if outcome.status == "requires_action":
-        logger.info("[preauth] card requires SCA at booking for ride=%s — deferring to post-trip settlement", ride_id)
-    elif outcome.status == "failed":
+    # failed (Stripe ops) / unconfigured — proceed without a hold; the post-trip
+    # settlement path (and its retry loop) remains the safety net.
+    if outcome.status == "failed":
         logger.error("[preauth] authorization ops error for ride=%s: %s", ride_id, outcome.error_message)
-    return {}
+    return _PreauthOutcome()
 
 
 @api_router.post("")
@@ -2408,14 +2475,38 @@ async def create_ride(
     # Any non-decline failure degrades to "no hold" and the existing post-trip
     # settlement path; the buffer never blocks a ride the rider could take.
     if ride_data.get("payment_method") == "card" and not _is_deferred_schedule:
-        _auth_fields = await _preauthorize_ride_card(
-            ride_id=ride_data["id"],
-            rider_id=current_user["id"],
-            grand_total=_d(grand_total),
-            stripe_customer_id=(rider_row or {}).get("stripe_customer_id"),
-            payment_method_id=body.payment_method_id,
-        )
-        ride_data.update(_auth_fields)
+        if body.preauthorized_payment_intent_id:
+            # SCA two-step, second leg: the app already confirmed this hold
+            # on-device (3DS / Apple Pay). Verify with Stripe and attach it —
+            # do NOT authorize again (that would place a second hold).
+            ride_data.update(
+                await _attach_preauthorized_hold(
+                    ride_id=ride_data["id"],
+                    payment_intent_id=body.preauthorized_payment_intent_id,
+                )
+            )
+        else:
+            _preauth = await _preauthorize_ride_card(
+                ride_id=ride_data["id"],
+                rider_id=current_user["id"],
+                grand_total=_d(grand_total),
+                stripe_customer_id=(rider_row or {}).get("stripe_customer_id"),
+                payment_method_id=body.payment_method_id,
+            )
+            if _preauth.requires_action:
+                # SCA two-step, first leg: the hold needs an on-device confirm.
+                # Do NOT create the ride yet — hand the client_secret back; the
+                # app runs the Stripe sheet, then re-books with
+                # preauthorized_payment_intent_id set. Keeps the ride state
+                # machine clean: no ride exists until the hold is real.
+                return {
+                    "requires_action": True,
+                    "payment_authorization": {
+                        "client_secret": _preauth.client_secret,
+                        "payment_intent_id": _preauth.payment_intent_id,
+                    },
+                }
+            ride_data.update(_preauth.fields)
 
     # ``insert_ride`` returns the row Supabase just wrote — use it directly
     # instead of a follow-up ``get_ride`` round-trip. Fall back to the

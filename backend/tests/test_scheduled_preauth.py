@@ -31,9 +31,11 @@ def _claimed_card_ride():
 
 def _dispatch_patches(*, preauth_fields, update_returns):
     """Patch the full dependency surface of _dispatch_scheduled_ride."""
+    from backend.routes.rides import _PreauthOutcome
+
     S = "backend.utils.scheduled_rides."
     update_mock = AsyncMock(side_effect=update_returns)
-    preauth_mock = AsyncMock(return_value=preauth_fields)
+    preauth_mock = AsyncMock(return_value=_PreauthOutcome(fields=preauth_fields))
     return (
         [
             patch(S + "db.update_one", update_mock),

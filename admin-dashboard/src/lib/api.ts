@@ -1916,6 +1916,11 @@ export const driverAction = (driverId: string, action: string, reason?: string) 
         body: JSON.stringify({ action, reason }),
     });
 
+export const getDriverVehicleHistory = (driverId: string) =>
+    request<{ history: Array<{ id: string; field: string; old_value: string | null; new_value: string | null; changed_by_role: string; created_at: string }> }>(
+        `/api/admin/drivers/${driverId}/vehicle-history`,
+    );
+
 export const reviewDriverPhoto = (driverId: string, action: "approve" | "reject") =>
     request<{ message: string; profile_image_status: string }>(`/api/admin/drivers/${driverId}/photo-review`, {
         method: "POST",

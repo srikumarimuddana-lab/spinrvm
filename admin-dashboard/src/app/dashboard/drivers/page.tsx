@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, reviewDriverPhoto, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, retryPayout, refreshDriverStripeKyc, revealDriverSin, logPiiReveal, type DriverLiveStats, type DriverPayoutSummary } from "@/lib/api";
+import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, reviewDriverPhoto, getDriverVehicleHistory, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, retryPayout, refreshDriverStripeKyc, revealDriverSin, logPiiReveal, type DriverLiveStats, type DriverPayoutSummary } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
@@ -84,6 +84,7 @@ export default function DriversPage() {
     const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
     const [selected, setSelected] = useState<any>(null);
     const [driverDocs, setDriverDocs] = useState<any[]>([]);
+    const [vehicleHistory, setVehicleHistory] = useState<any[]>([]);
     const [docsLoading, setDocsLoading] = useState(false);
     const [docBusy, setDocBusy] = useState<string | null>(null);
     const [reviewingDoc, setReviewingDoc] = useState<{ id: string; action: "approved" | "rejected"; docType?: string; requiresExpiry?: boolean } | null>(null);
@@ -254,6 +255,7 @@ export default function DriversPage() {
     }, [availableVehicleTypes, vehicleTypeFilter]);
 
     useEffect(() => { if (!selected?.id) { setDriverDocs([]); return; } setDocsLoading(true); getDriverDocuments(selected.id).then((d) => setDriverDocs(Array.isArray(d) ? d : [])).catch(() => setDriverDocs([])).finally(() => setDocsLoading(false)); }, [selected?.id]);
+    useEffect(() => { if (!selected?.id) { setVehicleHistory([]); return; } getDriverVehicleHistory(selected.id).then((r) => setVehicleHistory(r?.history || [])).catch(() => setVehicleHistory([])); }, [selected?.id]);
     useEffect(() => { setEditing(false); setEditForm({}); }, [selected?.id]);
     useEffect(() => {
         if (!selected?.id) {
@@ -904,6 +906,25 @@ export default function DriversPage() {
                                                     <DetailField icon={FileText} label="VIN" value={selected.vehicle_vin || "\u2014"} mono />
                                                 </div>
                                             </>
+                                        )}
+                                    </DetailSection>
+                                    <DetailSection title="Vehicle Change History" icon={FileText}>
+                                        {vehicleHistory.length === 0 ? (
+                                            <p className="text-xs text-muted-foreground">No vehicle changes recorded.</p>
+                                        ) : (
+                                            <div className="space-y-2">
+                                                {vehicleHistory.slice(0, 20).map((h) => (
+                                                    <div key={h.id} className="text-xs flex items-start gap-2">
+                                                        <span className="text-muted-foreground whitespace-nowrap">{new Date(h.created_at).toLocaleDateString()}</span>
+                                                        <span className="flex-1">
+                                                            <span className="font-medium">{h.field.replace(/_/g, " ")}</span>:{" "}
+                                                            <span className="line-through text-muted-foreground">{h.old_value || "—"}</span>{" → "}
+                                                            <span className="font-semibold">{h.new_value || "—"}</span>
+                                                            <span className="ml-1 text-[10px] text-muted-foreground">({h.changed_by_role})</span>
+                                                        </span>
+                                                    </div>
+                                                ))}
+                                            </div>
                                         )}
                                     </DetailSection>
                                     <DetailSection title="Spinr Pass" icon={CreditCard}>

@@ -68,6 +68,10 @@ _APP_CHECK_EXEMPT_PREFIXES = (
     "/openapi.json",
     "/health",
     "/api/admin/",
+    # Ride-offer fare banner: the OS (Notifee BigPicture) fetches this image
+    # with no App Check header. It is authorised instead by a short-TTL,
+    # ride+driver-bound HMAC token in the query string (routes/offer_card.py).
+    "/api/v1/offer-cards/",
 )
 
 

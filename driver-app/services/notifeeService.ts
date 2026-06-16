@@ -68,9 +68,13 @@ export interface RideOfferDisplayData {
     duration_minutes?: number;
     surge_multiplier?: number;
     rider_name?: string;
+    rider_rating?: number;
     incentives_count?: number;
     countdown_seconds?: number;
     offer_expires_at?: string;
+    // Signed, short-lived URL to the branded fare-banner image. When present,
+    // the Android card expands to this rich BigPicture instead of the text card.
+    offer_card_url?: string;
 }
 
 let channelReadyPromise: Promise<void> | null = null;
@@ -209,20 +213,34 @@ export async function displayRideOfferNotification(
     }
 
     const totalEarnings = offer.fare + (offer.total_bonus || 0);
-    const bonusBadge = offer.total_bonus && offer.total_bonus > 0
-        ? ` (+$${offer.total_bonus.toFixed(2)} bonus)` : '';
-    const surgeBadge = offer.surge_multiplier && offer.surge_multiplier > 1
-        ? ` ${offer.surge_multiplier.toFixed(1)}× SURGE` : '';
 
-    const title = `$${totalEarnings.toFixed(2)}${surgeBadge} — New ride`;
+    // Title = the always-visible line (collapsed shade + heads-up header). Lead
+    // with the money — that's the driver's accept/decline signal. Surge is
+    // deliberately not shown; the fare already reflects it. NEVER the booking
+    // UUID; it's opaque noise that was burying the addresses on the one line.
+    const title = `New ride · $${totalEarnings.toFixed(2)}`;
+
+    // Trip summary: distance • time • rider (with rating when known).
+    const tripStats = [
+        offer.distance_km != null ? `${offer.distance_km.toFixed(1)} km` : null,
+        offer.duration_minutes != null ? `${Math.round(offer.duration_minutes)} min` : null,
+    ].filter(Boolean).join(' • ');
+    const riderLabel = offer.rider_name
+        ? `${offer.rider_name}${offer.rider_rating ? ` ${offer.rider_rating.toFixed(1)}★` : ''}`
+        : null;
+    const summaryLine = [tripStats || null, riderLabel].filter(Boolean).join('  ·  ');
+    const bonusLine = offer.total_bonus && offer.total_bonus > 0
+        ? `🎁 +$${offer.total_bonus.toFixed(2)} bonus` : null;
+
+    // Body (expanded BIG_TEXT): pickup → dropoff → trip stats → bonus. Labeled
+    // with glyphs so the driver scans the route at a glance. The booking id
+    // lives only in the data payload for the app to read on tap.
     const body = [
-        `Booking: ${offer.booking_id || offer.ride_id}`,
-        offer.pickup_address ? `From: ${offer.pickup_address}` : null,
-        offer.dropoff_address ? `To: ${offer.dropoff_address}` : null,
-        offer.distance_km && offer.duration_minutes
-            ? `${offer.distance_km.toFixed(1)} km • ${Math.round(offer.duration_minutes)} min${bonusBadge}`
-            : null,
-    ].filter(Boolean).join('\n');
+        offer.pickup_address ? `📍 ${offer.pickup_address}` : null,
+        offer.dropoff_address ? `🏁 ${offer.dropoff_address}` : null,
+        summaryLine || null,
+        bonusLine,
+    ].filter(Boolean).join('\n') || 'Tap to view ride details';
 
     const dataPayload: Record<string, string> = {
         ride_id: offer.ride_id,
@@ -234,6 +252,9 @@ export async function displayRideOfferNotification(
         id: RIDE_OFFER_NOTIFICATION_ID,
         title,
         body,
+        // Sub-label under the title (Android header sub-text / iOS subtitle line)
+        // — the trip at a glance without expanding.
+        subtitle: summaryLine || undefined,
         data: dataPayload,
         android: {
             channelId: silent ? RIDE_OFFER_SILENT_CHANNEL_ID : RIDE_OFFER_CHANNEL_ID,
@@ -243,16 +264,33 @@ export async function displayRideOfferNotification(
             color: AndroidColor.GREEN,
             colorized: true,
             smallIcon: RIDE_OFFER_SMALL_ICON,
-            largeIcon: undefined,
+            // Branded mark on the right of the card — turns a plain text row
+            // into a recognizable Spinr offer at a glance. Statically required
+            // (bundled), so it resolves even in the headless background launch.
+            largeIcon: require('../assets/images/icon.png'),
+            circularLargeIcon: true,
             ongoing: true,
             autoCancel: false,
             showTimestamp: true,
             ...(silent ? {} : { sound: 'ride_offer' }),
             vibrationPattern: [300, 500, 300, 500],
-            style: {
-                type: 1, // BIG_TEXT
-                text: body,
-            } as any,
+            // Rich card: when the backend handed us a signed banner URL, expand
+            // to the BigPicture fare card; otherwise fall back to BigText. If
+            // the image fails to load, Android degrades BigPicture to the
+            // title/body row on its own, so the offer is never lost.
+            style: (offer.offer_card_url
+                ? {
+                    type: 0, // BIG_PICTURE
+                    picture: offer.offer_card_url,
+                    title: title,
+                    ...(summaryLine ? { summary: summaryLine } : {}),
+                }
+                : {
+                    type: 1, // BIG_TEXT
+                    title: title,
+                    text: body,
+                    ...(summaryLine ? { summary: summaryLine } : {}),
+                }) as any,
             actions: [
                 {
                     title: '<b><font color="#00D26A">APPROVE</font></b>',
@@ -279,7 +317,7 @@ export async function displayRideOfferNotification(
             categoryId: RIDE_OFFER_CATEGORY_ID,
             critical: false, // requires special Apple entitlement
             ...(silent ? {} : { sound: 'ride_offer.caf' }),
-            interruptionLevel: 'timeSensitive', // iOS 15+
+            interruptionLevel: 'timeSensitive' as const, // iOS 15+
             foregroundPresentationOptions: {
                 alert: true,
                 sound: !silent,
@@ -323,7 +361,7 @@ export async function displayRideOfferNotification(
                 },
                 ios: {
                     categoryId: RIDE_OFFER_CATEGORY_ID,
-                    interruptionLevel: 'timeSensitive',
+                    interruptionLevel: 'timeSensitive' as const,
                 },
             });
         } catch (e2) {

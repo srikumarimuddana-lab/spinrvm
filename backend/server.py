@@ -132,6 +132,7 @@ from routes.notifications import api_router as notifications_router
 from routes.payments import api_router as payments_router
 from routes.promotions import api_router as promotions_router
 from routes.quests import api_router as quests_router
+from routes.offer_card import router as offer_card_router
 from routes.rides import api_router as rides_router
 from routes.safety import api_router as safety_router
 from routes.service_areas import api_router as service_areas_router
@@ -279,6 +280,7 @@ v1_api_router.include_router(faqs_router)
 v1_api_router.include_router(legal_documents_router)
 v1_api_router.include_router(safety_router)
 v1_api_router.include_router(service_areas_router)
+v1_api_router.include_router(offer_card_router)
 v1_api_router.include_router(maps_router)
 
 # Include API routers

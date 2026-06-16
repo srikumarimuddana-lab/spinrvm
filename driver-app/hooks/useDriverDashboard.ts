@@ -142,8 +142,10 @@ function _surfaceOfferNotification(data: any): void {
     duration_minutes: _num(data.duration_minutes),
     surge_multiplier: _num(data.surge_multiplier),
     rider_name: data.rider_name || undefined,
+    rider_rating: _num(data.rider_rating),
     countdown_seconds: _num(data.countdown_seconds),
     offer_expires_at: data.offer_expires_at || undefined,
+    offer_card_url: data.offer_card_url || undefined,
   }, { silent }).catch((e: any) => console.warn('[Offer] Notifee surface failed:', e));
 }
 const PENDING_ACTION_KEY = 'spinr_pending_notifee_action';

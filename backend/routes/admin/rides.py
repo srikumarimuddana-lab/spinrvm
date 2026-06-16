@@ -2127,8 +2127,17 @@ async def admin_export_drivers(
 
     drivers = await db_supabase.get_rows("drivers", order="created_at", desc=True, limit=limit)
     user_ids = list({d.get("user_id") for d in drivers if d.get("user_id")})
+    # Export rows only carry name/email/phone from the user row — project those
+    # so the export doesn't read base64 profile_image for every driver.
     users_list = (
-        await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
+        await db_supabase.get_rows(
+            "users",
+            {"id": {"$in": user_ids}},
+            columns="id,first_name,last_name,email,phone",
+            limit=max(len(user_ids), 1),
+        )
+        if user_ids
+        else []
     )
     users_map = {u["id"]: u for u in users_list if u.get("id")}
     out = []

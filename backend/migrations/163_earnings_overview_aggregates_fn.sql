@@ -24,10 +24,18 @@
 -- Semantics mirror the previous Python exactly:
 --   * completed window = ride_completed_at in [start, end]; cancelled window =
 --     created_at in [start, end] (cancelled rows have null ride_completed_at).
---   * money columns are FLOAT -> cast ::text::numeric so sums match the old
+--   * money columns are FLOAT -> cast ::text::numeric so single-field sums
+--     (gbv, platform, promo, cancellation revenue, refunds) match the old
 --     Decimal(str(float)) arithmetic to the cent.
+--   * surge_revenue and the daily net_revenue/gbv are batch-SUMmed here, vs the
+--     old Python which round()-ed after each per-row addition. The SQL is
+--     arithmetically more correct; for big days the two can differ by a
+--     sub-cent — acceptable, these are display-only analytics, not charges.
 --   * surge_revenue = sum(total_fare - total_fare/surge_multiplier) over rides
 --     with surge_multiplier > 1.
+--   * GST bucket matches keys containing 'gst' OR exactly equal to 'hst' (HST is
+--     exact-match only — a compound key like 'provincial_hst' would NOT match,
+--     same as the old Python; new tax areas must use the key 'hst').
 --   * GST bucket = tax_breakdown keys containing 'gst' or equal to 'hst';
 --     PST bucket = keys containing 'pst' or 'qst'; amount = value->>'amount'.
 --   * cancel attribution: 'driver' in reason -> driver; else 'rider'/'user' ->

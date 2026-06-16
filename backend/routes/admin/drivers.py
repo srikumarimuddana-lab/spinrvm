@@ -171,6 +171,7 @@ async def admin_get_drivers(
             filters["$or"] = [
                 {"phone": {"$regex": re.escape(term), "$options": "i"}},
                 {"license_plate": {"$regex": re.escape(term), "$options": "i"}},
+                {"driver_code": {"$regex": re.escape(term), "$options": "i"}},
             ]
             if matching_uids:
                 filters["$or"].append({"user_id": {"$in": matching_uids}})

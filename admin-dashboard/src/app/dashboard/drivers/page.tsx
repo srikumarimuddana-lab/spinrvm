@@ -338,7 +338,7 @@ export default function DriversPage() {
     const setEf = (field: string, value: string) => setEditForm(prev => ({ ...prev, [field]: value }));
 
     const filtered = drivers.filter(d => {
-        const matchSearch = !search || (d.first_name + " " + d.last_name).toLowerCase().includes(search.toLowerCase()) || d.email?.toLowerCase().includes(search.toLowerCase()) || d.license_plate?.toLowerCase().includes(search.toLowerCase()) || d.id?.toLowerCase().includes(search.toLowerCase());
+        const matchSearch = !search || (d.first_name + " " + d.last_name).toLowerCase().includes(search.toLowerCase()) || d.email?.toLowerCase().includes(search.toLowerCase()) || d.license_plate?.toLowerCase().includes(search.toLowerCase()) || d.driver_code?.toLowerCase().includes(search.toLowerCase()) || d.id?.toLowerCase().includes(search.toLowerCase());
         let matchStatus = true;
         if (statusFilter === "online") matchStatus = d.is_online;
         if (statusFilter === "active") matchStatus = d.status === "active";
@@ -562,6 +562,7 @@ export default function DriversPage() {
                                                 </div>
                                                 <div className="flex-1 min-w-0">
                                                     <p className="text-sm font-semibold truncate">{driver.first_name} {driver.last_name}</p>
+                                                    {driver.driver_code && <p className="text-[11px] font-mono text-muted-foreground truncate">{driver.driver_code}</p>}
                                                     {driver.email && <p className="text-[11px] text-muted-foreground truncate">{showPii ? driver.email : maskEmail(driver.email)}</p>}
                                                     {driver.phone && <p className="text-[11px] text-muted-foreground flex items-center gap-1 mt-0.5"><Phone className="h-2.5 w-2.5" /> {showPii ? driver.phone : maskPhone(driver.phone)}</p>}
                                                 </div>
@@ -656,6 +657,9 @@ export default function DriversPage() {
                                         <div>
                                             <h2 className="text-xl font-bold">{selected.first_name} {selected.last_name}</h2>
                                             <div className="flex items-center gap-2 mt-1 flex-wrap">
+                                                {selected.driver_code && (
+                                                    <button onClick={() => navigator.clipboard.writeText(selected.driver_code)} className="flex items-center gap-1 text-xs font-mono font-semibold text-primary bg-primary/10 px-2 py-0.5 rounded" title="Copy driver code">{selected.driver_code}<Copy className="h-3 w-3" /></button>
+                                                )}
                                                 <button onClick={() => navigator.clipboard.writeText(selected.id)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition font-mono bg-muted/50 px-2 py-0.5 rounded" title="Copy driver UUID">{selected.id?.slice(0, 12)}…<Copy className="h-3 w-3" /></button>
                                                 {selected.email && (
                                                     <button onClick={() => navigator.clipboard.writeText(selected.email)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition px-2 py-0.5 rounded hover:bg-muted/50" title={showPii ? `Copy email: ${selected.email}` : "Reveal PII to copy"}>

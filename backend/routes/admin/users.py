@@ -30,7 +30,7 @@ router = APIRouter()
 # client-side. They must NOT be listed here — projecting a non-existent column
 # makes Postgres raise 42703 ("column does not exist") and the endpoint 503s.
 # The single-user detail endpoint (admin_get_user_details) still selects *.
-_USER_LIST_COLUMNS = "id,first_name,last_name,email,phone,role,created_at,is_rider,is_driver,status,suspended_until"
+_USER_LIST_COLUMNS = "id,first_name,last_name,email,phone,role,created_at,is_rider,is_driver,status,status_reason,suspended_until"
 
 
 class UserStatusRequest(BaseModel):

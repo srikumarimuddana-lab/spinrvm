@@ -151,6 +151,12 @@ class Settings(BaseSettings):
     # dedicated tracking subdomain in production (admin panel is NOT served here).
     TRACKING_BASE_URL: str = "https://track.spinr.ca"
 
+    # Public origin of this API itself, used to build absolute URLs the mobile
+    # OS fetches directly (e.g. the ride-offer fare-banner image in the driver
+    # notification). Must be the externally-routable host (Cloudflare CNAME),
+    # NOT an internal Fly/Railway address. Override per environment via env.
+    PUBLIC_API_BASE_URL: str = "https://api-spinr.spinr.ca"
+
     # File storage
     STORAGE_BUCKET: str = "driver-documents"
 

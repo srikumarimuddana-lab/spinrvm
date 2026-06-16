@@ -2,22 +2,42 @@
  * Unit tests for lib/androidAuto/register.ts — the Android Auto orchestration.
  * The native @iternio module, the surface component, the driver store, and the
  * zoom camera store are mocked, so these assert the JS contract without a head
- * unit: a live MapTemplate in every state (idle + navigating), zoom buttons
- * always present (nav hand-off buttons added only while navigating), leg-keyed
- * rebuild de-duping, the not-connected guard, and the button callbacks.
+ * unit: ONE persistent MapTemplate, state-driven map buttons (zoom-only idle,
+ * nav+zoom while navigating), the state-driven header progress action (Arrived /
+ * Complete / phone-start), and the Lyft-style ride-offer alert (Accept/Decline).
  *
  * Vars referenced inside jest.mock factories are `mock`-prefixed (jest hoisting).
  */
 import { Linking, Platform } from 'react-native';
 
-const mockState: { rideState: string; activeRide: unknown } = {
+const mockAcceptRide = jest.fn().mockResolvedValue(undefined);
+const mockDeclineRide = jest.fn().mockResolvedValue(undefined);
+const mockArriveAtPickup = jest.fn().mockResolvedValue(undefined);
+const mockCompleteRide = jest.fn().mockResolvedValue(undefined);
+
+const mockState: Record<string, unknown> = {
   rideState: 'idle',
   activeRide: null,
+  incomingRide: null,
+  countdownSeconds: 15,
+  acceptRide: mockAcceptRide,
+  declineRide: mockDeclineRide,
+  arriveAtPickup: mockArriveAtPickup,
+  completeRide: mockCompleteRide,
 };
 const mockSubscribe = jest.fn((_fn?: () => void) => jest.fn());
-const mockListeners: Record<string, () => void> = {};
+const mockListeners: Record<string, (...a: unknown[]) => void> = {};
 let mockConnected = true;
-const mockBuilt: { kind: string; config: Record<string, unknown>; setRootTemplate: jest.Mock }[] = [];
+
+type MockTpl = {
+  config: Record<string, unknown>;
+  setRootTemplate: jest.Mock;
+  setMapButtons: jest.Mock;
+  setHeaderActions: jest.Mock;
+  showAlert: jest.Mock;
+  dismissAlert: jest.Mock;
+};
+const mockTemplates: MockTpl[] = [];
 
 const mockZoomIn = jest.fn();
 const mockZoomOut = jest.fn();
@@ -25,14 +45,11 @@ const mockReset = jest.fn();
 
 jest.mock('../../../store/driverStore', () => ({
   useDriverStore: {
-    // Lazy references — the mock factory runs (at import time) before these
-    // consts initialize, so they must be read at call time, not captured.
     getState: () => mockState,
     subscribe: (fn: () => void) => mockSubscribe(fn),
   },
 }));
 
-// Surface component is passed to the template, never rendered here.
 jest.mock('../carSurface', () => ({ CarMapSurface: () => null }));
 
 jest.mock('../carMapCamera', () => ({
@@ -42,25 +59,28 @@ jest.mock('../carMapCamera', () => ({
 }));
 
 jest.mock('@iternio/react-native-auto-play', () => {
-  const make = (kind: string) =>
-    class {
-      config: Record<string, unknown>;
-      setRootTemplate = jest.fn();
-      constructor(config: Record<string, unknown>) {
-        this.config = config;
-        mockBuilt.push({ kind, config, setRootTemplate: this.setRootTemplate });
-      }
-    };
+  class MapTemplate {
+    config: Record<string, unknown>;
+    setRootTemplate = jest.fn();
+    setMapButtons = jest.fn();
+    setHeaderActions = jest.fn();
+    showAlert = jest.fn();
+    dismissAlert = jest.fn();
+    constructor(config: Record<string, unknown>) {
+      this.config = config;
+      mockTemplates.push(this as unknown as MockTpl);
+    }
+  }
   return {
     HybridAutoPlay: {
-      addListener: jest.fn((evt: string, cb: () => void) => {
+      addListener: jest.fn((evt: string, cb: (...a: unknown[]) => void) => {
         mockListeners[evt] = cb;
         return { remove: jest.fn() };
       }),
       isConnected: () => mockConnected,
     },
-    MapTemplate: make('map'),
-    InformationTemplate: make('info'),
+    MapTemplate,
+    Flag: { Primary: 1, Persistent: 2, Default: 4 },
   };
 });
 
@@ -77,28 +97,40 @@ const navRide = () =>
       pickup_lng: -106.67,
       dropoff_lat: 52.2,
       dropoff_lng: -106.6,
+      total_fare: '14.50',
+      distance_km: 3.2,
+      duration_minutes: 8,
       planned_route_polyline: [[52.13, -106.67], [52.2, -106.6]],
     },
-    rider: { id: 'rider', first_name: 'Alex' },
+    rider: { id: 'rider', first_name: 'Alex', rating: 4.9 },
     vehicle_type: { id: 'vt', name: 'Standard' },
   }) as unknown;
 
-const lastOf = (kind: string) => [...mockBuilt].reverse().find((t) => t.kind === kind);
-const buttonsOf = (t: { config: Record<string, unknown> }) =>
-  t.config.mapButtons as { onPress: () => void }[];
+const lastTpl = () => mockTemplates[mockTemplates.length - 1];
+const lastMapButtons = (t: MockTpl) =>
+  t.setMapButtons.mock.calls.at(-1)?.[0] as { onPress: () => void }[];
+const lastHeader = (t: MockTpl) =>
+  t.setHeaderActions.mock.calls.at(-1)?.[0] as
+    | { android?: { title: string; onPress: () => void }[] }
+    | undefined;
 
 beforeEach(() => {
   (Platform as unknown as { OS: string }).OS = 'android';
   jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined as never);
   for (const k of Object.keys(mockListeners)) delete mockListeners[k];
-  mockBuilt.length = 0;
+  mockTemplates.length = 0;
   mockSubscribe.mockClear();
   mockZoomIn.mockClear();
   mockZoomOut.mockClear();
   mockReset.mockClear();
+  mockAcceptRide.mockClear();
+  mockDeclineRide.mockClear();
+  mockArriveAtPickup.mockClear();
+  mockCompleteRide.mockClear();
   mockConnected = true;
   mockState.rideState = 'idle';
   mockState.activeRide = null;
+  mockState.incomingRide = null;
 });
 
 afterEach(() => jest.restoreAllMocks());
@@ -109,75 +141,141 @@ it('does nothing on non-Android platforms', () => {
   expect(mockListeners.didConnect).toBeUndefined();
 });
 
-it('shows a live MapTemplate with zoom-only buttons when idle', () => {
+it('creates ONE live MapTemplate with zoom-only buttons and no header action when idle', () => {
   registerAutoPlay();
   mockListeners.didConnect();
 
-  const map = lastOf('map');
-  expect(map).toBeDefined();
-  expect(map!.setRootTemplate).toHaveBeenCalled();
-  expect(lastOf('info')).toBeUndefined(); // no more blank status pane
+  const t = lastTpl();
+  expect(mockTemplates).toHaveLength(1);
+  expect(t.setRootTemplate).toHaveBeenCalled();
 
-  const buttons = buttonsOf(map!);
+  const buttons = lastMapButtons(t);
   expect(buttons).toHaveLength(2); // zoom out + zoom in only
   buttons[0].onPress();
   buttons[1].onPress();
   expect(mockZoomOut).toHaveBeenCalledTimes(1);
   expect(mockZoomIn).toHaveBeenCalledTimes(1);
 
-  expect(mockReset).toHaveBeenCalled(); // camera reframed on connect
+  expect(lastHeader(t)).toBeUndefined(); // no progress action when idle
+  expect(mockReset).toHaveBeenCalled();
   expect(mockSubscribe).toHaveBeenCalled();
 });
 
-it('adds Google + Waze hand-off buttons (before zoom) while navigating', () => {
+it('adds a single Navigate hand-off (before zoom) and a Complete action while in trip', () => {
   mockState.rideState = 'trip_in_progress';
   mockState.activeRide = navRide();
   registerAutoPlay();
   mockListeners.didConnect();
 
-  const map = lastOf('map');
-  expect(map).toBeDefined();
-  const buttons = buttonsOf(map!);
-  expect(buttons).toHaveLength(4); // google, waze, zoom out, zoom in
+  const t = lastTpl();
+  const buttons = lastMapButtons(t);
+  expect(buttons).toHaveLength(3); // navigate, zoom out, zoom in
 
-  buttons[0].onPress(); // Google hand-off
+  buttons[0].onPress(); // Navigate → Google hand-off (platform default)
   expect(Linking.openURL).toHaveBeenCalledWith(
     expect.stringContaining('google.navigation:q=52.2,-106.6'),
   );
 
-  buttons[2].onPress(); // zoom out
-  buttons[3].onPress(); // zoom in
-  expect(mockZoomOut).toHaveBeenCalledTimes(1);
-  expect(mockZoomIn).toHaveBeenCalledTimes(1);
+  const header = lastHeader(t);
+  expect(header?.android?.[0].title).toBe('Complete trip');
+  header?.android?.[0].onPress();
+  expect(mockCompleteRide).toHaveBeenCalledWith('r1');
 });
 
-it('does not rebuild the root when the leg + ride are unchanged', () => {
+it('shows an Arrived header action while heading to pickup', () => {
+  mockState.rideState = 'navigating_to_pickup';
+  mockState.activeRide = navRide();
+  registerAutoPlay();
+  mockListeners.didConnect();
+
+  const header = lastHeader(lastTpl());
+  expect(header?.android?.[0].title).toBe('Arrived');
+  header?.android?.[0].onPress();
+  expect(mockArriveAtPickup).toHaveBeenCalledWith('r1');
+});
+
+it('routes the OTP start-trip to the phone at pickup (no completeRide from the car)', () => {
+  mockState.rideState = 'arrived_at_pickup';
+  mockState.activeRide = navRide();
+  registerAutoPlay();
+  mockListeners.didConnect();
+
+  const header = lastHeader(lastTpl());
+  expect(header?.android?.[0].title).toBe('Start on phone');
+  header?.android?.[0].onPress(); // shows an info alert, never starts the trip
+  expect(lastTpl().showAlert).toHaveBeenCalled();
+  expect(mockCompleteRide).not.toHaveBeenCalled();
+});
+
+it('shows a high-priority ride-offer alert with working Accept / Decline', () => {
+  mockState.rideState = 'ride_offered';
+  mockState.incomingRide = {
+    ride_id: 'r1',
+    pickup_address: '101 Pickup St',
+    fare: '14.50',
+    duration_minutes: 8,
+    rider_name: 'Alex',
+    rider_rating: 4.9,
+    surge_multiplier: 1.5,
+  };
+  registerAutoPlay();
+  mockListeners.didConnect();
+
+  const t = lastTpl();
+  expect(t.showAlert).toHaveBeenCalledTimes(1);
+  const alert = t.showAlert.mock.calls[0][0];
+  expect(alert.priority).toBe('high');
+  expect(alert.title.text).toContain('Alex');
+  expect(alert.primaryAction.title).toBe('Accept');
+  expect(alert.secondaryAction.title).toBe('Decline');
+
+  alert.primaryAction.onPress();
+  expect(mockAcceptRide).toHaveBeenCalledWith('r1');
+  alert.secondaryAction.onPress();
+  expect(mockDeclineRide).toHaveBeenCalledWith('r1');
+});
+
+it('does not re-show the offer alert for the same ride on repeated ticks', () => {
+  mockState.rideState = 'ride_offered';
+  mockState.incomingRide = { ride_id: 'r1', pickup_address: 'x', fare: '9.00' };
+  registerAutoPlay();
+  mockListeners.didConnect();
+  const t = lastTpl();
+  const apply = mockSubscribe.mock.calls[0][0] as () => void;
+  apply(); // same offer → suppressed (iternio re-shows on update)
+  expect(t.showAlert).toHaveBeenCalledTimes(1);
+});
+
+it('dismisses the offer alert once the offer state is left', () => {
+  mockState.rideState = 'ride_offered';
+  mockState.incomingRide = { ride_id: 'r1', pickup_address: 'x', fare: '9.00' };
+  registerAutoPlay();
+  mockListeners.didConnect();
+  const t = lastTpl();
+  const apply = mockSubscribe.mock.calls[0][0] as () => void;
+
+  mockState.rideState = 'navigating_to_pickup';
+  mockState.incomingRide = null;
+  mockState.activeRide = navRide();
+  apply();
+  expect(t.dismissAlert).toHaveBeenCalled();
+});
+
+it('does not rebuild chrome when the state + ride are unchanged', () => {
   mockState.rideState = 'trip_in_progress';
   mockState.activeRide = navRide();
   registerAutoPlay();
   mockListeners.didConnect();
+  const t = lastTpl();
+  const calls = t.setMapButtons.mock.calls.length;
   const apply = mockSubscribe.mock.calls[0][0] as () => void;
-  const mapCount = mockBuilt.filter((t) => t.kind === 'map').length;
-  apply(); // same state → suppressed
-  expect(mockBuilt.filter((t) => t.kind === 'map').length).toBe(mapCount);
+  apply(); // same key → suppressed
+  expect(t.setMapButtons.mock.calls.length).toBe(calls);
 });
 
-it('rebuilds the root when transitioning from idle to a navigation leg', () => {
-  registerAutoPlay();
-  mockListeners.didConnect();
-  const apply = mockSubscribe.mock.calls[0][0] as () => void;
-  const before = mockBuilt.filter((t) => t.kind === 'map').length;
-
-  mockState.rideState = 'trip_in_progress';
-  mockState.activeRide = navRide();
-  apply(); // idle → dropoff leg → new root
-
-  expect(mockBuilt.filter((t) => t.kind === 'map').length).toBe(before + 1);
-});
-
-it('never sets a template when no car is connected', () => {
+it('never creates a template when no car is connected', () => {
   mockConnected = false;
   registerAutoPlay();
   mockListeners.didConnect?.();
-  expect(mockBuilt).toHaveLength(0);
+  expect(mockTemplates).toHaveLength(0);
 });

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -61,3 +61,50 @@ async def test_deliverability_days_clamped():
     ):
         out = await get_email_deliverability(days=999, current_admin={"id": "admin"})
     assert out["window_days"] == 90  # clamped to max
+
+
+# ---------------------------------------------------------------------------
+# Profile-image backfill (base64 -> storage)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_migrate_profile_images_uploads_and_updates():
+    try:
+        from routes.admin.monitoring import migrate_profile_images
+    except ImportError:
+        from backend.routes.admin.monitoring import migrate_profile_images  # type: ignore[no-redef]
+
+    base64_user = {"id": "u1", "profile_image": "data:image/png;base64,YWJj"}
+    url_user = {"id": "u2", "profile_image": "https://cdn/x.png"}  # already migrated → skipped
+    updates: list = []
+
+    sb = MagicMock()
+    sb.storage.from_.return_value.upload.return_value = None
+    sb.storage.from_.return_value.get_public_url.return_value = "https://cdn/profile-photos/u1/x.png"
+
+    with (
+        patch("routes.admin.monitoring.db_supabase.supabase", sb),
+        patch("routes.admin.monitoring.get_rows", AsyncMock(return_value=[base64_user, url_user])),
+        patch("routes.admin.monitoring.count_documents", AsyncMock(return_value=0)),
+        patch("routes.admin.monitoring.db_supabase.update_one", AsyncMock(side_effect=lambda t, f, fields: updates.append((f, fields)))),
+    ):
+        out = await migrate_profile_images(limit=25, current_admin={"id": "admin"})
+
+    assert out["migrated"] == 1  # only the base64 one
+    assert updates == [({"id": "u1"}, {"profile_image": "https://cdn/profile-photos/u1/x.png"})]
+
+
+@pytest.mark.anyio
+async def test_migrate_profile_images_requires_storage():
+    from fastapi import HTTPException
+
+    try:
+        from routes.admin.monitoring import migrate_profile_images
+    except ImportError:
+        from backend.routes.admin.monitoring import migrate_profile_images  # type: ignore[no-redef]
+
+    with patch("routes.admin.monitoring.db_supabase.supabase", None):
+        with pytest.raises(HTTPException) as ei:
+            await migrate_profile_images(limit=10, current_admin={"id": "admin"})
+    assert ei.value.status_code == 503

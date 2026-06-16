@@ -1830,6 +1830,16 @@ async def _attach_preauthorized_hold(
     least the ride fare, and (c) not already be attached to another ride — so a
     client cannot attach someone else's hold, replay a cheaper one, or reuse a PI
     across rides."""
+    # Fail CLOSED: ownership is verified against the rider's Stripe customer, so
+    # we cannot attach a client-supplied PI when we have no customer to check it
+    # against (e.g. a crafted work_profile card request). Reject rather than skip.
+    if not stripe_customer_id:
+        logger.error("[preauth][security] no Stripe customer to verify PI ownership for ride=%s", ride_id)
+        raise HTTPException(
+            status_code=402,
+            detail={"code": "CARD_DECLINED", "message": "No payment method on file. Please add a card first."},
+        )
+
     # (c) Reuse guard: a PI already on another ride must not be re-attached.
     try:
         existing = await db_supabase.get_rows(
@@ -1839,6 +1849,8 @@ async def _attach_preauthorized_hold(
             columns="id",
         )
     except Exception as e:
+        # Fail OPEN here is acceptable: ownership + amount are still enforced
+        # against Stripe below, so a degraded reuse-lookup can't bypass security.
         logger.error("[preauth] PI-reuse lookup failed for ride=%s pi=%s: %s", ride_id, payment_intent_id, e)
         existing = []
     if existing and existing[0].get("id") != ride_id:

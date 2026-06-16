@@ -2234,59 +2234,44 @@ async def admin_get_payouts_overview(
     def _in_scope(row: Dict[str, Any]) -> bool:
         return driver_id_filter is None or row.get("driver_id") in driver_id_filter
 
-    # ── Outstanding payable balance ──────────────────────────────────────
-    # Lifetime sum of driver_earnings on completed rides minus payouts
-    # that have either completed or are mid-flight. NOT scoped to the
-    # period — this is a "right now" snapshot. Showing PoP delta against
-    # "same number of days ago" so the operator can see whether the
-    # backlog is growing or shrinking.
-    def _sum(rows: list, key: str) -> Decimal:
-        return sum((Decimal(str(r.get(key) or 0)) for r in rows if _in_scope(r)), Decimal("0"))
-
-    all_completed_rides = await db_supabase.get_rows("rides", {"status": "completed"}, limit=200000)
-    all_payouts = await db_supabase.get_rows("payouts", {}, limit=200000)
-
-    earned_total = _sum(all_completed_rides, "driver_earnings")
-    paid_or_in_flight = sum(
-        (
-            Decimal(str(p.get("amount") or 0))
-            for p in all_payouts
-            if _in_scope(p) and p.get("status") in ("completed", "pending", "processing")
-        ),
-        Decimal("0"),
+    # ── Cumulative aggregates via SQL (one round-trip) ───────────────────
+    # Outstanding payable, the stuck/blocked queues, and the T4A YTD snapshot
+    # are all-time aggregates. They used to require streaming the whole rides +
+    # payouts history into Python (two limit=200000 scans); now Postgres sums
+    # them for us. Money is summed as NUMERIC server-side to stay cent-faithful.
+    year_start_iso = datetime(now.year, 1, 1, tzinfo=timezone.utc).isoformat()
+    stuck_before_iso = (now - timedelta(hours=48)).isoformat()
+    agg_rows = await db_supabase.rpc(
+        "admin_payouts_overview_aggregates",
+        {
+            "p_end": end.isoformat(),
+            "p_prev_end": prev_end.isoformat(),
+            "p_year_start": year_start_iso,
+            "p_stuck_before": stuck_before_iso,
+            "p_service_area_id": service_area_id,
+        },
     )
-    outstanding_now = max(earned_total - paid_or_in_flight, Decimal("0"))  # noqa: F841
+    agg = agg_rows[0] if isinstance(agg_rows, list) and agg_rows else agg_rows
+    if not isinstance(agg, dict):
+        agg = {}
 
-    # Same calculation snapshot at prev_end so we can show delta.
-    end_iso = end.isoformat()
-    prev_end_iso = prev_end.isoformat()
+    def _agg_dec(key: str) -> Decimal:
+        return Decimal(str(agg.get(key) or 0))
 
-    def _completed_up_to(rows: list, ts: str) -> Decimal:
-        return sum(
-            (
-                Decimal(str(r.get("driver_earnings") or 0))
-                for r in rows
-                if _in_scope(r) and (r.get("ride_completed_at") or r.get("updated_at") or "") <= ts
-            ),
-            Decimal("0"),
-        )
+    outstanding_now_calc = max(_agg_dec("earned_up_to_end") - _agg_dec("paid_up_to_end"), Decimal("0"))
+    outstanding_prev = max(_agg_dec("earned_up_to_prev") - _agg_dec("paid_up_to_prev"), Decimal("0"))
 
-    def _paid_up_to(rows: list, ts: str) -> Decimal:
-        return sum(
-            (
-                Decimal(str(p.get("amount") or 0))
-                for p in rows
-                if _in_scope(p)
-                and p.get("status") in ("completed", "pending", "processing")
-                and (p.get("created_at") or "") <= ts
-            ),
-            Decimal("0"),
-        )
-
-    outstanding_now_calc = _completed_up_to(all_completed_rides, end_iso) - _paid_up_to(all_payouts, end_iso)
-    outstanding_prev = _completed_up_to(all_completed_rides, prev_end_iso) - _paid_up_to(all_payouts, prev_end_iso)
-    outstanding_now_calc = max(outstanding_now_calc, Decimal("0"))
-    outstanding_prev = max(outstanding_prev, Decimal("0"))
+    # ── Period-windowed payouts ──────────────────────────────────────────
+    # The per-row metrics below only look at the current + previous windows, so
+    # fetch just that slice rather than the entire payouts table. A payout's
+    # effective timestamp is processed_at when present else created_at, so a row
+    # qualifies if either is at/after the earliest window bound (prev_start).
+    window_lo = prev_start.isoformat()
+    all_payouts = await db_supabase.get_rows(
+        "payouts",
+        {"$or": [{"created_at": {"$gte": window_lo}}, {"processed_at": {"$gte": window_lo}}]},
+        limit=200000,
+    )
 
     # ── Period-windowed payout metrics ───────────────────────────────────
     def _in_window(p: Dict[str, Any], lo: datetime, hi: datetime) -> bool:
@@ -2400,46 +2385,19 @@ async def admin_get_payouts_overview(
         key=lambda x: (-x["count"], -x["amount"]),
     )[:8]
 
-    # Stuck pending payouts — anything still pending more than 48h after
-    # creation. These are the manual-intervention queue: Stripe webhook
-    # didn't return or the rebalance is held up. NOT period-scoped —
-    # this is a "right now" signal regardless of the selected window.
-    stuck_threshold = (now - timedelta(hours=48)).isoformat()
-    stuck_rows = [
-        p
-        for p in all_payouts
-        if _in_scope(p)
-        and p.get("status") in ("pending", "processing")
-        and (p.get("created_at") or "") < stuck_threshold
-    ]
+    # Stuck pending payouts — pending/processing more than 48h after creation
+    # (manual-intervention queue). All-time signal, computed in SQL above.
     stuck_over_48h = {
-        "count": len(stuck_rows),
-        "amount": round(float(sum((Decimal(str(p.get("amount") or 0)) for p in stuck_rows), Decimal("0"))), 2),
+        "count": int(agg.get("stuck_count") or 0),
+        "amount": round(float(_agg_dec("stuck_amount")), 2),
     }
 
-    # Blocked drivers — Stripe Connect KYC mirror says payouts are
-    # disabled. Uses the partial index from migration 92. Outstanding
-    # balance for these drivers is the operational "we can't pay
-    # them yet" number.
-    blocked_drivers_rows = await db_supabase.get_rows(
-        "drivers",
-        {"stripe_payouts_enabled": False, "stripe_account_id": {"$ne": None}},
-        limit=500,
-    )
-    if driver_id_filter is not None:
-        blocked_drivers_rows = [d for d in blocked_drivers_rows if d.get("id") in driver_id_filter]
-    blocked_driver_ids = {d.get("id") for d in blocked_drivers_rows if d.get("id")}
-    blocked_outstanding = Decimal("0")
-    if blocked_driver_ids:
-        for r in all_completed_rides:
-            if r.get("driver_id") in blocked_driver_ids:
-                blocked_outstanding += Decimal(str(r.get("driver_earnings") or 0))
-        for p in all_payouts:
-            if p.get("driver_id") in blocked_driver_ids and p.get("status") in ("completed", "pending", "processing"):
-                blocked_outstanding -= Decimal(str(p.get("amount") or 0))
+    # Blocked drivers — Stripe Connect KYC mirror says payouts are disabled.
+    # Their count + the outstanding "we can't pay them yet" balance are
+    # all-time aggregates, computed in SQL above (scoped to the selected area).
     blocked_drivers = {
-        "count": len(blocked_driver_ids),
-        "outstanding_balance": round(float(max(blocked_outstanding, Decimal("0"))), 2),
+        "count": int(agg.get("blocked_count") or 0),
+        "outstanding_balance": round(float(_agg_dec("blocked_outstanding")), 2),
     }
 
     # Top earning drivers in window — sum of completed payout amounts
@@ -2506,41 +2464,16 @@ async def admin_get_payouts_overview(
     )[:10]
 
     # ── Pass 4: T4A snapshot ─────────────────────────────────────────────
-    # CRA T4A threshold for self-employed contractor reporting in Canada
-    # is $500 to the same payee in a tax year. The GST/HST mandatory
-    # registration threshold is $30,000 — that's the more operationally
-    # interesting line because it's when a driver MUST register their
-    # GST account. Bucket per driver against both numbers.
-    year_start = datetime(now.year, 1, 1, tzinfo=timezone.utc).isoformat()
-    ytd_completed = [
-        r
-        for r in all_completed_rides
-        if _in_scope(r) and (r.get("ride_completed_at") or r.get("updated_at") or "") >= year_start
-    ]
-    ytd_earnings_by_driver: Dict[str, Decimal] = {}
-    for r in ytd_completed:
-        did = r.get("driver_id")
-        if not did:
-            continue
-        ytd_earnings_by_driver[did] = ytd_earnings_by_driver.get(did, Decimal("0")) + Decimal(
-            str(r.get("driver_earnings") or 0)
-        )
-
+    # CRA T4A threshold for self-employed contractor reporting in Canada is
+    # $500 to the same payee in a tax year; the GST/HST mandatory registration
+    # threshold is $30,000. Per-driver YTD earnings are bucketed against both
+    # in SQL above (the bucketing is a GROUP BY, not a per-row Python loop).
     t4a_buckets = {
-        "under_500": 0,  # below T4A reporting threshold (CRA $500)
-        "from_500_to_10k": 0,  # T4A required, GST registration not required
-        "from_10k_to_30k": 0,  # T4A required, GST elective
-        "over_30k": 0,  # T4A required, GST registration MANDATORY
+        "under_500": int(agg.get("t4a_under_500") or 0),  # below T4A reporting threshold (CRA $500)
+        "from_500_to_10k": int(agg.get("t4a_500_10k") or 0),  # T4A required, GST registration not required
+        "from_10k_to_30k": int(agg.get("t4a_10k_30k") or 0),  # T4A required, GST elective
+        "over_30k": int(agg.get("t4a_over_30k") or 0),  # T4A required, GST registration MANDATORY
     }
-    for amt in ytd_earnings_by_driver.values():
-        if amt < Decimal("500"):
-            t4a_buckets["under_500"] += 1
-        elif amt < Decimal("10000"):
-            t4a_buckets["from_500_to_10k"] += 1
-        elif amt < Decimal("30000"):
-            t4a_buckets["from_10k_to_30k"] += 1
-        else:
-            t4a_buckets["over_30k"] += 1
 
     # Period locks — derived from audit_log entries written by
     # admin_close_payout_period. Surface the most recent N so the UI
@@ -2602,11 +2535,11 @@ async def admin_get_payouts_overview(
         # Pass 4 — compliance.
         "t4a_snapshot": {
             "tax_year": now.year,
-            "drivers_with_earnings": len(ytd_earnings_by_driver),
+            "drivers_with_earnings": int(agg.get("t4a_drivers_with_earnings") or 0),
             "buckets": t4a_buckets,
             # Sum of YTD driver_earnings — the gross-side of the T4A
             # generation pipeline, not what's been paid out.
-            "ytd_gross_earnings": round(float(sum(ytd_earnings_by_driver.values(), Decimal("0"))), 2),
+            "ytd_gross_earnings": round(float(_agg_dec("t4a_ytd_gross")), 2),
         },
         "period_locks": period_locks,
     }

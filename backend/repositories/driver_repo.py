@@ -146,6 +146,10 @@ async def set_driver_available(driver_id: str, available: bool = True, total_rid
 
     def _update():
         payload: Dict[str, Any] = {"is_available": available}
+        # C3: releasing the driver clears the claim stamp so the reaper won't
+        # consider them orphaned. (Claiming sets it; releasing unsets it.)
+        if available:
+            payload["availability_claimed_at"] = None
 
         # Enforce the invariant is_available ⇒ is_online. is_online is
         # driver-toggled, so we must NOT flip it on here; instead, when asked
@@ -233,7 +237,15 @@ async def claim_driver_atomic(driver_id: str) -> bool:
     def _claim():
         res = (
             supabase.table("drivers")
-            .update({"is_available": False})
+            # C3: stamp a dedicated claim time so the orphan-claim reaper can
+            # release this driver if the offer-insert never lands (crash/restart)
+            # without racing the sub-second claim→insert window. Cleared on release.
+            .update(
+                {
+                    "is_available": False,
+                    "availability_claimed_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
             .eq("id", driver_id)
             .eq("is_available", True)
             .execute()

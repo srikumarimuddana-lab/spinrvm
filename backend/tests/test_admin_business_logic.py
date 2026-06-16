@@ -291,6 +291,51 @@ class TestAdminRideCancel:
 
 
 # ---------------------------------------------------------------------------
+# Driver photo review (approve/reject)
+# ---------------------------------------------------------------------------
+
+
+class TestDriverPhotoReview:
+    def test_approve_sets_user_status_approved(self, client):
+        updates: dict = {}
+
+        async def _update(table, filt, fields):
+            updates.update({"table": table, "filt": filt, "fields": fields})
+
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value={"id": "d1", "user_id": "u1"})),
+            patch("db_supabase.update_one", AsyncMock(side_effect=_update)),
+            patch("routes.admin.drivers.log_admin_action", AsyncMock(return_value="a1")),
+            patch("routes.admin.drivers.send_push_notification", AsyncMock()),
+        ):
+            resp = client.post("/api/admin/drivers/d1/photo-review", json={"action": "approve"})
+        assert resp.status_code == 200
+        assert resp.json()["profile_image_status"] == "approved"
+        assert updates["table"] == "users"
+        assert updates["fields"] == {"profile_image_status": "approved"}
+
+    def test_reject_sets_rejected(self, client):
+        with (
+            patch("db_supabase.get_driver_by_id", AsyncMock(return_value={"id": "d1", "user_id": "u1"})),
+            patch("db_supabase.update_one", AsyncMock()),
+            patch("routes.admin.drivers.log_admin_action", AsyncMock(return_value="a1")),
+            patch("routes.admin.drivers.send_push_notification", AsyncMock()),
+        ):
+            resp = client.post("/api/admin/drivers/d1/photo-review", json={"action": "reject"})
+        assert resp.status_code == 200
+        assert resp.json()["profile_image_status"] == "rejected"
+
+    def test_nonexistent_driver_404(self, client):
+        with patch("db_supabase.get_driver_by_id", AsyncMock(return_value=None)):
+            resp = client.post("/api/admin/drivers/nope/photo-review", json={"action": "approve"})
+        assert resp.status_code == 404
+
+    def test_invalid_action_422(self, client):
+        resp = client.post("/api/admin/drivers/d1/photo-review", json={"action": "delete"})
+        assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
 # Admin "Send Invoice" → resend receipt (regression: used to 403 by hitting
 # the rider-owned /process-payment endpoint instead of an admin endpoint)
 # ---------------------------------------------------------------------------

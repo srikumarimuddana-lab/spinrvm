@@ -557,6 +557,10 @@ async def send_ride_receipt(ride: dict, rider_id: str, tip_amount: Decimal) -> b
                 driver_info = {
                     **du,
                     "name": f"{du.get('first_name', '')} {du.get('last_name', '')}".strip(),
+                    # Carry the PIPEDA-safe driver reference + vehicle onto the
+                    # receipt (the user record du has neither).
+                    "driver_code": drv.get("driver_code", ""),
+                    "driver_vehicle": f"{drv.get('vehicle_make', '')} {drv.get('vehicle_model', '')}".strip(),
                 }
     try:
         from utils.email_receipt import send_receipt_email

@@ -46,6 +46,8 @@ function buildReceiptHtml(ride: any): string {
     ride?.driver_name ||
     `${ride?.driver?.first_name || ''} ${ride?.driver?.last_name || ''}`.trim();
   const vehicle = ride?.driver_vehicle || '';
+  const driverCode = ride?.driver_code || ride?.driver?.driver_code || '';
+  const driverSub = [driverCode, vehicle].filter(Boolean).join(' · ') || 'Your driver';
 
   const line = (l: string, a: string) =>
     `<tr><td style="color:#666;padding:4px 0">${l}</td><td style="text-align:right;color:#1a1a1a">${a}</td></tr>`;
@@ -79,7 +81,7 @@ function buildReceiptHtml(ride: any): string {
   const driverBlock = driverName
     ? `<tr><td style="padding:0 24px 16px"><table width="100%" style="background:#f9f9f9;border-radius:12px"><tr><td style="padding:12px 14px">
        <p style="margin:0;font-size:13px;font-weight:600;color:#1a1a1a">${driverName}</p>
-       <p style="margin:2px 0 0;font-size:12px;color:#999">${vehicle || 'Your driver'}</p></td></tr></table></td></tr>`
+       <p style="margin:2px 0 0;font-size:12px;color:#999">${driverSub}</p></td></tr></table></td></tr>`
     : '';
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>

@@ -76,33 +76,36 @@ store and hand turn-by-turn to the driver's own Google Maps / Waze.
   - `register.ts` — `registerAutoPlay()`: on `HybridAutoPlay` `didConnect`, builds **one**
     persistent iternio `MapTemplate` (surface `component`) and then drives it per state via
     `setMapButtons` / `setHeaderActions` / `showAlert` — never rebuilding it (no flicker). Map
-    buttons: zoom always, plus Google/Waze hand-off while navigating; header carries the leg's
-    progress action; offers raise an Accept/Decline alert. State+leg+ride-id-keyed chrome
+    buttons: zoom always, plus a single Navigate hand-off while navigating; header carries the
+    leg's progress action; offers raise an Accept/Decline alert. State+leg+ride-id-keyed chrome
     de-duping; `isConnected()` guard; idempotent connect; camera reset on connect. Registered
     from `driver-app/index.js` at bundle load (car-only cold launch never mounts the phone route
     layout).
 - **Interaction model:** Android Auto routes taps through template **map buttons** + the
   **header action** + **navigation alerts**, never in-surface touchables (driver-distraction
-  rules). iternio's per-button `onPress` callbacks drive zoom (`→ useCarMapCamera`) and nav
-  hand-off (`nav-google` / `nav-waze` → `Linking.openURL`, web-Maps fallback). Up to 4 map
-  buttons during a ride (2 nav + 2 zoom) — at Android Auto's action-strip ceiling, so confirm
-  on the DHU.
+  rules). iternio's per-button `onPress` callbacks drive zoom (`→ useCarMapCamera`) and the
+  Navigate hand-off (Google `nav` intent → `Linking.openURL`, web-Maps fallback). 3 map buttons
+  during a ride (1 Navigate + 2 zoom) — well under Android Auto's action-strip ceiling.
 - **Lyft-style UX (`carCard.ts` + `CarTripCard.tsx`):** the surface draws a branded **trip
-  card** over the map — status pill, rider + rating, the current destination with ETA/distance,
-  fare with surge/WAV chips, and phone-only hints. One persistent `MapTemplate` is updated via
-  `setHeaderActions` / `setMapButtons` / `showAlert` (never rebuilt — no flicker):
+  card** over the map — status pill; rider **avatar** (photo, with a coloured-initial fallback)
+  + rating; the current destination with ETA/distance; fare with surge/WAV chips; an **earnings
+  bonus** chip + **incentive/quest perk**; and phone-only hints. One persistent `MapTemplate` is
+  updated via `setHeaderActions` / `setMapButtons` / `showAlert` (never rebuilt — no flicker):
   - **Ride offer** → a high-priority `showAlert` with **Accept / Decline** (the iconic request
-    card), auto-dismissed when the offer state is left; the store keeps its own countdown, so a
-    visual timeout never double-declines.
-  - **Heading to pickup** → header **Arrived** (`arriveAtPickup`) + Google/Waze + zoom buttons.
+    card; subtitle carries fare + bonus + ETA + surge), auto-dismissed when the offer state is
+    left; the store keeps its own countdown, so a visual timeout never double-declines.
+  - **Heading to pickup** → header **Arrived** (`arriveAtPickup`) + a single **Navigate**
+    hand-off button (Google, the AA default) + zoom.
   - **At pickup** → header **Start on phone** (OTP start-trip is distraction-sensitive and stays
     phone-only per CLAUDE.md).
-  - **In trip** → header **Complete trip** (`completeRide`) + nav + zoom.
+  - **In trip** → header **Complete trip** (`completeRide`) + Navigate + zoom.
   All car actions call the SAME `useDriverStore` actions the phone calls, so every dispatch /
   insurance-period / settlement invariant is preserved for free.
+- **Icons:** purpose-built monochrome glyphs — `nav_arrow.png` (3 densities) for the Navigate
+  hand-off, `zoom_in/zoom_out.png` for the camera. (Header actions are text, so need no icon.)
 - **Still unproven on hardware:** Nitro codegen building under Expo prebuild, the on-surface
-  map + card render, the alert/header rendering, and the map-button icons need the EAS dev build
-  + DHU. The JS contract is covered by **54 unit tests** (`lib/androidAuto/__tests__/`).
+  map + card render, and the alert/header rendering need the EAS dev build + DHU. The JS
+  contract is covered by **56 unit tests** (`lib/androidAuto/__tests__/`).
 - **Not yet wired:** online/offline toggle, OTP start-trip + rider rating (stay on phone).
 
 ### iOS CarPlay — dormant
@@ -195,7 +198,7 @@ launch path (iternio's `CarAppService` is a new `<service>` merged from its libr
 ## What's committed vs what the build must validate
 
 Committed on this branch (verifiable without a device): the dependency swap to iternio, the
-entry registration, and the `lib/androidAuto/` car-UI layer with 54 unit tests (lint/tsc clean
+entry registration, and the `lib/androidAuto/` car-UI layer with 56 unit tests (lint/tsc clean
 on the new files; pure logic fully covered).
 
 **Not yet validated** (needs an EAS build + head unit, which this environment can't run): that

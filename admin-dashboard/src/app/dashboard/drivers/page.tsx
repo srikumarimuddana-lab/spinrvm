@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, retryPayout, refreshDriverStripeKyc, revealDriverSin, logPiiReveal, type DriverLiveStats, type DriverPayoutSummary } from "@/lib/api";
+import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, reviewDriverPhoto, getDriverVehicleHistory, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, retryPayout, refreshDriverStripeKyc, revealDriverSin, logPiiReveal, type DriverLiveStats, type DriverPayoutSummary } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
@@ -35,6 +35,7 @@ const STATUS_TABS = [
     { value: "suspended", label: "Suspended", icon: Pause },
     { value: "banned", label: "Banned", icon: Ban },
     { value: "online", label: "Online", icon: Wifi },
+    { value: "photos_pending", label: "Pending photos", icon: Image },
 ];
 
 const PAGE_SIZE = 50;
@@ -84,6 +85,7 @@ export default function DriversPage() {
     const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
     const [selected, setSelected] = useState<any>(null);
     const [driverDocs, setDriverDocs] = useState<any[]>([]);
+    const [vehicleHistory, setVehicleHistory] = useState<any[]>([]);
     const [docsLoading, setDocsLoading] = useState(false);
     const [docBusy, setDocBusy] = useState<string | null>(null);
     const [reviewingDoc, setReviewingDoc] = useState<{ id: string; action: "approved" | "rejected"; docType?: string; requiresExpiry?: boolean } | null>(null);
@@ -165,6 +167,7 @@ export default function DriversPage() {
         const opts: any = { limit: PAGE_SIZE + 1, offset: page * PAGE_SIZE };
         if (serviceAreaId) opts.service_area_id = serviceAreaId;
         if (statusFilter === "online") opts.is_online = true;
+        else if (statusFilter === "photos_pending") opts.photo_status = "pending_review";
         else if (["active", "pending", "needs_review", "suspended", "banned"].includes(statusFilter)) opts.status = statusFilter;
         getDrivers(opts)
             .then((rows) => {
@@ -254,6 +257,7 @@ export default function DriversPage() {
     }, [availableVehicleTypes, vehicleTypeFilter]);
 
     useEffect(() => { if (!selected?.id) { setDriverDocs([]); return; } setDocsLoading(true); getDriverDocuments(selected.id).then((d) => setDriverDocs(Array.isArray(d) ? d : [])).catch(() => setDriverDocs([])).finally(() => setDocsLoading(false)); }, [selected?.id]);
+    useEffect(() => { if (!selected?.id) { setVehicleHistory([]); return; } getDriverVehicleHistory(selected.id).then((r) => setVehicleHistory(r?.history || [])).catch(() => setVehicleHistory([])); }, [selected?.id]);
     useEffect(() => { setEditing(false); setEditForm({}); }, [selected?.id]);
     useEffect(() => {
         if (!selected?.id) {
@@ -334,11 +338,28 @@ export default function DriversPage() {
         try { await updateDriver(selected.id, changes); const updated = { ...selected, ...changes }; setSelected(updated); setDrivers(prev => prev.map(d => d.id === selected.id ? { ...d, ...changes } : d)); setEditing(false); } catch (e: any) { toast({ title: "Failed to save driver", description: e?.message || "Unknown error", variant: "destructive" }); } finally { setSaving(false); }
     };
 
+    const [photoReviewing, setPhotoReviewing] = useState(false);
+    const handlePhotoReview = async (action: "approve" | "reject") => {
+        if (!selected || photoReviewing) return;
+        setPhotoReviewing(true);
+        try {
+            const res = await reviewDriverPhoto(selected.id, action);
+            const next = res.profile_image_status;
+            setSelected({ ...selected, profile_image_status: next });
+            setDrivers(prev => prev.map(d => d.id === selected.id ? { ...d, profile_image_status: next } : d));
+            toast({ title: `Photo ${next}` });
+        } catch (e: any) {
+            toast({ title: "Photo review failed", description: e?.message || "Unknown error", variant: "destructive" });
+        } finally {
+            setPhotoReviewing(false);
+        }
+    };
+
     const ef = (field: string) => editForm[field] ?? "";
     const setEf = (field: string, value: string) => setEditForm(prev => ({ ...prev, [field]: value }));
 
     const filtered = drivers.filter(d => {
-        const matchSearch = !search || (d.first_name + " " + d.last_name).toLowerCase().includes(search.toLowerCase()) || d.email?.toLowerCase().includes(search.toLowerCase()) || d.license_plate?.toLowerCase().includes(search.toLowerCase()) || d.id?.toLowerCase().includes(search.toLowerCase());
+        const matchSearch = !search || (d.first_name + " " + d.last_name).toLowerCase().includes(search.toLowerCase()) || d.email?.toLowerCase().includes(search.toLowerCase()) || d.license_plate?.toLowerCase().includes(search.toLowerCase()) || d.driver_code?.toLowerCase().includes(search.toLowerCase()) || d.id?.toLowerCase().includes(search.toLowerCase());
         let matchStatus = true;
         if (statusFilter === "online") matchStatus = d.is_online;
         if (statusFilter === "active") matchStatus = d.status === "active";
@@ -346,6 +367,7 @@ export default function DriversPage() {
         if (statusFilter === "needs_review") matchStatus = d.status === "needs_review";
         if (statusFilter === "suspended") matchStatus = d.status === "suspended";
         if (statusFilter === "banned") matchStatus = d.status === "banned";
+        if (statusFilter === "photos_pending") matchStatus = d.profile_image_status === "pending_review";
         const matchVehicleType = !vehicleTypeFilter || d.vehicle_type_id === vehicleTypeFilter;
         return matchSearch && matchStatus && matchVehicleType;
     });
@@ -384,6 +406,7 @@ export default function DriversPage() {
         if (!stats) return 0;
         if (s === "all") return stats.total ?? 0;
         if (s === "online") return stats.online ?? 0;
+        if (s === "photos_pending") return stats.pending_photos ?? 0;
         return stats[s] ?? 0;
     };
     const fmtDate = (d: string) => { if (!d) return "\u2014"; try { return new Date(d).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }); } catch { return d; } };
@@ -557,11 +580,17 @@ export default function DriversPage() {
                                         <TableCell className="py-3">
                                             <div className="flex items-center gap-3">
                                                 <div className="relative">
-                                                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center text-sm font-bold text-primary ring-1 ring-border shadow-sm">{(driver.first_name?.[0] || "")}{(driver.last_name?.[0] || "")}</div>
+                                                    {driver.photo_url ? (
+                                                        // eslint-disable-next-line @next/next/no-img-element
+                                                        <img src={driver.photo_url} alt="" className="w-10 h-10 rounded-full object-cover ring-1 ring-border shadow-sm" />
+                                                    ) : (
+                                                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center text-sm font-bold text-primary ring-1 ring-border shadow-sm">{(driver.first_name?.[0] || "")}{(driver.last_name?.[0] || "")}</div>
+                                                    )}
                                                     <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-card ${driver.is_online ? "bg-emerald-500" : "bg-gray-300"}`} />
                                                 </div>
                                                 <div className="flex-1 min-w-0">
                                                     <p className="text-sm font-semibold truncate">{driver.first_name} {driver.last_name}</p>
+                                                    {driver.driver_code && <p className="text-[11px] font-mono text-muted-foreground truncate">{driver.driver_code}</p>}
                                                     {driver.email && <p className="text-[11px] text-muted-foreground truncate">{showPii ? driver.email : maskEmail(driver.email)}</p>}
                                                     {driver.phone && <p className="text-[11px] text-muted-foreground flex items-center gap-1 mt-0.5"><Phone className="h-2.5 w-2.5" /> {showPii ? driver.phone : maskPhone(driver.phone)}</p>}
                                                 </div>
@@ -650,12 +679,20 @@ export default function DriversPage() {
                                 <div className="flex items-start justify-between">
                                     <div className="flex items-center gap-4">
                                         <div className="relative">
-                                            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center text-xl font-bold text-primary">{(selected.first_name?.[0] || "")}{(selected.last_name?.[0] || "")}</div>
+                                            {selected.photo_url ? (
+                                                // eslint-disable-next-line @next/next/no-img-element
+                                                <img src={selected.photo_url} alt="" className="w-16 h-16 rounded-2xl object-cover" />
+                                            ) : (
+                                                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center text-xl font-bold text-primary">{(selected.first_name?.[0] || "")}{(selected.last_name?.[0] || "")}</div>
+                                            )}
                                             <span className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-background ${selected.is_online ? "bg-emerald-500" : "bg-gray-300"}`} />
                                         </div>
                                         <div>
                                             <h2 className="text-xl font-bold">{selected.first_name} {selected.last_name}</h2>
                                             <div className="flex items-center gap-2 mt-1 flex-wrap">
+                                                {selected.driver_code && (
+                                                    <button onClick={() => navigator.clipboard.writeText(selected.driver_code)} className="flex items-center gap-1 text-xs font-mono font-semibold text-primary bg-primary/10 px-2 py-0.5 rounded" title="Copy driver code">{selected.driver_code}<Copy className="h-3 w-3" /></button>
+                                                )}
                                                 <button onClick={() => navigator.clipboard.writeText(selected.id)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition font-mono bg-muted/50 px-2 py-0.5 rounded" title="Copy driver UUID">{selected.id?.slice(0, 12)}…<Copy className="h-3 w-3" /></button>
                                                 {selected.email && (
                                                     <button onClick={() => navigator.clipboard.writeText(selected.email)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition px-2 py-0.5 rounded hover:bg-muted/50" title={showPii ? `Copy email: ${selected.email}` : "Reveal PII to copy"}>
@@ -664,6 +701,20 @@ export default function DriversPage() {
                                                     </button>
                                                 )}
                                             </div>
+                                            {selected.profile_image_status === "pending_review" && (
+                                                <div className="flex items-center gap-2 mt-2 p-2 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
+                                                    {selected.photo_url && (
+                                                        // eslint-disable-next-line @next/next/no-img-element
+                                                        <img src={selected.photo_url} alt="" className="w-9 h-9 rounded-full object-cover" />
+                                                    )}
+                                                    <span className="text-xs text-amber-700 dark:text-amber-400 flex-1">Profile photo pending review</span>
+                                                    <button disabled={photoReviewing} onClick={() => handlePhotoReview("approve")} className="text-xs font-semibold px-2 py-1 rounded bg-emerald-600 text-white disabled:opacity-50">Approve</button>
+                                                    <button disabled={photoReviewing} onClick={() => handlePhotoReview("reject")} className="text-xs font-semibold px-2 py-1 rounded bg-red-600 text-white disabled:opacity-50">Reject</button>
+                                                </div>
+                                            )}
+                                            {selected.profile_image_status === "rejected" && (
+                                                <div className="mt-2 text-xs text-red-600 dark:text-red-400">Profile photo rejected — driver must re-upload.</div>
+                                            )}
                                             <div className="flex items-center gap-2 mt-2">
                                                 {selected.status === "active" ? <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"><ShieldCheck className="h-3 w-3" /> Active</Badge>
                                                 : selected.status === "needs_review" ? <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"><AlertTriangle className="h-3 w-3" /> Needs Review</Badge>
@@ -859,6 +910,25 @@ export default function DriversPage() {
                                                     <DetailField icon={FileText} label="VIN" value={selected.vehicle_vin || "\u2014"} mono />
                                                 </div>
                                             </>
+                                        )}
+                                    </DetailSection>
+                                    <DetailSection title="Vehicle Change History" icon={FileText}>
+                                        {vehicleHistory.length === 0 ? (
+                                            <p className="text-xs text-muted-foreground">No vehicle changes recorded.</p>
+                                        ) : (
+                                            <div className="space-y-2">
+                                                {vehicleHistory.slice(0, 20).map((h) => (
+                                                    <div key={h.id} className="text-xs flex items-start gap-2">
+                                                        <span className="text-muted-foreground whitespace-nowrap">{new Date(h.created_at).toLocaleDateString()}</span>
+                                                        <span className="flex-1">
+                                                            <span className="font-medium">{h.field.replace(/_/g, " ")}</span>:{" "}
+                                                            <span className="line-through text-muted-foreground">{h.old_value || "—"}</span>{" → "}
+                                                            <span className="font-semibold">{h.new_value || "—"}</span>
+                                                            <span className="ml-1 text-[10px] text-muted-foreground">({h.changed_by_role})</span>
+                                                        </span>
+                                                    </div>
+                                                ))}
+                                            </div>
                                         )}
                                     </DetailSection>
                                     <DetailSection title="Spinr Pass" icon={CreditCard}>

@@ -516,6 +516,7 @@ export const getDrivers = (opts: {
     status?: string;
     service_area_id?: string;
     search?: string;
+    photo_status?: string;
 } = {}) => {
     const sp = new URLSearchParams();
     if (opts.limit != null) sp.set("limit", String(opts.limit));
@@ -526,6 +527,7 @@ export const getDrivers = (opts: {
     if (opts.status) sp.set("status", opts.status);
     if (opts.service_area_id) sp.set("service_area_id", opts.service_area_id);
     if (opts.search) sp.set("search", opts.search);
+    if (opts.photo_status) sp.set("photo_status", opts.photo_status);
     const qs = sp.toString();
     return request<any[]>(`/api/admin/drivers${qs ? `?${qs}` : ""}`);
 };
@@ -1914,6 +1916,17 @@ export const driverAction = (driverId: string, action: string, reason?: string) 
     request<{ message: string; new_status: string; audit_log_id?: string }>(`/api/admin/drivers/${driverId}/action`, {
         method: "POST",
         body: JSON.stringify({ action, reason }),
+    });
+
+export const getDriverVehicleHistory = (driverId: string) =>
+    request<{ history: Array<{ id: string; field: string; old_value: string | null; new_value: string | null; changed_by_role: string; created_at: string }> }>(
+        `/api/admin/drivers/${driverId}/vehicle-history`,
+    );
+
+export const reviewDriverPhoto = (driverId: string, action: "approve" | "reject") =>
+    request<{ message: string; profile_image_status: string }>(`/api/admin/drivers/${driverId}/photo-review`, {
+        method: "POST",
+        body: JSON.stringify({ action }),
     });
 
 export const overrideDriverStatus = (driverId: string, status: string, reason?: string) =>

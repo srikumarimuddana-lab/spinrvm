@@ -545,6 +545,20 @@ def _is_corporate_paid(
 api_router = APIRouter(prefix="/rides", tags=["Rides"])
 
 
+def _rider_visible_photo(user: Optional[dict]) -> Optional[str]:
+    """Driver avatar shown to RIDERS, gated on moderation status.
+
+    Driver photos upload as 'pending_review' and must be admin-approved before
+    riders see them (identity/safety). 'pending_review'/'rejected' → hidden.
+    Legacy photos with no status are treated as visible.
+    """
+    if not user:
+        return None
+    if user.get("profile_image_status") in ("pending_review", "rejected"):
+        return None
+    return user.get("profile_image")
+
+
 class TipRequest(BaseModel):
     amount: Decimal = Field(..., gt=0, le=500, description="Tip in CAD (max $500)")
 
@@ -2610,12 +2624,17 @@ async def get_active_ride(request: Request = None, current_user: dict = Depends(
             user = await db_supabase.get_user_by_id(driver.get("user_id"))
             driver = {
                 "id": driver["id"],
+                "driver_code": driver.get("driver_code"),
                 "name": (f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "Driver"),
                 "rating": driver.get("rating", 4.8),
                 "total_rides": driver.get("total_rides", 0),
+                # Driver photo lives on the USER row (users.profile_image),
+                # shown to riders only once admin-approved.
+                "photo_url": _rider_visible_photo(user),
                 "vehicle_make": driver.get("vehicle_make"),
                 "vehicle_model": driver.get("vehicle_model"),
                 "vehicle_color": driver.get("vehicle_color"),
+                "vehicle_year": driver.get("vehicle_year"),
                 "license_plate": driver.get("license_plate"),
                 "lat": driver.get("lat"),
                 "lng": driver.get("lng"),
@@ -2844,12 +2863,15 @@ async def get_ride(
     if ride.get("driver_id"):
         assigned_driver = await db_supabase.get_driver_by_id(ride["driver_id"])
         if assigned_driver:
+            # Driver photo lives on the user row (users.profile_image), shown to
+            # riders only once admin-approved.
+            _drv_user = await db_supabase.get_user_by_id(assigned_driver.get("user_id"))
             ride["driver"] = DriverPublicView(
                 id=assigned_driver.get("id", ""),
                 name=assigned_driver.get("name", ""),
                 rating=assigned_driver.get("rating"),
                 total_rides=assigned_driver.get("total_rides"),
-                photo_url=assigned_driver.get("photo_url"),
+                photo_url=_rider_visible_photo(_drv_user),
                 vehicle_make=assigned_driver.get("vehicle_make"),
                 vehicle_model=assigned_driver.get("vehicle_model"),
                 vehicle_color=assigned_driver.get("vehicle_color"),
@@ -3591,6 +3613,7 @@ async def track_shared_ride(share_token: str):
     if ride.get("driver_id"):
         driver = await db_supabase.get_driver_by_id(ride["driver_id"])
         if driver:
+            _drv_user = await db_supabase.get_user_by_id(driver.get("user_id"))
             driver_info = {
                 "name": driver.get("name", "Driver"),
                 "lat": driver.get("lat"),
@@ -3601,7 +3624,8 @@ async def track_shared_ride(share_token: str):
                 "vehicle_year": driver.get("vehicle_year"),
                 "license_plate": driver.get("license_plate"),
                 "rating": driver.get("rating"),
-                "photo_url": driver.get("photo_url"),
+                # users.profile_image, shown to riders only once admin-approved.
+                "photo_url": _rider_visible_photo(_drv_user),
             }
             # Cheap ETA: straight-line driver→dropoff at 30 km/h city speed.
             # Same formula used at /rides/estimate so the number stays consistent.

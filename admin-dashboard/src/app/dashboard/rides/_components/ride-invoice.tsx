@@ -244,14 +244,12 @@ export default function RideInvoice({ rideId, status }: Props) {
             doc.text(data.driver_name || "—", pageW / 2, y);
             y += 5;
             doc.text(data.rider_phone || "—", margin, y);
-            doc.text(data.driver_phone || "—", pageW / 2, y);
+            // PIPEDA: no driver personal phone/plate. Show the app-wide
+            // driver_code (support reference) + vehicle instead.
+            doc.text(data.driver_code || "—", pageW / 2, y);
             y += 5;
             doc.text(data.rider_email || "—", margin, y);
-            doc.text(
-                `${data.driver_vehicle || ""} ${data.driver_license_plate || ""}`.trim() || "—",
-                pageW / 2,
-                y
-            );
+            doc.text(data.driver_vehicle || "—", pageW / 2, y);
             y += 10;
 
             ensureSpace(50);

@@ -100,6 +100,10 @@ class DriverVerifyRequest(BaseModel):
     verified: bool
 
 
+class DriverPhotoReviewRequest(BaseModel):
+    action: Literal["approve", "reject"]
+
+
 class DriverActionRequest(BaseModel):
     action: Literal["approve", "reject", "suspend", "ban", "unban", "reactivate"]
     reason: Optional[str] = None
@@ -129,6 +133,7 @@ async def admin_get_drivers(
     is_available: Optional[bool] = None,
     status: Optional[str] = None,
     service_area_id: Optional[str] = None,
+    photo_status: Optional[str] = None,
 ):
     """Get drivers with filters, enriched with user name/email/phone.
 
@@ -171,9 +176,19 @@ async def admin_get_drivers(
             filters["$or"] = [
                 {"phone": {"$regex": re.escape(term), "$options": "i"}},
                 {"license_plate": {"$regex": re.escape(term), "$options": "i"}},
+                {"driver_code": {"$regex": re.escape(term), "$options": "i"}},
             ]
             if matching_uids:
                 filters["$or"].append({"user_id": {"$in": matching_uids}})
+
+    # Filter by profile-photo moderation status (photo lives on users). Used by
+    # the admin "Pending photos" queue. No matching users → no drivers.
+    if photo_status:
+        photo_users = await db_supabase.get_rows("users", {"profile_image_status": photo_status}, limit=1000)
+        photo_uids = [u["id"] for u in photo_users if u.get("id")]
+        if not photo_uids:
+            return []
+        filters["user_id"] = {"$in": photo_uids}
 
     drivers = await db_supabase.get_rows("drivers", filters, order="created_at", desc=True, limit=limit, offset=offset)
 
@@ -202,12 +217,19 @@ async def admin_get_drivers(
     out = []
     for d in deduped:
         u = users_map.get(d.get("user_id"))
+        # Driver avatar lives on the user row (users.profile_image); the drivers
+        # table has no photo column. Expose it as photo_url (canonical) +
+        # profile_photo_url (the key the existing UI presence-dot reads).
+        _img = u.get("profile_image") if u else None
         out.append(
             {
                 **d,
                 "name": _user_display_name(u) or d.get("name"),
                 "email": u.get("email") if u else None,
                 "phone": u.get("phone") if u else d.get("phone"),
+                "photo_url": _img,
+                "profile_photo_url": _img,
+                "profile_image_status": (u.get("profile_image_status") if u else None),
             }
         )
     return out
@@ -440,6 +462,10 @@ async def admin_get_driver_stats(
             "total_rides": total_rides_sum,
             "total_earnings": total_earnings_sum,
             "avg_rating": avg_rating,
+            # Drivers whose profile photo is awaiting admin approval.
+            "pending_photos": sum(
+                1 for u in users_map.values() if u.get("profile_image_status") == "pending_review"
+            ),
         },
         "area_stats": list(area_stats.values()),
         "charts": {
@@ -610,7 +636,8 @@ async def admin_get_approval_queue(
                 "name": _user_display_name(u) or drow.get("name") or "",
                 "email": (u or {}).get("email"),
                 "phone": (u or {}).get("phone") or drow.get("phone"),
-                "profile_photo_url": drow.get("profile_photo_url"),
+                # Driver photo = users.profile_image (no drivers photo column).
+                "profile_photo_url": (u or {}).get("profile_image"),
                 "status": drow.get("status", "pending"),
                 "created_at": drow.get("created_at"),
                 "queue_started_at": queue_started_at,
@@ -758,7 +785,8 @@ async def admin_get_expiring_documents(
                 "last_name": (u or {}).get("last_name") or "",
                 "email": (u or {}).get("email"),
                 "phone": (u or {}).get("phone") or d.get("phone"),
-                "profile_photo_url": d.get("profile_photo_url"),
+                # Driver photo = users.profile_image (no drivers photo column).
+                "profile_photo_url": (u or {}).get("profile_image"),
                 "status": d.get("status"),
                 "service_area_id": d.get("service_area_id"),
                 "service_area_name": areas_map.get(d.get("service_area_id")),
@@ -961,6 +989,16 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
             status_code=500,
             detail="Failed to update driver.",
         ) from e
+    # Append-only vehicle/identity change history (SGI/insurance audit).
+    if driver_updates:
+        try:
+            from ...utils.vehicle_history import record_vehicle_changes
+        except ImportError:
+            from utils.vehicle_history import record_vehicle_changes  # type: ignore
+        await record_vehicle_changes(
+            driver_id, existing, driver_updates, changed_by_user_id=admin.get("id"), role="admin"
+        )
+
     await log_admin_action(
         admin,
         "driver_updated",
@@ -1025,6 +1063,55 @@ async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest, admin: d
 
     await log_admin_action(admin, "driver_verified", "drivers", driver_id, {"verified": req.verified})
     return {"message": f"Driver {'verified' if req.verified else 'unverified'}"}
+
+
+@router.post("/drivers/{driver_id}/photo-review")
+async def admin_review_driver_photo(
+    driver_id: str, req: DriverPhotoReviewRequest, admin: dict = Depends(get_admin_user)
+):
+    """Approve or reject a driver's profile photo.
+
+    The photo lives on the user row (users.profile_image, status in
+    profile_image_status). Driver photos upload as 'pending_review' and stay
+    hidden from riders until an admin approves them here.
+    """
+    driver = await db_supabase.get_driver_by_id(driver_id)
+    if not driver:
+        raise HTTPException(status_code=404, detail=f"Driver {driver_id} not found")
+    user_id = driver.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=422, detail="Driver has no linked user account")
+
+    new_status = "approved" if req.action == "approve" else "rejected"
+    await db_supabase.update_one("users", {"id": user_id}, {"profile_image_status": new_status})
+
+    # Tell the driver their photo was reviewed (best-effort).
+    try:
+        if req.action == "approve":
+            await send_push_notification(
+                user_id, "Photo approved ✅", "Your profile photo is now visible to riders.", {"type": "photo_approved"}
+            )
+        else:
+            await send_push_notification(
+                user_id,
+                "Photo needs attention ⚠️",
+                "Your profile photo wasn't approved. Please upload a clear photo of yourself.",
+                {"type": "photo_rejected"},
+            )
+    except Exception as e:
+        logger.warning(f"[ADMIN] photo-review push failed for driver {driver_id}: {e}")
+
+    await log_admin_action(admin, "driver_photo_review", "drivers", driver_id, {"status": new_status})
+    return {"message": f"Photo {new_status}", "profile_image_status": new_status}
+
+
+@router.get("/drivers/{driver_id}/vehicle-history")
+async def admin_driver_vehicle_history(driver_id: str, admin: dict = Depends(get_admin_user)):
+    """Append-only before/after history of this driver's vehicle/identity changes."""
+    rows = await db_supabase.get_rows(
+        "driver_vehicle_history", {"driver_id": driver_id}, order="created_at", desc=True, limit=200
+    )
+    return {"history": rows or []}
 
 
 @router.post("/drivers/{driver_id}/action")

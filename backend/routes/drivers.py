@@ -33,6 +33,7 @@ try:
     from ..utils.breadcrumb_buffer import flush_driver_breadcrumbs
     from ..utils.breadcrumbs import invalidate_active_rides_cache
     from ..utils.datetime_utils import parse_iso_utc
+    from ..utils.driver_code import generate_driver_code
     from ..utils.driver_online import intent_online
     from ..utils.driver_presence import (
         clear_presence,
@@ -67,6 +68,7 @@ except ImportError:
     from utils.breadcrumb_buffer import flush_driver_breadcrumbs  # type: ignore
     from utils.breadcrumbs import invalidate_active_rides_cache  # type: ignore
     from utils.datetime_utils import parse_iso_utc
+    from utils.driver_code import generate_driver_code  # type: ignore
     from utils.driver_online import intent_online  # type: ignore
     from utils.driver_presence import (
         clear_presence,
@@ -605,6 +607,7 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
         last = current_user.get("last_name", "")
         new_driver = {
             "id": str(uuid.uuid4()),
+            "driver_code": generate_driver_code(),
             "user_id": current_user["id"],
             "name": f"{first} {last}".strip() or current_user.get("phone", ""),
             "first_name": first or None,
@@ -637,6 +640,16 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
 
     updates["updated_at"] = datetime.now(timezone.utc).isoformat()
     await db_supabase.update_one("drivers", {"id": driver["id"]}, await _encrypt_driver_pii(updates))
+    # Append-only vehicle/identity change history (SGI/insurance audit). Uses
+    # the pre-update `driver` row as the "before" snapshot.
+    if changed_vehicle:
+        try:
+            from ..utils.vehicle_history import record_vehicle_changes
+        except ImportError:
+            from utils.vehicle_history import record_vehicle_changes  # type: ignore
+        await record_vehicle_changes(
+            driver["id"], driver, updates, changed_by_user_id=current_user["id"], role="driver"
+        )
     # M-5: SGI insurance period audit — vehicle/document edits flip an
     # active driver to needs_review and force them offline. If they were
     # actually online before this update, that's a 1→0 transition.
@@ -782,6 +795,7 @@ async def register_driver(
 
     new_driver = {
         "id": str(_uuid.uuid4()),
+        "driver_code": generate_driver_code(),
         "user_id": user_id,
         "name": full_name,
         "first_name": _first_name_split or None,
@@ -1714,8 +1728,10 @@ async def create_driver(driver: Driver, admin_user: dict = Depends(get_admin_use
     if existing:
         raise HTTPException(status_code=400, detail="Driver with this phone already exists")
 
-    await db_supabase.insert_one("drivers", driver.dict())
-    return driver.dict()
+    row = driver.dict()
+    row.setdefault("driver_code", generate_driver_code())
+    await db_supabase.insert_one("drivers", row)
+    return row
 
 
 @api_router.post("/location-batch")

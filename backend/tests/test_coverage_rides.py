@@ -475,6 +475,7 @@ async def test_get_ride_driver_assigned_sets_offer_expiry():
         mock_db.get_ride = AsyncMock(return_value=ride)
         mock_db.get_rows = AsyncMock(return_value=[])
         mock_db.get_driver_by_id = AsyncMock(return_value=mock_driver)
+        mock_db.get_user_by_id = AsyncMock(return_value={"profile_image": ""})
 
         with patch(
             "backend.routes.rides.get_app_settings",
@@ -2277,12 +2278,14 @@ async def test_get_ride_driver_assigned_enrichment():
         mock_db.get_ride = AsyncMock(return_value=ride)
         mock_db.get_rows = AsyncMock(return_value=[{"id": _DRIVER_ID}])  # is_driver check
         mock_db.get_driver_by_id = AsyncMock(return_value=driver_row)
+        mock_db.get_user_by_id = AsyncMock(return_value={"profile_image": "data:image/png;base64,xx"})
         result = await get_ride(
             request=_starlette_request(),
             ride_id=_RIDE_ID,
             current_user=_USER,
         )
     assert result.get("status") == "driver_assigned"
+    assert result["driver"]["photo_url"] == "data:image/png;base64,xx"
 
 
 @pytest.mark.anyio
@@ -2656,6 +2659,7 @@ async def test_track_shared_ride_active():
     with patch("backend.routes.rides.db_supabase") as mock_db:
         mock_db.get_rows = AsyncMock(return_value=[ride])
         mock_db.get_driver_by_id = AsyncMock(return_value=driver_row)
+        mock_db.get_user_by_id = AsyncMock(return_value={"profile_image": ""})
         result = await track_shared_ride(share_token="abc123")
     assert result["status"] == "in_progress"
 

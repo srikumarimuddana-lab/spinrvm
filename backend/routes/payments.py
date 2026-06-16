@@ -559,8 +559,11 @@ async def get_cards(request: Request = None, current_user: dict = Depends(get_cu
             for m in methods.data
         ]
     except Exception as e:
+        # C7: do NOT mask a Stripe outage as "no cards" — that's the log-and-
+        # continue-on-payment-error anti-pattern CLAUDE.md forbids, and it makes
+        # a rider think their saved card vanished. Surface 502 so the client retries.
         logger.error(f"Get cards error: {e}", exc_info=True)
-        return []
+        raise HTTPException(status_code=502, detail="Could not load your saved cards. Please try again.") from e
 
 
 class AddCardRequest(BaseModel):
@@ -739,9 +742,13 @@ async def set_default_card(
     request: Request = None,
     current_user: dict = Depends(get_current_user),
 ):
-    """Set card as default. Updates both our DB and Stripe customer."""
-    await db_supabase.update_one("users", {"id": current_user["id"]}, {"default_payment_method": card_id})
+    """Set card as default. Updates both our DB and Stripe customer.
 
+    C7: Stripe is updated FIRST; the DB default is only written once Stripe
+    accepts it, so a Stripe failure can't leave our DB pointing at a default the
+    payment processor doesn't know about. On Stripe error we surface 502 (not a
+    silent success) so the client retries.
+    """
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "")
     if stripe_secret:
@@ -756,6 +763,9 @@ async def set_default_card(
                 )
         except Exception as e:
             logger.error(f"Stripe set default failed for card {card_id}: {e}", exc_info=True)
+            raise HTTPException(status_code=502, detail="Could not update your default card. Please try again.") from e
+
+    await db_supabase.update_one("users", {"id": current_user["id"]}, {"default_payment_method": card_id})
 
     import asyncio
 
@@ -778,7 +788,13 @@ async def delete_card(
     request: Request = None,
     current_user: dict = Depends(get_current_user),
 ):
-    """Detach card from Stripe and clear default if needed."""
+    """Detach card from Stripe and clear default if needed.
+
+    C7: the Stripe detach must SUCCEED before we mutate our DB. Previously a
+    failed detach was logged-and-ignored, then the DB default was cleared anyway
+    — leaving the card live in Stripe but gone from the UI. Now a failed detach
+    raises 502 and the DB is left untouched.
+    """
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "")
     if stripe_secret:
@@ -786,6 +802,7 @@ async def delete_card(
             stripe.PaymentMethod.detach(card_id, api_key=stripe_secret)
         except Exception as e:
             logger.error(f"Stripe detach failed for card {card_id}: {e}", exc_info=True)
+            raise HTTPException(status_code=502, detail="Could not remove your card. Please try again.") from e
 
     user = await db_supabase.get_user_by_id(current_user["id"])
     if user and user.get("default_payment_method") == card_id:

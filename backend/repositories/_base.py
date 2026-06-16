@@ -432,6 +432,17 @@ def _postgrest_pattern(value: str) -> str:
     return str(value).replace("*", r"\*").replace(",", r"\,").replace("(", r"\(").replace(")", r"\)")
 
 
+def _escape_like(value: str) -> str:
+    r"""Escape SQL LIKE/ILIKE wildcards in user input (C6).
+
+    Without this, a user-supplied ``%`` or ``_`` in a $regex search acts as a
+    wildcard (over-match) and ``%`` allows a cheap ReDoS-style scan. Escape the
+    escape char first, then the two wildcards. Postgres LIKE treats ``\`` as the
+    default ESCAPE, so ``\%`` / ``\_`` match a literal percent / underscore.
+    """
+    return str(value).replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+
+
 def _unwrap_enum(v: Any) -> Any:
     """Return the .value of Enum instances so PostgREST sees plain strings."""
     return v.value if isinstance(v, _Enum) else v
@@ -500,7 +511,9 @@ def _apply_filters(q, filters: Optional[Dict[str, Any]]):
             elif "$nin" in v and isinstance(v["$nin"], (list, tuple)):
                 q = q.not_.in_(k, [_unwrap_enum(x) for x in v["$nin"]])
             elif "$regex" in v:
-                pattern = f"%{v['$regex']}%"
+                # Escape LIKE wildcards in user input so `%`/`_` can't over-match
+                # or be used as a cheap scan vector (C6).
+                pattern = f"%{_escape_like(v['$regex'])}%"
                 if v.get("$options") == "i":
                     q = q.ilike(k, pattern)
                 else:

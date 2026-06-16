@@ -503,7 +503,11 @@ async def test_get_cards_with_stripe():
 
 
 @pytest.mark.anyio
-async def test_get_cards_stripe_error_returns_empty():
+async def test_get_cards_stripe_error_raises_502():
+    """C7: a Stripe outage must NOT masquerade as an empty card list — it raises
+    502 so the client retries instead of thinking the saved card vanished."""
+    from fastapi import HTTPException
+
     from backend.routes.payments import get_cards
 
     with (
@@ -516,9 +520,10 @@ async def test_get_cards_stripe_error_returns_empty():
     ):
         mock_db.get_user_by_id = AsyncMock(return_value=_USER)
 
-        result = await get_cards(current_user=_USER)
+        with pytest.raises(HTTPException) as exc:
+            await get_cards(current_user=_USER)
 
-    assert result == []
+    assert exc.value.status_code == 502
 
 
 # ── add_card (stripe path) ─────────────────────────────────────────────────────
@@ -868,8 +873,11 @@ async def test_add_card_invalid_json():
 
 
 @pytest.mark.anyio
-async def test_set_default_card_stripe_error_logged_not_raised():
-    """Stripe failure on set_default_card is logged but does not raise — DB update still ran."""
+async def test_set_default_card_stripe_error_raises_502_and_skips_db():
+    """C7: Stripe is the source of truth — a failed Customer.modify raises 502 and
+    must NOT write the DB default (no DB↔Stripe divergence)."""
+    from fastapi import HTTPException
+
     from backend.routes.payments import set_default_card
 
     with (
@@ -883,15 +891,19 @@ async def test_set_default_card_stripe_error_logged_not_raised():
         mock_db.update_one = AsyncMock()
         mock_db.get_user_by_id = AsyncMock(return_value={**_USER, "stripe_customer_id": "cus_existing"})
 
-        result = await set_default_card(card_id="pm_001", current_user=_USER)
+        with pytest.raises(HTTPException) as exc:
+            await set_default_card(card_id="pm_001", current_user=_USER)
 
-    # Should still succeed despite stripe error
-    assert result["success"] is True
+    assert exc.value.status_code == 502
+    mock_db.update_one.assert_not_awaited()  # DB default not written on Stripe failure
 
 
 @pytest.mark.anyio
-async def test_delete_card_stripe_error_logged_not_raised():
-    """Stripe detach failure is logged but does not raise — DB cleanup still runs."""
+async def test_delete_card_stripe_error_raises_502_and_keeps_db():
+    """C7: a failed detach raises 502 and leaves the DB untouched — the card must
+    not vanish from the UI while still live in Stripe."""
+    from fastapi import HTTPException
+
     from backend.routes.payments import delete_card
 
     with (
@@ -905,6 +917,8 @@ async def test_delete_card_stripe_error_logged_not_raised():
         mock_db.get_user_by_id = AsyncMock(return_value={**_USER, "default_payment_method": "pm_001"})
         mock_db.update_one = AsyncMock()
 
-        result = await delete_card(card_id="pm_001", current_user=_USER)
+        with pytest.raises(HTTPException) as exc:
+            await delete_card(card_id="pm_001", current_user=_USER)
 
-    assert result["success"] is True
+    assert exc.value.status_code == 502
+    mock_db.update_one.assert_not_awaited()  # default not cleared when detach failed

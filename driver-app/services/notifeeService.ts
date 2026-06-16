@@ -72,6 +72,9 @@ export interface RideOfferDisplayData {
     incentives_count?: number;
     countdown_seconds?: number;
     offer_expires_at?: string;
+    // Signed, short-lived URL to the branded fare-banner image. When present,
+    // the Android card expands to this rich BigPicture instead of the text card.
+    offer_card_url?: string;
 }
 
 let channelReadyPromise: Promise<void> | null = null;
@@ -273,12 +276,23 @@ export async function displayRideOfferNotification(
             showTimestamp: true,
             ...(silent ? {} : { sound: 'ride_offer' }),
             vibrationPattern: [300, 500, 300, 500],
-            style: {
-                type: 1, // BIG_TEXT
-                title: title,
-                text: body,
-                ...(summaryLine ? { summary: summaryLine } : {}),
-            } as any,
+            // Rich card: when the backend handed us a signed banner URL, expand
+            // to the BigPicture fare card; otherwise fall back to BigText. If
+            // the image fails to load, Android degrades BigPicture to the
+            // title/body row on its own, so the offer is never lost.
+            style: (offer.offer_card_url
+                ? {
+                    type: 0, // BIG_PICTURE
+                    picture: offer.offer_card_url,
+                    title: title,
+                    ...(summaryLine ? { summary: summaryLine } : {}),
+                }
+                : {
+                    type: 1, // BIG_TEXT
+                    title: title,
+                    text: body,
+                    ...(summaryLine ? { summary: summaryLine } : {}),
+                }) as any,
             actions: [
                 {
                     title: '<b><font color="#00D26A">APPROVE</font></b>',

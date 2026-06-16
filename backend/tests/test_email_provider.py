@@ -179,6 +179,25 @@ async def test_ses_failure_falls_back_to_resend():
 
 
 @pytest.mark.anyio
+async def test_ses_failure_log_does_not_leak_recipient(caplog):
+    """PIPEDA: SES MessageRejected echoes the recipient — it must not hit logs."""
+    addr = "mkkreddy52@gmail.com"
+    err = RuntimeError(f"MessageRejected: identities failed the check: {addr}")
+    factory, _ = _boto3_mock(send_side_effect=err)
+
+    with (
+        patch("settings_loader.get_app_settings", _settings(**_SES_SETTINGS)),
+        patch("boto3.client", factory),
+        caplog.at_level("ERROR"),
+    ):
+        ok = await send_transactional_email(to=addr, subject="Receipt", text="hi")
+
+    assert ok is False  # SES failed, no Resend configured
+    assert addr not in caplog.text  # raw address scrubbed
+    assert "MessageRejected" in caplog.text  # but the diagnostic survives
+
+
+@pytest.mark.anyio
 async def test_resend_used_when_ses_unconfigured():
     resend_client = _async_client_mock()
 

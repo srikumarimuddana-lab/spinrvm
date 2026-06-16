@@ -9,6 +9,8 @@ import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { useAuthStore } from '@shared/store/authStore';
+import { showToast } from '../store/toastStore';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
@@ -28,6 +30,84 @@ function decodePolyline(encoded: string): { latitude: number; longitude: number 
   return points;
 }
 
+const _num = (n: any): number => {
+  const v = typeof n === 'number' ? n : parseFloat(String(n ?? 0));
+  return Number.isFinite(v) ? v : 0;
+};
+const _money = (n: any): string => _num(n).toFixed(2);
+
+// Branded HTML receipt for the rider's own ride, rendered to PDF via expo-print.
+// PIPEDA: rider's own data only; driver block is name + vehicle (NO phone/plate).
+function buildReceiptHtml(ride: any): string {
+  const code = ride?.ride_code || String(ride?.id || '').slice(0, 8).toUpperCase() || '—';
+  const dateRaw = ride?.ride_completed_at || ride?.created_at;
+  const date = dateRaw ? new Date(dateRaw).toLocaleString() : '';
+  const driverName =
+    ride?.driver_name ||
+    `${ride?.driver?.first_name || ''} ${ride?.driver?.last_name || ''}`.trim();
+  const vehicle = ride?.driver_vehicle || '';
+
+  const line = (l: string, a: string) =>
+    `<tr><td style="color:#666;padding:4px 0">${l}</td><td style="text-align:right;color:#1a1a1a">${a}</td></tr>`;
+  const rows: string[] = [
+    line('Base fare', '$' + _money(ride?.base_fare)),
+    line(`Distance (${_num(ride?.distance_km).toFixed(1)} km)`, '$' + _money(ride?.distance_fare)),
+    line(`Time (${_num(ride?.duration_minutes).toFixed(0)} min)`, '$' + _money(ride?.time_fare)),
+  ];
+  if (_num(ride?.booking_fee) > 0) rows.push(line('Booking fee', '$' + _money(ride?.booking_fee)));
+  rows.push('<tr><td colspan="2" style="border-top:1px dashed #eee"></td></tr>');
+  rows.push(line('Subtotal', '$' + _money(ride?.total_fare)));
+
+  // GST/PST as separate line items from the persisted breakdown (SK regulatory);
+  // fall back to the grand_total gap so the lines reconcile to what was charged.
+  const tb = ride?.tax_breakdown && typeof ride.tax_breakdown === 'object' ? ride.tax_breakdown : {};
+  let hadTax = false;
+  for (const [label, payload] of Object.entries(tb)) {
+    const amt = _num((payload as any)?.amount);
+    const rate = _num((payload as any)?.rate);
+    if (amt === 0) continue;
+    hadTax = true;
+    rows.push(line(`${label}${rate ? ` (${rate.toFixed(0)}%)` : ''}`, '$' + _money(amt)));
+  }
+  if (!hadTax) {
+    const gap = _num(ride?.grand_total) - _num(ride?.total_fare);
+    if (gap > 0.005) rows.push(line('Tax', '$' + _money(gap)));
+  }
+  if (_num(ride?.tip_amount) > 0) rows.push(line('Tip', '$' + _money(ride?.tip_amount)));
+
+  const grand = _num(ride?.grand_total) + _num(ride?.tip_amount);
+  const driverBlock = driverName
+    ? `<tr><td style="padding:0 24px 16px"><table width="100%" style="background:#f9f9f9;border-radius:12px"><tr><td style="padding:12px 14px">
+       <p style="margin:0;font-size:13px;font-weight:600;color:#1a1a1a">${driverName}</p>
+       <p style="margin:2px 0 0;font-size:12px;color:#999">${vehicle || 'Your driver'}</p></td></tr></table></td></tr>`
+    : '';
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+  <body style="margin:0;background:#f5f5f5;font-family:-apple-system,Roboto,sans-serif">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;margin:0 auto;background:#fff">
+    <tr><td style="background:#ee2b2b;padding:24px;text-align:center">
+      <h1 style="color:#fff;margin:0;font-size:26px;font-weight:800">Spinr</h1>
+      <p style="color:rgba(255,255,255,.85);margin:4px 0 0;font-size:13px">Ride Receipt</p></td></tr>
+    <tr><td style="padding:20px 24px 0;text-align:center">
+      <p style="color:#ee2b2b;font-size:34px;font-weight:800;margin:0">$${_money(grand)} CAD</p>
+      <p style="color:#999;font-size:12px;margin:4px 0 0">${date}</p>
+      <p style="color:#999;font-size:11px;margin:6px 0 0">Ride <strong style="color:#1a1a1a">${code}</strong></p></td></tr>
+    <tr><td style="padding:16px 24px"><table width="100%" style="background:#f9f9f9;border-radius:12px"><tr><td style="padding:14px">
+      <p style="color:#999;font-size:10px;margin:0;text-transform:uppercase">Pickup</p>
+      <p style="color:#1a1a1a;font-size:13px;margin:2px 0 12px">${ride?.pickup_address || '—'}</p>
+      <p style="color:#999;font-size:10px;margin:0;text-transform:uppercase">Dropoff</p>
+      <p style="color:#1a1a1a;font-size:13px;margin:2px 0 0">${ride?.dropoff_address || '—'}</p></td></tr></table></td></tr>
+    <tr><td style="padding:0 24px 12px"><table width="100%" style="font-size:13px">${rows.join('')}
+      <tr><td colspan="2" style="border-top:1px solid #eee"></td></tr>
+      <tr><td style="padding:8px 0;font-weight:700;font-size:15px">Total</td>
+      <td style="text-align:right;color:#ee2b2b;font-weight:800;font-size:17px">$${_money(grand)}</td></tr></table></td></tr>
+    ${driverBlock}
+    <tr><td style="padding:12px 24px 24px;text-align:center;border-top:1px solid #f0f0f0">
+      <p style="color:#bbb;font-size:11px;margin:0">Spinr Technologies Inc. · Saskatoon, SK</p>
+      <p style="color:#bbb;font-size:11px;margin:3px 0 0">support@spinr.ca · www.spinr.ca</p></td></tr>
+  </table></body></html>`;
+}
+
 export default function RideDetailsScreen() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
@@ -36,7 +116,44 @@ export default function RideDetailsScreen() {
   const [ride, setRide] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [fallbackCoords, setFallbackCoords] = useState<any[]>([]);
+  const [emailSending, setEmailSending] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
   const mapRef = React.useRef<MapView>(null);
+
+  const handleEmailReceipt = async () => {
+    if (emailSending) return;
+    setEmailSending(true);
+    try {
+      await api.post(`/rides/${rideId}/email-receipt`);
+      const user = useAuthStore.getState().user;
+      showToast('Receipt Sent', `Receipt emailed to ${user?.email || 'your registered email'}.`, 'success');
+    } catch (e: any) {
+      showToast('Failed', e?.response?.data?.detail || e?.message || 'Could not send receipt email.', 'danger');
+    } finally {
+      setEmailSending(false);
+    }
+  };
+
+  const handleDownloadInvoice = async () => {
+    if (pdfBusy) return;
+    setPdfBusy(true);
+    try {
+      // Native modules — dynamic import so an older build without them degrades
+      // gracefully (caught below) instead of crashing at startup.
+      const Print = await import('expo-print');
+      const Sharing = await import('expo-sharing');
+      const { uri } = await Print.printToFileAsync({ html: buildReceiptHtml(ride) });
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Spinr ride receipt' });
+      } else {
+        showToast('Saved', 'Receipt PDF generated.', 'success');
+      }
+    } catch (e: any) {
+      showToast('Unavailable', 'Updating to the latest app version enables PDF export.', 'danger');
+    } finally {
+      setPdfBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (rideId) fetchRide();
@@ -363,6 +480,26 @@ export default function RideDetailsScreen() {
           </View>
         </View>
 
+        {/* Receipt actions (completed rides only) */}
+        {isCompleted && (
+          <TouchableOpacity style={styles.actionBtn} onPress={handleEmailReceipt} disabled={emailSending}>
+            <Ionicons name="mail-outline" size={20} color={colors.primary} />
+            <Text style={styles.actionText}>{emailSending ? 'Sending…' : 'Email receipt'}</Text>
+            {emailSending
+              ? <ActivityIndicator size="small" color={colors.primary} />
+              : <Ionicons name="chevron-forward" size={16} color={colors.border} />}
+          </TouchableOpacity>
+        )}
+        {isCompleted && (
+          <TouchableOpacity style={styles.actionBtn} onPress={handleDownloadInvoice} disabled={pdfBusy}>
+            <Ionicons name="download-outline" size={20} color={colors.primary} />
+            <Text style={styles.actionText}>{pdfBusy ? 'Preparing…' : 'Download invoice (PDF)'}</Text>
+            {pdfBusy
+              ? <ActivityIndicator size="small" color={colors.primary} />
+              : <Ionicons name="chevron-forward" size={16} color={colors.border} />}
+          </TouchableOpacity>
+        )}
+
         {/* Help */}
         <TouchableOpacity style={styles.helpBtn} onPress={() => router.push('/support' as any)}>
           <Ionicons name="help-circle-outline" size={20} color={colors.primary} />
@@ -450,5 +587,10 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 16,
     },
     helpText: { flex: 1, fontSize: 14, fontWeight: '600', color: colors.primary },
+    actionBtn: {
+      flexDirection: 'row', alignItems: 'center', gap: 10,
+      backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 16, marginBottom: 12,
+    },
+    actionText: { flex: 1, fontSize: 14, fontWeight: '600', color: colors.text },
   });
 }

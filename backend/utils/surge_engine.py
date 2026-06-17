@@ -7,6 +7,8 @@ service_areas.surge_multiplier for areas where surge_source == 'auto'.
 """
 
 import asyncio
+import json
+import os
 import random
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -40,6 +42,11 @@ except ImportError:
 # The real fix is a server-side spatial count (PostGIS ST_Covers + GIST index);
 # tracked as ACTION_ITEMS D1.
 _SURGE_FETCH_CAP = 5000
+
+# D1: enable the PostGIS server-side supply count (migration 170). Off by default
+# so applying the migration changes nothing until it's been rehearsed on staging;
+# flip SURGE_SPATIAL_COUNT=true to activate. The path is fallback-safe regardless.
+_SURGE_SPATIAL_COUNT = os.environ.get("SURGE_SPATIAL_COUNT", "").strip().lower() in ("1", "true", "yes", "on")
 
 # ── Surge tier mapping ───────────────────────────────────────────────
 # Maps demand/supply ratio to multiplier. Thresholds are tuned for a
@@ -104,11 +111,51 @@ async def _count_demand_in_area(area_id: str) -> int:
         return 0
 
 
+async def _count_supply_spatial(poly: List[Dict[str, float]]) -> int:
+    """PostGIS supply count via the drivers_available_in_polygon RPC (D1).
+
+    Builds a GeoJSON polygon with [lng, lat] ordering (what ST_GeomFromGeoJSON
+    expects — we construct it ourselves so there's no axis-swap risk), runs the
+    SECURITY DEFINER spatial lookup (index-only, no row cap), then applies the
+    Redis presence filter in Python so ghost-online drivers are excluded — same
+    semantics as the Python scan, without the truncation cap.
+    """
+    ring = [[p["lng"], p["lat"]] for p in poly]
+    if ring[0] != ring[-1]:
+        ring.append(ring[0])  # GeoJSON rings must be closed
+    geojson = json.dumps({"type": "Polygon", "coordinates": [ring]})
+    rows = await db.rpc("drivers_available_in_polygon", {"p_polygon_geojson": geojson}) or []
+    driver_ids = [r["driver_id"] for r in rows if r.get("driver_id")]
+    if not driver_ids:
+        return 0
+    try:
+        present = await present_driver_ids(driver_ids)
+        if present:
+            driver_ids = [d for d in driver_ids if d in present]
+    except Exception as exc:
+        logger.warning(f"Surge: presence filter failed (spatial), using DB state: {exc}")
+    return len(driver_ids)
+
+
 async def _count_supply_in_area(area: Dict[str, Any]) -> int:
     """Count online+available drivers within a service area polygon."""
     poly = get_service_area_polygon(area)
     if not poly:
         return 0
+
+    # D1: server-side spatial count (no row cap, index-only). Flag-gated and
+    # fully fallback-safe — on any error (flag off, migration 170 not applied,
+    # extension missing, RPC issue) we fall through to the Python scan below, so
+    # surge never breaks.
+    if _SURGE_SPATIAL_COUNT:
+        try:
+            return await _count_supply_spatial(poly)
+        except Exception as exc:
+            logger.warning(
+                f"Surge: spatial supply count failed for area {area.get('id')}, "
+                f"falling back to Python scan: {exc}",
+                exc_info=False,
+            )
 
     try:
         drivers = await db.get_rows(

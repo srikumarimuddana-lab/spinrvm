@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import {
     Table,
@@ -38,10 +39,10 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { Pagination } from "@/components/ui/pagination";
-import { Users, Search, Mail, Phone, MapPin, Star, Calendar, Car, ShieldCheck, Download, RefreshCw, Ban, CheckCircle, AlertTriangle, Wallet, Plus, Minus, Eye, EyeOff } from "lucide-react";
+import { Users, Search, Mail, Phone, Calendar, Car, ShieldCheck, Download, RefreshCw, Ban, CheckCircle, AlertTriangle, Wallet, Plus, Minus, Eye, EyeOff } from "lucide-react";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatDate } from "@/lib/utils";
-import { getUsersPaginated, updateUserStatus, updateUserFlags, getStats, getUserWallet, creditUserWallet, debitUserWallet, exportUsers, logPiiReveal } from "@/lib/api";
+import { getUsersPaginated, getUserDetails, updateUserStatus, updateUserFlags, getStats, getUserWallet, creditUserWallet, debitUserWallet, exportUsers, logPiiReveal } from "@/lib/api";
 import { maskEmail, maskPhone } from "@/lib/pii";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useToast } from "@/components/ui/use-toast";
@@ -58,6 +59,9 @@ export default function UsersPage() {
     const [statusUpdating, setStatusUpdating] = useState<string | null>(null);
     const [roleFilter, setRoleFilter] = useState<"all" | "rider" | "driver" | "both">("all");
     const [selectedUser, setSelectedUser] = useState<any>(null);
+    // Real lifetime ride count for the open user — the list row has no count
+    // (it's not a users column); the detail endpoint computes it on demand.
+    const [detailRides, setDetailRides] = useState<number | null>(null);
     const [page, setPage] = useState(0);
     const [hasNextPage, setHasNextPage] = useState(false);
     const [stats, setStats] = useState<{ total_users: number; total_drivers: number } | null>(null);
@@ -66,6 +70,9 @@ export default function UsersPage() {
     const [showPii, setShowPii] = useState(false);
 
     const [pendingStatusChange, setPendingStatusChange] = useState<{ id: string; status: "suspended" | "banned"; name: string } | null>(null);
+    // Moderation note (required) + optional suspension length (days; "" = indefinite).
+    const [moderationReason, setModerationReason] = useState("");
+    const [moderationDays, setModerationDays] = useState<string>("");
     const [pendingWalletAction, setPendingWalletAction] = useState<{ action: "credit" | "debit"; amount: number; reason: string } | null>(null);
 
     // Wallet state for the user-details dialog
@@ -159,13 +166,11 @@ export default function UsersPage() {
                 phone: u.phone,
                 role: u.role,
                 created_at: u.created_at,
-                total_rides: u.total_rides || 0,
-                rating: u.rating || null,
-                is_verified: u.is_verified ?? true,
                 is_rider: u.is_rider,
                 is_driver: u.is_driver,
-                city: u.city,
                 status: u.status || "active",
+                status_reason: u.status_reason ?? null,
+                suspended_until: u.suspended_until ?? null,
             }));
             setUsers(transformed);
         } catch (err: any) {
@@ -183,6 +188,19 @@ export default function UsersPage() {
     useEffect(() => {
         getStats().then((s) => setStats(s)).catch(() => setStats(null));
     }, []);
+
+    // Fetch the open user's real lifetime ride count (detail endpoint computes
+    // it from the rides table). Guarded against races when switching users.
+    useEffect(() => {
+        if (!selectedUser?.id) { setDetailRides(null); return; }
+        const id = selectedUser.id;
+        let active = true;
+        setDetailRides(null);
+        getUserDetails(id)
+            .then((d) => { if (active) setDetailRides(d?.total_rides ?? 0); })
+            .catch(() => {});
+        return () => { active = false; };
+    }, [selectedUser?.id]);
 
     // Reset to page 0 when filters change (debounce search).
     useEffect(() => {
@@ -208,10 +226,7 @@ export default function UsersPage() {
                 { key: 'name', label: 'Name' },
                 { key: 'email', label: 'Email' },
                 { key: 'phone', label: 'Phone' },
-                { value: (u: any) => u.city || 'N/A', label: 'City' },
-                { value: (u: any) => u.total_rides || 0, label: 'Total Rides' },
-                { value: (u: any) => u.rating || 'N/A', label: 'Rating' },
-                { value: (u: any) => u.is_verified ? 'Yes' : 'No', label: 'Verified' },
+                { value: (u: any) => (u.is_rider ? 'Rider' : '') + (u.is_rider && u.is_driver ? ' / ' : '') + (u.is_driver ? 'Driver' : ''), label: 'Role' },
                 { value: (u: any) => formatDate(u.created_at), label: 'Joined Date' },
             ]);
             toast({ title: "Export complete", description: `${res.count ?? 0} users exported.` });
@@ -276,28 +291,10 @@ export default function UsersPage() {
                 <Card>
                     <CardContent className="pt-4 pb-3">
                         <div className="flex items-center gap-2">
-                            <ShieldCheck className="h-5 w-5 text-emerald-500" />
+                            <Users className="h-5 w-5 text-emerald-500" />
                             <div>
-                                <p className="text-xs text-muted-foreground">Verified (page)</p>
-                                <p className="text-2xl font-bold">{users.filter(u => u.is_verified).length}</p>
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardContent className="pt-4 pb-3">
-                        <div className="flex items-center gap-2">
-                            <Star className="h-5 w-5 text-amber-400 fill-amber-400" />
-                            <div>
-                                <p className="text-xs text-muted-foreground">Avg Rating (page)</p>
-                                <p className="text-2xl font-bold">
-                                    {(() => {
-                                        const rated = users.filter(u => u.rating != null);
-                                        return rated.length > 0
-                                            ? (rated.reduce((s, u) => s + u.rating, 0) / rated.length).toFixed(1)
-                                            : "N/A";
-                                    })()}
-                                </p>
+                                <p className="text-xs text-muted-foreground">Riders (page)</p>
+                                <p className="text-2xl font-bold">{users.filter(u => u.is_rider).length}</p>
                             </div>
                         </div>
                     </CardContent>
@@ -307,10 +304,19 @@ export default function UsersPage() {
                         <div className="flex items-center gap-2">
                             <Car className="h-5 w-5 text-violet-500" />
                             <div>
-                                <p className="text-xs text-muted-foreground">Total Rides (page)</p>
-                                <p className="text-2xl font-bold">
-                                    {users.reduce((s, u) => s + (u.total_rides || 0), 0)}
-                                </p>
+                                <p className="text-xs text-muted-foreground">Drivers (page)</p>
+                                <p className="text-2xl font-bold">{users.filter(u => u.is_driver).length}</p>
+                            </div>
+                        </div>
+                    </CardContent>
+                </Card>
+                <Card>
+                    <CardContent className="pt-4 pb-3">
+                        <div className="flex items-center gap-2">
+                            <ShieldCheck className="h-5 w-5 text-sky-500" />
+                            <div>
+                                <p className="text-xs text-muted-foreground">Dual-role (page)</p>
+                                <p className="text-2xl font-bold">{users.filter(u => u.is_rider && u.is_driver).length}</p>
                             </div>
                         </div>
                     </CardContent>
@@ -380,9 +386,7 @@ export default function UsersPage() {
                                     <TableRow>
                                         <TableHead>Name</TableHead>
                                         <TableHead>Contact</TableHead>
-                                        <TableHead>City</TableHead>
-                                        <TableHead>Rides</TableHead>
-                                        <TableHead>Rating</TableHead>
+                                        <TableHead>Role</TableHead>
                                         <TableHead>Status</TableHead>
                                         <TableHead>Joined</TableHead>
                                         <TableHead className="text-right">Actions</TableHead>
@@ -391,7 +395,7 @@ export default function UsersPage() {
                                 <TableBody>
                                     {users.length === 0 ? (
                                         <TableRow>
-                                            <TableCell colSpan={8} className="text-center text-muted-foreground py-12">
+                                            <TableCell colSpan={6} className="text-center text-muted-foreground py-12">
                                                 No users found.
                                             </TableCell>
                                         </TableRow>
@@ -417,31 +421,28 @@ export default function UsersPage() {
                                                     </div>
                                                 </TableCell>
                                                 <TableCell>
-                                                    <div className="flex items-center gap-1">
-                                                        <MapPin className="h-3 w-3 text-muted-foreground" />
-                                                        {user.city || "N/A"}
-                                                    </div>
-                                                </TableCell>
-                                                <TableCell>
-                                                    <div className="flex items-center gap-1">
-                                                        <Car className="h-3 w-3 text-muted-foreground" />
-                                                        {user.total_rides || 0}
-                                                    </div>
-                                                </TableCell>
-                                                <TableCell>
-                                                    <div className="flex items-center gap-1">
-                                                        <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
-                                                        {user.rating != null ? user.rating.toFixed(1) : "N/A"}
+                                                    <div className="flex flex-wrap items-center gap-1">
+                                                        {user.is_rider && (
+                                                            <Badge variant="secondary" className="bg-sky-500/15 text-sky-600">Rider</Badge>
+                                                        )}
+                                                        {user.is_driver && (
+                                                            <Badge variant="secondary" className="bg-violet-500/15 text-violet-600">Driver</Badge>
+                                                        )}
+                                                        {!user.is_rider && !user.is_driver && (
+                                                            <span className="text-muted-foreground">—</span>
+                                                        )}
                                                     </div>
                                                 </TableCell>
                                                 <TableCell>
                                                     <Badge className={
                                                         user.status === "banned" ? "bg-red-500/15 text-red-600"
                                                         : user.status === "suspended" ? "bg-amber-500/15 text-amber-600"
+                                                        : user.status === "pending_deletion" ? "bg-orange-500/15 text-orange-600"
                                                         : "bg-emerald-500/15 text-emerald-600"
                                                     }>
                                                         {user.status === "banned" ? "Banned"
                                                         : user.status === "suspended" ? "Suspended"
+                                                        : user.status === "pending_deletion" ? "Pending deletion"
                                                         : "Active"}
                                                     </Badge>
                                                 </TableCell>
@@ -489,9 +490,14 @@ export default function UsersPage() {
                                 </div>
                                 <div>
                                     <p className="text-lg font-semibold">{selectedUser.name}</p>
-                                    <Badge variant={selectedUser.is_verified ? "default" : "secondary"} className={selectedUser.is_verified ? "bg-emerald-500" : ""}>
-                                        {selectedUser.is_verified ? "Verified" : "Unverified"}
-                                    </Badge>
+                                    <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                                        {selectedUser.is_rider && (
+                                            <Badge variant="secondary" className="bg-sky-500/15 text-sky-600">Rider</Badge>
+                                        )}
+                                        {selectedUser.is_driver && (
+                                            <Badge variant="secondary" className="bg-violet-500/15 text-violet-600">Driver</Badge>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
 
@@ -510,31 +516,15 @@ export default function UsersPage() {
                                 </div>
                                 <div className="space-y-1">
                                     <Label className="text-xs text-muted-foreground flex items-center gap-1">
-                                        <MapPin className="h-3 w-3" /> City
-                                    </Label>
-                                    <p className="text-sm">{selectedUser.city || "N/A"}</p>
-                                </div>
-                                <div className="space-y-1">
-                                    <Label className="text-xs text-muted-foreground flex items-center gap-1">
                                         <Calendar className="h-3 w-3" /> Joined
                                     </Label>
                                     <p className="text-sm">{formatDate(selectedUser.created_at)}</p>
                                 </div>
-                            </div>
-
-                            <div className="border-t pt-4">
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div className="rounded-lg bg-muted/50 p-3 text-center">
-                                        <p className="text-xs text-muted-foreground">Total Rides</p>
-                                        <p className="text-2xl font-bold">{selectedUser.total_rides || 0}</p>
-                                    </div>
-                                    <div className="rounded-lg bg-muted/50 p-3 text-center">
-                                        <p className="text-xs text-muted-foreground">Rating</p>
-                                        <p className="text-2xl font-bold flex items-center justify-center gap-1">
-                                            <Star className="h-4 w-4 fill-amber-400 text-amber-400" />
-                                            {selectedUser.rating != null ? selectedUser.rating.toFixed(1) : "N/A"}
-                                        </p>
-                                    </div>
+                                <div className="space-y-1">
+                                    <Label className="text-xs text-muted-foreground flex items-center gap-1">
+                                        <Car className="h-3 w-3" /> Total rides
+                                    </Label>
+                                    <p className="text-sm">{detailRides == null ? "…" : detailRides.toLocaleString()}</p>
                                 </div>
                             </div>
 
@@ -545,13 +535,29 @@ export default function UsersPage() {
                                     <Badge className={
                                         selectedUser.status === "banned" ? "bg-red-500/15 text-red-600"
                                         : selectedUser.status === "suspended" ? "bg-amber-500/15 text-amber-600"
+                                        : selectedUser.status === "pending_deletion" ? "bg-orange-500/15 text-orange-600"
                                         : "bg-emerald-500/15 text-emerald-600"
                                     }>
                                         {selectedUser.status === "banned" ? "Banned"
                                         : selectedUser.status === "suspended" ? "Suspended"
+                                        : selectedUser.status === "pending_deletion" ? "Pending deletion"
                                         : "Active"}
                                     </Badge>
                                 </div>
+                                {selectedUser.status !== "active" && (selectedUser.status_reason || selectedUser.suspended_until) && (
+                                    <div className="mb-3 rounded-md bg-muted/50 p-2 text-xs space-y-0.5">
+                                        {selectedUser.status_reason && (
+                                            <p><span className="text-muted-foreground">Reason: </span>{selectedUser.status_reason}</p>
+                                        )}
+                                        {selectedUser.status === "suspended" && (
+                                            <p className="text-muted-foreground">
+                                                {selectedUser.suspended_until
+                                                    ? `Auto-lifts ${formatDate(selectedUser.suspended_until)}`
+                                                    : "Indefinite — until reactivated"}
+                                            </p>
+                                        )}
+                                    </div>
+                                )}
                                 <div className="flex gap-2">
                                     {selectedUser.status !== "active" && (
                                         <Button
@@ -826,7 +832,7 @@ export default function UsersPage() {
                 </AlertDialogContent>
             </AlertDialog>
 
-            <AlertDialog open={!!pendingStatusChange} onOpenChange={(open) => !open && setPendingStatusChange(null)}>
+            <AlertDialog open={!!pendingStatusChange} onOpenChange={(open) => { if (!open) { setPendingStatusChange(null); setModerationReason(""); setModerationDays(""); } }}>
                 <AlertDialogContent>
                     <AlertDialogHeader>
                         <AlertDialogTitle>
@@ -834,22 +840,70 @@ export default function UsersPage() {
                         </AlertDialogTitle>
                         <AlertDialogDescription>
                             {pendingStatusChange?.status === "banned"
-                                ? `${pendingStatusChange?.name} will be permanently banned and unable to book rides or log in.`
-                                : `${pendingStatusChange?.name} will be suspended and unable to book rides until reactivated.`}
+                                ? `${pendingStatusChange?.name} will be deactivated and unable to book rides until an admin reactivates the account.`
+                                : `${pendingStatusChange?.name} will be unable to book rides for the chosen period.`}
                         </AlertDialogDescription>
                     </AlertDialogHeader>
+
+                    <div className="space-y-3 py-1">
+                        <div className="space-y-1.5">
+                            <Label className="text-xs">Reason <span className="text-red-500">*</span></Label>
+                            <div className="flex flex-wrap gap-1.5">
+                                {["Payment / chargeback", "Safety report", "Policy violation", "Fraud / abuse"].map((r) => (
+                                    <button
+                                        key={r}
+                                        type="button"
+                                        onClick={() => setModerationReason(r)}
+                                        className="text-[11px] rounded-full border px-2 py-0.5 hover:bg-muted"
+                                    >
+                                        {r}
+                                    </button>
+                                ))}
+                            </div>
+                            <Textarea
+                                value={moderationReason}
+                                onChange={(e) => setModerationReason(e.target.value)}
+                                placeholder="Shown to the rider and recorded in the audit log."
+                                className="min-h-[72px] text-sm"
+                            />
+                        </div>
+                        {pendingStatusChange?.status === "suspended" && (
+                            <div className="space-y-1.5">
+                                <Label className="text-xs">Duration</Label>
+                                <Select value={moderationDays || "0"} onValueChange={(v) => setModerationDays(v === "0" ? "" : v)}>
+                                    <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="0">Indefinite (until reactivated)</SelectItem>
+                                        <SelectItem value="1">24 hours</SelectItem>
+                                        <SelectItem value="7">7 days</SelectItem>
+                                        <SelectItem value="30">30 days</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                        )}
+                    </div>
+
                     <AlertDialogFooter>
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
                         <AlertDialogAction
                             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                            onClick={async () => {
+                            disabled={!moderationReason.trim() || statusUpdating === pendingStatusChange?.id}
+                            onClick={async (e) => {
                                 if (!pendingStatusChange) return;
-                                setStatusUpdating(pendingStatusChange.id);
+                                if (!moderationReason.trim()) { e.preventDefault(); return; }
+                                const change = pendingStatusChange;
+                                const reason = moderationReason.trim();
+                                const suspended_until =
+                                    change.status === "suspended" && moderationDays
+                                        ? new Date(Date.now() + Number(moderationDays) * 86400000).toISOString()
+                                        : undefined;
+                                setStatusUpdating(change.id);
                                 try {
-                                    await updateUserStatus(pendingStatusChange.id, { status: pendingStatusChange.status });
-                                    setSelectedUser((prev: any) => prev ? { ...prev, status: pendingStatusChange.status } : prev);
-                                    setUsers(prev => prev.map(u => u.id === pendingStatusChange.id ? { ...u, status: pendingStatusChange.status } : u));
-                                    toast({ title: `User ${pendingStatusChange.status === "banned" ? "banned" : "suspended"}` });
+                                    await updateUserStatus(change.id, { status: change.status, reason, suspended_until });
+                                    const patch = { status: change.status, status_reason: reason, suspended_until: suspended_until ?? null };
+                                    setSelectedUser((prev: any) => prev ? { ...prev, ...patch } : prev);
+                                    setUsers(prev => prev.map(u => u.id === change.id ? { ...u, ...patch } : u));
+                                    toast({ title: `User ${change.status === "banned" ? "banned" : "suspended"}` });
                                 } catch (err: any) {
                                     console.error('[UsersPage] Failed to update user status:', err);
                                     toast({ title: "Failed to update user status", description: err?.message, variant: "destructive" });
@@ -857,6 +911,8 @@ export default function UsersPage() {
                                     setStatusUpdating(null);
                                 }
                                 setPendingStatusChange(null);
+                                setModerationReason("");
+                                setModerationDays("");
                             }}
                         >
                             {pendingStatusChange?.status === "banned" ? "Ban user" : "Suspend user"}

@@ -2074,13 +2074,27 @@ async def create_ride(
     if user_status == "banned":
         raise HTTPException(
             status_code=403,
-            detail="Your account has been suspended due to policy violations.",
+            detail=(rider_row or {}).get("status_reason")
+            or "Your account has been deactivated due to policy violations. Please contact support.",
         )
     if user_status == "suspended":
-        raise HTTPException(
-            status_code=403,
-            detail="Your account is currently suspended. Please contact support.",
-        )
+        # A temporary suspension (suspended_until set) auto-lifts once that time
+        # passes — the rider can book again without an admin reactivating.
+        suspended_until = (rider_row or {}).get("suspended_until")
+        still_suspended = True
+        if suspended_until:
+            try:
+                still_suspended = datetime.fromisoformat(
+                    str(suspended_until).replace("Z", "+00:00")
+                ) > datetime.now(timezone.utc)
+            except ValueError:
+                still_suspended = True
+        if still_suspended:
+            raise HTTPException(
+                status_code=403,
+                detail=(rider_row or {}).get("status_reason")
+                or "Your account is currently suspended. Please contact support.",
+            )
     if body.payment_method == "card" and not body.work_profile:
         if not rider_row or not rider_row.get("stripe_customer_id"):
             raise HTTPException(

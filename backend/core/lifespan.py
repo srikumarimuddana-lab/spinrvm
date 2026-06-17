@@ -347,6 +347,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to import stuck ride sweeper: {e}", exc_info=True)
 
+    # Auto-reactivation of expired temporary rider suspensions — flips status
+    # back to active once suspended_until passes so the admin list isn't stale.
+    # Atomic conditional update keeps it replay-safe across replicas.
+    try:
+        from utils.suspension_reactivation import suspension_reactivation_loop
+
+        _spawn("suspension_reactivation (10min)", suspension_reactivation_loop)
+    except Exception as e:
+        logger.error(f"Failed to import suspension reactivation loop: {e}", exc_info=True)
+
     # Push notification retry loop — re-attempts FCM/Expo deliveries for
     # dispatch and safety priority pushes that failed on first attempt.
     # Uses exponential back-off (60 s × 2^attempt) up to _MAX_ATTEMPTS=5.

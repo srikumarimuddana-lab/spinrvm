@@ -10,13 +10,13 @@ from pydantic import BaseModel
 
 try:
     from ... import db_supabase
-    from ...dependencies import get_admin_user
     from ...db_supabase import run_sync
+    from ...dependencies import get_admin_user
     from ...settings_loader import get_app_settings
 except ImportError:
     import db_supabase
-    from dependencies import get_admin_user
     from db_supabase import run_sync
+    from dependencies import get_admin_user
     from settings_loader import get_app_settings
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,9 @@ router = APIRouter()
 # client-side. They must NOT be listed here — projecting a non-existent column
 # makes Postgres raise 42703 ("column does not exist") and the endpoint 503s.
 # The single-user detail endpoint (admin_get_user_details) still selects *.
-_USER_LIST_COLUMNS = "id,first_name,last_name,email,phone,role,created_at,is_rider,is_driver,status,status_reason,suspended_until"
+_USER_LIST_COLUMNS = (
+    "id,first_name,last_name,email,phone,role,created_at,is_rider,is_driver,status,status_reason,suspended_until"
+)
 
 
 class UserStatusRequest(BaseModel):
@@ -162,21 +164,38 @@ async def _list_user_cards(user: Dict[str, Any]) -> tuple[Optional[List[Dict[str
         return None, "Could not load cards from Stripe."
 
 
+# Columns the admin detail view renders for a rider's recent rides. Explicitly
+# EXCLUDES raw GPS (pickup_lat/lng, dropoff_lat/lng) and any route polyline —
+# PIPEDA forbids raw coordinates leaving the data store; the UI only shows the
+# address text, status, fare and date.
+_DETAIL_RIDE_COLUMNS = "id,status,pickup_address,dropoff_address,total_fare,created_at"
+
+
 @router.get("/users/{user_id}")
-async def admin_get_user_details(user_id: str):
+async def admin_get_user_details(user_id: str, admin: dict = Depends(get_admin_user)):
     """Get detailed user information: profile, recent rides, total ride count,
     and the masked (last-4) cards on file from Stripe."""
     user = await db_supabase.get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Get user's recent rides
-    rides = await db_supabase.get_rows("rides", {"rider_id": user_id}, order="created_at", desc=True, limit=10)
+    # Recent rides — projected to exclude raw GPS coordinates (PIPEDA).
+    rides = await db_supabase.get_rows(
+        "rides",
+        {"rider_id": user_id},
+        columns=_DETAIL_RIDE_COLUMNS,
+        order="created_at",
+        desc=True,
+        limit=10,
+    )
 
     cards, cards_error = await _list_user_cards(user)
 
+    # Drop the heavy base64 profile_image blob (same reason the list endpoint
+    # projects it out). Build a NEW dict — never mutate the cached user row.
+    safe_user = {k: v for k, v in user.items() if k != "profile_image"}
     return {
-        **user,
+        **safe_user,
         "total_rides": await db_supabase.count_documents("rides", {"rider_id": user_id}),
         "recent_rides": rides,
         "cards": cards,

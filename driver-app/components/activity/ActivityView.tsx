@@ -4,6 +4,7 @@ import {
   Text,
   StyleSheet,
   ScrollView,
+  FlatList,
   ActivityIndicator,
   TouchableOpacity,
 } from 'react-native';
@@ -105,8 +106,128 @@ export default function ActivityView() {
       ? true
       : (statusFilter === 'all' && periodRideTotal > filteredRides.length) || filteredRides.length >= PAGE_SIZE);
 
-  return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+  // #6: render one ride card. Extracted from the inline map so the list can be
+  // virtualized by FlatList. Wrapped in the 16px horizontal inset that the old
+  // `ridesSection` View used to provide (rideCard has no inset of its own).
+  const renderRideCard = ({ item: ride }: { item: any }) => {
+    const isCompleted = ride.status === 'completed';
+    const isCancelled = ride.status === 'cancelled';
+    const statusColor = isCompleted ? '#10b981' : isCancelled ? '#ef4444' : '#f59e0b';
+    const statusBg = isCompleted ? 'rgba(16,185,129,0.1)' : isCancelled ? 'rgba(239,68,68,0.1)' : 'rgba(245,158,11,0.1)';
+    const statusLabel = isCompleted ? 'Completed' : isCancelled ? 'Cancelled' : 'Scheduled';
+    const statusIcon = isCompleted ? 'checkmark-circle' : isCancelled ? 'close-circle' : 'time';
+
+    const date = ride.ride_completed_at || (ride as any).cancelled_at || ride.created_at;
+    const tipAmount = parseMoney((ride as any).tip_amount);
+    const incentiveAmount = parseMoney((ride as any).incentive_amount);
+    const totalEarned = parseMoney((ride as any).total_earned);
+
+    return (
+      <View style={styles.ridesSection}>
+        <TouchableOpacity
+          style={styles.rideCard}
+          activeOpacity={0.7}
+          onPress={() => router.push(`/driver/ride-detail?id=${ride.id}` as any)}
+        >
+          {/* Top row: status + date */}
+          <View style={styles.rideTopRow}>
+            <View style={[styles.statusBadge, { backgroundColor: statusBg }]}>
+              <Ionicons name={statusIcon as any} size={14} color={statusColor} />
+              <Text style={[styles.statusText, { color: statusColor }]}>{statusLabel}</Text>
+            </View>
+            <View style={{ alignItems: 'flex-end' }}>
+              <Text style={styles.dateText}>
+                {date ? new Date(date).toLocaleDateString('en', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}
+              </Text>
+              <Text style={styles.rideCodeText}>
+                {ride.ride_code ? String(ride.ride_code) : `#${String(ride.id).substring(0, 8).toUpperCase()}`}
+              </Text>
+            </View>
+          </View>
+
+          {/* Route: pickup → dropoff */}
+          <View style={styles.routeContainer}>
+            <View style={styles.routeDots}>
+              <View style={[styles.dot, { backgroundColor: '#ef4444' }]} />
+              <View style={styles.routeLine} />
+              <View style={[styles.dot, { backgroundColor: '#10b981' }]} />
+            </View>
+            <View style={styles.routeAddresses}>
+              <View>
+                <Text style={styles.routeLabel}>PICKUP</Text>
+                <Text style={styles.routeAddress} numberOfLines={1}>
+                  {ride.pickup_address || 'Unknown'}
+                </Text>
+              </View>
+              <View style={{ height: 16 }} />
+              <View>
+                <Text style={styles.routeLabel}>DROP-OFF</Text>
+                <Text style={styles.routeAddress} numberOfLines={1}>
+                  {ride.dropoff_address || 'Unknown'}
+                </Text>
+              </View>
+            </View>
+          </View>
+
+          {/* Bottom row: trip meta + fare */}
+          <View style={styles.rideBottomRow}>
+            <View style={styles.tripMeta}>
+              {ride.distance_km != null && (
+                <View style={styles.metaBadge}>
+                  <Ionicons name="map-outline" size={13} color="#9ca3af" />
+                  <Text style={styles.metaText}>{ride.distance_km.toFixed(1)} km</Text>
+                </View>
+              )}
+              {ride.duration_minutes != null && (
+                <View style={styles.metaBadge}>
+                  <Ionicons name="time-outline" size={13} color="#9ca3af" />
+                  <Text style={styles.metaText}>{ride.duration_minutes} min</Text>
+                </View>
+              )}
+            </View>
+            <View style={{ alignItems: 'flex-end' }}>
+              {isCompleted ? (
+                <>
+                  <Text style={styles.fareAmount}>${toMoney(totalEarned)}</Text>
+                  {(tipAmount > 0 || incentiveAmount > 0) && (
+                    <Text style={styles.tipText}>
+                      {[
+                        tipAmount > 0 ? `$${toMoney(tipAmount)} tip` : '',
+                        incentiveAmount > 0 ? `$${toMoney(incentiveAmount)} bonus` : '',
+                      ].filter(Boolean).join(' + ')}
+                    </Text>
+                  )}
+                </>
+              ) : isCancelled ? (
+                parseMoney((ride as any).cancel_fee_earned) > 0 ? (
+                  <>
+                    <Text style={[styles.fareAmount, { color: '#f59e0b' }]}>
+                      +${toMoney((ride as any).cancel_fee_earned)}
+                    </Text>
+                    <Text style={styles.cancelFeeText}>
+                      {(ride as any).cancellation_type === 'noshow' ? 'No-show fee' : 'Cancel fee'}
+                    </Text>
+                  </>
+                ) : (
+                  <Text style={[styles.fareAmount, { color: '#9ca3af', fontSize: 16 }]}>$0.00</Text>
+                )
+              ) : (
+                <Text style={styles.fareAmount}>Est. ${toMoney(parseMoney((ride as any).driver_earnings))}</Text>
+              )}
+            </View>
+          </View>
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
+  // #6: FlatList virtualizes the (potentially long, 'all'-period) ride history
+  // that was previously a filteredRides.map() inside a ScrollView — rendering
+  // every row at once. The chrome (pills/earnings/stats/section header/status
+  // pills) is the ListHeaderComponent; empty + load-more are the empty/footer
+  // slots. Each preserves the 16px inset the old `ridesSection` View provided.
+  const listHeader = (
+    <>
       {/* Period pills */}
       <View style={styles.pillRow}>
         {(['today', 'week', 'month', 'all'] as Period[]).map((item) => (
@@ -201,7 +322,8 @@ export default function ActivityView() {
             </View>
           </View>
 
-          {/* Rides section */}
+          {/* Rides section header + status filter. The ride cards themselves are
+              virtualized below as FlatList items (see renderRideCard). */}
           <View style={styles.ridesSection}>
             <View style={styles.ridesSectionHeader}>
               <Text style={styles.sectionTitle}>Your Rides</Text>
@@ -222,145 +344,54 @@ export default function ActivityView() {
                 </TouchableOpacity>
               ))}
             </ScrollView>
-
-            {/* Ride cards */}
-            {filteredRides.length === 0 ? (
-              <View style={styles.emptyState}>
-                <Ionicons name="car-sport-outline" size={48} color="#d1d5db" />
-                <Text style={styles.emptyTitle}>No Rides Found</Text>
-                <Text style={styles.emptyDesc}>No rides match this filter for the selected period.</Text>
-              </View>
-            ) : (
-              filteredRides.map((ride) => {
-                const isCompleted = ride.status === 'completed';
-                const isCancelled = ride.status === 'cancelled';
-                const statusColor = isCompleted ? '#10b981' : isCancelled ? '#ef4444' : '#f59e0b';
-                const statusBg = isCompleted ? 'rgba(16,185,129,0.1)' : isCancelled ? 'rgba(239,68,68,0.1)' : 'rgba(245,158,11,0.1)';
-                const statusLabel = isCompleted ? 'Completed' : isCancelled ? 'Cancelled' : 'Scheduled';
-                const statusIcon = isCompleted ? 'checkmark-circle' : isCancelled ? 'close-circle' : 'time';
-
-                const date = ride.ride_completed_at || (ride as any).cancelled_at || ride.created_at;
-                const tipAmount = parseMoney((ride as any).tip_amount);
-                const incentiveAmount = parseMoney((ride as any).incentive_amount);
-                const totalEarned = parseMoney((ride as any).total_earned);
-
-                return (
-                  <TouchableOpacity
-                    key={ride.id}
-                    style={styles.rideCard}
-                    activeOpacity={0.7}
-                    onPress={() => router.push(`/driver/ride-detail?id=${ride.id}` as any)}
-                  >
-                    {/* Top row: status + date */}
-                    <View style={styles.rideTopRow}>
-                      <View style={[styles.statusBadge, { backgroundColor: statusBg }]}>
-                        <Ionicons name={statusIcon as any} size={14} color={statusColor} />
-                        <Text style={[styles.statusText, { color: statusColor }]}>{statusLabel}</Text>
-                      </View>
-                      <View style={{ alignItems: 'flex-end' }}>
-                        <Text style={styles.dateText}>
-                          {date ? new Date(date).toLocaleDateString('en', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}
-                        </Text>
-                        <Text style={styles.rideCodeText}>
-                          {ride.ride_code ? String(ride.ride_code) : `#${String(ride.id).substring(0, 8).toUpperCase()}`}
-                        </Text>
-                      </View>
-                    </View>
-
-                    {/* Route: pickup → dropoff */}
-                    <View style={styles.routeContainer}>
-                      <View style={styles.routeDots}>
-                        <View style={[styles.dot, { backgroundColor: '#ef4444' }]} />
-                        <View style={styles.routeLine} />
-                        <View style={[styles.dot, { backgroundColor: '#10b981' }]} />
-                      </View>
-                      <View style={styles.routeAddresses}>
-                        <View>
-                          <Text style={styles.routeLabel}>PICKUP</Text>
-                          <Text style={styles.routeAddress} numberOfLines={1}>
-                            {ride.pickup_address || 'Unknown'}
-                          </Text>
-                        </View>
-                        <View style={{ height: 16 }} />
-                        <View>
-                          <Text style={styles.routeLabel}>DROP-OFF</Text>
-                          <Text style={styles.routeAddress} numberOfLines={1}>
-                            {ride.dropoff_address || 'Unknown'}
-                          </Text>
-                        </View>
-                      </View>
-                    </View>
-
-                    {/* Bottom row: trip meta + fare */}
-                    <View style={styles.rideBottomRow}>
-                      <View style={styles.tripMeta}>
-                        {ride.distance_km != null && (
-                          <View style={styles.metaBadge}>
-                            <Ionicons name="map-outline" size={13} color="#9ca3af" />
-                            <Text style={styles.metaText}>{ride.distance_km.toFixed(1)} km</Text>
-                          </View>
-                        )}
-                        {ride.duration_minutes != null && (
-                          <View style={styles.metaBadge}>
-                            <Ionicons name="time-outline" size={13} color="#9ca3af" />
-                            <Text style={styles.metaText}>{ride.duration_minutes} min</Text>
-                          </View>
-                        )}
-                      </View>
-                      <View style={{ alignItems: 'flex-end' }}>
-                        {isCompleted ? (
-                          <>
-                            <Text style={styles.fareAmount}>${toMoney(totalEarned)}</Text>
-                            {(tipAmount > 0 || incentiveAmount > 0) && (
-                              <Text style={styles.tipText}>
-                                {[
-                                  tipAmount > 0 ? `$${toMoney(tipAmount)} tip` : '',
-                                  incentiveAmount > 0 ? `$${toMoney(incentiveAmount)} bonus` : '',
-                                ].filter(Boolean).join(' + ')}
-                              </Text>
-                            )}
-                          </>
-                        ) : isCancelled ? (
-                          parseMoney((ride as any).cancel_fee_earned) > 0 ? (
-                            <>
-                              <Text style={[styles.fareAmount, { color: '#f59e0b' }]}>
-                                +${toMoney((ride as any).cancel_fee_earned)}
-                              </Text>
-                              <Text style={styles.cancelFeeText}>
-                                {(ride as any).cancellation_type === 'noshow' ? 'No-show fee' : 'Cancel fee'}
-                              </Text>
-                            </>
-                          ) : (
-                            <Text style={[styles.fareAmount, { color: '#9ca3af', fontSize: 16 }]}>$0.00</Text>
-                          )
-                        ) : (
-                          <Text style={styles.fareAmount}>Est. ${toMoney(parseMoney((ride as any).driver_earnings))}</Text>
-                        )}
-                      </View>
-                    </View>
-                  </TouchableOpacity>
-                );
-              })
-            )}
-
-            {canLoadMoreHistory && (
-              <TouchableOpacity
-                style={[styles.loadMoreButton, loadingMore && styles.loadMoreButtonDisabled]}
-                activeOpacity={0.8}
-                disabled={loadingMore}
-                onPress={loadMoreHistory}
-              >
-                {loadingMore ? (
-                  <ActivityIndicator color="#ef4444" />
-                ) : (
-                  <Text style={styles.loadMoreText}>Load more rides</Text>
-                )}
-              </TouchableOpacity>
-            )}
           </View>
         </>
       )}
-    </ScrollView>
+    </>
+  );
+
+  return (
+    <FlatList
+      style={styles.container}
+      contentContainerStyle={styles.content}
+      data={loading ? [] : filteredRides}
+      keyExtractor={(item: any) => String(item.id)}
+      renderItem={renderRideCard}
+      ListHeaderComponent={listHeader}
+      ListEmptyComponent={
+        loading ? null : (
+          <View style={styles.ridesSection}>
+            <View style={styles.emptyState}>
+              <Ionicons name="car-sport-outline" size={48} color="#d1d5db" />
+              <Text style={styles.emptyTitle}>No Rides Found</Text>
+              <Text style={styles.emptyDesc}>No rides match this filter for the selected period.</Text>
+            </View>
+          </View>
+        )
+      }
+      ListFooterComponent={
+        !loading && canLoadMoreHistory ? (
+          <View style={styles.ridesSection}>
+            <TouchableOpacity
+              style={[styles.loadMoreButton, loadingMore && styles.loadMoreButtonDisabled]}
+              activeOpacity={0.8}
+              disabled={loadingMore}
+              onPress={loadMoreHistory}
+            >
+              {loadingMore ? (
+                <ActivityIndicator color="#ef4444" />
+              ) : (
+                <Text style={styles.loadMoreText}>Load more rides</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        ) : null
+      }
+      initialNumToRender={8}
+      maxToRenderPerBatch={8}
+      windowSize={11}
+      removeClippedSubviews
+    />
   );
 }
 

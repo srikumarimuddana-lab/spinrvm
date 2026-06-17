@@ -166,9 +166,13 @@ async def admin_update_user_status(user_id: str, status_data: UserStatusRequest,
         "updated_at": now_iso,
     }
     if new_status == "active":
-        # Reactivation clears the moderation context.
+        # Reactivation clears the moderation context — and also any pending
+        # deletion, so an admin can honour a rider withdrawing their DSAR
+        # delete request within the 30-day grace window.
         update["status_reason"] = None
         update["suspended_until"] = None
+        update["deletion_requested_at"] = None
+        update["deletion_scheduled_at"] = None
     else:
         update["status_reason"] = reason
         # suspended_until only applies to a temporary suspension.

@@ -699,3 +699,6 @@ class TestAdminUserModeration:
         assert captured["status"] == "active"
         assert captured["status_reason"] is None
         assert captured["suspended_until"] is None
+        # Reactivating also withdraws a pending DSAR deletion.
+        assert captured["deletion_requested_at"] is None
+        assert captured["deletion_scheduled_at"] is None

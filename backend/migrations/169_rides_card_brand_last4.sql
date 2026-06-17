@@ -17,11 +17,22 @@
 -- only by the backend service role.
 --
 -- Rollback:
+--   ALTER TABLE rides DROP CONSTRAINT IF EXISTS rides_card_last4_check;
 --   ALTER TABLE rides DROP COLUMN IF EXISTS card_brand, DROP COLUMN IF EXISTS card_last4;
 
 ALTER TABLE rides
     ADD COLUMN IF NOT EXISTS card_brand TEXT,
     ADD COLUMN IF NOT EXISTS card_last4 TEXT;
+
+-- Belt-and-braces: last-4 must be exactly four digits (or NULL). Stops a
+-- malformed value — or a stray full PAN from a direct write — from being
+-- persisted. NOT VALID + VALIDATE keeps it non-blocking on a large table
+-- (all existing rows are NULL, so validation is trivial).
+ALTER TABLE rides DROP CONSTRAINT IF EXISTS rides_card_last4_check;
+ALTER TABLE rides
+    ADD CONSTRAINT rides_card_last4_check
+    CHECK (card_last4 IS NULL OR card_last4 ~ '^[0-9]{4}$') NOT VALID;
+ALTER TABLE rides VALIDATE CONSTRAINT rides_card_last4_check;
 
 COMMENT ON COLUMN rides.card_brand IS 'Masked card brand used for the ride (e.g. Visa). Never the PAN.';
 COMMENT ON COLUMN rides.card_last4 IS 'Last 4 digits of the card used for the ride. Never the full PAN (PCI).';

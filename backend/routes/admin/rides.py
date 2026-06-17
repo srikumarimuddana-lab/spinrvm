@@ -1277,7 +1277,7 @@ async def _resolve_ride_card(ride: Dict[str, Any]) -> tuple[Optional[str], Optio
             try:
                 await db_supabase.update_ride(ride["id"], {"card_brand": brand, "card_last4": last4})
             except Exception:
-                logger.warning(
+                logger.error(
                     "ride card backfill failed",
                     exc_info=True,
                     extra={"domain": "payments", "ride_id": ride.get("id")},
@@ -1293,7 +1293,7 @@ async def _resolve_ride_card(ride: Dict[str, Any]) -> tuple[Optional[str], Optio
 
 
 @router.get("/rides/{ride_id}/details")
-async def admin_get_ride_details(ride_id: str):
+async def admin_get_ride_details(ride_id: str, _: dict = Depends(get_admin_user)):
     """Get detailed ride information with rider, driver, flags, complaints, lost items, location trail."""
     ride = await db_supabase.get_ride_details_enriched(ride_id)
     if not ride:

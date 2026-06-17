@@ -4485,13 +4485,36 @@ async def cancel_ride(
         "updated_at": now,
     }
 
+    # C2: atomic, status-guarded cancel. The in-memory check above can race —
+    # between get_ride and the write the rider/driver can call verify-otp/start
+    # and flip the ride to in_progress. An unguarded update_ride (filters on id
+    # only) would then overwrite in_progress -> cancelled, violating "never cancel
+    # after trip start" (Period 3 left open, fare settlement skipped, regulatory
+    # trip log corrupted). Filtering on the pre-trip states matches zero rows once
+    # the ride has started/ended -> 409, nothing mutated. Mirrors the rider cancel
+    # path in routes/rides.py.
+    _cancel_filter = {
+        "id": ride_id,
+        "status": {
+            "$in": [
+                "requested",
+                RideStatus.SEARCHING,
+                RideStatus.DRIVER_ASSIGNED,
+                RideStatus.DRIVER_ACCEPTED,
+                "en_route",
+                RideStatus.DRIVER_ARRIVED,
+            ]
+        },
+    }
+
     # Try to persist cancelled_by / cancellation_reason for audit. These
     # columns may not exist in older Supabase schemas — PGRST204 on an
     # unknown column would crash the whole cancel. Fall back to the
-    # minimal update so the cancellation still succeeds.
+    # minimal (still status-guarded) update so the cancellation still succeeds.
     try:
-        await db_supabase.update_ride(
-            ride_id,
+        _claim = await db_supabase.update_one(
+            "rides",
+            _cancel_filter,
             {
                 **base_update,
                 "cancelled_by": "driver",
@@ -4504,7 +4527,13 @@ async def cancel_ride(
         logger.warning(
             f"[CANCEL] cancelled_by/cancellation_reason write failed (likely PGRST204); retrying minimal update: {exc}"
         )
-        await db_supabase.update_ride(ride_id, base_update)
+        _claim = await db_supabase.update_one("rides", _cancel_filter, base_update)
+
+    if _claim is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Ride can no longer be cancelled (it has started or already ended)",
+        )
 
     # Make driver available again
     await db_supabase.set_driver_available(driver["id"], True)
@@ -4604,6 +4633,25 @@ async def mark_rider_noshow(
             detail=f"Must wait {remaining} more seconds before marking no-show",
         )
 
+    # C2: atomically claim the no-show cancel (driver_arrived -> cancelled) BEFORE
+    # charging anyone. No-show charges the rider and pays the driver; if the status
+    # write were deferred until after the charge (and filtered on id only), a ride
+    # that started in the race window would be BOTH charged a no-show fee AND
+    # overwritten cancelled. The status-guarded claim matches zero rows once the
+    # ride leaves driver_arrived -> 409, nothing charged. It also makes a duplicate
+    # no-show call idempotent (no double charge).
+    _noshow_now = datetime.now(timezone.utc)
+    _noshow_claim = await db_supabase.update_one(
+        "rides",
+        {"id": ride_id, "status": RideStatus.DRIVER_ARRIVED},
+        {"status": RideStatus.CANCELLED, "cancelled_at": _noshow_now, "updated_at": _noshow_now},
+    )
+    if _noshow_claim is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Ride can no longer be marked no-show (it has started or already ended)",
+        )
+
     try:
         from ..services.cancellation_service import (
             calculate_noshow_fee,
@@ -4661,26 +4709,25 @@ async def mark_rider_noshow(
             ride_status_at_cancel="noshow",
         )
 
-    now = datetime.now(timezone.utc)
-    base_update = {
-        "status": RideStatus.CANCELLED,
-        "cancelled_at": now,
-        "updated_at": now,
-    }
+    # Status was already flipped to cancelled by the atomic claim above; here we
+    # only persist the fee attribution. Writing these columns onto an already-
+    # terminal cancelled ride is safe (cancelled cannot transition away), so an
+    # id-only update is fine. Optional columns may not exist on older schemas.
+    _fee_now = datetime.now(timezone.utc)
     try:
         await db_supabase.update_ride(
             ride_id,
             {
-                **base_update,
                 "cancelled_by": "driver",
                 "cancellation_type": "noshow",
                 "cancellation_fee_admin": float(fee_admin.quantize(Decimal("0.01"))),
                 "cancellation_fee_driver": float(fee_driver.quantize(Decimal("0.01"))),
+                "updated_at": _fee_now,
             },
         )
     except Exception as exc:
         logger.warning(f"[NOSHOW] extended fields write failed; retrying minimal: {exc}")
-        await db_supabase.update_ride(ride_id, base_update)
+        await db_supabase.update_ride(ride_id, {"updated_at": _fee_now})
 
     await db_supabase.set_driver_available(driver["id"], True)
     await record_period_transition(driver["id"], 1)

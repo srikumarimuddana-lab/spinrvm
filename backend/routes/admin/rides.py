@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
+import stripe
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
@@ -1228,12 +1229,77 @@ async def admin_get_ride_financials(
     }
 
 
+async def _resolve_ride_card(ride: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+    """Best-effort (brand, last4) of the card used for a card-paid ride.
+
+    Returns the cached values if already on the ride; otherwise resolves from
+    Stripe — the PaymentIntent's charge first (the card actually charged), else
+    the PaymentMethod — and backfills the ride row so later views are instant
+    and the masked-card receipt record survives the rider deleting the card.
+    Returns (None, None) for non-card rides or on any Stripe failure (the rest
+    of the detail still loads). Only the last-4 is ever exposed; the PAN never
+    touches the backend (PCI)."""
+    if (ride.get("payment_method") or "").lower() != "card":
+        return None, None
+    if ride.get("card_last4"):
+        return ride.get("card_brand"), ride.get("card_last4")
+
+    pi_id = ride.get("payment_intent_id")
+    pm_id = ride.get("payment_method_id")
+    if not pi_id and not pm_id:
+        return None, None
+
+    def _card_fields(card: Any) -> tuple[Optional[str], Optional[str]]:
+        if not card:
+            return None, None
+        return ((getattr(card, "brand", "") or "").capitalize() or None, getattr(card, "last4", None))
+
+    try:
+        settings = await get_app_settings()
+        stripe_secret = (settings or {}).get("stripe_secret_key", "")
+        if not stripe_secret:
+            return None, None
+
+        brand = last4 = None
+        if pi_id:
+            pi = await db_supabase.run_sync(
+                lambda: stripe.PaymentIntent.retrieve(pi_id, api_key=stripe_secret, expand=["latest_charge"])
+            )
+            charge = getattr(pi, "latest_charge", None)
+            if charge and not isinstance(charge, str):
+                pmd = getattr(charge, "payment_method_details", None)
+                brand, last4 = _card_fields(getattr(pmd, "card", None) if pmd else None)
+        if not last4 and pm_id:
+            pm = await db_supabase.run_sync(lambda: stripe.PaymentMethod.retrieve(pm_id, api_key=stripe_secret))
+            brand, last4 = _card_fields(getattr(pm, "card", None))
+
+        if last4:
+            try:
+                await db_supabase.update_ride(ride["id"], {"card_brand": brand, "card_last4": last4})
+            except Exception:
+                logger.warning(
+                    "ride card backfill failed",
+                    exc_info=True,
+                    extra={"domain": "payments", "ride_id": ride.get("id")},
+                )
+        return brand, last4
+    except Exception:
+        logger.error(
+            "failed to resolve ride card from Stripe",
+            exc_info=True,
+            extra={"domain": "payments", "ride_id": ride.get("id")},
+        )
+        return None, None
+
+
 @router.get("/rides/{ride_id}/details")
 async def admin_get_ride_details(ride_id: str):
     """Get detailed ride information with rider, driver, flags, complaints, lost items, location trail."""
     ride = await db_supabase.get_ride_details_enriched(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
+    # Masked card (brand + last-4) used for the ride, for the Payment panel.
+    ride["card_brand"], ride["card_last4"] = await _resolve_ride_card(ride)
     return ride
 
 

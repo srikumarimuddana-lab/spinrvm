@@ -6,7 +6,7 @@ import Script from 'next/script';
 
 // Google Maps API key — add NEXT_PUBLIC_GOOGLE_MAPS_API_KEY to Vercel env vars.
 // Same value as EXPO_PUBLIC_GOOGLE_MAPS_API_KEY used by the mobile apps;
-// ensure spinrvm.vercel.app is listed as an authorised referrer in the
+// ensure track.spinr.ca is listed as an authorised referrer in the
 // Google Cloud Console → Credentials page for this key.
 const GMAPS_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? '';
 

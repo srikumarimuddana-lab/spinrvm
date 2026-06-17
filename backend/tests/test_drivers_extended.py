@@ -1338,3 +1338,31 @@ class TestStripeEmbeddedOnboarding:
         ):
             resp = asyncio.run(drv.stripe_embedded())
         assert "sk_test_SHOULD_NOT_LEAK" not in resp.body.decode()
+
+    def test_embedded_page_escapes_script_breakout_in_publishable_key(self):
+        # The publishable key is admin-writable; a tampered value must not be
+        # able to close the inline <script> and inject arbitrary JS (which could
+        # read window.__SPINR_TOKEN). json.dumps alone does NOT escape </script>.
+        from backend.routes import drivers as drv
+
+        evil = "pk_x</script><script>alert(1)</script>"
+        with patch(
+            "backend.settings_loader.get_app_settings",
+            AsyncMock(return_value={"stripe_publishable_key": evil}),
+            create=True,
+        ):
+            body = asyncio.run(drv.stripe_embedded()).body.decode()
+
+        assert "</script><script>alert(1)" not in body
+        assert "\\u003c/script\\u003e" in body  # escaped, still a valid JS string
+
+    def test_embedded_page_keeps_normal_key_intact(self):
+        from backend.routes import drivers as drv
+
+        with patch(
+            "backend.settings_loader.get_app_settings",
+            AsyncMock(return_value={"stripe_publishable_key": "pk_test_51ABCxyz"}),
+            create=True,
+        ):
+            body = asyncio.run(drv.stripe_embedded()).body.decode()
+        assert 'var PK = "pk_test_51ABCxyz";' in body

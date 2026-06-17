@@ -19,6 +19,7 @@ import { useRouter } from 'expo-router';
 import { useDriverStore } from '../../store/driverStore';
 import { useAuthStore } from '@shared/store/authStore';
 import api from '@shared/api/client';
+import * as WebBrowser from 'expo-web-browser';
 import { useDriverMe, useUpdateDriverMe } from '@shared/hooks/queries';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -42,9 +43,9 @@ function PayoutScreen() {
     } = useDriverStore();
 
     const [payoutAmount, setPayoutAmount] = useState('');
-    // Onboarding now opens an in-app WebView screen (instant navigation), so
-    // there's no async "opening…" state to track here.
-    const stripeOnboarding = false;
+    // Hosted Stripe onboarding opens in the system browser, so track the brief
+    // "opening…" state while we mint the AccountLink and hand off.
+    const [stripeOnboarding, setStripeOnboarding] = useState(false);
     const [downloadingT4A, setDownloadingT4A] = useState(false);
     const [downloadingCSV, setDownloadingCSV] = useState(false);
     // gst_bn (CRA Business Number) is the canonical column on the driver row
@@ -105,12 +106,35 @@ function PayoutScreen() {
         }
     }, [error]);
 
-    const handleStripeOnboarding = () => {
-        // Option B: open Stripe's embedded onboarding in an in-app WebView (no
-        // browser redirect). The screen mints an AccountSession and lets Stripe
-        // collect the SIN/identity + payout bank account in-app; we only ever
-        // mirror the last-4 + verification status.
-        router.push('/driver/stripe-onboarding' as any);
+    const handleStripeOnboarding = async () => {
+        // Hosted onboarding (Option A): open Stripe's AccountLink in the system
+        // browser. A bare WebView dead-ends at Stripe's popup-based KYC step
+        // (the popup has no window.opener and the page hangs); the system
+        // browser supports the popup + redirect + camera/identity steps, so
+        // onboarding can actually complete. Stripe still collects and holds the
+        // SIN / government ID / bank account — we only ever mirror status. The
+        // backend return_url bounces back to spinr-driver://driver/payout.
+        try {
+            setStripeOnboarding(true);
+            const res = await api.post<{ url?: string; mock?: boolean }>('/drivers/stripe-onboard');
+            const url = res.data?.url;
+            if (!url || res.data?.mock) {
+                showToast('info', 'Unavailable', 'Payouts setup is not available yet. Please try again later.');
+                return;
+            }
+            // Redirect target must match the backend _STRIPE_RETURN_DEEP_LINK
+            // (backend/routes/drivers.py); openAuthSessionAsync auto-dismisses
+            // the browser when Stripe's return_url bounces to this scheme.
+            await WebBrowser.openAuthSessionAsync(url, 'spinr-driver://driver/payout');
+            // Whether they finished or dismissed, re-pull KYC + balance/bank
+            // state. The account.updated webhook is the authoritative gate; this
+            // just refreshes the UI so "Stripe Connected" flips once verified.
+            await loadData();
+        } catch (err: any) {
+            showToast('error', 'Error', err?.response?.data?.detail || 'Could not start verification. Please try again.');
+        } finally {
+            setStripeOnboarding(false);
+        }
     };
 
     const handleSaveGst = async () => {

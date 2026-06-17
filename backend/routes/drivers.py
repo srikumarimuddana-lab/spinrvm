@@ -1988,8 +1988,8 @@ async def onboard_stripe(current_user: dict = Depends(get_current_user)):
 
         account_link = stripe.AccountLink.create(
             account=account_id,
-            refresh_url=f"{api_base}/api/drivers/stripe-refresh",
-            return_url=f"{api_base}/api/drivers/stripe-return",
+            refresh_url=f"{api_base}/api/v1/drivers/stripe-refresh",
+            return_url=f"{api_base}/api/v1/drivers/stripe-return",
             type="account_onboarding",
             # Pull everything Stripe will *eventually* require into this session —
             # most importantly the SIN (individual.id_number), which for a CA
@@ -2140,7 +2140,7 @@ _STRIPE_EMBEDDED_HTML = """<!doctype html>
     function post(m){ if(window.ReactNativeWebView){ window.ReactNativeWebView.postMessage(m); } }
     async function fetchClientSecret(){
       var token = window.__SPINR_TOKEN || "";
-      var res = await fetch("/api/drivers/stripe-account-session", {
+      var res = await fetch("/api/v1/drivers/stripe-account-session", {
         method: "POST",
         headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" }
       });

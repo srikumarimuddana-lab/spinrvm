@@ -2034,6 +2034,47 @@ async def onboard_stripe(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 
+@api_router.post("/stripe-sync")
+async def stripe_sync_status(current_user: dict = Depends(get_current_user)) -> dict:
+    """Pull the driver's LIVE Stripe Connect status (Account.retrieve) and
+    mirror it onto the drivers row, then return the verification state.
+
+    Called by the driver app immediately after returning from Stripe's hosted
+    onboarding so the UI reflects acceptance right away — without waiting on the
+    account.updated webhook, which can be delayed or, if the Connect webhook
+    isn't configured, never arrive at all."""
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
+    )
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    try:
+        from ..services.stripe_kyc_sync import refresh_driver_kyc
+    except ImportError:
+        from services.stripe_kyc_sync import refresh_driver_kyc  # type: ignore
+
+    result = await refresh_driver_kyc(driver)
+    status = result.get("status")
+    if status == "no_stripe_account":
+        # Driver hasn't started onboarding yet — not an error, just not set up.
+        return {"synced": False, "onboarded": False, "payouts_enabled": False, "requirements_due": []}
+    if status != "ok":
+        # stripe_not_configured / stripe_error — surface it (don't silently
+        # report "not onboarded") so the app can retry instead of masking it.
+        raise HTTPException(status_code=502, detail="Could not sync verification status. Please try again.")
+
+    updates = result.get("updates") or {}
+    return {
+        "synced": True,
+        "onboarded": bool(updates.get("stripe_account_onboarded")),
+        "details_submitted": bool(updates.get("stripe_details_submitted")),
+        "payouts_enabled": bool(updates.get("stripe_payouts_enabled")),
+        "id_number_provided": bool(updates.get("stripe_id_number_provided")),
+        "requirements_due": list(updates.get("stripe_requirements_due") or []),
+    }
+
+
 # Driver-app deep link (scheme defined in driver-app/app.config.ts: SCHEME).
 _STRIPE_RETURN_DEEP_LINK = "spinr-driver://driver/payout"
 

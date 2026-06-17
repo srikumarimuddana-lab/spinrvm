@@ -1385,3 +1385,79 @@ class TestStripeEmbeddedOnboarding:
         ):
             body = asyncio.run(drv.stripe_embedded()).body.decode()
         assert 'var PK = "pk_test_51ABCxyz";' in body
+
+
+class TestStripeSyncStatus:
+    """POST /stripe-sync does a live Account.retrieve + mirror on return from
+    hosted onboarding, so the driver sees acceptance without the webhook."""
+
+    def test_sync_returns_live_status(self):
+        from backend.routes import drivers as drv
+
+        with (
+            patch(
+                "backend.routes.drivers.db_supabase.get_rows",
+                AsyncMock(return_value=[_driver(stripe_account_id="acct_1")]),
+            ),
+            patch(
+                "backend.services.stripe_kyc_sync.refresh_driver_kyc",
+                AsyncMock(
+                    return_value={
+                        "status": "ok",
+                        "updates": {
+                            "stripe_account_onboarded": True,
+                            "stripe_details_submitted": True,
+                            "stripe_payouts_enabled": True,
+                            "stripe_id_number_provided": True,
+                            "stripe_requirements_due": [],
+                        },
+                    }
+                ),
+            ),
+        ):
+            result = asyncio.run(drv.stripe_sync_status(current_user={"id": USER_ID}))
+
+        assert result["synced"] is True
+        assert result["onboarded"] is True
+        assert result["payouts_enabled"] is True
+        assert result["requirements_due"] == []
+
+    def test_sync_no_stripe_account_is_not_error(self):
+        from backend.routes import drivers as drv
+
+        with (
+            patch(
+                "backend.routes.drivers.db_supabase.get_rows",
+                AsyncMock(return_value=[_driver()]),
+            ),
+            patch(
+                "backend.services.stripe_kyc_sync.refresh_driver_kyc",
+                AsyncMock(return_value={"status": "no_stripe_account"}),
+            ),
+        ):
+            result = asyncio.run(drv.stripe_sync_status(current_user={"id": USER_ID}))
+        assert result == {
+            "synced": False,
+            "onboarded": False,
+            "payouts_enabled": False,
+            "requirements_due": [],
+        }
+
+    def test_sync_stripe_error_raises_502(self):
+        from fastapi import HTTPException
+
+        from backend.routes import drivers as drv
+
+        with (
+            patch(
+                "backend.routes.drivers.db_supabase.get_rows",
+                AsyncMock(return_value=[_driver(stripe_account_id="acct_1")]),
+            ),
+            patch(
+                "backend.services.stripe_kyc_sync.refresh_driver_kyc",
+                AsyncMock(return_value={"status": "stripe_error"}),
+            ),
+        ):
+            with pytest.raises(HTTPException) as ei:
+                asyncio.run(drv.stripe_sync_status(current_user={"id": USER_ID}))
+        assert ei.value.status_code == 502

@@ -486,7 +486,7 @@ export default function UsersPage() {
                         <div className="space-y-4">
                             <div className="flex items-center gap-4">
                                 <div className="h-16 w-16 rounded-full bg-gradient-to-br from-sky-500 to-blue-600 flex items-center justify-center text-white text-xl font-bold">
-                                    {selectedUser.name.charAt(0).toUpperCase()}
+                                    {selectedUser.name?.charAt(0)?.toUpperCase() || "?"}
                                 </div>
                                 <div>
                                     <p className="text-lg font-semibold">{selectedUser.name}</p>
@@ -809,9 +809,11 @@ export default function UsersPage() {
                                                     <span className="font-mono text-muted-foreground">•••• {c.last4}</span>
                                                     {c.is_default && <Badge variant="secondary" className="text-[10px]">Default</Badge>}
                                                 </span>
-                                                <span className="text-xs text-muted-foreground">
-                                                    {String(c.exp_month).padStart(2, "0")}/{String(c.exp_year).slice(-2)}
-                                                </span>
+                                                {c.exp_month != null && c.exp_year != null && (
+                                                    <span className="text-xs text-muted-foreground">
+                                                        {String(c.exp_month).padStart(2, "0")}/{String(c.exp_year).slice(-2)}
+                                                    </span>
+                                                )}
                                             </div>
                                         ))}
                                     </div>

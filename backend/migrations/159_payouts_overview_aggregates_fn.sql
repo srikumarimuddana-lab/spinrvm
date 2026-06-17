@@ -94,9 +94,13 @@ blocked AS (
       AND (p_service_area_id IS NULL OR d.id IN (SELECT id FROM scoped_drivers))
 ),
 ytd AS (
+    -- T4A is per-PAYEE (driver); a completed ride with no driver_id is not a
+    -- payee and must not form a (NULL, earned) group. The old Python skipped
+    -- such rides ("if not did: continue"). The cumulative earned_up_to/
+    -- outstanding sums above intentionally DO include null-driver rides.
     SELECT driver_id, COALESCE(SUM(earnings), 0) AS earned
     FROM scoped_rides
-    WHERE eff_ts >= p_year_start
+    WHERE eff_ts >= p_year_start AND driver_id IS NOT NULL
     GROUP BY driver_id
 )
 SELECT jsonb_build_object(

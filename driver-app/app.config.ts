@@ -22,7 +22,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // 'fingerprint'/'appVersion' rejected by EAS CLI). Bump manually when
     // shipping native changes that break JS-bundle compatibility. Pre-launch
     // with no production users, OTA compatibility risk is zero.
-    runtimeVersion: '2.2.0', // bump from 2.1.0: withOfferCardNotificationService adds a new iOS Notification Service Extension target — old binaries lack it, so this JS must not reach them via OTA
+    runtimeVersion: '2.3.0', // bump from 2.2.0: adds react-native-webview (a new native module) for Stripe embedded onboarding + the Android CAMERA permission — old binaries lack both, so this JS must not reach them via OTA
     splash: {
         image: './assets/images/splash-blank.png',
         resizeMode: 'contain',
@@ -43,11 +43,13 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // dependency calls a permission-gated API without a matching string.
         // Driver app needs camera + photo library for onboarding document
         // uploads (license, insurance, vehicle registration) per the
-        // Saskatchewan Transportation Act eligibility requirements.
-        // Location strings are supplied by the expo-location plugin block.
+        // Saskatchewan Transportation Act eligibility requirements, and for
+        // Stripe's in-app identity verification (capturing a government ID
+        // during payout setup). Location strings come from the expo-location
+        // plugin block.
         infoPlist: {
             NSCameraUsageDescription:
-                'Spinr Driver uses your camera to scan and upload your driver license, vehicle insurance, and vehicle registration documents during onboarding and renewal.',
+                'Spinr Driver uses your camera to scan and upload your driver license, vehicle insurance, and vehicle registration documents, and to verify your identity for payouts.',
             NSPhotoLibraryUsageDescription:
                 'Spinr Driver accesses your photo library so you can upload existing photos of your driver license, vehicle insurance, and vehicle registration.',
         },
@@ -152,6 +154,14 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             backgroundColor: '#FFFFFF'
         },
         package: BUNDLE_ID,
+        // CAMERA is needed for in-WebView getUserMedia — Stripe's embedded
+        // identity onboarding (stripe-onboarding.tsx) captures the driver's
+        // government ID live in the page. (The native expo-image-picker
+        // document-upload flows delegate to the system camera app via intent
+        // and don't require this, but in-page getUserMedia does.) Additive to
+        // the permissions auto-added by config plugins (location, notifications).
+        // No RECORD_AUDIO: Stripe Identity captures images only, never audio.
+        permissions: ['android.permission.CAMERA'],
         googleServicesFile: './google-services.json',
         config: {
             googleMaps: {

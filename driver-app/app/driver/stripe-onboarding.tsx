@@ -15,6 +15,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
+import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -42,6 +43,16 @@ export default function StripeOnboardingScreen() {
     useEffect(() => {
         let active = true;
         (async () => {
+            // Best-effort: hold the OS camera permission up front so Stripe's
+            // in-page getUserMedia can capture the driver's government ID. On
+            // Android the WebView can only grant the page's camera request if
+            // the app already holds CAMERA; iOS prompts on first use anyway. If
+            // denied, Stripe falls back to file upload — so never block on this.
+            try {
+                await ImagePicker.requestCameraPermissionsAsync();
+            } catch {
+                // ignore — onboarding continues with the file-upload fallback
+            }
             try {
                 await ensureFreshToken();
                 const t = await getAuthHeader();

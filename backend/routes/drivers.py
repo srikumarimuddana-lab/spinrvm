@@ -18,6 +18,7 @@ from fastapi import (
     Query,
     Request,
 )
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 try:
@@ -1967,11 +1968,29 @@ async def onboard_stripe(current_user: dict = Depends(get_current_user)):
             account_id = account.id
             await db_supabase.update_one("drivers", {"id": driver["id"]}, {"stripe_account_id": account_id})
 
+        # Build return/refresh URLs from the externally-routable API host
+        # (Cloudflare CNAME), NOT the app_settings dict. The dict has no
+        # "base_url" key, so the old code always fell back to localhost:8000 —
+        # which is why drivers landed on http://localhost:8000/api/drivers/...
+        # after finishing Stripe's hosted flow. An explicit app_settings
+        # "base_url" still wins if an operator sets one.
+        try:
+            from ..core.config import settings as _config
+        except ImportError:
+            from core.config import settings as _config  # type: ignore
+        api_base = (settings.get("base_url") or _config.PUBLIC_API_BASE_URL).rstrip("/")
+
         account_link = stripe.AccountLink.create(
             account=account_id,
-            refresh_url=f"{settings.get('base_url', 'http://localhost:8000')}/api/drivers/stripe-refresh",
-            return_url=f"{settings.get('base_url', 'http://localhost:8000')}/api/drivers/stripe-return",
+            refresh_url=f"{api_base}/api/drivers/stripe-refresh",
+            return_url=f"{api_base}/api/drivers/stripe-return",
             type="account_onboarding",
+            # Pull everything Stripe will *eventually* require into this session —
+            # most importantly the SIN (individual.id_number), which for a CA
+            # Express individual account is "eventually_due" and is otherwise
+            # skipped at initial onboarding. Needed for T4A / CRA platform
+            # reporting (Income Tax Act Part XX).
+            collection_options={"fields": "eventually_due"},
             api_key=stripe_secret,
         )
         # The real onboarded gate is now stripe_details_submitted, set by
@@ -1983,6 +2002,62 @@ async def onboard_stripe(current_user: dict = Depends(get_current_user)):
     except Exception as e:
         logger.error(f"Stripe error: {e}")
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
+
+
+# Driver-app deep link (scheme defined in driver-app/app.config.ts: SCHEME).
+_STRIPE_RETURN_DEEP_LINK = "spinr-driver://driver/payout"
+
+
+def _stripe_bounce_page(deep_link: str, heading: str, body: str) -> str:
+    """HTML interstitial that bounces the system browser back into the Spinr
+    Driver app. A raw 302 to a custom scheme is unreliable on iOS Safari, so we
+    auto-attempt the deep link and also render a manual button as a fallback."""
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spinr Driver</title>
+<style>
+  body{{font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#0f0f10;color:#fff;
+       display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;text-align:center}}
+  .card{{padding:32px;max-width:360px}}
+  h1{{font-size:20px;margin:0 0 8px}} p{{color:#bdbdbd;margin:0 0 24px}}
+  a.btn{{display:inline-block;background:#16a34a;color:#fff;text-decoration:none;
+         padding:14px 24px;border-radius:12px;font-weight:600}}
+</style></head>
+<body><div class="card">
+  <h1>{heading}</h1><p>{body}</p>
+  <a class="btn" href="{deep_link}">Return to Spinr Driver</a>
+</div>
+<script>setTimeout(function(){{window.location.replace("{deep_link}")}},150);</script>
+</body></html>"""
+
+
+@api_router.get("/stripe-return", include_in_schema=False)
+async def stripe_return() -> HTMLResponse:
+    """Stripe redirects the browser here when the driver finishes (or exits)
+    hosted onboarding. Bounces back into the app, which re-reads KYC status on
+    focus. The authoritative onboarding gate is the account.updated webhook
+    (services/stripe_kyc_sync.py) — this endpoint is UX only, never a trust gate."""
+    return HTMLResponse(
+        _stripe_bounce_page(
+            f"{_STRIPE_RETURN_DEEP_LINK}?stripe=return",
+            "Verification submitted",
+            "You can return to the Spinr Driver app now.",
+        )
+    )
+
+
+@api_router.get("/stripe-refresh", include_in_schema=False)
+async def stripe_refresh() -> HTMLResponse:
+    """Stripe redirects here when an onboarding link expires or is reopened.
+    Sends the driver back into the app, which restarts onboarding on demand."""
+    return HTMLResponse(
+        _stripe_bounce_page(
+            f"{_STRIPE_RETURN_DEEP_LINK}?stripe=refresh",
+            "Link expired",
+            "Return to the Spinr Driver app and tap Connect again to continue.",
+        )
+    )
 
 
 @api_router.post("/bank-account")

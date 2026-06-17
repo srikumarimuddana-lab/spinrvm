@@ -1168,3 +1168,72 @@ class TestGetCurrentSubscription:
             result = asyncio.run(drv.get_current_subscription(current_user={"id": USER_ID}))
 
         assert result["has_subscription"] is False
+
+
+# ---------------------------------------------------------------------------
+# Stripe Connect onboarding — return URL + SIN collection regression
+# (bugfix: onboarding redirected to localhost:8000 and never collected SIN)
+# ---------------------------------------------------------------------------
+
+
+class TestStripeOnboarding:
+    def _run_onboard(self, captured):
+        from backend.routes import drivers as drv
+
+        fake_link = type("L", (), {"url": "https://connect.stripe.com/setup/x"})()
+
+        def _account_link_create(**kwargs):
+            captured.update(kwargs)
+            return fake_link
+
+        with (
+            patch(
+                "backend.routes.drivers.db_supabase.get_rows",
+                AsyncMock(return_value=[_driver(stripe_account_id="acct_123")]),
+            ),
+            patch(
+                "backend.routes.drivers.db_supabase.get_user_by_id",
+                AsyncMock(return_value={"id": USER_ID, "email": "drv@example.com"}),
+            ),
+            patch(
+                "backend.settings_loader.get_app_settings",
+                AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
+                create=True,
+            ),
+            patch("backend.routes.drivers.stripe.AccountLink.create", _account_link_create),
+        ):
+            return asyncio.run(drv.onboard_stripe(current_user={"id": USER_ID}))
+
+    def test_return_url_uses_public_api_host_not_localhost(self):
+        captured: dict = {}
+        result = self._run_onboard(captured)
+
+        assert result["mock"] is False
+        # The headline bug: must NOT fall back to localhost.
+        assert "localhost" not in captured["return_url"]
+        assert "localhost" not in captured["refresh_url"]
+        assert captured["return_url"] == "https://api-spinr.spinr.ca/api/drivers/stripe-return"
+        assert captured["refresh_url"] == "https://api-spinr.spinr.ca/api/drivers/stripe-refresh"
+
+    def test_onboarding_collects_sin_eventually_due(self):
+        captured: dict = {}
+        self._run_onboard(captured)
+        # SIN (individual.id_number) is eventually_due for CA Express individuals;
+        # forcing eventually_due pulls it into the onboarding session.
+        assert captured["collection_options"] == {"fields": "eventually_due"}
+
+    def test_return_endpoint_bounces_into_driver_app(self):
+        from backend.routes import drivers as drv
+
+        resp = asyncio.run(drv.stripe_return())
+        body = resp.body.decode()
+        assert resp.status_code == 200
+        assert "spinr-driver://driver/payout?stripe=return" in body
+
+    def test_refresh_endpoint_bounces_into_driver_app(self):
+        from backend.routes import drivers as drv
+
+        resp = asyncio.run(drv.stripe_refresh())
+        body = resp.body.decode()
+        assert resp.status_code == 200
+        assert "spinr-driver://driver/payout?stripe=refresh" in body

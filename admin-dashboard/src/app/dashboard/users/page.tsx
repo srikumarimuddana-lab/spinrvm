@@ -39,7 +39,7 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { Pagination } from "@/components/ui/pagination";
-import { Users, Search, Mail, Phone, Calendar, Car, ShieldCheck, Download, RefreshCw, Ban, CheckCircle, AlertTriangle, Wallet, Plus, Minus, Eye, EyeOff } from "lucide-react";
+import { Users, Search, Mail, Phone, Calendar, Car, ShieldCheck, Download, RefreshCw, Ban, CheckCircle, AlertTriangle, Wallet, Plus, Minus, Eye, EyeOff, CreditCard } from "lucide-react";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatDate } from "@/lib/utils";
 import { getUsersPaginated, getUserDetails, updateUserStatus, updateUserFlags, getStats, getUserWallet, creditUserWallet, debitUserWallet, exportUsers, logPiiReveal } from "@/lib/api";
@@ -59,9 +59,9 @@ export default function UsersPage() {
     const [statusUpdating, setStatusUpdating] = useState<string | null>(null);
     const [roleFilter, setRoleFilter] = useState<"all" | "rider" | "driver" | "both">("all");
     const [selectedUser, setSelectedUser] = useState<any>(null);
-    // Real lifetime ride count for the open user — the list row has no count
-    // (it's not a users column); the detail endpoint computes it on demand.
-    const [detailRides, setDetailRides] = useState<number | null>(null);
+    // Full detail for the open user (real ride count, recent rides, saved cards),
+    // loaded on demand — the list row carries none of this.
+    const [userDetail, setUserDetail] = useState<any>(null);
     const [page, setPage] = useState(0);
     const [hasNextPage, setHasNextPage] = useState(false);
     const [stats, setStats] = useState<{ total_users: number; total_drivers: number } | null>(null);
@@ -189,16 +189,16 @@ export default function UsersPage() {
         getStats().then((s) => setStats(s)).catch(() => setStats(null));
     }, []);
 
-    // Fetch the open user's real lifetime ride count (detail endpoint computes
-    // it from the rides table). Guarded against races when switching users.
+    // Fetch the open user's detail (real ride count, recent rides, saved cards).
+    // Guarded against races when switching users.
     useEffect(() => {
-        if (!selectedUser?.id) { setDetailRides(null); return; }
+        if (!selectedUser?.id) { setUserDetail(null); return; }
         const id = selectedUser.id;
         let active = true;
-        setDetailRides(null);
+        setUserDetail(null);
         getUserDetails(id)
-            .then((d) => { if (active) setDetailRides(d?.total_rides ?? 0); })
-            .catch(() => {});
+            .then((d) => { if (active) setUserDetail(d || {}); })
+            .catch(() => { if (active) setUserDetail({}); });
         return () => { active = false; };
     }, [selectedUser?.id]);
 
@@ -524,7 +524,7 @@ export default function UsersPage() {
                                     <Label className="text-xs text-muted-foreground flex items-center gap-1">
                                         <Car className="h-3 w-3" /> Total rides
                                     </Label>
-                                    <p className="text-sm">{detailRides == null ? "…" : detailRides.toLocaleString()}</p>
+                                    <p className="text-sm">{userDetail == null ? "…" : (userDetail.total_rides ?? 0).toLocaleString()}</p>
                                 </div>
                             </div>
 
@@ -786,6 +786,72 @@ export default function UsersPage() {
                                     <p className="text-sm text-red-600 dark:text-red-400">{walletError}</p>
                                 ) : (
                                     <p className="text-sm text-muted-foreground">Loading wallet...</p>
+                                )}
+                            </div>
+
+                            {/* Saved cards (from Stripe — masked last-4 only) */}
+                            <div className="border-t pt-4">
+                                <Label className="text-xs text-muted-foreground mb-2 flex items-center gap-1">
+                                    <CreditCard className="h-3 w-3" /> Saved cards
+                                </Label>
+                                {userDetail == null ? (
+                                    <p className="text-sm text-muted-foreground">Loading…</p>
+                                ) : userDetail.cards_error ? (
+                                    <p className="text-sm text-red-600 dark:text-red-400">{userDetail.cards_error}</p>
+                                ) : !userDetail.cards || userDetail.cards.length === 0 ? (
+                                    <p className="text-sm text-muted-foreground">No cards on file.</p>
+                                ) : (
+                                    <div className="space-y-1.5">
+                                        {userDetail.cards.map((c: any) => (
+                                            <div key={c.id} className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                                                <span className="flex items-center gap-2">
+                                                    <span className="font-medium">{c.brand || "Card"}</span>
+                                                    <span className="font-mono text-muted-foreground">•••• {c.last4}</span>
+                                                    {c.is_default && <Badge variant="secondary" className="text-[10px]">Default</Badge>}
+                                                </span>
+                                                <span className="text-xs text-muted-foreground">
+                                                    {String(c.exp_month).padStart(2, "0")}/{String(c.exp_year).slice(-2)}
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Recent rides */}
+                            <div className="border-t pt-4">
+                                <Label className="text-xs text-muted-foreground mb-2 flex items-center gap-1">
+                                    <Car className="h-3 w-3" /> Recent rides
+                                </Label>
+                                {userDetail == null ? (
+                                    <p className="text-sm text-muted-foreground">Loading…</p>
+                                ) : !userDetail.recent_rides || userDetail.recent_rides.length === 0 ? (
+                                    <p className="text-sm text-muted-foreground">No rides yet.</p>
+                                ) : (
+                                    <div className="space-y-1 max-h-72 overflow-y-auto border rounded-md">
+                                        {userDetail.recent_rides.map((r: any) => (
+                                            <a
+                                                key={r.id}
+                                                href={`/dashboard/rides?id=${r.id}`}
+                                                className="block px-3 py-2 border-b last:border-b-0 hover:bg-muted/30 text-xs"
+                                            >
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <span className="font-medium truncate">
+                                                        {(r.pickup_address || "Pickup").split(",")[0]} → {(r.dropoff_address || "Dropoff").split(",")[0]}
+                                                    </span>
+                                                    <Badge variant="outline" className={`text-[10px] shrink-0 ${
+                                                        r.status === "completed" ? "text-emerald-600"
+                                                        : r.status === "cancelled" ? "text-red-600" : "text-amber-600"}`}>
+                                                        {r.status}
+                                                    </Badge>
+                                                </div>
+                                                <div className="mt-0.5 flex items-center justify-between text-muted-foreground">
+                                                    <span>{formatDate(r.created_at)}</span>
+                                                    <span>{r.total_fare != null ? `$${Number(r.total_fare).toFixed(2)}` : "—"}</span>
+                                                </div>
+                                            </a>
+                                        ))}
+                                    </div>
                                 )}
                             </div>
                         </div>

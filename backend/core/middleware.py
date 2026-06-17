@@ -29,6 +29,12 @@ _CSRF_EXEMPT_EXACT = frozenset(
         "/api/v1/auth/firebase",
         "/api/admin/auth/login",
         "/api/v1/stripe/webhook",
+        # Stripe embedded onboarding: the driver app's WebView posts here from
+        # an in-page fetch, which carries an Origin header (so it's not caught
+        # by the native-app no-Origin exemption) but no csrf_token cookie. Safe
+        # to exempt — the endpoint authenticates via the Bearer JWT, not a
+        # cookie session, and CSRF only threatens cookie-based auth.
+        "/api/v1/drivers/stripe-account-session",
     }
 )
 _CSRF_EXEMPT_PREFIXES = ("/ws/",)

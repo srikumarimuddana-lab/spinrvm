@@ -258,9 +258,15 @@ function RideOptionsScreenContent() {
   // with the estimate response). Falls back to MapViewDirections on-device
   // if the backend didn't return one.
   useEffect(() => {
-    if (routePolyline && routePolyline.length >= 2 && routeCoordinates.length === 0) {
+    if (routePolyline && routePolyline.length >= 2) {
       const coords = routePolyline.map(([lat, lng]: [number, number]) => ({ latitude: lat, longitude: lng }));
       setRouteCoordinates(coords);
+    } else {
+      // The store clears routePolyline whenever a waypoint changes (e.g. the
+      // rider went back and picked a new destination/stop). Drop the old drawn
+      // route too so a stale trace doesn't linger on the map and the
+      // MapViewDirections fallback can redraw for the new route.
+      setRouteCoordinates([]);
     }
   }, [routePolyline]);
 

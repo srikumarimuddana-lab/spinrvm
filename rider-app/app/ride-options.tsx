@@ -286,6 +286,11 @@ function RideOptionsScreenContent() {
     }
     setSelectedIndex(index);
     selectVehicle(estimates[index].vehicle_type);
+    // Expand the sheet to its full snap point so the payment, schedule, and
+    // Confirm rows come into view. Riders were tapping a vehicle and getting
+    // stuck on the 40% snap, not realizing they had to drag the sheet up to
+    // reach the Confirm button.
+    sheetRef.current?.expand();
     setTimeout(() => fetchNearbyDrivers(), 100);
     const est = estimates[index];
     const grandTotal = parseFloat((est as any).grand_total || est.total_fare || '0');

@@ -602,9 +602,25 @@ async def list_allowances_due_for_reset(as_of: str) -> List[Dict[str, Any]]:
     return await run_sync(_fn)
 
 
-async def reset_allowance_period(*, allowance_id: str, period_start: str, period_end: str) -> Optional[Dict[str, Any]]:
+async def reset_allowance_period(
+    *,
+    allowance_id: str,
+    period_start: str,
+    period_end: str,
+    expected_period_end: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Advance an allowance's billing period.
+
+    When ``expected_period_end`` is provided this becomes an atomic
+    compare-and-swap: the row is updated only if its current ``period_end``
+    still equals the expected value, so exactly one replica can claim a given
+    period roll-forward (replay-safety F8). Returns the updated row, or None
+    when the CAS lost (another replica already advanced it). With
+    ``expected_period_end=None`` it behaves as before (unconditional update).
+    """
+
     def _fn():
-        res = (
+        q = (
             supabase.table("corporate_member_allowances")
             .update(
                 {
@@ -615,8 +631,10 @@ async def reset_allowance_period(*, allowance_id: str, period_start: str, period
                 }
             )
             .eq("id", allowance_id)
-            .execute()
         )
+        if expected_period_end is not None:
+            q = q.eq("period_end", expected_period_end)
+        res = q.execute()
         return _single_row_from_res(res)
 
     return await run_sync(_fn)

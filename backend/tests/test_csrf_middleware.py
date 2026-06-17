@@ -72,6 +72,10 @@ def _make_app() -> tuple[FastAPI, TestClient]:
     async def stripe_webhook():
         return {"ok": True}
 
+    @app.post("/api/v1/drivers/stripe-account-session")
+    async def stripe_account_session():
+        return {"ok": True}
+
     app.add_middleware(CSRFMiddleware)
     client = TestClient(app, raise_server_exceptions=True)
     return app, client
@@ -140,6 +144,16 @@ class TestExemptPaths:
         res = client.post(
             "/api/admin/auth/login",
             headers={"Origin": "https://example.com"},
+        )
+        assert res.status_code == 200
+
+    def test_stripe_account_session_exempt(self, client: TestClient):
+        # The driver app's embedded-onboarding WebView posts here with an Origin
+        # header but no csrf_token cookie; it authenticates via Bearer JWT, so it
+        # must be exempt or the in-page fetch 403s (prod regression 2026-06-17).
+        res = client.post(
+            "/api/v1/drivers/stripe-account-session",
+            headers={"Origin": "https://api-spinr.spinr.ca"},
         )
         assert res.status_code == 200
 

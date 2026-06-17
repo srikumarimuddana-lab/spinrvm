@@ -34,7 +34,6 @@ except ImportError:
 
 try:
     from .. import db_supabase
-    from ..geo_utils import calculate_distance
     from ..settings_loader import get_app_settings
     from ..utils.maps_budget import check_budget, record_call
 except ImportError:
@@ -508,6 +507,14 @@ async def _reconcile_pickup(
     geocoded = next((c for c in lookup.get("candidates") or [] if c.get("in_service_area")), None)
     if not geocoded:
         return pickup_lat, pickup_lng, pickup_address, in_area
+
+    # Lazy dual import (same pattern as _resolve_area): module-level import of a
+    # sibling top-level module is fragile under the absolute-import deploy mode,
+    # so resolve it at the call site where it's used.
+    try:
+        from ..geo_utils import calculate_distance
+    except ImportError:
+        from geo_utils import calculate_distance
 
     drift_km = calculate_distance(pickup_lat, pickup_lng, geocoded["lat"], geocoded["lng"])
     if in_area and drift_km <= _PICKUP_RECONCILE_KM:

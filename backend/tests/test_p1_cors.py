@@ -330,10 +330,20 @@ class TestStripeEmbedSecurityHeaders:
         assert "camera=(self" in pp
         assert "camera=()" not in pp
 
+    def test_stripe_embedded_relaxes_coop_for_verification_popup(self):
+        # Stripe's identity-verification sub-flow opens a cross-origin popup that
+        # talks back via window.opener; COOP=same-origin breaks that handshake and
+        # leaves the embedded component stuck on "Loading…". The host page must
+        # relax COOP to unsafe-none.
+        h = self._headers_for("/api/v1/drivers/stripe-embedded")
+        assert h["Cross-Origin-Opener-Policy"] == "unsafe-none"
+
     def test_other_api_paths_keep_strict_csp_and_no_camera(self):
         h = self._headers_for("/api/v1/drivers/payouts")
         assert h["Content-Security-Policy"] == "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
         assert h["Permissions-Policy"] == "geolocation=(), microphone=(), camera=(), payment=()"
+        # COOP stays locked down everywhere except the Stripe embed path.
+        assert h["Cross-Origin-Opener-Policy"] == "same-origin"
 
 
 class TestStripeAppCheckExemption:

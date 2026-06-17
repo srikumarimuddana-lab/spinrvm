@@ -1323,6 +1323,25 @@ class TestStripeEmbeddedOnboarding:
         # SIN-forcing collection options carried into the embedded component.
         assert 'futureRequirements: "include"' in body
 
+    def test_embedded_page_emits_progress_and_failure_diagnostics(self):
+        # The page must surface where it stalls instead of spinning silently:
+        # per-stage progress, a connect.js load watchdog, an onerror handler,
+        # and a network-level fetch failure signal (previously swallowed).
+        from backend.routes import drivers as drv
+
+        with patch(
+            "backend.settings_loader.get_app_settings",
+            AsyncMock(return_value={"stripe_publishable_key": "pk_test_pub42"}),
+            create=True,
+        ):
+            body = asyncio.run(drv.stripe_embedded()).body.decode()
+
+        assert 'post("stage:" + s)' in body  # progress relayed to the RN host
+        assert 'stage("mounting")' in body and 'stage("mounted")' in body
+        assert 'fail("fetch-network")' in body  # network/CSP fetch reject made visible
+        assert 'fail("connectjs-timeout")' in body  # connect.js load watchdog
+        assert "onerror=\"fail('connectjs-load')\"" in body
+
     def test_embedded_page_has_no_secret_key(self):
         from backend.routes import drivers as drv
 

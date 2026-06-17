@@ -2149,25 +2149,40 @@ _STRIPE_EMBEDDED_HTML = """<!doctype html>
   html,body{margin:0;height:100%;background:#0f0f10;
     font-family:-apple-system,Segoe UI,Roboto,sans-serif}
   #msg{color:#bdbdbd;padding:28px;text-align:center;font-size:15px}
+  #dbg{color:#6b7280;padding:6px 12px;text-align:center;font-size:11px;
+    font-family:ui-monospace,Menlo,Consolas,monospace;word-break:break-all}
   #container{padding:0 4px}
 </style></head>
 <body>
   <div id="msg">Loading secure verification…</div>
   <div id="container"></div>
+  <div id="dbg"></div>
   <script>
     var PK = __SPINR_PK__;
+    var mounted = false;
     function post(m){ if(window.ReactNativeWebView){ window.ReactNativeWebView.postMessage(m); } }
+    // Surface progress to BOTH the RN host (debug strip) and on-page, so the
+    // same URL opened directly in a browser shows exactly where it stalls.
+    function stage(s){ post("stage:" + s); var d=document.getElementById("dbg"); if(d){ d.textContent="stage: "+s; } }
+    function fail(c){ post("error:" + c); var d=document.getElementById("dbg"); if(d){ d.textContent="error: "+c; } }
     async function fetchClientSecret(){
+      stage("fetch-start");
       var token = window.__SPINR_TOKEN || "";
-      var res = await fetch("/api/v1/drivers/stripe-account-session", {
-        method: "POST",
-        headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" }
-      });
-      if(!res.ok){ post("error:" + res.status); throw new Error("account_session " + res.status); }
+      if(!token){ fail("no-token"); throw new Error("no token"); }
+      var res;
+      try{
+        res = await fetch("/api/v1/drivers/stripe-account-session", {
+          method: "POST",
+          headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" }
+        });
+      }catch(e){ fail("fetch-network"); throw e; }  // network/CSP block — previously silent
+      if(!res.ok){ fail(String(res.status)); throw new Error("account_session " + res.status); }
       var data = await res.json();
+      stage("fetch-ok");
       return data.client_secret;
     }
     function mount(){
+      stage("mounting");
       try{
         var instance = StripeConnect.init({
           publishableKey: PK,
@@ -2176,6 +2191,7 @@ _STRIPE_EMBEDDED_HTML = """<!doctype html>
             colorBackground: "#0f0f10", colorText: "#ffffff",
             colorPrimary: "#16a34a", colorSecondaryText: "#bdbdbd" } }
         });
+        stage("init-ok");
         var onboarding = instance.create("account-onboarding");
         // Mirror the hosted flow: collect eventually/future-due fields up front
         // so the SIN (individual.id_number) is requested during onboarding.
@@ -2183,18 +2199,24 @@ _STRIPE_EMBEDDED_HTML = """<!doctype html>
         onboarding.setOnExit(function(){ post("exit"); });
         document.getElementById("msg").style.display = "none";
         document.getElementById("container").appendChild(onboarding);
-      }catch(e){ post("error:init"); }
+        mounted = true;
+        stage("mounted");
+      }catch(e){ fail("init"); }
     }
-    if(!PK){ document.getElementById("msg").textContent =
+    if(!PK){ stage("no-pk"); document.getElementById("msg").textContent =
       "Payouts setup is not available yet. Please try again later."; }
     else {
+      stage("script-init");
       window.StripeConnect = window.StripeConnect || {};
       // connect.js calls StripeConnect.onLoad once the script finishes loading.
       if(window.StripeConnect && typeof window.StripeConnect.init === "function"){ mount(); }
-      else { window.StripeConnect.onLoad = mount; }
+      else { stage("awaiting-connectjs"); window.StripeConnect.onLoad = mount; }
+      // Watchdog: if connect.js never loads (CSP/network block), onLoad never
+      // fires and the page would spin forever — surface it instead.
+      setTimeout(function(){ if(!mounted){ fail("connectjs-timeout"); } }, 12000);
     }
   </script>
-  <script src="https://connect-js.stripe.com/v1.0/connect.js" async></script>
+  <script src="https://connect-js.stripe.com/v1.0/connect.js" async onerror="fail('connectjs-load')"></script>
 </body></html>"""
 
 

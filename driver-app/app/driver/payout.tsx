@@ -213,6 +213,10 @@ function PayoutScreen() {
     }, []);
 
     const isStripeReady = stripeAccountStatus === 'active' || hasBankAccount;
+    // CRA hard requirement: rideshare drivers must be GST/HST-registered before
+    // any payout (the backend rejects payouts without a valid BN). Mirror the
+    // server-side ^\d{9}(RT\d{4})?$ check so we gate the UI before the request.
+    const gstOnFile = /^\d{9}(RT\d{4})?$/.test((gstNumber || '').replace(/\s/g, '').toUpperCase());
 
     if (initialLoading) {
         return (
@@ -361,7 +365,7 @@ function PayoutScreen() {
                         <View style={styles.gstForm}>
                             <Text style={styles.inputLabel}>GST/HST Number (Business Number)</Text>
                             <Text style={styles.gstHelpText}>
-                                If you're registered for GST/HST, enter your 9-digit Business Number (BN) or full program account (e.g., 123456789RT0001). Leave blank if not registered.
+                                Enter your 9-digit CRA Business Number (BN) or full program account (e.g., 123456789RT0001).
                             </Text>
                             <TextInput
                                 style={styles.textInput}
@@ -373,7 +377,9 @@ function PayoutScreen() {
                                 maxLength={15}
                             />
                             <Text style={styles.gstNote}>
-                                Drivers earning over $30,000/year must register for GST/HST with CRA.
+                                Required to receive payouts. As a rideshare driver you must register for
+                                GST/HST with the CRA from your first fare — the $30,000 small-supplier
+                                threshold does not apply to ride-sharing.
                             </Text>
                             <View style={styles.gstFormButtons}>
                                 <TouchableOpacity
@@ -436,6 +442,23 @@ function PayoutScreen() {
                 {isStripeReady && driverBalance && parseFloat(driverBalance.payable_balance) > 0 && (
                     <View style={styles.section}>
                         <Text style={styles.sectionTitle}>Request Payout</Text>
+                        {!gstOnFile && (
+                            <TouchableOpacity
+                                style={[styles.payoutCard, { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 }]}
+                                onPress={() => setShowGstForm(true)}
+                            >
+                                <Ionicons name="alert-circle" size={22} color={colors.primary} />
+                                <View style={{ flex: 1, marginLeft: 10 }}>
+                                    <Text style={{ color: colors.text, fontSize: 14, fontWeight: '600' }}>
+                                        GST/HST registration required
+                                    </Text>
+                                    <Text style={{ color: colors.textDim, fontSize: 13, marginTop: 2, lineHeight: 18 }}>
+                                        Add your CRA Business Number to receive payouts. Rideshare drivers
+                                        must register for GST/HST from their first fare. Tap to add it.
+                                    </Text>
+                                </View>
+                            </TouchableOpacity>
+                        )}
                         <View style={styles.payoutCard}>
                             <View style={styles.payoutInputRow}>
                                 <Text style={styles.dollarSign}>$</Text>
@@ -446,14 +469,15 @@ function PayoutScreen() {
                                     keyboardType="decimal-pad"
                                     value={payoutAmount}
                                     onChangeText={setPayoutAmount}
+                                    editable={gstOnFile}
                                 />
                                 <TouchableOpacity
                                     style={[
                                         styles.payoutButton,
-                                        (!payoutAmount || isLoading) && styles.payoutButtonDisabled,
+                                        (!payoutAmount || isLoading || !gstOnFile) && styles.payoutButtonDisabled,
                                     ]}
                                     onPress={handleRequestPayout}
-                                    disabled={!payoutAmount || isLoading}
+                                    disabled={!payoutAmount || isLoading || !gstOnFile}
                                 >
                                     {isLoading ? (
                                         <ActivityIndicator size="small" color="#fff" />

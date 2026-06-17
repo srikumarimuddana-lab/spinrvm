@@ -59,3 +59,40 @@ def scrub_breadcrumb(crumb: dict, hint: Optional[dict] = None) -> dict:
     except Exception:  # noqa: BLE001
         return crumb
     return crumb
+
+
+# Structured-log context keys promoted onto Sentry tags so events are triageable
+# by domain/surface and correlatable to a ride/driver/rider/request. All are IDs
+# or enums — never PII (no phone/email/name/coords), per the logging conventions.
+_TAG_KEYS = (
+    "domain",
+    "surface",
+    "ride_id",
+    "driver_id",
+    "rider_id",
+    "event_id",
+    "request_id",
+    "user_id",
+)
+
+
+def tags_from_log_extra(extra: Any) -> dict:
+    """Lift structured-log ``extra={...}`` context into Sentry tags.
+
+    The codebase already annotates many ``logger.*`` calls with
+    ``extra={"domain": "payments", ...}``; without this the loguru->Sentry
+    bridge dropped that context and events arrived with only ``environment``.
+    Always stamps ``surface=backend`` so every event is at least attributable.
+    Never raises.
+    """
+    tags: dict = {}
+    try:
+        if isinstance(extra, dict):
+            for key in _TAG_KEYS:
+                val = extra.get(key)
+                if val is not None:
+                    tags[key] = str(val)
+    except Exception:  # noqa: BLE001
+        pass
+    tags.setdefault("surface", "backend")
+    return tags

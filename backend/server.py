@@ -420,7 +420,7 @@ if sentry_dsn:
     # arbitrary error-message strings to a third party; these hooks redact
     # phones/emails/coords/postal codes from event + breadcrumb text and stamp
     # surface=backend before egress. They never drop an event on failure.
-    from utils.sentry_scrub import scrub_breadcrumb, scrub_event
+    from utils.sentry_scrub import scrub_breadcrumb, scrub_event, tags_from_log_extra
 
     sentry_sdk.init(
         dsn=sentry_dsn,
@@ -438,13 +438,23 @@ if sentry_dsn:
     # stdlib `logging` records; the rest of the backend uses loguru and
     # would otherwise be invisible in Sentry (including the high-signal
     # REFRESH TOKEN REUSE DETECTED alert in utils/refresh_tokens.py).
+    #
+    # Promote the loguru `extra={...}` context (domain/ride_id/driver_id/...)
+    # onto a forked Sentry scope so events are triageable by domain/surface and
+    # correlatable — without this they arrived with only `environment` set.
     def _loguru_sentry_sink(message: "Any") -> None:  # noqa: ANN401, F821
         record = message.record
-        exc_info = record["exception"]
-        if exc_info is not None and exc_info.value is not None:
-            sentry_sdk.capture_exception(exc_info.value)
-        else:
-            sentry_sdk.capture_message(record["message"], level="error")
+        tags = tags_from_log_extra(record.get("extra") or {})
+        # sentry-sdk 2.x prefers new_scope(); fall back to push_scope() on 1.x.
+        scope_cm = getattr(sentry_sdk, "new_scope", None) or sentry_sdk.push_scope
+        with scope_cm() as scope:
+            for key, val in tags.items():
+                scope.set_tag(key, val)
+            exc_info = record["exception"]
+            if exc_info is not None and exc_info.value is not None:
+                sentry_sdk.capture_exception(exc_info.value)
+            else:
+                sentry_sdk.capture_message(record["message"], level="error")
 
     logger.add(_loguru_sentry_sink, level="ERROR")
     logger.info("Sentry SDK initialized for error monitoring")

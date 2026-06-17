@@ -1,5 +1,6 @@
 import asyncio
 import hmac
+import json
 import logging
 import os
 import socket
@@ -1932,6 +1933,25 @@ async def get_bank_account(current_user: dict = Depends(get_current_user)):
     return {"has_bank_account": False, "bank_account": None}
 
 
+async def _ensure_stripe_account(driver: dict, user: dict, stripe_secret: str) -> str:
+    """Return the driver's Stripe Connect (Express) account id, creating it on
+    first use. Shared by the hosted-link and embedded-onboarding flows so both
+    converge on a single CA individual Express account per driver."""
+    account_id = driver.get("stripe_account_id")
+    if account_id:
+        return account_id
+    account = stripe.Account.create(
+        type="express",
+        country="CA",
+        email=user.get("email"),
+        capabilities={"transfers": {"requested": True}},
+        business_type="individual",
+        api_key=stripe_secret,
+    )
+    await db_supabase.update_one("drivers", {"id": driver["id"]}, {"stripe_account_id": account.id})
+    return account.id
+
+
 @api_router.post("/stripe-onboard")
 async def onboard_stripe(current_user: dict = Depends(get_current_user)):
     driver = (lambda _r: _r[0] if _r else None)(
@@ -1952,21 +1972,7 @@ async def onboard_stripe(current_user: dict = Depends(get_current_user)):
         return {"url": "https://spinr-demo-onboard.com", "mock": True}
 
     try:
-        account_id = driver.get("stripe_account_id")
-
-        if not account_id:
-            account = stripe.Account.create(
-                type="express",
-                country="CA",
-                email=user.get("email"),
-                capabilities={
-                    "transfers": {"requested": True},
-                },
-                business_type="individual",
-                api_key=stripe_secret,
-            )
-            account_id = account.id
-            await db_supabase.update_one("drivers", {"id": driver["id"]}, {"stripe_account_id": account_id})
+        account_id = await _ensure_stripe_account(driver, user, stripe_secret)
 
         # Build return/refresh URLs from the externally-routable API host
         # (Cloudflare CNAME), NOT the app_settings dict. The dict has no
@@ -2063,6 +2069,140 @@ async def stripe_refresh() -> HTMLResponse:
             "Return to the Spinr Driver app and tap Connect again to continue.",
         )
     )
+
+
+@api_router.post("/stripe-account-session")
+async def stripe_account_session(current_user: dict = Depends(get_current_user)) -> dict:
+    """Mint a single-use Stripe AccountSession client secret for the embedded
+    account-onboarding component (Option B — fully in-app, no browser redirect).
+
+    The connected account collects and *holds* the SIN itself; we never see the
+    raw value, preserving the PIPEDA posture (only last-4 + status is mirrored
+    back via the account.updated webhook). Called repeatedly by the WebView's
+    fetchClientSecret callback, so it must stay cheap and idempotent."""
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
+    )
+    user = await db_supabase.get_user_by_id(current_user.get("id"))
+    if not driver or not user:
+        raise HTTPException(status_code=404, detail="Driver/User profile not found")
+
+    try:
+        from ..settings_loader import get_app_settings
+    except ImportError:
+        from settings_loader import get_app_settings
+    settings = await get_app_settings()
+    stripe_secret = settings.get("stripe_secret_key", "")
+    if not stripe_secret:
+        # Dev/demo: Stripe not configured. 503 lets the WebView surface a clean
+        # "not available yet" state instead of a blank embedded component.
+        raise HTTPException(status_code=503, detail="Stripe is not configured")
+
+    try:
+        account_id = await _ensure_stripe_account(driver, user, stripe_secret)
+        session = stripe.AccountSession.create(
+            account=account_id,
+            components={
+                "account_onboarding": {
+                    "enabled": True,
+                    # Let the driver add their payout bank account inside the
+                    # same embedded flow.
+                    "features": {"external_account_collection": True},
+                },
+            },
+            api_key=stripe_secret,
+        )
+        return {"client_secret": session.client_secret}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Stripe AccountSession error: {e}")
+        raise HTTPException(status_code=502, detail="Could not start verification. Please try again.") from e
+
+
+# Plain template (NOT an f-string) so the embedded JS braces stay literal.
+# __SPINR_PK__ is substituted with json.dumps(publishable_key) at render time.
+_STRIPE_EMBEDDED_HTML = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Spinr Driver — Verification</title>
+<style>
+  html,body{margin:0;height:100%;background:#0f0f10;
+    font-family:-apple-system,Segoe UI,Roboto,sans-serif}
+  #msg{color:#bdbdbd;padding:28px;text-align:center;font-size:15px}
+  #container{padding:0 4px}
+</style></head>
+<body>
+  <div id="msg">Loading secure verification…</div>
+  <div id="container"></div>
+  <script>
+    var PK = __SPINR_PK__;
+    function post(m){ if(window.ReactNativeWebView){ window.ReactNativeWebView.postMessage(m); } }
+    async function fetchClientSecret(){
+      var token = window.__SPINR_TOKEN || "";
+      var res = await fetch("/api/drivers/stripe-account-session", {
+        method: "POST",
+        headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" }
+      });
+      if(!res.ok){ post("error:" + res.status); throw new Error("account_session " + res.status); }
+      var data = await res.json();
+      return data.client_secret;
+    }
+    function mount(){
+      try{
+        var instance = StripeConnect.init({
+          publishableKey: PK,
+          fetchClientSecret: fetchClientSecret,
+          appearance: { variables: {
+            colorBackground: "#0f0f10", colorText: "#ffffff",
+            colorPrimary: "#16a34a", colorSecondaryText: "#bdbdbd" } }
+        });
+        var onboarding = instance.create("account-onboarding");
+        // Mirror the hosted flow: collect eventually/future-due fields up front
+        // so the SIN (individual.id_number) is requested during onboarding.
+        onboarding.setCollectionOptions({ fields: "eventually_due", futureRequirements: "include" });
+        onboarding.setOnExit(function(){ post("exit"); });
+        document.getElementById("msg").style.display = "none";
+        document.getElementById("container").appendChild(onboarding);
+      }catch(e){ post("error:init"); }
+    }
+    if(!PK){ document.getElementById("msg").textContent =
+      "Payouts setup is not available yet. Please try again later."; }
+    else {
+      window.StripeConnect = window.StripeConnect || {};
+      // connect.js calls StripeConnect.onLoad once the script finishes loading.
+      if(window.StripeConnect && typeof window.StripeConnect.init === "function"){ mount(); }
+      else { window.StripeConnect.onLoad = mount; }
+    }
+  </script>
+  <script src="https://connect-js.stripe.com/v1.0/connect.js" async></script>
+</body></html>"""
+
+
+def _stripe_embedded_page(publishable_key: str) -> str:
+    """HTML shell that mounts Stripe's embedded account-onboarding component.
+
+    Served same-origin with the API so the in-page fetchClientSecret POST to
+    /stripe-account-session needs no CORS. The page carries only the publishable
+    key (public by design); the driver's bearer token is injected at runtime by
+    the WebView via injectedJavaScriptBeforeContentLoaded (window.__SPINR_TOKEN),
+    never placed in the URL or server logs. setCollectionOptions mirrors the
+    hosted flow so the SIN (eventually/future-due) is collected up front."""
+    return _STRIPE_EMBEDDED_HTML.replace("__SPINR_PK__", json.dumps(publishable_key))
+
+
+@api_router.get("/stripe-embedded", include_in_schema=False)
+async def stripe_embedded() -> HTMLResponse:
+    """Public HTML host for the embedded onboarding WebView. Contains no secret
+    (publishable key only); all privileged work goes through the authenticated
+    /stripe-account-session endpoint the page calls back into."""
+    try:
+        from ..settings_loader import get_app_settings
+    except ImportError:
+        from settings_loader import get_app_settings
+    settings = await get_app_settings()
+    publishable_key = settings.get("stripe_publishable_key", "")
+    return HTMLResponse(_stripe_embedded_page(publishable_key))
 
 
 @api_router.post("/bank-account")
@@ -2552,7 +2692,6 @@ async def export_driver_data(
 async def _build_and_email_data_export(user_id: str, email: str) -> None:
     """Background task: collect all driver data and email a JSON export."""
     import asyncio  # noqa: PLC0415
-    import json  # noqa: PLC0415
 
     try:
         # B-P2-6: PIPEDA right-to-access has a 30-day SLA but riders/drivers

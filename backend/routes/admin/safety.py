@@ -10,6 +10,7 @@ routes/admin/__init__.py wiring at module mount time).
 """
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 

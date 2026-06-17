@@ -2,17 +2,22 @@ import logging
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
+import stripe
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
+    from ...db_supabase import run_sync
+    from ...settings_loader import get_app_settings
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user
+    from db_supabase import run_sync
+    from settings_loader import get_app_settings
 
 logger = logging.getLogger(__name__)
 
@@ -116,9 +121,51 @@ async def admin_search_users(
     return await admin_get_users(role=body.role, search=body.search, limit=body.limit)
 
 
+async def _list_user_cards(user: Dict[str, Any]) -> tuple[Optional[List[Dict[str, Any]]], Optional[str]]:
+    """Best-effort list of the rider's saved cards (brand + last-4 + expiry) from
+    Stripe. Returns (cards, error): on a Stripe failure we return (None, message)
+    so the rest of the user detail still loads — the card panel surfaces the
+    error rather than 503'ing the whole page. Only the masked last-4 is exposed;
+    the PAN never touches the backend (PCI)."""
+    customer_id = user.get("stripe_customer_id")
+    if not customer_id:
+        return [], None
+    try:
+        settings = await get_app_settings()
+        stripe_secret = (settings or {}).get("stripe_secret_key", "")
+        if not stripe_secret:
+            return [], None
+        methods = await run_sync(
+            lambda: stripe.PaymentMethod.list(customer=customer_id, type="card", api_key=stripe_secret)
+        )
+        default_pm = user.get("default_payment_method")
+        return (
+            [
+                {
+                    "id": m.id,
+                    "brand": (m.card.brand or "").capitalize(),
+                    "last4": m.card.last4,
+                    "exp_month": m.card.exp_month,
+                    "exp_year": m.card.exp_year,
+                    "is_default": m.id == default_pm,
+                }
+                for m in methods.data
+            ],
+            None,
+        )
+    except Exception:
+        logger.error(
+            "admin: failed to list cards from Stripe",
+            exc_info=True,
+            extra={"domain": "admin", "user_id": user.get("id")},
+        )
+        return None, "Could not load cards from Stripe."
+
+
 @router.get("/users/{user_id}")
 async def admin_get_user_details(user_id: str):
-    """Get detailed user information."""
+    """Get detailed user information: profile, recent rides, total ride count,
+    and the masked (last-4) cards on file from Stripe."""
     user = await db_supabase.get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -126,10 +173,14 @@ async def admin_get_user_details(user_id: str):
     # Get user's recent rides
     rides = await db_supabase.get_rows("rides", {"rider_id": user_id}, order="created_at", desc=True, limit=10)
 
+    cards, cards_error = await _list_user_cards(user)
+
     return {
         **user,
         "total_rides": await db_supabase.count_documents("rides", {"rider_id": user_id}),
         "recent_rides": rides,
+        "cards": cards,
+        "cards_error": cards_error,
     }
 
 

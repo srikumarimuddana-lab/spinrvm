@@ -575,6 +575,11 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                             <span className="flex items-center gap-2 text-sm font-medium">
                                                 <Receipt className="h-4 w-4 text-muted-foreground" />
                                                 {ride.payment_method || "Card"}
+                                                {ride.card_last4 && (
+                                                    <span className="text-muted-foreground font-normal">
+                                                        · {ride.card_brand || "Card"} •••• {ride.card_last4}
+                                                    </span>
+                                                )}
                                             </span>
                                             <span className={`text-xs font-bold px-2.5 py-1 rounded-lg ${
                                                 ride.payment_status === "paid" || ride.payment_status === "waived_admin"

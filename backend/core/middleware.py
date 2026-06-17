@@ -29,6 +29,12 @@ _CSRF_EXEMPT_EXACT = frozenset(
         "/api/v1/auth/firebase",
         "/api/admin/auth/login",
         "/api/v1/stripe/webhook",
+        # Stripe embedded onboarding: the driver app's WebView posts here from
+        # an in-page fetch, which carries an Origin header (so it's not caught
+        # by the native-app no-Origin exemption) but no csrf_token cookie. Safe
+        # to exempt — the endpoint authenticates via the Bearer JWT, not a
+        # cookie session, and CSRF only threatens cookie-based auth.
+        "/api/v1/drivers/stripe-account-session",
     }
 )
 _CSRF_EXEMPT_PREFIXES = ("/ws/",)
@@ -60,7 +66,7 @@ _CSRF_EXEMPT_PREFIXES = ("/ws/",)
 #     routes/admin/auth.py), so the attack surface is bounded. Without this
 #     exemption /api/admin/auth/login returns 401 "App Check token
 #     required" before the login handler runs, and the dashboard at
-#     spinrvm.vercel.app can never authenticate.
+#     admin-spinr.spinr.ca can never authenticate.
 _APP_CHECK_EXEMPT_PREFIXES = (
     "/ws/",
     "/docs",
@@ -161,8 +167,12 @@ def _extract_user_id(request: Request) -> str | None:
             return None
         token = auth[len("Bearer ") :]
         payload = jwt.decode(token, options={"verify_signature": False})
-        sub = payload.get("sub")
-        return str(sub) if sub is not None else None
+        # Spinr JWTs carry the user id in `user_id` (see core auth.create_jwt_token),
+        # not the standard `sub` claim — reading `sub` left request.state.user_id
+        # (and every log line's user correlation) permanently None. Fall back to
+        # `sub` for any token that does use it.
+        uid = payload.get("user_id") or payload.get("sub")
+        return str(uid) if uid is not None else None
     except Exception:
         return None
 
@@ -269,6 +279,14 @@ def _apply_security_headers(response: Response, path: str, enable_hsts: bool) ->
     if any(path.startswith(p) for p in _STRIPE_EMBED_PATHS):
         response.headers["Content-Security-Policy"] = _STRIPE_EMBED_CSP
         response.headers["Permissions-Policy"] = _STRIPE_EMBED_PERMISSIONS_POLICY
+        # Stripe's embedded onboarding spawns a cross-origin popup for identity
+        # verification (gov ID + selfie) that posts its result back via
+        # window.opener. The base COOP=same-origin severs that opener link, so
+        # connect.js hangs on "Loading secure verification…" forever and the
+        # Stripe component never renders. Stripe's embedded-components guidance
+        # requires COOP=unsafe-none on the host page — relax it for this one
+        # server-rendered path only; every other response keeps same-origin.
+        response.headers["Cross-Origin-Opener-Policy"] = "unsafe-none"
     elif any(path.startswith(p) for p in _DOCS_PATHS):
         response.headers["Content-Security-Policy"] = _DOCS_CSP
     else:
@@ -495,7 +513,6 @@ def init_middleware(app):
 
     # Always allow the admin and default apps explicitly regardless of env variables
     always_allowed = [
-        "https://spinr-admin.vercel.app",
         "https://spinr.app",
         "https://www.spinr.app",
         "https://spinr-track.app",

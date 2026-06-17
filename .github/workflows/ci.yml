@@ -627,11 +627,13 @@ jobs:
             echo "url=$FALLBACK" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Health check — confirm 200 + non-empty body
+      - name: Health check — confirm 200 + DB reachable
+        # /health performs a real DB readiness ping (F1): a dead-DB deploy
+        # returns 503 (curl -sf fails) or status!=healthy, turning this red.
         run: |
           BODY=$(curl -sf --retry 3 --retry-delay 5 "${{ steps.resolve.outputs.url }}/health")
           echo "$BODY"
-          echo "$BODY" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('status') in ('ok','healthy'), f'bad status: {d}'"
+          echo "$BODY" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('status') in ('ok','healthy'), f'bad status: {d}'; assert d.get('db', {}).get('status') == 'ok', f'DB not ready: {d}'"
 
       - name: Settings endpoint — confirm 200 + JSON
         run: |

@@ -309,12 +309,19 @@ Sentry tags (attach to every captured event):
 - `ride_id`, `driver_id`, `rider_id` — only IDs, never PII
 - `env`: `production` / `staging` / `development`
 
-Metric naming (`spinr.<domain>.<metric>.<unit>`):
-- `spinr.dispatch.offer_sent.count`
-- `spinr.dispatch.offer_to_accept.duration_ms`
-- `spinr.fare.calc.duration_ms`
-- `spinr.payment.settlement.count{outcome=success|failed|retry}`
-- `spinr.ws.fanout.duration_ms`
+Metric naming — Prometheus/OpenMetrics snake_case `spinr_<domain>_<metric>_<unit>`
+(counters end `_total`, latency histograms end `_duration_ms`). `utils/metrics.py`
+is the source of truth and the exposition format `utils/metrics.render_prometheus`
+emits; dashboards/alerts must use these names (the older dotted
+`spinr.<domain>.<metric>.<unit>` spelling is **not** what the code emits — do not
+write alerts against it):
+- `spinr_dispatch_offer_sent_total`
+- `spinr_dispatch_offer_accepted_total`
+- `spinr_dispatch_offer_to_accept_duration_ms`  (KPI: P95 < 2s dispatch latency)
+- `spinr_dispatch_presence_filter_failed_total`  (Redis-presence degradation)
+- `spinr_fare_calc_duration_ms`
+- `spinr_payment_settlement_total{outcome=success|failed|retry}`
+- `spinr_ws_fanout_duration_ms`
 
 What to log vs metric vs Sentry:
 - State transitions → info log + metric

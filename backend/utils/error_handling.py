@@ -563,10 +563,44 @@ class DuplicateRecordError(SpinrException):
         )
 
 
+def pg_error_code(exc: Exception) -> str:
+    """Return the SQLSTATE / PostgREST error code for a DB exception, or ''.
+
+    db_supabase.run_sync wraps PostgREST errors in DatabaseError/
+    DuplicateRecordError; the original postgrest-py APIError (which carries
+    ``.code`` — e.g. "23505" unique_violation, "PGRST204" schema-cache miss) is
+    on the ``__cause__`` chain. Prefer the structured code over fragile message
+    substrings.
+    """
+    code = getattr(exc, "code", None)
+    if not code:
+        cause = getattr(exc, "__cause__", None)
+        code = getattr(cause, "code", None)
+    return str(code or "")
+
+
+def db_error_text(exc: Exception) -> str:
+    """Best-effort lowercased underlying DB error text for branching.
+
+    ``str(exc)`` on a wrapped DatabaseError/DuplicateRecordError is a generic
+    sentinel ("Database operation failed" / "Record already exists") — the real
+    message with the SQLSTATE and constraint name lives in
+    ``details['original']`` and the ``__cause__`` chain. Matching ``str(exc)``
+    alone silently misses constraint-specific handling; this joins all three so
+    callers can reliably detect e.g. a specific unique-index violation.
+    """
+    parts = [str(exc)]
+    details = getattr(exc, "details", None)
+    if isinstance(details, dict) and details.get("original"):
+        parts.append(str(details["original"]))
+    cause = getattr(exc, "__cause__", None)
+    if cause is not None:
+        parts.append(str(cause))
+    return " ".join(parts).lower()
+
+
 # Error handling middleware
-async def spinr_exception_handler(
-    request: Request, exc: SpinrException
-) -> JSONResponse:
+async def spinr_exception_handler(request: Request, exc: SpinrException) -> JSONResponse:
     """Handle SpinrException and return formatted JSON response."""
     request_id = _resolve_request_id(request)
 
@@ -624,9 +658,7 @@ async def spinr_exception_handler(
     )
 
 
-async def validation_exception_handler(
-    request: Request, exc: RequestValidationError
-) -> JSONResponse:
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     """Handle validation errors and return formatted response."""
     errors = []
     for error in exc.errors():
@@ -759,7 +791,7 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
 # list, so the two code paths can't drift. Resolved once at import
 # time since app settings don't change between restarts.
 _ALWAYS_ALLOWED = {
-    "https://spinr-admin.vercel.app",
+    "https://admin-spinr.spinr.ca",
     "http://localhost:3000",
     "http://localhost:3001",
 }

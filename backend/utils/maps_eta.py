@@ -244,6 +244,49 @@ async def get_ride_eta_seconds(
     return eta_seconds
 
 
+async def get_cached_ride_eta(driver_id: str, ride_id: str) -> int | None:
+    """Cache-only ETA read (no routing-provider call) — safe on the WS hot path.
+
+    Returns the last computed ETA if still cached, else None. On a miss the
+    caller should schedule refresh_ride_eta() OFF the receive loop (#1) so the
+    sub-150ms location write is never blocked by an OSRM/Google round-trip; the
+    refreshed value is then served from cache on the next ping.
+    """
+    try:
+        cached = await redis_get(f"eta:{driver_id}:{ride_id}")
+        return int(cached) if cached is not None else None
+    except Exception:
+        logger.debug("[ETA] cache-only read failed", exc_info=False)
+        return None
+
+
+async def refresh_ride_eta(
+    *,
+    driver_lat: float,
+    driver_lng: float,
+    dest_lat: float,
+    dest_lng: float,
+    maps_api_key: str,
+    driver_id: str,
+    ride_id: str,
+) -> None:
+    """Exception-safe background ETA refresh (compute + cache) for use via
+    asyncio.create_task, keeping the routing-provider round-trip off the WS
+    receive loop. Never raises to the caller."""
+    try:
+        await get_ride_eta_seconds(
+            driver_lat=driver_lat,
+            driver_lng=driver_lng,
+            dest_lat=dest_lat,
+            dest_lng=dest_lng,
+            maps_api_key=maps_api_key,
+            driver_id=driver_id,
+            ride_id=ride_id,
+        )
+    except Exception:
+        logger.debug("[ETA] background refresh failed", exc_info=True)
+
+
 async def batch_get_etas(
     drivers: list[dict],
     dest_lat: float,

@@ -135,6 +135,19 @@ async def _process_row(row: dict) -> None:
         await _delete_row(row_id)
         return
 
+    # Replay-safety (F5): atomically lease this row BEFORE sending so two
+    # replicas can't both deliver it. The conditional update bumps attempts
+    # (compare-and-swap on the observed value) and sets the back-off window in
+    # one statement; a racing replica that already claimed the row gets zero
+    # rows back here and skips. Writing next_attempt_at at claim time also acts
+    # as a crash-safe lease: if this worker dies after claiming but before
+    # delivering, the row becomes due again after the back-off rather than lost.
+    backoff_seconds = _BACKOFF_BASE * (2**attempts)
+    next_attempt_at = (datetime.now(timezone.utc) + timedelta(seconds=backoff_seconds)).isoformat()
+    if not await _claim_row(row_id, attempts, next_attempt_at):
+        logger.info(f"push_retry: row {row_id} already claimed by another worker; skipping")
+        return
+
     success = False
     try:
         if _is_expo_token(token):
@@ -148,9 +161,8 @@ async def _process_row(row: dict) -> None:
         )
         success = False
 
-    now_iso = datetime.now(timezone.utc).isoformat()
-
     if success:
+        now_iso = datetime.now(timezone.utc).isoformat()
         try:
             await run_sync(
                 lambda: supabase.table("push_retry_queue").update({"sent_at": now_iso}).eq("id", row_id).execute()
@@ -165,7 +177,9 @@ async def _process_row(row: dict) -> None:
             )
         return
 
-    # Delivery failed — apply back-off or drop if exhausted.
+    # Delivery failed. The atomic claim already incremented attempts and
+    # scheduled the next retry via next_attempt_at; here we only drop the row
+    # once attempts are exhausted.
     new_attempts = attempts + 1
     if new_attempts >= _MAX_ATTEMPTS:
         logger.error(
@@ -174,28 +188,7 @@ async def _process_row(row: dict) -> None:
         await _delete_row(row_id)
         return
 
-    backoff_seconds = _BACKOFF_BASE * (2**attempts)
-    next_attempt_at = (datetime.now(timezone.utc) + timedelta(seconds=backoff_seconds)).isoformat()
-    try:
-        await run_sync(
-            lambda: (
-                supabase.table("push_retry_queue")
-                .update(
-                    {
-                        "attempts": new_attempts,
-                        "next_attempt_at": next_attempt_at,
-                    }
-                )
-                .eq("id", row_id)
-                .execute()
-            )
-        )
-        logger.warning(f"push_retry: attempt {new_attempts} failed for row {row_id}; next retry in {backoff_seconds}s")
-    except Exception:
-        logger.error(
-            f"push_retry: failed to update back-off for row {row_id}",
-            exc_info=True,
-        )
+    logger.warning(f"push_retry: attempt {new_attempts} failed for row {row_id}; next retry in {backoff_seconds}s")
 
 
 async def _send_fcm_push(
@@ -265,6 +258,34 @@ async def _send_fcm_push(
             f"push_retry: FCM send failed for user {user_id!r}",
             exc_info=True,
         )
+        return False
+
+
+async def _claim_row(row_id: str, observed_attempts: int, next_attempt_at: str) -> bool:
+    """Atomically lease one queue row for delivery (replay-safety, F5).
+
+    Compare-and-swap on the observed ``attempts`` value while ``sent_at IS
+    NULL``: only the worker whose UPDATE flips attempts wins the row;
+    concurrent workers on other replicas read the same snapshot but match zero
+    rows once attempts has advanced, so they skip. Returns True iff this worker
+    claimed the row. Never raises — a claim failure is treated as "not claimed".
+    """
+
+    def _fn() -> bool:
+        res = (
+            supabase.table("push_retry_queue")
+            .update({"attempts": observed_attempts + 1, "next_attempt_at": next_attempt_at})
+            .eq("id", row_id)
+            .eq("attempts", observed_attempts)
+            .is_("sent_at", "null")
+            .execute()
+        )
+        return bool(getattr(res, "data", None))
+
+    try:
+        return await run_sync(_fn)
+    except Exception:
+        logger.error(f"push_retry: failed to claim row {row_id}", exc_info=True)
         return False
 
 

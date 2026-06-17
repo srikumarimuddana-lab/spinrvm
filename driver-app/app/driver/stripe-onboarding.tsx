@@ -11,6 +11,14 @@
  * runtime via injectedJavaScriptBeforeContentLoaded (window.__SPINR_TOKEN) and
  * used by the page's same-origin POST to /stripe-account-session — it is never
  * placed in the URL or written to logs.
+ *
+ * Diagnostics: this screen used to collapse every failure (token hang, page not
+ * loading, connect.js blocked, COOP, slow fetchClientSecret) into one identical
+ * infinite spinner. It now (a) logs the URL + each progress stage to the JS
+ * console, (b) shows a live debug strip with the exact URL (long-press to copy
+ * and open in a browser) + current stage, (c) trips a no-progress watchdog that
+ * replaces the spinner with an actionable error naming the stall point, and
+ * (d) surfaces HTTP / network / connect.js errors instead of swallowing them.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
@@ -31,6 +39,9 @@ const EMBEDDED_URL = `${SpinrConfig.backendUrl}/api/v1/drivers/stripe-embedded`;
 // alongside mediaCapturePermissionGrantType="grant" — Stripe renders inside
 // iframes, which aren't subject to this list, so this stays tight).
 const ORIGIN_WHITELIST = [SpinrConfig.backendUrl, 'https://*.stripe.com', 'https://connect-js.stripe.com'];
+// If no terminal signal (mounted / exit / error) arrives within this window we
+// stop spinning and show an actionable error naming the current stage.
+const LOAD_TIMEOUT_MS = 30000;
 
 export default function StripeOnboardingScreen() {
     const router = useRouter();
@@ -42,15 +53,33 @@ export default function StripeOnboardingScreen() {
     const [token, setToken] = useState<string | null>(null);
     const [tokenError, setTokenError] = useState(false);
     const [pageLoading, setPageLoading] = useState(true);
+    const [stage, setStageState] = useState<string>('starting');
+    const [fatalError, setFatalError] = useState<string | null>(null);
+    const [reloadKey, setReloadKey] = useState(0);
     const exitedRef = useRef(false);
+    const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // Single place to record progress: logs URL + stage to the JS console
+    // (visible via Metro / `npx react-native log-android|log-ios`) and drives
+    // the on-screen debug strip, so the exact stall point is observable.
+    const log = (s: string) => {
+        // eslint-disable-next-line no-console
+        console.log(`[StripeOnboarding] stage=${s} url=${EMBEDDED_URL}`);
+        setStageState(s);
+    };
+
+    const clearTimer = () => {
+        if (timerRef.current) {
+            clearTimeout(timerRef.current);
+            timerRef.current = null;
+        }
+    };
 
     useEffect(() => {
         let active = true;
         (async () => {
             // Best-effort: hold the OS camera permission up front so Stripe's
-            // in-page getUserMedia can capture the driver's government ID. On
-            // Android the WebView can only grant the page's camera request if
-            // the app already holds CAMERA; iOS prompts on first use anyway. If
+            // in-page getUserMedia can capture the driver's government ID. If
             // denied, Stripe falls back to file upload — so never block on this.
             try {
                 await ImagePicker.requestCameraPermissionsAsync();
@@ -58,22 +87,41 @@ export default function StripeOnboardingScreen() {
                 // ignore — onboarding continues with the file-upload fallback
             }
             try {
+                log('requesting-token');
                 await ensureFreshToken();
                 const t = await getAuthHeader();
                 if (!active) return;
                 if (!t) {
+                    log('token-missing');
                     setTokenError(true);
                     return;
                 }
+                log('token-ready');
                 setToken(t);
             } catch {
-                if (active) setTokenError(true);
+                if (active) {
+                    log('token-error');
+                    setTokenError(true);
+                }
             }
         })();
         return () => {
             active = false;
+            clearTimer();
         };
     }, []);
+
+    // Start the no-progress watchdog once the WebView has a token to load with
+    // (and restart it on a manual retry). Cleared on the `mounted` signal.
+    useEffect(() => {
+        if (!token || fatalError) return;
+        clearTimer();
+        timerRef.current = setTimeout(() => {
+            log('timeout');
+            setFatalError('timeout');
+        }, LOAD_TIMEOUT_MS);
+        return clearTimer;
+    }, [token, reloadKey, fatalError]);
 
     // Inject the bearer token into the page BEFORE its scripts run, so the
     // embedded component's fetchClientSecret can authenticate its POST.
@@ -85,6 +133,7 @@ export default function StripeOnboardingScreen() {
     const finish = (opts: { refresh: boolean; message?: string; type?: 'success' | 'error' }) => {
         if (exitedRef.current) return;
         exitedRef.current = true;
+        clearTimer();
         if (opts.message) showToast(opts.type ?? 'info', opts.type === 'error' ? 'Error' : 'Done', opts.message);
         if (opts.refresh) void refetch();
         router.back();
@@ -94,19 +143,33 @@ export default function StripeOnboardingScreen() {
         const data = e.nativeEvent.data || '';
         if (data === 'exit') {
             // User finished or closed Stripe's flow. Re-pull KYC status; the
-            // account.updated webhook is the authoritative gate, so the payout
-            // screen reflects "verified" once Stripe confirms.
+            // account.updated webhook is the authoritative gate.
             finish({ refresh: true, message: 'Verification updated.', type: 'success' });
+        } else if (data.startsWith('stage:')) {
+            const s = data.slice(6);
+            log(s);
+            if (s === 'mounted') clearTimer(); // component is live; stop the watchdog
         } else if (data.startsWith('error:')) {
-            finish({
-                refresh: false,
-                message: 'Could not load verification. Please try again.',
-                type: 'error',
-            });
+            // Show the specific failure (no-token / 401 / fetch-network /
+            // connectjs-timeout / connectjs-load / init / <status>) instead of
+            // an endless spinner.
+            clearTimer();
+            const code = data.slice(6);
+            log(`error:${code}`);
+            setFatalError(code);
         }
     };
 
-    const showSpinner = (!token && !tokenError) || (pageLoading && !tokenError);
+    const retry = () => {
+        exitedRef.current = false;
+        setFatalError(null);
+        setPageLoading(true);
+        log('retry');
+        setReloadKey((k) => k + 1); // remounts the WebView with a fresh load
+    };
+
+    const showSpinner =
+        (!token && !tokenError && !fatalError) || (pageLoading && !tokenError && !fatalError);
 
     return (
         <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -130,23 +193,48 @@ export default function StripeOnboardingScreen() {
                         Your session expired. Please go back and try again.
                     </Text>
                 </View>
+            ) : fatalError ? (
+                <View style={styles.center}>
+                    <Ionicons name="alert-circle-outline" size={40} color={colors.textDim} />
+                    <Text style={[styles.errText, { color: colors.text, fontWeight: '700' }]}>
+                        Verification couldn’t load.
+                    </Text>
+                    <Text style={[styles.errText, { color: colors.textDim }]}>
+                        {fatalError === 'timeout'
+                            ? `Timed out at stage "${stage}".`
+                            : `Failure: ${fatalError} (last stage "${stage}").`}
+                    </Text>
+                    <Text style={[styles.debugLabel, { color: colors.textDim }]}>
+                        Open this URL in a browser to test it directly:
+                    </Text>
+                    <Text selectable style={[styles.debugUrl, { color: colors.primary }]}>
+                        {EMBEDDED_URL}
+                    </Text>
+                    <TouchableOpacity style={[styles.retryBtn, { backgroundColor: colors.primary }]} onPress={retry}>
+                        <Text style={styles.retryText}>Retry</Text>
+                    </TouchableOpacity>
+                </View>
             ) : (
                 <View style={{ flex: 1 }}>
                     {token && (
                         <WebView
+                            key={reloadKey}
                             ref={webRef}
                             source={{ uri: EMBEDDED_URL }}
                             originWhitelist={ORIGIN_WHITELIST}
                             injectedJavaScriptBeforeContentLoaded={injectedBeforeLoad}
                             onMessage={onMessage}
-                            onLoadEnd={() => setPageLoading(false)}
-                            onError={() =>
-                                finish({
-                                    refresh: false,
-                                    message: 'Network error loading verification.',
-                                    type: 'error',
-                                })
-                            }
+                            onLoadStart={() => log('page-loading')}
+                            onLoadEnd={() => {
+                                setPageLoading(false);
+                                log('page-loaded');
+                            }}
+                            onError={(e) => {
+                                log(`webview-error:${e.nativeEvent?.description ?? ''}`);
+                                clearTimer();
+                                setFatalError('webview-error');
+                            }}
+                            onHttpError={(e) => log(`http-${e.nativeEvent?.statusCode ?? '?'}`)}
                             javaScriptEnabled
                             domStorageEnabled
                             // Stripe identity verification may capture a document photo.
@@ -161,10 +249,23 @@ export default function StripeOnboardingScreen() {
                         <View style={[styles.center, styles.overlay, { backgroundColor: colors.background }]}>
                             <ActivityIndicator size="large" color={colors.primary} />
                             <Text style={[styles.loadingText, { color: colors.textDim }]}>
-                                Loading secure verification…
+                                Loading secure verification… ({stage})
                             </Text>
                         </View>
                     )}
+                    {/* Always-on debug strip: the exact URL (long-press to copy
+                        and open in a browser) + the live progress stage. */}
+                    <View
+                        style={[
+                            styles.debugBar,
+                            { borderTopColor: colors.border, paddingBottom: Math.max(insets.bottom, 6) },
+                        ]}
+                    >
+                        <Text style={[styles.debugLabel, { color: colors.textDim }]}>stage: {stage}</Text>
+                        <Text selectable style={[styles.debugUrl, { color: colors.textDim }]}>
+                            {EMBEDDED_URL}
+                        </Text>
+                    </View>
                 </View>
             )}
         </View>
@@ -181,4 +282,9 @@ const styles = StyleSheet.create({
     overlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
     loadingText: { marginTop: 12, fontSize: 14 },
     errText: { marginTop: 12, fontSize: 14, textAlign: 'center', lineHeight: 20 },
+    debugBar: { borderTopWidth: 1, paddingHorizontal: 12, paddingTop: 6 },
+    debugLabel: { fontSize: 11, textAlign: 'center', marginTop: 8 },
+    debugUrl: { fontSize: 11, textAlign: 'center', marginTop: 2 },
+    retryBtn: { marginTop: 18, paddingHorizontal: 32, paddingVertical: 12, borderRadius: 12 },
+    retryText: { color: '#fff', fontSize: 15, fontWeight: '700' },
 });

@@ -50,6 +50,8 @@ try:
         ErrorCode,
         RideStateError,
         SpinrException,
+        db_error_text,
+        pg_error_code,
     )
     from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
@@ -85,6 +87,8 @@ except ImportError:
         ErrorCode,
         RideStateError,
         SpinrException,
+        db_error_text,
+        pg_error_code,
     )
     from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
@@ -2149,25 +2153,40 @@ _STRIPE_EMBEDDED_HTML = """<!doctype html>
   html,body{margin:0;height:100%;background:#0f0f10;
     font-family:-apple-system,Segoe UI,Roboto,sans-serif}
   #msg{color:#bdbdbd;padding:28px;text-align:center;font-size:15px}
+  #dbg{color:#6b7280;padding:6px 12px;text-align:center;font-size:11px;
+    font-family:ui-monospace,Menlo,Consolas,monospace;word-break:break-all}
   #container{padding:0 4px}
 </style></head>
 <body>
   <div id="msg">Loading secure verification…</div>
   <div id="container"></div>
+  <div id="dbg"></div>
   <script>
     var PK = __SPINR_PK__;
+    var mounted = false;
     function post(m){ if(window.ReactNativeWebView){ window.ReactNativeWebView.postMessage(m); } }
+    // Surface progress to BOTH the RN host (debug strip) and on-page, so the
+    // same URL opened directly in a browser shows exactly where it stalls.
+    function stage(s){ post("stage:" + s); var d=document.getElementById("dbg"); if(d){ d.textContent="stage: "+s; } }
+    function fail(c){ post("error:" + c); var d=document.getElementById("dbg"); if(d){ d.textContent="error: "+c; } }
     async function fetchClientSecret(){
+      stage("fetch-start");
       var token = window.__SPINR_TOKEN || "";
-      var res = await fetch("/api/v1/drivers/stripe-account-session", {
-        method: "POST",
-        headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" }
-      });
-      if(!res.ok){ post("error:" + res.status); throw new Error("account_session " + res.status); }
+      if(!token){ fail("no-token"); throw new Error("no token"); }
+      var res;
+      try{
+        res = await fetch("/api/v1/drivers/stripe-account-session", {
+          method: "POST",
+          headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" }
+        });
+      }catch(e){ fail("fetch-network"); throw e; }  // network/CSP block — previously silent
+      if(!res.ok){ fail(String(res.status)); throw new Error("account_session " + res.status); }
       var data = await res.json();
+      stage("fetch-ok");
       return data.client_secret;
     }
     function mount(){
+      stage("mounting");
       try{
         var instance = StripeConnect.init({
           publishableKey: PK,
@@ -2176,6 +2195,7 @@ _STRIPE_EMBEDDED_HTML = """<!doctype html>
             colorBackground: "#0f0f10", colorText: "#ffffff",
             colorPrimary: "#16a34a", colorSecondaryText: "#bdbdbd" } }
         });
+        stage("init-ok");
         var onboarding = instance.create("account-onboarding");
         // Mirror the hosted flow: collect eventually/future-due fields up front
         // so the SIN (individual.id_number) is requested during onboarding.
@@ -2183,18 +2203,24 @@ _STRIPE_EMBEDDED_HTML = """<!doctype html>
         onboarding.setOnExit(function(){ post("exit"); });
         document.getElementById("msg").style.display = "none";
         document.getElementById("container").appendChild(onboarding);
-      }catch(e){ post("error:init"); }
+        mounted = true;
+        stage("mounted");
+      }catch(e){ fail("init"); }
     }
-    if(!PK){ document.getElementById("msg").textContent =
+    if(!PK){ stage("no-pk"); document.getElementById("msg").textContent =
       "Payouts setup is not available yet. Please try again later."; }
     else {
+      stage("script-init");
       window.StripeConnect = window.StripeConnect || {};
       // connect.js calls StripeConnect.onLoad once the script finishes loading.
       if(window.StripeConnect && typeof window.StripeConnect.init === "function"){ mount(); }
-      else { window.StripeConnect.onLoad = mount; }
+      else { stage("awaiting-connectjs"); window.StripeConnect.onLoad = mount; }
+      // Watchdog: if connect.js never loads (CSP/network block), onLoad never
+      // fires and the page would spin forever — surface it instead.
+      setTimeout(function(){ if(!mounted){ fail("connectjs-timeout"); } }, 12000);
     }
   </script>
-  <script src="https://connect-js.stripe.com/v1.0/connect.js" async></script>
+  <script src="https://connect-js.stripe.com/v1.0/connect.js" async onerror="fail('connectjs-load')"></script>
 </body></html>"""
 
 
@@ -4255,9 +4281,11 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         _updated_ride_row = await db_supabase.update_one("rides", _complete_filters, update_fields)
     except Exception as e:
         # Some columns may not exist yet in older deployments. Retry with only
-        # the essential fields so ride completion never fails.
-        err_msg = str(e).lower()
-        if "column" in err_msg or "pgrst204" in err_msg:
+        # the essential fields so ride completion never fails. run_sync wraps the
+        # PostgREST error, so match the real text + structured code, not str(e)
+        # (the generic "Database operation failed" sentinel never contains it).
+        err_msg = db_error_text(e)
+        if pg_error_code(e).upper() == "PGRST204" or "column" in err_msg or "pgrst204" in err_msg:
             logger.warning(f"Retrying ride update with minimal fields: {e}")
             safe_keys = {
                 "status",
@@ -4485,13 +4513,36 @@ async def cancel_ride(
         "updated_at": now,
     }
 
+    # C2: atomic, status-guarded cancel. The in-memory check above can race —
+    # between get_ride and the write the rider/driver can call verify-otp/start
+    # and flip the ride to in_progress. An unguarded update_ride (filters on id
+    # only) would then overwrite in_progress -> cancelled, violating "never cancel
+    # after trip start" (Period 3 left open, fare settlement skipped, regulatory
+    # trip log corrupted). Filtering on the pre-trip states matches zero rows once
+    # the ride has started/ended -> 409, nothing mutated. Mirrors the rider cancel
+    # path in routes/rides.py.
+    _cancel_filter = {
+        "id": ride_id,
+        "status": {
+            "$in": [
+                "requested",
+                RideStatus.SEARCHING,
+                RideStatus.DRIVER_ASSIGNED,
+                RideStatus.DRIVER_ACCEPTED,
+                "en_route",
+                RideStatus.DRIVER_ARRIVED,
+            ]
+        },
+    }
+
     # Try to persist cancelled_by / cancellation_reason for audit. These
     # columns may not exist in older Supabase schemas — PGRST204 on an
     # unknown column would crash the whole cancel. Fall back to the
-    # minimal update so the cancellation still succeeds.
+    # minimal (still status-guarded) update so the cancellation still succeeds.
     try:
-        await db_supabase.update_ride(
-            ride_id,
+        _claim = await db_supabase.update_one(
+            "rides",
+            _cancel_filter,
             {
                 **base_update,
                 "cancelled_by": "driver",
@@ -4504,7 +4555,13 @@ async def cancel_ride(
         logger.warning(
             f"[CANCEL] cancelled_by/cancellation_reason write failed (likely PGRST204); retrying minimal update: {exc}"
         )
-        await db_supabase.update_ride(ride_id, base_update)
+        _claim = await db_supabase.update_one("rides", _cancel_filter, base_update)
+
+    if _claim is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Ride can no longer be cancelled (it has started or already ended)",
+        )
 
     # Make driver available again
     await db_supabase.set_driver_available(driver["id"], True)
@@ -4604,6 +4661,25 @@ async def mark_rider_noshow(
             detail=f"Must wait {remaining} more seconds before marking no-show",
         )
 
+    # C2: atomically claim the no-show cancel (driver_arrived -> cancelled) BEFORE
+    # charging anyone. No-show charges the rider and pays the driver; if the status
+    # write were deferred until after the charge (and filtered on id only), a ride
+    # that started in the race window would be BOTH charged a no-show fee AND
+    # overwritten cancelled. The status-guarded claim matches zero rows once the
+    # ride leaves driver_arrived -> 409, nothing charged. It also makes a duplicate
+    # no-show call idempotent (no double charge).
+    _noshow_now = datetime.now(timezone.utc)
+    _noshow_claim = await db_supabase.update_one(
+        "rides",
+        {"id": ride_id, "status": RideStatus.DRIVER_ARRIVED},
+        {"status": RideStatus.CANCELLED, "cancelled_at": _noshow_now, "updated_at": _noshow_now},
+    )
+    if _noshow_claim is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Ride can no longer be marked no-show (it has started or already ended)",
+        )
+
     try:
         from ..services.cancellation_service import (
             calculate_noshow_fee,
@@ -4661,26 +4737,25 @@ async def mark_rider_noshow(
             ride_status_at_cancel="noshow",
         )
 
-    now = datetime.now(timezone.utc)
-    base_update = {
-        "status": RideStatus.CANCELLED,
-        "cancelled_at": now,
-        "updated_at": now,
-    }
+    # Status was already flipped to cancelled by the atomic claim above; here we
+    # only persist the fee attribution. Writing these columns onto an already-
+    # terminal cancelled ride is safe (cancelled cannot transition away), so an
+    # id-only update is fine. Optional columns may not exist on older schemas.
+    _fee_now = datetime.now(timezone.utc)
     try:
         await db_supabase.update_ride(
             ride_id,
             {
-                **base_update,
                 "cancelled_by": "driver",
                 "cancellation_type": "noshow",
                 "cancellation_fee_admin": float(fee_admin.quantize(Decimal("0.01"))),
                 "cancellation_fee_driver": float(fee_driver.quantize(Decimal("0.01"))),
+                "updated_at": _fee_now,
             },
         )
     except Exception as exc:
         logger.warning(f"[NOSHOW] extended fields write failed; retrying minimal: {exc}")
-        await db_supabase.update_ride(ride_id, base_update)
+        await db_supabase.update_ride(ride_id, {"updated_at": _fee_now})
 
     await db_supabase.set_driver_available(driver["id"], True)
     await record_period_transition(driver["id"], 1)
@@ -4870,10 +4945,10 @@ async def get_referred_drivers(
     referral_code = driver.get("referral_code", f"DRIVER{driver['id'][:8].upper()}")
 
     # Find users who used this referral code and became drivers
-    # Each referred user contributes name + email to the response — project
-    # those columns and keep base64 profile_image out of the read.
+    # Each referred user contributes name + email + signup date to the response
+    # — project those columns and keep base64 profile_image out of the read.
     referred_users_cursor = db_supabase.get_rows(
-        "users", {"referral_code_used": referral_code}, columns="id,first_name,last_name,email", limit=100
+        "users", {"referral_code_used": referral_code}, columns="id,first_name,last_name,email,created_at", limit=100
     )
     referred_users = (
         await referred_users_cursor.to_list(100)

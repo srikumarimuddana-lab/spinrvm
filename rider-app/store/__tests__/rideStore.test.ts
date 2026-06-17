@@ -97,6 +97,7 @@ const resetStore = () =>
     appliedPromo: null,
     isLoading: false,
     error: null,
+    _clearedRideId: null,
   });
 
 beforeEach(() => {

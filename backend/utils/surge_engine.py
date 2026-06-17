@@ -26,10 +26,20 @@ try:
     from db import db
     from geo_utils import get_service_area_polygon, point_in_polygon
     from utils.driver_presence import present_driver_ids
+    from utils.metrics import inc as _metric_inc
 except ImportError:
     from ..db import db
     from ..geo_utils import get_service_area_polygon, point_in_polygon
     from .driver_presence import present_driver_ids
+    from .metrics import inc as _metric_inc
+
+# Per-area supply/demand fetch cap. Surge = demand/supply, a regulated rider-
+# facing price; if a fetch hits this cap the count is TRUNCATED and the
+# multiplier is wrong (supply undercount → over-price). Raised from 500 and made
+# loud (metric + warning below) so truncation can never silently mis-price.
+# The real fix is a server-side spatial count (PostGIS ST_Covers + GIST index);
+# tracked as ACTION_ITEMS D1.
+_SURGE_FETCH_CAP = 5000
 
 # ── Surge tier mapping ───────────────────────────────────────────────
 # Maps demand/supply ratio to multiplier. Thresholds are tuned for a
@@ -70,9 +80,16 @@ async def _count_demand_in_area(area_id: str) -> int:
                 "service_area_id": area_id,
                 "ride_requested_at": {"$gte": cutoff},
             },
-            limit=500,
+            limit=_SURGE_FETCH_CAP,
             columns="id,status",
         )
+        if len(rides) >= _SURGE_FETCH_CAP:
+            _metric_inc("spinr_surge_fetch_cap_hit_total", {"kind": "demand"})
+            logger.error(
+                f"Surge: demand fetch hit the {_SURGE_FETCH_CAP}-row cap for area {area_id} — "
+                f"demand is TRUNCATED and the surge multiplier may be under-stated. "
+                f"Move to a server-side spatial/aggregate count (D1)."
+            )
         # Count rides that are still active or very recently requested
         active_statuses = {
             "searching",
@@ -97,9 +114,16 @@ async def _count_supply_in_area(area: Dict[str, Any]) -> int:
         drivers = await db.get_rows(
             "drivers",
             {"is_online": True, "is_available": True},
-            limit=500,
+            limit=_SURGE_FETCH_CAP,
             columns="id,user_id,lat,lng",
         )
+        if len(drivers) >= _SURGE_FETCH_CAP:
+            _metric_inc("spinr_surge_fetch_cap_hit_total", {"kind": "supply"})
+            logger.error(
+                f"Surge: supply fetch hit the {_SURGE_FETCH_CAP}-row cap for area {area.get('id')} — "
+                f"supply is TRUNCATED and the surge multiplier may be OVER-stated (a regulated price). "
+                f"Move to a server-side spatial count (PostGIS ST_Covers + GIST index, D1)."
+            )
 
         # Presence filter: ghost-online drivers (app force-killed, phone dead)
         # shouldn't count as "supply" or we'd compute a lower surge than the

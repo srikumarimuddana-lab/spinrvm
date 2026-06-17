@@ -50,6 +50,8 @@ try:
         ErrorCode,
         RideStateError,
         SpinrException,
+        db_error_text,
+        pg_error_code,
     )
     from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
@@ -85,6 +87,8 @@ except ImportError:
         ErrorCode,
         RideStateError,
         SpinrException,
+        db_error_text,
+        pg_error_code,
     )
     from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
@@ -4255,9 +4259,11 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         _updated_ride_row = await db_supabase.update_one("rides", _complete_filters, update_fields)
     except Exception as e:
         # Some columns may not exist yet in older deployments. Retry with only
-        # the essential fields so ride completion never fails.
-        err_msg = str(e).lower()
-        if "column" in err_msg or "pgrst204" in err_msg:
+        # the essential fields so ride completion never fails. run_sync wraps the
+        # PostgREST error, so match the real text + structured code, not str(e)
+        # (the generic "Database operation failed" sentinel never contains it).
+        err_msg = db_error_text(e)
+        if pg_error_code(e).upper() == "PGRST204" or "column" in err_msg or "pgrst204" in err_msg:
             logger.warning(f"Retrying ride update with minimal fields: {e}")
             safe_keys = {
                 "status",

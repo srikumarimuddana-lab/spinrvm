@@ -1,8 +1,10 @@
 """Monthly allowance reset — rolls fixed_recurring periods forward and
 zeroes `used` for non-rollover allowances.
 
-Runs as a scheduled loop (pattern: utils/scheduled_rides.py). Idempotent:
-`list_allowances_due_for_reset` short-circuits when `period_end >= today`.
+Runs as a scheduled loop (pattern: utils/scheduled_rides.py). Replay-safe:
+`list_allowances_due_for_reset` short-circuits when `period_end >= today`, and
+each period roll-forward is claimed via an atomic compare-and-swap on
+`period_end` so only one replica processes a given allowance per period (F8).
 """
 
 from __future__ import annotations
@@ -78,6 +80,21 @@ async def run_allowance_reset_tick(now: Optional[date] = None) -> int:
             wallet = await get_corporate_wallet_by_company(member["company_id"])
             if not wallet:
                 continue
+            # Replay-safety (F8): claim this period roll-forward atomically via a
+            # compare-and-swap on period_end BEFORE zeroing `used`. On >=2 replicas
+            # only the winner advances the period (the others match zero rows and
+            # skip), so apply_reset's reset ledger entry is written once per period.
+            # apply_reset is itself idempotent (re-zeroing `used` is a no-op and a
+            # reset moves no master funds), so a crash between the claim and the
+            # reset fails safe — `used` simply stays as-is (less budget, never more).
+            claimed = await reset_allowance_period(
+                allowance_id=r["id"],
+                period_start=new_start.isoformat(),
+                period_end=new_end.isoformat(),
+                expected_period_end=r["period_end"],
+            )
+            if not claimed:
+                continue
             if not r.get("rollover"):
                 await apply_reset(
                     wallet_id=wallet["id"],
@@ -86,11 +103,6 @@ async def run_allowance_reset_tick(now: Optional[date] = None) -> int:
                     actor_user_id=None,
                     notes=f"period reset {new_start} -> {new_end}",
                 )
-            await reset_allowance_period(
-                allowance_id=r["id"],
-                period_start=new_start.isoformat(),
-                period_end=new_end.isoformat(),
-            )
             processed += 1
         except Exception:
             logger.exception("allowance reset failed for %s", r.get("id"))

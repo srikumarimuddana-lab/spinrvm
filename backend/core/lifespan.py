@@ -78,28 +78,27 @@ async def cleanup_database(db):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application lifespan events"""
-    # Size the default ThreadPoolExecutor that run_in_executor() uses.
-    # Every Supabase call goes through run_sync() → run_in_executor(),
-    # and each call pins one thread for its entire DB roundtrip (plus
-    # any blocking retry is on asyncio.sleep — not pinning — so the
-    # pool is only loaded during actual wire time).
-    #
-    # Python's default is min(32, os.cpu_count() + 4), which on a 2-vCPU
-    # Railway instance works out to 6 threads. Under any realistic load
-    # that's the bottleneck: at ~200ms average PostgREST latency, 6
-    # threads cap us at 30 concurrent DB RPS. Bumping to 64 gives us
-    # ~300 concurrent RPS headroom while still being well within the
-    # memory budget (each thread is ~8 MB stack).
-    #
-    # Override with BACKEND_EXECUTOR_WORKERS env var if needed.
+    # Size the event-loop DEFAULT ThreadPoolExecutor. IMPORTANT: this does NOT
+    # size DB capacity. Every Supabase call goes through run_sync() →
+    # run_in_executor(_DB_EXECUTOR, ...), a DEDICATED pool sized by
+    # DB_THREAD_POOL_SIZE (repositories/_base.py) — that is the single source of
+    # truth for DB throughput. The default executor here is used only by the few
+    # non-DB blocking offloads that pass None to run_in_executor (currently the
+    # ride-snapshot PNG render + Supabase Storage upload in routes/drivers.py).
+    # Those are low-frequency (per ride completion), so a modest pool suffices;
+    # the previous 64 here (mislabelled as DB sizing) left ~48 idle threads
+    # wasting stack budget on a 1 GB VM. Override with BACKEND_EXECUTOR_WORKERS.
     import asyncio as _asyncio_lifespan
     import os as _os
     from concurrent.futures import ThreadPoolExecutor as _Executor
 
-    executor_size = int(_os.environ.get("BACKEND_EXECUTOR_WORKERS", "64"))
+    executor_size = int(_os.environ.get("BACKEND_EXECUTOR_WORKERS", "16"))
     loop = _asyncio_lifespan.get_event_loop()
-    loop.set_default_executor(_Executor(max_workers=executor_size, thread_name_prefix="spinr-db"))
-    logger.info(f"Default executor sized to {executor_size} workers")
+    loop.set_default_executor(_Executor(max_workers=executor_size, thread_name_prefix="spinr-misc"))
+    logger.info(
+        f"Default (non-DB) executor sized to {executor_size} workers; "
+        f"DB capacity is the separate _DB_EXECUTOR (DB_THREAD_POOL_SIZE)"
+    )
 
     # Initialize database
     logger.info("Initializing database connection...")

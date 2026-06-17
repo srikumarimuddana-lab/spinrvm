@@ -102,6 +102,28 @@ async def test_match_driver_to_ride_counts_offers_sent():
 
 
 @pytest.mark.anyio
+async def test_find_candidate_drivers_counts_presence_filter_failure():
+    """A Redis-presence failure falls back to DB-online drivers AND increments
+    spinr_dispatch_presence_filter_failed_total so the degradation is visible."""
+    from backend.services.dispatch_service import DispatchService
+
+    before = _counter_total("spinr_dispatch_presence_filter_failed_total")
+
+    db = MagicMock()
+    db.get_rows = AsyncMock(return_value=[_driver()])
+    svc = DispatchService(db)
+
+    with patch(
+        "backend.services.dispatch_service.present_driver_ids",
+        AsyncMock(side_effect=RuntimeError("redis down")),
+    ):
+        rows = await svc.find_candidate_drivers(_ride())
+
+    assert rows == [_driver()]  # safety valve: fall back to DB-online drivers
+    assert _counter_total("spinr_dispatch_presence_filter_failed_total") == before + 1
+
+
+@pytest.mark.anyio
 async def test_accept_ride_counts_accept_and_observes_latency():
     from backend.routes import drivers as drivers_mod
 

@@ -709,7 +709,11 @@ async def ping() -> dict:
     """Liveness probe with latency and circuit breaker telemetry."""
 
     def _check():
-        supabase.table("app_settings").select("key").limit(1).execute()
+        # Probe the `settings` table (single config row, id='app_settings').
+        # NB: the table is `settings`; `app_settings` is the row id, not a table
+        # — querying table("app_settings") 503s the /health readiness probe and
+        # aborts rolling deploys (PGRST205: table not found).
+        supabase.table("settings").select("id").limit(1).execute()
 
     t0 = _time.monotonic()
     try:

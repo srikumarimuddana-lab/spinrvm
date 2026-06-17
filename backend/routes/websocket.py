@@ -690,8 +690,10 @@ async def websocket_endpoint(
                             f"rider_{ride['rider_id']}",
                         )
 
-                    # Broadcast live location to all connected admin monitoring clients
-                    await manager.broadcast_to_admins(location_update)
+                    # Broadcast live location to admin monitoring clients —
+                    # throttled per driver (#3) so 1 Hz pings don't fan out
+                    # N drivers x A admins every second.
+                    await manager.broadcast_driver_location_to_admins(driver_id, location_update)
 
             elif data.get("type") in ("location_batch", "driver_location_batch"):
                 # Batch upload of buffered GPS points (offline recovery).
@@ -844,7 +846,7 @@ async def websocket_endpoint(
                                     _batch_rider_msg,
                                     f"rider_{_batch_ride['rider_id']}",
                                 )
-                            await manager.broadcast_to_admins(_batch_loc_update)
+                            await manager.broadcast_driver_location_to_admins(driver_id, _batch_loc_update)
                     await websocket.send_json({"type": "location_batch_ack", "count": inserted})
 
             elif data.get("type") == "ride_status_update":

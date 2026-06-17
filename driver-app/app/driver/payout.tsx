@@ -47,11 +47,13 @@ function PayoutScreen() {
     const stripeOnboarding = false;
     const [downloadingT4A, setDownloadingT4A] = useState(false);
     const [downloadingCSV, setDownloadingCSV] = useState(false);
-    // gst_number is part of the driver row served by useDriverMe — keep
-    // a local form state for the input field but seed it from the cached
-    // server value (also re-seeds from the background refetch).
+    // gst_bn (CRA Business Number) is the canonical column on the driver row
+    // served by useDriverMe and accepted by PUT /drivers/me — keep a local form
+    // state for the input but seed it from the cached server value (also
+    // re-seeds from the background refetch). NOTE: the column is gst_bn, not
+    // gst_number — the latter is silently dropped by the backend schema.
     const { data: driverMeRaw } = useDriverMe();
-    const driverMe = driverMeRaw as { gst_number?: string } | undefined;
+    const driverMe = driverMeRaw as { gst_bn?: string } | undefined;
     const updateDriverMe = useUpdateDriverMe();
     const [gstNumber, setGstNumber] = useState('');
     const [showGstForm, setShowGstForm] = useState(false);
@@ -93,7 +95,7 @@ function PayoutScreen() {
     // The hook has its own cache + background refetch, so this replaces
     // the legacy `loadGstNumber()` round-trip entirely.
     useEffect(() => {
-        if (driverMe) setGstNumber(driverMe.gst_number || '');
+        if (driverMe) setGstNumber(driverMe.gst_bn || '');
     }, [driverMe]);
 
     useEffect(() => {
@@ -120,7 +122,10 @@ function PayoutScreen() {
         }
 
         try {
-            await updateDriverMe.mutateAsync({ gst_number: cleaned || null });
+            // Canonical column is gst_bn; also set gst_registered so the T4A
+            // export and admin KYC view stay in sync. (gst_bn:null is dropped by
+            // the backend's exclude_none, so this is an add/update, not a clear.)
+            await updateDriverMe.mutateAsync({ gst_bn: cleaned || null, gst_registered: !!cleaned });
             setShowGstForm(false);
             showToast('success', 'Saved', 'GST/BN number updated successfully');
         } catch (err: any) {

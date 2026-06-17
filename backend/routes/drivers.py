@@ -1941,6 +1941,11 @@ async def _ensure_stripe_account(driver: dict, user: dict, stripe_secret: str) -
     account_id = driver.get("stripe_account_id")
     if account_id:
         return account_id
+    # Idempotency key keyed on the driver makes concurrent / rapid-retry creates
+    # converge on ONE Express account instead of leaking duplicate orphans —
+    # the embedded onboarding's fetchClientSecret can fire this twice before the
+    # first write lands. It also lets a retry recover a create whose DB write
+    # below failed (same key → same account within Stripe's 24h window).
     account = stripe.Account.create(
         type="express",
         country="CA",
@@ -1948,8 +1953,17 @@ async def _ensure_stripe_account(driver: dict, user: dict, stripe_secret: str) -
         capabilities={"transfers": {"requested": True}},
         business_type="individual",
         api_key=stripe_secret,
+        idempotency_key=f"connect-acct-{driver['id']}",
     )
-    await db_supabase.update_one("drivers", {"id": driver["id"]}, {"stripe_account_id": account.id})
+    try:
+        await db_supabase.update_one("drivers", {"id": driver["id"]}, {"stripe_account_id": account.id})
+    except Exception as e:
+        # Never return an unpersisted account id — payouts read the DB column, so
+        # a lost write would strand the driver on an account nothing points to.
+        # Surface loudly; a retry re-creates with the same idempotency key and
+        # converges on this same account, then persists it.
+        logger.error("Failed to persist stripe_account_id", exc_info=True)
+        raise HTTPException(status_code=502, detail="Could not start verification. Please try again.") from e
     return account.id
 
 
@@ -2011,8 +2025,12 @@ async def onboard_stripe(current_user: dict = Depends(get_current_user)):
         # which mis-classified every driver who abandoned Stripe's hosted
         # flow halfway through as fully onboarded. Removed.
         return {"url": account_link.url, "mock": False}
+    except HTTPException:
+        # Preserve the helper's 502 (e.g. failed stripe_account_id persist)
+        # instead of masking it as a generic 500.
+        raise
     except Exception as e:
-        logger.error(f"Stripe error: {e}")
+        logger.error("Stripe onboarding error", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 
@@ -2117,7 +2135,7 @@ async def stripe_account_session(current_user: dict = Depends(get_current_user))
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Stripe AccountSession error: {e}")
+        logger.error("Stripe AccountSession error", exc_info=True)
         raise HTTPException(status_code=502, detail="Could not start verification. Please try again.") from e
 
 
@@ -2189,7 +2207,21 @@ def _stripe_embedded_page(publishable_key: str) -> str:
     the WebView via injectedJavaScriptBeforeContentLoaded (window.__SPINR_TOKEN),
     never placed in the URL or server logs. setCollectionOptions mirrors the
     hosted flow so the SIN (eventually/future-due) is collected up front."""
-    return _STRIPE_EMBEDDED_HTML.replace("__SPINR_PK__", json.dumps(publishable_key))
+    # The publishable key comes from the admin-writable app_settings table, so
+    # treat it as untrusted: plain json.dumps does NOT escape </script>, which
+    # would let a tampered value break out of the inline <script> (stored XSS
+    # that could read window.__SPINR_TOKEN). Escape the HTML-significant chars
+    # to their \uXXXX forms — still a valid JS string literal, no breakout.
+    safe_pk = json.dumps(publishable_key)
+    for _ch, _esc in (
+        ("<", "\\u003c"),
+        (">", "\\u003e"),
+        ("&", "\\u0026"),
+        ("\u2028", "\\u2028"),  # JS line separator — illegal raw in a string literal
+        ("\u2029", "\\u2029"),  # JS paragraph separator
+    ):
+        safe_pk = safe_pk.replace(_ch, _esc)
+    return _STRIPE_EMBEDDED_HTML.replace("__SPINR_PK__", safe_pk)
 
 
 @api_router.get("/stripe-embedded", include_in_schema=False)

@@ -1241,3 +1241,100 @@ class TestStripeOnboarding:
         body = resp.body.decode()
         assert resp.status_code == 200
         assert "spinr-driver://driver/payout?stripe=refresh" in body
+
+
+# ---------------------------------------------------------------------------
+# Stripe embedded onboarding (Option B) — AccountSession + WebView host page
+# ---------------------------------------------------------------------------
+
+
+class TestStripeEmbeddedOnboarding:
+    def test_account_session_returns_client_secret(self):
+        from backend.routes import drivers as drv
+
+        fake_session = type("S", (), {"client_secret": "accs_secret_123"})()
+        captured: dict = {}
+
+        def _session_create(**kwargs):
+            captured.update(kwargs)
+            return fake_session
+
+        with (
+            patch(
+                "backend.routes.drivers.db_supabase.get_rows",
+                AsyncMock(return_value=[_driver(stripe_account_id="acct_123")]),
+            ),
+            patch(
+                "backend.routes.drivers.db_supabase.get_user_by_id",
+                AsyncMock(return_value={"id": USER_ID, "email": "drv@example.com"}),
+            ),
+            patch(
+                "backend.settings_loader.get_app_settings",
+                AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
+                create=True,
+            ),
+            patch("backend.routes.drivers.stripe.AccountSession.create", _session_create),
+        ):
+            result = asyncio.run(drv.stripe_account_session(current_user={"id": USER_ID}))
+
+        assert result == {"client_secret": "accs_secret_123"}
+        # account_onboarding component must be enabled for the embedded flow.
+        assert captured["components"]["account_onboarding"]["enabled"] is True
+
+    def test_account_session_503_when_stripe_unconfigured(self):
+        from fastapi import HTTPException
+
+        from backend.routes import drivers as drv
+
+        with (
+            patch(
+                "backend.routes.drivers.db_supabase.get_rows",
+                AsyncMock(return_value=[_driver()]),
+            ),
+            patch(
+                "backend.routes.drivers.db_supabase.get_user_by_id",
+                AsyncMock(return_value={"id": USER_ID, "email": "drv@example.com"}),
+            ),
+            patch(
+                "backend.settings_loader.get_app_settings",
+                AsyncMock(return_value={"stripe_secret_key": ""}),
+                create=True,
+            ),
+        ):
+            with pytest.raises(HTTPException) as ei:
+                asyncio.run(drv.stripe_account_session(current_user={"id": USER_ID}))
+        assert ei.value.status_code == 503
+
+    def test_embedded_page_serves_connect_js_and_publishable_key(self):
+        from backend.routes import drivers as drv
+
+        with patch(
+            "backend.settings_loader.get_app_settings",
+            AsyncMock(return_value={"stripe_publishable_key": "pk_test_pub42"}),
+            create=True,
+        ):
+            resp = asyncio.run(drv.stripe_embedded())
+
+        body = resp.body.decode()
+        assert resp.status_code == 200
+        assert "connect-js.stripe.com/v1.0/connect.js" in body
+        assert '"pk_test_pub42"' in body  # injected as a JS string literal
+        assert "/api/drivers/stripe-account-session" in body
+        # SIN-forcing collection options carried into the embedded component.
+        assert 'futureRequirements: "include"' in body
+
+    def test_embedded_page_has_no_secret_key(self):
+        from backend.routes import drivers as drv
+
+        with patch(
+            "backend.settings_loader.get_app_settings",
+            AsyncMock(
+                return_value={
+                    "stripe_publishable_key": "pk_test_pub42",
+                    "stripe_secret_key": "sk_test_SHOULD_NOT_LEAK",
+                }
+            ),
+            create=True,
+        ):
+            resp = asyncio.run(drv.stripe_embedded())
+        assert "sk_test_SHOULD_NOT_LEAK" not in resp.body.decode()

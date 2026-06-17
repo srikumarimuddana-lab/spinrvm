@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { useSearchParams } from "next/navigation";
 import { getRides, exportRides, getServiceAreas, type RideListOpts } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { PlusCircle } from "lucide-react";
@@ -36,12 +35,16 @@ export default function RidesPage() {
     const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Deep-link support: open a specific ride when arriving via ?id=<rideId>
-    // (e.g. from a user's "Recent rides" or the safety queue).
-    const searchParams = useSearchParams();
+    // (e.g. from a user's "Recent rides" or the safety queue). Read once on
+    // mount from window.location rather than useSearchParams() — the latter
+    // requires a <Suspense> boundary (which this route lacks) and fails
+    // `next build`. Mount-only also avoids re-opening the modal after close.
     useEffect(() => {
-        const id = searchParams.get("id");
+        if (typeof window === "undefined") return;
+        const id = new URLSearchParams(window.location.search).get("id");
         if (id) setSelectedRideId(id);
-    }, [searchParams]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     const loadRides = useCallback(async (
         p: number,

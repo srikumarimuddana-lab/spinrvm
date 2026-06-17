@@ -2,9 +2,32 @@
 
 import pytest
 
-from utils.sentry_scrub import scrub_breadcrumb, scrub_event
+from utils.sentry_scrub import scrub_breadcrumb, scrub_event, tags_from_log_extra
 
 pytestmark = pytest.mark.unit
+
+
+def test_tags_from_log_extra_promotes_known_keys():
+    tags = tags_from_log_extra(
+        {"domain": "payments", "ride_id": "r1", "driver_id": "d1", "noise": "ignored"}
+    )
+    assert tags["domain"] == "payments"
+    assert tags["ride_id"] == "r1"
+    assert tags["driver_id"] == "d1"
+    assert tags["surface"] == "backend"  # always stamped
+    assert "noise" not in tags  # only whitelisted keys promoted
+
+
+def test_tags_from_log_extra_stamps_surface_on_empty_or_bad_input():
+    assert tags_from_log_extra({}) == {"surface": "backend"}
+    assert tags_from_log_extra(None) == {"surface": "backend"}
+    # An explicit surface is preserved.
+    assert tags_from_log_extra({"surface": "worker"})["surface"] == "worker"
+
+
+def test_tags_from_log_extra_coerces_values_to_str():
+    tags = tags_from_log_extra({"ride_id": 123})
+    assert tags["ride_id"] == "123"
 
 
 def test_scrub_event_redacts_phone_in_message():

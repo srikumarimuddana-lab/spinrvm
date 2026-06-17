@@ -223,6 +223,7 @@ interface RideState {
   updateStop: (index: number, location: Location) => void;
   fetchActiveRide: () => Promise<{ active: boolean; ride: Ride } | null>;
   fetchEstimates: () => Promise<void>;
+  clearEstimates: () => void;
   fetchNearbyDrivers: () => Promise<void>;
   selectVehicle: (vehicle: VehicleType) => void;
   createRide: (
@@ -391,6 +392,19 @@ export const useRideStore = create<RideState>((set, get) => ({
       return null;
     }
   },
+
+  // Wipe the previous route's quote so the next estimate fetch starts from a
+  // clean slate. Called when the rider taps "Search Ride" so a recompute is
+  // unconditional — no stale price, route line, or promo can survive into the
+  // new search even if the pickup/dropoff coordinates happen to be unchanged.
+  clearEstimates: () => set({
+    estimates: [],
+    routePolyline: [],
+    availablePromos: [],
+    appliedPromo: null,
+    isLoading: true,
+    error: null,
+  }),
 
   fetchEstimates: async () => {
     const { pickup, dropoff, stops, estimates: existing } = get();

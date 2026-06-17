@@ -43,6 +43,8 @@ try:
         ErrorCode,
         RideNotFoundException,
         SpinrException,
+        db_error_text,
+        pg_error_code,
     )
     from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
@@ -84,6 +86,8 @@ except ImportError:
         ErrorCode,
         RideNotFoundException,
         SpinrException,
+        db_error_text,
+        pg_error_code,
     )
     from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
@@ -2626,8 +2630,14 @@ async def create_ride(
             break
         except Exception as e:
             last_exc = e
-            msg = str(e).lower()
-            if "column" in msg or "pgrst204" in msg:
+            # db_supabase.run_sync wraps PostgREST errors in DatabaseError/
+            # DuplicateRecordError, so str(e) is a generic sentinel — the SQLSTATE
+            # and constraint name live in details['original']/__cause__. Match the
+            # real text + structured code, not str(e) (which silently missed every
+            # branch below and fell through to a generic 409/503).
+            msg = db_error_text(e)
+            code = pg_error_code(e).upper()
+            if code == "PGRST204" or "pgrst204" in msg or "column" in msg:
                 ride_data.pop("ride_code", None)
                 inserted = await db_supabase.insert_ride(ride_data)
                 break
@@ -2643,7 +2653,7 @@ async def create_ride(
                 if existing:
                     return existing
                 raise HTTPException(status_code=409, detail="Duplicate ride request") from e
-            if "unique" in msg or "duplicate" in msg or "23505" in msg:
+            if code == "23505" or "unique" in msg or "duplicate" in msg:
                 continue  # retry with a new code for ride_code conflicts
             raise
     else:

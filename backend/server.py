@@ -129,10 +129,10 @@ from routes.lost_and_found import api_router as lost_and_found_router
 from routes.loyalty import api_router as loyalty_router
 from routes.maps_proxy import api_router as maps_router
 from routes.notifications import api_router as notifications_router
+from routes.offer_card import router as offer_card_router
 from routes.payments import api_router as payments_router
 from routes.promotions import api_router as promotions_router
 from routes.quests import api_router as quests_router
-from routes.offer_card import router as offer_card_router
 from routes.rides import api_router as rides_router
 from routes.safety import api_router as safety_router
 from routes.service_areas import api_router as service_areas_router
@@ -369,6 +369,12 @@ if sentry_dsn:
     if _StarletteMiddleware is not None:
         integrations.append(_StarletteMiddleware())
 
+    # C1: defense-in-depth PII scrubber. The loguru->Sentry bridge below forwards
+    # arbitrary error-message strings to a third party; these hooks redact
+    # phones/emails/coords/postal codes from event + breadcrumb text and stamp
+    # surface=backend before egress. They never drop an event on failure.
+    from utils.sentry_scrub import scrub_breadcrumb, scrub_event
+
     sentry_sdk.init(
         dsn=sentry_dsn,
         integrations=integrations,
@@ -377,6 +383,8 @@ if sentry_dsn:
         environment=settings.ENV if hasattr(settings, "ENV") else "production",
         # PIPEDA: never send IP, cookies, or auth headers to Sentry.
         send_default_pii=False,
+        before_send=scrub_event,
+        before_breadcrumb=scrub_breadcrumb,
     )
 
     # Bridge loguru → Sentry. The LoggingIntegration above only captures

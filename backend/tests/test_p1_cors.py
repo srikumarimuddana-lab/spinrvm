@@ -301,7 +301,9 @@ class TestAlwaysAllowedOrigins:
 
         cors_mw = next(m for m in fake_app.middlewares if m["cls"] is CORSMiddleware)
         allowed = cors_mw["kwargs"]["allow_origins"]
-        assert "https://spinr-admin.vercel.app" in allowed
+        assert "https://admin-spinr.spinr.ca" in allowed
+        # The dead Vercel preview domain was removed in favour of the custom domain.
+        assert "https://spinr-admin.vercel.app" not in allowed
 
 
 class TestStripeEmbedSecurityHeaders:

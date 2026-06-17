@@ -564,9 +564,7 @@ class DuplicateRecordError(SpinrException):
 
 
 # Error handling middleware
-async def spinr_exception_handler(
-    request: Request, exc: SpinrException
-) -> JSONResponse:
+async def spinr_exception_handler(request: Request, exc: SpinrException) -> JSONResponse:
     """Handle SpinrException and return formatted JSON response."""
     request_id = _resolve_request_id(request)
 
@@ -624,9 +622,7 @@ async def spinr_exception_handler(
     )
 
 
-async def validation_exception_handler(
-    request: Request, exc: RequestValidationError
-) -> JSONResponse:
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     """Handle validation errors and return formatted response."""
     errors = []
     for error in exc.errors():
@@ -759,7 +755,7 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
 # list, so the two code paths can't drift. Resolved once at import
 # time since app settings don't change between restarts.
 _ALWAYS_ALLOWED = {
-    "https://spinr-admin.vercel.app",
+    "https://admin-spinr.spinr.ca",
     "http://localhost:3000",
     "http://localhost:3001",
 }

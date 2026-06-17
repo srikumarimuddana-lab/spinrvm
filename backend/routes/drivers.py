@@ -3,6 +3,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import socket
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
@@ -2248,6 +2249,34 @@ async def delete_bank_account(current_user: dict = Depends(get_current_user)):
     return {"success": True}
 
 
+_GST_BN_RE = re.compile(r"^\d{9}(RT\d{4})?$")
+
+
+def _gst_on_file(driver: dict) -> bool:
+    """True when the driver has a CRA Business Number on file in a valid format
+    (9-digit BN, optionally with the RTxxxx GST/HST program suffix).
+
+    Rideshare drivers must register for GST/HST with the CRA from their first
+    fare — the $30k small-supplier exemption does NOT apply to ride-sharing
+    (Excise Tax Act "taxi business" definition). So a valid BN is a hard
+    precondition for any payout, scheduled or instant."""
+    bn = (driver.get("gst_bn") or "").replace(" ", "").upper()
+    return bool(_GST_BN_RE.match(bn))
+
+
+def _require_gst_for_payout(driver: dict) -> None:
+    """Block payout until the driver's GST/HST Business Number is on file."""
+    if not _gst_on_file(driver):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "A valid GST/HST Business Number is required before you can be paid. "
+                "Rideshare drivers must register for GST/HST with the CRA from their "
+                "first fare. Add your 9-digit Business Number in Payouts to continue."
+            ),
+        )
+
+
 @api_router.post("/payouts")
 @idempotent_endpoint(scope="driver_payout")
 async def request_payout(
@@ -2260,6 +2289,9 @@ async def request_payout(
     )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    # CRA: rideshare drivers must be GST/HST-registered from their first fare.
+    _require_gst_for_payout(driver)
 
     balance = await get_driver_balance(current_user)
     if req.amount > Decimal(balance.get("payable_balance", "0")):
@@ -2386,6 +2418,9 @@ async def request_instant_payout(
     )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    # CRA: rideshare drivers must be GST/HST-registered from their first fare.
+    _require_gst_for_payout(driver)
 
     fee = compute_instant_payout_fee(req.amount)
     net_amount = req.amount - fee

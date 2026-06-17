@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import { useSearchParams } from "next/navigation";
 import { getRides, exportRides, getServiceAreas, type RideListOpts } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { PlusCircle } from "lucide-react";
@@ -33,6 +34,14 @@ export default function RidesPage() {
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
 
     const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // Deep-link support: open a specific ride when arriving via ?id=<rideId>
+    // (e.g. from a user's "Recent rides" or the safety queue).
+    const searchParams = useSearchParams();
+    useEffect(() => {
+        const id = searchParams.get("id");
+        if (id) setSelectedRideId(id);
+    }, [searchParams]);
 
     const loadRides = useCallback(async (
         p: number,

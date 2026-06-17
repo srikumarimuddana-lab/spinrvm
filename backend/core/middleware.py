@@ -66,7 +66,7 @@ _CSRF_EXEMPT_PREFIXES = ("/ws/",)
 #     routes/admin/auth.py), so the attack surface is bounded. Without this
 #     exemption /api/admin/auth/login returns 401 "App Check token
 #     required" before the login handler runs, and the dashboard at
-#     spinrvm.vercel.app can never authenticate.
+#     admin-spinr.spinr.ca can never authenticate.
 _APP_CHECK_EXEMPT_PREFIXES = (
     "/ws/",
     "/docs",
@@ -509,7 +509,6 @@ def init_middleware(app):
 
     # Always allow the admin and default apps explicitly regardless of env variables
     always_allowed = [
-        "https://spinr-admin.vercel.app",
         "https://spinr.app",
         "https://www.spinr.app",
         "https://spinr-track.app",

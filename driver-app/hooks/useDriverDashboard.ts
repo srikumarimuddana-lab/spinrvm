@@ -643,6 +643,13 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
               lastWsFlushRef.current = Date.now();
             }
           }
+          // C4 (P0 GPS OOM): the batch above is only cleared when the socket is
+          // OPEN. During a sustained outage the push keeps growing it without
+          // bound -> OOM on low-memory devices. Cap it like the REST buffer
+          // below: keep the most recent points, drop the oldest.
+          if (wsBatchRef.current.length > 500) {
+            wsBatchRef.current = wsBatchRef.current.slice(-500);
+          }
 
           // Only buffer for the REST fallback when the socket is DOWN. When WS
           // is open it already persists each point as a breadcrumb server-side,

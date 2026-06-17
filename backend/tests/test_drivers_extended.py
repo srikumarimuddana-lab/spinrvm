@@ -1212,8 +1212,8 @@ class TestStripeOnboarding:
         # The headline bug: must NOT fall back to localhost.
         assert "localhost" not in captured["return_url"]
         assert "localhost" not in captured["refresh_url"]
-        assert captured["return_url"] == "https://api-spinr.spinr.ca/api/drivers/stripe-return"
-        assert captured["refresh_url"] == "https://api-spinr.spinr.ca/api/drivers/stripe-refresh"
+        assert captured["return_url"] == "https://api-spinr.spinr.ca/api/v1/drivers/stripe-return"
+        assert captured["refresh_url"] == "https://api-spinr.spinr.ca/api/v1/drivers/stripe-refresh"
 
     def test_onboarding_collects_sin_eventually_due(self):
         captured: dict = {}
@@ -1319,7 +1319,7 @@ class TestStripeEmbeddedOnboarding:
         assert resp.status_code == 200
         assert "connect-js.stripe.com/v1.0/connect.js" in body
         assert '"pk_test_pub42"' in body  # injected as a JS string literal
-        assert "/api/drivers/stripe-account-session" in body
+        assert "/api/v1/drivers/stripe-account-session" in body
         # SIN-forcing collection options carried into the embedded component.
         assert 'futureRequirements: "include"' in body
 

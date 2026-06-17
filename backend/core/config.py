@@ -151,6 +151,13 @@ class Settings(BaseSettings):
     # dedicated tracking subdomain in production (admin panel is NOT served here).
     TRACKING_BASE_URL: str = "https://track.spinr.ca"
 
+    # Public base URL of THIS backend API (Cloudflare CNAME → Fly/Railway). Used
+    # to build Stripe Connect onboarding return/refresh URLs that the driver's
+    # browser must be able to reach. An app_settings `base_url` value overrides
+    # this. Must be a public https origin — never localhost (the phone can't
+    # reach localhost, which hangs Stripe's hosted onboarding mid-flow).
+    API_BASE_URL: str = "https://api-spinr.spinr.ca"
+
     # File storage
     STORAGE_BUCKET: str = "driver-documents"
 

@@ -18,6 +18,7 @@ from fastapi import (
     Query,
     Request,
 )
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 try:
@@ -1943,22 +1944,99 @@ async def onboard_stripe(current_user: dict = Depends(get_current_user)):
             account_id = account.id
             await db_supabase.update_one("drivers", {"id": driver["id"]}, {"stripe_account_id": account_id})
 
-        account_link = stripe.AccountLink.create(
-            account=account_id,
-            refresh_url=f"{settings.get('base_url', 'http://localhost:8000')}/api/drivers/stripe-refresh",
-            return_url=f"{settings.get('base_url', 'http://localhost:8000')}/api/drivers/stripe-return",
-            type="account_onboarding",
-            api_key=stripe_secret,
-        )
+        account_link = _create_onboarding_link(account_id, settings, stripe_secret)
         # The real onboarded gate is now stripe_details_submitted, set by
         # the account.updated webhook handler in services/stripe_kyc_sync.py.
         # We used to flip stripe_account_onboarded=True here optimistically,
         # which mis-classified every driver who abandoned Stripe's hosted
         # flow halfway through as fully onboarded. Removed.
         return {"url": account_link.url, "mock": False}
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Stripe error: {e}")
-        raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
+        # Surface the real Stripe error (Connect config, invalid URL, etc.) so a
+        # failure is diagnosable instead of a generic 500.
+        logger.error("Stripe onboarding error for driver %s: %s", driver.get("id"), e, exc_info=True)
+        raise HTTPException(status_code=502, detail="Could not start payout onboarding. Please try again.") from e
+
+
+def _onboarding_base_url(settings: dict) -> str:
+    """Public https origin Stripe redirects the driver's browser back to.
+
+    Order: app_settings ``base_url`` (operator override) → config API_BASE_URL.
+    NEVER localhost — Stripe hits refresh_url MID-onboarding, and a phone can't
+    reach localhost, which hangs the hosted flow at "Verify Identity".
+    """
+    try:
+        from ..core.config import settings as _cfg
+    except ImportError:
+        from core.config import settings as _cfg  # type: ignore
+    base = (settings.get("base_url") or _cfg.API_BASE_URL or "").strip().rstrip("/")
+    if not base or base.startswith("http://localhost") or base.startswith("http://127."):
+        base = _cfg.API_BASE_URL.rstrip("/")
+    return base
+
+
+def _create_onboarding_link(account_id: str, settings: dict, stripe_secret: str):
+    """Mint a fresh Stripe Connect onboarding AccountLink (single-use).
+
+    refresh_url carries the account_id so the (unauthenticated) refresh endpoint
+    can mint a new link when Stripe expires this one mid-flow — the standard
+    Stripe refresh pattern. Both URLs hit real /api/v1/drivers/ handlers below.
+    """
+    base = _onboarding_base_url(settings)
+    return stripe.AccountLink.create(
+        account=account_id,
+        refresh_url=f"{base}/api/v1/drivers/stripe-refresh?account_id={account_id}",
+        return_url=f"{base}/api/v1/drivers/stripe-return",
+        type="account_onboarding",
+        api_key=stripe_secret,
+    )
+
+
+@api_router.get("/stripe-refresh")
+async def stripe_onboard_refresh(account_id: str = Query(..., min_length=1, max_length=255)):
+    """Stripe redirects the driver's BROWSER here (no JWT) when an onboarding
+    link expires mid-flow. Look up the driver by connected-account id, mint a
+    fresh AccountLink, and 303-redirect to it. Without this endpoint the link's
+    refresh_url 404'd/hung — the cause of the 'Verify Identity' buffering."""
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"stripe_account_id": account_id}, limit=1)
+    )
+    if not driver:
+        raise HTTPException(status_code=404, detail="Unknown payout account")
+
+    try:
+        from ..settings_loader import get_app_settings
+    except ImportError:
+        from settings_loader import get_app_settings
+    settings = await get_app_settings()
+    stripe_secret = settings.get("stripe_secret_key", "")
+    if not stripe_secret:
+        raise HTTPException(status_code=503, detail="Payments not configured")
+
+    try:
+        link = _create_onboarding_link(account_id, settings, stripe_secret)
+    except Exception as e:
+        logger.error("Stripe onboarding refresh failed for account %s: %s", account_id, e, exc_info=True)
+        raise HTTPException(status_code=502, detail="Could not refresh payout onboarding.") from e
+    return RedirectResponse(link.url, status_code=303)
+
+
+@api_router.get("/stripe-return")
+async def stripe_onboard_return():
+    """Stripe redirects the driver's browser here after they finish (or exit)
+    onboarding. The authoritative onboarded gate is the account.updated webhook
+    (services/stripe_kyc_sync.py), so this is purely a friendly landing page that
+    tells the driver to return to the app."""
+    return HTMLResponse(
+        """<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Spinr — Payouts</title></head>
+<body style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;text-align:center;padding:48px 24px;color:#111">
+<h2>You're all set 🎉</h2>
+<p>Your payout details were submitted to Stripe.<br>You can close this page and return to the Spinr Driver app.</p>
+</body></html>"""
+    )
 
 
 @api_router.post("/bank-account")

@@ -13,6 +13,9 @@ from loguru import logger
 # keepalive can take tens of seconds otherwise).
 _BROADCAST_SEND_TIMEOUT = 2.0
 
+# #3: min seconds between admin location-fan-out messages per driver.
+_ADMIN_LOC_MIN_INTERVAL = 3.0
+
 try:
     from .logging_utils import diag_logger  # type: ignore
     from .utils.metrics import observe as _metric_observe  # type: ignore
@@ -46,6 +49,10 @@ class ConnectionManager:
         # B-P1-12: per-user inbound msg timestamps. See module-level
         # comment above for the cross-machine caveat.
         self._user_msg_timestamps: Dict[str, List[float]] = {}
+        # #3: per-driver throttle for the high-frequency admin location fan-out.
+        # A driver's pings land on one replica, so an in-process gate here caps
+        # the publish rate to once per interval per driver.
+        self._admin_loc_last: Dict[str, float] = {}
 
     async def connect(self, websocket: WebSocket, client_id: str):
         # WebSocket is already accepted in the endpoint handler
@@ -345,6 +352,23 @@ class ConnectionManager:
         if await pubsub.publish_broadcast("admin_", message):
             return
         await self._deliver_broadcast_local("admin_", message)
+
+    async def broadcast_driver_location_to_admins(self, driver_id: str, message: dict) -> None:
+        """Throttled admin fan-out for driver location pings (#3).
+
+        Ride-status events go through broadcast_to_admins unthrottled; only the
+        ~1 Hz location pings are rate-limited (admins don't need sub-interval
+        granularity), cutting the N-drivers x A-admins x 1 Hz fan-out down to
+        once per driver per interval. NOTE: this is the load-shedding half —
+        viewport/bbox filtering (only sending drivers an admin is actually
+        looking at) needs an admin-client subscription protocol and is tracked
+        as a follow-up.
+        """
+        now = time.monotonic()
+        if now - self._admin_loc_last.get(driver_id, 0.0) < _ADMIN_LOC_MIN_INTERVAL:
+            return
+        self._admin_loc_last[driver_id] = now
+        await self.broadcast_to_admins(message)
 
     async def broadcast_ride_status(
         self,

@@ -177,7 +177,11 @@ async def set_driver_available(driver_id: str, available: bool = True, total_rid
             f"is never written here)"
         )
         res = supabase.table("drivers").update(payload).eq("id", driver_id).execute()
-        logger.info(f"[GO-ONLINE] set_driver_available executed, res.data={getattr(res, 'data', None)}")
+        # PIPEDA: never log res.data — supabase-py returns the full driver row by
+        # default, which includes the encrypted address, driver-license number,
+        # and name/phone. Log only the driver_id and whether a row was updated.
+        _rows = getattr(res, "data", None) or []
+        logger.info(f"[GO-ONLINE] set_driver_available executed driver_id={driver_id} rows_updated={len(_rows)}")
         return _single_row_from_res(res)
 
     result = await run_sync(_update)

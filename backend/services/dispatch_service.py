@@ -25,11 +25,13 @@ try:
     from ..settings_loader import get_app_settings
     from ..utils.breadcrumbs import invalidate_active_rides_cache
     from ..utils.driver_presence import present_driver_ids
+    from ..utils.metrics import inc as _metric_inc
 except ImportError:  # pragma: no cover - allow direct module imports in tests
     from geo_utils import calculate_distance
     from settings_loader import get_app_settings
     from utils.breadcrumbs import invalidate_active_rides_cache  # type: ignore
     from utils.driver_presence import present_driver_ids
+    from utils.metrics import inc as _metric_inc  # type: ignore
 
 
 # Valid algorithm values. ``nearest`` is the production default.
@@ -294,10 +296,15 @@ class DispatchService:
         try:
             present = await present_driver_ids([d["id"] for d in rows])
         except Exception as exc:
+            # Graceful degradation (Redis presence is best-effort) — keep the
+            # fallback, but emit a metric so a sustained outage on this KPI path
+            # (match rate, P95 dispatch) is visible on dashboards rather than
+            # buried at warning level.
             logger.warning(
                 "Presence filter failed, dispatching all DB-online drivers",
                 exc_info=exc,
             )
+            _metric_inc("spinr_dispatch_presence_filter_failed_total")
             return rows
         if not present:
             return rows

@@ -58,8 +58,9 @@ async def insert_ride(payload: Dict[str, Any]):
     if not supabase:
         raise RuntimeError("Supabase client not configured")
     payload = _serialize_for_api(payload)
+    # PIPEDA: never log the full payload — it carries raw GPS (pickup/dropoff
+    # lat/lng) and exact addresses. Log only the field names present.
     logger.info(f"[DEBUG-INSERT-RIDE] payload keys: {sorted(payload.keys())}")
-    logger.info(f"[DEBUG-INSERT-RIDE] full payload: {payload}")
     try:
         result = await run_sync(lambda: _single_row_from_res(supabase.table("rides").insert(payload).execute()))
         logger.info(f"[DEBUG-INSERT-RIDE] SUCCESS ride_id={payload.get('id')}")
@@ -627,7 +628,9 @@ async def get_live_ride_data(ride_id: str) -> Optional[Dict[str, Any]]:
         driver = await run_sync(
             lambda did=driver_id: _single_row_from_res(
                 supabase.table("drivers")
-                .select("user_id,name,phone,lat,lng,vehicle_make,vehicle_model,vehicle_color,license_plate,rating,photo_url")
+                .select(
+                    "user_id,name,phone,lat,lng,vehicle_make,vehicle_model,vehicle_color,license_plate,rating,photo_url"
+                )
                 .eq("id", did)
                 .execute()
             )

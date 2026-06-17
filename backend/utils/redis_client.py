@@ -108,6 +108,25 @@ async def redis_get(key: str) -> Optional[str]:
     return _local_get(key)
 
 
+async def redis_mget(keys: list[str]) -> list[Optional[str]]:
+    """Batch GET — one MGET round-trip instead of N redis_get calls.
+
+    Returns a list aligned to ``keys`` (None for misses). Falls back to the
+    in-process store when Redis is unset. Empty input → []. Used on the dispatch
+    hot path to collapse the per-candidate offer_skip lookups into one call.
+    """
+    if not keys:
+        return []
+    r = await _get_redis()
+    if r is not None:
+        try:
+            return await r.mget(keys)
+        except Exception as e:
+            logger.error(f"[REDIS] redis_mget({len(keys)} keys) failed — Redis configured but unavailable: {e}")
+            raise
+    return [_local_get(k) for k in keys]
+
+
 async def redis_set(key: str, value: str, ttl: Optional[int] = None) -> None:
     r = await _get_redis()
     if r is not None:

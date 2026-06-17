@@ -150,14 +150,61 @@ init_firebase()
 app = FastAPI(title="Spinr API", version="1.0.0", lifespan=lifespan, redirect_slashes=False)
 
 
-# Railway's healthcheckPath in railway.json is /health. If that endpoint
-# returns anything other than 2xx the deployment never goes live and every
-# request to the public domain is answered with "Application failed to
-# respond". Mount it on the root app (not behind /api) so the probe hits it
-# before any auth middleware.
+# /health is the readiness probe every platform gate hits: fly.toml
+# [[http_service.checks]], railway.json healthcheckPath, both Dockerfile
+# HEALTHCHECKs, and the CI post-deploy smoke test. It must verify the DB is
+# actually reachable — otherwise a replica whose Supabase connection is dead
+# (or whose circuit breaker is open) keeps returning 200, stays in the
+# load-balancer rotation, and answers every real request with a 503, while a
+# bad rolling deploy gets promoted. (F1: previously this returned a static
+# {"status":"healthy"} unconditionally.) The DB ping is cached for a few
+# seconds and time-bounded so frequent probes across replicas add no real load
+# and can't hang. Loop-staleness is intentionally NOT part of this probe — a
+# stale background loop must not pull a serving replica out of rotation; that
+# is covered separately by the loop watchdog alert.
+_HEALTH_CACHE_TTL = 5.0  # seconds — bound DB-ping load under frequent probing
+_HEALTH_PING_TIMEOUT = 3.0  # seconds — never let a hung DB hang the probe
+_health_cache: dict = {"at": 0.0, "ok": False, "detail": {}}
+
+
+async def _db_ready() -> "tuple[bool, dict]":
+    import asyncio
+    import time as _time
+
+    import db_supabase
+
+    now = _time.monotonic()
+    if now - _health_cache["at"] < _HEALTH_CACHE_TTL:
+        return _health_cache["ok"], _health_cache["detail"]
+
+    ok = False
+    detail: dict = {}
+    try:
+        info = await asyncio.wait_for(db_supabase.ping(), timeout=_HEALTH_PING_TIMEOUT)
+        ok = True
+        if isinstance(info, dict):
+            # Only non-sensitive telemetry — safe on an unauthenticated probe.
+            detail = {k: info[k] for k in ("ping_ms", "circuit_state") if k in info}
+    except Exception as exc:
+        # Full error is logged server-side; the public body stays generic so the
+        # health endpoint never leaks DB internals.
+        _logging.getLogger(__name__).error(f"/health DB readiness check failed: {exc}")
+
+    _health_cache.update(at=now, ok=ok, detail=detail)
+    return ok, detail
+
+
 @app.get("/health")
 async def health():
-    return {"status": "healthy"}
+    from starlette.responses import JSONResponse
+
+    ok, detail = await _db_ready()
+    if ok:
+        return {"status": "healthy", "db": {"status": "ok", **detail}}
+    return JSONResponse(
+        status_code=503,
+        content={"status": "unhealthy", "db": {"status": "error"}},
+    )
 
 
 # Prometheus-style metrics exposition. Scraped by Grafana / Railway

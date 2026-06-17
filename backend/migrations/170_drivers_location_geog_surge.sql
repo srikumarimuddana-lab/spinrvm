@@ -28,7 +28,7 @@
 --     GRANTed only to service_role (it returns driver-location-derived data, so a
 --     default PUBLIC EXECUTE on a SECURITY DEFINER fn would be a PIPEDA leak).
 --
--- ROLLBACK (on paper):
+-- Rollback:
 --   DROP FUNCTION IF EXISTS drivers_available_in_polygon(text);
 --   DROP TRIGGER IF EXISTS trg_drivers_location_geog ON drivers;
 --   DROP FUNCTION IF EXISTS _drivers_sync_location_geog();

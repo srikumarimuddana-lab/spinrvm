@@ -302,3 +302,55 @@ class TestAlwaysAllowedOrigins:
         cors_mw = next(m for m in fake_app.middlewares if m["cls"] is CORSMiddleware)
         allowed = cors_mw["kwargs"]["allow_origins"]
         assert "https://spinr-admin.vercel.app" in allowed
+
+
+class TestStripeEmbedSecurityHeaders:
+    """The Stripe embedded onboarding page needs a relaxed CSP + camera, but
+    only on its own path — every other API path keeps the strict posture."""
+
+    def _headers_for(self, path: str):
+        from fastapi.responses import JSONResponse
+
+        from backend.core.middleware import _apply_security_headers
+
+        resp = JSONResponse(content={})
+        _apply_security_headers(resp, path, enable_hsts=False)
+        return resp.headers
+
+    def test_stripe_embedded_gets_relaxed_csp_and_camera(self):
+        h = self._headers_for("/api/v1/drivers/stripe-embedded")
+        csp = h["Content-Security-Policy"]
+        # Must allow connect.js, Stripe iframes, and inline script/style.
+        assert "https://connect-js.stripe.com" in csp
+        assert "frame-src" in csp and "js.stripe.com" in csp
+        assert "'unsafe-inline'" in csp
+        assert csp != "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+        # Camera delegated to self + Stripe (not revoked).
+        pp = h["Permissions-Policy"]
+        assert "camera=(self" in pp
+        assert "camera=()" not in pp
+
+    def test_other_api_paths_keep_strict_csp_and_no_camera(self):
+        h = self._headers_for("/api/v1/drivers/payouts")
+        assert h["Content-Security-Policy"] == "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+        assert h["Permissions-Policy"] == "geolocation=(), microphone=(), camera=(), payment=()"
+
+
+class TestStripeAppCheckExemption:
+    """The WebView-loaded Stripe endpoints can't carry X-Firebase-AppCheck;
+    they're exempt (with JWT / public-only alternative auth). The money-moving
+    payout endpoint must stay enforced."""
+
+    def test_stripe_embedded_endpoints_are_exempt(self):
+        from backend.core.middleware import _APP_CHECK_EXEMPT_PREFIXES
+
+        for path in (
+            "/api/v1/drivers/stripe-embedded",
+            "/api/v1/drivers/stripe-account-session",
+        ):
+            assert any(path.startswith(p) for p in _APP_CHECK_EXEMPT_PREFIXES), path
+
+    def test_payout_endpoint_not_exempt(self):
+        from backend.core.middleware import _APP_CHECK_EXEMPT_PREFIXES
+
+        assert not any("/api/v1/drivers/payouts".startswith(p) for p in _APP_CHECK_EXEMPT_PREFIXES)

@@ -1168,3 +1168,201 @@ class TestGetCurrentSubscription:
             result = asyncio.run(drv.get_current_subscription(current_user={"id": USER_ID}))
 
         assert result["has_subscription"] is False
+
+
+# ---------------------------------------------------------------------------
+# Stripe Connect onboarding — return URL + SIN collection regression
+# (bugfix: onboarding redirected to localhost:8000 and never collected SIN)
+# ---------------------------------------------------------------------------
+
+
+class TestStripeOnboarding:
+    def _run_onboard(self, captured):
+        from backend.routes import drivers as drv
+
+        fake_link = type("L", (), {"url": "https://connect.stripe.com/setup/x"})()
+
+        def _account_link_create(**kwargs):
+            captured.update(kwargs)
+            return fake_link
+
+        with (
+            patch(
+                "backend.routes.drivers.db_supabase.get_rows",
+                AsyncMock(return_value=[_driver(stripe_account_id="acct_123")]),
+            ),
+            patch(
+                "backend.routes.drivers.db_supabase.get_user_by_id",
+                AsyncMock(return_value={"id": USER_ID, "email": "drv@example.com"}),
+            ),
+            patch(
+                "backend.settings_loader.get_app_settings",
+                AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
+                create=True,
+            ),
+            patch("backend.routes.drivers.stripe.AccountLink.create", _account_link_create),
+        ):
+            return asyncio.run(drv.onboard_stripe(current_user={"id": USER_ID}))
+
+    def test_return_url_uses_public_api_host_not_localhost(self):
+        captured: dict = {}
+        result = self._run_onboard(captured)
+
+        assert result["mock"] is False
+        # The headline bug: must NOT fall back to localhost.
+        assert "localhost" not in captured["return_url"]
+        assert "localhost" not in captured["refresh_url"]
+        assert captured["return_url"] == "https://api-spinr.spinr.ca/api/v1/drivers/stripe-return"
+        assert captured["refresh_url"] == "https://api-spinr.spinr.ca/api/v1/drivers/stripe-refresh"
+
+    def test_onboarding_collects_sin_eventually_due(self):
+        captured: dict = {}
+        self._run_onboard(captured)
+        # SIN (individual.id_number) is eventually_due for CA Express individuals;
+        # forcing eventually_due + future_requirements pulls it (incl. the
+        # threshold-gated full SIN) into the onboarding session.
+        assert captured["collection_options"] == {
+            "fields": "eventually_due",
+            "future_requirements": "include",
+        }
+
+    def test_return_endpoint_bounces_into_driver_app(self):
+        from backend.routes import drivers as drv
+
+        resp = asyncio.run(drv.stripe_return())
+        body = resp.body.decode()
+        assert resp.status_code == 200
+        assert "spinr-driver://driver/payout?stripe=return" in body
+
+    def test_refresh_endpoint_bounces_into_driver_app(self):
+        from backend.routes import drivers as drv
+
+        resp = asyncio.run(drv.stripe_refresh())
+        body = resp.body.decode()
+        assert resp.status_code == 200
+        assert "spinr-driver://driver/payout?stripe=refresh" in body
+
+
+# ---------------------------------------------------------------------------
+# Stripe embedded onboarding (Option B) — AccountSession + WebView host page
+# ---------------------------------------------------------------------------
+
+
+class TestStripeEmbeddedOnboarding:
+    def test_account_session_returns_client_secret(self):
+        from backend.routes import drivers as drv
+
+        fake_session = type("S", (), {"client_secret": "accs_secret_123"})()
+        captured: dict = {}
+
+        def _session_create(**kwargs):
+            captured.update(kwargs)
+            return fake_session
+
+        with (
+            patch(
+                "backend.routes.drivers.db_supabase.get_rows",
+                AsyncMock(return_value=[_driver(stripe_account_id="acct_123")]),
+            ),
+            patch(
+                "backend.routes.drivers.db_supabase.get_user_by_id",
+                AsyncMock(return_value={"id": USER_ID, "email": "drv@example.com"}),
+            ),
+            patch(
+                "backend.settings_loader.get_app_settings",
+                AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
+                create=True,
+            ),
+            patch("backend.routes.drivers.stripe.AccountSession.create", _session_create),
+        ):
+            result = asyncio.run(drv.stripe_account_session(current_user={"id": USER_ID}))
+
+        assert result == {"client_secret": "accs_secret_123"}
+        # account_onboarding component must be enabled for the embedded flow.
+        assert captured["components"]["account_onboarding"]["enabled"] is True
+
+    def test_account_session_503_when_stripe_unconfigured(self):
+        from fastapi import HTTPException
+
+        from backend.routes import drivers as drv
+
+        with (
+            patch(
+                "backend.routes.drivers.db_supabase.get_rows",
+                AsyncMock(return_value=[_driver()]),
+            ),
+            patch(
+                "backend.routes.drivers.db_supabase.get_user_by_id",
+                AsyncMock(return_value={"id": USER_ID, "email": "drv@example.com"}),
+            ),
+            patch(
+                "backend.settings_loader.get_app_settings",
+                AsyncMock(return_value={"stripe_secret_key": ""}),
+                create=True,
+            ),
+        ):
+            with pytest.raises(HTTPException) as ei:
+                asyncio.run(drv.stripe_account_session(current_user={"id": USER_ID}))
+        assert ei.value.status_code == 503
+
+    def test_embedded_page_serves_connect_js_and_publishable_key(self):
+        from backend.routes import drivers as drv
+
+        with patch(
+            "backend.settings_loader.get_app_settings",
+            AsyncMock(return_value={"stripe_publishable_key": "pk_test_pub42"}),
+            create=True,
+        ):
+            resp = asyncio.run(drv.stripe_embedded())
+
+        body = resp.body.decode()
+        assert resp.status_code == 200
+        assert "connect-js.stripe.com/v1.0/connect.js" in body
+        assert '"pk_test_pub42"' in body  # injected as a JS string literal
+        assert "/api/v1/drivers/stripe-account-session" in body
+        # SIN-forcing collection options carried into the embedded component.
+        assert 'futureRequirements: "include"' in body
+
+    def test_embedded_page_has_no_secret_key(self):
+        from backend.routes import drivers as drv
+
+        with patch(
+            "backend.settings_loader.get_app_settings",
+            AsyncMock(
+                return_value={
+                    "stripe_publishable_key": "pk_test_pub42",
+                    "stripe_secret_key": "sk_test_SHOULD_NOT_LEAK",
+                }
+            ),
+            create=True,
+        ):
+            resp = asyncio.run(drv.stripe_embedded())
+        assert "sk_test_SHOULD_NOT_LEAK" not in resp.body.decode()
+
+    def test_embedded_page_escapes_script_breakout_in_publishable_key(self):
+        # The publishable key is admin-writable; a tampered value must not be
+        # able to close the inline <script> and inject arbitrary JS (which could
+        # read window.__SPINR_TOKEN). json.dumps alone does NOT escape </script>.
+        from backend.routes import drivers as drv
+
+        evil = "pk_x</script><script>alert(1)</script>"
+        with patch(
+            "backend.settings_loader.get_app_settings",
+            AsyncMock(return_value={"stripe_publishable_key": evil}),
+            create=True,
+        ):
+            body = asyncio.run(drv.stripe_embedded()).body.decode()
+
+        assert "</script><script>alert(1)" not in body
+        assert "\\u003c/script\\u003e" in body  # escaped, still a valid JS string
+
+    def test_embedded_page_keeps_normal_key_intact(self):
+        from backend.routes import drivers as drv
+
+        with patch(
+            "backend.settings_loader.get_app_settings",
+            AsyncMock(return_value={"stripe_publishable_key": "pk_test_51ABCxyz"}),
+            create=True,
+        ):
+            body = asyncio.run(drv.stripe_embedded()).body.decode()
+        assert 'var PK = "pk_test_51ABCxyz";' in body

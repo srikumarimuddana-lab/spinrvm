@@ -1219,8 +1219,12 @@ class TestStripeOnboarding:
         captured: dict = {}
         self._run_onboard(captured)
         # SIN (individual.id_number) is eventually_due for CA Express individuals;
-        # forcing eventually_due pulls it into the onboarding session.
-        assert captured["collection_options"] == {"fields": "eventually_due"}
+        # forcing eventually_due + future_requirements pulls it (incl. the
+        # threshold-gated full SIN) into the onboarding session.
+        assert captured["collection_options"] == {
+            "fields": "eventually_due",
+            "future_requirements": "include",
+        }
 
     def test_return_endpoint_bounces_into_driver_app(self):
         from backend.routes import drivers as drv

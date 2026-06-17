@@ -1988,9 +1988,14 @@ async def onboard_stripe(current_user: dict = Depends(get_current_user)):
             # Pull everything Stripe will *eventually* require into this session —
             # most importantly the SIN (individual.id_number), which for a CA
             # Express individual account is "eventually_due" and is otherwise
-            # skipped at initial onboarding. Needed for T4A / CRA platform
-            # reporting (Income Tax Act Part XX).
-            collection_options={"fields": "eventually_due"},
+            # skipped at initial onboarding. future_requirements="include" also
+            # pulls in threshold-gated requirements (Stripe often defers the full
+            # SIN until a CAD payout volume threshold). Needed for T4A / CRA
+            # platform reporting (Income Tax Act Part XX).
+            collection_options={
+                "fields": "eventually_due",
+                "future_requirements": "include",
+            },
             api_key=stripe_secret,
         )
         # The real onboarded gate is now stripe_details_submitted, set by

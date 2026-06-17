@@ -807,6 +807,7 @@ function RideOptionsScreenContent() {
                   <Ionicons name={paymentIcon} size={18} color={colors.primary} />
                 </View>
                 <View style={{ flex: 1 }}>
+                  <Text style={styles.actionRowLabel}>Payment</Text>
                   <Text style={styles.actionRowValue}>{paymentLabel}</Text>
                 </View>
                 <Ionicons name="chevron-forward" size={16} color="#9CA3AF" />
@@ -819,14 +820,20 @@ function RideOptionsScreenContent() {
                 activeOpacity={0.7}
               >
                 <View style={styles.actionRowIcon}>
-                  <Ionicons name="time" size={18} color={colors.primary} />
+                  <Ionicons name="calendar-outline" size={18} color={colors.primary} />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.actionRowValue}>
-                    {scheduledTime
-                      ? `${scheduledTime.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' })} at ${scheduledTime.toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' })}`
-                      : 'Now'}
-                  </Text>
+                  <Text style={styles.actionRowLabel}>Pickup time</Text>
+                  {scheduledTime ? (
+                    <Text style={styles.actionRowValue}>
+                      {`${scheduledTime.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' })} at ${scheduledTime.toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' })}`}
+                    </Text>
+                  ) : (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Text style={styles.actionRowValue}>Now</Text>
+                      <Text style={styles.actionRowHint}>· tap to schedule</Text>
+                    </View>
+                  )}
                 </View>
                 {scheduledTime ? (
                   <TouchableOpacity onPress={() => setScheduledTime(null)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
@@ -1688,6 +1695,17 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       fontSize: sf(14),
       fontFamily: 'PlusJakartaSans_500Medium',
       color: colors.text,
+    },
+    actionRowLabel: {
+      fontSize: sf(11),
+      fontFamily: 'PlusJakartaSans_500Medium',
+      color: colors.textDim,
+      marginBottom: 1,
+    },
+    actionRowHint: {
+      fontSize: sf(11),
+      fontFamily: 'PlusJakartaSans_500Medium',
+      color: colors.primary,
     },
     confirmButton: {
       backgroundColor: colors.primary,

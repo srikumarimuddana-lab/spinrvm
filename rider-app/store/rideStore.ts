@@ -323,17 +323,24 @@ export const useRideStore = create<RideState>((set, get) => ({
   // server-side validation rejects the booking but the screen looks
   // committed). fetchAvailablePromos re-runs from the ride-options effect
   // and will auto-apply the best eligible promo for the new route.
+  // routePolyline is cleared alongside estimates here: changing any waypoint
+  // invalidates the drawn route, and a stale polyline would otherwise linger
+  // on the ride-options map (e.g. the previous destination's route trace still
+  // showing after the rider goes back and searches a new one). The next
+  // estimate fetch repopulates it for the new route.
   setPickup: (location) => set({
     pickup: location,
     estimates: [],
     availablePromos: [],
     appliedPromo: null,
+    routePolyline: [],
   }),
   setDropoff: (location) => set({
     dropoff: location,
     estimates: [],
     availablePromos: [],
     appliedPromo: null,
+    routePolyline: [],
   }),
   setUserLocation: (loc) => set({ userLocation: loc }),
 
@@ -342,12 +349,14 @@ export const useRideStore = create<RideState>((set, get) => ({
     estimates: [],
     availablePromos: [],
     appliedPromo: null,
+    routePolyline: [],
   })),
   removeStop: (index) => set((state) => ({
     stops: state.stops.filter((_, i) => i !== index),
     estimates: [],
     availablePromos: [],
     appliedPromo: null,
+    routePolyline: [],
   })),
   updateStop: (index, location) => set((state) => {
     const newStops = [...state.stops];
@@ -357,6 +366,7 @@ export const useRideStore = create<RideState>((set, get) => ({
       estimates: [],
       availablePromos: [],
       appliedPromo: null,
+      routePolyline: [],
     };
   }),
 
@@ -385,6 +395,10 @@ export const useRideStore = create<RideState>((set, get) => ({
   fetchEstimates: async () => {
     const { pickup, dropoff, stops, estimates: existing } = get();
     if (!pickup || !dropoff) return;
+    // Drop unfilled stop rows (the rider added a stop field but hasn't picked a
+    // place yet — lat/lng are still 0). Sending those would geofence-reject the
+    // quote or bend the route to (0,0).
+    const validStops = stops.filter((s) => s.lat && s.lng);
 
     try {
       // Only show loading skeleton on the initial fetch. Subsequent
@@ -397,7 +411,7 @@ export const useRideStore = create<RideState>((set, get) => ({
         pickup_lng: pickup.lng,
         dropoff_lat: dropoff.lat,
         dropoff_lng: dropoff.lng,
-        stops: stops,
+        stops: validStops,
       });
       // Backend returns {estimates, route_polyline} — handle both old (array) and new (object) shapes.
       const raw = response.data;
@@ -602,7 +616,9 @@ export const useRideStore = create<RideState>((set, get) => ({
         dropoff_address: dropoff.address,
         dropoff_lat: dropoff.lat,
         dropoff_lng: dropoff.lng,
-        stops: stops,
+        // Only send stops the rider actually resolved to a place — never the
+        // (0,0) placeholders of empty stop fields.
+        stops: stops.filter((s) => s.lat && s.lng),
         payment_method: paymentMethod,
         payment_method_id: paymentMethodId ?? null,
         // SCA two-step: a hold the app already confirmed on-device after a prior

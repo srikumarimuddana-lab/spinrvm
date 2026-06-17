@@ -54,6 +54,10 @@ def _driver(**extra):
         "id": DRIVER_ID,
         "user_id": USER_ID,
         "stripe_account_id": "acct_TEST",
+        # GST/HST registration is a hard precondition for payout (CRA rideshare
+        # rule). Default to a valid BN so eligibility tests reach the Stripe path;
+        # override with gst_bn=None to exercise the block.
+        "gst_bn": "123456789RT0001",
         **extra,
     }
 
@@ -100,6 +104,35 @@ class TestRequestInstantPayout:
                 )
         assert exc.value.status_code == 400
         assert "Stripe Connect" in exc.value.detail
+
+    def test_rejects_when_gst_not_registered(self):
+        # CRA rideshare rule: no GST/HST Business Number on file → hard block,
+        # before the Stripe eligibility / balance checks.
+        from backend.routes import drivers as drv
+
+        def get_rows_side_effect(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver(gst_bn=None)]
+            if table == "bank_accounts":
+                return [_bank_account()]
+            return []
+
+        req = drv.InstantPayoutRequest(amount=Decimal("50.00"))
+
+        with (
+            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers.get_driver_balance", AsyncMock(return_value=self._balance())),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(
+                    drv.request_instant_payout(
+                        req=req,
+                        request=MagicMock(),
+                        current_user={"id": USER_ID},
+                    )
+                )
+        assert exc.value.status_code == 422
+        assert "gst" in exc.value.detail.lower()
 
     def test_rejects_when_insufficient_funds(self):
         from backend.routes import drivers as drv

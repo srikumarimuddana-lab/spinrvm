@@ -213,6 +213,12 @@ export default function BookingProposalCard({ proposal }: Props) {
           )}
         </View>
       )}
+
+      {phase !== 'booked' && (
+        <Text style={styles.aiDisclaimer}>
+          Spinr AI can make mistakes — double-check the pickup address before you confirm.
+        </Text>
+      )}
     </View>
   );
 }
@@ -266,6 +272,13 @@ const createStyles = (colors: ThemeColors) =>
     confirmDisabled: { opacity: 0.6 },
     confirmText: { color: '#fff', fontSize: 15, fontWeight: '700' },
     fineprint: { fontSize: 11, color: colors.textDim, textAlign: 'center' },
+    aiDisclaimer: {
+      fontSize: 11,
+      color: colors.textDim,
+      textAlign: 'center',
+      fontStyle: 'italic',
+      marginTop: 2,
+    },
     bookedRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
     bookedText: { fontSize: 14, fontWeight: '600', color: colors.success },
     errorText: { fontSize: 13, color: colors.error },

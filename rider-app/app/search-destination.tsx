@@ -34,6 +34,7 @@ export default function SearchDestinationScreen() {
     savedAddresses, fetchSavedAddresses,
     recentSearches, addRecentSearch, loadRecentSearches,
     userLocation, setUserLocation,
+    clearEstimates,
   } = useRideStore();
 
   const { colors, isDark } = useTheme();
@@ -289,6 +290,10 @@ export default function SearchDestinationScreen() {
 
   const handleSearchRide = () => {
     if (pickup && dropoff) {
+      // Force a fresh quote for the current pickup/dropoff/stops: drop any
+      // estimate, route line, or promo left over from a previous search so
+      // ride-options recomputes from scratch rather than flashing stale data.
+      clearEstimates();
       router.push('/confirm-pickup');
     }
   };

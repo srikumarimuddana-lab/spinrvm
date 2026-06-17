@@ -598,20 +598,33 @@ async def create_demo_drivers(vehicle_type_id: str, lat: float, lng: float):
     return
 
 
-async def _dispatch_retry(ride_id: str, delay: int = 10) -> None:
-    """Re-attempt dispatch after a delay. Stops if the ride left searching."""
+# Cap the no-driver re-dispatch chain. At 10s/attempt this is ~5 min, matching
+# the stuck-ride sweeper's cancel window — defense-in-depth so a sweeper failure
+# can't leave a ride re-dispatching (and re-querying drivers) forever.
+_MAX_DISPATCH_ATTEMPTS = 30
+
+
+async def _dispatch_retry(ride_id: str, delay: int = 10, *, attempt: int = 1) -> None:
+    """Re-attempt dispatch after a delay. Stops if the ride left searching or the
+    per-ride attempt cap is reached (the stuck-ride sweeper then owns resolution)."""
     await asyncio.sleep(delay)
+    if attempt > _MAX_DISPATCH_ATTEMPTS:
+        logger.warning(
+            f"[DISPATCH] ride {ride_id} hit {_MAX_DISPATCH_ATTEMPTS} dispatch attempts — "
+            f"stopping retries; stuck-ride sweeper will resolve it"
+        )
+        return
     try:
         ride = await db_supabase.get_ride(ride_id)
         if not ride or ride.get("status") != RideStatus.SEARCHING:
             return
-        logger.info(f"[DISPATCH] retry for ride {ride_id}")
-        await match_driver_to_ride(ride_id, ride=ride)
+        logger.info(f"[DISPATCH] retry {attempt} for ride {ride_id}")
+        await match_driver_to_ride(ride_id, ride=ride, attempt=attempt)
     except Exception as e:
         logger.error(f"[DISPATCH] retry failed for {ride_id}: {e}", exc_info=True)
 
 
-async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
+async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, attempt: int = 0):
     """Dispatch a driver for ``ride_id``.
 
     ``ride`` may be passed when the caller already has the fresh row
@@ -731,15 +744,16 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
         logger.warning(f"[DISPATCH] presence filter failed, using all DB-online drivers: {_pres_exc}")
 
     # Skip drivers who recently timed out or declined this specific offer
-    # so the same driver is not hammered with repeat notifications.
+    # so the same driver is not hammered with repeat notifications. Batch the
+    # lookups into one MGET — the old per-candidate redis_get was an N+1 on the
+    # dispatch hot path (N round-trips per attempt per replica).
     try:
-        from ..utils.redis_client import redis_get as _redis_get  # type: ignore
+        from ..utils.redis_client import redis_mget as _redis_mget  # type: ignore
     except ImportError:
-        from utils.redis_client import redis_get as _redis_get  # type: ignore
-    _skip_ids: set = set()
-    for _d in all_drivers:
-        if await _redis_get(f"spinr:offer_skip:{ride_id}:{_d['id']}"):
-            _skip_ids.add(_d["id"])
+        from utils.redis_client import redis_mget as _redis_mget  # type: ignore
+    _skip_keys = [f"spinr:offer_skip:{ride_id}:{_d['id']}" for _d in all_drivers]
+    _skip_vals = await _redis_mget(_skip_keys)
+    _skip_ids: set = {_d["id"] for _d, _v in zip(all_drivers, _skip_vals) if _v}
     if _skip_ids:
         all_drivers = [d for d in all_drivers if d["id"] not in _skip_ids]
         logger.info(f"[DISPATCH] skipped {len(_skip_ids)} driver(s) with recent timeout/decline for ride {ride_id}")
@@ -754,8 +768,8 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
     )
 
     if not drivers_with_distance:
-        logger.info(f"[DISPATCH] no eligible drivers for ride {ride_id} — scheduling retry in 10s")
-        asyncio.create_task(_dispatch_retry(ride_id, delay=10))
+        logger.info(f"[DISPATCH] no eligible drivers for ride {ride_id} — scheduling retry in 10s (attempt {attempt})")
+        asyncio.create_task(_dispatch_retry(ride_id, delay=10, attempt=attempt + 1))
         return
 
     # ── ETA ranking ───────────────────────────────────────────────

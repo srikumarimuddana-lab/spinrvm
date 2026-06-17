@@ -100,13 +100,21 @@ class TestRequestPayout:
     Code under test: backend/routes/drivers.py::request_payout (~line 1353).
     """
 
-    async def _request(self, amount: float = 50.00, payable_balance: float = 100.00, has_bank_account: bool = True):
+    async def _request(
+        self,
+        amount: float = 50.00,
+        payable_balance: float = 100.00,
+        has_bank_account: bool = True,
+        gst_bn: str | None = "123456789RT0001",
+    ):
         from starlette.requests import Request as StarletteRequest
 
         from backend.routes.drivers import PayoutRequest, request_payout
 
         req = PayoutRequest(amount=Decimal(str(amount)))
-        driver = _driver_row()
+        # GST/HST registration is a hard precondition for payout (CRA rideshare
+        # rule); default to a valid BN so the balance/bank logic is reachable.
+        driver = {**_driver_row(), "gst_bn": gst_bn}
         inserted = []
 
         # Build a real Starlette Request so @idempotent_endpoint can read headers.
@@ -179,6 +187,25 @@ class TestRequestPayout:
 
         assert exc_info.value.status_code == 400
         assert "bank" in exc_info.value.detail.lower()
+
+    async def test_payout_blocked_without_gst_raises_422(self):
+        # CRA: rideshare drivers must be GST/HST-registered from their first
+        # fare. No BN on file → hard block before any money moves.
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._request(gst_bn=None)
+
+        assert exc_info.value.status_code == 422
+        assert "gst" in exc_info.value.detail.lower()
+
+    async def test_payout_blocked_with_malformed_gst_raises_422(self):
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._request(gst_bn="12345")  # not a 9-digit BN
+
+        assert exc_info.value.status_code == 422
 
     async def test_driver_not_found_raises_404(self):
         from fastapi import HTTPException

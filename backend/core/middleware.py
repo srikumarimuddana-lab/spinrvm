@@ -72,6 +72,13 @@ _APP_CHECK_EXEMPT_PREFIXES = (
     # with no App Check header. It is authorised instead by a short-TTL,
     # ride+driver-bound HMAC token in the query string (routes/offer_card.py).
     "/api/v1/offer-cards/",
+    # Stripe embedded onboarding: the driver app loads these inside a WebView
+    # (Stripe's connect.js page + its same-origin fetchClientSecret POST), which
+    # cannot attach the app's X-Firebase-AppCheck header. Alternative auth holds:
+    # /stripe-embedded is public and serves only the publishable key (no secret),
+    # and /stripe-account-session still requires the driver's JWT Bearer token.
+    "/api/v1/drivers/stripe-embedded",
+    "/api/v1/drivers/stripe-account-session",
 )
 
 
@@ -214,6 +221,37 @@ _DOCS_CSP = (
 
 _DOCS_PATHS = ("/docs", "/redoc", "/openapi.json")
 
+# The driver app's in-WebView Stripe onboarding page (GET .../stripe-embedded)
+# loads connect.js, mounts cross-origin Stripe iframes, posts back to our API,
+# and captures a camera photo for identity verification. The strict API CSP
+# (default-src 'none') + Permissions-Policy camera=() would render a blank page,
+# so this single server-rendered path gets a Stripe-scoped CSP and camera
+# delegation. Domains follow Stripe's embedded-components CSP guidance. The
+# inline <script>/<style> in the page is fully server-controlled (only the
+# public publishable key is injected, and it's <script>-escaped at render time),
+# so 'unsafe-inline' here is bounded.
+_STRIPE_EMBED_PATHS = ("/api/v1/drivers/stripe-embedded",)
+
+_STRIPE_EMBED_CSP = (
+    "default-src 'none'; "
+    "script-src 'self' 'unsafe-inline' https://connect-js.stripe.com https://*.js.stripe.com https://js.stripe.com; "
+    "style-src 'self' 'unsafe-inline' https://connect-js.stripe.com https://*.js.stripe.com; "
+    "frame-src https://connect-js.stripe.com https://*.js.stripe.com https://js.stripe.com "
+    "https://hooks.stripe.com https://m.stripe.network; "
+    "connect-src 'self' https://api.stripe.com https://connect-js.stripe.com https://*.js.stripe.com "
+    "https://merchant-ui-api.stripe.com https://m.stripe.network; "
+    "img-src 'self' data: https://*.stripe.com; "
+    "font-src 'self' data: https://*.js.stripe.com; "
+    "frame-ancestors 'none'; base-uri 'none'"
+)
+
+# Delegate camera to Stripe's identity-capture iframe (and self) ONLY on the
+# embedded path; every other path keeps camera=() from the base headers. If
+# Stripe serves the capture iframe from another origin, add it here.
+_STRIPE_EMBED_PERMISSIONS_POLICY = (
+    'camera=(self "https://js.stripe.com" "https://connect-js.stripe.com"), microphone=(), geolocation=(), payment=()'
+)
+
 
 def _apply_security_headers(response: Response, path: str, enable_hsts: bool) -> None:
     """Attach the baseline security headers to a response.
@@ -228,7 +266,10 @@ def _apply_security_headers(response: Response, path: str, enable_hsts: bool) ->
         # 1 year, include subdomains, eligible for preload.
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
 
-    if any(path.startswith(p) for p in _DOCS_PATHS):
+    if any(path.startswith(p) for p in _STRIPE_EMBED_PATHS):
+        response.headers["Content-Security-Policy"] = _STRIPE_EMBED_CSP
+        response.headers["Permissions-Policy"] = _STRIPE_EMBED_PERMISSIONS_POLICY
+    elif any(path.startswith(p) for p in _DOCS_PATHS):
         response.headers["Content-Security-Policy"] = _DOCS_CSP
     else:
         response.headers["Content-Security-Policy"] = _STRICT_CSP

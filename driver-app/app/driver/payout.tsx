@@ -42,14 +42,18 @@ function PayoutScreen() {
     } = useDriverStore();
 
     const [payoutAmount, setPayoutAmount] = useState('');
-    const [stripeOnboarding, setStripeOnboarding] = useState(false);
+    // Onboarding now opens an in-app WebView screen (instant navigation), so
+    // there's no async "opening…" state to track here.
+    const stripeOnboarding = false;
     const [downloadingT4A, setDownloadingT4A] = useState(false);
     const [downloadingCSV, setDownloadingCSV] = useState(false);
-    // gst_number is part of the driver row served by useDriverMe — keep
-    // a local form state for the input field but seed it from the cached
-    // server value (also re-seeds from the background refetch).
+    // gst_bn (CRA Business Number) is the canonical column on the driver row
+    // served by useDriverMe and accepted by PUT /drivers/me — keep a local form
+    // state for the input but seed it from the cached server value (also
+    // re-seeds from the background refetch). NOTE: the column is gst_bn, not
+    // gst_number — the latter is silently dropped by the backend schema.
     const { data: driverMeRaw } = useDriverMe();
-    const driverMe = driverMeRaw as { gst_number?: string } | undefined;
+    const driverMe = driverMeRaw as { gst_bn?: string } | undefined;
     const updateDriverMe = useUpdateDriverMe();
     const [gstNumber, setGstNumber] = useState('');
     const [showGstForm, setShowGstForm] = useState(false);
@@ -91,7 +95,7 @@ function PayoutScreen() {
     // The hook has its own cache + background refetch, so this replaces
     // the legacy `loadGstNumber()` round-trip entirely.
     useEffect(() => {
-        if (driverMe) setGstNumber(driverMe.gst_number || '');
+        if (driverMe) setGstNumber(driverMe.gst_bn || '');
     }, [driverMe]);
 
     useEffect(() => {
@@ -101,26 +105,12 @@ function PayoutScreen() {
         }
     }, [error]);
 
-    const handleStripeOnboarding = async () => {
-        setStripeOnboarding(true);
-        try {
-            const res = await api.post<{ url?: string; mock?: boolean }>('/drivers/stripe-onboard');
-            const { url, mock } = res.data;
-
-            if (mock) {
-                showToast(
-                    'info',
-                    'Demo Mode',
-                    'Stripe is not configured yet. In production, you will be redirected to Stripe to complete identity verification and add your bank account.',
-                );
-            } else if (url) {
-                await Linking.openURL(url);
-            }
-        } catch (err: any) {
-            showToast('error', 'Error', err.response?.data?.detail || 'Failed to start Stripe onboarding');
-        } finally {
-            setStripeOnboarding(false);
-        }
+    const handleStripeOnboarding = () => {
+        // Option B: open Stripe's embedded onboarding in an in-app WebView (no
+        // browser redirect). The screen mints an AccountSession and lets Stripe
+        // collect the SIN/identity + payout bank account in-app; we only ever
+        // mirror the last-4 + verification status.
+        router.push('/driver/stripe-onboarding' as any);
     };
 
     const handleSaveGst = async () => {
@@ -132,7 +122,10 @@ function PayoutScreen() {
         }
 
         try {
-            await updateDriverMe.mutateAsync({ gst_number: cleaned || null });
+            // Canonical column is gst_bn; also set gst_registered so the T4A
+            // export and admin KYC view stay in sync. (gst_bn:null is dropped by
+            // the backend's exclude_none, so this is an add/update, not a clear.)
+            await updateDriverMe.mutateAsync({ gst_bn: cleaned || null, gst_registered: !!cleaned });
             setShowGstForm(false);
             showToast('success', 'Saved', 'GST/BN number updated successfully');
         } catch (err: any) {
@@ -225,6 +218,10 @@ function PayoutScreen() {
     }, []);
 
     const isStripeReady = stripeAccountStatus === 'active' || hasBankAccount;
+    // CRA hard requirement: rideshare drivers must be GST/HST-registered before
+    // any payout (the backend rejects payouts without a valid BN). Mirror the
+    // server-side ^\d{9}(RT\d{4})?$ check so we gate the UI before the request.
+    const gstOnFile = /^\d{9}(RT\d{4})?$/.test((gstNumber || '').replace(/\s/g, '').toUpperCase());
 
     if (initialLoading) {
         return (
@@ -373,7 +370,7 @@ function PayoutScreen() {
                         <View style={styles.gstForm}>
                             <Text style={styles.inputLabel}>GST/HST Number (Business Number)</Text>
                             <Text style={styles.gstHelpText}>
-                                If you're registered for GST/HST, enter your 9-digit Business Number (BN) or full program account (e.g., 123456789RT0001). Leave blank if not registered.
+                                Enter your 9-digit CRA Business Number (BN) or full program account (e.g., 123456789RT0001).
                             </Text>
                             <TextInput
                                 style={styles.textInput}
@@ -385,7 +382,9 @@ function PayoutScreen() {
                                 maxLength={15}
                             />
                             <Text style={styles.gstNote}>
-                                Drivers earning over $30,000/year must register for GST/HST with CRA.
+                                Required to receive payouts. As a rideshare driver you must register for
+                                GST/HST with the CRA from your first fare — the $30,000 small-supplier
+                                threshold does not apply to ride-sharing.
                             </Text>
                             <View style={styles.gstFormButtons}>
                                 <TouchableOpacity
@@ -448,6 +447,23 @@ function PayoutScreen() {
                 {isStripeReady && driverBalance && parseFloat(driverBalance.payable_balance) > 0 && (
                     <View style={styles.section}>
                         <Text style={styles.sectionTitle}>Request Payout</Text>
+                        {!gstOnFile && (
+                            <TouchableOpacity
+                                style={[styles.payoutCard, { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 }]}
+                                onPress={() => setShowGstForm(true)}
+                            >
+                                <Ionicons name="alert-circle" size={22} color={colors.primary} />
+                                <View style={{ flex: 1, marginLeft: 10 }}>
+                                    <Text style={{ color: colors.text, fontSize: 14, fontWeight: '600' }}>
+                                        GST/HST registration required
+                                    </Text>
+                                    <Text style={{ color: colors.textDim, fontSize: 13, marginTop: 2, lineHeight: 18 }}>
+                                        Add your CRA Business Number to receive payouts. Rideshare drivers
+                                        must register for GST/HST from their first fare. Tap to add it.
+                                    </Text>
+                                </View>
+                            </TouchableOpacity>
+                        )}
                         <View style={styles.payoutCard}>
                             <View style={styles.payoutInputRow}>
                                 <Text style={styles.dollarSign}>$</Text>
@@ -458,14 +474,15 @@ function PayoutScreen() {
                                     keyboardType="decimal-pad"
                                     value={payoutAmount}
                                     onChangeText={setPayoutAmount}
+                                    editable={gstOnFile}
                                 />
                                 <TouchableOpacity
                                     style={[
                                         styles.payoutButton,
-                                        (!payoutAmount || isLoading) && styles.payoutButtonDisabled,
+                                        (!payoutAmount || isLoading || !gstOnFile) && styles.payoutButtonDisabled,
                                     ]}
                                     onPress={handleRequestPayout}
-                                    disabled={!payoutAmount || isLoading}
+                                    disabled={!payoutAmount || isLoading || !gstOnFile}
                                 >
                                     {isLoading ? (
                                         <ActivityIndicator size="small" color="#fff" />

@@ -983,7 +983,7 @@ export default function SettingsPage() {
                         Recipients open ${base}/${share_token}; the URL is served
                         runtime from app_settings so it rotates without a mobile
                         rebuild. Should point at the admin dashboard's /track route
-                        — e.g. https://spinrvm.vercel.app/track. */}
+                        — e.g. https://track.spinr.ca/track. */}
                     <Card className="border-border/50 lg:col-span-2">
                         <CardHeader>
                             <CardTitle className="text-base">Share Trip — Live Tracking URL</CardTitle>
@@ -994,7 +994,7 @@ export default function SettingsPage() {
                             <Input
                                 value={settings.track_base_url || ""}
                                 onChange={(e) => update("track_base_url", e.target.value)}
-                                placeholder="https://spinrvm.vercel.app/track"
+                                placeholder="https://track.spinr.ca/track"
                             />
                             <p className="text-xs text-muted-foreground">
                                 Used by the rider-app "Share Trip" message. Set this to the

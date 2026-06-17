@@ -657,9 +657,10 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
         ride, app_settings=app_settings
     )
 
+    # PIPEDA: do not log raw pickup lat/lng — coordinates are forbidden in logs
+    # (and this line fires on every dispatch). Correlate by ride_id only.
     logger.info(
         f"[DISPATCH] match start ride_id={ride_id} "
-        f"pickup=({ride['pickup_lat']},{ride['pickup_lng']}) "
         f"vehicle_type_id={ride['vehicle_type_id']} algorithm={algorithm} "
         f"radius_km={search_radius} batch={max_offers} eta={use_eta}"
     )
@@ -2084,9 +2085,9 @@ async def create_ride(
         still_suspended = True
         if suspended_until:
             try:
-                still_suspended = datetime.fromisoformat(
-                    str(suspended_until).replace("Z", "+00:00")
-                ) > datetime.now(timezone.utc)
+                still_suspended = datetime.fromisoformat(str(suspended_until).replace("Z", "+00:00")) > datetime.now(
+                    timezone.utc
+                )
             except ValueError:
                 still_suspended = True
         if still_suspended:

@@ -386,6 +386,69 @@ class TestProposal:
         assert proposal["pickup_address"] == "Saskatoon Airport (YXE), SK, Canada"
 
     @pytest.mark.anyio
+    async def test_proposal_corrects_pickup_coords_far_from_address_even_when_in_area(self):
+        # The reported bug: the model passes a correct address but a stale /
+        # hallucinated coordinate that still lands inside a service area, so
+        # the old out-of-area-only guard never fired and the driver was sent
+        # ~17 km away. Re-geocoding the address must win.
+        correct = {
+            "status": "OK",
+            "results": [
+                {
+                    "formatted_address": "123 Main St, Saskatoon, SK, Canada",
+                    "geometry": {"location": {"lat": 52.1170, "lng": -106.6345}},
+                }
+            ],
+        }
+        args = dict(
+            self.ARGS,
+            pickup_lat=52.2680,  # ~17 km north of the real address, still "in area"
+            pickup_lng=-106.6345,
+            pickup_address="123 Main St, Saskatoon",
+        )
+        with (
+            _patch_area(),  # every point resolves to a service area
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(correct),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        proposal = result["_client_action"]["proposal"]
+        assert proposal["pickup_lat"] == 52.1170
+        assert proposal["pickup_lng"] == -106.6345
+        assert proposal["pickup_address"] == "123 Main St, Saskatoon, SK, Canada"
+
+    @pytest.mark.anyio
+    async def test_proposal_keeps_pickup_coords_that_match_address(self):
+        # A precise coordinate near its address must be left untouched — never
+        # snapped to the geocoded street centroid.
+        near = {
+            "status": "OK",
+            "results": [
+                {
+                    "formatted_address": "123 Main St, Saskatoon, SK, Canada",
+                    "geometry": {"location": {"lat": 52.1325, "lng": -106.6610}},
+                }
+            ],
+        }
+        args = dict(self.ARGS, pickup_lat=52.1318, pickup_lng=-106.6608, pickup_address="123 Main St")
+        with (
+            _patch_area(),
+            _patch_settings(),
+            _patch_budget(),
+            _patch_http(near),
+            patch.object(tools_booking, "record_call", AsyncMock()),
+        ):
+            result, ok = await execute_tool("propose_ride_booking", args, user=RIDER)
+        assert ok
+        proposal = result["_client_action"]["proposal"]
+        assert proposal["pickup_lat"] == 52.1318
+        assert proposal["pickup_lng"] == -106.6608
+        assert proposal["pickup_address"] == "123 Main St"
+
+    @pytest.mark.anyio
     async def test_out_of_area_refused(self):
         with _patch_area(area=None):
             result, ok = await execute_tool("propose_ride_booking", self.ARGS, user=RIDER)

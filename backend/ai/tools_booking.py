@@ -34,6 +34,7 @@ except ImportError:
 
 try:
     from .. import db_supabase
+    from ..geo_utils import calculate_distance
     from ..settings_loader import get_app_settings
     from ..utils.maps_budget import check_budget, record_call
 except ImportError:
@@ -48,6 +49,11 @@ _PLACES_TEXT_URL = "https://maps.googleapis.com/maps/api/place/textsearch/json"
 _HTTP_TIMEOUT = 4.0
 _CENT = Decimal("0.01")
 _PLACE_RADIUS_METERS = 25000
+# A model-supplied pickup that sits more than this far from its own
+# (re-geocoded) address is treated as stale/hallucinated and replaced by the
+# address — the driver is dispatched to the coordinate, never the text, so the
+# two must agree before a booking card is shown.
+_PICKUP_RECONCILE_KM = 1.0
 
 _COORD_PROPS = {
     "pickup_lat": {"type": "number", "minimum": -90, "maximum": 90},
@@ -467,6 +473,51 @@ async def get_fare_quote(
     return result
 
 
+async def _reconcile_pickup(
+    pickup_lat: float,
+    pickup_lng: float,
+    pickup_address: str,
+    *,
+    dropoff_lat: float,
+    dropoff_lng: float,
+) -> tuple:
+    """Re-verify the pickup coordinate against its own address before anyone
+    is dispatched. Returns ``(lat, lng, address, in_service_area)``.
+
+    The model fills pickup_lat/pickup_lng from conversation context that no
+    longer holds the find_place result (history keeps only message text, not
+    tool results), so a stale or hallucinated coordinate can travel alongside
+    a correct address: the card shows the right street while the driver is
+    routed kilometres away. Re-geocoding the address is the authoritative
+    check — when it lands in a service area more than _PICKUP_RECONCILE_KM
+    from the supplied point (or the supplied point is out of area entirely),
+    the address wins. A coordinate that already agrees with its address is
+    left untouched so a precise pin is never snapped to a street centroid.
+    """
+    in_area = await _resolve_area(pickup_lat, pickup_lng) is not None
+
+    api_key, _error = await _places_available()
+    if not api_key:
+        # Maps unavailable (no key or budget exhausted) — can't verify; keep
+        # the supplied point and let the caller's area check decide.
+        return pickup_lat, pickup_lng, pickup_address, in_area
+
+    lookup = await _lookup_place_candidates(
+        api_key=api_key, query=pickup_address, near_lat=dropoff_lat, near_lng=dropoff_lng
+    )
+    geocoded = next((c for c in lookup.get("candidates") or [] if c.get("in_service_area")), None)
+    if not geocoded:
+        return pickup_lat, pickup_lng, pickup_address, in_area
+
+    drift_km = calculate_distance(pickup_lat, pickup_lng, geocoded["lat"], geocoded["lng"])
+    if in_area and drift_km <= _PICKUP_RECONCILE_KM:
+        return pickup_lat, pickup_lng, pickup_address, True  # coordinate agrees with the address
+
+    # Out of area, or the address geocodes far from the supplied point — trust
+    # the address, which resolves into a service area.
+    return geocoded["lat"], geocoded["lng"], geocoded.get("address") or pickup_address, True
+
+
 async def propose_ride_booking(
     user: Dict[str, Any],
     pickup_lat: float,
@@ -480,25 +531,15 @@ async def propose_ride_booking(
     scheduled_time: Optional[str] = None,
     payment_method: Optional[str] = None,
 ) -> Dict[str, Any]:
-    area = await _resolve_area(pickup_lat, pickup_lng)
-    if area is None:
-        api_key, error = await _places_available()
-        if not error and api_key:
-            retry = await _lookup_place_candidates(
-                api_key=api_key,
-                query=pickup_address,
-                near_lat=dropoff_lat,
-                near_lng=dropoff_lng,
-            )
-            for candidate in retry.get("candidates") or []:
-                if candidate.get("in_service_area"):
-                    pickup_lat = candidate["lat"]
-                    pickup_lng = candidate["lng"]
-                    pickup_address = candidate.get("address") or pickup_address
-                    area = await _resolve_area(pickup_lat, pickup_lng)
-                    break
-        if area is None:
-            return {"error": "pickup is outside Spinr's service areas — booking is not possible there"}
+    pickup_lat, pickup_lng, pickup_address, in_area = await _reconcile_pickup(
+        pickup_lat,
+        pickup_lng,
+        pickup_address,
+        dropoff_lat=dropoff_lat,
+        dropoff_lng=dropoff_lng,
+    )
+    if not in_area:
+        return {"error": "pickup is outside Spinr's service areas — booking is not possible there"}
 
     proposal = {
         "pickup_lat": pickup_lat,

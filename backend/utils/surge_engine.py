@@ -7,6 +7,8 @@ service_areas.surge_multiplier for areas where surge_source == 'auto'.
 """
 
 import asyncio
+import json
+import os
 import random
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -26,10 +28,25 @@ try:
     from db import db
     from geo_utils import get_service_area_polygon, point_in_polygon
     from utils.driver_presence import present_driver_ids
+    from utils.metrics import inc as _metric_inc
 except ImportError:
     from ..db import db
     from ..geo_utils import get_service_area_polygon, point_in_polygon
     from .driver_presence import present_driver_ids
+    from .metrics import inc as _metric_inc
+
+# Per-area supply/demand fetch cap. Surge = demand/supply, a regulated rider-
+# facing price; if a fetch hits this cap the count is TRUNCATED and the
+# multiplier is wrong (supply undercount → over-price). Raised from 500 and made
+# loud (metric + warning below) so truncation can never silently mis-price.
+# The real fix is a server-side spatial count (PostGIS ST_Covers + GIST index);
+# tracked as ACTION_ITEMS D1.
+_SURGE_FETCH_CAP = 5000
+
+# D1: enable the PostGIS server-side supply count (migration 170). Off by default
+# so applying the migration changes nothing until it's been rehearsed on staging;
+# flip SURGE_SPATIAL_COUNT=true to activate. The path is fallback-safe regardless.
+_SURGE_SPATIAL_COUNT = os.environ.get("SURGE_SPATIAL_COUNT", "").strip().lower() in ("1", "true", "yes", "on")
 
 # ── Surge tier mapping ───────────────────────────────────────────────
 # Maps demand/supply ratio to multiplier. Thresholds are tuned for a
@@ -70,9 +87,16 @@ async def _count_demand_in_area(area_id: str) -> int:
                 "service_area_id": area_id,
                 "ride_requested_at": {"$gte": cutoff},
             },
-            limit=500,
+            limit=_SURGE_FETCH_CAP,
             columns="id,status",
         )
+        if len(rides) >= _SURGE_FETCH_CAP:
+            _metric_inc("spinr_surge_fetch_cap_hit_total", {"kind": "demand"})
+            logger.error(
+                f"Surge: demand fetch hit the {_SURGE_FETCH_CAP}-row cap for area {area_id} — "
+                f"demand is TRUNCATED and the surge multiplier may be under-stated. "
+                f"Move to a server-side spatial/aggregate count (D1)."
+            )
         # Count rides that are still active or very recently requested
         active_statuses = {
             "searching",
@@ -87,19 +111,66 @@ async def _count_demand_in_area(area_id: str) -> int:
         return 0
 
 
+async def _count_supply_spatial(poly: List[Dict[str, float]]) -> int:
+    """PostGIS supply count via the drivers_available_in_polygon RPC (D1).
+
+    Builds a GeoJSON polygon with [lng, lat] ordering (what ST_GeomFromGeoJSON
+    expects — we construct it ourselves so there's no axis-swap risk), runs the
+    SECURITY DEFINER spatial lookup (index-only, no row cap), then applies the
+    Redis presence filter in Python so ghost-online drivers are excluded — same
+    semantics as the Python scan, without the truncation cap.
+    """
+    ring = [[p["lng"], p["lat"]] for p in poly]
+    if ring[0] != ring[-1]:
+        ring.append(ring[0])  # GeoJSON rings must be closed
+    geojson = json.dumps({"type": "Polygon", "coordinates": [ring]})
+    rows = await db.rpc("drivers_available_in_polygon", {"p_polygon_geojson": geojson}) or []
+    driver_ids = [r["driver_id"] for r in rows if r.get("driver_id")]
+    if not driver_ids:
+        return 0
+    try:
+        present = await present_driver_ids(driver_ids)
+        if present:
+            driver_ids = [d for d in driver_ids if d in present]
+    except Exception as exc:
+        logger.warning(f"Surge: presence filter failed (spatial), using DB state: {exc}")
+    return len(driver_ids)
+
+
 async def _count_supply_in_area(area: Dict[str, Any]) -> int:
     """Count online+available drivers within a service area polygon."""
     poly = get_service_area_polygon(area)
     if not poly:
         return 0
 
+    # D1: server-side spatial count (no row cap, index-only). Flag-gated and
+    # fully fallback-safe — on any error (flag off, migration 170 not applied,
+    # extension missing, RPC issue) we fall through to the Python scan below, so
+    # surge never breaks.
+    if _SURGE_SPATIAL_COUNT:
+        try:
+            return await _count_supply_spatial(poly)
+        except Exception as exc:
+            logger.warning(
+                f"Surge: spatial supply count failed for area {area.get('id')}, "
+                f"falling back to Python scan: {exc}",
+                exc_info=False,
+            )
+
     try:
         drivers = await db.get_rows(
             "drivers",
             {"is_online": True, "is_available": True},
-            limit=500,
+            limit=_SURGE_FETCH_CAP,
             columns="id,user_id,lat,lng",
         )
+        if len(drivers) >= _SURGE_FETCH_CAP:
+            _metric_inc("spinr_surge_fetch_cap_hit_total", {"kind": "supply"})
+            logger.error(
+                f"Surge: supply fetch hit the {_SURGE_FETCH_CAP}-row cap for area {area.get('id')} — "
+                f"supply is TRUNCATED and the surge multiplier may be OVER-stated (a regulated price). "
+                f"Move to a server-side spatial count (PostGIS ST_Covers + GIST index, D1)."
+            )
 
         # Presence filter: ghost-online drivers (app force-killed, phone dead)
         # shouldn't count as "supply" or we'd compute a lower surge than the

@@ -137,16 +137,25 @@ async def check_expiring_documents():
         # spam-guard below — expiry events must always trigger a new notification.
         if expired_docs:
             doc_list = ", ".join(expired_docs)
-            logger.warning(f"Doc expiry: driver {driver['id']} has expired docs ({doc_list}) — suspending")
-            # 1. Suspension
+            # Replay-safety (F6): make the suspension itself the atomic claim.
+            # Filtering on status != 'suspended' means only the replica that
+            # actually transitions the driver into suspension gets a row back; it
+            # alone clears presence, disconnects, and sends the single suspension
+            # push. Re-ticks (driver already suspended) and sibling replicas match
+            # zero rows, so the driver is not re-suspended or re-notified every 12h.
             try:
-                await db.update_one(
+                claimed = await db.update_one(
                     "drivers",
-                    {"id": driver["id"]},
+                    {"id": driver["id"], "status": {"$ne": "suspended"}},
                     {"is_online": False, "is_available": False, "status": "suspended"},
                 )
             except Exception as e:
                 logger.error(f"Doc expiry: failed to suspend driver {driver['id']}: {e}", exc_info=True)
+                continue
+            if not claimed:
+                # Already suspended by a prior tick or another replica — nothing to do.
+                continue
+            logger.warning(f"Doc expiry: driver {driver['id']} suspended for expired docs ({doc_list})")
             # Clear Redis presence so dispatch filters drop this driver
             # immediately — otherwise they'd remain eligible for up to
             # PRESENCE_TTL (90 s) and could still be assigned a ride.
@@ -155,7 +164,6 @@ async def check_expiring_documents():
             except Exception as e:
                 logger.error(f"Doc expiry: clear_presence failed for {driver['id']}: {e}", exc_info=True)
             manager.disconnect(f"driver_{user_id}")
-            # 2. Notification
             try:
                 await send_push_notification(
                     user_id,
@@ -189,14 +197,29 @@ async def check_expiring_documents():
             notif_body = f"Please renew: {doc_list}. You won't be able to go online with expired documents."
             notif_type = "document_expiry_warning"
 
-        # Spam-guard: apply 24 h throttle only for the 7-day tier.
-        # 1-day and day-of warnings bypass the guard — these are urgent enough
-        # that they must reach the driver even if a 7-day reminder was sent
-        # within the past 24 h.
-        if days_left >= 2:
-            warned_dt = parse_iso_utc(driver.get("doc_expiry_warned_at"))
-            if warned_dt is not None and (now - warned_dt).total_seconds() < 86400:
-                continue
+        # Replay-safety (F6) + spam-guard: claim the notification slot atomically
+        # with a compare-and-swap on doc_expiry_warned_at BEFORE sending, so two
+        # replicas can't both notify in the same tick (the old read-then-write let
+        # every replica pass the throttle and send). The 7-day tier keeps the 24 h
+        # throttle; urgent tiers (today / tomorrow) use a 6 h window so they still
+        # fire on each 12 h tick but exactly once across replicas.
+        throttle_seconds = 86400 if days_left >= 2 else 21600
+        cutoff = (now - timedelta(seconds=throttle_seconds)).isoformat()
+        try:
+            claimed = await db.update_one(
+                "drivers",
+                {
+                    "id": driver["id"],
+                    "$or": [f"doc_expiry_warned_at.is.null,doc_expiry_warned_at.lt.{cutoff}"],
+                },
+                {"doc_expiry_warned_at": now.isoformat()},
+            )
+        except Exception as e:
+            logger.warning(f"Doc expiry: warn-claim failed for driver {driver['id']}: {e}")
+            continue
+        if not claimed:
+            # Another replica already notified within the throttle window.
+            continue
 
         try:
             await send_push_notification(
@@ -204,11 +227,6 @@ async def check_expiring_documents():
                 notif_title,
                 notif_body,
                 data={"type": notif_type, "driver_id": driver["id"]},
-            )
-            await db.update_one(
-                "drivers",
-                {"id": driver["id"]},
-                {"doc_expiry_warned_at": now.isoformat()},
             )
             notified += 1
         except Exception as e:

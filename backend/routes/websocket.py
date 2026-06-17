@@ -37,17 +37,27 @@ db = db_supabase  # legacy alias
 # without the formatter stripping them from the main block's except branch.
 try:
     from ..settings_loader import get_app_settings
-    from ..utils.maps_eta import get_ride_eta_seconds
+    from ..utils.maps_eta import get_cached_ride_eta, get_ride_eta_seconds, refresh_ride_eta
 except ImportError:
     try:
         from settings_loader import get_app_settings  # type: ignore[no-redef]
-        from utils.maps_eta import get_ride_eta_seconds  # type: ignore[no-redef]
+        from utils.maps_eta import (  # type: ignore[no-redef]
+            get_cached_ride_eta,
+            get_ride_eta_seconds,
+            refresh_ride_eta,
+        )
     except ImportError:
         # Stubs used when backend is imported outside its package (e.g. tests).
         async def get_app_settings():  # type: ignore[misc]
             return {}
 
         async def get_ride_eta_seconds(*_a, **_kw):  # type: ignore[misc]
+            return None
+
+        async def get_cached_ride_eta(*_a, **_kw):  # type: ignore[misc]
+            return None
+
+        async def refresh_ride_eta(*_a, **_kw):  # type: ignore[misc]
             return None
 
 
@@ -668,17 +678,26 @@ async def websocket_endpoint(
                             pickup_lng = ride.get("pickup_lng")
                             if pickup_lat is not None and pickup_lng is not None:
                                 try:
-                                    eta_sec = await get_ride_eta_seconds(
-                                        driver_lat=lat,
-                                        driver_lng=lng,
-                                        dest_lat=pickup_lat,
-                                        dest_lng=pickup_lng,
-                                        maps_api_key=_maps_key_cache,
-                                        driver_id=driver_id,
-                                        ride_id=ride["id"],
-                                    )
+                                    # #1: hot-path read is cache-only (one Redis
+                                    # GET). On a miss, refresh the ETA OFF the
+                                    # receive loop so an OSRM/Google round-trip
+                                    # never blocks the <150ms location write; the
+                                    # value lands in cache for the next ping.
+                                    eta_sec = await get_cached_ride_eta(driver_id, ride["id"])
                                     if eta_sec is not None:
                                         rider_msg["eta_seconds"] = eta_sec
+                                    else:
+                                        asyncio.create_task(
+                                            refresh_ride_eta(
+                                                driver_lat=lat,
+                                                driver_lng=lng,
+                                                dest_lat=pickup_lat,
+                                                dest_lng=pickup_lng,
+                                                maps_api_key=_maps_key_cache,
+                                                driver_id=driver_id,
+                                                ride_id=ride["id"],
+                                            )
+                                        )
                                 except Exception:
                                     logger.debug(
                                         "ETA fetch failed; omitting eta_seconds from location update",
@@ -690,8 +709,10 @@ async def websocket_endpoint(
                             f"rider_{ride['rider_id']}",
                         )
 
-                    # Broadcast live location to all connected admin monitoring clients
-                    await manager.broadcast_to_admins(location_update)
+                    # Broadcast live location to admin monitoring clients —
+                    # throttled per driver (#3) so 1 Hz pings don't fan out
+                    # N drivers x A admins every second.
+                    await manager.broadcast_driver_location_to_admins(driver_id, location_update)
 
             elif data.get("type") in ("location_batch", "driver_location_batch"):
                 # Batch upload of buffered GPS points (offline recovery).
@@ -824,17 +845,23 @@ async def websocket_endpoint(
                                     _p_lng = _batch_ride.get("pickup_lng")
                                     if _p_lat is not None and _p_lng is not None:
                                         try:
-                                            _eta_sec = await get_ride_eta_seconds(
-                                                driver_lat=_lat,
-                                                driver_lng=_lng,
-                                                dest_lat=_p_lat,
-                                                dest_lng=_p_lng,
-                                                maps_api_key=_maps_key_cache,
-                                                driver_id=driver_id,
-                                                ride_id=_batch_ride["id"],
-                                            )
+                                            # #1: cache-only on the hot path;
+                                            # refresh off-loop on a miss.
+                                            _eta_sec = await get_cached_ride_eta(driver_id, _batch_ride["id"])
                                             if _eta_sec is not None:
                                                 _batch_rider_msg["eta_seconds"] = _eta_sec
+                                            else:
+                                                asyncio.create_task(
+                                                    refresh_ride_eta(
+                                                        driver_lat=_lat,
+                                                        driver_lng=_lng,
+                                                        dest_lat=_p_lat,
+                                                        dest_lng=_p_lng,
+                                                        maps_api_key=_maps_key_cache,
+                                                        driver_id=driver_id,
+                                                        ride_id=_batch_ride["id"],
+                                                    )
+                                                )
                                         except Exception:
                                             logger.debug(
                                                 "ETA fetch failed for batch; omitting eta_seconds",
@@ -844,7 +871,7 @@ async def websocket_endpoint(
                                     _batch_rider_msg,
                                     f"rider_{_batch_ride['rider_id']}",
                                 )
-                            await manager.broadcast_to_admins(_batch_loc_update)
+                            await manager.broadcast_driver_location_to_admins(driver_id, _batch_loc_update)
                     await websocket.send_json({"type": "location_batch_ack", "count": inserted})
 
             elif data.get("type") == "ride_status_update":

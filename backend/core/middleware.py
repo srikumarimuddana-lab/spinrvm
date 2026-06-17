@@ -167,8 +167,12 @@ def _extract_user_id(request: Request) -> str | None:
             return None
         token = auth[len("Bearer ") :]
         payload = jwt.decode(token, options={"verify_signature": False})
-        sub = payload.get("sub")
-        return str(sub) if sub is not None else None
+        # Spinr JWTs carry the user id in `user_id` (see core auth.create_jwt_token),
+        # not the standard `sub` claim — reading `sub` left request.state.user_id
+        # (and every log line's user correlation) permanently None. Fall back to
+        # `sub` for any token that does use it.
+        uid = payload.get("user_id") or payload.get("sub")
+        return str(uid) if uid is not None else None
     except Exception:
         return None
 

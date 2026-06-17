@@ -25,6 +25,7 @@ try:
     from ..geo_utils import (
         calculate_distance,
         get_service_area_polygon,
+        multi_leg_distance,
         point_in_polygon,
     )
     from ..models.ride_status import RideStatus
@@ -69,7 +70,7 @@ except ImportError:
         notify_safety_team,
         send_push_notification,
     )
-    from geo_utils import calculate_distance, get_service_area_polygon, point_in_polygon
+    from geo_utils import calculate_distance, get_service_area_polygon, multi_leg_distance, point_in_polygon
     from models.ride_status import RideStatus  # noqa: F401
     from schemas import CreateRideRequest, DriverPublicView, Ride, RideRatingRequest
     from services.dispatch_service import (
@@ -343,15 +344,13 @@ def _reestimate_fare_for_stops(ride: dict, new_stops: list) -> dict:
     surge)), then applies them to the new multi-leg distance.  Returns a dict
     suitable for merging into a $set update.
     """
-    # Build ordered waypoints: pickup → stops → dropoff
-    waypoints = [
-        (ride["pickup_lat"], ride["pickup_lng"]),
-        *[(s["lat"], s["lng"]) for s in new_stops],
-        (ride["dropoff_lat"], ride["dropoff_lng"]),
-    ]
-    new_distance_km = sum(
-        calculate_distance(waypoints[i][0], waypoints[i][1], waypoints[i + 1][0], waypoints[i + 1][1])
-        for i in range(len(waypoints) - 1)
+    # Multi-leg distance pickup → stops → dropoff (shared with /rides/estimate).
+    new_distance_km = multi_leg_distance(
+        ride["pickup_lat"],
+        ride["pickup_lng"],
+        ride["dropoff_lat"],
+        ride["dropoff_lng"],
+        new_stops,
     )
     new_duration_minutes = max(5, int(new_distance_km / 30 * 60) + 5)
 
@@ -1413,7 +1412,11 @@ async def compute_ride_estimates(
     don't render a map (saves a Maps API call and its latency).
     """
     validate_ride_location(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
-    distance_km = calculate_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
+    # Price the actual route through any intermediate stops, not the straight
+    # pickup→dropoff line — otherwise adding a stop never changes the quote.
+    distance_km = multi_leg_distance(
+        body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng, body.stops
+    )
     duration_minutes = int(distance_km / 30 * 60) + 5
 
     fares = await get_fares_for_location(body.pickup_lat, body.pickup_lng)
@@ -2155,7 +2158,11 @@ async def create_ride(
             message_key=ErrorKeys.PAYMENT_UNPAID_RIDE_BLOCK,
         )
 
-    distance_km = calculate_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
+    # Charge the multi-leg route (pickup → stops → dropoff) so the booked fare
+    # matches the multi-stop quote shown at /rides/estimate.
+    distance_km = multi_leg_distance(
+        body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng, body.stops
+    )
     duration_minutes = int(distance_km / 30 * 60) + 5
 
     # Fetch service_areas ONCE for this request and share across:

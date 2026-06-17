@@ -11,6 +11,40 @@ def calculate_distance(lat1: float, lng1: float, lat2: float, lng2: float) -> fl
     return R * c
 
 
+def multi_leg_distance(
+    pickup_lat: float,
+    pickup_lng: float,
+    dropoff_lat: float,
+    dropoff_lng: float,
+    stops: List[Dict[str, Any]] | None = None,
+) -> float:
+    """Total distance (km) of the route pickup → stops → dropoff.
+
+    Sums the haversine length of each leg through the intermediate stops, so a
+    multi-stop ride is priced on the actual detour rather than the straight
+    pickup→dropoff line. With no stops this is identical to a single
+    ``calculate_distance`` call.
+
+    Stops missing coordinates, or carrying the placeholder ``(0, 0)`` an
+    unfilled stop field sends from the rider app, are skipped — they must not
+    inflate the fare or bend the route into the ocean off West Africa.
+    """
+    points = [(pickup_lat, pickup_lng)]
+    for stop in stops or []:
+        lat = stop.get("lat")
+        lng = stop.get("lng")
+        # `0`/`0.0` placeholder or missing coord → not a real stop. A genuine
+        # Saskatchewan coordinate is never exactly on the equator/prime meridian.
+        if not lat or not lng:
+            continue
+        points.append((lat, lng))
+    points.append((dropoff_lat, dropoff_lng))
+    return sum(
+        calculate_distance(points[i][0], points[i][1], points[i + 1][0], points[i + 1][1])
+        for i in range(len(points) - 1)
+    )
+
+
 def get_service_area_polygon(area: Dict[str, Any]) -> List[Dict[str, float]]:
     """
     Return polygon as list of {lat, lng} from a service area row.

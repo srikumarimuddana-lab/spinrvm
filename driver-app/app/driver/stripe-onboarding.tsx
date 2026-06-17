@@ -27,6 +27,10 @@ import { useDriverMe } from '@shared/hooks/queries';
 import { useTheme } from '@shared/theme/ThemeContext';
 
 const EMBEDDED_URL = `${SpinrConfig.backendUrl}/api/v1/drivers/stripe-embedded`;
+// Restrict top-level navigation to our API origin + Stripe (defence-in-depth
+// alongside mediaCapturePermissionGrantType="grant" — Stripe renders inside
+// iframes, which aren't subject to this list, so this stays tight).
+const ORIGIN_WHITELIST = [SpinrConfig.backendUrl, 'https://*.stripe.com', 'https://connect-js.stripe.com'];
 
 export default function StripeOnboardingScreen() {
     const router = useRouter();
@@ -132,7 +136,7 @@ export default function StripeOnboardingScreen() {
                         <WebView
                             ref={webRef}
                             source={{ uri: EMBEDDED_URL }}
-                            originWhitelist={['https://*']}
+                            originWhitelist={ORIGIN_WHITELIST}
                             injectedJavaScriptBeforeContentLoaded={injectedBeforeLoad}
                             onMessage={onMessage}
                             onLoadEnd={() => setPageLoading(false)}

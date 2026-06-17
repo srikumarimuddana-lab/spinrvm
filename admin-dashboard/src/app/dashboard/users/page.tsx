@@ -42,7 +42,7 @@ import { Pagination } from "@/components/ui/pagination";
 import { Users, Search, Mail, Phone, Calendar, Car, ShieldCheck, Download, RefreshCw, Ban, CheckCircle, AlertTriangle, Wallet, Plus, Minus, Eye, EyeOff } from "lucide-react";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatDate } from "@/lib/utils";
-import { getUsersPaginated, updateUserStatus, updateUserFlags, getStats, getUserWallet, creditUserWallet, debitUserWallet, exportUsers, logPiiReveal } from "@/lib/api";
+import { getUsersPaginated, getUserDetails, updateUserStatus, updateUserFlags, getStats, getUserWallet, creditUserWallet, debitUserWallet, exportUsers, logPiiReveal } from "@/lib/api";
 import { maskEmail, maskPhone } from "@/lib/pii";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useToast } from "@/components/ui/use-toast";
@@ -59,6 +59,9 @@ export default function UsersPage() {
     const [statusUpdating, setStatusUpdating] = useState<string | null>(null);
     const [roleFilter, setRoleFilter] = useState<"all" | "rider" | "driver" | "both">("all");
     const [selectedUser, setSelectedUser] = useState<any>(null);
+    // Real lifetime ride count for the open user — the list row has no count
+    // (it's not a users column); the detail endpoint computes it on demand.
+    const [detailRides, setDetailRides] = useState<number | null>(null);
     const [page, setPage] = useState(0);
     const [hasNextPage, setHasNextPage] = useState(false);
     const [stats, setStats] = useState<{ total_users: number; total_drivers: number } | null>(null);
@@ -185,6 +188,19 @@ export default function UsersPage() {
     useEffect(() => {
         getStats().then((s) => setStats(s)).catch(() => setStats(null));
     }, []);
+
+    // Fetch the open user's real lifetime ride count (detail endpoint computes
+    // it from the rides table). Guarded against races when switching users.
+    useEffect(() => {
+        if (!selectedUser?.id) { setDetailRides(null); return; }
+        const id = selectedUser.id;
+        let active = true;
+        setDetailRides(null);
+        getUserDetails(id)
+            .then((d) => { if (active) setDetailRides(d?.total_rides ?? 0); })
+            .catch(() => {});
+        return () => { active = false; };
+    }, [selectedUser?.id]);
 
     // Reset to page 0 when filters change (debounce search).
     useEffect(() => {
@@ -421,10 +437,12 @@ export default function UsersPage() {
                                                     <Badge className={
                                                         user.status === "banned" ? "bg-red-500/15 text-red-600"
                                                         : user.status === "suspended" ? "bg-amber-500/15 text-amber-600"
+                                                        : user.status === "pending_deletion" ? "bg-orange-500/15 text-orange-600"
                                                         : "bg-emerald-500/15 text-emerald-600"
                                                     }>
                                                         {user.status === "banned" ? "Banned"
                                                         : user.status === "suspended" ? "Suspended"
+                                                        : user.status === "pending_deletion" ? "Pending deletion"
                                                         : "Active"}
                                                     </Badge>
                                                 </TableCell>
@@ -502,6 +520,12 @@ export default function UsersPage() {
                                     </Label>
                                     <p className="text-sm">{formatDate(selectedUser.created_at)}</p>
                                 </div>
+                                <div className="space-y-1">
+                                    <Label className="text-xs text-muted-foreground flex items-center gap-1">
+                                        <Car className="h-3 w-3" /> Total rides
+                                    </Label>
+                                    <p className="text-sm">{detailRides == null ? "…" : detailRides.toLocaleString()}</p>
+                                </div>
                             </div>
 
                             {/* Status Management */}
@@ -511,10 +535,12 @@ export default function UsersPage() {
                                     <Badge className={
                                         selectedUser.status === "banned" ? "bg-red-500/15 text-red-600"
                                         : selectedUser.status === "suspended" ? "bg-amber-500/15 text-amber-600"
+                                        : selectedUser.status === "pending_deletion" ? "bg-orange-500/15 text-orange-600"
                                         : "bg-emerald-500/15 text-emerald-600"
                                     }>
                                         {selectedUser.status === "banned" ? "Banned"
                                         : selectedUser.status === "suspended" ? "Suspended"
+                                        : selectedUser.status === "pending_deletion" ? "Pending deletion"
                                         : "Active"}
                                     </Badge>
                                 </div>

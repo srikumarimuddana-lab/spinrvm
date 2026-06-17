@@ -42,7 +42,9 @@ function PayoutScreen() {
     } = useDriverStore();
 
     const [payoutAmount, setPayoutAmount] = useState('');
-    const [stripeOnboarding, setStripeOnboarding] = useState(false);
+    // Onboarding now opens an in-app WebView screen (instant navigation), so
+    // there's no async "opening…" state to track here.
+    const stripeOnboarding = false;
     const [downloadingT4A, setDownloadingT4A] = useState(false);
     const [downloadingCSV, setDownloadingCSV] = useState(false);
     // gst_number is part of the driver row served by useDriverMe — keep
@@ -101,26 +103,12 @@ function PayoutScreen() {
         }
     }, [error]);
 
-    const handleStripeOnboarding = async () => {
-        setStripeOnboarding(true);
-        try {
-            const res = await api.post<{ url?: string; mock?: boolean }>('/drivers/stripe-onboard');
-            const { url, mock } = res.data;
-
-            if (mock) {
-                showToast(
-                    'info',
-                    'Demo Mode',
-                    'Stripe is not configured yet. In production, you will be redirected to Stripe to complete identity verification and add your bank account.',
-                );
-            } else if (url) {
-                await Linking.openURL(url);
-            }
-        } catch (err: any) {
-            showToast('error', 'Error', err.response?.data?.detail || 'Failed to start Stripe onboarding');
-        } finally {
-            setStripeOnboarding(false);
-        }
+    const handleStripeOnboarding = () => {
+        // Option B: open Stripe's embedded onboarding in an in-app WebView (no
+        // browser redirect). The screen mints an AccountSession and lets Stripe
+        // collect the SIN/identity + payout bank account in-app; we only ever
+        // mirror the last-4 + verification status.
+        router.push('/driver/stripe-onboarding' as any);
     };
 
     const handleSaveGst = async () => {

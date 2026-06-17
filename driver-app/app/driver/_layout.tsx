@@ -37,6 +37,7 @@ export default function DriverStackLayout() {
         <Stack.Screen name="notifications" />
         <Stack.Screen name="payout" />
         <Stack.Screen name="payout-history" />
+        <Stack.Screen name="stripe-onboarding" />
         <Stack.Screen name="tax-documents" />
         <Stack.Screen name="referral" />
         <Stack.Screen name="addresses" />

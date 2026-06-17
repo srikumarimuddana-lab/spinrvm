@@ -1342,7 +1342,7 @@ function VerificationSummaryCard({
                 </div>
                 <div className="flex items-center justify-between pt-1 text-xs border-t border-border">
                     <div className="flex items-center gap-2">
-                        <div className={`w-2 h-2 rounded-full ${driver.profile_image_status ? "bg-emerald-500" : "bg-muted-foreground/30"}`} />
+                        <div className={`w-2 h-2 rounded-full ${driver.profile_image_status && driver.profile_image_status !== "rejected" ? "bg-emerald-500" : "bg-muted-foreground/30"}`} />
                         <span className="text-muted-foreground">Profile photo</span>
                     </div>
                     <div className="flex items-center gap-2">

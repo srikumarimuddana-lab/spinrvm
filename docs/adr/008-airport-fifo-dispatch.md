@@ -51,21 +51,52 @@ Add an **opt-in, per-venue FIFO dispatch mode**, gated behind a
 `venues.fifo_enabled` flag (default `false`). When a ride's pickup falls inside a
 `fifo_enabled` venue, dispatch orders candidate drivers by **zone-entry time
 ascending** (longest wait first) instead of by ETA/distance, restricted to
-drivers currently queued in that same venue.
+drivers currently queued for that venue.
 
 Nothing changes anywhere until an admin enables the flag on a specific venue, so
 the airport queue can be A/B'd against nearest-matching before any expansion.
 
+### Geography: a terminal and its feeder lots are separate venues
+
+An airport has two physically distinct places, typically 0.5–2 km apart, and they
+are **separate `venues` rows**:
+
+- **Terminal venue** (`fifo_enabled = true`) — where the rider's pickup pin lands.
+  Its `center/radius_m` is the *pickup-detection* geofence (the role venues
+  already play today). This is also the **shared queue key**.
+- **Feeder-lot venue(s)** — where drivers physically **wait**. Each is its own
+  venue row carrying a new `queue_for_venue_id` that points at the terminal. Its
+  `center/radius_m` is the *queue-entry* geofence.
+
+Multiple feeder lots may point at the same terminal (cell-phone lot + overflow
+lot). All drivers in any lot of a terminal share **one** FIFO line: entering *any*
+feeder lot stamps `drivers.zone_venue_id = <terminal id>` (not the lot id), so
+ordering is a single `WHERE zone_venue_id = <terminal> ORDER BY zone_entered_at`
+across every feeder lot at once. A driver waiting in Lot A and one in Lot B are
+correctly interleaved by wait time, not segregated per lot.
+
+Modelling lots as full venue rows (rather than inline `lot_*` columns on the
+terminal) means an admin draws each lot with the **existing** venues admin UI —
+the only new inputs are the `fifo_enabled` toggle (on the terminal) and a
+`queue_for_venue_id` selector (on each lot).
+
+Admin setup for an airport:
+1. Create the terminal venue, toggle `fifo_enabled` on.
+2. Create each feeder-lot venue, set `queue_for_venue_id` → the terminal.
+
 ### Queue mechanics
 
-- **Entry** — on each driver location update, if the point is inside a
-  `fifo_enabled` venue radius and the driver was not already queued there, stamp
-  `drivers.zone_venue_id` + `drivers.zone_entered_at = now`.
+- **Entry** — on each driver location update, if the point is inside a **feeder-lot**
+  venue radius, resolve that lot's `queue_for_venue_id` (the terminal) and, if the
+  driver was not already queued for that terminal, stamp
+  `drivers.zone_venue_id = <terminal id>` + `drivers.zone_entered_at = now`.
 - **Ordering** — `ORDER BY zone_entered_at ASC` among drivers with
-  `zone_venue_id = <venue>` who pass the normal eligibility set (online,
-  available, verified, vehicle-type, WAV if required, present heartbeat).
-- **Exit resets to back** — leaving the zone radius clears
-  `zone_venue_id`/`zone_entered_at`. Re-entering re-stamps `now` → back of line.
+  `zone_venue_id = <terminal>` who pass the normal eligibility set (online,
+  available, verified, vehicle-type, WAV if required, present heartbeat). Drivers
+  across all feeder lots of that terminal are interleaved by wait time.
+- **Exit resets to back** — leaving the feeder-lot radius (with hysteresis) clears
+  `zone_venue_id`/`zone_entered_at`. Re-entering any feeder lot re-stamps `now`
+  → back of line.
 
 ### Edge-case policies (the decisions that are easy to get wrong)
 
@@ -134,9 +165,9 @@ of "the app screwed me" airport tickets. Mitigation:
 
 - Set `venues.fifo_enabled = false` on the venue → dispatch instantly reverts to
   nearest/ETA matching for that venue. No deploy needed.
-- The `zone_venue_id` / `zone_entered_at` columns and `fifo_enabled` flag are
-  additive and nullable; dropping them is a clean reverse migration if the
-  feature is abandoned.
+- The `zone_venue_id` / `zone_entered_at` columns, `fifo_enabled` flag, and
+  `queue_for_venue_id` link are additive and nullable; dropping them is a clean
+  reverse migration if the feature is abandoned.
 
 ## Implementation note
 

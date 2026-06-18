@@ -34,6 +34,16 @@ _LOT_B = {
     "radius_m": 150,
     "is_active": True,
 }
+# The terminal venue itself (fifo_enabled, no queue_for_venue_id), ~1.3 km south
+# of the lots — this is the pickup-detection geofence dispatch resolves against.
+_TERMINAL_VENUE = {
+    "id": TERMINAL,
+    "fifo_enabled": True,
+    "center_lat": 52.1580,
+    "center_lng": -106.7000,
+    "radius_m": 250,
+    "is_active": True,
+}
 
 
 @pytest.fixture(autouse=True)
@@ -133,4 +143,30 @@ async def test_db_failure_never_propagates():
     with _patch_lots(_LOT_A), patch.object(fz.db_supabase, "set_driver_zone", set_zone):
         out = await fz.update_driver_zone("drv-1", 52.1700, -106.7000)  # would enter
     # Swallowed (best-effort): returns prior state (None), does not raise.
+    assert out is None
+
+
+# ── fifo_terminal_for_point (dispatch-side pickup detection) ──────────────────
+
+
+@pytest.mark.anyio
+async def test_pickup_inside_terminal_resolves_terminal_id():
+    with _patch_lots(_TERMINAL_VENUE, _LOT_A):
+        out = await fz.fifo_terminal_for_point(52.1580, -106.7000)  # terminal center
+    assert out == TERMINAL
+
+
+@pytest.mark.anyio
+async def test_pickup_outside_any_terminal_returns_none():
+    with _patch_lots(_TERMINAL_VENUE):
+        out = await fz.fifo_terminal_for_point(52.5000, -106.7000)  # ~4.7 km away
+    assert out is None
+
+
+@pytest.mark.anyio
+async def test_feeder_lot_is_not_a_pickup_terminal():
+    # A lot (queue_for_venue_id set, not fifo_enabled) must NOT match pickup
+    # detection — only the terminal does, even if the pin is dead-center of a lot.
+    with _patch_lots(_LOT_A):
+        out = await fz.fifo_terminal_for_point(52.1700, -106.7000)
     assert out is None

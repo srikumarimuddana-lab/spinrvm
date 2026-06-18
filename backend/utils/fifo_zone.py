@@ -42,11 +42,12 @@ except ImportError:  # pragma: no cover - top-level run
 
 logger = logging.getLogger(__name__)
 
-# Feeder-lot venue cache. FIFO venues are admin config that changes rarely, and
-# this runs on the hot GPS path, so serve from a short in-process TTL cache.
+# Venue cache. FIFO venues are admin config that changes rarely, and the
+# driver-side path runs on the hot GPS path, so serve the raw active-venue list
+# from a short in-process TTL cache and derive lots/terminals from it on demand.
 _VENUE_CACHE_TTL_SECONDS = 30.0
-_lots_cache: Optional[List[Dict[str, Any]]] = None
-_lots_fetched_at = 0.0
+_venues_cache: Optional[List[Dict[str, Any]]] = None
+_venues_fetched_at = 0.0
 
 # Re-entering within radius * this factor keeps a driver in their current queue,
 # so jitter at the lot boundary doesn't reset their place in line.
@@ -70,12 +71,12 @@ def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     return r * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
-async def _feeder_lots() -> List[Dict[str, Any]]:
-    """Active feeder-lot venues (those with a queue_for_venue_id), cached."""
-    global _lots_cache, _lots_fetched_at
+async def _active_venues() -> List[Dict[str, Any]]:
+    """All active venue rows, cached in-process for _VENUE_CACHE_TTL_SECONDS."""
+    global _venues_cache, _venues_fetched_at
     now = time.monotonic()
-    if _lots_cache is not None and now - _lots_fetched_at < _VENUE_CACHE_TTL_SECONDS:
-        return _lots_cache
+    if _venues_cache is not None and now - _venues_fetched_at < _VENUE_CACHE_TTL_SECONDS:
+        return _venues_cache
     try:
         venues = await db_supabase.get_rows("venues", {"is_active": True}, limit=2000)
     except Exception:
@@ -83,10 +84,16 @@ async def _feeder_lots() -> List[Dict[str, Any]]:
         # write — never break GPS ingestion on a venue-cache refresh failure.
         # Logged at error (not warning) per the no-silent-swallow rule; serve
         # the last good snapshot (or empty) until the next refresh.
-        logger.error("fifo_zone: feeder-lot venue refresh failed", exc_info=True)
-        return _lots_cache or []
+        logger.error("fifo_zone: venue refresh failed", exc_info=True)
+        return _venues_cache or []
+    _venues_cache, _venues_fetched_at = list(venues or []), now
+    return _venues_cache
+
+
+async def _feeder_lots() -> List[Dict[str, Any]]:
+    """Active feeder-lot venues (those with a queue_for_venue_id)."""
     lots: List[Dict[str, Any]] = []
-    for v in venues or []:
+    for v in await _active_venues():
         terminal = v.get("queue_for_venue_id")
         clat, clng = v.get("center_lat"), v.get("center_lng")
         if not terminal or clat is None or clng is None:
@@ -99,8 +106,29 @@ async def _feeder_lots() -> List[Dict[str, Any]]:
                 "radius_m": float(v.get("radius_m") or 150),
             }
         )
-    _lots_cache, _lots_fetched_at = lots, now
     return lots
+
+
+async def fifo_terminal_for_point(lat: float, lng: float) -> Optional[str]:
+    """Terminal venue id whose FIFO detection radius contains (lat, lng), else None.
+
+    Dispatch-side counterpart to the driver-side lot detection: a ride whose
+    pickup falls inside a fifo_enabled venue is dispatched FIFO. Nearest matching
+    terminal wins. Returns the venue id (str) so dispatch can order drivers whose
+    drivers.zone_venue_id equals it.
+    """
+    best: Optional[str] = None
+    best_d: Optional[float] = None
+    for v in await _active_venues():
+        if not v.get("fifo_enabled"):
+            continue
+        clat, clng = v.get("center_lat"), v.get("center_lng")
+        if clat is None or clng is None:
+            continue
+        d = _haversine_m(lat, lng, float(clat), float(clng))
+        if d <= float(v.get("radius_m") or 150) and (best_d is None or d < best_d):
+            best, best_d = str(v.get("id")), d
+    return best
 
 
 def _resolve_terminal(
@@ -182,7 +210,7 @@ async def update_driver_zone(
 
 def _reset_for_tests() -> None:
     """Clear module caches between tests."""
-    global _lots_cache, _lots_fetched_at
-    _lots_cache = None
-    _lots_fetched_at = 0.0
+    global _venues_cache, _venues_fetched_at
+    _venues_cache = None
+    _venues_fetched_at = 0.0
     _zone_state.clear()

@@ -82,21 +82,11 @@ export default function BrandSplash({ onLayout }: Props) {
   return (
     <View style={styles.root} onLayout={onLayout}>
       <View style={styles.center}>
-        <View style={styles.logoWrap}>
-          <Animated.Image
-            source={LOGO}
-            resizeMode="contain"
-            style={[styles.logo, { opacity: logoOpacity, transform: [{ scale: logoScale }] }]}
-          />
-          {/* Role label — right-aligned under the wordmark so it reads as
-              "spinr Driver", distinguishing this build from the rider app. */}
-          <Animated.Text
-            allowFontScaling={false}
-            style={[styles.appRole, { opacity: logoOpacity }]}
-          >
-            Driver
-          </Animated.Text>
-        </View>
+        <Animated.Image
+          source={LOGO}
+          resizeMode="contain"
+          style={[styles.logo, { opacity: logoOpacity, transform: [{ scale: logoScale }] }]}
+        />
         <Animated.Text
           allowFontScaling={false}
           style={[styles.tagline, { opacity: tagOpacity, transform: [{ translateY: tagY }] }]}
@@ -123,34 +113,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 32,
   },
-  logoWrap: {
-    width: LOGO_WIDTH,
-    // Right-align the "Driver" label to the wordmark's right edge.
-    alignItems: 'flex-end',
-  },
   logo: {
     width: LOGO_WIDTH,
     height: LOGO_HEIGHT,
   },
-  appRole: {
-    marginTop: 2,
-    marginRight: 4,
-    fontSize: Math.round(LOGO_HEIGHT * 0.22),
-    letterSpacing: 3,
-    color: '#FF3B30',
-    fontFamily: 'PlusJakartaSans_700Bold',
-    textTransform: 'uppercase',
-    includeFontPadding: false,
-  },
   tagline: {
-    marginTop: 18,
-    paddingBottom: 12,
+    marginTop: 20,
+    paddingBottom: 6,
     fontSize: TAGLINE_SIZE,
-    // Explicit lineHeight + padding so the descenders of "pp" in "Support" are
-    // never clipped by the text box (RN's intrinsic line height is too tight
-    // for PlusJakartaSans here). includeFontPadding keeps Android consistent.
-    lineHeight: Math.round(TAGLINE_SIZE * 1.5),
-    includeFontPadding: true,
     letterSpacing: 0.8,
     color: '#8A8F98',
     fontFamily: 'PlusJakartaSans_600SemiBold',

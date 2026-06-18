@@ -41,6 +41,18 @@ class VenueRequest(BaseModel):
     pickup_points: List[PickupPoint] = Field(default_factory=list, max_length=30)
     service_area_id: Optional[str] = None
     is_active: bool = True
+    # ADR-008 airport FIFO dispatch. A venue is EITHER a terminal
+    # (fifo_enabled, pickup detection) OR a feeder lot (queue_for_venue_id →
+    # the terminal whose queue its waiting drivers join) — never both. Mirrors
+    # the venues_fifo_lot_exclusive DB CHECK; validated here for a clean 400.
+    fifo_enabled: bool = False
+    queue_for_venue_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _fifo_exclusive(self) -> "VenueRequest":
+        if self.fifo_enabled and self.queue_for_venue_id:
+            raise ValueError("A venue cannot be a FIFO terminal and a feeder lot at the same time")
+        return self
 
 
 @router.get("")
@@ -70,12 +82,36 @@ def _payload(body: VenueRequest) -> dict:
         "pickup_points": [p.model_dump() for p in body.pickup_points],
         "service_area_id": body.service_area_id,
         "is_active": body.is_active,
+        "fifo_enabled": body.fifo_enabled,
+        "queue_for_venue_id": body.queue_for_venue_id,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
+async def _validate_queue_target(body: VenueRequest, venue_id: Optional[str] = None) -> None:
+    """Reject a feeder-lot link that can't form a valid FIFO queue (clean 400).
+
+    The DB CHECK + FK ultimately guard this, but surfacing the reason here gives
+    the admin dashboard a usable message instead of a 503/constraint error.
+    """
+    target_id = body.queue_for_venue_id
+    if not target_id:
+        return
+    if venue_id is not None and target_id == venue_id:
+        raise HTTPException(status_code=400, detail="A venue cannot queue for itself")
+    target = await db_supabase.find_one(_TABLE, {"id": target_id})
+    if not target:
+        raise HTTPException(status_code=400, detail="queue_for_venue_id does not reference an existing venue")
+    if not target.get("fifo_enabled"):
+        raise HTTPException(
+            status_code=400,
+            detail="queue_for_venue_id must reference a fifo_enabled terminal venue",
+        )
+
+
 @router.post("")
 async def create_venue(body: VenueRequest, admin: dict = Depends(get_admin_user)):
+    await _validate_queue_target(body)
     try:
         row = await db_supabase.insert_one(_TABLE, _payload(body))
     except Exception as e:
@@ -90,6 +126,7 @@ async def update_venue(venue_id: str, body: VenueRequest, admin: dict = Depends(
     existing = await db_supabase.find_one(_TABLE, {"id": venue_id})
     if not existing:
         raise HTTPException(status_code=404, detail="Venue not found")
+    await _validate_queue_target(body, venue_id=venue_id)
     try:
         await db_supabase.update_one(_TABLE, {"id": venue_id}, _payload(body))
     except Exception as e:

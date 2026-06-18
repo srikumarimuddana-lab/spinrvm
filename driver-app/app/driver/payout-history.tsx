@@ -5,6 +5,7 @@ import {
     StyleSheet,
     FlatList,
     TouchableOpacity,
+    ScrollView,
 } from 'react-native';
 import SafeRefreshControl from '../../components/SafeRefreshControl';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -149,21 +150,36 @@ export default function PayoutHistoryScreen() {
                 </View>
             </LinearGradient>
 
-            {/* Status Filter — wraps to a second row so every pill (incl.
-                "Failed") is always visible and tappable on narrow screens,
-                instead of overflowing a non-obvious horizontal scroll. */}
-            <View style={styles.filterRow}>
-                {STATUS_FILTERS.map(s => (
-                    <TouchableOpacity
-                        key={s}
-                        style={[styles.filterPill, statusFilter === s && styles.filterPillActive]}
-                        onPress={() => setStatusFilter(s)}
-                    >
-                        <Text style={[styles.filterPillText, statusFilter === s && styles.filterPillTextActive]}>
-                            {s === 'all' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
-                        </Text>
-                    </TouchableOpacity>
-                ))}
+            {/* Status Filter — single-row horizontal scroll. The scroll
+                indicator + right-edge fade make it obvious there are more
+                pills off-screen (e.g. "Failed") so they stay reachable. */}
+            <View style={styles.filterWrap}>
+                <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator
+                    style={styles.filterRow}
+                    contentContainerStyle={styles.filterContent}
+                >
+                    {STATUS_FILTERS.map(s => (
+                        <TouchableOpacity
+                            key={s}
+                            style={[styles.filterPill, statusFilter === s && styles.filterPillActive]}
+                            onPress={() => setStatusFilter(s)}
+                        >
+                            <Text style={[styles.filterPillText, statusFilter === s && styles.filterPillTextActive]}>
+                                {s === 'all' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
+                            </Text>
+                        </TouchableOpacity>
+                    ))}
+                </ScrollView>
+                {/* Non-interactive fade hint that the row scrolls. */}
+                <LinearGradient
+                    colors={['transparent', colors.background]}
+                    start={{ x: 0, y: 0.5 }}
+                    end={{ x: 1, y: 0.5 }}
+                    pointerEvents="none"
+                    style={styles.filterFade}
+                />
             </View>
 
             <FlatList
@@ -217,12 +233,26 @@ function createStyles(colors: ThemeColors) {
         },
         headerTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
 
-        filterRow: {
-            flexDirection: 'row',
-            flexWrap: 'wrap',
-            paddingHorizontal: 16,
-            gap: 8,
+        filterWrap: {
+            position: 'relative',
             marginBottom: 8,
+        },
+        filterRow: {
+            flexGrow: 0,
+        },
+        filterContent: {
+            paddingHorizontal: 16,
+            // Extra right padding so the last pill scrolls clear of the fade.
+            paddingRight: 36,
+            gap: 8,
+            alignItems: 'center',
+        },
+        filterFade: {
+            position: 'absolute',
+            right: 0,
+            top: 0,
+            bottom: 0,
+            width: 36,
         },
         filterPill: {
             paddingHorizontal: 16,

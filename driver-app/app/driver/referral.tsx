@@ -129,7 +129,10 @@ export default function ReferralScreen() {
                 >
                     <Text style={styles.heroTitle}>Invite Drivers & Earn</Text>
                     <Text style={styles.heroSubtitle}>
-                        {t('referral.earn') || 'Earn $25 for each driver you refer who completes 50 rides'}
+                        {/* Generic tagline only — the exact reward ($ and ride
+                            threshold) is stated in the Terms section below, driven
+                            by the backend so the two can never contradict. */}
+                        {t('referral.earn') || 'Invite drivers to Spinr and earn rewards when they sign up and start driving.'}
                     </Text>
 
                     {referralInfo && (

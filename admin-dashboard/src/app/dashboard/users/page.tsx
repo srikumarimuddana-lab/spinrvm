@@ -39,7 +39,7 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { Pagination } from "@/components/ui/pagination";
-import { Users, Search, Mail, Phone, Calendar, Car, ShieldCheck, Download, RefreshCw, Ban, CheckCircle, AlertTriangle, Wallet, Plus, Minus, Eye, EyeOff, CreditCard } from "lucide-react";
+import { Users, Search, Mail, Phone, Calendar, Car, ShieldCheck, Download, RefreshCw, Ban, CheckCircle, AlertTriangle, Wallet, Plus, Minus, Eye, EyeOff, CreditCard, MapPin, Gift } from "lucide-react";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatDate } from "@/lib/utils";
 import { getUsersPaginated, getUserDetails, updateUserStatus, updateUserFlags, getStats, getUserWallet, creditUserWallet, debitUserWallet, exportUsers, logPiiReveal } from "@/lib/api";
@@ -475,7 +475,7 @@ export default function UsersPage() {
 
             {/* User Details Dialog */}
             <Dialog open={!!selectedUser} onOpenChange={(open) => { if (!open) setSelectedUser(null); }}>
-                <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+                <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
                     <DialogHeader>
                         <DialogTitle className="flex items-center gap-2">
                             <Users className="h-5 w-5 text-sky-500" />
@@ -501,12 +501,12 @@ export default function UsersPage() {
                                 </div>
                             </div>
 
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                                 <div className="space-y-1">
                                     <Label className="text-xs text-muted-foreground flex items-center gap-1">
                                         <Mail className="h-3 w-3" /> Email
                                     </Label>
-                                    <p className="text-sm">{showPii ? selectedUser.email : maskEmail(selectedUser.email)}</p>
+                                    <p className="text-sm break-all">{showPii ? selectedUser.email : maskEmail(selectedUser.email)}</p>
                                 </div>
                                 <div className="space-y-1">
                                     <Label className="text-xs text-muted-foreground flex items-center gap-1">
@@ -525,6 +525,36 @@ export default function UsersPage() {
                                         <Car className="h-3 w-3" /> Total rides
                                     </Label>
                                     <p className="text-sm">{userDetail == null ? "…" : (userDetail.total_rides ?? 0).toLocaleString()}</p>
+                                </div>
+                                <div className="space-y-1">
+                                    <Label className="text-xs text-muted-foreground flex items-center gap-1">
+                                        <Users className="h-3 w-3" /> Gender
+                                    </Label>
+                                    <p className="text-sm">{userDetail?.gender || selectedUser.gender || "—"}</p>
+                                </div>
+                                <div className="space-y-1">
+                                    <Label className="text-xs text-muted-foreground flex items-center gap-1">
+                                        <MapPin className="h-3 w-3" /> City
+                                    </Label>
+                                    <p className="text-sm">{userDetail?.city || selectedUser.city || "—"}</p>
+                                </div>
+                                <div className="space-y-1">
+                                    <Label className="text-xs text-muted-foreground flex items-center gap-1">
+                                        <Gift className="h-3 w-3" /> Referred by
+                                    </Label>
+                                    <p className="text-sm font-mono">{userDetail?.referral_code_used || "—"}</p>
+                                </div>
+                                <div className="space-y-1">
+                                    <Label className="text-xs text-muted-foreground flex items-center gap-1">
+                                        <CreditCard className="h-3 w-3" /> Cards on file
+                                    </Label>
+                                    <p className="text-sm">{userDetail == null ? "…" : (userDetail.cards?.length ?? 0)}</p>
+                                </div>
+                                <div className="space-y-1">
+                                    <Label className="text-xs text-muted-foreground flex items-center gap-1">
+                                        <ShieldCheck className="h-3 w-3" /> Account
+                                    </Label>
+                                    <p className="text-sm">{selectedUser.is_driver && selectedUser.is_rider ? "Rider + Driver" : selectedUser.is_driver ? "Driver" : "Rider"}</p>
                                 </div>
                             </div>
 

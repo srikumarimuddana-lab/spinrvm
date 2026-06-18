@@ -839,6 +839,20 @@ export default function DriversPage() {
                             <div className="flex-1 overflow-y-auto px-6 pb-6">
                                 {/* Overview */}
                                 <TabsContent value="overview" className="mt-4 space-y-5">
+                                    <DetailSection title="Performance" icon={Star}>
+                                        {liveStats ? (
+                                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                                                <DetailField icon={Car} label="Total Assigned" value={(liveStats.total_assigned ?? 0).toLocaleString()} />
+                                                <DetailField icon={CheckCircle} label="Completed" value={(liveStats.total_rides ?? 0).toLocaleString()} />
+                                                <DetailField icon={ShieldCheck} label="Acceptance Rate" value={liveStats.acceptance_rate != null ? `${liveStats.acceptance_rate}%` : "—"} />
+                                                <DetailField icon={XCircle} label="Cancelled (driver)" value={(liveStats.cancelled_by_driver ?? 0).toLocaleString()} />
+                                                <DetailField icon={Star} label="Avg Rating" value={liveStats.avg_rating != null ? liveStats.avg_rating.toFixed(2) : "—"} />
+                                                <DetailField icon={DollarSign} label="Avg / Ride" value={liveStats.total_rides > 0 ? formatCurrency(liveStats.total_earnings / liveStats.total_rides) : "—"} />
+                                            </div>
+                                        ) : (
+                                            <p className="text-xs text-muted-foreground">Loading stats…</p>
+                                        )}
+                                    </DetailSection>
                                     <DetailSection title="Contact Information" icon={Mail}>
                                         {editing ? (
                                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

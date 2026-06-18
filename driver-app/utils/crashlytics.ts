@@ -12,10 +12,13 @@ import { NativeModules } from 'react-native';
  * side effects in the firebase/crashlytics module scope.
  */
 const hasFirebaseNative = !!NativeModules.RNFBAppModule;
-let crashlytics: any = null;
+// Whole module namespace (not `.default`) so the v22+ modular named exports
+// (getCrashlytics, setAttribute, recordError) are available — the namespaced
+// crashlytics() API is deprecated and logs a warning on every call.
+let crashlyticsApi: typeof import('@react-native-firebase/crashlytics') | null = null;
 if (hasFirebaseNative) {
   try {
-    crashlytics = require('@react-native-firebase/crashlytics').default;
+    crashlyticsApi = require('@react-native-firebase/crashlytics');
   } catch (e) {
     console.log('[Crashlytics] module load error:', e);
   }
@@ -25,15 +28,16 @@ export function recordNonFatal(
   error: unknown,
   context?: Record<string, string>
 ): void {
-  if (!crashlytics) return;
+  if (!crashlyticsApi) return;
   try {
+    const crashlytics = crashlyticsApi.getCrashlytics();
     const err = error instanceof Error ? error : new Error(String(error));
     if (context) {
       for (const [key, value] of Object.entries(context)) {
-        crashlytics().setAttribute(key, value);
+        crashlyticsApi.setAttribute(crashlytics, key, value);
       }
     }
-    crashlytics().recordError(err);
+    crashlyticsApi.recordError(crashlytics, err);
   } catch {
     // Never let Crashlytics reporting itself throw — it would shadow the
     // original error and confuse callers.

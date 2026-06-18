@@ -1405,8 +1405,15 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           ]
         );
       } else if (data?.type) {
-        console.warn('[Push] Unknown notification type — navigating to notifications list:', data.type);
-        router.push('/driver/notifications' as any);
+        // Informational foreground push (tip_received, rating_received,
+        // trip_shared, …). Do NOT navigate: this handler fires on message
+        // RECEIPT, not on a user tap, so auto-pushing the inbox here yanks the
+        // driver off whatever they're doing (accepting an offer, entering the
+        // OTP, completing a trip) the instant the backend sends a status push.
+        // The OS notification + unread badge already surface it, and an actual
+        // tap on the notification routes to the inbox via the response listener
+        // in app/_layout.tsx. Just log and let the driver keep their context.
+        console.log('[Push] Foreground informational push (no navigation):', data.type);
       }
     });
 

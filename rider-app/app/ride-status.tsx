@@ -11,6 +11,7 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -33,6 +34,7 @@ export default function RideStatusScreen() {
   // live on ride-options. Editable until the trip starts; backend
   // returns 409 after that so the chip auto-hides.
   const [notesSheetOpen, setNotesSheetOpen] = useState(false);
+  const [driverPhotoError, setDriverPhotoError] = useState(false);
   const [notesDraft, setNotesDraft] = useState('');
   const [savingNotes, setSavingNotes] = useState(false);
   const currentNotes = (currentRide as { rider_notes?: string | null } | null)?.rider_notes || '';
@@ -255,7 +257,16 @@ export default function RideStatusScreen() {
       <View style={styles.driverCard}>
         <View style={styles.driverHeader}>
           <View style={styles.driverAvatar}>
-            <Ionicons name="person" size={32} color={colors.textDim} />
+            {currentDriver?.photo_url && !driverPhotoError ? (
+              <Image
+                source={{ uri: currentDriver.photo_url }}
+                style={styles.driverAvatarImg}
+                resizeMode="cover"
+                onError={() => setDriverPhotoError(true)}
+              />
+            ) : (
+              <Ionicons name="person" size={32} color={colors.textDim} />
+            )}
           </View>
           <View style={styles.driverInfo}>
             <Text style={styles.driverName}>{currentDriver?.name}</Text>
@@ -355,7 +366,16 @@ export default function RideStatusScreen() {
       <View style={styles.driverCard}>
         <View style={styles.driverHeader}>
           <View style={styles.driverAvatar}>
-            <Ionicons name="person" size={32} color={colors.textDim} />
+            {currentDriver?.photo_url && !driverPhotoError ? (
+              <Image
+                source={{ uri: currentDriver.photo_url }}
+                style={styles.driverAvatarImg}
+                resizeMode="cover"
+                onError={() => setDriverPhotoError(true)}
+              />
+            ) : (
+              <Ionicons name="person" size={32} color={colors.textDim} />
+            )}
           </View>
           <View style={styles.driverInfo}>
             <Text style={styles.driverName}>{currentDriver?.name}</Text>
@@ -685,6 +705,12 @@ function createStyles(colors: ThemeColors) {
       justifyContent: 'center',
       alignItems: 'center',
       marginRight: 12,
+      overflow: 'hidden',
+    },
+    driverAvatarImg: {
+      width: 56,
+      height: 56,
+      borderRadius: 28,
     },
     driverInfo: {
       flex: 1,

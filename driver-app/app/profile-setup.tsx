@@ -43,6 +43,7 @@ export default function ProfileSetupScreen() {
   const [serviceAreaId, setServiceAreaId] = useState('');
   const [serviceAreas, setServiceAreas] = useState<any[]>([]);
   const [city, setCity] = useState('');
+  const [referralCode, setReferralCode] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
 
@@ -202,6 +203,19 @@ export default function ProfileSetupScreen() {
         // Non-fatal: the driver record might already exist (idempotent register)
         // or will be created on the next refresh. Don't block navigation.
         if (__DEV__) console.log('[ProfileSetup] auto-register result:', regErr?.message);
+      }
+
+      // Optional referral code — best-effort, never blocks signup. The user is
+      // authenticated by this point, so /drivers/referral/apply can attribute
+      // the referrer. An invalid/duplicate code just surfaces a toast.
+      const code = referralCode.trim();
+      if (code) {
+        try {
+          await api.post('/drivers/referral/apply', { referral_code: code });
+          showToast('success', 'Referral applied', 'Your referral code was added.');
+        } catch (refErr: any) {
+          showToast('error', 'Referral code', refErr?.response?.data?.detail || "That referral code couldn't be applied.");
+        }
       }
       router.replace('/driver' as any);
     } catch (err: any) {
@@ -448,6 +462,26 @@ export default function ProfileSetupScreen() {
             <Text style={styles.serviceAreaHint}>
               {serviceAreaId ? 'You can only operate in your selected area' : 'Select your service area to continue'}
             </Text>
+          </View>
+
+          {/* Referral code (optional) — invited by another driver? */}
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Referral Code (optional)</Text>
+            <View style={styles.inputContainer}>
+              <View style={styles.inputIconContainer}>
+                <Ionicons name="gift-outline" size={20} color={referralCode ? colors.text : '#A0A0A0'} />
+              </View>
+              <TextInput
+                style={styles.input}
+                value={referralCode}
+                onChangeText={(t) => setReferralCode(t.toUpperCase())}
+                placeholder="e.g. DRV-7K9M2P"
+                placeholderTextColor="#B0B0B0"
+                autoCapitalize="characters"
+                autoCorrect={false}
+              />
+            </View>
+            <Text style={styles.serviceAreaHint}>Invited by a driver? Enter their code to credit them.</Text>
           </View>
         </View>
 

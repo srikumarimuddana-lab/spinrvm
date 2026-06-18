@@ -33,6 +33,7 @@ try:
     from ..services import DispatchService
     from ..services.dispatch_service import (
         filter_and_rank_drivers,
+        order_drivers_fifo,
         rank_by_eta_with_acceptance,
     )
     from ..services.fare_service import build_fare_breakdown_lines, calculate_fare
@@ -771,28 +772,61 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
         asyncio.create_task(_dispatch_retry(ride_id, delay=10, attempt=attempt + 1))
         return
 
-    # ── ETA ranking ───────────────────────────────────────────────
-    # Pre-filter to top 15 by haversine, then batch-query Distance
-    # Matrix for real ETAs. Falls back to haversine if API fails.
-    drivers_with_distance.sort(key=lambda x: x[1])
-    pre_filtered = drivers_with_distance[: max(max_offers * 5, 15)]
-
-    if use_eta:
-        try:
-            maps_key = app_settings.get("google_maps_api_key", "")
-            eta_map = await batch_get_etas(
-                [d for d, _ in pre_filtered],
-                # ETA to the road-snapped pickup the driver actually drives to.
-                ride["pickup_nav_lat"] if ride.get("pickup_nav_lat") is not None else ride["pickup_lat"],
-                ride["pickup_nav_lng"] if ride.get("pickup_nav_lng") is not None else ride["pickup_lng"],
-                maps_key,
+    # ── ADR-008 airport FIFO override ─────────────────────────────
+    # If this ride's pickup falls inside a fifo_enabled terminal venue, order
+    # eligible drivers by airport-queue wait time (longest first) instead of by
+    # ETA/distance. Falls back to normal ranking when nobody is queued so an
+    # empty cell-phone lot doesn't strand the rider.
+    fifo_ranked = None
+    try:
+        from ..utils.fifo_zone import fifo_terminal_for_point
+    except ImportError:
+        from utils.fifo_zone import fifo_terminal_for_point  # type: ignore
+    _fifo_pickup_lat = ride["pickup_nav_lat"] if ride.get("pickup_nav_lat") is not None else ride["pickup_lat"]
+    _fifo_pickup_lng = ride["pickup_nav_lng"] if ride.get("pickup_nav_lng") is not None else ride["pickup_lng"]
+    try:
+        _terminal_id = await fifo_terminal_for_point(_fifo_pickup_lat, _fifo_pickup_lng)
+    except Exception:
+        logger.error(f"[DISPATCH] FIFO terminal lookup failed ride_id={ride_id}", exc_info=True)
+        _terminal_id = None
+    if _terminal_id:
+        _fifo = order_drivers_fifo(drivers_with_distance, _terminal_id)
+        if _fifo:
+            fifo_ranked = _fifo
+            logger.info(f"[DISPATCH] FIFO mode ride_id={ride_id} terminal={_terminal_id} queued={len(_fifo)}")
+            _metric_inc("spinr_dispatch_fifo_dispatch_total")
+        else:
+            logger.info(
+                f"[DISPATCH] FIFO terminal {_terminal_id} has no queued drivers — "
+                f"falling back to normal ranking ride_id={ride_id}"
             )
-            ranked = rank_by_eta_with_acceptance([(d, eta_map.get(d["id"], 9999)) for d, _ in pre_filtered])
-        except Exception as e:
-            logger.error(f"[DISPATCH] ETA ranking failed, falling back to haversine: {e}", exc_info=True)
-            ranked = [(d, int(dist * 120), dist) for d, dist in pre_filtered]
+
+    if fifo_ranked is not None:
+        # Already wait-ordered (longest first); skip ETA/distance ranking entirely.
+        ranked = fifo_ranked
     else:
-        ranked = [(d, int(dist * 120), dist) for d, dist in pre_filtered]
+        # ── ETA ranking ───────────────────────────────────────────
+        # Pre-filter to top 15 by haversine, then batch-query Distance
+        # Matrix for real ETAs. Falls back to haversine if API fails.
+        drivers_with_distance.sort(key=lambda x: x[1])
+        pre_filtered = drivers_with_distance[: max(max_offers * 5, 15)]
+
+        if use_eta:
+            try:
+                maps_key = app_settings.get("google_maps_api_key", "")
+                eta_map = await batch_get_etas(
+                    [d for d, _ in pre_filtered],
+                    # ETA to the road-snapped pickup the driver actually drives to.
+                    ride["pickup_nav_lat"] if ride.get("pickup_nav_lat") is not None else ride["pickup_lat"],
+                    ride["pickup_nav_lng"] if ride.get("pickup_nav_lng") is not None else ride["pickup_lng"],
+                    maps_key,
+                )
+                ranked = rank_by_eta_with_acceptance([(d, eta_map.get(d["id"], 9999)) for d, _ in pre_filtered])
+            except Exception as e:
+                logger.error(f"[DISPATCH] ETA ranking failed, falling back to haversine: {e}", exc_info=True)
+                ranked = [(d, int(dist * 120), dist) for d, dist in pre_filtered]
+        else:
+            ranked = [(d, int(dist * 120), dist) for d, dist in pre_filtered]
 
     # ── Batch claim ───────────────────────────────────────────────
     claimed_drivers: list[tuple[dict, int]] = []
@@ -1414,9 +1448,7 @@ async def compute_ride_estimates(
     validate_ride_location(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
     # Price the actual route through any intermediate stops, not the straight
     # pickup→dropoff line — otherwise adding a stop never changes the quote.
-    distance_km = multi_leg_distance(
-        body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng, body.stops
-    )
+    distance_km = multi_leg_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng, body.stops)
     duration_minutes = int(distance_km / 30 * 60) + 5
 
     fares = await get_fares_for_location(body.pickup_lat, body.pickup_lng)
@@ -2160,9 +2192,7 @@ async def create_ride(
 
     # Charge the multi-leg route (pickup → stops → dropoff) so the booked fare
     # matches the multi-stop quote shown at /rides/estimate.
-    distance_km = multi_leg_distance(
-        body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng, body.stops
-    )
+    distance_km = multi_leg_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng, body.stops)
     duration_minutes = int(distance_km / 30 * 60) + 5
 
     # Fetch service_areas ONCE for this request and share across:

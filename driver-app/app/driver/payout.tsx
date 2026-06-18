@@ -126,9 +126,30 @@ function PayoutScreen() {
             // (backend/routes/drivers.py); openAuthSessionAsync auto-dismisses
             // the browser when Stripe's return_url bounces to this scheme.
             await WebBrowser.openAuthSessionAsync(url, 'spinr-driver://driver/payout');
-            // Whether they finished or dismissed, re-pull KYC + balance/bank
-            // state. The account.updated webhook is the authoritative gate; this
-            // just refreshes the UI so "Stripe Connected" flips once verified.
+            // Pull the driver's LIVE Stripe status on return — don't wait on the
+            // account.updated webhook (it can be delayed, or never arrive if the
+            // Connect webhook isn't configured). This mirrors the status
+            // server-side AND tells us what to show the driver right now.
+            try {
+                const sync = await api.post<{ onboarded?: boolean; payouts_enabled?: boolean }>(
+                    '/drivers/stripe-sync',
+                );
+                if (sync.data?.onboarded) {
+                    showToast(
+                        'success',
+                        'Verification submitted',
+                        sync.data.payouts_enabled
+                            ? 'Stripe approved your account — payouts are enabled.'
+                            : 'Details received. Stripe is reviewing them; this can take a few minutes.',
+                    );
+                } else {
+                    showToast('info', 'Not finished', 'Stripe onboarding wasn’t completed. You can resume anytime.');
+                }
+            } catch {
+                // Sync failed (e.g. transient) — fall through; loadData still
+                // reflects whatever the webhook may have already mirrored.
+            }
+            // Refresh balance / bank / status so the screen reflects the new state.
             await loadData();
         } catch (err: any) {
             showToast('error', 'Error', err?.response?.data?.detail || 'Could not start verification. Please try again.');

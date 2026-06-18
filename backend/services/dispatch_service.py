@@ -196,6 +196,38 @@ def select_driver_by_algorithm(
     return ranked[0][0]
 
 
+def order_drivers_fifo(
+    drivers_with_distance: List[Tuple[Dict[str, Any], float]],
+    terminal_id: str,
+) -> List[Tuple[Dict[str, Any], int, float]]:
+    """ADR-008 FIFO ordering for an airport-style terminal.
+
+    Among the already-eligible candidate pool (``filter_and_rank_drivers`` has
+    applied radius / rating / WAV / destination), keep only drivers physically
+    queued for this terminal — ``drivers.zone_venue_id == terminal_id`` with a
+    ``zone_entered_at`` stamp — and order them by wait time, longest first. A
+    driver who never entered a feeder lot does NOT jump the queue.
+
+    Returns the dispatch ``ranked`` shape ``(driver, eta_seconds, distance_km)``;
+    ETA is the haversine estimate (``dist * 120``) so the offer still shows a
+    sane countdown, matching the non-ETA ranking branch in the route.
+
+    An EMPTY result is meaningful: no one is queued, so the caller should fall
+    back to normal ranking rather than strand the rider (anti-abandonment — an
+    empty cell-phone lot must not mean "no airport rides dispatch").
+    """
+    queued = [
+        (d, dist)
+        for d, dist in drivers_with_distance
+        if str(d.get("zone_venue_id") or "") == str(terminal_id) and d.get("zone_entered_at")
+    ]
+    # Oldest zone_entered_at first. set_driver_zone writes a UTC isoformat
+    # string, so all stamps share one format/offset and sort chronologically by
+    # plain comparison; rows without a stamp were excluded above.
+    queued.sort(key=lambda x: x[0]["zone_entered_at"])
+    return [(d, int(dist * 120), dist) for d, dist in queued]
+
+
 class DispatchService:
     """
     Driver-matching operations that depend on the database.

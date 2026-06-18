@@ -259,6 +259,50 @@ class TestSelectDriverByAlgorithm:
         assert out["id"] == "close"
 
 
+class TestOrderDriversFifo:
+    TERMINAL = "term-yxe"
+
+    def _d(self, did, zone, entered, dist):
+        return ({"id": did, "zone_venue_id": zone, "zone_entered_at": entered}, dist)
+
+    def test_orders_by_wait_time_longest_first(self):
+        pool = [
+            self._d("newest", self.TERMINAL, "2026-06-18T10:05:00+00:00", 0.2),
+            self._d("oldest", self.TERMINAL, "2026-06-18T10:00:00+00:00", 1.5),
+            self._d("middle", self.TERMINAL, "2026-06-18T10:02:00+00:00", 0.9),
+        ]
+        ranked = order_drivers_fifo(pool, self.TERMINAL)
+        assert [d["id"] for d, _, _ in ranked] == ["oldest", "middle", "newest"]
+
+    def test_distance_is_ignored_for_ordering(self):
+        # The closest driver ("newest", 0.1km) must still wait behind the
+        # longest-queued one — that's the whole point of FIFO.
+        pool = [
+            self._d("newest", self.TERMINAL, "2026-06-18T10:05:00+00:00", 0.1),
+            self._d("oldest", self.TERMINAL, "2026-06-18T10:00:00+00:00", 9.0),
+        ]
+        ranked = order_drivers_fifo(pool, self.TERMINAL)
+        assert ranked[0][0]["id"] == "oldest"
+
+    def test_excludes_drivers_not_queued_for_this_terminal(self):
+        pool = [
+            self._d("queued", self.TERMINAL, "2026-06-18T10:00:00+00:00", 1.0),
+            self._d("other_terminal", "term-other", "2026-06-18T09:00:00+00:00", 0.5),
+            self._d("not_queued", None, None, 0.3),
+        ]
+        ranked = order_drivers_fifo(pool, self.TERMINAL)
+        assert [d["id"] for d, _, _ in ranked] == ["queued"]
+
+    def test_empty_when_nobody_queued_signals_fallback(self):
+        pool = [self._d("not_queued", None, None, 0.3)]
+        assert order_drivers_fifo(pool, self.TERMINAL) == []
+
+    def test_eta_seconds_derived_from_distance(self):
+        pool = [self._d("d1", self.TERMINAL, "2026-06-18T10:00:00+00:00", 2.0)]
+        (_driver, eta_sec, dist_km) = order_drivers_fifo(pool, self.TERMINAL)[0]
+        assert dist_km == 2.0 and eta_sec == int(2.0 * 120)
+
+
 # ── Service class (with mocked db) ────────────────────────────────────────────
 
 

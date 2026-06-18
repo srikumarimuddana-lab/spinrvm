@@ -26,7 +26,11 @@ import type { ThemeColors } from '@shared/theme/index';
 interface ReferralInfo {
     referral_code: string;
     total_referrals: number;
+    qualified_referrals?: number;
+    pending_referrals?: number;
     referral_earnings: number;
+    reward_amount?: number;
+    rides_required?: number;
     referral_link: string;
     terms: string;
 }
@@ -36,7 +40,11 @@ interface ReferredDriver {
     email: string;
     referred_at: string;
     total_trips: number;
-    status: string;
+    rides_required?: number;
+    rides_remaining?: number;
+    reward_amount?: number;
+    qualified?: boolean;
+    status: string; // 'earned' | 'in_progress'
 }
 
 export default function ReferralScreen() {
@@ -156,7 +164,11 @@ export default function ReferralScreen() {
                 <View style={styles.statsRow}>
                     <View style={styles.statCard}>
                         <Text style={styles.statValue}>{referralInfo?.total_referrals || 0}</Text>
-                        <Text style={styles.statLabel}>Total Referrals</Text>
+                        <Text style={styles.statLabel}>Total</Text>
+                    </View>
+                    <View style={styles.statCard}>
+                        <Text style={styles.statValue}>{referralInfo?.qualified_referrals || 0}</Text>
+                        <Text style={styles.statLabel}>Rewarded</Text>
                     </View>
                     <View style={styles.statCard}>
                         <Text style={styles.statValue}>${(referralInfo?.referral_earnings || 0).toFixed(2)}</Text>
@@ -190,19 +202,35 @@ export default function ReferralScreen() {
                                     </View>
                                     <View style={styles.referralInfo}>
                                         <Text style={styles.referralName}>{driver.name}</Text>
-                                        <Text style={styles.referralTrips}>
-                                            {driver.total_trips} trips completed
-                                        </Text>
+                                        {driver.qualified ? (
+                                            <Text style={styles.referralEarned}>
+                                                Reward earned · ${(driver.reward_amount ?? 0).toFixed(0)}
+                                            </Text>
+                                        ) : (
+                                            <>
+                                                <Text style={styles.referralTrips}>
+                                                    {driver.total_trips}/{driver.rides_required ?? 10} rides
+                                                    {typeof driver.rides_remaining === 'number' && driver.rides_remaining > 0
+                                                        ? ` · ${driver.rides_remaining} more to unlock`
+                                                        : ''}
+                                                </Text>
+                                                <View style={styles.refProgressBar}>
+                                                    <View style={[styles.refProgressFill, {
+                                                        width: `${Math.min(100, ((driver.total_trips || 0) / (driver.rides_required || 10)) * 100)}%`,
+                                                    }]} />
+                                                </View>
+                                            </>
+                                        )}
                                     </View>
                                     <View style={[
                                         styles.referralBadge,
-                                        driver.status === 'active' ? styles.badgeActive : styles.badgePending
+                                        driver.qualified ? styles.badgeActive : styles.badgePending
                                     ]}>
                                         <Text style={[
                                             styles.badgeText,
-                                            driver.status === 'active' ? styles.badgeTextActive : styles.badgeTextPending
+                                            driver.qualified ? styles.badgeTextActive : styles.badgeTextPending
                                         ]}>
-                                            {driver.status === 'active' ? 'Paid' : 'Pending'}
+                                            {driver.qualified ? 'Earned' : 'In progress'}
                                         </Text>
                                     </View>
                                 </View>
@@ -453,6 +481,24 @@ function createStyles(colors: ThemeColors) {
         fontSize: 12,
         color: colors.textDim,
         marginTop: 2,
+    },
+    referralEarned: {
+        fontSize: 12,
+        color: colors.success,
+        fontWeight: '700',
+        marginTop: 2,
+    },
+    refProgressBar: {
+        height: 5,
+        borderRadius: 3,
+        backgroundColor: colors.border,
+        overflow: 'hidden',
+        marginTop: 6,
+    },
+    refProgressFill: {
+        height: '100%',
+        borderRadius: 3,
+        backgroundColor: colors.primary,
     },
     referralBadge: {
         paddingHorizontal: 10,

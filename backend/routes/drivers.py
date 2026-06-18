@@ -4901,6 +4901,12 @@ class ApplyReferralCodeRequest(BaseModel):
     referral_code: str
 
 
+# Referral reward terms — single source of truth so the earnings calc, the
+# per-referee progress, and the displayed terms can never drift apart.
+REFERRAL_RIDES_REQUIRED = 10
+REFERRAL_REWARD_AMOUNT = 10  # CAD, paid per referee who reaches the ride target
+
+
 @api_router.get("/referral")
 async def get_driver_referral_info(current_user: dict = Depends(get_current_user)):
     """Get driver's referral code and earnings from referrals."""
@@ -4928,11 +4934,11 @@ async def get_driver_referral_info(current_user: dict = Depends(get_current_user
         else list(referred_users_cursor)
     )
 
-    # Calculate referral earnings (e.g., $10 per referred driver who completes 10 rides)
+    # A referral pays out once the referred driver completes REFERRAL_RIDES_REQUIRED
+    # rides; until then it's "in progress". Earnings are the sum of qualified ones.
     total_referrals = len(referred_users)
-    referral_earnings = 0
+    qualified_referrals = 0
 
-    # Check how many referred drivers have completed rides
     for user in referred_users:
         # Check if user became a driver and completed rides
         referred_driver = (lambda _r: _r[0] if _r else None)(
@@ -4943,15 +4949,24 @@ async def get_driver_referral_info(current_user: dict = Depends(get_current_user
                 "rides",
                 {"driver_id": referred_driver["id"], "status": RideStatus.COMPLETED},
             )
-            if completed_rides >= 10:
-                referral_earnings += 10  # $10 bonus
+            if completed_rides >= REFERRAL_RIDES_REQUIRED:
+                qualified_referrals += 1
+
+    referral_earnings = qualified_referrals * REFERRAL_REWARD_AMOUNT
 
     return {
         "referral_code": referral_code,
         "referral_link": f"https://spinr.app/join/{referral_code}",
         "total_referrals": total_referrals,
+        "qualified_referrals": qualified_referrals,
+        "pending_referrals": total_referrals - qualified_referrals,
         "referral_earnings": referral_earnings,
-        "terms": "Earn $10 for each driver who signs up with your code and completes 10 rides.",
+        "reward_amount": REFERRAL_REWARD_AMOUNT,
+        "rides_required": REFERRAL_RIDES_REQUIRED,
+        "terms": (
+            f"Earn ${REFERRAL_REWARD_AMOUNT} for each driver who signs up with your code "
+            f"and completes {REFERRAL_RIDES_REQUIRED} rides."
+        ),
     }
 
 
@@ -5025,7 +5040,9 @@ async def get_referred_drivers(
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    referral_code = driver.get("referral_code", f"DRIVER{driver['id'][:8].upper()}")
+    # Match the shareable code used everywhere else (driver_code / DRV-XXXXXX),
+    # falling back the same way get_driver_referral_info does.
+    referral_code = driver.get("driver_code") or driver.get("referral_code") or f"DRIVER{driver['id'][:8].upper()}"
 
     # Find users who used this referral code and became drivers
     # Each referred user contributes name + email + signup date to the response
@@ -5050,13 +5067,23 @@ async def get_referred_drivers(
                 "rides",
                 {"driver_id": referred_driver["id"], "status": RideStatus.COMPLETED},
             )
+            # Progress toward the reward: qualified once they hit the ride target.
+            qualified = completed_rides >= REFERRAL_RIDES_REQUIRED
+            rides_remaining = max(0, REFERRAL_RIDES_REQUIRED - completed_rides)
             referred_drivers.append(
                 {
                     "name": f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or "Driver",
                     "email": user.get("email", ""),
                     "referred_at": user.get("created_at", ""),
                     "total_trips": completed_rides,
-                    "status": "active" if completed_rides > 0 else "pending",
+                    # Reward-progress detail surfaced to the referrer.
+                    "rides_required": REFERRAL_RIDES_REQUIRED,
+                    "rides_remaining": rides_remaining,
+                    "reward_amount": REFERRAL_REWARD_AMOUNT,
+                    "qualified": qualified,
+                    # "earned"  → reward unlocked (>= target rides)
+                    # "in_progress" → started but not yet at target
+                    "status": "earned" if qualified else "in_progress",
                 }
             )
 

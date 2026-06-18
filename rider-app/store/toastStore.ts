@@ -41,9 +41,10 @@ export const useToastStore = create<ToastStore>((set, get) => ({
       cur.message === toast.message &&
       cur.variant === toast.variant;
     if (sameContent && now - cur!.shownAt < DEDUPE_WINDOW_MS) {
-      // Keep the same id (no re-animate) and just refresh the timer + content
-      // (duration may differ on the repeat).
-      set({ current: { ...cur!, ...toast, shownAt: now } });
+      // Keep the same id (no re-animate) and just refresh the timer + content.
+      // Preserve a previously-set custom duration when the repeat omits one, so
+      // a deduped repeat never shortens a deliberately-longer banner.
+      set({ current: { ...cur!, ...toast, duration: toast.duration ?? cur!.duration, shownAt: now } });
       return;
     }
     set({ current: { ...toast, id: String(++_id), shownAt: now } });

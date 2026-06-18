@@ -199,10 +199,7 @@ export default function AccountScreen() {
             ) : user?.profile_image ? (
               <Image
                 source={{ uri: user.profile_image }}
-                style={[
-                  styles.avatar,
-                  user.profile_image_status === 'pending_review' && { opacity: 0.7 },
-                ]}
+                style={styles.avatar}
                 placeholder={BLURHASH_PLACEHOLDER}
                 contentFit="cover"
                 transition={200}
@@ -221,19 +218,6 @@ export default function AccountScreen() {
               </View>
             )}
           </TouchableOpacity>
-
-          {user?.profile_image_status === 'pending_review' && (
-            <View style={styles.photoStatusBanner}>
-              <Ionicons name="time-outline" size={14} color="#fff" />
-              <Text style={styles.photoStatusText}>Photo pending review</Text>
-            </View>
-          )}
-          {user?.profile_image_status === 'rejected' && (
-            <View style={[styles.photoStatusBanner, { backgroundColor: 'rgba(239, 68, 68, 0.9)' }]}>
-              <Ionicons name="close-circle" size={14} color="#fff" />
-              <Text style={styles.photoStatusText}>Photo rejected — update needed</Text>
-            </View>
-          )}
 
           <Text style={styles.name}>
             {user?.first_name ? `${user.first_name} ${user.last_name || ''}`.trim() : 'Rider'}
@@ -515,12 +499,6 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
     justifyContent: 'center', alignItems: 'center',
     shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8, elevation: 4,
   },
-  photoStatusBanner: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: 'rgba(0,0,0,0.15)', borderRadius: 20,
-    paddingHorizontal: 12, paddingVertical: 6, marginBottom: 12,
-  },
-  photoStatusText: { fontSize: 12, fontWeight: '600', color: '#fff' },
   name: { color: '#fff', fontSize: 26, fontWeight: '900', letterSpacing: 0.5 },
   subtitle: { color: 'rgba(255,255,255,0.8)', fontSize: 14, marginTop: 2, fontWeight: '500' },
   ratingHeroContainer: {

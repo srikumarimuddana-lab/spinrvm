@@ -55,6 +55,19 @@ describe('toastStore — dedupe', () => {
     expect(useToastStore.getState().current?.id).not.toBe(firstId);
   });
 
+  it('preserves a custom duration when a deduped repeat omits one', () => {
+    const nowSpy = jest.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(1000);
+    showToast('Offline Actions Lost', 'Some queued actions could not be recovered.', 'warning', 6000);
+    expect(useToastStore.getState().current?.duration).toBe(6000);
+
+    nowSpy.mockReturnValue(1300); // identical content within window, no duration
+    showToast('Offline Actions Lost', 'Some queued actions could not be recovered.', 'warning');
+
+    // The deliberately-longer banner must not be shortened to the default.
+    expect(useToastStore.getState().current?.duration).toBe(6000);
+  });
+
   it('dismiss clears the current toast', () => {
     showToast('Hello', 'World', 'info');
     expect(useToastStore.getState().current).not.toBeNull();

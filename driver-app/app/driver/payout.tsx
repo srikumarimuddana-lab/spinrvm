@@ -260,7 +260,19 @@ function PayoutScreen() {
             {/* Header */}
             <LinearGradient colors={[colors.surface, colors.background]} style={[styles.header, { paddingTop: insets.top + 12 }]}>
                 <View style={styles.headerRow}>
-                    <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+                    <TouchableOpacity
+                        onPress={() => {
+                            // After Stripe onboarding returns via the
+                            // spinr-driver://driver/payout deep link, expo-router
+                            // rebuilds the stack with only this route, so there's
+                            // nothing to pop — router.back() becomes a no-op and the
+                            // screen looks "stuck". Fall back to the driver home so
+                            // the back button always has somewhere to go.
+                            if (router.canGoBack()) router.back();
+                            else router.replace('/driver/' as any);
+                        }}
+                        style={styles.backBtn}
+                    >
                         <Ionicons name="arrow-back" size={22} color={colors.text} />
                     </TouchableOpacity>
                     <Text style={styles.headerTitle}>Payouts</Text>

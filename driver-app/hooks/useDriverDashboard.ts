@@ -3,6 +3,7 @@ import { Animated } from 'react-native';
 import { showAlert } from '../components/AlertDialog';
 import * as Location from 'expo-location';
 import { Platform, Vibration, Linking, AppState } from 'react-native';
+import NetInfo from '@react-native-community/netinfo';
 import { showToast } from './useToast';
 
 export type ConnectionState = 'connected' | 'reconnecting' | 'disconnected';
@@ -1183,27 +1184,57 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // ─── Toggle Online/Offline ───────────────────────────────────────
   const toggleOnline = async () => {
     try {
+      // Offline guard — only when going ONLINE. Without a connection the
+      // go-online request can't reach the backend, so tell the driver with a
+      // toast instead of letting it silently fail. (Going offline is always
+      // allowed so a driver on a dead connection can still flip themselves off.)
+      if (!isOnline) {
+        const net = await NetInfo.fetch().catch(() => null);
+        const connected = net ? (net.isConnected ?? net.isInternetReachable ?? true) : true;
+        if (connected === false) {
+          showToast('error', 'Internet offline', 'Your internet is offline. Reconnect and try again.');
+          return;
+        }
+      }
+
+      // Onboarding status is computed server-side on /auth/me; read it live.
+      const onboardingStatus = useAuthStore.getState().user?.driver_onboarding_status;
+
+      // Vehicle details missing → toast + send them to the vehicle form.
       if (!driverData?.vehicle_make || !driverData?.license_plate) {
-        showAlert(
-          "Profile Incomplete",
-          "You must provide vehicle details before going online.",
-          [
-            { text: "Add Vehicle Info", onPress: () => router.push('/vehicle-info' as any) },
-            { text: "Cancel", style: "cancel" },
-          ]
-        );
+        showToast('error', tKey('dashboard.addVehicle'), tKey('dashboard.profileIncompleteMsg'));
+        router.push('/vehicle-info' as any);
+        return;
+      }
+
+      // Documents pending / rejected / expired / under review → toast + docs page.
+      if (onboardingStatus === 'documents_required') {
+        showToast('error', tKey('dashboard.actionRequired'), tKey('dashboard.uploadDocs'));
+        router.push('/documents' as any);
+        return;
+      }
+      if (onboardingStatus === 'documents_rejected') {
+        showToast('error', tKey('dashboard.docsRejected'), tKey('dashboard.fixDocuments'));
+        router.push('/documents' as any);
+        return;
+      }
+      if (onboardingStatus === 'documents_expired') {
+        showToast('error', tKey('dashboard.docsExpired'), tKey('dashboard.updateDocs'));
+        router.push('/documents' as any);
+        return;
+      }
+      if (onboardingStatus === 'pending_review') {
+        showToast('info', tKey('dashboard.underReview'), tKey('dashboard.viewStatus'));
+        router.push('/documents' as any);
+        return;
+      }
+      if (onboardingStatus === 'suspended') {
+        showToast('error', tKey('dashboard.accountSuspended'), tKey('dashboard.contactSupport'));
         return;
       }
 
       if (!driverData?.is_verified) {
-        showAlert(
-          "Account Not Verified",
-          "Your account is not verified yet. Please complete your profile and wait for admin approval before going online.",
-          [
-            { text: "Check Status", onPress: () => router.push('/driver/profile' as any) },
-            { text: "OK", style: "default" },
-          ]
-        );
+        showToast('error', tKey('dashboard.accountNotVerified'), tKey('dashboard.accountNotVerifiedMsg'));
         return;
       }
 

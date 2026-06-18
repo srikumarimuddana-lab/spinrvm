@@ -4910,8 +4910,11 @@ async def get_driver_referral_info(current_user: dict = Depends(get_current_user
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    # Get or create referral code (use driver ID as default code)
-    referral_code = driver.get("referral_code", f"DRIVER{driver['id'][:8].upper()}")
+    # The shareable referral code IS the human-readable driver_code (DRV-XXXXXX)
+    # when present — it's designed to be spoken/typed. Fall back to a stored
+    # custom referral_code, then to the id-derived default for legacy rows that
+    # predate driver_code (migration 156).
+    referral_code = driver.get("driver_code") or driver.get("referral_code") or f"DRIVER{driver['id'][:8].upper()}"
 
     # Find users who used this referral code
     # Only the id is used below (to look up each referred user's driver row),
@@ -4962,10 +4965,16 @@ async def apply_referral_code(req: ApplyReferralCodeRequest, current_user: dict 
     if user and user.get("referral_code_used"):
         raise HTTPException(status_code=400, detail="Referral code already applied")
 
-    # Validate referral code exists (check if any driver has this code)
+    # Resolve the referrer. The primary shareable code is the human-readable
+    # driver_code (DRV-XXXXXX) shown in the profile / referral screen; also
+    # accept a stored custom referral_code for backward compatibility.
     ref_driver = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("drivers", {"referral_code": code}, limit=1)
+        await db_supabase.get_rows("drivers", {"driver_code": code}, limit=1)
     )
+    if not ref_driver:
+        ref_driver = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows("drivers", {"referral_code": code}, limit=1)
+        )
     if not ref_driver:
         # Fallback for the auto-generated default code, which is
         # "DRIVER" + the first 8 chars of the driver id, upper-cased

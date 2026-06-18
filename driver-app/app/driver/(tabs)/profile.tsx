@@ -42,11 +42,12 @@ export default function ProfileScreen() {
   const styles = useMemo(() => createStyles(colors), [colors]);
   const modalStyles = useMemo(() => createModalStyles(colors), [colors]);
 
-  // Referral code shown in the profile. Prefer a stored custom code; otherwise
-  // derive it automatically from the driver id exactly as the backend does
-  // (get_driver_referral_info: "DRIVER" + first 8 chars of the id, upper-cased)
-  // so a code is always present without the driver doing anything. Tap to copy.
-  const referralCode = (driverData?.referral_code as string | undefined)
+  // Referral code shown in the profile. It IS the human-readable driver_code
+  // (DRV-XXXXXX) — designed to be spoken/typed — falling back to a stored
+  // custom code or the id-derived default only for legacy rows without one.
+  // Tap to copy.
+  const referralCode = (driverData?.driver_code as string | undefined)
+    || (driverData?.referral_code as string | undefined)
     || (driverData?.id ? `DRIVER${String(driverData.id).slice(0, 8).toUpperCase()}` : '');
 
   const copyReferralCode = useCallback(async () => {
@@ -313,9 +314,6 @@ export default function ProfileScreen() {
           <Text style={styles.name}>
             {driverData?.name || (user?.first_name ? `${user.first_name} ${user.last_name || ''}` : 'Driver')}
           </Text>
-          {!!driverData?.driver_code && (
-            <Text style={styles.driverCode}>{driverData.driver_code}</Text>
-          )}
           {!!referralCode && (
             <TouchableOpacity
               style={styles.referralChip}

@@ -317,7 +317,7 @@ function createStyles(colors: ThemeColors) {
 
     tabs: {
       flexDirection: 'row', backgroundColor: colors.surface,
-      paddingHorizontal: 16, paddingBottom: 12, gap: 8,
+      paddingHorizontal: 16, paddingTop: 16, paddingBottom: 14, gap: 10,
     },
     tab: {
       flex: 1, paddingVertical: 10, borderRadius: 24,

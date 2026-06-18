@@ -13,6 +13,7 @@ import {
   Animated,
   Easing,
   useWindowDimensions,
+  Image,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -86,6 +87,7 @@ function DriverArrivingScreenContent() {
     return [];
   });
   const [isCancelling, setIsCancelling] = useState(false);
+  const [driverPhotoError, setDriverPhotoError] = useState(false);
   const cancelInitiatedRef = useRef(false);
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean; title: string; message?: string;
@@ -511,7 +513,16 @@ function DriverArrivingScreenContent() {
 
                 <View style={styles.driverRow}>
                   <View style={styles.avatar}>
-                    <Ionicons name="person" size={24} color={colors.textDim} />
+                    {currentDriver?.photo_url && !driverPhotoError ? (
+                      <Image
+                        source={{ uri: currentDriver.photo_url }}
+                        style={styles.avatarImg}
+                        resizeMode="cover"
+                        onError={() => setDriverPhotoError(true)}
+                      />
+                    ) : (
+                      <Ionicons name="person" size={24} color={colors.textDim} />
+                    )}
                     <View style={styles.ratingBadge}>
                       <Ionicons name="star" size={9} color="#FFB800" />
                       <Text style={styles.ratingText}>{currentDriver?.rating || 'New'}</Text>
@@ -767,6 +778,7 @@ function createStyles(colors: ThemeColors, sf: (s: number) => number, insets: { 
       width: 52, height: 52, borderRadius: 26, backgroundColor: '#E8E8E8',
       justifyContent: 'center', alignItems: 'center', position: 'relative',
     },
+    avatarImg: { width: 52, height: 52, borderRadius: 26 },
     ratingBadge: {
       position: 'absolute', bottom: -3, left: -3, flexDirection: 'row', alignItems: 'center',
       backgroundColor: '#FFF', paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8,

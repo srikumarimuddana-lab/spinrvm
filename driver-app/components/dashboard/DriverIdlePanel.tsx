@@ -2,118 +2,38 @@ import React, { useRef, useEffect, useMemo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import { useAuthStore, DriverOnboardingStatus } from '@shared/store/authStore';
+import { useAuthStore } from '@shared/store/authStore';
 import { useLanguageStore } from '../../store/languageStore';
 
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 const Notifications: typeof import('expo-notifications') | null =
   (!isExpoGo && Platform.OS !== 'web') ? require('expo-notifications') : null;
 
-interface DriverData {
-  acceptance_rate?: string;
-  total_rides?: string;
-  is_verified?: boolean;
-}
-
-interface Earnings {
-  total_earnings?: string; // MoneyString
-}
-
 interface IdlePanelProps {
   isOnline: boolean;
-  driverData?: DriverData;
-  earnings?: Earnings;
   onToggleOnline: () => void;
   pulseAnim: any;
 }
 
-function getStateBanners(t: (key: string) => string, driverData?: any) {
-  return {
-    profile_incomplete: {
-      title: t('dashboard.completeProfile'),
-      subtitle: t('dashboard.profileIncompleteMsg'),
-      button: t('dashboard.finishProfile'),
-      icon: 'person', tone: 'info', target: '/profile-setup',
-    },
-    vehicle_required: {
-      title: t('dashboard.addVehicle'),
-      subtitle: t('dashboard.profileIncompleteMsg'),
-      button: t('dashboard.addVehicleDetails'),
-      icon: 'car', tone: 'info', target: '/vehicle-info',
-    },
-    documents_required: {
-      title: t('dashboard.actionRequired'),
-      subtitle: t('dashboard.uploadDocs'),
-      button: t('dashboard.uploadDocs'),
-      icon: 'document-text', tone: 'warning', target: '/documents',
-    },
-    documents_rejected: {
-      title: t('dashboard.docsRejected'),
-      subtitle: t('dashboard.fixDocuments'),
-      button: t('dashboard.fixDocuments'),
-      icon: 'alert-circle', tone: 'danger', target: '/documents',
-    },
-    documents_expired: {
-      title: t('dashboard.docsExpired'),
-      subtitle: t('dashboard.updateDocs'),
-      button: t('dashboard.updateDocs'),
-      icon: 'time', tone: 'warning', target: '/documents',
-    },
-    pending_review: {
-      title: t('dashboard.underReview'),
-      subtitle: t('dashboard.viewStatus'),
-      button: t('dashboard.viewStatus'),
-      icon: 'hourglass', tone: 'info', target: '/documents',
-    },
-    suspended: {
-      title: t('dashboard.accountSuspended'),
-      subtitle: driverData?.suspension_reason || driverData?.ban_reason || t('dashboard.contactSupport'),
-      button: t('dashboard.contactSupport'),
-      icon: 'ban', tone: 'danger', target: 'mailto:support@spinr.ca?subject=Account%20Suspended',
-    },
-  };
-}
-
 export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
   isOnline,
-  driverData,
-  earnings,
   onToggleOnline,
 }) => {
   const { colors } = useTheme();
   const { t } = useLanguageStore();
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const STATE_BANNERS = getStateBanners(t, driverData);
   const insets = useSafeAreaInsets();
-  const router = useRouter();
-  let onboardingStatus = useAuthStore(s => s.user?.driver_onboarding_status ?? null);
   const driver = useAuthStore(s => s.driver);
 
-  // Fallback: If backend returns null (e.g. role still 'rider'), infer status locally
-  if (!onboardingStatus) {
-    if (!driver) {
-      // No driver row at all — they need to register a vehicle
-      onboardingStatus = 'vehicle_required';
-    } else if (!driver.vehicle_make) {
-      onboardingStatus = 'vehicle_required';
-    } else if (!driver.is_verified) {
-      onboardingStatus = 'documents_required';
-    }
-  }
-
-  const banner = onboardingStatus && onboardingStatus !== 'verified'
-    ? STATE_BANNERS[onboardingStatus as keyof typeof STATE_BANNERS]
-    : null;
-
   // Only drivers with status='active' can go online. The backend enforces
-  // this too, but we disable the GO button client-side for better UX.
-  const driverStatus = (driverData as any)?.status || 'pending';
+  // this too, but we keep the visual state client-side. The button is always
+  // pressable so toggleOnline can show a specific toast for each ineligible state.
+  const driverStatus = (driver as any)?.status || 'pending';
   const canGoOnline = driverStatus === 'active';
 
   const goAnim = useRef(new Animated.Value(1)).current;
@@ -139,8 +59,10 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
     };
   }, [canGoOnline, isOnline]);
 
-  // Welcome / Onboarding Notification Check
+  // Welcome / Onboarding Notification Check — sent once when documents are first required
   useEffect(() => {
+    if (!driver) return;
+    const onboardingStatus = (driver as any)?.onboarding_status;
     if (onboardingStatus === 'documents_required') {
       const triggerWelcomeNotif = async () => {
         try {
@@ -148,11 +70,11 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
           if (!hasSent && Notifications) {
             await Notifications.scheduleNotificationAsync({
               content: {
-                title: 'Welcome to Spinr! 🎉',
+                title: 'Welcome to Spinr!',
                 body: 'Please upload your required documents to get approved and start driving.',
                 sound: true,
               },
-              trigger: null, // Send immediately
+              trigger: null,
             });
             await AsyncStorage.setItem('@notif_welcome_docs', 'true');
           }
@@ -162,53 +84,30 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
       };
       triggerWelcomeNotif();
     }
-  }, [onboardingStatus]);
+  }, [driver]);
 
   return (
     <View style={[styles.idlePanelContainer, { paddingBottom: insets.bottom + 16 }]} pointerEvents="box-none">
       
       {/* HUD Info Area */}
       <View style={styles.hudArea} pointerEvents="box-none">
-        
-        {/* Onboarding banner */}
-        {banner && (
-          <TouchableOpacity
-            style={[
-              styles.actionBar,
-              banner.tone === 'danger' && styles.actionBarDanger,
-              banner.tone === 'warning' && styles.actionBarWarning,
-            ]}
-            onPress={() => {
-              if (banner.target.startsWith('mailto:') || banner.target.startsWith('http')) {
-                require('react-native').Linking.openURL(banner.target);
-              } else {
-                router.push(banner.target as any);
-              }
-            }}
-            activeOpacity={0.85}
-            accessibilityRole="button"
-            accessibilityLabel={banner.button}
-          >
-            <Ionicons
-              name={banner.icon as keyof typeof Ionicons.glyphMap}
-              size={16}
-              color={banner.tone === 'danger' ? colors.error : banner.tone === 'warning' ? '#92400E' : colors.primary}
-            />
-            <Text
-              style={[
-                styles.actionBarText,
-                banner.tone === 'danger' && styles.actionBarTextDanger,
-                banner.tone === 'warning' && styles.actionBarTextWarning,
-              ]}
-              numberOfLines={1}
-            >
-              {banner.title}
-            </Text>
-            <Text style={styles.actionBarCta}>{banner.button}</Text>
-            <Ionicons name="chevron-forward" size={14} color={colors.primary} />
-          </TouchableOpacity>
-        )}
 
+        {/* Vehicle details pill — always visible so name/plate stay on screen when offline */}
+        {driver?.vehicle_make ? (
+          <View style={styles.vehiclePill}>
+            <Ionicons name="car-outline" size={14} color={colors.textSecondary} />
+            <Text style={styles.vehiclePillText} numberOfLines={1}>
+              {[driver.vehicle_color, driver.vehicle_make, driver.vehicle_model]
+                .filter(Boolean)
+                .join(' ')}
+            </Text>
+            {driver.license_plate ? (
+              <View style={styles.plateBadge}>
+                <Text style={styles.plateBadgeText}>{driver.license_plate.toUpperCase()}</Text>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
 
         {/* Status Indicator Pill */}
         <View style={styles.statusPillWrapper}>
@@ -232,7 +131,6 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
         
         <TouchableOpacity
           activeOpacity={0.9}
-          disabled={!canGoOnline}
           onPress={onToggleOnline}
           style={styles.goButtonOuterContainer}
           accessibilityRole="button"
@@ -281,48 +179,41 @@ function createStyles(colors: ThemeColors) {
       paddingHorizontal: 20,
       marginBottom: 20,
     },
-    actionBar: {
+    vehiclePill: {
       flexDirection: 'row',
       alignItems: 'center',
-      width: '100%',
       backgroundColor: colors.surface,
-      borderRadius: 16,
+      borderRadius: 20,
       paddingHorizontal: 14,
-      paddingVertical: 12,
-      marginBottom: 12,
-      gap: 8,
+      paddingVertical: 8,
+      marginBottom: 10,
+      gap: 6,
       shadowColor: '#000',
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.1,
-      shadowRadius: 10,
-      elevation: 5,
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.08,
+      shadowRadius: 6,
+      elevation: 3,
       borderWidth: 1,
       borderColor: colors.border,
+      maxWidth: '90%',
     },
-    actionBarWarning: {
-      backgroundColor: colors.warningBg,
-      borderColor: colors.warning,
-    },
-    actionBarDanger: {
-      backgroundColor: colors.dangerBg,
-      borderColor: colors.error,
-    },
-    actionBarText: {
-      flex: 1,
-      fontSize: 13,
-      fontWeight: '700',
-      color: colors.text,
-    },
-    actionBarTextWarning: {
-      color: '#92400E',
-    },
-    actionBarTextDanger: {
-      color: '#991B1B',
-    },
-    actionBarCta: {
+    vehiclePillText: {
       fontSize: 12,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      flexShrink: 1,
+    },
+    plateBadge: {
+      backgroundColor: colors.primary + '20',
+      borderRadius: 6,
+      paddingHorizontal: 7,
+      paddingVertical: 2,
+    },
+    plateBadgeText: {
+      fontSize: 11,
       fontWeight: '700',
       color: colors.primary,
+      letterSpacing: 0.5,
     },
 
     statusPillWrapper: {

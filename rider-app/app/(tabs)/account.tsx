@@ -292,6 +292,8 @@ export default function AccountScreen() {
               <MenuRow styles={styles} colors={colors} icon="card" iconColor="#7C3AED" iconBg="rgba(124, 58, 237, 0.1)" label="Payment Methods" onPress={() => router.push('/manage-cards' as any)} />
               <View style={styles.cardDivider} />
               <MenuRow styles={styles} colors={colors} icon="pricetag" iconColor="#10B981" iconBg="rgba(16, 185, 129, 0.1)" label="Promotions" onPress={() => router.push('/promotions' as any)} />
+              <View style={styles.cardDivider} />
+              <MenuRow styles={styles} colors={colors} icon="gift" iconColor="#8B5CF6" iconBg="rgba(139, 92, 246, 0.1)" label="Refer & Earn" onPress={() => router.push('/referral' as any)} />
             </View>
           </View>
 

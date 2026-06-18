@@ -13,7 +13,7 @@
 -- deletion/anonymisation for reconciliation and tax purposes, while the PII
 -- link is severed per PIPEDA.
 --
--- Rollback (coordinated — do in this order):
+-- Rollback: (coordinated — do in this order)
 --   1. Set REFERRAL_PAYOUTS_ENABLED=false and redeploy so the payout loop stops
 --      touching the table (the loop is wired in core/lifespan.py).
 --   2. DROP TABLE IF EXISTS referral_payouts;

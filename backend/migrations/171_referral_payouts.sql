@@ -25,8 +25,9 @@ CREATE TABLE IF NOT EXISTS referral_payouts (
     -- One payout per referred user — this UNIQUE is the idempotency claim.
     -- Nullable + SET NULL so the financial row is retained (PII severed) if the
     -- user is later deleted; multiple NULLs are allowed by the UNIQUE index.
-    referee_user_id   uuid UNIQUE REFERENCES users(id) ON DELETE SET NULL,
-    referrer_user_id  uuid REFERENCES users(id) ON DELETE SET NULL,
+    -- users.id is TEXT in this schema, so the FK columns must be TEXT too.
+    referee_user_id   text UNIQUE REFERENCES users(id) ON DELETE SET NULL,
+    referrer_user_id  text REFERENCES users(id) ON DELETE SET NULL,
     kind              text NOT NULL CHECK (kind IN ('rider', 'driver')),
     referrer_reward   numeric(10, 2) NOT NULL DEFAULT 0,
     referee_reward    numeric(10, 2) NOT NULL DEFAULT 0,
@@ -52,7 +53,7 @@ ALTER TABLE referral_payouts ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS referral_payouts_select_own ON referral_payouts;
 CREATE POLICY referral_payouts_select_own ON referral_payouts
     FOR SELECT
-    USING (auth.uid() = referrer_user_id OR auth.uid() = referee_user_id);
+    USING (auth.uid()::text = referrer_user_id OR auth.uid()::text = referee_user_id);
 
 -- Explicit client-write denials (service role bypasses these by design).
 DROP POLICY IF EXISTS referral_payouts_no_insert ON referral_payouts;

@@ -8,6 +8,7 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -34,6 +35,7 @@ export default function ChatDriverScreen() {
   const { currentDriver, chatMessages, addChatMessage, setChatMessages } = useRideStore();
   const scrollViewRef = useRef<ScrollView>(null);
   const [message, setMessage] = useState('');
+  const [driverPhotoError, setDriverPhotoError] = useState(false);
   const [sending, setSending] = useState(false);
   // Tracks when the initial AsyncStorage read has completed so the persist
   // effect knows it is safe to write an empty array without clobbering a
@@ -169,7 +171,16 @@ export default function ChatDriverScreen() {
 
         <View style={styles.driverHeader}>
           <View style={styles.driverAvatar}>
-            <Ionicons name="person" size={22} color={colors.textDim} />
+            {currentDriver?.photo_url && !driverPhotoError ? (
+              <Image
+                source={{ uri: currentDriver.photo_url }}
+                style={styles.driverAvatarImg}
+                resizeMode="cover"
+                onError={() => setDriverPhotoError(true)}
+              />
+            ) : (
+              <Ionicons name="person" size={22} color={colors.textDim} />
+            )}
             <View style={styles.onlineDot} />
           </View>
           <View style={styles.driverInfo}>
@@ -308,6 +319,11 @@ function createStyles(colors: ThemeColors) {
       justifyContent: 'center',
       alignItems: 'center',
       position: 'relative',
+    },
+    driverAvatarImg: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
     },
     onlineDot: {
       position: 'absolute',

@@ -132,6 +132,7 @@ function RideCompletedScreenContent() {
     return () => sub.remove();
   }, []);
 
+  const [driverPhotoError, setDriverPhotoError] = useState(false);
   const [lostItemText, setLostItemText] = useState('');
   const [lostItemVisible, setLostItemVisible] = useState(false);
   const [lostItemSending, setLostItemSending] = useState(false);
@@ -320,7 +321,16 @@ function RideCompletedScreenContent() {
           <View style={styles.driverRow}>
             <View style={styles.driverAvatarWrap}>
               <View style={styles.driverAvatar}>
-                <Ionicons name="person" size={26} color="#FFF" />
+                {currentDriver?.photo_url && !driverPhotoError ? (
+                  <Image
+                    source={{ uri: currentDriver.photo_url }}
+                    style={styles.driverAvatarImg}
+                    resizeMode="cover"
+                    onError={() => setDriverPhotoError(true)}
+                  />
+                ) : (
+                  <Ionicons name="person" size={26} color="#FFF" />
+                )}
               </View>
               <View style={styles.driverRatingBadge}>
                 <Ionicons name="star" size={9} color="#FFF" />
@@ -812,8 +822,9 @@ function createStyles(colors: ThemeColors) {
     driverAvatarWrap: { marginRight: 14, position: 'relative' as const },
     driverAvatar: {
       width: 56, height: 56, borderRadius: 28, backgroundColor: colors.primary,
-      justifyContent: 'center', alignItems: 'center',
+      justifyContent: 'center', alignItems: 'center', overflow: 'hidden' as const,
     },
+    driverAvatarImg: { width: 56, height: 56, borderRadius: 28 },
     driverRatingBadge: {
       position: 'absolute', bottom: -4, right: -4,
       flexDirection: 'row', alignItems: 'center', gap: 2,

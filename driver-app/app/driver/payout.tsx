@@ -271,54 +271,6 @@ function PayoutScreen() {
     // server-side ^\d{9}(RT\d{4})?$ check so we gate the UI before the request.
     const gstOnFile = /^\d{9}(RT\d{4})?$/.test((gstNumber || '').replace(/\s/g, '').toUpperCase());
 
-    // Guided-setup checklist. Every payout prerequisite lives here as a single
-    // ordered list so the driver sees exactly what's done vs. what still needs a
-    // tap — instead of the same requirement repeated across scattered cards.
-    const allReady = isStripeReady && sinOnFile && gstOnFile;
-    const setupSteps: {
-        key: string;
-        icon: keyof typeof Ionicons.glyphMap;
-        title: string;
-        subtitle: string;
-        done: boolean;
-        locked: boolean;
-        onPress: () => void;
-    }[] = [
-        {
-            key: 'stripe',
-            icon: 'card',
-            title: 'Connect payout account',
-            subtitle: isStripeReady
-                ? 'Connected with Stripe'
-                : 'Link your bank and verify your identity with Stripe',
-            done: isStripeReady,
-            locked: false,
-            onPress: handleStripeOnboarding,
-        },
-        {
-            key: 'sin',
-            icon: 'shield-checkmark',
-            title: 'Verify your SIN',
-            subtitle: sinOnFile
-                ? 'Identity verified'
-                : 'Added securely through Stripe — we never see or store it',
-            done: sinOnFile,
-            locked: !isStripeReady,
-            onPress: handleStripeOnboarding,
-        },
-        {
-            key: 'gst',
-            icon: 'document-text',
-            title: 'Add GST/HST number',
-            subtitle: gstOnFile
-                ? `Registered · ${gstNumber}`
-                : 'CRA Business Number — rideshare drivers register from their first fare',
-            done: gstOnFile,
-            locked: false,
-            onPress: () => setShowGstForm(true),
-        },
-    ];
-
     if (initialLoading) {
         return (
             <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
@@ -388,8 +340,8 @@ function PayoutScreen() {
                     </View>
                 </View>
 
-                {/* Next Payout Schedule — only once fully set up and able to cash out */}
-                {allReady && (
+                {/* Next Payout Schedule */}
+                {isStripeReady && (
                     <View style={styles.payoutScheduleCard}>
                         <Ionicons name="calendar-outline" size={20} color={colors.primary} />
                         <View style={{ flex: 1, marginLeft: 12 }}>
@@ -400,103 +352,85 @@ function PayoutScreen() {
                     </View>
                 )}
 
-                {/* Setup checklist — one guided list of every payout prerequisite */}
-                {!allReady && (
-                    <View style={styles.section}>
-                        <Text style={styles.sectionTitle}>Set up payouts</Text>
-                        <Text style={styles.sectionSubtitle}>
-                            Complete these steps to cash out your balance.
-                        </Text>
-                        <View style={styles.checklistCard}>
-                            {setupSteps.map((step, i) => {
-                                const state = step.done ? 'done' : step.locked ? 'locked' : 'todo';
-                                const busy = step.key !== 'gst' && stripeOnboarding;
-                                const inner = (
-                                    <>
-                                        <View
-                                            style={[
-                                                styles.stepIcon,
-                                                state === 'done' && styles.stepIconDone,
-                                                state === 'todo' && styles.stepIconTodo,
-                                            ]}
-                                        >
-                                            <Ionicons
-                                                name={
-                                                    state === 'done'
-                                                        ? 'checkmark'
-                                                        : state === 'locked'
-                                                            ? 'lock-closed'
-                                                            : step.icon
-                                                }
-                                                size={16}
-                                                color={
-                                                    state === 'done'
-                                                        ? '#fff'
-                                                        : state === 'todo'
-                                                            ? colors.primary
-                                                            : colors.textDim
-                                                }
-                                            />
-                                        </View>
-                                        <View style={{ flex: 1 }}>
-                                            <Text
-                                                style={[
-                                                    styles.stepTitle,
-                                                    state !== 'todo' && styles.stepTitleMuted,
-                                                ]}
-                                            >
-                                                {step.title}
-                                            </Text>
-                                            <Text style={styles.stepSubtitle}>{step.subtitle}</Text>
-                                        </View>
-                                        {busy ? (
-                                            <ActivityIndicator size="small" color={colors.primary} />
-                                        ) : state === 'todo' ? (
-                                            <Ionicons name="chevron-forward" size={18} color={colors.primary} />
-                                        ) : state === 'done' ? (
-                                            <Ionicons name="checkmark-circle" size={20} color={colors.success} />
-                                        ) : null}
-                                    </>
-                                );
-                                const rowStyle = [styles.stepRow, i > 0 && styles.stepRowBorder];
-                                return state === 'todo' ? (
-                                    <TouchableOpacity
-                                        key={step.key}
-                                        style={rowStyle}
-                                        onPress={step.onPress}
-                                        disabled={busy}
-                                        activeOpacity={0.7}
-                                    >
-                                        {inner}
-                                    </TouchableOpacity>
-                                ) : (
-                                    <View key={step.key} style={rowStyle}>
-                                        {inner}
+                {/* Stripe Connect Setup */}
+                <View style={styles.section}>
+                    <Text style={styles.sectionTitle}>Payment Account</Text>
+                    {stripeAccountStatus === 'active' ? (
+                        <View style={styles.stripeCard}>
+                            <View style={styles.stripeIconContainer}>
+                                <Ionicons name="checkmark-circle" size={28} color={colors.success} />
+                            </View>
+                            <View style={{ flex: 1 }}>
+                                <Text style={styles.stripeTitle}>Stripe Connected</Text>
+                                <Text style={styles.stripeSubtitle}>
+                                    {sinOnFile
+                                        ? 'Identity verified. Bank account linked.'
+                                        : 'SIN required before payout — tap Update to add it.'}
+                                </Text>
+                            </View>
+                            <TouchableOpacity onPress={handleStripeOnboarding}>
+                                <Text style={{ color: colors.primary, fontSize: 13, fontWeight: '600' }}>Update</Text>
+                            </TouchableOpacity>
+                        </View>
+                    ) : (
+                        <TouchableOpacity
+                            style={styles.stripeSetupCard}
+                            onPress={handleStripeOnboarding}
+                            disabled={stripeOnboarding}
+                        >
+                            {stripeOnboarding ? (
+                                <ActivityIndicator size="small" color={colors.primary} />
+                            ) : (
+                                <>
+                                    <View style={styles.stripeSetupIcon}>
+                                        <Ionicons name="shield-checkmark" size={32} color={colors.primary} />
                                     </View>
-                                );
-                            })}
-                        </View>
-                    </View>
-                )}
+                                    <Text style={styles.stripeSetupTitle}>Set Up Payouts with Stripe</Text>
+                                    <Text style={styles.stripeSetupDesc}>
+                                        Stripe will securely verify your identity and collect your banking details. This includes:
+                                    </Text>
+                                    <View style={styles.requirementsList}>
+                                        <View style={styles.requirementItem}>
+                                            <Ionicons name="person" size={16} color={colors.textDim} />
+                                            <Text style={styles.requirementText}>Government-issued photo ID</Text>
+                                        </View>
+                                        <View style={styles.requirementItem}>
+                                            <Ionicons name="camera" size={16} color={colors.textDim} />
+                                            <Text style={styles.requirementText}>Selfie for proof of liveness</Text>
+                                        </View>
+                                        <View style={styles.requirementItem}>
+                                            <Ionicons name="home" size={16} color={colors.textDim} />
+                                            <Text style={styles.requirementText}>Home address verification</Text>
+                                        </View>
+                                        <View style={styles.requirementItem}>
+                                            <Ionicons name="card" size={16} color={colors.textDim} />
+                                            <Text style={styles.requirementText}>Bank account or debit card</Text>
+                                        </View>
+                                    </View>
+                                    <View style={styles.stripeSetupBtn}>
+                                        <Text style={styles.stripeSetupBtnText}>Continue to Stripe</Text>
+                                        <Ionicons name="arrow-forward" size={18} color="#fff" />
+                                    </View>
+                                </>
+                            )}
+                        </TouchableOpacity>
+                    )}
+                </View>
 
-                {/* Payouts-ready confirmation */}
-                {allReady && (
-                    <View style={styles.section}>
-                        <View style={styles.readyCard}>
-                            <Ionicons name="checkmark-circle" size={22} color={colors.success} />
-                            <Text style={styles.readyText}>
-                                You're all set — your balance is ready to cash out.
-                            </Text>
-                        </View>
+                {/* GST / Business Number */}
+                <View style={styles.section}>
+                    <View style={styles.sectionHeader}>
+                        <Text style={styles.sectionTitle}>Tax Information</Text>
+                        {!showGstForm && (
+                            <TouchableOpacity onPress={() => setShowGstForm(true)}>
+                                <Text style={styles.addLink}>{gstNumber ? 'Edit' : 'Add'}</Text>
+                            </TouchableOpacity>
+                        )}
                     </View>
-                )}
 
-                {/* GST/HST number form — opened from the setup checklist */}
-                {showGstForm && (
-                    <View style={styles.section}>
-                        <Text style={styles.sectionTitle}>GST/HST number</Text>
+                    {showGstForm ? (
                         <View style={styles.gstForm}>
-                            <Text style={styles.inputLabel}>Business Number (BN)</Text>
+                            <Text style={styles.inputLabel}>GST/HST Number (Business Number)</Text>
                             <Text style={styles.gstHelpText}>
                                 Enter your 9-digit CRA Business Number (BN) or full program account (e.g., 123456789RT0001).
                             </Text>
@@ -534,27 +468,81 @@ function PayoutScreen() {
                                 </TouchableOpacity>
                             </View>
                         </View>
+                    ) : (
+                        <View style={styles.gstCard}>
+                            <Ionicons name="document-text" size={22} color={colors.textDim} />
+                            <View style={{ flex: 1, marginLeft: 12 }}>
+                                <Text style={styles.gstLabel}>GST/HST Number</Text>
+                                <Text style={styles.gstValue}>
+                                    {gstNumber || 'Not provided'}
+                                </Text>
+                            </View>
+                        </View>
+                    )}
+                </View>
+
+                {/* G14: Show a clear CTA when Stripe isn't set up yet */}
+                {!isStripeReady && !initialLoading && (
+                    <View style={styles.section}>
+                        <View style={[styles.payoutCard, { alignItems: 'center', paddingVertical: 24 }]}>
+                            <Ionicons name="card-outline" size={40} color={colors.textDim} />
+                            <Text style={[styles.sectionTitle, { marginTop: 12, textAlign: 'center' }]}>
+                                Set Up Payouts
+                            </Text>
+                            <Text style={{ color: colors.textDim, fontSize: 13, textAlign: 'center', marginTop: 4, marginBottom: 16, lineHeight: 18 }}>
+                                Connect your bank account via Stripe to start receiving your earnings.
+                            </Text>
+                            <TouchableOpacity
+                                style={[styles.payoutButton, { paddingHorizontal: 24, paddingVertical: 12, opacity: stripeOnboarding ? 0.6 : 1 }]}
+                                onPress={handleStripeOnboarding}
+                                disabled={stripeOnboarding}
+                            >
+                                <Text style={styles.payoutButtonText}>
+                                    {stripeOnboarding ? 'Opening Stripe...' : 'Connect Bank Account'}
+                                </Text>
+                            </TouchableOpacity>
+                        </View>
                     </View>
                 )}
 
-                {/* Request Payout */}
-                <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Request payout</Text>
-                    {!allReady ? (
-                        <View style={styles.infoRow}>
-                            <Ionicons name="lock-closed" size={18} color={colors.textDim} />
-                            <Text style={styles.infoRowText}>
-                                Finish the setup steps above to request a payout.
-                            </Text>
-                        </View>
-                    ) : !driverBalance || parseFloat(driverBalance.payable_balance) <= 0 ? (
-                        <View style={styles.infoRow}>
-                            <Ionicons name="wallet-outline" size={18} color={colors.textDim} />
-                            <Text style={styles.infoRowText}>
-                                No balance to pay out yet. Completed rides will show up here.
-                            </Text>
-                        </View>
-                    ) : (
+                {/* Payout Request */}
+                {isStripeReady && driverBalance && parseFloat(driverBalance.payable_balance) > 0 && (
+                    <View style={styles.section}>
+                        <Text style={styles.sectionTitle}>Request Payout</Text>
+                        {!gstOnFile && (
+                            <TouchableOpacity
+                                style={[styles.payoutCard, { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 }]}
+                                onPress={() => setShowGstForm(true)}
+                            >
+                                <Ionicons name="alert-circle" size={22} color={colors.primary} />
+                                <View style={{ flex: 1, marginLeft: 10 }}>
+                                    <Text style={{ color: colors.text, fontSize: 14, fontWeight: '600' }}>
+                                        GST/HST registration required
+                                    </Text>
+                                    <Text style={{ color: colors.textDim, fontSize: 13, marginTop: 2, lineHeight: 18 }}>
+                                        Add your CRA Business Number to receive payouts. Rideshare drivers
+                                        must register for GST/HST from their first fare. Tap to add it.
+                                    </Text>
+                                </View>
+                            </TouchableOpacity>
+                        )}
+                        {!sinOnFile && (
+                            <TouchableOpacity
+                                style={[styles.payoutCard, { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 }]}
+                                onPress={handleStripeOnboarding}
+                            >
+                                <Ionicons name="alert-circle" size={22} color={colors.primary} />
+                                <View style={{ flex: 1, marginLeft: 10 }}>
+                                    <Text style={{ color: colors.text, fontSize: 14, fontWeight: '600' }}>
+                                        SIN required before payout
+                                    </Text>
+                                    <Text style={{ color: colors.textDim, fontSize: 13, marginTop: 2, lineHeight: 18 }}>
+                                        Add your Social Insurance Number securely through Stripe — we never
+                                        see or store it. Tap to continue verification.
+                                    </Text>
+                                </View>
+                            </TouchableOpacity>
+                        )}
                         <View style={styles.payoutCard}>
                             <View style={styles.payoutInputRow}>
                                 <Text style={styles.dollarSign}>$</Text>
@@ -565,14 +553,15 @@ function PayoutScreen() {
                                     keyboardType="decimal-pad"
                                     value={payoutAmount}
                                     onChangeText={setPayoutAmount}
+                                    editable={gstOnFile && sinOnFile}
                                 />
                                 <TouchableOpacity
                                     style={[
                                         styles.payoutButton,
-                                        (!payoutAmount || isLoading) && styles.payoutButtonDisabled,
+                                        (!payoutAmount || isLoading || !gstOnFile || !sinOnFile) && styles.payoutButtonDisabled,
                                     ]}
                                     onPress={handleRequestPayout}
-                                    disabled={!payoutAmount || isLoading}
+                                    disabled={!payoutAmount || isLoading || !gstOnFile || !sinOnFile}
                                 >
                                     {isLoading ? (
                                         <ActivityIndicator size="small" color="#fff" />
@@ -589,8 +578,8 @@ function PayoutScreen() {
                                 </Text>
                             </TouchableOpacity>
                         </View>
-                    )}
-                </View>
+                    </View>
+                )}
 
                 {/* Tax Documents */}
                 <View style={styles.section}>
@@ -770,89 +759,6 @@ function createStyles(colors: ThemeColors) {
             fontSize: 14,
             fontWeight: '600',
             marginBottom: 12,
-        },
-        sectionSubtitle: {
-            color: colors.textDim,
-            fontSize: 13,
-            lineHeight: 18,
-            marginTop: -6,
-            marginBottom: 12,
-        },
-
-        // Setup checklist — actionable rows (accent icon + chevron) read clearly
-        // apart from completed/locked rows (muted, flat, no chevron).
-        checklistCard: {
-            backgroundColor: colors.surface,
-            borderRadius: 16,
-            paddingHorizontal: 16,
-        },
-        stepRow: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            paddingVertical: 16,
-            gap: 12,
-        },
-        stepRowBorder: {
-            borderTopWidth: 1,
-            borderTopColor: colors.border,
-        },
-        stepIcon: {
-            width: 32,
-            height: 32,
-            borderRadius: 16,
-            backgroundColor: colors.surfaceLight,
-            justifyContent: 'center',
-            alignItems: 'center',
-        },
-        stepIconTodo: {
-            backgroundColor: `${colors.primary}1A`,
-        },
-        stepIconDone: {
-            backgroundColor: colors.success,
-        },
-        stepTitle: {
-            color: colors.text,
-            fontSize: 15,
-            fontWeight: '600',
-        },
-        stepTitleMuted: {
-            color: colors.textDim,
-        },
-        stepSubtitle: {
-            color: colors.textDim,
-            fontSize: 12,
-            lineHeight: 17,
-            marginTop: 2,
-        },
-
-        // "All set" confirmation
-        readyCard: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: 10,
-            backgroundColor: `${colors.success}14`,
-            borderRadius: 14,
-            padding: 14,
-        },
-        readyText: {
-            flex: 1,
-            color: colors.text,
-            fontSize: 14,
-            fontWeight: '500',
-        },
-
-        // Muted, flat, non-actionable info row (clearly NOT a button).
-        infoRow: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: 10,
-            paddingVertical: 12,
-        },
-        infoRowText: {
-            flex: 1,
-            color: colors.textDim,
-            fontSize: 13,
-            lineHeight: 18,
         },
 
         // Stripe Connected Card

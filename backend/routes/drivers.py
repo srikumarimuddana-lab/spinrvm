@@ -979,6 +979,7 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         "total_paid_out": "0.00",
         "has_bank_account": bool(driver.get("bank_account")),
         "stripe_account_onboarded": bool(driver.get("stripe_account_onboarded", False)),
+        "stripe_id_number_provided": bool(driver.get("stripe_id_number_provided", False)),
         "total_tips": _money_str(total_tips),
         "total_rides": total_rides,
     }
@@ -2376,6 +2377,27 @@ def _require_gst_for_payout(driver: dict) -> None:
         )
 
 
+def _require_sin_for_payout(driver: dict) -> None:
+    """Block payout until the driver's SIN is on file with Stripe.
+
+    Stripe collects and *holds* the SIN (individual.id_number); we only mirror
+    the boolean stripe_id_number_provided (+ last4), never the number itself.
+    CRA T4A / platform reporting (Income Tax Act Part XX) requires the SIN, so
+    we treat it as a hard precondition for payout — stricter than Stripe, which
+    leaves the full SIN "eventually due" until a payout-volume threshold. The
+    driver supplies it by re-opening Stripe onboarding (Payouts -> Update); on
+    an Express account it cannot be pushed via the platform API."""
+    if not driver.get("stripe_id_number_provided"):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Your SIN must be on file before you can be paid. Open "
+                "Payouts and tap Update to add it securely through Stripe "
+                "(we never see or store it — Stripe holds it)."
+            ),
+        )
+
+
 @api_router.post("/payouts")
 @idempotent_endpoint(scope="driver_payout")
 async def request_payout(
@@ -2391,6 +2413,8 @@ async def request_payout(
 
     # CRA: rideshare drivers must be GST/HST-registered from their first fare.
     _require_gst_for_payout(driver)
+    # CRA T4A: the SIN (held by Stripe) must be on file before any payout.
+    _require_sin_for_payout(driver)
 
     balance = await get_driver_balance(current_user)
     if req.amount > Decimal(balance.get("payable_balance", "0")):
@@ -2520,6 +2544,8 @@ async def request_instant_payout(
 
     # CRA: rideshare drivers must be GST/HST-registered from their first fare.
     _require_gst_for_payout(driver)
+    # CRA T4A: the SIN (held by Stripe) must be on file before any payout.
+    _require_sin_for_payout(driver)
 
     fee = compute_instant_payout_fee(req.amount)
     net_amount = req.amount - fee

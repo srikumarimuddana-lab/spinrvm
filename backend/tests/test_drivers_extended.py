@@ -1461,3 +1461,22 @@ class TestStripeSyncStatus:
             with pytest.raises(HTTPException) as ei:
                 asyncio.run(drv.stripe_sync_status(current_user={"id": USER_ID}))
         assert ei.value.status_code == 502
+
+
+class TestPayoutKycGates:
+    """Payout is blocked until BOTH the GST/HST BN and the SIN are on file."""
+
+    def test_require_sin_blocks_when_not_provided(self):
+        from fastapi import HTTPException
+
+        from backend.routes import drivers as drv
+
+        with pytest.raises(HTTPException) as ei:
+            drv._require_sin_for_payout({"stripe_id_number_provided": False})
+        assert ei.value.status_code == 422
+
+    def test_require_sin_allows_when_provided(self):
+        from backend.routes import drivers as drv
+
+        # Should not raise when Stripe reports the SIN on file.
+        drv._require_sin_for_payout({"stripe_id_number_provided": True})

@@ -1144,44 +1144,27 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // ─── Toggle Online/Offline ───────────────────────────────────────
   const toggleOnline = async () => {
     try {
-      // Eligibility gating. Each blocked scenario surfaces a specific toast
-      // (instead of the old blocking dialog / home-screen banner) so the
-      // driver knows exactly what to fix before they can go online.
-      const onboarding = user?.driver_onboarding_status ?? null;
-
-      // 1. Vehicle details missing.
-      if (!driverData?.vehicle_make || !driverData?.license_plate || onboarding === 'vehicle_required') {
-        showToast('error', 'Vehicle details needed', 'Add your vehicle make, model and license plate before going online.');
+      if (!driverData?.vehicle_make || !driverData?.license_plate) {
+        showAlert(
+          "Profile Incomplete",
+          "You must provide vehicle details before going online.",
+          [
+            { text: "Add Vehicle Info", onPress: () => router.push('/vehicle-info' as any) },
+            { text: "Cancel", style: "cancel" },
+          ]
+        );
         return;
       }
 
-      // 2. Document state — required / rejected / expired / under review.
-      switch (onboarding) {
-        case 'documents_required':
-          showToast('error', 'Documents required', 'Upload your driver documents to get approved before going online.');
-          return;
-        case 'documents_rejected':
-          showToast('error', 'Documents rejected', 'One or more documents were rejected. Re-upload them before going online.');
-          return;
-        case 'documents_expired':
-          showToast('error', 'Documents expired', 'Update your expired documents before going online.');
-          return;
-        case 'pending_review':
-          showToast('info', 'Under review', 'Your documents are under review. You can go online once approved.');
-          return;
-        case 'profile_incomplete':
-          showToast('error', 'Profile incomplete', 'Finish setting up your profile before going online.');
-          return;
-        case 'suspended':
-          showToast('error', 'Account suspended', 'Your account is suspended. Contact support for help.');
-          return;
-        default:
-          break;
-      }
-
-      // 3. Fallback: not verified for any other reason.
       if (!driverData?.is_verified) {
-        showToast('error', 'Account not verified', 'Your account is not verified yet. Please wait for admin approval before going online.');
+        showAlert(
+          "Account Not Verified",
+          "Your account is not verified yet. Please complete your profile and wait for admin approval before going online.",
+          [
+            { text: "Check Status", onPress: () => router.push('/driver/profile' as any) },
+            { text: "OK", style: "default" },
+          ]
+        );
         return;
       }
 

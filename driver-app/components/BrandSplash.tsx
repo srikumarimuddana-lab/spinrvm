@@ -118,9 +118,15 @@ const styles = StyleSheet.create({
     height: LOGO_HEIGHT,
   },
   tagline: {
-    marginTop: 20,
-    paddingBottom: 6,
+    marginTop: 16,
+    paddingBottom: 12,
     fontSize: TAGLINE_SIZE,
+    // Explicit lineHeight + bottom padding so the descenders of the "pp" in
+    // "Support" aren't clipped by the text box (RN's intrinsic line height is
+    // too tight for PlusJakartaSans). includeFontPadding keeps Android
+    // consistent. This is a pure text-style change — no timing/layout effect.
+    lineHeight: Math.round(TAGLINE_SIZE * 1.5),
+    includeFontPadding: true,
     letterSpacing: 0.8,
     color: '#8A8F98',
     fontFamily: 'PlusJakartaSans_600SemiBold',

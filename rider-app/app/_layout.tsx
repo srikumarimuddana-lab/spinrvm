@@ -18,7 +18,10 @@ import * as Updates from 'expo-updates';
 // Minimum time the branded splash (logo + tagline) stays on screen, even when
 // auth/location init finishes sooner — otherwise the tagline animation (which
 // only starts ~400ms in) is cut off and the rider barely sees the branding.
-const SPLASH_MIN_DISPLAY_MS = 3000;
+// The full intro (logo + tagline + footer loader) settles by ~1.1s, so 1.8s
+// shows the branding with a brief beat without the logo sitting idle on a
+// white screen long enough to feel stuck.
+const SPLASH_MIN_DISPLAY_MS = 1800;
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import NetInfo from '@react-native-community/netinfo';
 import api from '@shared/api/client';

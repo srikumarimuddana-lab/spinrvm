@@ -31,6 +31,29 @@ import type { ThemeColors } from '@shared/theme/index';
 
 const HOME_DATA_TTL_MS = 5 * 60 * 1000;
 
+// Home promo banner messages. Add / edit / reorder entries here — the banner
+// rotates through them automatically (and shows dots when there's more than
+// one). `icon` is any Ionicons name. Keep `title` short and `text` to ~2 lines.
+type PromoMessage = { icon: keyof typeof Ionicons.glyphMap; title: string; text: string };
+const PROMO_MESSAGES: PromoMessage[] = [
+  {
+    icon: 'megaphone',
+    title: 'Ride local. Support local.',
+    text: 'We take 0% commission. 100% of\nyour fare goes to your driver.',
+  },
+  {
+    icon: 'leaf',
+    title: 'Saskatchewan-first',
+    text: 'Built for Saskatchewan, run in\nSaskatchewan — your fares stay home.',
+  },
+  {
+    icon: 'shield-checkmark',
+    title: 'Safety built in',
+    text: 'One-tap SOS, trip sharing, and\nverified drivers on every ride.',
+  },
+];
+const PROMO_ROTATE_MS = 6000;
+
 export default function HomeScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
@@ -527,6 +550,18 @@ function BottomSheetContent({
   showPromo: boolean; setShowPromo: (v: boolean) => void;
   handleSearchPress: () => void; handleAiPress: () => void; handleQuickAction: (type: string) => void;
 }) {
+  // Rotate through PROMO_MESSAGES while the banner is visible and there's more
+  // than one message. Pauses (and resets) when the rider dismisses the banner.
+  const [promoIndex, setPromoIndex] = useState(0);
+  useEffect(() => {
+    if (!showPromo || PROMO_MESSAGES.length <= 1) return;
+    const id = setInterval(() => {
+      setPromoIndex((i) => (i + 1) % PROMO_MESSAGES.length);
+    }, PROMO_ROTATE_MS);
+    return () => clearInterval(id);
+  }, [showPromo]);
+  const promo = PROMO_MESSAGES[promoIndex] ?? PROMO_MESSAGES[0];
+
   return (
     <>
       <View style={styles.searchRow}>
@@ -593,13 +628,21 @@ function BottomSheetContent({
       {showPromo && (
         <View style={styles.promoBanner}>
           <View style={styles.promoIconContainer}>
-            <Ionicons name="megaphone" size={20} color={colors.primary} />
+            <Ionicons name={promo.icon} size={20} color={colors.primary} />
           </View>
           <View style={styles.promoContent}>
-            <Text style={styles.promoTitle}>Ride local. Support local.</Text>
-            <Text style={styles.promoText}>
-              We take 0% commission. 100% of{'\n'}your fare goes to your driver.
-            </Text>
+            <Text style={styles.promoTitle}>{promo.title}</Text>
+            <Text style={styles.promoText}>{promo.text}</Text>
+            {PROMO_MESSAGES.length > 1 && (
+              <View style={styles.promoDots}>
+                {PROMO_MESSAGES.map((_, i) => (
+                  <View
+                    key={i}
+                    style={[styles.promoDot, i === promoIndex && styles.promoDotActive]}
+                  />
+                ))}
+              </View>
+            )}
           </View>
           <TouchableOpacity
             onPress={() => setShowPromo(false)}
@@ -890,6 +933,21 @@ function createStyles(colors: ThemeColors) {
       fontFamily: 'PlusJakartaSans_400Regular',
       color: colors.textDim,
       lineHeight: 18,
+    },
+    promoDots: {
+      flexDirection: 'row',
+      gap: 5,
+      marginTop: 8,
+    },
+    promoDot: {
+      width: 6,
+      height: 6,
+      borderRadius: 3,
+      backgroundColor: colors.border,
+    },
+    promoDotActive: {
+      backgroundColor: colors.primary,
+      width: 14,
     },
     promoClose: {
       padding: 4,

@@ -13,7 +13,8 @@ import { Button } from "@/components/ui/button";
 import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { Download, Car, CreditCard, Users, TrendingUp, TrendingDown, DollarSign, UserPlus, Clock, MapPin, X, GitCompareArrows, Wallet, CheckCircle, AlertTriangle, Percent, Receipt, UserCheck, XCircle, Ticket, Zap, Landmark, Undo2, Filter, Hourglass, Activity } from "lucide-react";
+import { Download, Car, CreditCard, Users, TrendingUp, TrendingDown, DollarSign, UserPlus, Clock, MapPin, X, GitCompareArrows, Wallet, CheckCircle, AlertTriangle, Percent, Receipt, UserCheck, XCircle, Ticket, Zap, Landmark, Undo2, Filter, Hourglass, Activity, Gift } from "lucide-react";
+import ReferralLeaderboard from "@/components/referral-leaderboard";
 import { getPayouts, getPayoutStats, getPayoutsOverview, retryPayout, bulkRetryPayouts, closePayoutPeriod, type PayoutsOverview } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
@@ -34,7 +35,7 @@ const tooltipStyle = {
 
 export default function EarningsPage() {
     const { allowed } = useRequireModule("earnings");
-    const [tab, setTab] = useState<"rides" | "spinr-pass" | "payouts">("rides");
+    const [tab, setTab] = useState<"rides" | "spinr-pass" | "payouts" | "referrals">("rides");
 
     if (!allowed) return null;
     return (
@@ -60,11 +61,20 @@ export default function EarningsPage() {
                     className={`flex items-center gap-1.5 px-5 py-2 rounded-lg text-sm font-semibold transition ${tab === "payouts" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"}`}>
                     <Wallet className="h-4 w-4" /> Payouts
                 </button>
+                <button onClick={() => setTab("referrals")}
+                    className={`flex items-center gap-1.5 px-5 py-2 rounded-lg text-sm font-semibold transition ${tab === "referrals" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"}`}>
+                    <Gift className="h-4 w-4" /> Referrals
+                </button>
             </div>
 
             {tab === "rides" && <RideEarningsTab />}
             {tab === "spinr-pass" && <SpinrPassRevenueTab />}
             {tab === "payouts" && <PayoutsTab />}
+            {tab === "referrals" && (
+                <div className="pt-1">
+                    <ReferralLeaderboard limit={25} />
+                </div>
+            )}
         </div>
     );
 }

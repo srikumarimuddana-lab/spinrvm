@@ -27,9 +27,11 @@ from decimal import ROUND_HALF_UP, Decimal
 try:
     from .. import db_supabase  # type: ignore
     from ..core.config import settings  # type: ignore
+    from ..utils.error_handling import DuplicateRecordError  # type: ignore
 except ImportError:
     import db_supabase  # type: ignore
     from core.config import settings  # type: ignore
+    from utils.error_handling import DuplicateRecordError  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +115,9 @@ async def _tick() -> None:
     # Referred users. A not-null filter isn't supported by the query translator,
     # so project minimal columns and filter in memory (bounded; fine for the
     # current fleet — move to an RPC/rollup if the user table grows large).
-    users = await db_supabase.get_rows("users", {}, columns="id,referral_code_used,referred_by", limit=10000)
+    users = await db_supabase.get_rows(
+        "users", {}, columns="id,referral_code_used,referred_by,referral_applied_at", limit=10000
+    )
     for u in users:
         code = u.get("referral_code_used")
         if not code or u["id"] in done:
@@ -144,16 +148,26 @@ async def _process_one(referee: dict, code: str, terms: dict) -> None:
     if not referrer_user_id or referrer_user_id == referee_id:
         return  # unresolved or self — nothing to pay
 
+    # Count only rides completed AFTER the referral was applied — never pay
+    # retroactively for rides that predate the referral. (Legacy rows with no
+    # referral_applied_at fall back to lifetime count.)
+    applied_at = referee.get("referral_applied_at")
+    since = {"created_at": {"$gte": applied_at}} if applied_at else {}
+
     # Has the referee reached the ride threshold?
     if is_rider:
-        completed = await db_supabase.count_documents("rides", {"rider_id": referee_id, "status": "completed"})
+        completed = await db_supabase.count_documents(
+            "rides", {"rider_id": referee_id, "status": "completed", **since}
+        )
     else:
         ref_as_driver = (lambda _r: _r[0] if _r else None)(
             await db_supabase.get_rows("drivers", {"user_id": referee_id}, limit=1)
         )
         if not ref_as_driver:
             return
-        completed = await db_supabase.count_documents("rides", {"driver_id": ref_as_driver["id"], "status": "completed"})
+        completed = await db_supabase.count_documents(
+            "rides", {"driver_id": ref_as_driver["id"], "status": "completed", **since}
+        )
     if completed < t["rides"]:
         return
 
@@ -176,51 +190,34 @@ async def _process_one(referee: dict, code: str, terms: dict) -> None:
                 "created_at": now_iso,
             },
         )
-    except Exception as e:
-        logger.info(f"referral_payout: claim skipped for referee {referee_id} (already claimed): {e}")
+    except DuplicateRecordError:
+        # Another replica/tick already claimed this referee — expected, skip.
+        logger.info(f"referral_payout: claim already exists for referee {referee_id} — skipping")
         return
+    # Any other DB error (table missing, RLS/schema, connectivity) propagates to
+    # the outer handler in _tick, which logs it as an error rather than silently
+    # treating it as 'already claimed'.
 
-    # Credit the referrer first, then the referee (rider only). Make a partial
-    # failure recoverable: if the second credit fails, reverse the first with a
-    # compensating debit and DELETE the claim so the next tick retries cleanly.
-    # Only if the compensation itself fails do we leave the row 'failed' for
-    # manual reconciliation — never a silent half-applied state.
+    # Credit the referrer, then the referee (rider only). Each _credit is
+    # self-atomic — it reverses its own increment if the ledger write fails, so
+    # money is never left unrecorded. On ANY credit failure we mark the claim
+    # 'failed' and stop: we deliberately do NOT delete/retry, because the claim
+    # row staying in place is exactly what prevents a re-claim and a double
+    # credit on the next tick. 'failed' rows surface for manual reconciliation.
     meta = {"kind": kind, "referee_id": referee_id, "referrer_user_id": referrer_user_id}
-    referrer_paid = False
     try:
         await _credit(referrer_user_id, referrer_reward, kind, referee_id, "referral_reward", meta)
-        referrer_paid = True
         if referee_reward > 0:
             await _credit(referee_id, referee_reward, kind, referee_id, "referral_bonus", meta)
     except Exception:
         logger.error(
-            "referral_payout: credit failed — compensating and releasing claim",
+            "referral_payout: credit failed — marking claim 'failed' for manual reconciliation",
             exc_info=True,
             extra=meta,
         )
-        compensated = True
-        if referrer_paid:
-            try:
-                await _credit(referrer_user_id, -referrer_reward, kind, referee_id, "referral_reversal", meta)
-            except Exception:
-                compensated = False
-                logger.error(
-                    "referral_payout: compensation debit FAILED — manual reconciliation required",
-                    exc_info=True,
-                    extra=meta,
-                )
-        if compensated:
-            # Release the claim so a future tick retries from a clean slate.
-            try:
-                await db_supabase.delete_one("referral_payouts", {"referee_user_id": referee_id})
-            except Exception:
-                await db_supabase.update_one(
-                    "referral_payouts", {"referee_user_id": referee_id}, {"$set": {"status": "failed"}}
-                )
-        else:
-            await db_supabase.update_one(
-                "referral_payouts", {"referee_user_id": referee_id}, {"$set": {"status": "failed"}}
-            )
+        await db_supabase.update_one(
+            "referral_payouts", {"referee_user_id": referee_id}, {"$set": {"status": "failed"}}
+        )
         return
 
     await db_supabase.update_one(
@@ -232,8 +229,13 @@ async def _process_one(referee: dict, code: str, terms: dict) -> None:
 
 
 async def _credit(user_id: str, amount: Decimal, kind: str, reference_id: str, txn_type: str, metadata: dict) -> None:
-    """Credit (or, with a negative amount, reverse) a wallet and write the
-    immutable ledger entry. Decimal-only."""
+    """Credit a wallet and write the immutable ledger entry — atomically.
+
+    If the ledger write fails after the balance already moved, reverse the
+    increment so money is never left without a matching ledger entry, then
+    re-raise. (Same compensate-on-ledger-failure pattern as the quest-reward
+    payout.) Decimal-only.
+    """
     try:
         from ..routes.wallet import _record_transaction, get_or_create_wallet  # type: ignore
     except ImportError:
@@ -241,13 +243,28 @@ async def _credit(user_id: str, amount: Decimal, kind: str, reference_id: str, t
 
     wallet = await get_or_create_wallet(user_id)
     new_balance = await db_supabase.wallet_increment_balance(wallet["id"], amount)
-    await _record_transaction(
-        wallet_id=wallet["id"],
-        user_id=user_id,
-        txn_type=txn_type,
-        amount=_f(amount),
-        balance_after=_f(new_balance),
-        reference_id=reference_id,
-        description=f"{kind.capitalize()} referral reward",
-        metadata=metadata,
-    )
+    try:
+        await _record_transaction(
+            wallet_id=wallet["id"],
+            user_id=user_id,
+            txn_type=txn_type,
+            amount=_f(amount),
+            balance_after=_f(new_balance),
+            reference_id=reference_id,
+            description=f"{kind.capitalize()} referral reward",
+            metadata=metadata,
+        )
+    except Exception:
+        # Ledger write failed after the balance moved — reverse the increment so
+        # no money is left unrecorded, then surface the error to the caller.
+        try:
+            await db_supabase.wallet_increment_balance(wallet["id"], -amount)
+        except Exception:
+            logger.error(
+                "referral_payout: ledger write AND its reversal failed — wallet %s left with an "
+                "unrecorded %s credit; manual reconciliation required",
+                wallet["id"],
+                _f(amount),
+                exc_info=True,
+            )
+        raise

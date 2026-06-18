@@ -1515,19 +1515,30 @@ def _referral_terms() -> tuple[int, int]:
     return REFERRAL_RIDES_REQUIRED, REFERRAL_REWARD_AMOUNT
 
 
+def _driver_referral_codes(driver: dict) -> list:
+    """Every code a driver may have been shared under (current + legacy), so
+    referees who applied an older code still count."""
+    out: list = []
+    for c in (driver.get("driver_code"), driver.get("referral_code"), f"DRIVER{driver['id'][:8].upper()}"):
+        if c and c not in out:
+            out.append(c)
+    return out
+
+
 def _driver_referral_code(driver: dict) -> str:
-    """The shareable code, matching the app side (driver_code → referral_code → id-derived)."""
-    return driver.get("driver_code") or driver.get("referral_code") or f"DRIVER{driver['id'][:8].upper()}"
+    """The primary shareable code (driver_code → referral_code → id-derived)."""
+    return _driver_referral_codes(driver)[0]
 
 
 async def _driver_referral_summary(driver: dict, *, include_referees: bool) -> dict:
     """Compute a referrer's referral stats (and optionally the referee list)."""
     rides_required, reward_amount = _referral_terms()
-    code = _driver_referral_code(driver)
+    codes = _driver_referral_codes(driver)
+    code = codes[0]
 
     referred_users = await db_supabase.get_rows(
         "users",
-        {"referral_code_used": code},
+        {"referral_code_used": {"$in": codes}},
         columns="id,first_name,last_name,email,created_at",
         limit=200,
     )
@@ -1597,11 +1608,15 @@ async def admin_get_referral_leaderboard(
     """
     rides_required, reward_amount = _referral_terms()
 
-    users = await db_supabase.get_rows("users", {}, columns="id,referred_by", limit=5000)
+    users = await db_supabase.get_rows("users", {}, columns="id,referred_by,referral_code_used", limit=5000)
     by_referrer: dict[str, list[str]] = {}
     for u in users:
         rid = u.get("referred_by")
-        if rid:
+        code = u.get("referral_code_used")
+        # Only DRIVER referrals here — rider referrals (RIDE-prefixed codes) also
+        # populate referred_by (with a user id) and would otherwise inflate the
+        # fleet totals and crowd out real driver referrers in the top-N slice.
+        if rid and code and not str(code).upper().startswith("RIDE"):
             by_referrer.setdefault(rid, []).append(u["id"])
 
     fleet_total_referrals = sum(len(v) for v in by_referrer.values())

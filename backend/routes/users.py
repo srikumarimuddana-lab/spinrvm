@@ -558,6 +558,11 @@ async def apply_rider_referral(req: ApplyRiderReferralRequest, current_user: dic
     await db_supabase.update_one(
         "users",
         {"id": current_user["id"]},
-        {"referral_code_used": code, "referred_by": ref_user["id"]},
+        {
+            "referral_code_used": code,
+            "referred_by": ref_user["id"],
+            # Recorded so the payout loop only rewards rides completed AFTER this.
+            "referral_applied_at": datetime.now(timezone.utc).isoformat(),
+        },
     )
     return {"success": True, "referral_code": code}

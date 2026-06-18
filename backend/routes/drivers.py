@@ -5017,6 +5017,11 @@ async def apply_referral_code(req: ApplyReferralCodeRequest, current_user: dict 
     if not ref_driver:
         raise HTTPException(status_code=404, detail="Invalid referral code")
 
+    # Block self-referral — a driver can't refer themselves (now that the code
+    # can be entered at signup, this is an easy thing to try).
+    if ref_driver.get("user_id") == current_user["id"]:
+        raise HTTPException(status_code=400, detail="You can't use your own referral code")
+
     # Apply referral code to user
     await db_supabase.update_one(
         "users",

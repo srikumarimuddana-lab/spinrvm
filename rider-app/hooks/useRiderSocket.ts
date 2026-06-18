@@ -133,6 +133,14 @@ export function useRiderSocket() {
       case 'ride_cancelled': {
         const currentId = useRideStore.getState().currentRide?.id;
         if (data.ride_id && currentId && data.ride_id !== currentId) break;
+        // Rider cancelled this ride locally — the cancel button already cleared
+        // the ride and navigated home. The server echoes ride_cancelled back to
+        // confirm; handling it again here re-shows the toast and re-navigates,
+        // restarting the toast's enter animation (the flicker the rider sees).
+        // _clearedRideId marks a ride the client already finished with locally,
+        // so skip the duplicate handling. Driver/auto/no-show cancels leave the
+        // ride active locally, so they fall through and notify as before.
+        if (data.ride_id && useRideStore.getState()._clearedRideId === data.ride_id) break;
         const cancelMessages: Record<string, string> = {
           driver_cancelled: 'Your driver has cancelled the ride. We apologize for the inconvenience.',
           rider_cancelled: 'Your ride has been cancelled.',

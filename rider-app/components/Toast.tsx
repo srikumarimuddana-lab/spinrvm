@@ -55,6 +55,9 @@ export default function Toast() {
     ]).start(() => dismiss());
   };
 
+  // Enter animation — runs only when a NEW toast appears (id changes). A
+  // deduped repeat keeps the same id, so the banner does not slide back off
+  // and in again (the flicker).
   useEffect(() => {
     if (!current) return;
     translateY.setValue(-120);
@@ -63,13 +66,19 @@ export default function Toast() {
       Animated.spring(translateY, { toValue: 0, friction: 8, useNativeDriver: true }),
       Animated.timing(opacity, { toValue: 1, duration: 200, useNativeDriver: true }),
     ]).start();
+  }, [current?.id]);
 
+  // Auto-dismiss timer — (re)armed for a new toast OR when a deduped repeat
+  // extends it (shownAt bumps). Kept separate from the enter animation so
+  // refreshing the timer never restarts the slide-in.
+  useEffect(() => {
+    if (!current) return;
     const duration = current.duration ?? DEFAULT_DURATION;
     timer.current = setTimeout(hide, duration);
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [current?.id]);
+  }, [current?.id, current?.shownAt]);
 
   if (!current) return null;
 

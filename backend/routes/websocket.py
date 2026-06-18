@@ -10,6 +10,7 @@ from loguru import logger
 try:
     from ..utils.breadcrumb_buffer import buffer_ride_breadcrumb, flush_driver_breadcrumbs
     from ..utils.breadcrumbs import persist_ride_breadcrumbs, resolve_active_rides_cached
+    from ..utils.fifo_zone import update_driver_zone
     from ..utils.location_integrity import check_location_integrity
 except ImportError:
     from utils.breadcrumb_buffer import buffer_ride_breadcrumb, flush_driver_breadcrumbs  # type: ignore
@@ -617,6 +618,12 @@ async def websocket_endpoint(
                     # than pongs — fresh GPS proves the app is running and
                     # foregrounded, not just that TCP is open.
                     await mark_present(driver_id)
+
+                    # ADR-008: reconcile airport FIFO queue membership from this
+                    # fix. Best-effort and self-swallowing; the WS connection is
+                    # pinned to one replica so its in-process zone cache is
+                    # authoritative (no current_zone_id needed here).
+                    await update_driver_zone(driver_id, lat, lng)
 
                     # Resolve active rides for rider fan-out. B3.1: served from
                     # a 5 s Redis cache — this runs on EVERY GPS ping and used

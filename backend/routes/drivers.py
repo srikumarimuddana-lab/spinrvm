@@ -1831,6 +1831,16 @@ async def update_location_batch(batch: Union[List[dict], dict], current_user: di
         if driver_row and driver_row.get("is_online"):
             await mark_present(driver_row["id"])
 
+        # ADR-008: reconcile airport FIFO queue membership on the REST fallback
+        # path too. This batch can land on any replica, so pass the authoritative
+        # zone from the row we just read instead of trusting an in-process cache.
+        if driver_row:
+            try:
+                from ..utils.fifo_zone import update_driver_zone
+            except ImportError:
+                from utils.fifo_zone import update_driver_zone  # type: ignore
+            await update_driver_zone(driver_row["id"], lat, lng, current_zone_id=driver_row.get("zone_venue_id"))
+
     return {"success": True}
 
 

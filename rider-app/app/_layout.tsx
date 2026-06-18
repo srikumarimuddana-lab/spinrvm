@@ -6,7 +6,7 @@ export const StripeKeyContext = React.createContext<string | null>(null);
 // until the admin configures it. Consumers should disable the share
 // action when null/empty rather than fall back to a hardcoded URL.
 export const TrackBaseUrlContext = React.createContext<string | null>(null);
-import { Stack, router } from 'expo-router';
+import { Stack, router, usePathname } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { AppState, View, Text, Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -146,6 +146,20 @@ setBackgroundMessageHandler(async (remoteMessage: any) => {
 });
 
 
+// Maps an active-ride status to the screen that should be showing it. Used by
+// the cold-start and foreground-resume handlers so they can skip navigating to
+// a screen the rider is already on (re-navigating remounts the screen and its
+// bottom sheet — the OTP / ride-in-progress "double load" on app resume).
+function targetPathForRideStatus(status: string): string | null {
+  if (status === 'searching' || status === 'driver_assigned' || status === 'driver_accepted') {
+    return '/driver-arriving';
+  }
+  if (status === 'driver_arrived') return '/driver-arrived';
+  if (status === 'in_progress') return '/ride-in-progress';
+  if (status === 'completed') return '/ride-completed';
+  return null;
+}
+
 function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
     PlusJakartaSans_400Regular,
@@ -181,6 +195,12 @@ function RootLayout() {
   const [trackBaseUrl, setTrackBaseUrl] = useState<string | null>(null);
   const fcmRegisteredRef = useRef(false);
   const backgroundedAtRef = useRef<number | null>(null);
+  // Current route, mirrored into a ref so the AppState listener (registered
+  // once) and the cold-start timeout read a fresh value instead of a stale
+  // closure when deciding whether a resume navigation is redundant.
+  const pathname = usePathname();
+  const pathnameRef = useRef(pathname);
+  pathnameRef.current = pathname;
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;
     title: string;
@@ -460,18 +480,12 @@ function RootLayout() {
     const timer = setTimeout(() => {
       const ride = useRideStore.getState().currentRide;
       if (!ride?.id) return;
-      const s = ride.status;
-      if (s === 'searching' || s === 'driver_assigned' || s === 'driver_accepted') {
-        router.push({ pathname: '/driver-arriving', params: { rideId: ride.id } } as any);
-      } else if (s === 'driver_arrived') {
-        router.push({ pathname: '/driver-arrived', params: { rideId: ride.id } } as any);
-      } else if (s === 'in_progress') {
-        router.push({ pathname: '/ride-in-progress', params: { rideId: ride.id } } as any);
-      } else if (s === 'completed') {
-        if (ride.payment_status !== 'paid' && ride.payment_status !== 'waived_admin') {
-          router.push({ pathname: '/ride-completed', params: { rideId: ride.id } } as any);
-        }
-      }
+      const target = targetPathForRideStatus(ride.status);
+      if (!target) return;
+      if (target === '/ride-completed' &&
+          (ride.payment_status === 'paid' || ride.payment_status === 'waived_admin')) return;
+      if (pathnameRef.current === target) return;
+      router.push({ pathname: target, params: { rideId: ride.id } } as any);
     }, 200);
     return () => clearTimeout(timer);
   }, [navReady]);
@@ -502,19 +516,17 @@ function RootLayout() {
       try {
         const result = await useRideStore.getState().fetchActiveRide();
         if (!result?.active || !result.ride) return;
-        const s = result.ride.status;
-        if (s === 'searching' || s === 'driver_assigned' || s === 'driver_accepted') {
-          router.replace({ pathname: '/driver-arriving', params: { rideId: result.ride.id } } as any);
-        } else if (s === 'driver_arrived') {
-          router.replace({ pathname: '/driver-arrived', params: { rideId: result.ride.id } } as any);
-        } else if (s === 'in_progress') {
-          router.replace({ pathname: '/ride-in-progress', params: { rideId: result.ride.id } } as any);
-        } else if (s === 'completed') {
+        const target = targetPathForRideStatus(result.ride.status);
+        if (!target) return;
+        if (target === '/ride-completed') {
           const ps = result.ride.payment_status;
-          if (ps !== 'paid' && ps !== 'waived_admin') {
-            router.replace({ pathname: '/ride-completed', params: { rideId: result.ride.id } } as any);
-          }
+          if (ps === 'paid' || ps === 'waived_admin') return;
         }
+        // Already on the destination screen — re-navigating remounts it and its
+        // bottom sheet, which the rider sees as the page "double loading" every
+        // time the app returns to the foreground. Skip the redundant nav.
+        if (pathnameRef.current === target) return;
+        router.replace({ pathname: target, params: { rideId: result.ride.id } } as any);
       } catch (e) {
         console.warn('[Layout] Foreground ride check failed:', e);
       }

@@ -59,6 +59,7 @@ function PayoutScreen() {
     const [gstNumber, setGstNumber] = useState('');
     const [showGstForm, setShowGstForm] = useState(false);
     const [stripeAccountStatus, setStripeAccountStatus] = useState<string | null>(null);
+    const [sinOnFile, setSinOnFile] = useState(false);
     const [initialLoading, setInitialLoading] = useState(true);
 
     useEffect(() => {
@@ -83,12 +84,14 @@ function PayoutScreen() {
 
     const loadStripeStatus = async () => {
         try {
-            const res = await api.get<{ stripe_account_onboarded?: boolean }>('/drivers/balance');
+            const res = await api.get<{ stripe_account_onboarded?: boolean; stripe_id_number_provided?: boolean }>('/drivers/balance');
             setStripeAccountStatus(
                 res.data.stripe_account_onboarded ? 'active' : 'not_onboarded'
             );
+            setSinOnFile(!!res.data.stripe_id_number_provided);
         } catch {
             setStripeAccountStatus('not_onboarded');
+            setSinOnFile(false);
         }
     };
 
@@ -348,7 +351,9 @@ function PayoutScreen() {
                             <View style={{ flex: 1 }}>
                                 <Text style={styles.stripeTitle}>Stripe Connected</Text>
                                 <Text style={styles.stripeSubtitle}>
-                                    Identity verified. Bank account linked.
+                                    {sinOnFile
+                                        ? 'Identity verified. Bank account linked.'
+                                        : 'SIN required before payout — tap Update to add it.'}
                                 </Text>
                             </View>
                             <TouchableOpacity onPress={handleStripeOnboarding}>
@@ -509,6 +514,23 @@ function PayoutScreen() {
                                 </View>
                             </TouchableOpacity>
                         )}
+                        {!sinOnFile && (
+                            <TouchableOpacity
+                                style={[styles.payoutCard, { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 }]}
+                                onPress={handleStripeOnboarding}
+                            >
+                                <Ionicons name="alert-circle" size={22} color={colors.primary} />
+                                <View style={{ flex: 1, marginLeft: 10 }}>
+                                    <Text style={{ color: colors.text, fontSize: 14, fontWeight: '600' }}>
+                                        SIN required before payout
+                                    </Text>
+                                    <Text style={{ color: colors.textDim, fontSize: 13, marginTop: 2, lineHeight: 18 }}>
+                                        Add your Social Insurance Number securely through Stripe — we never
+                                        see or store it. Tap to continue verification.
+                                    </Text>
+                                </View>
+                            </TouchableOpacity>
+                        )}
                         <View style={styles.payoutCard}>
                             <View style={styles.payoutInputRow}>
                                 <Text style={styles.dollarSign}>$</Text>
@@ -519,15 +541,15 @@ function PayoutScreen() {
                                     keyboardType="decimal-pad"
                                     value={payoutAmount}
                                     onChangeText={setPayoutAmount}
-                                    editable={gstOnFile}
+                                    editable={gstOnFile && sinOnFile}
                                 />
                                 <TouchableOpacity
                                     style={[
                                         styles.payoutButton,
-                                        (!payoutAmount || isLoading || !gstOnFile) && styles.payoutButtonDisabled,
+                                        (!payoutAmount || isLoading || !gstOnFile || !sinOnFile) && styles.payoutButtonDisabled,
                                     ]}
                                     onPress={handleRequestPayout}
-                                    disabled={!payoutAmount || isLoading || !gstOnFile}
+                                    disabled={!payoutAmount || isLoading || !gstOnFile || !sinOnFile}
                                 >
                                     {isLoading ? (
                                         <ActivityIndicator size="small" color="#fff" />

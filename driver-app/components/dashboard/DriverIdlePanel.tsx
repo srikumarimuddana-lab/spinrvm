@@ -2,12 +2,13 @@ import React, { useRef, useEffect, useMemo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import { useAuthStore } from '@shared/store/authStore';
+import { useAuthStore, DriverOnboardingStatus } from '@shared/store/authStore';
 import { useLanguageStore } from '../../store/languageStore';
 
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
@@ -32,6 +33,53 @@ interface IdlePanelProps {
   pulseAnim: any;
 }
 
+function getStateBanners(t: (key: string) => string, driverData?: any) {
+  return {
+    profile_incomplete: {
+      title: t('dashboard.completeProfile'),
+      subtitle: t('dashboard.profileIncompleteMsg'),
+      button: t('dashboard.finishProfile'),
+      icon: 'person', tone: 'info', target: '/profile-setup',
+    },
+    vehicle_required: {
+      title: t('dashboard.addVehicle'),
+      subtitle: t('dashboard.profileIncompleteMsg'),
+      button: t('dashboard.addVehicleDetails'),
+      icon: 'car', tone: 'info', target: '/vehicle-info',
+    },
+    documents_required: {
+      title: t('dashboard.actionRequired'),
+      subtitle: t('dashboard.uploadDocs'),
+      button: t('dashboard.uploadDocs'),
+      icon: 'document-text', tone: 'warning', target: '/documents',
+    },
+    documents_rejected: {
+      title: t('dashboard.docsRejected'),
+      subtitle: t('dashboard.fixDocuments'),
+      button: t('dashboard.fixDocuments'),
+      icon: 'alert-circle', tone: 'danger', target: '/documents',
+    },
+    documents_expired: {
+      title: t('dashboard.docsExpired'),
+      subtitle: t('dashboard.updateDocs'),
+      button: t('dashboard.updateDocs'),
+      icon: 'time', tone: 'warning', target: '/documents',
+    },
+    pending_review: {
+      title: t('dashboard.underReview'),
+      subtitle: t('dashboard.viewStatus'),
+      button: t('dashboard.viewStatus'),
+      icon: 'hourglass', tone: 'info', target: '/documents',
+    },
+    suspended: {
+      title: t('dashboard.accountSuspended'),
+      subtitle: driverData?.suspension_reason || driverData?.ban_reason || t('dashboard.contactSupport'),
+      button: t('dashboard.contactSupport'),
+      icon: 'ban', tone: 'danger', target: 'mailto:support@spinr.ca?subject=Account%20Suspended',
+    },
+  };
+}
+
 export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
   isOnline,
   driverData,
@@ -41,7 +89,9 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
   const { colors } = useTheme();
   const { t } = useLanguageStore();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const STATE_BANNERS = getStateBanners(t, driverData);
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   let onboardingStatus = useAuthStore(s => s.user?.driver_onboarding_status ?? null);
   const driver = useAuthStore(s => s.driver);
 
@@ -57,14 +107,9 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
     }
   }
 
-  // Vehicle summary shown on the home HUD instead of an onboarding /
-  // document-upload banner. Missing-vehicle and missing-document cases are
-  // surfaced as a toast when the driver taps GO (see useDriverDashboard
-  // .toggleOnline) rather than cluttering the map.
-  const vehicleLabel = [driver?.vehicle_color, driver?.vehicle_make, driver?.vehicle_model]
-    .filter(Boolean)
-    .join(' ')
-    .trim();
+  const banner = onboardingStatus && onboardingStatus !== 'verified'
+    ? STATE_BANNERS[onboardingStatus as keyof typeof STATE_BANNERS]
+    : null;
 
   // Only drivers with status='active' can go online. The backend enforces
   // this too, but we disable the GO button client-side for better UX.
@@ -124,22 +169,46 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
       
       {/* HUD Info Area */}
       <View style={styles.hudArea} pointerEvents="box-none">
-
-        {/* Vehicle details pill — replaces the old onboarding / document
-            banner. Shows the driver's car at a glance; missing vehicle /
-            document requirements are surfaced as a toast on GO instead. */}
-        {!!vehicleLabel && (
-          <View style={styles.vehiclePill} accessibilityRole="text" accessibilityLabel={`Vehicle ${vehicleLabel}${driver?.license_plate ? `, plate ${driver.license_plate}` : ''}`}>
-            <Ionicons name="car-sport" size={15} color={colors.primary} />
-            <Text style={styles.vehiclePillText} numberOfLines={1}>{vehicleLabel}</Text>
-            {!!driver?.license_plate && (
-              <>
-                <View style={styles.vehiclePillDivider} />
-                <Text style={styles.vehiclePillPlate} numberOfLines={1}>{driver.license_plate}</Text>
-              </>
-            )}
-          </View>
+        
+        {/* Onboarding banner */}
+        {banner && (
+          <TouchableOpacity
+            style={[
+              styles.actionBar,
+              banner.tone === 'danger' && styles.actionBarDanger,
+              banner.tone === 'warning' && styles.actionBarWarning,
+            ]}
+            onPress={() => {
+              if (banner.target.startsWith('mailto:') || banner.target.startsWith('http')) {
+                require('react-native').Linking.openURL(banner.target);
+              } else {
+                router.push(banner.target as any);
+              }
+            }}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel={banner.button}
+          >
+            <Ionicons
+              name={banner.icon as keyof typeof Ionicons.glyphMap}
+              size={16}
+              color={banner.tone === 'danger' ? colors.error : banner.tone === 'warning' ? '#92400E' : colors.primary}
+            />
+            <Text
+              style={[
+                styles.actionBarText,
+                banner.tone === 'danger' && styles.actionBarTextDanger,
+                banner.tone === 'warning' && styles.actionBarTextWarning,
+              ]}
+              numberOfLines={1}
+            >
+              {banner.title}
+            </Text>
+            <Text style={styles.actionBarCta}>{banner.button}</Text>
+            <Ionicons name="chevron-forward" size={14} color={colors.primary} />
+          </TouchableOpacity>
         )}
+
 
         {/* Status Indicator Pill */}
         <View style={styles.statusPillWrapper}>
@@ -161,17 +230,14 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
       {/* Floating GO Button */}
       <View style={styles.goButtonArea} pointerEvents="box-none">
         
-        {/* GO is always pressable: when the driver isn't eligible yet,
-            onToggleOnline shows a scenario-specific toast (missing vehicle,
-            documents required/rejected/expired, under review, not verified)
-            instead of silently doing nothing. The greyed style still signals
-            "not ready". */}
         <TouchableOpacity
           activeOpacity={0.9}
+          disabled={!canGoOnline}
           onPress={onToggleOnline}
           style={styles.goButtonOuterContainer}
           accessibilityRole="button"
           accessibilityLabel={isOnline ? t('home.stop') : t('home.go')}
+          accessibilityState={{ disabled: !canGoOnline }}
         >
           <Animated.View style={[
             styles.goButtonShadow, 
@@ -215,40 +281,48 @@ function createStyles(colors: ThemeColors) {
       paddingHorizontal: 20,
       marginBottom: 20,
     },
-    vehiclePill: {
+    actionBar: {
       flexDirection: 'row',
       alignItems: 'center',
-      maxWidth: '100%',
+      width: '100%',
       backgroundColor: colors.surface,
-      borderRadius: 20,
+      borderRadius: 16,
       paddingHorizontal: 14,
-      paddingVertical: 8,
+      paddingVertical: 12,
       marginBottom: 12,
       gap: 8,
       shadowColor: '#000',
-      shadowOffset: { width: 0, height: 2 },
+      shadowOffset: { width: 0, height: 4 },
       shadowOpacity: 0.1,
-      shadowRadius: 6,
-      elevation: 3,
+      shadowRadius: 10,
+      elevation: 5,
       borderWidth: 1,
       borderColor: colors.border,
     },
-    vehiclePillText: {
-      flexShrink: 1,
+    actionBarWarning: {
+      backgroundColor: colors.warningBg,
+      borderColor: colors.warning,
+    },
+    actionBarDanger: {
+      backgroundColor: colors.dangerBg,
+      borderColor: colors.error,
+    },
+    actionBarText: {
+      flex: 1,
       fontSize: 13,
       fontWeight: '700',
       color: colors.text,
     },
-    vehiclePillDivider: {
-      width: 1,
-      height: 14,
-      backgroundColor: colors.border,
+    actionBarTextWarning: {
+      color: '#92400E',
     },
-    vehiclePillPlate: {
-      fontSize: 13,
-      fontWeight: '800',
+    actionBarTextDanger: {
+      color: '#991B1B',
+    },
+    actionBarCta: {
+      fontSize: 12,
+      fontWeight: '700',
       color: colors.primary,
-      letterSpacing: 0.5,
     },
 
     statusPillWrapper: {

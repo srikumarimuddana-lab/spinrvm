@@ -2,16 +2,7 @@ import { create } from 'zustand';
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 import api, { setCsrfToken, setInMemoryToken, setRefreshCallback } from '../api/client';
-import { appCache, CACHE_KEYS } from '../cache';
-
-// Last-known profile is cached with a long TTL so the driver/rider still sees
-// their photo, name, phone, and vehicle after a long idle period or when the
-// device is offline on relaunch — instead of the screen blanking to "N/A" /
-// "Add Vehicle" while the network refresh is in flight. This cache is wiped on
-// logout via appCache.clearUserCache(), so it does not extend PII retention
-// beyond the active session (TanStack Query already persists /drivers/me for
-// 24h; this brings the user row to parity).
-const PROFILE_CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days
+import { appCache, CACHE_KEYS, CACHE_CONFIG } from '../cache';
 
 // Registry of callbacks that must run when the user logs out. Other stores
 // (rideStore, driverStore) register here on mount to wipe per-session state
@@ -290,28 +281,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // to restore a session without forcing the user back to the OTP screen.
     const storedRefresh = await storage.getItem('refresh_token');
     if (storedRefresh) {
-      // Optimistic hydration: paint the last-known profile from cache before
-      // the network round-trips below resolve, so the first frame after the
-      // splash never flashes blank ("N/A" / "Add Vehicle"). Fresh data from
-      // /auth/me + /drivers/me overwrites this on success.
-      try {
-        const [cachedUser, cachedDriver] = await Promise.all([
-          appCache.get<User>(CACHE_KEYS.USER_PROFILE),
-          appCache.get<Driver>(CACHE_KEYS.DRIVER_PROFILE),
-        ]);
-        if (cachedUser) set({ user: cachedUser });
-        if (cachedDriver) set({ driver: cachedDriver });
-      } catch {
-        // Cache read is best-effort — never block init on it.
-      }
-
       const refreshed = await get().refreshTokens();
       if (refreshed) {
         const newToken = get().token;
         try {
           const meRes = await api.get('/auth/me');
           const userData = meRes.data as User;
-          await appCache.set(CACHE_KEYS.USER_PROFILE, userData, PROFILE_CACHE_TTL);
+          await appCache.set(CACHE_KEYS.USER_PROFILE, userData, CACHE_CONFIG.USER_PROFILE_TTL);
 
           let driverData: Driver | null = null;
           const looksLikeDriver =
@@ -321,23 +297,19 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             try {
               const driverRes = await api.get('/drivers/me');
               driverData = driverRes.data as Driver;
-              await appCache.set(CACHE_KEYS.DRIVER_PROFILE, driverData, PROFILE_CACHE_TTL);
+              await appCache.set(CACHE_KEYS.DRIVER_PROFILE, driverData, CACHE_CONFIG.USER_PROFILE_TTL);
             } catch (e: unknown) {
               if (isApiError(e) && e.response?.status === 404) {
                 if (__DEV__) console.log('[Auth] No driver row on refresh-init — auto-registering');
                 try {
                   const regRes = await api.post('/drivers/register', {});
                   driverData = regRes.data as Driver;
-                  await appCache.set(CACHE_KEYS.DRIVER_PROFILE, driverData, PROFILE_CACHE_TTL);
+                  await appCache.set(CACHE_KEYS.DRIVER_PROFILE, driverData, CACHE_CONFIG.USER_PROFILE_TTL);
                 } catch (regErr) {
                   if (__DEV__) console.log('[Auth] Auto-register failed on refresh-init:', regErr);
                 }
               } else {
-                // Network/transient failure fetching the driver row — keep the
-                // cached driver (set optimistically above) so vehicle details
-                // stay visible instead of reverting to "Add Vehicle".
                 if (__DEV__) console.log('Failed to fetch driver data on refresh-init');
-                driverData = get().driver;
               }
             }
           }
@@ -352,29 +324,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           return;
         } catch (e) {
           if (__DEV__) console.log('[Auth] Profile hydration after refresh failed:', e);
-          // Refresh succeeded (access token is valid) but /auth/me failed —
-          // almost always a transient network blip right after resume, or the
-          // device is offline. Rather than bouncing the driver to the OTP
-          // screen, fall back to the last-known cached profile and keep the
-          // session so their photo/name/phone/vehicle stay on screen. The 60s
-          // foreground refresh ticker replaces it with live data once the
-          // network is back.
-          const cachedUser = await appCache.get<User>(CACHE_KEYS.USER_PROFILE);
-          if (cachedUser && newToken) {
-            const cachedDriver = await appCache.get<Driver>(CACHE_KEYS.DRIVER_PROFILE);
-            set({
-              user: cachedUser,
-              driver: cachedDriver,
-              token: newToken,
-              isInitialized: true,
-              isLoading: false,
-            });
-            return;
-          }
-          // No cached profile to fall back on — clear the in-memory token so
-          // the app doesn't send a stale Authorization header while Zustand
-          // thinks the user is logged out. This mismatch previously left a
-          // zombie auth state that could corrupt HTTP/2 connections.
+          // Refresh succeeded but /auth/me failed — clear the in-memory
+          // token so the app doesn't send a stale Authorization header
+          // while Zustand thinks the user is logged out. This mismatch
+          // previously left a zombie auth state that could corrupt HTTP/2
+          // connections on the next request.
           setInMemoryToken(null);
           setCsrfToken(null);
         }
@@ -441,9 +395,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const meRes = await api.get('/auth/me');
       const userData = meRes.data as User;
       set({ user: userData });
-      // Keep the offline-fallback cache warm so a later cold start / resume
-      // still has a recent profile to paint while the network refresh runs.
-      appCache.set(CACHE_KEYS.USER_PROFILE, userData, PROFILE_CACHE_TTL).catch(() => {});
       // A driver row exists iff the server returned a driver_onboarding_status
       // — that derivation only runs when there's a driver row (or role=driver).
       // This signal is more reliable than `is_driver` / `role`, which can be
@@ -457,7 +408,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         try {
           const driverRes = await api.get('/drivers/me');
           set({ driver: driverRes.data as Driver });
-          appCache.set(CACHE_KEYS.DRIVER_PROFILE, driverRes.data as Driver, PROFILE_CACHE_TTL).catch(() => {});
         } catch (e: unknown) {
           if (__DEV__) console.log('refreshProfile: driver fetch failed', e);
           if (isApiError(e) && e.response?.status === 404) {

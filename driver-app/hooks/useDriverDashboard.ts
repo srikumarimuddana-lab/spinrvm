@@ -15,6 +15,7 @@ import { tKey } from '../i18n';
 import api from '@shared/api/client';
 import { useDriverConfig } from '@shared/hooks/queries';
 import { API_URL } from '@shared/config';
+import SpinrConfig from '@shared/config/spinr.config';
 import { onForegroundMessage } from '@shared/services/firebase';
 import { Dimensions } from 'react-native';
 import {
@@ -60,6 +61,28 @@ const _toFiniteCoord = (v: unknown): number | null => {
   if (!Number.isFinite(n)) return null;
   if (n < -180 || n > 180) return null; // valid range for both lat (-90..90) and lng (-180..180)
   return n;
+};
+
+/**
+ * Resolve a backend base URL that is guaranteed to carry an http(s) scheme,
+ * or null if none can be found.
+ *
+ * `@shared/config`'s API_URL is env-var-only and resolves to '' when
+ * EXPO_PUBLIC_BACKEND_URL was not baked into the build (a known EAS / OTA
+ * hazard — the var is compiled in at build time, not read at runtime). An
+ * empty base produced a scheme-less WebSocket URL like "/ws/driver/123",
+ * which crashed the native OkHttp layer with a FATAL EXCEPTION:
+ * "Expected URL scheme 'http' or 'https' but no scheme was found".
+ *
+ * Defence: prefer API_URL when it has a valid scheme, otherwise fall back to
+ * SpinrConfig.backendUrl (which carries the hardcoded production safety net
+ * + HTTPS enforcement). Only ever return a value that starts with http(s);
+ * callers treat null as "cannot connect" and surface it instead of crashing.
+ */
+const _resolveBackendBaseUrl = (): string | null => {
+  const candidate = API_URL && /^https?:\/\//.test(API_URL) ? API_URL : SpinrConfig.backendUrl;
+  if (!candidate || !/^https?:\/\//.test(candidate)) return null;
+  return candidate.replace(/\/+$/, '');
 };
 
 export type LocationStatus = 'pending' | 'denied' | 'unavailable' | 'ok';
@@ -894,11 +917,27 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       return;
     }
 
+    // Defence against a misconfigured build: if no backend URL with a valid
+    // http(s) scheme can be resolved, do NOT construct the socket — a
+    // scheme-less URL ("/ws/driver/123") crashes the native OkHttp layer with
+    // a FATAL EXCEPTION. Surface a connection error and bail gracefully so the
+    // driver sees "Connection lost" instead of the app dying on tap-GO.
+    const baseUrl = _resolveBackendBaseUrl();
+    if (!baseUrl) {
+      console.error(
+        '[WS] No valid backend URL — cannot open driver socket. ' +
+        'EXPO_PUBLIC_BACKEND_URL is likely missing from this build.',
+      );
+      setConnectionState('disconnected');
+      setWsError(tKey('dashboard.connectionLost'));
+      return;
+    }
+
     // Match URL scheme: https backends (prod or DEV pointing at prod) use wss://,
     // http backends (local dev) use ws://. Checking __DEV__ is wrong — Railway's
     // edge proxy rejects plain ws:// with "Invalid Sec-WebSocket-Accept response".
-    const useSecure = API_URL.startsWith('https');
-    const wsBaseUrl = `${API_URL.replace(/^https?/, useSecure ? 'wss' : 'ws')}/ws/driver/${currentUser.id}`;
+    const useSecure = baseUrl.startsWith('https');
+    const wsBaseUrl = `${baseUrl.replace(/^https?/, useSecure ? 'wss' : 'ws')}/ws/driver/${currentUser.id}`;
     const wsUrl = lastSeqRef.current > 0 ? `${wsBaseUrl}?last_seq=${lastSeqRef.current}` : wsBaseUrl;
     // Flip the banner to 'reconnecting' the moment we start connecting.
     // The initial state is 'disconnected', which renders as the red

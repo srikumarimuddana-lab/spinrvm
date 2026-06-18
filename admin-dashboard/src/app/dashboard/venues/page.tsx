@@ -12,6 +12,7 @@ import {
 
 const EMPTY: VenueUpsert = {
   name: "", center_lat: 0, center_lng: 0, radius_m: 150, pickup_points: [], service_area_id: null, is_active: true,
+  fifo_enabled: false, queue_for_venue_id: null,
 };
 
 export default function VenuesPage() {
@@ -50,6 +51,18 @@ export default function VenuesPage() {
     return m;
   }, [serviceAreas]);
 
+  // ADR-008: feeder lots queue for a fifo_enabled terminal. The selector lists
+  // every terminal except the venue being edited (a venue can't queue for itself).
+  const venueNameById = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const v of venues) m[v.id] = v.name;
+    return m;
+  }, [venues]);
+  const terminals = useMemo(
+    () => venues.filter((v) => v.fifo_enabled && v.id !== editing?.id),
+    [venues, editing?.id],
+  );
+
   const startNew = () => setEditing({ id: null, data: { ...EMPTY, pickup_points: [] } });
   const startEdit = (v: Venue) => setEditing({
     id: v.id,
@@ -57,6 +70,7 @@ export default function VenuesPage() {
       name: v.name, center_lat: v.center_lat, center_lng: v.center_lng, radius_m: v.radius_m,
       pickup_points: (v.pickup_points || []).map((p) => ({ ...p })),
       service_area_id: v.service_area_id ?? null, is_active: v.is_active,
+      fifo_enabled: v.fifo_enabled ?? false, queue_for_venue_id: v.queue_for_venue_id ?? null,
     },
   });
 
@@ -157,6 +171,45 @@ export default function VenuesPage() {
               <span className="text-sm">Active</span>
             </div>
 
+            <div className="border-t pt-3 space-y-3">
+              <div>
+                <p className="text-sm font-semibold">Airport FIFO queue</p>
+                <p className="text-xs text-muted-foreground">
+                  A venue is either a <strong>terminal</strong> (riders are picked up here; dispatch offers
+                  rides to the longest-waiting driver) or a <strong>feeder lot</strong> (drivers wait here and
+                  join a terminal&rsquo;s queue). It can&rsquo;t be both.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Switch
+                  checked={!!d.fifo_enabled}
+                  // Enabling terminal mode clears any feeder-lot link (mutually exclusive).
+                  onCheckedChange={(v) => patch({ fifo_enabled: v, queue_for_venue_id: v ? null : d.queue_for_venue_id })}
+                />
+                <span className="text-sm">FIFO terminal (pickup point for an airport queue)</span>
+              </div>
+              <label className="text-sm block">
+                Feeder lot — queue for terminal
+                <select
+                  value={d.queue_for_venue_id ?? ""}
+                  // Linking to a terminal clears terminal mode on this venue.
+                  onChange={(e) => patch({ queue_for_venue_id: e.target.value || null, fifo_enabled: e.target.value ? false : d.fifo_enabled })}
+                  disabled={!!d.fifo_enabled}
+                  className="mt-1 w-full text-sm border rounded-md px-3 py-2 bg-background h-10 disabled:opacity-50"
+                >
+                  <option value="">Not a feeder lot</option>
+                  {terminals.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
+                </select>
+                {d.fifo_enabled ? (
+                  <span className="text-xs text-muted-foreground">Disabled — this venue is itself a terminal.</span>
+                ) : terminals.length === 0 ? (
+                  <span className="text-xs text-muted-foreground">Create a FIFO terminal venue first, then point lots at it.</span>
+                ) : null}
+              </label>
+            </div>
+
             <div className="border-t pt-3">
               <div className="flex items-center justify-between mb-2">
                 <p className="text-sm font-semibold">Pickup points</p>
@@ -212,6 +265,14 @@ export default function VenuesPage() {
                         <Ruler className="h-2.5 w-2.5" />
                         {v.radius_m} m
                       </span>
+                      {v.fifo_enabled && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">FIFO terminal</span>
+                      )}
+                      {v.queue_for_venue_id && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+                          feeds {venueNameById[v.queue_for_venue_id] || "a terminal"}
+                        </span>
+                      )}
                       {!v.is_active && <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">inactive</span>}
                     </p>
                     <p className="text-xs text-muted-foreground tabular-nums">

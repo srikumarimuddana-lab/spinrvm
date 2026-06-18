@@ -886,6 +886,11 @@ export interface Venue {
     pickup_points: VenuePickupPoint[];
     service_area_id?: string | null;
     is_active: boolean;
+    // ADR-008 airport FIFO dispatch. A venue is EITHER a terminal
+    // (fifo_enabled) OR a feeder lot (queue_for_venue_id → the terminal whose
+    // queue its waiting drivers join) — never both.
+    fifo_enabled?: boolean;
+    queue_for_venue_id?: string | null;
 }
 export type VenueUpsert = Omit<Venue, "id">;
 export const getVenues = (params?: { service_area_id?: string }) => {

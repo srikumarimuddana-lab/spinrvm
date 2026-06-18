@@ -10,7 +10,6 @@ import { router } from 'expo-router';
 
 import { useAuthStore } from '@shared/store/authStore';
 import { useDriverStore } from '../store/driverStore';
-import { useLanguageStore } from '../store/languageStore';
 import { useRideOfferSound, setOfferSoundUrl } from './useRideOfferSound';
 import { tKey } from '../i18n';
 import api from '@shared/api/client';
@@ -153,7 +152,6 @@ const PENDING_ACTION_KEY = 'spinr_pending_notifee_action';
 
 export const useDriverDashboard = (): UseDriverDashboardReturn => {
   const { user, driver: driverData, updateDriverStatus, refreshProfile } = useAuthStore();
-  const { t } = useLanguageStore();
   const {
     rideState,
     incomingRide,
@@ -1146,37 +1144,27 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // ─── Toggle Online/Offline ───────────────────────────────────────
   const toggleOnline = async () => {
     try {
-      // Gate on onboarding status from the user row (computed server-side on /auth/me).
-      const onboardingStatus = useAuthStore.getState().user?.driver_onboarding_status;
-
       if (!driverData?.vehicle_make || !driverData?.license_plate) {
-        showToast('error', t('dashboard.addVehicle'), t('dashboard.profileIncompleteMsg'));
-        router.push('/vehicle-info' as any);
+        showAlert(
+          "Profile Incomplete",
+          "You must provide vehicle details before going online.",
+          [
+            { text: "Add Vehicle Info", onPress: () => router.push('/vehicle-info' as any) },
+            { text: "Cancel", style: "cancel" },
+          ]
+        );
         return;
       }
 
-      if (onboardingStatus === 'documents_required') {
-        showToast('error', t('dashboard.actionRequired'), t('dashboard.uploadDocs'));
-        return;
-      }
-      if (onboardingStatus === 'documents_rejected') {
-        showToast('error', t('dashboard.docsRejected'), t('dashboard.fixDocuments'));
-        return;
-      }
-      if (onboardingStatus === 'documents_expired') {
-        showToast('error', t('dashboard.docsExpired'), t('dashboard.updateDocs'));
-        return;
-      }
-      if (onboardingStatus === 'pending_review') {
-        showToast('info', t('dashboard.underReview'), t('dashboard.viewStatus'));
-        return;
-      }
-      if (onboardingStatus === 'suspended') {
-        showToast('error', t('dashboard.accountSuspended'), t('dashboard.contactSupport'));
-        return;
-      }
       if (!driverData?.is_verified) {
-        showToast('error', t('dashboard.accountNotVerified'), t('dashboard.accountNotVerifiedMsg'));
+        showAlert(
+          "Account Not Verified",
+          "Your account is not verified yet. Please complete your profile and wait for admin approval before going online.",
+          [
+            { text: "Check Status", onPress: () => router.push('/driver/profile' as any) },
+            { text: "OK", style: "default" },
+          ]
+        );
         return;
       }
 

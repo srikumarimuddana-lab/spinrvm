@@ -36,6 +36,30 @@ def _f(v: Decimal) -> str:
     return str(v)
 
 
+def _parse_dt(value) -> Optional[datetime]:
+    """Parse an ISO datetime to a tz-aware UTC datetime, or None.
+
+    Quest start/end dates are stored as whatever string the admin dashboard
+    sent, which may use a trailing 'Z', omit the timezone, or be date-only.
+    The old code compared these as raw strings against now().isoformat(), so
+    any format mismatch ('Z' vs '+00:00', differing precision) silently
+    excluded a perfectly valid quest from the available list. Parsing to a
+    real datetime makes the window check correct regardless of format.
+    """
+    if not value or not isinstance(value, str):
+        return None
+    s = value.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 # ── Request Schemas ──────────────────────────────────────────────────
 
 
@@ -74,7 +98,7 @@ async def get_available_quests(current_user: dict = Depends(get_current_user)):
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    now = datetime.now(timezone.utc).isoformat()
+    now_dt = datetime.now(timezone.utc)
 
     try:
         # Get all active quests
@@ -91,9 +115,13 @@ async def get_available_quests(current_user: dict = Depends(get_current_user)):
     # Filter by date range and eligibility
     available = []
     for q in quests:
-        start = q.get("start_date", "")
-        end = q.get("end_date", "")
-        if start > now or end < now:
+        # Parse to real datetimes — a missing/unparseable bound is treated as
+        # open-ended on that side rather than silently hiding the quest.
+        start_dt = _parse_dt(q.get("start_date"))
+        end_dt = _parse_dt(q.get("end_date"))
+        if start_dt and start_dt > now_dt:
+            continue
+        if end_dt and end_dt < now_dt:
             continue
 
         # Check rating requirement
@@ -164,8 +192,8 @@ async def join_quest(quest_id: str, current_user: dict = Depends(get_current_use
     if not quest.get("is_active", True):
         raise HTTPException(status_code=400, detail="Quest is no longer active")
 
-    now = datetime.now(timezone.utc).isoformat()
-    if quest.get("end_date", "") < now:
+    end_dt = _parse_dt(quest.get("end_date"))
+    if end_dt and end_dt < datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="Quest has ended")
 
     # Check if already joined

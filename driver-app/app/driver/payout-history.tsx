@@ -5,7 +5,6 @@ import {
     StyleSheet,
     FlatList,
     TouchableOpacity,
-    ScrollView,
 } from 'react-native';
 import SafeRefreshControl from '../../components/SafeRefreshControl';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -150,8 +149,10 @@ export default function PayoutHistoryScreen() {
                 </View>
             </LinearGradient>
 
-            {/* Status Filter */}
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterRow} contentContainerStyle={styles.filterContent}>
+            {/* Status Filter — wraps to a second row so every pill (incl.
+                "Failed") is always visible and tappable on narrow screens,
+                instead of overflowing a non-obvious horizontal scroll. */}
+            <View style={styles.filterRow}>
                 {STATUS_FILTERS.map(s => (
                     <TouchableOpacity
                         key={s}
@@ -163,7 +164,7 @@ export default function PayoutHistoryScreen() {
                         </Text>
                     </TouchableOpacity>
                 ))}
-            </ScrollView>
+            </View>
 
             <FlatList
                 data={filteredHistory}
@@ -217,12 +218,11 @@ function createStyles(colors: ThemeColors) {
         headerTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
 
         filterRow: {
-            maxHeight: 44,
-            marginBottom: 4,
-        },
-        filterContent: {
+            flexDirection: 'row',
+            flexWrap: 'wrap',
             paddingHorizontal: 16,
             gap: 8,
+            marginBottom: 8,
         },
         filterPill: {
             paddingHorizontal: 16,

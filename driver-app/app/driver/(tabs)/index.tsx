@@ -4,7 +4,6 @@ import MapView, { Marker, Polyline, Polygon, Heatmap, PROVIDER_GOOGLE } from 're
 import MapViewDirections from 'react-native-maps-directions';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useFocusEffect } from '@react-navigation/native';
 import { useDriverStore } from '../../../store/driverStore';
 import { useAuthStore } from '@shared/store/authStore';
 import { useVehicleTypeStore } from '@shared/store/vehicleTypeStore';
@@ -412,27 +411,10 @@ function DriverDashboard() {
   const pendingRecenterRef = useRef(false);
   useEffect(() => {
     const sub = AppState.addEventListener('change', (next) => {
-      if (next === 'active') {
-        pendingRecenterRef.current = true;
-        // Re-pull the profile after returning from the background so the
-        // idle panel doesn't keep showing stale/empty data (no name, "Add
-        // Vehicle", offline-with-no-info) once the access token has lapsed
-        // during a long idle period.
-        useAuthStore.getState().refreshProfile().catch(() => {});
-      }
+      if (next === 'active') pendingRecenterRef.current = true;
     });
     return () => sub.remove();
   }, []);
-
-  // Refresh the driver + user profile whenever the dashboard regains focus.
-  // Unlike the Profile tab, the home screen had no refetch, so after some
-  // time idle the in-memory store was never repopulated and the panel showed
-  // "Add Vehicle" / no name. This keeps the home HUD in sync with the server.
-  useFocusEffect(
-    React.useCallback(() => {
-      useAuthStore.getState().refreshProfile().catch(() => {});
-    }, [])
-  );
   useEffect(() => {
     if (!pendingRecenterRef.current) return;
     if (!location?.coords || !mapRef.current) return;

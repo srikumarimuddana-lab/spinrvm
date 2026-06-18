@@ -137,6 +137,58 @@ async def update_driver_location(driver_id: str, lat: float, lng: float, heading
     return await run_sync(_update)
 
 
+async def set_driver_zone(driver_id: str, terminal_id: Optional[str]) -> bool:
+    """Guarded FIFO queue-membership write (ADR-008).
+
+    Stamps the TERMINAL venue a driver is queued for plus the arrival time that
+    orders the FIFO line, or clears both on exit (``terminal_id=None``). The
+    enter path is *guarded* so re-stamping the same terminal is a no-op:
+
+      WHERE id = driver AND (zone_venue_id IS NULL OR zone_venue_id != terminal)
+
+    Without that guard every GPS ping inside the lot would reset
+    ``zone_entered_at`` and silently send the driver to the back of the line.
+    The guard also makes the write replay-/replica-safe: if another process
+    already stamped this terminal, the update matches 0 rows. Exit is an
+    unconditional clear (idempotent — nothing to lose once empty); callers only
+    invoke it on a real transition.
+
+    Returns True iff a row actually transitioned (caller emits the metric).
+
+    NB: deliberately does NOT invalidate the driver cache — FIFO dispatch reads
+    the drivers table directly for ordering, and skipping the eviction keeps
+    this off-the-hot-GPS-path write cheap.
+    """
+    if not supabase:
+        return False
+
+    def _write():
+        if terminal_id is None:
+            res = (
+                supabase.table("drivers")
+                .update({"zone_venue_id": None, "zone_entered_at": None})
+                .eq("id", str(driver_id))
+                .execute()
+            )
+        else:
+            res = (
+                supabase.table("drivers")
+                .update(
+                    {
+                        "zone_venue_id": str(terminal_id),
+                        "zone_entered_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+                .eq("id", str(driver_id))
+                # Only (re)stamp on an actual zone change — see docstring.
+                .or_(f"zone_venue_id.is.null,zone_venue_id.neq.{terminal_id}")
+                .execute()
+            )
+        return len(_rows_from_res(res)) > 0
+
+    return await run_sync(_write)
+
+
 async def set_driver_available(driver_id: str, available: bool = True, total_rides_inc: int = 0):
     if not supabase:
         logger.warning("[GO-ONLINE] set_driver_available: supabase client is None!")

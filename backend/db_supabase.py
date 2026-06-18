@@ -219,6 +219,7 @@ try:
         get_service_area_for_point,
         match_and_claim_driver,
         set_driver_available,
+        set_driver_zone,
         update_driver_location,
     )
 except ImportError:
@@ -232,6 +233,7 @@ except ImportError:
         get_service_area_for_point,
         match_and_claim_driver,
         set_driver_available,
+        set_driver_zone,
         update_driver_location,
     )
 

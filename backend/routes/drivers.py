@@ -4967,21 +4967,28 @@ async def apply_referral_code(req: ApplyReferralCodeRequest, current_user: dict 
         await db_supabase.get_rows("drivers", {"referral_code": code}, limit=1)
     )
     if not ref_driver:
-        # Legacy fallback: allow `DRIVER<id-suffix>` format where the
-        # suffix is the last 8 chars of a driver ID. The original
-        # implementation used a `$regex` filter which (a) the Supabase
-        # translator silently dropped, so this path never matched, and
-        # (b) would have been a ReDoS vector on MongoDB.
+        # Fallback for the auto-generated default code, which is
+        # "DRIVER" + the first 8 chars of the driver id, upper-cased
+        # (see get_driver_referral_info). Resolve it back to the driver.
         #
-        # Replacement: accept only an 8-char alphanumeric suffix, then
-        # use a bounded PostgREST `.ilike()` lookup. The `%` suffix
-        # wildcard means "id ends with this string" — exactly what the
-        # original code was trying to do.
+        # NOTE: _apply_filters maps {"$regex": x} onto a SQL LIKE/ILIKE
+        # pattern (%x%), NOT a real regex — so the previous ".*<id>.*"
+        # value was matched *literally* (looking for ".*" inside the id)
+        # and never hit. Pass the bare 8-char token and set $options:"i"
+        # for a case-insensitive contains match (the code upper-cases the
+        # lower-case hex id, so a case-sensitive match would also miss).
         potential_id = code.replace("DRIVER", "")
-        if len(potential_id) == 8:
-            ref_driver = (lambda _r: _r[0] if _r else None)(
-                await db_supabase.get_rows("drivers", {"id": {"$regex": f".*{potential_id}.*"}}, limit=1)
-            )
+        if len(potential_id) == 8 and potential_id.isalnum():
+            try:
+                ref_driver = (lambda _r: _r[0] if _r else None)(
+                    await db_supabase.get_rows(
+                        "drivers",
+                        {"id": {"$regex": potential_id, "$options": "i"}},
+                        limit=1,
+                    )
+                )
+            except Exception as e:
+                logger.warning(f"Referral default-code fallback lookup failed: {e}")
 
     if not ref_driver:
         raise HTTPException(status_code=404, detail="Invalid referral code")

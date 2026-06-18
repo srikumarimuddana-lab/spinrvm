@@ -376,6 +376,15 @@ export const useRideStore = create<RideState>((set, get) => ({
       const response = await api.get<{ active?: boolean; ride?: Ride & { driver?: Driver | null } }>('/rides/active');
       if (response.data?.active && response.data.ride) {
         const ride = response.data.ride;
+        // The rider just cancelled this ride locally; the server may not have
+        // committed the cancel yet, so /rides/active can still report it as
+        // active for a moment (read-after-write lag). Treat it as inactive so
+        // the home useFocusEffect doesn't re-push into the searching screen,
+        // which restarted the cancel toast (the flicker). _clearedRideId is
+        // reset to null when the rider books a new ride.
+        if (get()._clearedRideId === ride.id) {
+          return null;
+        }
         const driver = ride.driver ?? null;
         const rideWithoutDriver: Ride = (({ driver: _d, ...rest }) => rest)(ride);
         set({ currentRide: rideWithoutDriver, currentDriver: driver, _clearedRideId: null });
@@ -730,7 +739,12 @@ export const useRideStore = create<RideState>((set, get) => ({
       } else {
         await api.post(`/rides/${currentRide.id}/cancel`);
       }
-      set({ currentRide: null, currentDriver: null, isLoading: false });
+      // Record the cancelled ride as locally-cleared so (a) in-flight fetchRide
+      // responses for it are discarded and (b) the WS ride_cancelled echo the
+      // server sends back is recognised as already-handled and skipped — without
+      // this the echo re-toasts + re-navigates, restarting the toast animation
+      // (the cancel-during-search flicker).
+      set({ currentRide: null, currentDriver: null, isLoading: false, _clearedRideId: currentRide.id });
       AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
     } catch (error: unknown) {
       // 409 with a terminal current_status means the backend already cancelled/
@@ -742,7 +756,7 @@ export const useRideStore = create<RideState>((set, get) => ({
         error.status === 409 &&
         TERMINAL_STATUSES.has(String(error.details?.current_status ?? ''))
       ) {
-        set({ currentRide: null, currentDriver: null, isLoading: false });
+        set({ currentRide: null, currentDriver: null, isLoading: false, _clearedRideId: currentRide.id });
         AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
         return;
       }
@@ -892,7 +906,12 @@ export const useRideStore = create<RideState>((set, get) => ({
   // this, the race (clearRide → fetchRide response arrives → currentRide
   // re-populated) traps the rider on ride-completed after paying.
   clearRide: () => {
-    const clearedId = get().currentRide?.id;
+    // Fall back to the existing _clearedRideId when currentRide is already null:
+    // performCancel() calls cancelRide() (which nulls currentRide and records
+    // _clearedRideId) and THEN clearRide(), so without this fallback the second
+    // call would reset _clearedRideId to null and re-enable the duplicate WS
+    // ride_cancelled handling we're suppressing.
+    const clearedId = get().currentRide?.id ?? get()._clearedRideId;
     set({
       currentRide: null,
       currentDriver: null,

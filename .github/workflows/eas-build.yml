@@ -80,7 +80,13 @@ jobs:
           MESSAGE="${MSG:-manual update}"
           # eas update truncates at 1024 chars; keep just the first line.
           MESSAGE=$(echo "$MESSAGE" | head -1 | cut -c1-1000)
-          eas update --channel "$CHANNEL" --auto --non-interactive --message "$MESSAGE"
+          # Publish to the branch of the same name as the channel (branch
+          # `preview`/`production`/`test`). `eas update --channel` requires the
+          # channel to already be linked to exactly one branch and fails with
+          # "Channel has no branches associated with it" otherwise; publishing
+          # by --branch is unambiguous. The same-named channel routes builds to
+          # this branch (one-time `eas channel:edit <name> --branch <name>`).
+          eas update --branch "$CHANNEL" --non-interactive --message "$MESSAGE"
 
   driver:
     needs: detect
@@ -109,4 +115,5 @@ jobs:
         run: |
           MESSAGE="${MSG:-manual update}"
           MESSAGE=$(echo "$MESSAGE" | head -1 | cut -c1-1000)
-          eas update --channel "$CHANNEL" --auto --non-interactive --message "$MESSAGE"
+          # See rider job above — publish by branch, not channel.
+          eas update --branch "$CHANNEL" --non-interactive --message "$MESSAGE"

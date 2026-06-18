@@ -1540,9 +1540,7 @@ async def _driver_referral_summary(driver: dict, *, include_referees: bool) -> d
         )
         completed = 0
         if ref_drv:
-            completed = await db_supabase.count_documents(
-                "rides", {"driver_id": ref_drv["id"], "status": "completed"}
-            )
+            completed = await db_supabase.count_documents("rides", {"driver_id": ref_drv["id"], "status": "completed"})
         is_qualified = bool(ref_drv) and completed >= rides_required
         if is_qualified:
             qualified += 1
@@ -1599,9 +1597,7 @@ async def admin_get_referral_leaderboard(
     """
     rides_required, reward_amount = _referral_terms()
 
-    users = await db_supabase.get_rows(
-        "users", {}, columns="id,referred_by", limit=5000
-    )
+    users = await db_supabase.get_rows("users", {}, columns="id,referred_by", limit=5000)
     by_referrer: dict[str, list[str]] = {}
     for u in users:
         rid = u.get("referred_by")
@@ -1625,13 +1621,9 @@ async def admin_get_referral_leaderboard(
         )
         qualified = 0
         for uid in referee_user_ids:
-            rdrv = (lambda _r: _r[0] if _r else None)(
-                await db_supabase.get_rows("drivers", {"user_id": uid}, limit=1)
-            )
+            rdrv = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": uid}, limit=1))
             if rdrv:
-                completed = await db_supabase.count_documents(
-                    "rides", {"driver_id": rdrv["id"], "status": "completed"}
-                )
+                completed = await db_supabase.count_documents("rides", {"driver_id": rdrv["id"], "status": "completed"})
                 if completed >= rides_required:
                     qualified += 1
         fleet_qualified += qualified
@@ -1652,6 +1644,69 @@ async def admin_get_referral_leaderboard(
         "fleet_total_referrers": len(by_referrer),
         "reward_amount": reward_amount,
         "rides_required": rides_required,
+    }
+
+
+@router.get("/referrals/rider-leaderboard")
+async def admin_get_rider_referral_leaderboard(
+    limit: int = Query(20, ge=1, le=100),
+    admin: dict = Depends(get_admin_user),
+):
+    """Fleet-wide top RIDER referrers (riders referring riders). Same response
+    shape as the driver leaderboard so the admin UI component is shared."""
+    try:
+        from ..users import (  # type: ignore
+            RIDER_REFERRAL_RIDES_REQUIRED,
+            RIDER_REFERRER_REWARD,
+        )
+    except ImportError:
+        from routes.users import (  # type: ignore
+            RIDER_REFERRAL_RIDES_REQUIRED,
+            RIDER_REFERRER_REWARD,
+        )
+
+    users = await db_supabase.get_rows(
+        "users", {}, columns="id,referral_code_used,referred_by,first_name,last_name", limit=10000
+    )
+    by_referrer: dict[str, list[str]] = {}
+    name_by_id: dict[str, str] = {}
+    for u in users:
+        name_by_id[u["id"]] = f"{u.get('first_name', '')} {u.get('last_name', '')}".strip() or "Rider"
+        code = u.get("referral_code_used")
+        rid = u.get("referred_by")
+        # Rider referrals use a RIDE-prefixed code and store the referrer's user id.
+        if code and str(code).upper().startswith("RIDE") and rid:
+            by_referrer.setdefault(rid, []).append(u["id"])
+
+    fleet_total = sum(len(v) for v in by_referrer.values())
+    top = sorted(by_referrer.items(), key=lambda kv: len(kv[1]), reverse=True)[:limit]
+
+    leaders: list[dict] = []
+    for referrer_id, referee_ids in top:
+        qualified = 0
+        for ride_user_id in referee_ids:
+            completed = await db_supabase.count_documents("rides", {"rider_id": ride_user_id, "status": "completed"})
+            if completed >= RIDER_REFERRAL_RIDES_REQUIRED:
+                qualified += 1
+        leaders.append(
+            {
+                # driver_id/driver_code reuse the shared UI fields — here they
+                # carry the referrer's user id and RIDE code.
+                "driver_id": referrer_id,
+                "driver_code": f"RIDE{referrer_id[:8].upper()}",
+                "name": name_by_id.get(referrer_id, "Rider"),
+                "total_referrals": len(referee_ids),
+                "qualified_referrals": qualified,
+                "referral_earnings": qualified * RIDER_REFERRER_REWARD,
+            }
+        )
+
+    return {
+        "leaders": leaders,
+        "fleet_total_referrals": fleet_total,
+        "fleet_total_referrers": len(by_referrer),
+        "reward_amount": RIDER_REFERRER_REWARD,
+        "rides_required": RIDER_REFERRAL_RIDES_REQUIRED,
     }
 
 

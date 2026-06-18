@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getReferralLeaderboard, type ReferralLeaderboard as Data } from "@/lib/api";
+import { getReferralLeaderboard, getRiderReferralLeaderboard, type ReferralLeaderboard as Data } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatCurrency } from "@/lib/utils";
 import { Gift, Users, Award, Trophy } from "lucide-react";
@@ -11,7 +11,7 @@ import { Gift, Users, Award, Trophy } from "lucide-react";
  * Shared by the standalone Referrals page and the Earnings → Referrals tab so
  * the two can never diverge.
  */
-export default function ReferralLeaderboard({ limit = 20 }: { limit?: number }) {
+export default function ReferralLeaderboard({ limit = 20, source = "driver" }: { limit?: number; source?: "driver" | "rider" }) {
     const [data, setData] = useState<Data | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
@@ -19,12 +19,14 @@ export default function ReferralLeaderboard({ limit = 20 }: { limit?: number }) 
     useEffect(() => {
         let cancelled = false;
         setLoading(true);
-        getReferralLeaderboard(limit)
+        setError("");
+        const fetcher = source === "rider" ? getRiderReferralLeaderboard : getReferralLeaderboard;
+        fetcher(limit)
             .then((d) => { if (!cancelled) setData(d); })
             .catch((e) => { if (!cancelled) setError(e?.message || "Failed to load referral stats"); })
             .finally(() => { if (!cancelled) setLoading(false); });
         return () => { cancelled = true; };
-    }, [limit]);
+    }, [limit, source]);
 
     if (loading) {
         return <div className="text-sm text-muted-foreground py-10 text-center">Loading referral stats…</div>;

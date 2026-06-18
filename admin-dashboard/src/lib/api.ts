@@ -616,6 +616,9 @@ export interface ReferralLeaderboard {
 export const getReferralLeaderboard = (limit = 20) =>
     request<ReferralLeaderboard>(`/api/admin/referrals/leaderboard?limit=${limit}`);
 
+export const getRiderReferralLeaderboard = (limit = 20) =>
+    request<ReferralLeaderboard>(`/api/admin/referrals/rider-leaderboard?limit=${limit}`);
+
 export interface DriverPayoutSummary {
     summary: {
         lifetime_earnings: number;

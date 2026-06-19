@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -1154,8 +1155,10 @@ async def logout_all(request: Request, response: Response, current_user: dict = 
     # minting fresh ID tokens, forcing a real re-sign-in. Best-effort only —
     # the sessions_invalid_before watermark above is the authoritative
     # enforcement (a refreshed ID token keeps its original auth_time, so the
-    # watermark rejects it regardless).
-    _revoke_firebase_refresh_tokens(user_id)
+    # watermark rejects it regardless). The Firebase Admin SDK call is
+    # synchronous/blocking, so run it in a worker thread to avoid stalling the
+    # event loop (and other requests on this worker) if Firebase is slow.
+    await asyncio.to_thread(_revoke_firebase_refresh_tokens, user_id)
 
     # B-P1-11: kick any live WebSocket sockets so the user is logged
     # out instantly rather than waiting up to 30s for the heartbeat

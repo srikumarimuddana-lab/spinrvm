@@ -83,13 +83,14 @@ export default function RiderReferralScreen() {
 
     const share = async () => {
         if (!info) return;
+        // No deep link — invitees paste the code on the signup screen, so the
+        // message shares the CODE and tells them exactly where to enter it.
+        const message = `Join me on Spinr! Download the app, then paste my code ${info.referral_code} during signup and we both get a reward when you take your first ride.`;
         try {
-            await Share.share({
-                message: `Join me on Spinr! Use my code ${info.referral_code} and we both get a reward when you take your first ride. ${info.referral_link}`,
-            });
+            await Share.share({ message });
         } catch {
-            await Clipboard.setStringAsync(info.referral_link);
-            showToast('Link copied', 'Referral link copied to clipboard', 'info');
+            await Clipboard.setStringAsync(info.referral_code);
+            showToast('Code copied', 'Referral code copied to clipboard', 'info');
         }
     };
 
@@ -119,7 +120,7 @@ export default function RiderReferralScreen() {
                 <ScrollView style={styles.content} contentContainerStyle={{ paddingBottom: insets.bottom + 32 }} showsVerticalScrollIndicator={false}>
                     <LinearGradient colors={[colors.primary, colors.primaryDark]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.hero}>
                         <Text style={styles.heroTitle}>Give a ride, get a reward</Text>
-                        <Text style={styles.heroSubtitle}>{info?.terms || 'Invite friends and earn when they take their first ride.'}</Text>
+                        <Text style={styles.heroSubtitle}>Share your code — friends paste it when they sign up, and you both earn.</Text>
 
                         {info && (
                             <View style={styles.codeBox}>
@@ -134,7 +135,7 @@ export default function RiderReferralScreen() {
 
                         <TouchableOpacity style={styles.shareBtn} onPress={share}>
                             <Ionicons name="share-social-outline" size={20} color={colors.primary} />
-                            <Text style={styles.shareBtnText}>Share Invite Link</Text>
+                            <Text style={styles.shareBtnText}>Share Your Code</Text>
                         </TouchableOpacity>
                     </LinearGradient>
 
@@ -180,6 +181,15 @@ export default function RiderReferralScreen() {
                                 );
                             })}
                         </View>
+                    )}
+
+                    {!!info?.terms && (
+                        <>
+                            <Text style={styles.sectionTitle}>Terms & Conditions</Text>
+                            <View style={styles.termsCard}>
+                                <Text style={styles.termsText}>{info.terms}</Text>
+                            </View>
+                        </>
                     )}
                 </ScrollView>
             )}
@@ -230,6 +240,8 @@ function createStyles(colors: ThemeColors) {
         statValue: { fontSize: 22, fontWeight: '700', color: colors.primary },
         statLabel: { fontSize: 12, color: colors.textDim, marginTop: 4 },
         sectionTitle: { fontSize: 16, fontWeight: '600', color: colors.text, marginTop: 24, marginBottom: 12 },
+        termsCard: { backgroundColor: colors.surface, borderRadius: 12, padding: 16 },
+        termsText: { fontSize: 13, lineHeight: 20, color: colors.textDim },
         empty: { backgroundColor: colors.surface, borderRadius: 12, padding: 32, alignItems: 'center' },
         emptyText: { fontSize: 16, fontWeight: '600', color: colors.text, marginTop: 12 },
         emptySub: { fontSize: 14, color: colors.textDim, marginTop: 4 },

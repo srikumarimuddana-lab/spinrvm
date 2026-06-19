@@ -21,7 +21,8 @@
 -- All changes are additive + nullable/defaulted → forward-compatible with
 -- in-flight traffic; no backfill of large tables required.
 --
--- Rollback (on paper):
+-- Rollback:
+--   (on paper — drop the added columns)
 --   ALTER TABLE service_areas
 --     DROP COLUMN IF EXISTS rider_referrer_reward,
 --     DROP COLUMN IF EXISTS rider_referee_reward,

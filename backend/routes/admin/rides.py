@@ -1634,6 +1634,11 @@ async def admin_send_payable_invoice(
                 metadata={"ride_id": ride_id, "source": "admin_send_invoice"},
                 description=f"Spinr ride {ride_code}",
                 api_key=stripe_secret,
+                # Per-attempt key (the unique CAS sentinel) so a network-timeout
+                # retry of THIS request dedupes, while a later reclaim (new
+                # sentinel) still mints a fresh invoice instead of replaying a
+                # voided one — keying on ride+amount would do the latter wrongly.
+                idempotency_key=f"ride-invoice-{invoice_claim_sentinel}",
             )
         )
         created_invoice_id = invoice.id
@@ -1660,6 +1665,9 @@ async def admin_send_payable_invoice(
                 currency="cad",
                 description=f"Spinr ride {ride_code}",
                 api_key=stripe_secret,
+                # Keyed to this invoice so a retry can't attach a duplicate line
+                # item (which would double the amount due).
+                idempotency_key=f"ride-invoiceitem-{invoice.id}",
             )
         )
         finalized = await db_supabase.run_sync(

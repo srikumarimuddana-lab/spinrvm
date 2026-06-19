@@ -154,17 +154,20 @@ async def _handle_ride_invoice_paid(invoice: dict, ride_id: str, event_id: str, 
     if _pstatus == "processing":
         # An in-app settlement holds the atomic 'processing' claim (or a card
         # charge was captured-but-unconfirmed). Settling the invoice here too
-        # would double-credit the driver and double-write the ledger. Skip and
-        # let the in-app finalize / Stripe reconcile decide the truth. ERROR so
-        # the concurrent-charge anomaly surfaces (the invoice may have collected
-        # alongside an in-app charge — a refund may be owed).
+        # would double-credit the driver and double-write the ledger. Do NOT ack
+        # the event: a bare return would stamp processed_at and permanently drop
+        # this paid invoice (driver never credited) if the in-app charge later
+        # fails. Raise so processed_at stays NULL — once the 'processing' claim
+        # resolves (→ paid: idempotent skip; → failed: invoice settles) a replay
+        # settles correctly. ERROR so the concurrent-charge anomaly surfaces (a
+        # refund may be owed if the in-app charge also collected).
         logger.error(
             "invoice.paid for ride %s while payment_status='processing' — possible "
-            "concurrent in-app charge; skipping invoice settlement, reconcile required",
+            "concurrent in-app charge; deferring invoice settlement, reconcile required",
             ride_id,
             extra={"domain": "payments", "ride_id": ride_id, "event_id": event_id},
         )
-        return
+        raise HTTPException(status_code=500, detail="Ride payment is processing — deferring invoice settlement")
 
     rider_id = ride.get("rider_id")
     amount_cents = invoice.get("amount_paid")

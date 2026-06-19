@@ -1499,10 +1499,14 @@ class TestRideInvoicePaid:
         record_mock.assert_not_awaited()
         update_ride_mock.assert_not_awaited()
 
-    def test_ride_invoice_paid_skips_when_processing(self):
-        """A ride mid in-app charge (payment_status='processing') must NOT also
-        be settled by the invoice path — that would double-credit the driver."""
+    def test_ride_invoice_paid_defers_when_processing(self):
+        """A ride mid in-app charge (payment_status='processing') must NOT also be
+        settled by the invoice path (double-credit). It must also NOT ack the
+        event — a bare return would stamp processed_at and permanently drop this
+        paid invoice if the in-app charge later fails. So it RAISES (processed_at
+        stays NULL) for a later replay once 'processing' resolves."""
         import stripe
+        from fastapi import HTTPException
 
         from backend.routes import webhooks as wh
 
@@ -1524,9 +1528,11 @@ class TestRideInvoicePaid:
             patch("backend.services.payment_service.record_payment_event", record_mock),
             patch("services.payment_service.record_payment_event", record_mock),
         ):
-            result = asyncio.run(wh.stripe_webhook(request=self._req()))
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(wh.stripe_webhook(request=self._req()))
 
-        assert result["received"] is True
+        assert exc.value.status_code == 500
+        # No settlement happened, and the event was not acked.
         record_mock.assert_not_awaited()
         update_ride_mock.assert_not_awaited()
 

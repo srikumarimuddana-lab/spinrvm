@@ -13,6 +13,7 @@ import {
   ScrollView,
   Animated,
   Alert,
+  BackHandler,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -146,7 +147,7 @@ export default function ProfileSetupScreen() {
     })();
   }, []);
 
-  const handleChangeNumber = () => {
+  const handleChangeNumber = useCallback(() => {
     Alert.alert(
       'Change phone number?',
       'This will sign you out and return to the login screen. Any progress here will be lost.',
@@ -162,7 +163,22 @@ export default function ProfileSetupScreen() {
         },
       ],
     );
-  };
+  }, [logout, router]);
+
+  // Android hardware back: there is no plain "back" out of profile setup.
+  // The user is already authenticated (OTP set their token) but has no
+  // profile yet, so popping to the login screen would silently strand a
+  // half-finished session — and make the "Change" button look redundant.
+  // Route the back press through the same sign-out confirmation as Change so
+  // the two behave identically. (iOS swipe-back is already disabled via
+  // gestureEnabled:false in _layout.tsx.)
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      handleChangeNumber();
+      return true;
+    });
+    return () => sub.remove();
+  }, [handleChangeNumber]);
 
   const validateEmail = (email: string): boolean => {
     return EMAIL_REGEX.test(email);
@@ -278,7 +294,7 @@ export default function ProfileSetupScreen() {
         <View style={styles.header}>
           <Text style={styles.title}>Welcome! 🎉</Text>
           <Text style={styles.subtitle}>
-            Let's get to know you better. This info will be shown to your riders.
+            Let&apos;s get to know you better. This info will be shown to your riders.
           </Text>
         </View>
 

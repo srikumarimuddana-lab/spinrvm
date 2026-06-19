@@ -289,7 +289,10 @@ function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.surface },
     scrollContent: { flexGrow: 1, paddingHorizontal: 24 },
-    centerArea: { flex: 1, justifyContent: 'center' },
+    // flexGrow (not flex) so it centers when there is room but never shrinks
+    // below its content — otherwise the keyboard clips the Verify button
+    // instead of letting the ScrollView scroll to it.
+    centerArea: { flexGrow: 1, justifyContent: 'center' },
     backBtn: {
       width: 44, height: 44, borderRadius: 14,
       backgroundColor: colors.surfaceLight,

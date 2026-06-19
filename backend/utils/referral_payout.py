@@ -198,11 +198,26 @@ async def _process_one(referee: dict, code: str) -> None:
     # 'failed' and stop: we deliberately do NOT delete/retry, because the claim
     # row staying in place is exactly what prevents a re-claim and a double
     # credit on the next tick. 'failed' rows surface for manual reconciliation.
+    # Each side's credit timestamp is persisted IMMEDIATELY after that credit
+    # succeeds (before attempting the next side), so a later failure/crash leaves
+    # a durable record of exactly which wallets were credited. Reconciliation of
+    # a 'failed' row then reads: referrer_credited_at set + referee_credited_at
+    # NULL → pay only the referee; both NULL → neither paid.
     meta = {"kind": kind, "referee_id": referee_id, "referrer_user_id": referrer_user_id}
     try:
         await _credit(referrer_user_id, referrer_reward, kind, referee_id, "referral_reward", meta)
+        await db_supabase.update_one(
+            "referral_payouts",
+            {"referee_user_id": referee_id},
+            {"$set": {"referrer_credited_at": datetime.now(timezone.utc).isoformat()}},
+        )
         if referee_reward > 0:
             await _credit(referee_id, referee_reward, kind, referee_id, "referral_bonus", meta)
+            await db_supabase.update_one(
+                "referral_payouts",
+                {"referee_user_id": referee_id},
+                {"$set": {"referee_credited_at": datetime.now(timezone.utc).isoformat()}},
+            )
     except Exception:
         logger.error(
             "referral_payout: credit failed — marking claim 'failed' for manual reconciliation",

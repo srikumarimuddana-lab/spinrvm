@@ -35,7 +35,9 @@ const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
 function RideCompletedScreenContent() {
   const router = useRouter();
-  const { rideId } = useLocalSearchParams<{ rideId: string }>();
+  // payWithCard is set when the rider returns from the "Change Card" escape
+  // (manage-cards) having picked a different card for this stuck trip.
+  const { rideId, payWithCard } = useLocalSearchParams<{ rideId: string; payWithCard?: string }>();
   const { currentRide, currentDriver, fetchRide, rateRide, clearRide } = useRideStore();
 
   // P0-5: confirmPayment is called when the backend returns
@@ -181,11 +183,24 @@ function RideCompletedScreenContent() {
    * confirmSheet shape (with onPress handlers). Split from the attempt
    * itself so the attempt stays pure-data and unit-testable.
    */
+  // handleSubmit is defined below but referenced by the Retry button here;
+  // a ref breaks the definition cycle without reordering the whole component.
+  const handleSubmitRef = useRef<(overrideCardId?: string) => void>(() => {});
+
   const showPaymentAlert = (alert: NonNullable<Awaited<ReturnType<typeof attemptRidePayment>>['alert']>) => {
     const buttons = (alert.buttons || []).map((b: PaymentAlertButton) => ({
       text: b.text,
       style: (b.kind === 'cancel' ? 'cancel' : 'default') as 'default' | 'cancel',
-      onPress: b.kind === 'change_card' ? () => router.push('/manage-cards' as any) : undefined,
+      onPress:
+        b.kind === 'change_card'
+          // Carry the ride so manage-cards can re-charge THIS trip on the new card.
+          ? () => router.push(`/manage-cards?rideId=${rideId}&forPayment=1` as any)
+          : b.kind === 'support'
+            // Pre-fill support with the stuck ride + a payment-failed topic.
+            ? () => router.push(`/support?rideId=${rideId}&topic=payment_failed` as any)
+            : b.kind === 'retry'
+              ? () => handleSubmitRef.current?.()
+              : undefined,
     }));
     setConfirmSheet({
       visible: true,
@@ -196,7 +211,7 @@ function RideCompletedScreenContent() {
     });
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (overrideCardId?: string) => {
     if (isSubmitting) return; // prevent double tap
     setIsSubmitting(true);
     setSubmitPhase('rating');
@@ -220,6 +235,7 @@ function RideCompletedScreenContent() {
           stripe: { confirmPayment },
           rideId: rideId as string,
           tipAmount,
+          paymentMethodId: overrideCardId,
         });
         paymentOk = result.ok;
         chargedAmount = result.charged;
@@ -257,6 +273,18 @@ function RideCompletedScreenContent() {
       setSubmitPhase('idle');
     }
   };
+  handleSubmitRef.current = handleSubmit;
+
+  // Returned from the "Change Card" escape with a card chosen for this trip —
+  // auto-retry the charge on it once. The ref guard stops a re-run on every
+  // re-render while the param is still in the route.
+  const retriedCardRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!payWithCard || alreadyPaid) return;
+    if (retriedCardRef.current === payWithCard) return;
+    retriedCardRef.current = payWithCard;
+    handleSubmit(payWithCard);
+  }, [payWithCard, alreadyPaid]);
 
   // Google Pay path — presents the Stripe PaymentSheet modal so riders can
   // pay without re-entering a card. Only shown for card payment rides on
@@ -675,7 +703,7 @@ function RideCompletedScreenContent() {
         )}
         <TouchableOpacity
           style={styles.submitBtn}
-          onPress={handleSubmit}
+          onPress={() => handleSubmit()}
           disabled={isSubmitting || sheetLoading}
           activeOpacity={0.8}
           accessibilityRole="button"

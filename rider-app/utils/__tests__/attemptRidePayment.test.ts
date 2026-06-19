@@ -195,7 +195,8 @@ describe('attemptRidePayment', () => {
       expect(result.alert?.message).toContain('insufficient funds');
       const buttonKinds = (result.alert?.buttons || []).map((b) => b.kind);
       expect(buttonKinds).toContain('change_card');
-      expect(buttonKinds).toContain('cancel');
+      // The screen blocks back nav — every failure must offer a support escape.
+      expect(buttonKinds).toContain('support');
     });
 
     it('also handles flat (non-detail-wrapped) 402 bodies', async () => {
@@ -242,8 +243,56 @@ describe('attemptRidePayment', () => {
       expect(result.ok).toBe(false);
       expect(result.alert?.variant).toBe('warning');
       expect(result.alert?.title).toMatch(/can't process payment/i);
-      // No change-card CTA — this is an ops issue, not a card issue
-      expect(result.alert?.buttons).toBeFalsy();
+      const kinds = (result.alert?.buttons || []).map((b) => b.kind);
+      // No change-card CTA — this is an ops issue, not a card issue …
+      expect(kinds).not.toContain('change_card');
+      // … but still offer Retry + Support so the rider isn't trapped.
+      expect(kinds).toContain('retry');
+      expect(kinds).toContain('support');
+    });
+  });
+
+  describe('change-card escape (override + no-card + 400)', () => {
+    it('forwards payment_method_id when the rider picks a different card', async () => {
+      const api = makeApi(async () => ({ data: { success: true, charged_amount: 9.99 } }));
+      const result = await attemptRidePayment({
+        api,
+        stripe: makeStripe(),
+        rideId: 'r1',
+        tipAmount: 1,
+        paymentMethodId: 'pm_NEW',
+      });
+      expect(result.ok).toBe(true);
+      expect(api.post).toHaveBeenCalledWith('/rides/r1/process-payment', {
+        tip_amount: 1,
+        payment_method_id: 'pm_NEW',
+      });
+    });
+
+    it('maps 402 no_payment_method to an Add Card alert with support', async () => {
+      const err: any = new Error('no card');
+      err.response = {
+        status: 402,
+        data: { detail: { code: 'no_payment_method', message: 'No payment method on file.' } },
+      };
+      const api = { post: jest.fn().mockRejectedValue(err) };
+      const result = await attemptRidePayment({ api, stripe: makeStripe(), rideId: 'r1', tipAmount: 0 });
+      expect(result.ok).toBe(false);
+      expect(result.alert?.title).toBe('Add a payment method');
+      const kinds = (result.alert?.buttons || []).map((b) => b.kind);
+      expect(kinds).toContain('change_card');
+      expect(kinds).toContain('support');
+    });
+
+    it('turns a 400 dead-end into a Change Card + Support escape', async () => {
+      const err: any = new Error('bad request');
+      err.response = { status: 400, data: { detail: 'No payment method on file. Please add a card.' } };
+      const api = { post: jest.fn().mockRejectedValue(err) };
+      const result = await attemptRidePayment({ api, stripe: makeStripe(), rideId: 'r1', tipAmount: 0 });
+      expect(result.ok).toBe(false);
+      const kinds = (result.alert?.buttons || []).map((b) => b.kind);
+      expect(kinds).toContain('change_card');
+      expect(kinds).toContain('support');
     });
   });
 

@@ -1,7 +1,7 @@
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -1738,6 +1738,138 @@ async def admin_get_rider_referral_leaderboard(
         "fleet_total_referrers": len(by_referrer),
         "reward_amount": RIDER_REFERRER_REWARD,
         "rides_required": RIDER_REFERRAL_RIDES_REQUIRED,
+    }
+
+
+@router.get("/referrals/analytics")
+async def admin_get_referral_analytics(
+    source: str = Query("driver", pattern="^(driver|rider)$"),
+    service_area_id: str | None = Query(None),
+    start: str | None = Query(None, description="ISO date inclusive lower bound (YYYY-MM-DD)"),
+    end: str | None = Query(None, description="ISO date inclusive upper bound (YYYY-MM-DD)"),
+    admin: dict = Depends(get_admin_user),
+):
+    """Referral analytics hub: redemption funnel, amounts paid, and a daily
+    redemption trend, filterable by rider/driver, service area, and date.
+
+    Data sources:
+      * Funnel + amounts + trend read the referral_payouts ledger (source of
+        truth for money actually moved). It carries kind, service_area_id
+        (snapshot at claim), status, paid_at and reward amounts, so area/date
+        filtering is exact.
+      * Top-of-funnel "total_referred" (sign-ups via a code) is tallied from
+        users.referred_by. Users aren't area-tagged until they qualify, so this
+        line is null when a service-area filter is active (UI shows "—").
+
+    In-memory filtering matches the leaderboard endpoints' scale assumption;
+    move to a SQL/RPC rollup if the ledger grows large.
+    """
+
+    def _d(x) -> Decimal:
+        try:
+            return Decimal(str(x if x is not None else 0))
+        except (InvalidOperation, ValueError):
+            return Decimal("0")
+
+    def _m(x: Decimal) -> str:
+        # ROUND_HALF_UP to match the house money convention (fare_service._round);
+        # default banker's rounding would disagree at the half-cent boundary.
+        return str(x.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+    def _in_range(iso_ts: str | None) -> bool:
+        if not iso_ts:
+            return start is None  # undated rows only pass when no lower bound
+        day = str(iso_ts)[:10]
+        if start and day < start:
+            return False
+        if end and day > end:
+            return False
+        return True
+
+    # ---- Ledger: redemption funnel, amounts, trend ----
+    filt: dict = {"kind": source}
+    if service_area_id:
+        filt["service_area_id"] = service_area_id
+    payouts = await db_supabase.get_rows(
+        "referral_payouts",
+        filt,
+        columns="status,referrer_reward,referee_reward,paid_at,created_at",
+        limit=10000,
+    )
+    in_window = [p for p in payouts if _in_range(p.get("created_at"))]
+
+    qualified = len(in_window)
+    paid_rows = [p for p in in_window if p.get("status") == "paid"]
+    redeemed = len(paid_rows)
+    processing = sum(1 for p in in_window if p.get("status") == "processing")
+    failed = sum(1 for p in in_window if p.get("status") == "failed")
+
+    total_paid = Decimal("0")
+    for p in paid_rows:
+        total_paid += _d(p.get("referrer_reward")) + _d(p.get("referee_reward"))
+    avg_paid = (total_paid / redeemed) if redeemed else Decimal("0")
+
+    # Daily redemption trend keyed by paid_at (rows that actually paid).
+    trend_map: dict[str, dict] = {}
+    for p in paid_rows:
+        day = str(p.get("paid_at") or p.get("created_at") or "")[:10]
+        if not day:
+            continue
+        bucket = trend_map.setdefault(day, {"date": day, "redeemed": 0, "paid": Decimal("0")})
+        bucket["redeemed"] += 1
+        bucket["paid"] += _d(p.get("referrer_reward")) + _d(p.get("referee_reward"))
+    trend = [
+        {"date": b["date"], "redeemed": b["redeemed"], "paid": _m(b["paid"])}
+        for b in sorted(trend_map.values(), key=lambda b: b["date"])
+    ]
+
+    # ---- Top of funnel: sign-ups via a referral code (users.referred_by) ----
+    total_referred: int | None = None
+    if not service_area_id:
+        users = await db_supabase.get_rows(
+            "users", {}, columns="referred_by,referral_code_used,created_at", limit=10000
+        )
+        total_referred = 0
+        for u in users:
+            code = u.get("referral_code_used")
+            rid = u.get("referred_by")
+            if not (rid and code):
+                continue
+            is_rider = str(code).upper().startswith("RIDE")
+            if (source == "rider") != is_rider:
+                continue
+            if not _in_range(u.get("created_at")):
+                continue
+            total_referred += 1
+
+    # A display ratio (not a monetary amount) — float is fine here; do NOT copy
+    # this pattern into any fare/payout path, which must stay Decimal.
+    redemption_rate = round(redeemed / total_referred, 4) if total_referred else None
+
+    if source == "rider":
+        try:
+            from ..users import RIDER_REFERRAL_RIDES_REQUIRED, RIDER_REFERRER_REWARD  # type: ignore
+        except ImportError:
+            from routes.users import RIDER_REFERRAL_RIDES_REQUIRED, RIDER_REFERRER_REWARD  # type: ignore
+        rides_required, reward_amount = RIDER_REFERRAL_RIDES_REQUIRED, RIDER_REFERRER_REWARD
+    else:
+        rides_required, reward_amount = _referral_terms()
+
+    return {
+        "source": source,
+        "funnel": {
+            "total_referred": total_referred,
+            "qualified": qualified,
+            "redeemed": redeemed,
+            "processing": processing,
+            "failed": failed,
+            "redemption_rate": redemption_rate,
+            "total_paid": _m(total_paid),
+            "avg_paid": _m(avg_paid),
+        },
+        "trend": trend,
+        "reward_amount": reward_amount,
+        "rides_required": rides_required,
     }
 
 

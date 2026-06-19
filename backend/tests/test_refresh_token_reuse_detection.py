@@ -132,10 +132,14 @@ async def test_cascade_bumps_users_token_version_for_rider():
 
         await _handle_refresh_token_reuse(_revoked_row(audience="rider", user_id="user-rider-1"))
 
-    # users.token_version went from 4 → 5
+    # users.token_version went from 4 → 5, and the Firebase revocation
+    # watermark is stamped alongside it so the cascade also kills Firebase
+    # sessions (which carry no token_version claim).
     bump_calls = [c for c in update_calls if c[0] == "users"]
     assert bump_calls, "users.token_version was not bumped"
-    assert bump_calls[0][2] == {"$set": {"token_version": 5}}
+    bump_set = bump_calls[0][2]["$set"]
+    assert bump_set["token_version"] == 5
+    assert isinstance(bump_set["sessions_invalid_before"], str) and bump_set["sessions_invalid_before"]
 
 
 @pytest.mark.asyncio

@@ -971,12 +971,55 @@ class TestRateRider:
 
         with (
             patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=_ride("completed"))),
             patch("backend.routes.drivers.db_supabase.update_ride", AsyncMock(return_value=_ride("completed"))),
         ):
             req = RideRatingRequest(rating=5, comment="Great rider!")
             result = asyncio.run(drv.rate_rider(ride_id=RIDE_ID, rating_data=req, current_user={"id": USER_ID}))
 
         assert result is not None
+
+    def test_cannot_rate_ride_driven_by_another_driver(self):
+        """IDOR regression: a driver must not be able to write a rating onto a
+        ride they did not drive. The denial returns the SAME 404 as a missing
+        ride (so a leaked ride_id can't reveal existence), and update_ride is
+        never reached."""
+        from fastapi import HTTPException
+
+        from backend.routes import drivers as drv
+        from backend.schemas import RideRatingRequest
+
+        other_ride = _ride("completed", driver_id="some_other_driver")
+        update_mock = AsyncMock(return_value=other_ride)
+        with (
+            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=other_ride)),
+            patch("backend.routes.drivers.db_supabase.update_ride", update_mock),
+        ):
+            req = RideRatingRequest(rating=1, comment="not my ride")
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(drv.rate_rider(ride_id=RIDE_ID, rating_data=req, current_user={"id": USER_ID}))
+
+        # Indistinguishable from the missing-ride 404.
+        assert exc.value.status_code == 404
+        update_mock.assert_not_called()
+
+    def test_rate_rider_404_when_ride_missing(self):
+        from fastapi import HTTPException
+
+        from backend.routes import drivers as drv
+        from backend.schemas import RideRatingRequest
+
+        with (
+            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=None)),
+            patch("backend.routes.drivers.db_supabase.update_ride", AsyncMock()),
+        ):
+            req = RideRatingRequest(rating=5, comment="ok")
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(drv.rate_rider(ride_id=RIDE_ID, rating_data=req, current_user={"id": USER_ID}))
+
+        assert exc.value.status_code == 404
 
 
 # ---------------------------------------------------------------------------

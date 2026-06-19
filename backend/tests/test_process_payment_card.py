@@ -352,22 +352,22 @@ class TestOpenInvoiceGuard:
                 await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
         assert exc.value.status_code == 409
 
-    def test_stale_claim_helper_is_not_blocking(self):
-        """The staleness helper: only an abandoned `pending:<epoch>:<uuid>` claim
-        (>5 min) is stale (non-blocking). A finalized invoice, a fresh claim, and
-        a legacy timestamp-less sentinel all still block in-app payment."""
+    async def test_stale_pending_claim_also_blocks(self):
+        """Codex round-3 (#2): in-app charging must NOT unblock by claim age — a
+        stale 'pending:' sentinel blocks just like a fresh one. Recovery is
+        admin-side (crash-safe), never by silently re-opening the in-app charge."""
         from datetime import datetime, timedelta, timezone
 
         from backend.routes import rides as rides_mod
 
-        now = datetime.now(timezone.utc)
-        stale = f"pending:{(now - timedelta(minutes=10)).timestamp()}:u1"
-        fresh = f"pending:{now.timestamp()}:u1"
-
-        assert rides_mod._is_stale_invoice_claim(stale) is True
-        assert rides_mod._is_stale_invoice_claim(fresh) is False
-        assert rides_mod._is_stale_invoice_claim("in_admin_123") is False
-        assert rides_mod._is_stale_invoice_claim("pending:legacynouuid") is False
+        stale = _completed_ride(
+            stripe_invoice_id=f"pending:{(datetime.now(timezone.utc) - timedelta(minutes=10)).timestamp()}:u1"
+        )
+        with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=stale)):
+            req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
+            with pytest.raises(HTTPException) as exc:
+                await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
+        assert exc.value.status_code == 409
 
 
 @pytest.mark.asyncio

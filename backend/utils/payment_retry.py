@@ -226,31 +226,25 @@ async def retry_failed_payments():
         retry_count = ride.get("payment_retry_count", 0)
         current_status = ride.get("payment_status", "failed")
 
-        # An admin sent a payable Stripe invoice for this ride — collection has
-        # moved to the hosted invoice (settled by the invoice.paid webhook).
+        # An admin sent (or is creating) a payable Stripe invoice for this ride —
+        # collection has moved to the hosted invoice (settled by invoice.paid).
         # Retrying the stored PaymentIntent on the old card here would collect a
-        # second time alongside the invoice. Leave it to the invoice path.
+        # second time alongside the invoice, so skip ANY non-null claim (a
+        # finalized in_* id or a 'pending:' creation sentinel alike). We never
+        # re-open retries by age — a stuck claim is recovered admin-side (which
+        # creates invoices crash-safely), not by silently re-charging here.
         _invoice_sid = ride.get("stripe_invoice_id")
         if _invoice_sid:
-            if str(_invoice_sid).startswith("pending:"):
-                # Transient CAS claim from admin_send_payable_invoice. A claim that
-                # never cleared (crashed mid-creation) is reclaimable once stale —
-                # mirror admin/rides.py: a stale claim means Stripe almost certainly
-                # never created the invoice, so an in-app retry is safe and unblocks
-                # the ride. A fresh claim is left alone (real creation in flight).
-                if _invoice_claim_is_stale(_invoice_sid):
-                    logger.warning(
-                        "payment_retry: ride %s has a STALE pending invoice sentinel '%s' — "
-                        "retrying in-app (creation never completed)",
-                        ride_id,
-                        _invoice_sid,
-                        extra={"domain": "payments", "ride_id": ride_id},
-                    )
-                    # fall through to the normal retry path
-                else:
-                    continue
-            else:
-                continue
+            if str(_invoice_sid).startswith("pending:") and _invoice_claim_is_stale(_invoice_sid):
+                # Surface a long-lived bare sentinel so ops can re-send admin-side.
+                logger.error(
+                    "payment_retry: ride %s has a stale pending invoice sentinel '%s' — "
+                    "in-app retry is blocked; admin must re-send the invoice to recover",
+                    ride_id,
+                    _invoice_sid,
+                    extra={"domain": "payments", "ride_id": ride_id},
+                )
+            continue
 
         if retry_count >= MAX_RETRIES:
             if not ride.get("admin_alerted_payment_exhausted"):

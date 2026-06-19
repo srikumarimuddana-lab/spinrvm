@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { sendRideInvoice, getRideInvoice, getRideRouteMapDataUrl } from "@/lib/api";
+import { sendRideInvoice, sendPayableRideInvoice, getRideInvoice, getRideRouteMapDataUrl } from "@/lib/api";
 import { Send, Download } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import { computePhaseDistances } from "./ride-ui-helpers";
@@ -9,6 +9,7 @@ import { computePhaseDistances } from "./ride-ui-helpers";
 interface Props {
     rideId: string;
     status: string;
+    paymentStatus?: string;
 }
 
 // Safe number formatter — returns em-dash for null/undefined/NaN.
@@ -28,20 +29,38 @@ const num = (n: any): number => {
 // Spinr brand red (#ee2b2b) as an RGB triple for jsPDF fills/text.
 const BRAND: [number, number, number] = [238, 43, 43];
 
-export default function RideInvoice({ rideId, status }: Props) {
+export default function RideInvoice({ rideId, status, paymentStatus }: Props) {
     const { toast } = useToast();
     const [sending, setSending] = useState(false);
     const [downloading, setDownloading] = useState(false);
 
     if (status !== "completed") return null;
 
+    // Unpaid completed ride → send a PAYABLE Stripe invoice (rider pays the
+    // hosted page, invoice.paid settles the ride). Paid/waived → re-email the
+    // receipt as before.
+    const isUnpaid = !!paymentStatus && !["paid", "waived_admin"].includes(paymentStatus);
+
     const handleSend = async () => {
         setSending(true);
         try {
-            await sendRideInvoice(rideId);
-            toast({ title: "Invoice sent", description: "Receipt sent to rider's email." });
+            if (isUnpaid) {
+                const res = await sendPayableRideInvoice(rideId);
+                toast({
+                    title: "Payable invoice sent",
+                    description: res?.invoice_url
+                        ? "Stripe emailed the rider a pay link. The ride settles automatically once paid."
+                        : "Stripe emailed the rider a pay link.",
+                });
+            } else {
+                await sendRideInvoice(rideId);
+                toast({ title: "Invoice sent", description: "Receipt sent to rider's email." });
+            }
         } catch {
-            toast({ title: "Failed to send invoice", variant: "destructive" });
+            toast({
+                title: isUnpaid ? "Failed to send payable invoice" : "Failed to send invoice",
+                variant: "destructive",
+            });
         } finally {
             setSending(false);
         }
@@ -427,7 +446,7 @@ export default function RideInvoice({ rideId, status }: Props) {
              *  for the main action, outline for the secondary download. */}
             <button onClick={handleSend} disabled={sending}
                 className="flex items-center gap-1.5 text-xs font-semibold bg-primary text-primary-foreground hover:bg-primary/90 px-3 py-1.5 rounded-lg shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-                <Send className="h-3.5 w-3.5" /> {sending ? "Sending..." : "Send Invoice"}
+                <Send className="h-3.5 w-3.5" /> {sending ? "Sending..." : isUnpaid ? "Send Payable Invoice" : "Send Invoice"}
             </button>
             <button onClick={handleDownload} disabled={downloading}
                 className="flex items-center gap-1.5 text-xs font-semibold border border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-400 dark:hover:bg-emerald-900/20 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">

@@ -4886,11 +4886,12 @@ async def rate_rider(
     # Authorization: a driver may only rate the rider on a ride they actually
     # drove. Without this guard any credentialed driver could overwrite the
     # rider_rating/rider_comment on any ride by supplying an arbitrary ride_id.
+    # Return the SAME 404 for a ride owned by another driver as for a missing
+    # ride, so a leaked/guessed ride_id can't be used to distinguish real rides
+    # from nonexistent ones (matches the chat-status guard).
     ride = await db_supabase.get_ride(ride_id)
-    if not ride:
+    if not ride or ride.get("driver_id") != driver["id"]:
         raise HTTPException(status_code=404, detail="Ride not found")
-    if ride.get("driver_id") != driver["id"]:
-        raise HTTPException(status_code=403, detail="Not authorized to rate this ride")
 
     # Update ride with rating
     await db_supabase.update_ride(

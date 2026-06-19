@@ -191,7 +191,7 @@ async def retry_failed_payments():
             columns=(
                 "id,rider_id,driver_id,payment_status,payment_retry_count,"
                 "payment_intent_id,admin_alerted_payment_exhausted,total_fare,"
-                "created_at,updated_at"
+                "stripe_invoice_id,created_at,updated_at"
             ),
         )
     except Exception as e:
@@ -205,6 +205,13 @@ async def retry_failed_payments():
         ride_id = ride["id"]
         retry_count = ride.get("payment_retry_count", 0)
         current_status = ride.get("payment_status", "failed")
+
+        # An admin sent a payable Stripe invoice for this ride — collection has
+        # moved to the hosted invoice (settled by the invoice.paid webhook).
+        # Retrying the stored PaymentIntent on the old card here would collect a
+        # second time alongside the invoice. Leave it to the invoice path.
+        if ride.get("stripe_invoice_id"):
+            continue
 
         if retry_count >= MAX_RETRIES:
             if not ride.get("admin_alerted_payment_exhausted"):

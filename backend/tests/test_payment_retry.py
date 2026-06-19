@@ -98,6 +98,34 @@ async def test_retry_skips_when_stripe_already_succeeded():
 
 
 @pytest.mark.anyio
+async def test_retry_skips_ride_with_open_invoice():
+    """Codex P1: once an admin has sent a payable Stripe invoice
+    (stripe_invoice_id set), the retry loop must NOT confirm the stored PI on
+    the old card — that would collect twice alongside the invoice. The ride is
+    skipped entirely (no claim, no confirm)."""
+    ride = _make_ride(stripe_invoice_id="in_admin_123")
+
+    mock_db_update = AsyncMock(return_value={"id": RIDE_ID})
+    mock_confirm = MagicMock()
+    fake_settings = {"stripe_secret_key": STRIPE_SECRET}
+
+    with (
+        patch("utils.payment_retry.db.get_rows", AsyncMock(return_value=[ride])),
+        patch("utils.payment_retry.get_app_settings", AsyncMock(return_value=fake_settings)),
+        patch("utils.payment_retry.db.update_one", mock_db_update),
+        patch("utils.payment_retry.send_push_notification", AsyncMock()),
+        patch("stripe.PaymentIntent.retrieve", MagicMock(return_value=_fake_intent("requires_payment_method"))),
+        patch("stripe.PaymentIntent.confirm", mock_confirm),
+    ):
+        from utils import payment_retry
+
+        await payment_retry.retry_failed_payments()
+
+    mock_confirm.assert_not_called()
+    mock_db_update.assert_not_awaited()
+
+
+@pytest.mark.anyio
 async def test_retry_proceeds_when_stripe_failed():
     """
     When Stripe reports the PI as 'requires_payment_method', the loop must:

@@ -106,16 +106,27 @@ def _patch_jwt_auth_and_db(user, db_user=None):
 
     Admin tokens are minted by the backend (not Firebase), so Firebase
     verify_id_token is forced to raise — this triggers the JWT fallback path
-    in the endpoint. The JWT payload carries role + email so the admin-user
-    shortcut in the fallback applies without a DB lookup.
+    in the endpoint. The no-aud admin shortcut was retired as a hardening
+    (a crafted admin-001 token with role+email but no aud used to pass with
+    zero DB verification), so an admin token now MUST carry aud=JWT_AUD_ADMIN
+    and resolve to an active admin_staff row. Claims are derived from the
+    user's role so the same helper serves both the admin-success path and the
+    rider-rejection path (rider gets aud=JWT_AUD_MOBILE and no staff row).
     """
+    from backend.dependencies import JWT_AUD_ADMIN, JWT_AUD_MOBILE
+
+    _admin_roles = {"admin", "super_admin", "operations", "support", "finance", "custom"}
+    role = user.get("role", "rider")
+    is_admin = role in _admin_roles
     jwt_payload = {
         "user_id": user["id"],
-        "role": user.get("role", "rider"),
-        # email is required for the admin-user-from-payload shortcut
+        "role": role,
         "email": user.get("email", f"{user['id']}@spinr.test"),
         "phone": user.get("phone", ""),
+        "aud": JWT_AUD_ADMIN if is_admin else JWT_AUD_MOBILE,
     }
+    # _verify_admin_payload reads an active admin_staff row for admin tokens.
+    staff_rows = [{"id": user["id"], "is_active": True, "token_version": 0}] if is_admin else []
     return [
         patch(
             "backend.routes.websocket.firebase_auth.verify_id_token",
@@ -131,7 +142,11 @@ def _patch_jwt_auth_and_db(user, db_user=None):
         ),
         patch(
             "backend.routes.websocket.db_supabase.get_rows",
-            new=AsyncMock(return_value=[]),
+            new=AsyncMock(return_value=staff_rows),
+        ),
+        patch(
+            "backend.routes.websocket.db_supabase.update_one",
+            new=AsyncMock(return_value={}),
         ),
         patch(
             "backend.routes.websocket.db.find_one",

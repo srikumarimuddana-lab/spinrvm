@@ -173,14 +173,18 @@ async def _handle_ride_invoice_paid(invoice: dict, ride_id: str, event_id: str, 
     payment_intent_id = _extract_invoice_payment_intent(invoice, stripe_secret)
     if not payment_intent_id:
         # No PI means later refund/dispute webhooks (keyed on payment_intent_id)
-        # cannot find this ride. Surface loudly rather than writing a half-record.
+        # cannot find this ride. This is usually a transient Stripe-retrieve
+        # failure in the expand fallback. Do NOT write a half-settled ride
+        # (payment_status=paid with payment_intent_id=NULL); raise so the event
+        # is not acked (processed_at stays NULL) and the retry/reconciliation
+        # path re-resolves the PI. Matches the missing-ride contract above.
         logger.error(
-            "invoice.paid: could not resolve payment_intent for ride %s (invoice %s) — "
-            "refund/dispute lookups will fail",
+            "invoice.paid: could not resolve payment_intent for ride %s (invoice %s) — not settling; Stripe will retry",
             ride_id,
             invoice.get("id"),
             extra={"domain": "payments", "ride_id": ride_id, "event_id": event_id},
         )
+        raise HTTPException(status_code=500, detail="Could not resolve invoice payment_intent — Stripe will retry")
     tip_amount = Decimal(str(ride.get("tip_amount") or 0))
 
     try:

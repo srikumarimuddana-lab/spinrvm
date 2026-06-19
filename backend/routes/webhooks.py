@@ -79,11 +79,26 @@ async def _handle_ride_invoice_paid(invoice: dict, ride_id: str, event_id: str) 
             extra={"domain": "payments", "ride_id": ride_id, "event_id": event_id},
         )
         return
-    if ride.get("payment_status") in ("paid", "waived_admin"):
+    _pstatus = ride.get("payment_status")
+    if _pstatus in ("paid", "waived_admin"):
         logger.info(
             "invoice.paid: ride %s already settled (%s) — skipping",
             ride_id,
-            ride.get("payment_status"),
+            _pstatus,
+            extra={"domain": "payments", "ride_id": ride_id, "event_id": event_id},
+        )
+        return
+    if _pstatus == "processing":
+        # An in-app settlement holds the atomic 'processing' claim (or a card
+        # charge was captured-but-unconfirmed). Settling the invoice here too
+        # would double-credit the driver and double-write the ledger. Skip and
+        # let the in-app finalize / Stripe reconcile decide the truth. ERROR so
+        # the concurrent-charge anomaly surfaces (the invoice may have collected
+        # alongside an in-app charge — a refund may be owed).
+        logger.error(
+            "invoice.paid for ride %s while payment_status='processing' — possible "
+            "concurrent in-app charge; skipping invoice settlement, reconcile required",
+            ride_id,
             extra={"domain": "payments", "ride_id": ride_id, "event_id": event_id},
         )
         return
@@ -142,10 +157,15 @@ async def _handle_ride_invoice_paid(invoice: dict, ride_id: str, event_id: str) 
             )
         except Exception:
             logger.warning("invoice.paid: WS payment_completed push failed", exc_info=True)
+        # Re-fetch so the receipt reflects the just-written paid status / PI /
+        # invoice id rather than the pre-update snapshot. The receipt is the
+        # rider's tax document — a send failure is logged at ERROR (it may hide
+        # a broken email pipeline), not swallowed at warning.
+        updated_ride = await db_supabase.get_ride(ride_id) or ride
         try:
-            await send_ride_receipt(ride, rider_id, tip_amount)
+            await send_ride_receipt(updated_ride, rider_id, tip_amount)
         except Exception:
-            logger.warning("invoice.paid: receipt email failed", exc_info=True)
+            logger.error("invoice.paid: receipt email failed for ride %s", ride_id, exc_info=True)
 
 
 def _invoice_period_end_iso(invoice: dict) -> str | None:

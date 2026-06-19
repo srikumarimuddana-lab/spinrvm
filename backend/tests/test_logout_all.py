@@ -78,7 +78,7 @@ class TestLogoutAllRiderDriver:
             patch("backend.routes.auth.db.update_one", update_one),
             patch("backend.routes.auth.revoke_all_for_user", revoke_all),
             patch("backend.socket_manager.manager.kick_user", kick_user),
-            patch("firebase_admin.auth.revoke_refresh_tokens", fb_revoke),
+            patch("backend.routes.auth._revoke_firebase_refresh_tokens", fb_revoke),
         ):
             inner = _resolve_inner(logout_all)
             request = MagicMock()
@@ -264,6 +264,16 @@ class TestFirebaseSessionRevocation:
         from backend.dependencies import _firebase_session_revoked
 
         assert _firebase_session_revoked({}, 1_700_000_000) is True
+
+    def test_firebase_revoke_seam_swallows_errors(self):
+        """The Firebase revoke is best-effort hardening; a Firebase SDK error
+        (e.g. user not found for OTP/JWT users) must never propagate and fail
+        logout-all — the watermark is the authoritative enforcement."""
+        from backend.routes.auth import _revoke_firebase_refresh_tokens
+
+        with patch("firebase_admin.auth.revoke_refresh_tokens", side_effect=RuntimeError("boom")):
+            # Must not raise.
+            _revoke_firebase_refresh_tokens("user-rider-1")
 
     def test_to_epoch_handles_iso_datetime_and_number(self):
         from datetime import datetime, timezone

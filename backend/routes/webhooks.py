@@ -143,7 +143,10 @@ async def _handle_ride_invoice_paid(invoice: dict, ride_id: str, event_id: str, 
         )
         raise HTTPException(status_code=500, detail="Ride not found for paid invoice — Stripe will retry")
     _pstatus = ride.get("payment_status")
-    if _pstatus in ("paid", "waived_admin"):
+    # 'refunded' is terminal too: if charge.refunded marked the ride refunded
+    # before a delayed invoice.paid lands, re-settling here would append another
+    # ledger row and flip payment_status back to 'paid', erasing the refund.
+    if _pstatus in ("paid", "waived_admin", "refunded"):
         logger.info(
             "invoice.paid: ride %s already settled (%s) — skipping",
             ride_id,

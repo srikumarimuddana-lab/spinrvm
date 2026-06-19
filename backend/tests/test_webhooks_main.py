@@ -1499,6 +1499,38 @@ class TestRideInvoicePaid:
         record_mock.assert_not_awaited()
         update_ride_mock.assert_not_awaited()
 
+    def test_ride_invoice_paid_skips_when_refunded(self):
+        """Codex round-4 (P2): a ride already 'refunded' (by charge.refunded) is
+        terminal — a delayed invoice.paid must NOT re-settle it (which would
+        append a ledger row and flip payment_status back to 'paid', erasing the
+        refund)."""
+        import stripe
+
+        from backend.routes import webhooks as wh
+
+        data_obj = {"id": "in_ride_ref", "metadata": {"ride_id": "ride_ref"}, "amount_paid": 402}
+        event_obj = self._event(data_obj, event_id="evt_ride_inv_ref")
+        update_ride_mock = AsyncMock()
+        record_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch(
+                "backend.routes.webhooks.db_supabase.get_ride",
+                AsyncMock(return_value={"id": "ride_ref", "rider_id": "u1", "payment_status": "refunded"}),
+            ),
+            patch("backend.routes.webhooks.db_supabase.update_ride", update_ride_mock),
+            patch("backend.services.payment_service.record_payment_event", record_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._req()))
+
+        assert result["received"] is True
+        record_mock.assert_not_awaited()
+        update_ride_mock.assert_not_awaited()
+
     def test_ride_invoice_paid_defers_when_processing(self):
         """A ride mid in-app charge (payment_status='processing') must NOT also be
         settled by the invoice path (double-credit). It must also NOT ack the

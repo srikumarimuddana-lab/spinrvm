@@ -249,6 +249,34 @@ class TestChangeCardOverride:
         assert paid_update["card_brand"] is None
         assert paid_update["card_last4"] is None
 
+    async def test_override_decline_does_not_release_old_hold(self):
+        """Codex round-3 (#6 follow-up, P1): the old hold must be released only
+        AFTER the new card charges. If the new card declines, the guaranteed
+        authorization must be left intact (not cancelled) so fare is still
+        collectable."""
+        from contextlib import ExitStack
+
+        from backend.services.payment_service import settle_card
+
+        # New card declines.
+        declined = _outcome(status="declined", decline_code="card_declined", error_message="Declined")
+        cancel_mock = AsyncMock(return_value=True)
+        patches, updates = _common_patches(charge=declined)
+        patches.append(patch("backend.services.payment_service.capture_ride", AsyncMock()))
+        patches.append(patch("backend.services.payment_service.cancel_authorization", cancel_mock))
+
+        with ExitStack() as st:
+            for p in patches:
+                st.enter_context(p)
+            result = await settle_card(
+                _held_ride(), RIDE_ID, RIDER_ID, Decimal("30.00"), Decimal("5.00"),
+                payment_method_id_override="pm_NEW",
+            )
+
+        assert result.success is False
+        # The old hold was NOT cancelled — it stays authorized and collectable.
+        cancel_mock.assert_not_awaited()
+
 
 @pytest.mark.asyncio
 class TestNoPaymentMethod:

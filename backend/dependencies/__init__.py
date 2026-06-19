@@ -136,6 +136,48 @@ def _token_version_mismatch(payload: dict, user_row: dict) -> bool:
     return claim < stored
 
 
+def _to_epoch(value) -> "int | None":
+    """Best-effort conversion of an ISO-8601 string / datetime / epoch number to
+    integer Unix seconds. Returns None when the value is empty or unparseable."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, datetime):
+        return int(value.timestamp())
+    try:
+        s = str(value).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp())
+    except ValueError:
+        return None
+
+
+def _firebase_session_revoked(payload: dict, invalid_before) -> bool:
+    """Return True if a Firebase ID token has been revoked by /auth/logout-all.
+
+    Firebase ID tokens do not carry our token_version claim, so revocation is
+    enforced by comparing the token's ``auth_time`` (the moment the user signed
+    in — unchanged when the ID token is refreshed) against the user row's
+    ``sessions_invalid_before`` watermark. A token from a sign-in before the
+    watermark is rejected; a fresh sign-in (auth_time > watermark) is accepted.
+    Fail closed: if the watermark is set but the token's age cannot be
+    determined, treat the token as revoked.
+    """
+    watermark = _to_epoch(invalid_before)
+    if watermark is None:
+        return False
+    issued = payload.get("auth_time") or payload.get("iat")
+    if issued is None:
+        return True
+    try:
+        return int(issued) < watermark
+    except (TypeError, ValueError):
+        return True
+
+
 async def _verify_admin_payload(payload: dict) -> "dict | None":
     """Full admin verification: aud, JTI revocation, staff active, token_version, idle timeout.
 
@@ -268,10 +310,16 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                     await db_supabase.create_user(new_user)
                     user = new_user
 
-            # R-P1-13: Apply same revocation checks as the JWT path so that
+            # R-P1-13: Apply the same revocation intent as the JWT path so that
             # /auth/logout-all also invalidates Firebase-authenticated sessions.
+            # Firebase ID tokens carry no token_version claim, so revocation is
+            # enforced via the sessions_invalid_before watermark compared against
+            # the token's auth_time. (The former _token_version_mismatch({}, user)
+            # approach was broken both ways: it never revoked version-0 users and
+            # permanently locked out anyone who had ever bumped token_version,
+            # since the claim was hard-coded to 0.)
             if user:
-                if _token_version_mismatch({}, user):
+                if _firebase_session_revoked(payload, user.get("sessions_invalid_before")):
                     raise HTTPException(status_code=401, detail="ERR_SESSION_REVOKED")
                 token_session = payload.get("session_id")
                 db_session = user.get("current_session_id")

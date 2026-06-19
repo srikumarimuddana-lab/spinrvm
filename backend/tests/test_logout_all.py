@@ -72,25 +72,31 @@ class TestLogoutAllRiderDriver:
         update_one = AsyncMock(return_value={"id": "user-rider-1"})
         revoke_all = AsyncMock(return_value=3)
         kick_user = AsyncMock(return_value=0)
+        fb_revoke = MagicMock()
 
         with (
             patch("backend.routes.auth.db.update_one", update_one),
             patch("backend.routes.auth.revoke_all_for_user", revoke_all),
             patch("backend.socket_manager.manager.kick_user", kick_user),
+            patch("firebase_admin.auth.revoke_refresh_tokens", fb_revoke),
         ):
             inner = _resolve_inner(logout_all)
             request = MagicMock()
             current_user = {"id": "user-rider-1", "token_version": 7}
             result = await inner(request, MagicMock(), current_user=current_user)
 
-        # token_version bumped from 7 -> 8 against the right row
-        update_one.assert_awaited_once_with(
-            "users",
-            {"id": "user-rider-1"},
-            {"$set": {"token_version": 8}},
-        )
+        # token_version bumped from 7 -> 8 against the right row, and the
+        # Firebase revocation watermark stamped (dynamic timestamp string).
+        args, _ = update_one.call_args
+        assert args[0] == "users"
+        assert args[1] == {"id": "user-rider-1"}
+        set_payload = args[2]["$set"]
+        assert set_payload["token_version"] == 8
+        assert isinstance(set_payload["sessions_invalid_before"], str) and set_payload["sessions_invalid_before"]
         # refresh tokens revoked for the same user
         revoke_all.assert_awaited_once_with("user-rider-1")
+        # Firebase refresh tokens revoked too (forces Firebase re-sign-in).
+        fb_revoke.assert_called_once_with("user-rider-1")
         # B-P1-11: WS sockets kicked for the same user, scoped to
         # rider+driver (not admin). Pin the scope — admin sockets
         # belong to a different identity space.
@@ -153,11 +159,12 @@ class TestLogoutAllRiderDriver:
             current_user = {"id": "user-rider-2"}
             result = await inner(request, MagicMock(), current_user=current_user)
 
-        update_one.assert_awaited_once_with(
-            "users",
-            {"id": "user-rider-2"},
-            {"$set": {"token_version": 1}},
-        )
+        args, _ = update_one.call_args
+        assert args[0] == "users"
+        assert args[1] == {"id": "user-rider-2"}
+        set_payload = args[2]["$set"]
+        assert set_payload["token_version"] == 1
+        assert isinstance(set_payload["sessions_invalid_before"], str) and set_payload["sessions_invalid_before"]
         assert result == {"success": True, "revoked_refresh_tokens": 0}
 
     @pytest.mark.asyncio
@@ -204,6 +211,74 @@ def _admin_jwt(user_id: str = "staff-001") -> str:
         settings.JWT_SECRET,
         algorithm=settings.ALGORITHM,
     )
+
+
+class TestFirebaseSessionRevocation:
+    """Pin the Firebase revocation contract. Firebase ID tokens carry no
+    token_version claim, so /auth/logout-all enforces revocation via the
+    users.sessions_invalid_before watermark compared against the token's
+    auth_time. (Previously _token_version_mismatch({}, user) was used, which
+    never revoked version-0 users and permanently locked out anyone who had
+    bumped token_version.)"""
+
+    def test_no_watermark_means_not_revoked(self):
+        from backend.dependencies import _firebase_session_revoked
+
+        assert _firebase_session_revoked({"auth_time": 1000}, None) is False
+        assert _firebase_session_revoked({"auth_time": 1000}, "") is False
+
+    def test_token_before_watermark_is_revoked(self):
+        from datetime import datetime, timezone
+
+        from backend.dependencies import _firebase_session_revoked
+
+        watermark = datetime(2026, 6, 1, tzinfo=timezone.utc)
+        before = int(datetime(2026, 5, 31, tzinfo=timezone.utc).timestamp())
+        assert _firebase_session_revoked({"auth_time": before}, watermark.isoformat()) is True
+
+    def test_token_after_watermark_is_allowed(self):
+        from datetime import datetime, timezone
+
+        from backend.dependencies import _firebase_session_revoked
+
+        watermark = datetime(2026, 6, 1, tzinfo=timezone.utc)
+        after = int(datetime(2026, 6, 2, tzinfo=timezone.utc).timestamp())
+        assert _firebase_session_revoked({"auth_time": after}, watermark.isoformat()) is False
+
+    def test_refreshed_token_keeps_old_auth_time_so_still_revoked(self):
+        """The crux: refreshing a Firebase ID token does NOT change auth_time
+        (the sign-in moment), only iat. A token refreshed AFTER logout-all must
+        still be rejected because auth_time predates the watermark."""
+        from datetime import datetime, timezone
+
+        from backend.dependencies import _firebase_session_revoked
+
+        watermark = int(datetime(2026, 6, 1, tzinfo=timezone.utc).timestamp())
+        payload = {
+            "auth_time": watermark - 3600,  # signed in an hour before logout-all
+            "iat": watermark + 3600,  # but token refreshed an hour after
+        }
+        assert _firebase_session_revoked(payload, watermark) is True
+
+    def test_missing_auth_time_with_watermark_fails_closed(self):
+        from backend.dependencies import _firebase_session_revoked
+
+        assert _firebase_session_revoked({}, 1_700_000_000) is True
+
+    def test_to_epoch_handles_iso_datetime_and_number(self):
+        from datetime import datetime, timezone
+
+        from backend.dependencies import _to_epoch
+
+        dt = datetime(2026, 6, 1, tzinfo=timezone.utc)
+        epoch = int(dt.timestamp())
+        assert _to_epoch(dt.isoformat()) == epoch
+        assert _to_epoch(dt.isoformat().replace("+00:00", "Z")) == epoch
+        assert _to_epoch(dt) == epoch
+        assert _to_epoch(epoch) == epoch
+        assert _to_epoch(None) is None
+        assert _to_epoch("") is None
+        assert _to_epoch("not-a-date") is None
 
 
 class TestAdminLogoutAll:

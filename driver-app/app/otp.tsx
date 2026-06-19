@@ -191,6 +191,9 @@ export default function OtpScreen() {
           <Ionicons name="arrow-back" size={22} color={colors.text} />
         </TouchableOpacity>
 
+        {/* Centered content area — keeps the form vertically centered so the
+            screen doesn't leave a large empty gap below the resend row. */}
+        <View style={styles.centerArea}>
         {/* Header illustration */}
         <View style={styles.illustrationContainer}>
           <View style={styles.illustrationCircle}>
@@ -319,6 +322,7 @@ export default function OtpScreen() {
             <Text style={styles.changeNumberText}>{t('otp.changeNumber')}</Text>
           </TouchableOpacity>
         </View>
+        </View>
       </View>
 
     </KeyboardAvoidingView>
@@ -343,6 +347,12 @@ function createStyles(colors: ThemeColors) {
       justifyContent: 'center',
       alignItems: 'center',
       marginBottom: 24,
+    },
+    // Vertically centers the OTP form between the back button and the
+    // bottom safe-area so there is no large trailing gap at the page end.
+    centerArea: {
+      flex: 1,
+      justifyContent: 'center',
     },
     // Illustration
     illustrationContainer: {

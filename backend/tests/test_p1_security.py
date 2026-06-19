@@ -387,11 +387,16 @@ class TestDriverEarningsIsolation:
 
         driver_row = _driver_row(user_id=DRIVER_USER_ID)
 
+        # Earnings are summed from the fare components (base + distance + time +
+        # tip), not a precomputed driver_earnings field. 8 + 4 + 2 + 1 = 15.00.
         own_ride = {
             "id": RIDE_ID,
             "driver_id": DRIVER_ID,
-            "driver_earnings": 15.0,
-            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "base_fare": 8.0,
+            "distance_fare": 4.0,
+            "time_fare": 2.0,
+            "tip_amount": 1.0,
+            "ride_completed_at": datetime.now(timezone.utc).isoformat(),
             "status": "completed",
         }
 

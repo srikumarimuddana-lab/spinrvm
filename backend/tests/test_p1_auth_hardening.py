@@ -263,3 +263,60 @@ class TestFirebaseAuthDbFailureRaises503:
             assert exc_info.value.message_key == ErrorKeys.SYSTEM_DATABASE
         else:
             assert "session" in exc_info.value.detail
+
+    async def test_revoked_firebase_token_rejected_at_exchange(self):
+        """A pre-logout Firebase ID token (auth_time <= sessions_invalid_before)
+        must be rejected at the /auth/firebase exchange with 401, never minted
+        into a fresh Spinr JWT — even if Firebase's own check_revoked passed
+        (best-effort revoke_refresh_tokens may have been skipped)."""
+        from fastapi import HTTPException
+
+        # auth_time 1000 predates the watermark (2000s) → revoked.
+        fake_payload = {
+            "uid": "firebase_uid_rev",
+            "phone_number": "+13061234599",
+            "aud": "driver-app",
+            "auth_time": 1000,
+        }
+        existing_user = {
+            "id": "firebase_uid_rev",
+            "phone": "+13061234599",
+            "token_version": 1,
+            "sessions_invalid_before": "1970-01-01T00:33:20+00:00",  # epoch 2000
+        }
+        fb_stub = self._make_firebase_stub(fake_payload)
+
+        with patch.dict(sys.modules, {"firebase_admin.auth": fb_stub}):
+            sys.modules["firebase_admin"].auth = fb_stub
+            if "backend.routes.auth" in sys.modules:
+                del sys.modules["backend.routes.auth"]
+            from backend.routes import auth as auth_mod
+
+            with (
+                patch("backend.routes.auth.settings.FIREBASE_DRIVER_APP_ID", "driver-app"),
+                patch("backend.routes.auth.db_supabase.get_user_by_id", AsyncMock(return_value=existing_user)),
+                patch("backend.routes.auth.db_supabase.update_one", AsyncMock(return_value=True)),
+                patch("backend.routes.auth.create_jwt_token") as mint,
+            ):
+                from starlette.requests import Request as _Req
+
+                req = _Req(
+                    scope={
+                        "type": "http",
+                        "method": "POST",
+                        "path": "/api/auth/firebase",
+                        "query_string": b"",
+                        "headers": [(b"user-agent", b"test-agent")],
+                        "client": ("127.0.0.3", 0),
+                    }
+                )
+                resp = MagicMock()
+                body = auth_mod.FirebaseAuthRequest(firebase_token="fake_token")
+
+                with pytest.raises((HTTPException, SpinrException)) as exc_info:
+                    await auth_mod.firebase_auth_login(req, resp, body)
+
+                # Must reject before minting any JWT.
+                mint.assert_not_called()
+
+        assert exc_info.value.status_code == 401

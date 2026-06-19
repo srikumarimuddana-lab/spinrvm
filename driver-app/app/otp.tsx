@@ -9,6 +9,7 @@ import {
   Platform,
   KeyboardAvoidingView,
   Animated,
+  ScrollView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -178,19 +179,25 @@ export default function OtpScreen() {
   return (
     <KeyboardAvoidingView
       style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <View
-        style={[
+      <ScrollView
+        style={styles.scrollFlex}
+        contentContainerStyle={[
           styles.scrollContent,
-          { flex: 1, paddingTop: insets.top + 16, paddingBottom: insets.bottom + 24 },
+          { flexGrow: 1, paddingTop: insets.top + 16, paddingBottom: insets.bottom + 24 },
         ]}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
       >
         {/* Back button */}
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={22} color={colors.text} />
         </TouchableOpacity>
 
+        {/* Centered content area — keeps the form vertically centered so the
+            screen doesn't leave a large empty gap below the resend row. */}
+        <View style={styles.centerArea}>
         {/* Header illustration */}
         <View style={styles.illustrationContainer}>
           <View style={styles.illustrationCircle}>
@@ -319,7 +326,8 @@ export default function OtpScreen() {
             <Text style={styles.changeNumberText}>{t('otp.changeNumber')}</Text>
           </TouchableOpacity>
         </View>
-      </View>
+        </View>
+      </ScrollView>
 
     </KeyboardAvoidingView>
   );
@@ -330,6 +338,9 @@ function createStyles(colors: ThemeColors) {
     container: {
       flex: 1,
       backgroundColor: colors.surface,
+    },
+    scrollFlex: {
+      flex: 1,
     },
     scrollContent: {
       flexGrow: 1,
@@ -343,6 +354,12 @@ function createStyles(colors: ThemeColors) {
       justifyContent: 'center',
       alignItems: 'center',
       marginBottom: 24,
+    },
+    // Vertically centers the OTP form between the back button and the
+    // bottom safe-area so there is no large trailing gap at the page end.
+    centerArea: {
+      flex: 1,
+      justifyContent: 'center',
     },
     // Illustration
     illustrationContainer: {

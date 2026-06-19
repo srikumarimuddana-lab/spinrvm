@@ -59,6 +59,27 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# A `pending:<epoch>:<uuid>` value in rides.stripe_invoice_id is a transient CAS
+# claim held while admin_send_payable_invoice creates the Stripe invoice. If the
+# request crashes after writing the sentinel (and the release also fails), it
+# would otherwise block all future invoicing AND in-app retries forever. A claim
+# older than this window is considered abandoned and may be reclaimed.
+_INVOICE_CLAIM_STALE_SECONDS = 300
+
+
+def _invoice_claim_age_seconds(sentinel: str) -> Optional[float]:
+    """Age (seconds) of a `pending:<epoch>:<uuid>` claim, or None if unparseable.
+
+    Returns None for legacy `pending:<uuid>` sentinels (no embedded timestamp) so
+    the caller treats them conservatively (not auto-reclaimable)."""
+    try:
+        parts = str(sentinel).split(":")
+        if len(parts) < 3:
+            return None
+        return (datetime.now(timezone.utc) - datetime.fromtimestamp(float(parts[1]), tz=timezone.utc)).total_seconds()
+    except (ValueError, OverflowError, OSError):
+        return None
+
 
 # ---------- Rides ----------
 
@@ -1504,11 +1525,23 @@ async def admin_send_payable_invoice(
             await db_supabase.update_one("users", {"id": rider_id}, {"stripe_customer_id": customer_id})
 
         # Re-send an existing OPEN invoice instead of creating a duplicate. A
-        # 'pending:' sentinel means a concurrent request is mid-creation.
+        # 'pending:' sentinel means a concurrent request is mid-creation — unless
+        # it is stale (a crashed request that never released the claim), in which
+        # case we let the CAS below reclaim it rather than blocking forever.
         existing_id = ride.get("stripe_invoice_id")
         if existing_id and str(existing_id).startswith("pending:"):
-            raise HTTPException(status_code=409, detail="An invoice is already being created for this ride")
-        if existing_id:
+            age = _invoice_claim_age_seconds(existing_id)
+            if age is None or age < _INVOICE_CLAIM_STALE_SECONDS:
+                raise HTTPException(status_code=409, detail="An invoice is already being created for this ride")
+            logger.warning(
+                "admin_send_payable_invoice: reclaiming stale invoice sentinel for ride %s (age %.0fs)",
+                ride_id,
+                age,
+                extra={"domain": "payments", "ride_id": ride_id},
+            )
+            # Fall through: the CAS claim filters on this stale sentinel value, so
+            # only one caller wins the reclaim; others get a 409 on the CAS.
+        if existing_id and not str(existing_id).startswith("pending:"):
             existing = await db_supabase.run_sync(lambda: stripe.Invoice.retrieve(existing_id, api_key=stripe_secret))
             # stripe-python v5+ returns typed model objects — use attribute access.
             existing_status = getattr(existing, "status", None)
@@ -1533,7 +1566,7 @@ async def admin_send_payable_invoice(
         # the request that flips stripe_invoice_id from its observed value to a
         # 'pending:' sentinel proceeds; the loser gets a 409. On Stripe failure
         # the sentinel is released below so a later retry can re-claim.
-        invoice_claim_sentinel = f"pending:{uuid.uuid4()}"
+        invoice_claim_sentinel = f"pending:{datetime.now(timezone.utc).timestamp()}:{uuid.uuid4()}"
         claim = await db_supabase.update_one(
             "rides",
             {"id": ride_id, "stripe_invoice_id": existing_id},

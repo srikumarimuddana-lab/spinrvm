@@ -59,20 +59,28 @@ export default function ReferralScreen() {
     const fetchReferralInfo = async () => {
         setIsLoading(true);
         setError(false);
+        // The summary (/drivers/referral) is the critical data — it carries the
+        // code, share link and stats. Only its failure shows the full error
+        // state. The referrals list is secondary: if it fails on its own we keep
+        // the summary visible (code stays shareable) and just show the list's
+        // empty state, instead of blanking a screen whose data actually loaded.
         try {
             const res = await api.get<ReferralInfo>('/drivers/referral');
             setReferralInfo(res.data);
+        } catch (err) {
+            console.error('[DriverReferral] summary load failed:', err);
+            setReferralInfo(null);
+            setError(true);
+            setIsLoading(false);
+            return;
+        }
 
-            // Fetch referred drivers
+        try {
             const driversRes = await api.get<{ referred_drivers: any[] }>('/drivers/referrals?limit=50');
             setReferredDrivers(driversRes.data.referred_drivers || []);
         } catch (err) {
-            // Surface the failure instead of silently rendering an empty
-            // "success" state — a null `referralInfo` otherwise hides the code
-            // box and zeroes the stats, which reads as a broken/blank screen.
-            console.error('[DriverReferral] load failed:', err);
-            setReferralInfo(null);
-            setError(true);
+            console.error('[DriverReferral] referrals list load failed:', err);
+            setReferredDrivers([]);
         } finally {
             setIsLoading(false);
         }

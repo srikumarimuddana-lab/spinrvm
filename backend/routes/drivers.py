@@ -4956,13 +4956,8 @@ async def get_driver_referral_info(current_user: dict = Depends(get_current_user
     # referrer doesn't lose progress for referees who applied an older code.
     # Only the id is used below (to look up each referred user's driver row),
     # so project it and keep base64 profile_image out of the read.
-    referred_users_cursor = db_supabase.get_rows(
+    referred_users = await db_supabase.get_rows(
         "users", {"referral_code_used": {"$in": codes}}, columns="id", limit=100
-    )
-    referred_users = (
-        await referred_users_cursor.to_list(100)
-        if hasattr(referred_users_cursor, "to_list")
-        else list(referred_users_cursor)
     )
 
     # Reward terms follow this driver's assigned service area (global default
@@ -5107,13 +5102,8 @@ async def get_referred_drivers(
 
     # Each referred user contributes name + email + signup date to the response
     # — project those columns and keep base64 profile_image out of the read.
-    referred_users_cursor = db_supabase.get_rows(
+    referred_users = await db_supabase.get_rows(
         "users", {"referral_code_used": {"$in": codes}}, columns="id,first_name,last_name,email,created_at", limit=100
-    )
-    referred_users = (
-        await referred_users_cursor.to_list(100)
-        if hasattr(referred_users_cursor, "to_list")
-        else list(referred_users_cursor)
     )
 
     referred_drivers = []

@@ -775,6 +775,23 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
             ) from e
         user = new_user
     else:
+        # Enforce the logout-all / reuse-cascade watermark at token EXCHANGE,
+        # BEFORE rotating the session. verify_id_token(check_revoked=True) only
+        # catches tokens once Firebase's own revocation propagated; our
+        # revoke_refresh_tokens is best-effort, so without this a pre-logout
+        # Firebase ID token (auth_time <= sessions_invalid_before) could be
+        # exchanged for a fresh Spinr JWT, bypassing logout-all. Checking before
+        # the current_session_id write matters: rotating the session on a
+        # rejected exchange would invalidate the user's legitimate in-flight JWT
+        # (ERR_SESSION_EXPIRED) and let a stale-token holder repeatedly force
+        # re-sign-in. New users (handled above) have no watermark, so unaffected.
+        if _firebase_session_revoked(payload, user.get("sessions_invalid_before")):
+            raise SpinrException(
+                message="Session has been revoked, please sign in again",
+                error_code=ErrorCode.AUTH_INVALID_CREDENTIALS,
+                status_code=401,
+                message_key=ErrorKeys.AUTH_INVALID_CREDENTIALS,
+            )
         try:
             await db_supabase.update_one("users", {"id": uid}, {"current_session_id": session_id})
         except Exception as e:
@@ -793,21 +810,6 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
                 message_key=ErrorKeys.SYSTEM_DATABASE,
             ) from e
         user["current_session_id"] = session_id
-
-        # Enforce the logout-all / reuse-cascade watermark at token EXCHANGE too.
-        # verify_id_token(check_revoked=True) only catches tokens once Firebase's
-        # own revocation propagated; our best-effort revoke_refresh_tokens can be
-        # skipped/slow, so without this a pre-logout Firebase ID token
-        # (auth_time <= sessions_invalid_before) could still be exchanged for a
-        # fresh Spinr JWT, bypassing logout-all for Firebase drivers. New users
-        # (handled above) have no watermark, so this only gates existing rows.
-        if _firebase_session_revoked(payload, user.get("sessions_invalid_before")):
-            raise SpinrException(
-                message="Session has been revoked, please sign in again",
-                error_code=ErrorCode.AUTH_INVALID_CREDENTIALS,
-                status_code=401,
-                message_key=ErrorKeys.AUTH_INVALID_CREDENTIALS,
-            )
 
     user_id = user["id"]
     token_version = int(user.get("token_version") or 0)

@@ -186,6 +186,14 @@ function RideCompletedScreenContent() {
   // handleSubmit is defined below but referenced by the Retry button here;
   // a ref breaks the definition cycle without reordering the whole component.
   const handleSubmitRef = useRef<(overrideCardId?: string) => void>(() => {});
+  // The card the rider chose via "Change Card" — Retry must re-charge on THIS
+  // card, not silently fall back to the booking/default card (Codex P2).
+  const activeOverrideCardRef = useRef<string | undefined>(undefined);
+  // Rating + tip is posted to /rate, which ACCUMULATES tip into driver_earnings
+  // on every call. Across a retry (button or auto card-change) we must post it
+  // at most once or the driver is over-credited while only one tip is charged
+  // (Codex P1). This latches after the first attempt.
+  const hasRatedRef = useRef(false);
 
   const showPaymentAlert = (alert: NonNullable<Awaited<ReturnType<typeof attemptRidePayment>>['alert']>) => {
     const buttons = (alert.buttons || []).map((b: PaymentAlertButton) => ({
@@ -199,7 +207,7 @@ function RideCompletedScreenContent() {
             // Pre-fill support with the stuck ride + a payment-failed topic.
             ? () => router.push(`/support?rideId=${rideId}&topic=payment_failed` as any)
             : b.kind === 'retry'
-              ? () => handleSubmitRef.current?.()
+              ? () => handleSubmitRef.current?.(activeOverrideCardRef.current)
               : undefined,
     }));
     setConfirmSheet({
@@ -213,16 +221,22 @@ function RideCompletedScreenContent() {
 
   const handleSubmit = async (overrideCardId?: string) => {
     if (isSubmitting) return; // prevent double tap
+    if (overrideCardId) activeOverrideCardRef.current = overrideCardId;
     setIsSubmitting(true);
     setSubmitPhase('rating');
     try {
       const tipAmount = selectedTip || (customTip ? parseFloat(customTip) || 0 : 0);
 
-      // 1. Rate the driver first — this is fire-and-forget because
-      //    rating may fail if already rated (idempotent upstream).
-      try {
-        await rateRide(rideId as string, rating, comment || undefined, tipAmount > 0 ? tipAmount : undefined);
-      } catch { /* rating may fail if already rated */ }
+      // 1. Rate the driver first — fire-and-forget, and ONLY once across
+      //    retries. /rate accumulates tip into driver_earnings on every call,
+      //    so re-rating on a card-change retry would over-credit the driver
+      //    while the eventual payment charges a single tip (Codex P1).
+      if (!hasRatedRef.current) {
+        try {
+          await rateRide(rideId as string, rating, comment || undefined, tipAmount > 0 ? tipAmount : undefined);
+        } catch { /* rating may fail if already rated */ }
+        hasRatedRef.current = true;
+      }
 
       // 2. Process payment. If the rider has already paid (came back to
       //    this screen), skip the attempt entirely.

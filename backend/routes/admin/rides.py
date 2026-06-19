@@ -1451,6 +1451,10 @@ async def admin_send_payable_invoice(
         )
     if ride.get("payment_status") in ("paid", "waived_admin"):
         raise HTTPException(status_code=409, detail="Ride is already settled — nothing to invoice")
+    if ride.get("payment_status") == "processing":
+        # An in-app charge is mid-flight (or captured-but-unconfirmed). Sending
+        # an invoice now risks collecting twice. Make the admin retry shortly.
+        raise HTTPException(status_code=409, detail="Payment is currently processing — try again in a moment")
 
     rider_id = ride.get("rider_id")
     rider = await db_supabase.get_user_by_id(rider_id) if rider_id else None

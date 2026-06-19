@@ -1006,8 +1006,9 @@ class TestStripeWebhookRecurringSubscription:
     def test_invoice_paid_renews_and_notifies_on_cycle(self):
         from datetime import datetime, timedelta, timezone
 
-        from backend.routes import webhooks as wh
         import stripe
+
+        from backend.routes import webhooks as wh
 
         period_end = int((datetime.now(timezone.utc) + timedelta(days=30)).timestamp())
         data_obj = {
@@ -1046,8 +1047,9 @@ class TestStripeWebhookRecurringSubscription:
         push_mock.assert_awaited_once()
 
     def test_invoice_payment_failed_marks_past_due_and_notifies(self):
-        from backend.routes import webhooks as wh
         import stripe
+
+        from backend.routes import webhooks as wh
 
         data_obj = {"id": "in_2", "subscription": "sub_456"}
         event_obj = self._event("invoice.payment_failed", data_obj)
@@ -1076,8 +1078,9 @@ class TestStripeWebhookRecurringSubscription:
         push_mock.assert_awaited_once()
 
     def test_subscription_updated_canceled_cancels_row(self):
-        from backend.routes import webhooks as wh
         import stripe
+
+        from backend.routes import webhooks as wh
 
         data_obj = {"id": "sub_789", "status": "canceled"}
         event_obj = self._event("customer.subscription.updated", data_obj)
@@ -1100,8 +1103,9 @@ class TestStripeWebhookRecurringSubscription:
         assert update_mock.await_args.args[2]["status"] == "cancelled"
 
     def test_invoice_paid_no_matching_row_acks(self):
-        from backend.routes import webhooks as wh
         import stripe
+
+        from backend.routes import webhooks as wh
 
         data_obj = {"id": "in_3", "subscription": "sub_orphan", "lines": {"data": []}}
         event_obj = self._event("invoice.paid", data_obj)
@@ -1146,8 +1150,9 @@ class TestStripeWebhookSubscriptionDeleted:
         return req
 
     def test_deleted_matches_by_subscription_id(self):
-        from backend.routes import webhooks as wh
         import stripe
+
+        from backend.routes import webhooks as wh
 
         event_obj = self._event({"id": "sub_del_1", "customer": "cus_x"})
         update_mock = AsyncMock()
@@ -1199,12 +1204,11 @@ class TestStripeWebhookInvoicePaidCancelledGuard:
         return req
 
     def test_invoice_paid_ignored_for_cancelled_row(self):
-        from backend.routes import webhooks as wh
         import stripe
 
-        event_obj = self._event(
-            {"id": "in_x", "subscription": "sub_cancelled", "billing_reason": "subscription_cycle"}
-        )
+        from backend.routes import webhooks as wh
+
+        event_obj = self._event({"id": "in_x", "subscription": "sub_cancelled", "billing_reason": "subscription_cycle"})
         update_mock = AsyncMock()
 
         with (
@@ -1248,8 +1252,9 @@ class TestStripeWebhookSubscriptionUpdatedGuard:
         return req
 
     def test_active_update_does_not_reactivate_cancelled_row(self):
-        from backend.routes import webhooks as wh
         import stripe
+
+        from backend.routes import webhooks as wh
 
         event_obj = self._event({"id": "sub_g", "status": "active"})
         update_mock = AsyncMock()
@@ -1296,8 +1301,9 @@ class TestStripeWebhookInvoiceLedger:
     def test_invoice_paid_records_ledger_payment(self):
         from datetime import datetime, timedelta, timezone
 
-        from backend.routes import webhooks as wh
         import stripe
+
+        from backend.routes import webhooks as wh
 
         period_end = int((datetime.now(timezone.utc) + timedelta(days=30)).timestamp())
         data_obj = {
@@ -1360,8 +1366,9 @@ class TestStripeWebhookInvoiceRecovery:
     def test_invoice_paid_recovers_row_via_subscription_metadata(self):
         from datetime import datetime, timedelta, timezone
 
-        from backend.routes import webhooks as wh
         import stripe
+
+        from backend.routes import webhooks as wh
 
         period_end = int((datetime.now(timezone.utc) + timedelta(days=30)).timestamp())
         data_obj = {
@@ -1421,8 +1428,9 @@ class TestRideInvoicePaid:
         return req
 
     def test_ride_invoice_paid_settles_ride(self):
-        from backend.routes import webhooks as wh
         import stripe
+
+        from backend.routes import webhooks as wh
 
         data_obj = {
             "id": "in_ride_1",
@@ -1441,7 +1449,9 @@ class TestRideInvoicePaid:
             patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
             patch(
                 "backend.routes.webhooks.db_supabase.get_ride",
-                AsyncMock(return_value={"id": "ride_xyz", "rider_id": "u1", "payment_status": "failed", "tip_amount": "0"}),
+                AsyncMock(
+                    return_value={"id": "ride_xyz", "rider_id": "u1", "payment_status": "failed", "tip_amount": "0"}
+                ),
             ),
             patch("backend.routes.webhooks.db_supabase.update_ride", update_ride_mock),
             patch("backend.services.payment_service.record_payment_event", record_mock),
@@ -1461,8 +1471,9 @@ class TestRideInvoicePaid:
         record_mock.assert_awaited_once()
 
     def test_ride_invoice_paid_idempotent_when_already_paid(self):
-        from backend.routes import webhooks as wh
         import stripe
+
+        from backend.routes import webhooks as wh
 
         data_obj = {"id": "in_ride_2", "metadata": {"ride_id": "ride_paid"}, "amount_paid": 402}
         event_obj = self._event(data_obj, event_id="evt_ride_inv_2")
@@ -1485,5 +1496,36 @@ class TestRideInvoicePaid:
 
         assert result["received"] is True
         # Already settled — no ledger write, no ride update (no double-credit).
+        record_mock.assert_not_awaited()
+        update_ride_mock.assert_not_awaited()
+
+    def test_ride_invoice_paid_skips_when_processing(self):
+        """A ride mid in-app charge (payment_status='processing') must NOT also
+        be settled by the invoice path — that would double-credit the driver."""
+        import stripe
+
+        from backend.routes import webhooks as wh
+
+        data_obj = {"id": "in_ride_3", "metadata": {"ride_id": "ride_proc"}, "amount_paid": 402}
+        event_obj = self._event(data_obj, event_id="evt_ride_inv_3")
+        update_ride_mock = AsyncMock()
+        record_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch(
+                "backend.routes.webhooks.db_supabase.get_ride",
+                AsyncMock(return_value={"id": "ride_proc", "rider_id": "u1", "payment_status": "processing"}),
+            ),
+            patch("backend.routes.webhooks.db_supabase.update_ride", update_ride_mock),
+            patch("backend.services.payment_service.record_payment_event", record_mock),
+            patch("services.payment_service.record_payment_event", record_mock),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._req()))
+
+        assert result["received"] is True
         record_mock.assert_not_awaited()
         update_ride_mock.assert_not_awaited()

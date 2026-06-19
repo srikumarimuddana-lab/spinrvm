@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Platform,
   KeyboardAvoidingView,
+  ScrollView,
   Animated,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -180,11 +181,15 @@ export default function OtpScreen() {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
-      <View
-        style={[
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={[
           styles.scrollContent,
-          { flex: 1, paddingTop: insets.top + 16, paddingBottom: insets.bottom + 24 },
+          { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 24 },
         ]}
+        keyboardShouldPersistTaps="handled"
+        automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+        showsVerticalScrollIndicator={false}
       >
         {/* Back button */}
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
@@ -319,7 +324,7 @@ export default function OtpScreen() {
             <Text style={styles.changeNumberText}>{t('otp.changeNumber')}</Text>
           </TouchableOpacity>
         </View>
-      </View>
+      </ScrollView>
 
     </KeyboardAvoidingView>
   );

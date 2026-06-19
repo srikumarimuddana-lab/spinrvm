@@ -8,11 +8,22 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 ADMIN_USER = {"id": "admin_1", "role": "admin", "email": "admin@spinr.ca"}
+
+
+def _fake_request():
+    """Minimal FastAPI Request stub for endpoints decorated with @limiter.limit."""
+    req = MagicMock()
+    req.scope = {"type": "http"}
+    req.state = MagicMock()
+    return req
+
+
+_FAKE_REQUEST = _fake_request()
 DRIVER_ID = "driver_admin_ext"
 DRIVER_USER_ID = "user_admin_ext"
 RIDE_ID = "ride_admin_ext"
@@ -277,7 +288,7 @@ class TestAdminSendPayableInvoice:
         ride = _ride("completed", payment_status="refunded")
         with patch("backend.routes.admin.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
             with pytest.raises(HTTPException) as exc:
-                asyncio.run(admin_rides.admin_send_payable_invoice(ride_id=RIDE_ID, admin_user=ADMIN_USER))
+                asyncio.run(admin_rides.admin_send_payable_invoice(request=_FAKE_REQUEST, ride_id=RIDE_ID, admin_user=ADMIN_USER))
         assert exc.value.status_code == 409
         assert "terminal" in str(exc.value.detail).lower()
 
@@ -299,7 +310,7 @@ class TestAdminSendPayableInvoice:
             patch("backend.routes.admin.rides.db_supabase.update_one", AsyncMock(return_value=None)),
         ):
             with pytest.raises(HTTPException) as exc:
-                asyncio.run(admin_rides.admin_send_payable_invoice(ride_id=RIDE_ID, admin_user=ADMIN_USER))
+                asyncio.run(admin_rides.admin_send_payable_invoice(request=_FAKE_REQUEST, ride_id=RIDE_ID, admin_user=ADMIN_USER))
         assert exc.value.status_code == 409
         assert "already being created" in str(exc.value.detail).lower()
 
@@ -316,7 +327,7 @@ class TestAdminSendPayableInvoice:
 
         inv = MagicMock(id="in_new_1")
         fin = MagicMock()
-        fin.get = lambda k, d=None: {"hosted_invoice_url": "https://pay.stripe/x"}.get(k, d)
+        fin.hosted_invoice_url = "https://pay.stripe/x"
         update_ride_mock = AsyncMock()
 
         with (
@@ -332,7 +343,7 @@ class TestAdminSendPayableInvoice:
             patch("stripe.Invoice.finalize_invoice", MagicMock(return_value=fin)),
             patch("stripe.Invoice.send_invoice", MagicMock(return_value=MagicMock())),
         ):
-            result = asyncio.run(admin_rides.admin_send_payable_invoice(ride_id=RIDE_ID, admin_user=ADMIN_USER))
+            result = asyncio.run(admin_rides.admin_send_payable_invoice(request=_FAKE_REQUEST, ride_id=RIDE_ID, admin_user=ADMIN_USER))
 
         assert result["sent"] is True
         assert result["stripe_invoice_id"] == "in_new_1"

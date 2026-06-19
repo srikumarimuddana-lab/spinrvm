@@ -210,7 +210,19 @@ async def retry_failed_payments():
         # moved to the hosted invoice (settled by the invoice.paid webhook).
         # Retrying the stored PaymentIntent on the old card here would collect a
         # second time alongside the invoice. Leave it to the invoice path.
-        if ride.get("stripe_invoice_id"):
+        _invoice_sid = ride.get("stripe_invoice_id")
+        if _invoice_sid:
+            if str(_invoice_sid).startswith("pending:"):
+                # Admin request crashed after writing the CAS sentinel but before
+                # Stripe created the invoice. The sentinel has no TTL and will block
+                # all retries indefinitely. Alert ops to investigate.
+                logger.error(
+                    "payment_retry: ride %s has stuck pending invoice sentinel '%s' — "
+                    "all automatic retries are blocked; ops must clear rides.stripe_invoice_id manually",
+                    ride_id,
+                    _invoice_sid,
+                    extra={"domain": "payments", "ride_id": ride_id},
+                )
             continue
 
         if retry_count >= MAX_RETRIES:

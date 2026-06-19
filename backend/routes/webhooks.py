@@ -111,9 +111,9 @@ async def _handle_ride_invoice_paid(invoice: dict, ride_id: str, event_id: str) 
     tip_amount = Decimal(str(ride.get("tip_amount") or 0))
 
     try:
-        from ..services.payment_service import record_payment_event, send_ride_receipt
+        from ..services.payment_service import _tip_ride_update, record_payment_event, send_ride_receipt
     except ImportError:
-        from services.payment_service import record_payment_event, send_ride_receipt  # type: ignore
+        from services.payment_service import _tip_ride_update, record_payment_event, send_ride_receipt  # type: ignore
 
     # Ledger first (recovery record exists even if the ride update fails).
     await record_payment_event(
@@ -131,6 +131,9 @@ async def _handle_ride_invoice_paid(invoice: dict, ride_id: str, event_id: str) 
             "payment_intent_id": payment_intent_id,
             "stripe_invoice_id": invoice.get("id"),
             "updated_at": datetime.now(timezone.utc).isoformat(),
+            # Mirror settle_card: apply tip delta so driver_earnings reflects any
+            # tip that was captured before the original card decline.
+            **_tip_ride_update(ride, tip_amount),
         },
     )
     logger.info(

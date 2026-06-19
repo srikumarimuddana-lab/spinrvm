@@ -27,6 +27,7 @@ try:
         places_new_headers,
     )
     from ...utils.insurance_periods import record_period_transition
+    from ...utils.money import dollars_to_cents
     from ...utils.rate_limiter import default_limiter as limiter
 except ImportError:
     import db_supabase
@@ -47,6 +48,7 @@ except ImportError:
         places_new_headers,
     )
     from utils.insurance_periods import record_period_transition
+    from utils.money import dollars_to_cents
     from utils.rate_limiter import default_limiter as limiter
 
 from .drivers import _batch_fetch_drivers_and_users, _user_display_name
@@ -1425,7 +1427,9 @@ async def admin_send_ride_receipt(
 
 
 @router.post("/rides/{ride_id}/send-invoice")
+@limiter.limit("10/minute")
 async def admin_send_payable_invoice(
+    request: Request,
     ride_id: str,
     admin_user: dict = Depends(get_admin_user),
 ):
@@ -1480,7 +1484,7 @@ async def admin_send_payable_invoice(
     total = (Decimal(str(grand or 0)) + Decimal(str(ride.get("tip_amount") or 0))).quantize(
         Decimal("0.01"), rounding=ROUND_HALF_UP
     )
-    amount_cents = int(total * 100)
+    amount_cents = dollars_to_cents(total)
     if amount_cents <= 0:
         raise HTTPException(status_code=409, detail="Ride total is $0 — nothing to invoice")
 
@@ -1506,9 +1510,11 @@ async def admin_send_payable_invoice(
             raise HTTPException(status_code=409, detail="An invoice is already being created for this ride")
         if existing_id:
             existing = await db_supabase.run_sync(lambda: stripe.Invoice.retrieve(existing_id, api_key=stripe_secret))
-            if existing.get("status") == "paid":
+            # stripe-python v5+ returns typed model objects — use attribute access.
+            existing_status = getattr(existing, "status", None)
+            if existing_status == "paid":
                 raise HTTPException(status_code=409, detail="Invoice already paid — webhook will settle the ride")
-            if existing.get("status") == "open":
+            if existing_status == "open":
                 await db_supabase.run_sync(lambda: stripe.Invoice.send_invoice(existing_id, api_key=stripe_secret))
                 await log_admin_action(
                     admin_user, "resend_ride_invoice", "ride", ride_id, {"stripe_invoice_id": existing_id}
@@ -1517,7 +1523,7 @@ async def admin_send_payable_invoice(
                     "sent": True,
                     "ride_id": ride_id,
                     "stripe_invoice_id": existing_id,
-                    "invoice_url": existing.get("hosted_invoice_url"),
+                    "invoice_url": getattr(existing, "hosted_invoice_url", None),
                     "resent": True,
                 }
 
@@ -1594,15 +1600,28 @@ async def admin_send_payable_invoice(
         )
         raise HTTPException(status_code=502, detail="Could not create Stripe invoice") from e
 
-    invoice_url = finalized.get("hosted_invoice_url")
-    await db_supabase.update_ride(
-        ride_id,
-        {
-            "stripe_invoice_id": invoice.id,
-            "invoice_url": invoice_url,
-            "invoice_sent_at": datetime.now(timezone.utc).isoformat(),
-        },
-    )
+    invoice_url = getattr(finalized, "hosted_invoice_url", None)
+    try:
+        await db_supabase.update_ride(
+            ride_id,
+            {
+                "stripe_invoice_id": invoice.id,
+                "invoice_url": invoice_url,
+                "invoice_sent_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except Exception as db_err:
+        # The Stripe invoice is live and the rider will be emailed. Log at
+        # ERROR so ops can manually reconcile the sentinel vs the real invoice id.
+        logger.error(
+            "admin_send_payable_invoice: Stripe invoice %s created for ride %s but "
+            "DB update failed — sentinel may persist; check rides.stripe_invoice_id. err=%s",
+            invoice.id,
+            ride_id,
+            db_err,
+            exc_info=True,
+            extra={"domain": "payments", "ride_id": ride_id},
+        )
     await log_admin_action(
         admin_user,
         "send_ride_invoice",

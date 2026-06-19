@@ -4727,12 +4727,15 @@ async def get_chat_status(ride_id: str, current_user: dict = Depends(get_current
     # Authorization: only the rider or the assigned driver may query chat
     # status. Without this guard any authenticated user could probe an
     # arbitrary ride_id and learn whether it exists and its status/timing.
+    # Return the SAME 404 as a missing ride for an unauthorized caller — a 403
+    # here would still leak ride existence (403 = exists-but-not-yours vs
+    # 404 = no-such-ride), the exact disclosure this guard closes.
     if ride.get("rider_id") != current_user["id"]:
         driver = (lambda _r: _r[0] if _r else None)(
             await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
         )
         if not (driver and ride.get("driver_id") == driver["id"]):
-            raise HTTPException(status_code=403, detail="Not authorized to view this ride")
+            raise HTTPException(status_code=404, detail="Ride not found")
 
     status = ride.get("status", "")
     if status == RideStatus.CANCELLED:

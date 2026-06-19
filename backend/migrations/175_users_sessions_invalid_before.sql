@@ -19,6 +19,21 @@
 -- migration time so any Firebase token from a sign-in before now stays revoked;
 -- it can only over-revoke (force one re-sign-in for users who already chose
 -- "log out everywhere"), never under-revoke.
+--
+-- Rolling-deploy gap (IMPORTANT): the backfill below is a point-in-time
+-- snapshot. During a rolling deploy an OLD backend instance can still process
+-- /auth/logout-all or the refresh-token-reuse cascade AFTER this UPDATE runs and
+-- bump users.token_version WITHOUT stamping sessions_invalid_before (old code
+-- doesn't know the column), leaving a token_version>0 / watermark-NULL row that
+-- the new Firebase path would treat as not-revoked. New backend code always
+-- stamps the watermark alongside every token_version bump, so the window is
+-- bounded to this one deploy. To close it, the backfill is idempotent — re-run
+-- the UPDATE below (or this whole migration) as the FINAL deploy step, once
+-- 100% of instances are on the new code. We chose this over a code "fail closed
+-- on NULL watermark" gate because that would force-logout legitimately-active
+-- Firebase users mid-deploy with no clean self-service recovery path (a
+-- re-login cannot safely distinguish a stolen pre-logout token from a fresh one
+-- when Firebase's own revocation has not propagated).
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS sessions_invalid_before TIMESTAMPTZ;
 

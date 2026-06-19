@@ -3,8 +3,13 @@ import { NativeModules, Platform } from 'react-native';
 /**
  * Firebase Services — FCM, Crashlytics, App Check
  *
- * These use @react-native-firebase (native modules).
- * Only work in custom dev builds, NOT Expo Go.
+ * Uses the @react-native-firebase v22+ **modular** API (getMessaging(),
+ * getCrashlytics(), initializeAppCheck(), getToken(), …) rather than the
+ * deprecated namespaced API (messaging(), crashlytics(), appCheck()). The
+ * namespaced API still works on v24 but logs a deprecation warning on every
+ * call and is slated for removal in the next major release.
+ *
+ * These are native modules — only work in custom dev/release builds, NOT Expo Go.
  */
 
 // Gate on native-module presence. require()-ing @react-native-firebase
@@ -15,27 +20,31 @@ import { NativeModules, Platform } from 'react-native';
 const hasFirebaseNative = !!NativeModules.RNFBAppModule;
 
 // Type-only imports — runtime loads via require() guarded by hasFirebaseNative.
-// `typeof import(...)` gives us the correct factory-function type without
-// pulling the packages into shared/'s runtime bundle.
-type MessagingFactory = typeof import('@react-native-firebase/messaging').default;
-type CrashlyticsFactory = typeof import('@react-native-firebase/crashlytics').default;
-type AppCheckFactory = typeof import('@react-native-firebase/app-check').default;
+// `typeof import(...)` gives the full module namespace type (including the
+// modular function exports) without pulling the packages into shared/'s bundle.
+type MessagingModule = typeof import('@react-native-firebase/messaging');
+type CrashlyticsModule = typeof import('@react-native-firebase/crashlytics');
+type AppCheckModule = typeof import('@react-native-firebase/app-check');
+type AppCheckInstance = import('@react-native-firebase/app-check').AppCheck;
+type RemoteMessage = import('@react-native-firebase/messaging').FirebaseMessagingTypes.RemoteMessage;
 
-let messaging: MessagingFactory | null = null;
-let crashlytics: CrashlyticsFactory | null = null;
-let appCheck: AppCheckFactory | null = null;
+// The whole module namespaces are loaded (not `.default`) so the modular
+// named exports (getMessaging, getToken, initializeAppCheck, …) are available.
+let messagingApi: MessagingModule | null = null;
+let crashlyticsApi: CrashlyticsModule | null = null;
+let appCheckApi: AppCheckModule | null = null;
 
 if (hasFirebaseNative) {
   try {
-    messaging = require('@react-native-firebase/messaging').default;
+    messagingApi = require('@react-native-firebase/messaging');
   } catch (e) { console.log('[Firebase] messaging load error:', e); }
 
   try {
-    crashlytics = require('@react-native-firebase/crashlytics').default;
+    crashlyticsApi = require('@react-native-firebase/crashlytics');
   } catch (e) { console.log('[Firebase] crashlytics load error:', e); }
 
   try {
-    appCheck = require('@react-native-firebase/app-check').default;
+    appCheckApi = require('@react-native-firebase/app-check');
   } catch (e) { console.log('[Firebase] app-check load error:', e); }
 } else {
   console.log('[Firebase] native module not linked (Expo Go) — push/crashlytics disabled');
@@ -54,6 +63,11 @@ if (hasFirebaseNative) {
  */
 let _initServicesPromise: Promise<void> | null = null;
 
+// The modular App Check getToken(appCheckInstance, …) needs the instance
+// returned by initializeAppCheck(). We cache it here from _doInit so
+// getAppCheckToken() (called per-request + per background batch) can reuse it.
+let _appCheckInstance: AppCheckInstance | null = null;
+
 export function initFirebaseServices(): Promise<void> {
   if (_initServicesPromise) return _initServicesPromise;
   _initServicesPromise = _doInitFirebaseServices();
@@ -62,9 +76,10 @@ export function initFirebaseServices(): Promise<void> {
 
 async function _doInitFirebaseServices(): Promise<void> {
   // 1. Crashlytics — enable automatic crash reporting
-  if (crashlytics) {
+  if (crashlyticsApi) {
     try {
-      await crashlytics().setCrashlyticsCollectionEnabled(true);
+      const crashlytics = crashlyticsApi.getCrashlytics();
+      await crashlyticsApi.setCrashlyticsCollectionEnabled(crashlytics, true);
       console.log('[Firebase] Crashlytics enabled');
     } catch (e) {
       console.log('[Firebase] Crashlytics init error:', e);
@@ -76,9 +91,13 @@ async function _doInitFirebaseServices(): Promise<void> {
   // via the @react-native-firebase/app-check config plugin in app.config.ts.
   // Here we configure the runtime provider to match. Without configure(),
   // initializeAppCheck() throws "no provider or no provider options defined".
-  if (appCheck) {
+  //
+  // newReactNativeFirebaseAppCheckProvider() exists only on the namespaced
+  // module instance (it has no modular replacement and so does not warn);
+  // everything after it — initializeAppCheck()/getToken() — is modular.
+  if (appCheckApi) {
     try {
-      const provider = appCheck().newReactNativeFirebaseAppCheckProvider();
+      const provider = appCheckApi.default().newReactNativeFirebaseAppCheckProvider();
       provider.configure({
         android: {
           provider: 'playIntegrity',
@@ -93,7 +112,9 @@ async function _doInitFirebaseServices(): Promise<void> {
         },
       });
 
-      await appCheck().initializeAppCheck({
+      // First arg (app) omitted — initializeAppCheck() falls back to the
+      // default app internally, so we don't need @react-native-firebase/app.
+      _appCheckInstance = await appCheckApi.initializeAppCheck(undefined, {
         provider,
         isTokenAutoRefreshEnabled: true,
       });
@@ -110,12 +131,13 @@ async function _doInitFirebaseServices(): Promise<void> {
  * Call on first open so the OS dialog appears before login.
  */
 export async function requestNotificationPermission(): Promise<boolean> {
-  if (!messaging) return false;
+  if (!messagingApi) return false;
   try {
-    const authStatus = await messaging().requestPermission();
+    const messaging = messagingApi.getMessaging();
+    const authStatus = await messagingApi.requestPermission(messaging);
     const enabled =
-      authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
-      authStatus === messaging.AuthorizationStatus.PROVISIONAL;
+      authStatus === messagingApi.AuthorizationStatus.AUTHORIZED ||
+      authStatus === messagingApi.AuthorizationStatus.PROVISIONAL;
     console.log('[Firebase] Notification permission:', enabled ? 'granted' : 'denied');
     return enabled;
   } catch (e) {
@@ -130,14 +152,15 @@ export async function requestNotificationPermission(): Promise<boolean> {
  * Returns the token string or null.
  */
 export async function requestPushPermissionAndGetToken(): Promise<string | null> {
-  if (!messaging) return null;
+  if (!messagingApi) return null;
 
   try {
+    const messaging = messagingApi.getMessaging();
     // Request permission (iOS — Android auto-grants)
-    const authStatus = await messaging().requestPermission();
+    const authStatus = await messagingApi.requestPermission(messaging);
     const enabled =
-      authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
-      authStatus === messaging.AuthorizationStatus.PROVISIONAL;
+      authStatus === messagingApi.AuthorizationStatus.AUTHORIZED ||
+      authStatus === messagingApi.AuthorizationStatus.PROVISIONAL;
 
     if (!enabled) {
       console.log('[Firebase] Push permission denied');
@@ -145,7 +168,7 @@ export async function requestPushPermissionAndGetToken(): Promise<string | null>
     }
 
     // Get FCM token
-    const token = await messaging().getToken();
+    const token = await messagingApi.getToken(messaging);
     // A token prefix is still a device-routable identifier — keep it out of
     // production logs. In dev we log only whether one was obtained.
     if (__DEV__) console.log('[Firebase] FCM token obtained:', token ? 'yes' : 'no');
@@ -160,9 +183,9 @@ export async function requestPushPermissionAndGetToken(): Promise<string | null>
 /**
  * Register a handler for incoming push notifications (foreground).
  */
-export function onForegroundMessage(handler: (message: import('@react-native-firebase/messaging').FirebaseMessagingTypes.RemoteMessage) => void) {
-  if (!messaging) return () => {};
-  return messaging().onMessage(handler);
+export function onForegroundMessage(handler: (message: RemoteMessage) => void) {
+  if (!messagingApi) return () => {};
+  return messagingApi.onMessage(messagingApi.getMessaging(), handler);
 }
 
 
@@ -170,9 +193,9 @@ export function onForegroundMessage(handler: (message: import('@react-native-fir
  * Set the background message handler.
  * Must be called at the TOP LEVEL (outside of any component).
  */
-export function setBackgroundMessageHandler(handler: (message: import('@react-native-firebase/messaging').FirebaseMessagingTypes.RemoteMessage) => Promise<unknown> | void) {
-  if (!messaging) return;
-  messaging().setBackgroundMessageHandler((msg) => handler(msg) ?? Promise.resolve());
+export function setBackgroundMessageHandler(handler: (message: RemoteMessage) => Promise<unknown> | void) {
+  if (!messagingApi) return;
+  messagingApi.setBackgroundMessageHandler(messagingApi.getMessaging(), (msg) => handler(msg) ?? Promise.resolve());
 }
 
 
@@ -190,8 +213,8 @@ export function setBackgroundMessageHandler(handler: (message: import('@react-na
  * @param onRefresh - called with the new FCM token string.
  */
 export function onTokenRefresh(onRefresh: (newToken: string) => void): () => void {
-  if (!messaging) return () => {};
-  return messaging().onTokenRefresh(onRefresh);
+  if (!messagingApi) return () => {};
+  return messagingApi.onTokenRefresh(messagingApi.getMessaging(), onRefresh);
 }
 
 
@@ -199,8 +222,8 @@ export function onTokenRefresh(onRefresh: (newToken: string) => void): () => voi
  * Log a custom event to Crashlytics.
  */
 export function logCrashlyticsEvent(message: string) {
-  if (!crashlytics) return;
-  crashlytics().log(message);
+  if (!crashlyticsApi) return;
+  crashlyticsApi.log(crashlyticsApi.getCrashlytics(), message);
 }
 
 
@@ -208,8 +231,8 @@ export function logCrashlyticsEvent(message: string) {
  * Set user ID for Crashlytics (helps identify crashes per user).
  */
 export function setCrashlyticsUser(userId: string) {
-  if (!crashlytics) return;
-  crashlytics().setUserId(userId);
+  if (!crashlyticsApi) return;
+  crashlyticsApi.setUserId(crashlyticsApi.getCrashlytics(), userId);
 }
 
 
@@ -217,8 +240,8 @@ export function setCrashlyticsUser(userId: string) {
  * Record a non-fatal error in Crashlytics.
  */
 export function recordError(error: Error) {
-  if (!crashlytics) return;
-  crashlytics().recordError(error);
+  if (!crashlyticsApi) return;
+  crashlyticsApi.recordError(crashlyticsApi.getCrashlytics(), error);
 }
 
 
@@ -231,9 +254,14 @@ export function recordError(error: Error) {
  * enforcement mode determines whether the call succeeds.
  */
 export async function getAppCheckToken(): Promise<string | null> {
-  if (!appCheck) return null;
+  if (!appCheckApi) return null;
   try {
-    const result = await appCheck().getToken(false);
+    // The modular getToken() needs the AppCheck instance from init. If init
+    // hasn't run in this context yet (e.g. a headless task), run it now —
+    // initFirebaseServices() is idempotent and cheap when already resolved.
+    if (!_appCheckInstance) await initFirebaseServices();
+    if (!_appCheckInstance) return null;
+    const result = await appCheckApi.getToken(_appCheckInstance, false);
     return result?.token ?? null;
   } catch (e) {
     console.log('[Firebase] App Check token fetch error:', e);

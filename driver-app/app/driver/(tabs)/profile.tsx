@@ -28,6 +28,7 @@ import api from '@shared/api/client';
 import { useDriverMe } from '@shared/hooks/queries';
 import SpinrConfig from '@shared/config/spinr.config';
 import { showToast } from '../../../hooks/useToast';
+import * as Clipboard from 'expo-clipboard';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -40,6 +41,24 @@ export default function ProfileScreen() {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const modalStyles = useMemo(() => createModalStyles(colors), [colors]);
+
+  // Referral code shown in the profile. It IS the human-readable driver_code
+  // (DRV-XXXXXX) — designed to be spoken/typed — falling back to a stored
+  // custom code or the id-derived default only for legacy rows without one.
+  // Tap to copy.
+  const referralCode = (driverData?.driver_code as string | undefined)
+    || (driverData?.referral_code as string | undefined)
+    || (driverData?.id ? `DRIVER${String(driverData.id).slice(0, 8).toUpperCase()}` : '');
+
+  const copyReferralCode = useCallback(async () => {
+    if (!referralCode) return;
+    try {
+      await Clipboard.setStringAsync(referralCode);
+      showToast('success', 'Copied!', 'Referral code copied to clipboard');
+    } catch {
+      // Clipboard is best-effort — never throw from a copy tap.
+    }
+  }, [referralCode]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [docRequirements, setDocRequirements] = useState<Array<{id: string; name: string; description?: string}>>([]);
@@ -295,8 +314,19 @@ export default function ProfileScreen() {
           <Text style={styles.name}>
             {driverData?.name || (user?.first_name ? `${user.first_name} ${user.last_name || ''}` : 'Driver')}
           </Text>
-          {!!driverData?.driver_code && (
-            <Text style={styles.driverCode}>{driverData.driver_code}</Text>
+          {!!referralCode && (
+            <TouchableOpacity
+              style={styles.referralChip}
+              onPress={copyReferralCode}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel={`Referral code ${referralCode}. Tap to copy.`}
+            >
+              <Ionicons name="gift-outline" size={13} color="#fff" />
+              <Text style={styles.referralChipLabel}>Referral code</Text>
+              <Text style={styles.referralChipCode}>{referralCode}</Text>
+              <Ionicons name="copy-outline" size={13} color="rgba(255,255,255,0.9)" />
+            </TouchableOpacity>
           )}
           <Text style={styles.subtitle}>
             {driverData?.is_verified ? 'Verified Driver' : 'Pending Verification'}
@@ -954,6 +984,28 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
     fontSize: 13,
     marginTop: 4,
     fontWeight: '700',
+    letterSpacing: 1,
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+  },
+  referralChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+  },
+  referralChipLabel: {
+    color: 'rgba(255,255,255,0.85)',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  referralChipCode: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '800',
     letterSpacing: 1,
     fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
   },

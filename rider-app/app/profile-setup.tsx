@@ -18,6 +18,7 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@shared/store/authStore';
+import api from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import ConfirmSheet from '../components/ConfirmSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -37,6 +38,7 @@ export default function ProfileSetupScreen() {
     lastName: user?.last_name || '',
     email: user?.email || '',
     gender: user?.gender || '',
+    referralCode: '',
   });
 
   const [focusedField, setFocusedField] = useState<string | null>(null);
@@ -96,6 +98,16 @@ export default function ProfileSetupScreen() {
       if (isEditing) {
         router.back();
       } else {
+        // Optional referral code — best-effort, never blocks signup.
+        const code = form.referralCode.trim();
+        if (code) {
+          try {
+            await api.post('/users/referral/apply', { referral_code: code });
+            showToast('Referral applied', 'Your referral code was added.', 'success');
+          } catch (refErr: any) {
+            showToast('Referral code', refErr?.response?.data?.detail || "That code couldn't be applied.", 'warning');
+          }
+        }
         router.replace('/(tabs)' as any);
       }
     } catch (err: any) {
@@ -231,6 +243,8 @@ export default function ProfileSetupScreen() {
             </View>
           )}
         </View>
+
+        {!isEditing && renderInput('referralCode', 'REFERRAL CODE (OPTIONAL)', 'e.g. RIDE3F8A9C21', 'gift-outline', 'default', 'characters')}
       </View>
 
       {!isEditing && (

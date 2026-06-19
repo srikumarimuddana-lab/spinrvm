@@ -204,6 +204,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to import pre-auth capture sweeper: {e}", exc_info=True)
 
+    # Referral reward payouts — pays referrer/referee rewards once a referee
+    # hits the ride threshold. Idempotent via referral_payouts UNIQUE claim.
+    # No-ops unless settings.REFERRAL_PAYOUTS_ENABLED (OFF by default — it moves
+    # real wallet money, enable only after staging verification).
+    try:
+        from utils.referral_payout import referral_payout_loop
+
+        _spawn("referral_payout (5min)", referral_payout_loop)
+    except Exception as e:
+        logger.error(f"Failed to import referral payout loop: {e}", exc_info=True)
+
     # Driver claim reaper — releases drivers claimed by dispatch whose offer
     # insert never landed (crash/restart), recovering orphaned is_available
     # flags so supply isn't silently eroded. Every 60 seconds.

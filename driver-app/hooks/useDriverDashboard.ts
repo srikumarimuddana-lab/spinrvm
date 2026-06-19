@@ -3,6 +3,7 @@ import { Animated } from 'react-native';
 import { showAlert } from '../components/AlertDialog';
 import * as Location from 'expo-location';
 import { Platform, Vibration, Linking, AppState } from 'react-native';
+import NetInfo from '@react-native-community/netinfo';
 import { showToast } from './useToast';
 
 export type ConnectionState = 'connected' | 'reconnecting' | 'disconnected';
@@ -15,6 +16,7 @@ import { tKey } from '../i18n';
 import api from '@shared/api/client';
 import { useDriverConfig } from '@shared/hooks/queries';
 import { API_URL } from '@shared/config';
+import SpinrConfig from '@shared/config/spinr.config';
 import { onForegroundMessage } from '@shared/services/firebase';
 import { Dimensions } from 'react-native';
 import {
@@ -60,6 +62,28 @@ const _toFiniteCoord = (v: unknown): number | null => {
   if (!Number.isFinite(n)) return null;
   if (n < -180 || n > 180) return null; // valid range for both lat (-90..90) and lng (-180..180)
   return n;
+};
+
+/**
+ * Resolve a backend base URL that is guaranteed to carry an http(s) scheme,
+ * or null if none can be found.
+ *
+ * `@shared/config`'s API_URL is env-var-only and resolves to '' when
+ * EXPO_PUBLIC_BACKEND_URL was not baked into the build (a known EAS / OTA
+ * hazard — the var is compiled in at build time, not read at runtime). An
+ * empty base produced a scheme-less WebSocket URL like "/ws/driver/123",
+ * which crashed the native OkHttp layer with a FATAL EXCEPTION:
+ * "Expected URL scheme 'http' or 'https' but no scheme was found".
+ *
+ * Defence: prefer API_URL when it has a valid scheme, otherwise fall back to
+ * SpinrConfig.backendUrl (which carries the hardcoded production safety net
+ * + HTTPS enforcement). Only ever return a value that starts with http(s);
+ * callers treat null as "cannot connect" and surface it instead of crashing.
+ */
+const _resolveBackendBaseUrl = (): string | null => {
+  const candidate = API_URL && /^https?:\/\//.test(API_URL) ? API_URL : SpinrConfig.backendUrl;
+  if (!candidate || !/^https?:\/\//.test(candidate)) return null;
+  return candidate.replace(/\/+$/, '');
 };
 
 export type LocationStatus = 'pending' | 'denied' | 'unavailable' | 'ok';
@@ -894,11 +918,27 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       return;
     }
 
+    // Defence against a misconfigured build: if no backend URL with a valid
+    // http(s) scheme can be resolved, do NOT construct the socket — a
+    // scheme-less URL ("/ws/driver/123") crashes the native OkHttp layer with
+    // a FATAL EXCEPTION. Surface a connection error and bail gracefully so the
+    // driver sees "Connection lost" instead of the app dying on tap-GO.
+    const baseUrl = _resolveBackendBaseUrl();
+    if (!baseUrl) {
+      console.error(
+        '[WS] No valid backend URL — cannot open driver socket. ' +
+        'EXPO_PUBLIC_BACKEND_URL is likely missing from this build.',
+      );
+      setConnectionState('disconnected');
+      setWsError(tKey('dashboard.connectionLost'));
+      return;
+    }
+
     // Match URL scheme: https backends (prod or DEV pointing at prod) use wss://,
     // http backends (local dev) use ws://. Checking __DEV__ is wrong — Railway's
     // edge proxy rejects plain ws:// with "Invalid Sec-WebSocket-Accept response".
-    const useSecure = API_URL.startsWith('https');
-    const wsBaseUrl = `${API_URL.replace(/^https?/, useSecure ? 'wss' : 'ws')}/ws/driver/${currentUser.id}`;
+    const useSecure = baseUrl.startsWith('https');
+    const wsBaseUrl = `${baseUrl.replace(/^https?/, useSecure ? 'wss' : 'ws')}/ws/driver/${currentUser.id}`;
     const wsUrl = lastSeqRef.current > 0 ? `${wsBaseUrl}?last_seq=${lastSeqRef.current}` : wsBaseUrl;
     // Flip the banner to 'reconnecting' the moment we start connecting.
     // The initial state is 'disconnected', which renders as the red
@@ -1144,27 +1184,57 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // ─── Toggle Online/Offline ───────────────────────────────────────
   const toggleOnline = async () => {
     try {
+      // Offline guard — only when going ONLINE. Without a connection the
+      // go-online request can't reach the backend, so tell the driver with a
+      // toast instead of letting it silently fail. (Going offline is always
+      // allowed so a driver on a dead connection can still flip themselves off.)
+      if (!isOnline) {
+        const net = await NetInfo.fetch().catch(() => null);
+        const connected = net ? (net.isConnected ?? net.isInternetReachable ?? true) : true;
+        if (connected === false) {
+          showToast('error', 'Internet offline', 'Your internet is offline. Reconnect and try again.');
+          return;
+        }
+      }
+
+      // Onboarding status is computed server-side on /auth/me; read it live.
+      const onboardingStatus = useAuthStore.getState().user?.driver_onboarding_status;
+
+      // Vehicle details missing → toast + send them to the vehicle form.
       if (!driverData?.vehicle_make || !driverData?.license_plate) {
-        showAlert(
-          "Profile Incomplete",
-          "You must provide vehicle details before going online.",
-          [
-            { text: "Add Vehicle Info", onPress: () => router.push('/vehicle-info' as any) },
-            { text: "Cancel", style: "cancel" },
-          ]
-        );
+        showToast('error', tKey('dashboard.addVehicle'), tKey('dashboard.profileIncompleteMsg'));
+        router.push('/vehicle-info' as any);
+        return;
+      }
+
+      // Documents pending / rejected / expired / under review → toast + docs page.
+      if (onboardingStatus === 'documents_required') {
+        showToast('error', tKey('dashboard.actionRequired'), tKey('dashboard.uploadDocs'));
+        router.push('/documents' as any);
+        return;
+      }
+      if (onboardingStatus === 'documents_rejected') {
+        showToast('error', tKey('dashboard.docsRejected'), tKey('dashboard.fixDocuments'));
+        router.push('/documents' as any);
+        return;
+      }
+      if (onboardingStatus === 'documents_expired') {
+        showToast('error', tKey('dashboard.docsExpired'), tKey('dashboard.updateDocs'));
+        router.push('/documents' as any);
+        return;
+      }
+      if (onboardingStatus === 'pending_review') {
+        showToast('info', tKey('dashboard.underReview'), tKey('dashboard.viewStatus'));
+        router.push('/documents' as any);
+        return;
+      }
+      if (onboardingStatus === 'suspended') {
+        showToast('error', tKey('dashboard.accountSuspended'), tKey('dashboard.contactSupport'));
         return;
       }
 
       if (!driverData?.is_verified) {
-        showAlert(
-          "Account Not Verified",
-          "Your account is not verified yet. Please complete your profile and wait for admin approval before going online.",
-          [
-            { text: "Check Status", onPress: () => router.push('/driver/profile' as any) },
-            { text: "OK", style: "default" },
-          ]
-        );
+        showToast('error', tKey('dashboard.accountNotVerified'), tKey('dashboard.accountNotVerifiedMsg'));
         return;
       }
 

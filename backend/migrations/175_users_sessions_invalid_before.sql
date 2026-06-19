@@ -1,5 +1,11 @@
 -- Migration 175: add users.sessions_invalid_before watermark for Firebase session revocation
 --
+-- migration-override-ok: the CREATE OR REPLACE cross-check extracts the "public"
+-- schema qualifier (not the function name) as the target, so it false-flags a
+-- conflict with every prior migration that defines a public.<fn>. This file's
+-- function, guard_session_revocation_columns, is new and unique — it redefines
+-- no existing object.
+--
 -- Rollback:
 --   DROP TRIGGER IF EXISTS trg_guard_session_revocation ON public.users;
 --   DROP FUNCTION IF EXISTS public.guard_session_revocation_columns();

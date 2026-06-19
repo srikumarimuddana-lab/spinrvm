@@ -36,14 +36,10 @@ async def create_profile(request: CreateProfileRequest, current_user: dict = Dep
     if request.gender not in valid_genders:
         raise HTTPException(status_code=400, detail=f"Gender must be one of: {', '.join(valid_genders)}")
 
-    # GAP FIX: Check for duplicate email across users.
-    # Spinr is a single-identity-per-person model (one account, dual rider+driver
-    # role via is_rider/is_driver). Phone is the unique login key, so reusing an
-    # email on a second phone number means the person accidentally created a
-    # second account. A blunt "already in use" 400 leaves them at a dead-end
-    # (logged in, but unable to complete their profile). Return an actionable
-    # account-recovery nudge instead. We deliberately do NOT disclose the other
-    # account's phone number (PII / account-enumeration).
+    # Enforce unique email across accounts. Spinr requires both phone and email
+    # to be unique (no duplicates of either), so if this email already belongs to
+    # another account the user must use a different email address. We deliberately
+    # do NOT disclose the other account's phone number (PII / account-enumeration).
     email_lower = request.email.strip().lower()
     existing_email_user = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("users", {"email": email_lower, "id": {"$ne": current_user["id"]}}, limit=1)
@@ -51,12 +47,7 @@ async def create_profile(request: CreateProfileRequest, current_user: dict = Dep
     if existing_email_user:
         raise HTTPException(
             status_code=400,
-            detail=(
-                "This email is already linked to a Spinr account registered with a "
-                "different phone number. Your rider and driver profiles live on one "
-                "account — please log in with that phone number, or contact support "
-                "if you need to update the number on your account."
-            ),
+            detail="This email is already in use with another account. Please change your email address.",
         )
 
     update_data = {
@@ -454,7 +445,7 @@ async def delete_emergency_contact(contact_id: str, current_user: dict = Depends
 # migration + money-auditor review) and is intentionally not done here.
 RIDER_REFERRAL_RIDES_REQUIRED = 1
 RIDER_REFERRER_REWARD = 5  # CAD — referrer credit once referee takes first ride
-RIDER_REFEREE_REWARD = 5   # CAD — new rider's first-ride credit
+RIDER_REFEREE_REWARD = 5  # CAD — new rider's first-ride credit
 
 
 def _rider_referral_code(user: dict) -> str:

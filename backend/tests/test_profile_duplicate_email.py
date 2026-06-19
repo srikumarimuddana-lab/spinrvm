@@ -1,10 +1,9 @@
 """Unit tests for POST /users/profile duplicate-email handling.
 
-Spinr is a single-identity-per-person model: phone is the unique login key and
-a person holds both rider and driver roles on ONE account. Reusing an email on a
-second phone number means a duplicate account was created by mistake. The profile
-route must block the duplicate email AND return an actionable account-recovery
-message (not a dead-end), while never disclosing the other account's phone.
+Spinr requires both phone and email to be unique across accounts (no duplicates
+of either). If an email already belongs to another account, the profile route
+must block it and tell the user to use a different email address, while never
+disclosing the other account's phone number.
 """
 
 from __future__ import annotations
@@ -33,8 +32,8 @@ def _req(email: str = "Shared@Example.com", role: str | None = None) -> CreatePr
 
 
 @pytest.mark.anyio
-async def test_duplicate_email_on_different_phone_is_blocked_with_recovery_hint():
-    """Email already on another account → 400 with an actionable, PII-safe message."""
+async def test_duplicate_email_is_blocked_with_change_email_message():
+    """Email already on another account → 400 telling the user to change their email."""
     current_user = {"id": "u-new", "phone": "+13060000002"}
     other_account = {"id": "u-existing", "phone": "+13060000001", "email": "shared@example.com"}
 
@@ -50,9 +49,9 @@ async def test_duplicate_email_on_different_phone_is_blocked_with_recovery_hint(
 
     assert ei.value.status_code == 400
     detail = ei.value.detail.lower()
-    # Actionable recovery nudge, not a blunt dead-end.
-    assert "different phone number" in detail
-    assert "log in" in detail
+    # Tell the user the email is taken and to use a different one.
+    assert "already in use" in detail
+    assert "change your email" in detail
     # Never disclose the other account's phone number (PII / enumeration).
     assert "+13060000001" not in ei.value.detail
     # The duplicate must not be written.

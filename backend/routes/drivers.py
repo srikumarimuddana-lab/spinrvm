@@ -5002,7 +5002,10 @@ async def get_driver_referral_info(current_user: dict = Depends(get_current_user
         "referral_earnings": _money_str(referral_earnings),
         "reward_amount": _money_str(reward_amount),
         "rides_required": rides_required,
-        "terms": (
+        # Admin-authored per-area T&C wins; otherwise generate the default
+        # sentence from this area's reward numbers.
+        "terms": terms.get("terms")
+        or (
             f"Earn ${_fmt_money(reward_amount)} for each driver who signs up with your code "
             f"and completes {rides_required} rides."
         ),

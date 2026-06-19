@@ -14,8 +14,8 @@ from backend.utils import referral_terms
 # Fixed stand-in for the global constants so assertions don't drift if the real
 # RIDER_*/REFERRAL_* constants are later retuned.
 _GLOBAL = {
-    "rider": {"rides": 1, "referrer": Decimal("5.00"), "referee": Decimal("5.00")},
-    "driver": {"rides": 10, "referrer": Decimal("10.00"), "referee": Decimal("0.00")},
+    "rider": {"rides": 1, "referrer": Decimal("5.00"), "referee": Decimal("5.00"), "terms": None},
+    "driver": {"rides": 10, "referrer": Decimal("10.00"), "referee": Decimal("0.00"), "terms": None},
 }
 
 
@@ -67,6 +67,21 @@ class TestResolveReferralTerms:
         with _patch_global(), _patch_rows([]):
             t = asyncio.run(referral_terms.resolve_referral_terms("ghost", "driver"))
         assert t == _GLOBAL["driver"]
+
+    def test_area_terms_override_returned(self):
+        # A non-blank per-area T&C string is surfaced so the route shows it
+        # verbatim instead of the auto-generated sentence.
+        area = {"id": "a", "rider_referral_terms": "  Custom rider terms.  "}
+        with _patch_global(), _patch_rows([area]):
+            t = asyncio.run(referral_terms.resolve_referral_terms("a", "rider"))
+        assert t["terms"] == "Custom rider terms."  # trimmed
+
+    def test_blank_area_terms_fall_back_to_none(self):
+        # Whitespace-only / empty override must not suppress the dynamic default.
+        area = {"id": "a", "driver_referral_terms": "   "}
+        with _patch_global(), _patch_rows([area]):
+            t = asyncio.run(referral_terms.resolve_referral_terms("a", "driver"))
+        assert t["terms"] is None
 
     def test_driver_referee_always_zero(self):
         area = {"id": "a", "driver_referral_reward": 25, "driver_referral_rides_required": 4}

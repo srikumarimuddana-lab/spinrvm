@@ -20,9 +20,7 @@ _GLOBAL = {
 
 
 def _patch_global():
-    return patch.object(
-        referral_terms, "_global_terms", lambda: {k: dict(v) for k, v in _GLOBAL.items()}
-    )
+    return patch.object(referral_terms, "_global_terms", lambda: {k: dict(v) for k, v in _GLOBAL.items()})
 
 
 def _patch_rows(value=None, side_effect=None):
@@ -44,8 +42,8 @@ class TestResolveReferralTerms:
     def test_area_overrides_win_and_coerce_to_decimal(self):
         area = {
             "id": "area1",
-            "rider_referrer_reward": 7,          # int from DB
-            "rider_referee_reward": "8.50",      # numeric-as-string from DB
+            "rider_referrer_reward": 7,  # int from DB
+            "rider_referee_reward": "8.50",  # numeric-as-string from DB
             "rider_referral_rides_required": 3,
         }
         with _patch_global(), _patch_rows([area]):
@@ -123,3 +121,28 @@ class TestAreaIdForDriverUser:
         with _patch_rows([]):
             area = asyncio.run(referral_terms.area_id_for_driver_user("u1"))
         assert area is None
+
+
+class TestPaidReferralEarnings:
+    def test_none_when_no_paid_rows(self):
+        # No paid payout yet → None so the caller falls back to the estimate.
+        with _patch_rows([]):
+            out = asyncio.run(referral_terms.paid_referral_earnings("u1", "rider"))
+        assert out is None
+
+    def test_sums_snapshotted_rewards_as_decimal(self):
+        rows = [
+            {"referrer_reward": 5},  # int from DB
+            {"referrer_reward": "10.50"},  # numeric-as-string from DB
+            {"referrer_reward": None},  # defensive: NULL coerces to 0
+        ]
+        with _patch_rows(rows):
+            out = asyncio.run(referral_terms.paid_referral_earnings("u1", "driver"))
+        assert out == Decimal("15.50")
+
+    def test_lookup_failure_propagates(self):
+        import pytest
+
+        with _patch_rows(side_effect=RuntimeError("db down")):
+            with pytest.raises(RuntimeError):
+                asyncio.run(referral_terms.paid_referral_earnings("u1", "rider"))

@@ -59,7 +59,7 @@ try:
     from ..utils.metrics import inc as _metric_inc
     from ..utils.metrics import observe as _metric_observe
     from ..utils.money import dollars_to_cents, to_decimal
-    from ..utils.referral_terms import resolve_referral_terms
+    from ..utils.referral_terms import paid_referral_earnings, resolve_referral_terms
     from ..utils.t4a_pdf import generate_t4a_pdf
 except ImportError:
     import db_supabase
@@ -4980,7 +4980,12 @@ async def get_driver_referral_info(current_user: dict = Depends(get_current_user
             if completed_rides >= rides_required:
                 qualified_referrals += 1
 
-    referral_earnings = reward_amount * qualified_referrals
+    # Earned total: prefer the snapshotted sum of PAID payouts so it never changes
+    # retroactively when area terms or the driver's area change; fall back to the
+    # estimate (reward × qualified) until a payout has actually been paid (the
+    # payout loop is off by default, so this preserves current behaviour).
+    paid = await paid_referral_earnings(current_user["id"], "driver")
+    referral_earnings = paid if paid is not None else (reward_amount * qualified_referrals)
 
     return {
         "referral_code": referral_code,

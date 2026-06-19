@@ -1414,9 +1414,7 @@ async def compute_ride_estimates(
     validate_ride_location(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
     # Price the actual route through any intermediate stops, not the straight
     # pickup→dropoff line — otherwise adding a stop never changes the quote.
-    distance_km = multi_leg_distance(
-        body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng, body.stops
-    )
+    distance_km = multi_leg_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng, body.stops)
     duration_minutes = int(distance_km / 30 * 60) + 5
 
     fares = await get_fares_for_location(body.pickup_lat, body.pickup_lng)
@@ -2160,9 +2158,7 @@ async def create_ride(
 
     # Charge the multi-leg route (pickup → stops → dropoff) so the booked fare
     # matches the multi-stop quote shown at /rides/estimate.
-    distance_km = multi_leg_distance(
-        body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng, body.stops
-    )
+    distance_km = multi_leg_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng, body.stops)
     duration_minutes = int(distance_km / 30 * 60) + 5
 
     # Fetch service_areas ONCE for this request and share across:
@@ -4727,6 +4723,16 @@ async def get_chat_status(ride_id: str, current_user: dict = Depends(get_current
     ride = await db.find_one("rides", {"id": ride_id})
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
+
+    # Authorization: only the rider or the assigned driver may query chat
+    # status. Without this guard any authenticated user could probe an
+    # arbitrary ride_id and learn whether it exists and its status/timing.
+    if ride.get("rider_id") != current_user["id"]:
+        driver = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+        )
+        if not (driver and ride.get("driver_id") == driver["id"]):
+            raise HTTPException(status_code=403, detail="Not authorized to view this ride")
 
     status = ride.get("status", "")
     if status == RideStatus.CANCELLED:

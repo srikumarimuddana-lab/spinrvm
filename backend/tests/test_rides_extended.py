@@ -478,6 +478,41 @@ class TestGetChatStatus:
                 asyncio.run(rides_mod.get_chat_status(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
         assert exc.value.status_code == 404
 
+    def test_outsider_cannot_read_chat_status(self):
+        """IDOR regression: a user who is neither the rider nor the assigned
+        driver must not be able to probe a ride's existence/status via
+        chat-status. The driver lookup returns no driver for the outsider, so
+        the request is rejected with 403."""
+        from fastapi import HTTPException
+
+        from backend.routes import rides as rides_mod
+
+        ride = _ride("in_progress")
+
+        with (
+            patch("backend.routes.rides.db.find_one", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(rides_mod.get_chat_status(ride_id=RIDE_ID, current_user={"id": "outsider_999"}))
+        assert exc.value.status_code == 403
+
+    def test_assigned_driver_can_read_chat_status(self):
+        """The assigned driver (matched via the drivers lookup) is authorized."""
+        from backend.routes import rides as rides_mod
+
+        ride = _ride("in_progress")
+
+        with (
+            patch("backend.routes.rides.db.find_one", AsyncMock(return_value=ride)),
+            patch(
+                "backend.routes.rides.db_supabase.get_rows",
+                AsyncMock(return_value=[{"id": DRIVER_ID, "user_id": "driver_user_xyz"}]),
+            ),
+        ):
+            result = asyncio.run(rides_mod.get_chat_status(ride_id=RIDE_ID, current_user={"id": "driver_user_xyz"}))
+        assert result["available"] is True
+
 
 # ---------------------------------------------------------------------------
 # get_ride_messages

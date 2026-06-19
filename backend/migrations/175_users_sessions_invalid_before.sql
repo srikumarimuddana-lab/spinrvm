@@ -36,26 +36,46 @@
 --      sessions_invalid_before via direct PostgREST access and bypass
 --      logout-all. Any non-service role that changes either column is rejected.
 -- SECURITY INVOKER (default) so current_user reflects the actual caller
--- (service_role for the backend, authenticated/anon for direct PostgREST).
+-- (service_role for PostgREST backend writes; authenticated/anon for direct
+-- PostgREST). Role membership is checked with pg_has_role (not a literal name
+-- list) so it is robust to the connection user — service_role directly, or
+-- postgres/superuser/pooler users that are members of it — and it is guarded by
+-- a pg_roles EXISTS check so the trigger no-ops on a vanilla Postgres (CI
+-- containers without Supabase's service_role) instead of erroring.
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS sessions_invalid_before TIMESTAMPTZ;
+
+-- Backfill BEFORE the trigger is installed, so the one-time snapshot can never
+-- trip the tamper guard regardless of which role the migration runner connects
+-- as (default postgres DSN vs. Session-Pooler postgres.<ref>).
+UPDATE users
+SET sessions_invalid_before = NOW()
+WHERE COALESCE(token_version, 0) > 0
+  AND sessions_invalid_before IS NULL;
 
 CREATE OR REPLACE FUNCTION public.guard_session_revocation_columns()
 RETURNS TRIGGER
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = public, pg_catalog
 AS $$
 BEGIN
-    -- Tamper protection: only the backend (service role) / migrations may change
-    -- the revocation columns.
-    IF current_user NOT IN ('service_role', 'postgres', 'supabase_admin')
+    -- Tamper protection: token_version and sessions_invalid_before are
+    -- backend-managed. Only a caller acting within service_role (the backend via
+    -- PostgREST; superusers/migration roles are members too) may change them, so
+    -- a frontend authenticated/anon user cannot clear or move the watermark via
+    -- direct PostgREST and bypass logout-all. Skipped where service_role does
+    -- not exist (non-Supabase / CI Postgres) so the migration stays portable.
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role')
+       AND NOT pg_has_role(current_user, 'service_role', 'MEMBER')
        AND (NEW.token_version IS DISTINCT FROM OLD.token_version
             OR NEW.sessions_invalid_before IS DISTINCT FROM OLD.sessions_invalid_before) THEN
         RAISE EXCEPTION 'token_version and sessions_invalid_before are backend-managed';
     END IF;
 
     -- Rollout-gap closure: auto-stamp the watermark on any token_version bump
-    -- that did not already set it in the same UPDATE.
+    -- that did not already set it in the same UPDATE. Covers an old backend
+    -- instance (or any future code path) that bumps token_version without the
+    -- watermark; Firebase sessions are gated only by the watermark.
     IF COALESCE(NEW.token_version, 0) > COALESCE(OLD.token_version, 0)
        AND NEW.sessions_invalid_before IS NOT DISTINCT FROM OLD.sessions_invalid_before THEN
         NEW.sessions_invalid_before := NOW();
@@ -70,8 +90,3 @@ CREATE TRIGGER trg_guard_session_revocation
     BEFORE UPDATE ON public.users
     FOR EACH ROW
     EXECUTE FUNCTION public.guard_session_revocation_columns();
-
-UPDATE users
-SET sessions_invalid_before = NOW()
-WHERE COALESCE(token_version, 0) > 0
-  AND sessions_invalid_before IS NULL;

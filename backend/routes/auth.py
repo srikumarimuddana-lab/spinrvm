@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -14,6 +15,7 @@ try:
     from ..core.csrf import clear_csrf_cookie, generate_csrf_token, set_csrf_cookie
     from ..dependencies import (
         OTP_EXPIRY_MINUTES,
+        _firebase_session_revoked,
         create_jwt_token,
         generate_otp,
         get_current_user,
@@ -56,6 +58,7 @@ except ImportError:
     from core.csrf import clear_csrf_cookie, generate_csrf_token, set_csrf_cookie
     from dependencies import (
         OTP_EXPIRY_MINUTES,
+        _firebase_session_revoked,
         create_jwt_token,
         generate_otp,
         get_current_user,
@@ -772,6 +775,23 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
             ) from e
         user = new_user
     else:
+        # Enforce the logout-all / reuse-cascade watermark at token EXCHANGE,
+        # BEFORE rotating the session. verify_id_token(check_revoked=True) only
+        # catches tokens once Firebase's own revocation propagated; our
+        # revoke_refresh_tokens is best-effort, so without this a pre-logout
+        # Firebase ID token (auth_time <= sessions_invalid_before) could be
+        # exchanged for a fresh Spinr JWT, bypassing logout-all. Checking before
+        # the current_session_id write matters: rotating the session on a
+        # rejected exchange would invalidate the user's legitimate in-flight JWT
+        # (ERR_SESSION_EXPIRED) and let a stale-token holder repeatedly force
+        # re-sign-in. New users (handled above) have no watermark, so unaffected.
+        if _firebase_session_revoked(payload, user.get("sessions_invalid_before")):
+            raise SpinrException(
+                message="Session has been revoked, please sign in again",
+                error_code=ErrorCode.AUTH_INVALID_CREDENTIALS,
+                status_code=401,
+                message_key=ErrorKeys.AUTH_INVALID_CREDENTIALS,
+            )
         try:
             await db_supabase.update_one("users", {"id": uid}, {"current_session_id": session_id})
         except Exception as e:
@@ -1097,6 +1117,24 @@ async def logout(
     return {"success": True}
 
 
+def _revoke_firebase_refresh_tokens(user_id: str) -> None:
+    """Best-effort revocation of a user's Firebase refresh tokens on logout-all.
+
+    Forces a real Firebase re-sign-in by invalidating refresh tokens. The
+    sessions_invalid_before watermark is the authoritative session-kill; this is
+    hardening on top. For OTP/JWT users with no Firebase uid this no-ops with
+    UserNotFoundError, which is expected — not an error. Isolated into a
+    module-level seam so the (best-effort, Firebase-SDK-dependent) side effect is
+    patchable without coupling tests to global firebase_admin module state.
+    """
+    try:
+        from firebase_admin import auth as _firebase_auth  # type: ignore
+
+        _firebase_auth.revoke_refresh_tokens(user_id)
+    except Exception as e:
+        logger.info(f"logout-all: firebase refresh-token revoke skipped for {user_id}: {type(e).__name__}")
+
+
 @api_router.post("/logout-all")
 @limiter.limit("5/minute")
 async def logout_all(request: Request, response: Response, current_user: dict = Depends(get_current_user)):
@@ -1110,8 +1148,16 @@ async def logout_all(request: Request, response: Response, current_user: dict = 
     """
     user_id = current_user["id"]
     new_version = int(current_user.get("token_version") or 0) + 1
+    # Firebase-authed riders carry no token_version claim, so the watermark
+    # (sessions_invalid_before, compared against each token's auth_time on every
+    # request) is what revokes their existing Firebase ID tokens.
+    invalidate_ts = datetime.now(timezone.utc).isoformat()
     try:
-        await db.update_one("users", {"id": user_id}, {"$set": {"token_version": new_version}})
+        await db.update_one(
+            "users",
+            {"id": user_id},
+            {"$set": {"token_version": new_version, "sessions_invalid_before": invalidate_ts}},
+        )
     except Exception as e:
         logger.error(
             f"logout-all: could not bump token_version for {user_id}: {e}",
@@ -1123,6 +1169,15 @@ async def logout_all(request: Request, response: Response, current_user: dict = 
         ) from e
 
     revoked = await revoke_all_for_user(user_id)
+
+    # Revoking Firebase refresh tokens additionally stops the device from
+    # minting fresh ID tokens, forcing a real re-sign-in. Best-effort only —
+    # the sessions_invalid_before watermark above is the authoritative
+    # enforcement (a refreshed ID token keeps its original auth_time, so the
+    # watermark rejects it regardless). The Firebase Admin SDK call is
+    # synchronous/blocking, so run it in a worker thread to avoid stalling the
+    # event loop (and other requests on this worker) if Firebase is slow.
+    await asyncio.to_thread(_revoke_firebase_refresh_tokens, user_id)
 
     # B-P1-11: kick any live WebSocket sockets so the user is logged
     # out instantly rather than waiting up to 30s for the heartbeat

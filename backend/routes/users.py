@@ -47,7 +47,12 @@ async def create_profile(request: CreateProfileRequest, current_user: dict = Dep
     if request.gender not in valid_genders:
         raise HTTPException(status_code=400, detail=f"Gender must be one of: {', '.join(valid_genders)}")
 
-    # GAP FIX: Check for duplicate email across users
+    # Uber-style single-identity model: one person = one account holding both
+    # rider and driver roles (is_rider/is_driver), keyed on a unique phone AND a
+    # unique email. If this email already belongs to another account, the user
+    # already has an account — point them to log in / recover it rather than
+    # creating a duplicate. We deliberately do NOT disclose the other account's
+    # phone number (PII / account-enumeration).
     email_lower = request.email.strip().lower()
     existing_email_user = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("users", {"email": email_lower, "id": {"$ne": current_user["id"]}}, limit=1)
@@ -55,7 +60,12 @@ async def create_profile(request: CreateProfileRequest, current_user: dict = Dep
     if existing_email_user:
         raise HTTPException(
             status_code=400,
-            detail="This email address is already in use by another account",
+            detail=(
+                "This email is already linked to an existing Spinr account. Your rider "
+                "and driver profiles share one account — please log in to that account "
+                "instead of creating a new one. If you no longer have access to its "
+                "phone number, contact support."
+            ),
         )
 
     update_data = {

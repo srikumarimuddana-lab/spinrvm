@@ -19,14 +19,14 @@ except ImportError:
 try:
     from .. import db_supabase
     from ..core.config import settings
-    from ..dependencies import _verify_admin_payload, verify_jwt_token
+    from ..dependencies import _firebase_session_revoked, _verify_admin_payload, verify_jwt_token
     from ..socket_manager import manager
     from ..utils.driver_presence import clear_presence, mark_present
     from ..utils.redis_client import redis_expire, redis_incr
 except ImportError:
     import db_supabase
     from core.config import settings
-    from dependencies import _verify_admin_payload, verify_jwt_token
+    from dependencies import _firebase_session_revoked, _verify_admin_payload, verify_jwt_token
     from socket_manager import manager
     from utils.driver_presence import clear_presence, mark_present
     from utils.redis_client import redis_expire, redis_incr  # type: ignore
@@ -207,6 +207,25 @@ async def _read_token_version(connection_key: str, user_id: str) -> int | None:
         return None
 
 
+async def _read_firebase_session_revoked(connection_key: str, user_id: str, auth_time: int) -> bool:
+    """Re-read the user's ``sessions_invalid_before`` watermark and return True
+    if a Firebase token with this ``auth_time`` is now revoked (B-P1-11).
+
+    Firebase ID tokens carry no token_version claim, so the heartbeat re-checks
+    the watermark instead — mirroring the HTTP path and the WS handshake. DB read
+    failure or a missing row is treated as "do not act" (returns False), matching
+    _read_token_version, so a transient blip never closes a healthy socket.
+    """
+    try:
+        row = await db_supabase.get_user_by_id(user_id)
+        if not row:
+            return False
+        return _firebase_session_revoked({"auth_time": auth_time}, row.get("sessions_invalid_before"))
+    except Exception as e:
+        logger.warning(f"WS watermark read failed for {connection_key}: {e}")
+        return False
+
+
 async def heartbeat_task(
     websocket: WebSocket,
     connection_key: str,
@@ -214,6 +233,7 @@ async def heartbeat_task(
     *,
     user_id: str | None = None,
     claim_token_version: int = 0,
+    firebase_auth_time: int | None = None,
 ):
     """Background task that sends periodic ping messages to keep the connection
     alive and detect dead connections early. Critical for rideshare apps where
@@ -258,12 +278,15 @@ async def heartbeat_task(
             # backwards-compatible with any future heartbeat caller that
             # hasn't been updated.
             if user_id:
-                stored_version = await _read_token_version(connection_key, user_id)
-                if stored_version is not None and stored_version > claim_token_version:
-                    logger.info(
-                        f"WS heartbeat: token_version stale for {connection_key} "
-                        f"(stored={stored_version} > claim={claim_token_version}); closing"
-                    )
+                if firebase_auth_time is not None:
+                    # Firebase connection: token_version is meaningless (no
+                    # claim), so re-check the sessions_invalid_before watermark.
+                    _revoked = await _read_firebase_session_revoked(connection_key, user_id, firebase_auth_time)
+                else:
+                    stored_version = await _read_token_version(connection_key, user_id)
+                    _revoked = stored_version is not None and stored_version > claim_token_version
+                if _revoked:
+                    logger.info(f"WS heartbeat: session revoked for {connection_key}; closing")
                     try:
                         await websocket.send_json({"type": "session_revoked", "reason": "token_revoked"})
                     except Exception:  # noqa: S110 — socket may already be dead
@@ -421,24 +444,38 @@ async def websocket_endpoint(
             await websocket.close()
             return
 
-        # B-P1-11: Reject the handshake if the JWT's token_version claim
-        # is below the row's current value. This catches the case where
-        # the user called /auth/logout-all and is now reconnecting with
-        # a stale token they had cached client-side. HTTP requests
-        # already enforce this in dependencies.py::_token_version_mismatch;
-        # without the same gate here, a stale-token reconnect would
-        # silently succeed and start receiving ride events again.
-        # Firebase tokens carry no token_version claim — treated as 0,
-        # which matches the existing HTTP-side behaviour.
-        try:
-            claim_token_version = int((payload or {}).get("token_version") or 0)
-        except (TypeError, ValueError):
-            claim_token_version = 0
-        try:
-            stored_token_version = int((user or {}).get("token_version") or 0)
-        except (TypeError, ValueError):
-            stored_token_version = 0
-        if claim_token_version < stored_token_version:
+        # B-P1-11: Reject the handshake if the session has been revoked via
+        # /auth/logout-all (or a refresh-token-reuse cascade). This catches a
+        # stale token cached client-side reconnecting. HTTP requests enforce the
+        # same in dependencies.py; without the gate here a stale-token reconnect
+        # would silently succeed and start receiving ride events again.
+        #
+        # Firebase ID tokens carry no token_version claim, so the JWT
+        # token_version comparison (claim defaults to 0) would wrongly close the
+        # socket for any Firebase user whose row has token_version > 0 —
+        # including a fresh post-logout-all re-sign-in that HTTP auth accepted,
+        # breaking realtime updates. Detect Firebase tokens by their auth_time
+        # claim and enforce revocation via the same sessions_invalid_before
+        # watermark the HTTP path uses; keep the token_version check for JWTs.
+        claim_token_version = 0
+        firebase_auth_time: int | None = None
+        if (payload or {}).get("auth_time") is not None:
+            try:
+                firebase_auth_time = int(payload.get("auth_time"))
+            except (TypeError, ValueError):
+                firebase_auth_time = None
+            session_revoked = _firebase_session_revoked(payload, (user or {}).get("sessions_invalid_before"))
+        else:
+            try:
+                claim_token_version = int((payload or {}).get("token_version") or 0)
+            except (TypeError, ValueError):
+                claim_token_version = 0
+            try:
+                stored_token_version = int((user or {}).get("token_version") or 0)
+            except (TypeError, ValueError):
+                stored_token_version = 0
+            session_revoked = claim_token_version < stored_token_version
+        if session_revoked:
             await websocket.send_json({"type": "error", "message": "session_revoked"})
             await websocket.close()
             return
@@ -525,6 +562,7 @@ async def websocket_endpoint(
                 conn_state,
                 user_id=user["id"],
                 claim_token_version=claim_token_version,
+                firebase_auth_time=firebase_auth_time,
             )
         )
 

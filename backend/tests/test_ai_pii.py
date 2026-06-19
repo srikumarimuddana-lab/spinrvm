@@ -72,7 +72,13 @@ class TestComposite:
 
     def test_support_route_uses_shared_impl(self):
         # routes/support.py must keep importing the shared scrubber rather
-        # than re-growing a private copy.
+        # than re-growing a private copy. Under the dual-import convention the
+        # module object identity can legitimately differ (ai.pii vs
+        # backend.ai.pii resolve to distinct module objects depending on the
+        # import root), so assert by source module + behaviour rather than `is`.
         from backend.routes import support
 
-        assert support.scrub_pii is scrub_pii
+        assert support.scrub_pii.__module__.endswith("ai.pii")
+        assert support.scrub_pii.__name__ == "scrub_pii"
+        sample = "call 306-555-1234 or email jane@x.ca"
+        assert support.scrub_pii(sample) == scrub_pii(sample)

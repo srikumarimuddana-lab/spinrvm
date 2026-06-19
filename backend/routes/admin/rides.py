@@ -1449,8 +1449,14 @@ async def admin_send_payable_invoice(
             status_code=409,
             detail=f"Invoice is only for completed rides; ride is '{ride.get('status')}'",
         )
-    if ride.get("payment_status") in ("paid", "waived_admin"):
-        raise HTTPException(status_code=409, detail="Ride is already settled — nothing to invoice")
+    # Terminal payment states must never be re-invoiced. 'refunded' is set by the
+    # charge.refunded webhook — re-collecting an intentionally refunded fare would
+    # be a chargeback/PR incident. 'paid'/'waived_admin' are already settled.
+    if ride.get("payment_status") in ("paid", "waived_admin", "refunded"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Ride is in terminal payment state '{ride.get('payment_status')}' — cannot invoice",
+        )
     if ride.get("payment_status") == "processing":
         # An in-app charge is mid-flight (or captured-but-unconfirmed). Sending
         # an invoice now risks collecting twice. Make the admin retry shortly.
@@ -1480,6 +1486,7 @@ async def admin_send_payable_invoice(
 
     # Ensure the rider has a Stripe customer (an invoice must target one).
     customer_id = rider.get("stripe_customer_id")
+    claimed_sentinel: Optional[str] = None  # set once THIS request wins the CAS claim
     try:
         if not customer_id:
             customer = await db_supabase.run_sync(
@@ -1492,8 +1499,11 @@ async def admin_send_payable_invoice(
             customer_id = customer.id
             await db_supabase.update_one("users", {"id": rider_id}, {"stripe_customer_id": customer_id})
 
-        # Re-send an existing OPEN invoice instead of creating a duplicate.
+        # Re-send an existing OPEN invoice instead of creating a duplicate. A
+        # 'pending:' sentinel means a concurrent request is mid-creation.
         existing_id = ride.get("stripe_invoice_id")
+        if existing_id and str(existing_id).startswith("pending:"):
+            raise HTTPException(status_code=409, detail="An invoice is already being created for this ride")
         if existing_id:
             existing = await db_supabase.run_sync(lambda: stripe.Invoice.retrieve(existing_id, api_key=stripe_secret))
             if existing.get("status") == "paid":
@@ -1510,6 +1520,22 @@ async def admin_send_payable_invoice(
                     "invoice_url": existing.get("hosted_invoice_url"),
                     "resent": True,
                 }
+
+        # Atomic compare-and-swap claim so two concurrent admin requests can't
+        # each create a separate payable invoice (which would leave the rider
+        # with multiple open pay links and a refund owed if both are paid). Only
+        # the request that flips stripe_invoice_id from its observed value to a
+        # 'pending:' sentinel proceeds; the loser gets a 409. On Stripe failure
+        # the sentinel is released below so a later retry can re-claim.
+        invoice_claim_sentinel = f"pending:{uuid.uuid4()}"
+        claim = await db_supabase.update_one(
+            "rides",
+            {"id": ride_id, "stripe_invoice_id": existing_id},
+            {"stripe_invoice_id": invoice_claim_sentinel},
+        )
+        if claim is None:
+            raise HTTPException(status_code=409, detail="An invoice is already being created for this ride")
+        claimed_sentinel = invoice_claim_sentinel
 
         ride_code = ride.get("ride_code") or ride_id[:8].upper()
         # Create the invoice first (auto_advance off, exclude any unrelated
@@ -1543,6 +1569,22 @@ async def admin_send_payable_invoice(
     except HTTPException:
         raise
     except Exception as e:
+        # Release the creation claim (CAS on our own sentinel so a concurrent
+        # write is never clobbered) so a later retry can re-claim the ride.
+        if claimed_sentinel:
+            try:
+                await db_supabase.update_one(
+                    "rides",
+                    {"id": ride_id, "stripe_invoice_id": claimed_sentinel},
+                    {"stripe_invoice_id": None},
+                )
+            except Exception:
+                logger.error(
+                    "admin_send_payable_invoice: failed to release invoice claim for ride %s",
+                    ride_id,
+                    exc_info=True,
+                    extra={"domain": "payments", "ride_id": ride_id},
+                )
         logger.error(
             "admin_send_payable_invoice failed ride_id=%s: %s",
             ride_id,

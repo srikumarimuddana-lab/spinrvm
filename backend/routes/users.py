@@ -532,7 +532,10 @@ async def _rider_referral_summary(user: dict, *, include_referees: bool) -> dict
         "referrer_reward": str(referrer_reward),
         "referee_reward": str(referee_reward),
         "rides_required": rides_required,
-        "terms": (
+        # Admin-authored per-area T&C wins; otherwise generate the default
+        # sentence from this area's reward numbers.
+        "terms": terms.get("terms")
+        or (
             f"Give ${_fmt_money(referee_reward)}, get ${_fmt_money(referrer_reward)} when your friend "
             f"{_ride_phrase(rides_required)}."
         ),

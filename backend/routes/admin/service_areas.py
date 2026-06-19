@@ -163,6 +163,12 @@ class ServiceAreaCreateRequest(BaseModel):
     max_simultaneous_offers: int = Field(default=3, ge=1, le=10)
     use_eta_ranking: bool = True
     show_demand_heatmap: bool = False
+    # Per-area referral rewards (CAD). Defaults equal the global constants.
+    rider_referrer_reward: float = Field(default=5, ge=0, le=1000)
+    rider_referee_reward: float = Field(default=5, ge=0, le=1000)
+    rider_referral_rides_required: int = Field(default=1, ge=1, le=100)
+    driver_referral_reward: float = Field(default=10, ge=0, le=1000)
+    driver_referral_rides_required: int = Field(default=10, ge=1, le=100)
 
 
 class ServiceAreaUpdateRequest(BaseModel):
@@ -206,6 +212,12 @@ class ServiceAreaUpdateRequest(BaseModel):
     free_cancel_window_seconds: Optional[int] = Field(default=None, ge=0, le=3600)
     noshow_wait_seconds: Optional[int] = Field(default=None, ge=60, le=1800)
     currency: Optional[str] = None
+    # Per-area referral rewards (CAD).
+    rider_referrer_reward: Optional[float] = Field(default=None, ge=0, le=1000)
+    rider_referee_reward: Optional[float] = Field(default=None, ge=0, le=1000)
+    rider_referral_rides_required: Optional[int] = Field(default=None, ge=1, le=100)
+    driver_referral_reward: Optional[float] = Field(default=None, ge=0, le=1000)
+    driver_referral_rides_required: Optional[int] = Field(default=None, ge=1, le=100)
 
 
 class SurgePricingRequest(BaseModel):
@@ -402,6 +414,11 @@ async def admin_create_service_area(area: ServiceAreaCreateRequest, admin: dict 
         "max_simultaneous_offers": area.max_simultaneous_offers,
         "use_eta_ranking": area.use_eta_ranking,
         "show_demand_heatmap": area.show_demand_heatmap,
+        "rider_referrer_reward": area.rider_referrer_reward,
+        "rider_referee_reward": area.rider_referee_reward,
+        "rider_referral_rides_required": area.rider_referral_rides_required,
+        "driver_referral_reward": area.driver_referral_reward,
+        "driver_referral_rides_required": area.driver_referral_rides_required,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     # Seed vehicle_pricing with all active vehicle types so every type
@@ -530,6 +547,11 @@ async def admin_update_service_area(
         "free_cancel_window_seconds",
         "noshow_wait_seconds",
         "currency",
+        "rider_referrer_reward",
+        "rider_referee_reward",
+        "rider_referral_rides_required",
+        "driver_referral_reward",
+        "driver_referral_rides_required",
     ]:
         val = getattr(area, field)
         if val is not None:

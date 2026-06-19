@@ -1,7 +1,7 @@
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, Optional
 
 import stripe
@@ -1422,6 +1422,149 @@ async def admin_send_ride_receipt(
         # Email provider rejected/failed — 502 so the operator knows it didn't go.
         raise HTTPException(status_code=502, detail="Receipt could not be sent — email provider unavailable")
     return {"sent": True, "ride_id": ride_id}
+
+
+@router.post("/rides/{ride_id}/send-invoice")
+async def admin_send_payable_invoice(
+    ride_id: str,
+    admin_user: dict = Depends(get_admin_user),
+):
+    """Email the rider a *payable* Stripe Invoice for a stuck unpaid ride.
+
+    Remediation for the card-rejected-at-trip-end loop: when the rider can't
+    pay in-app, an admin sends a real Stripe Invoice (collection_method=
+    send_invoice). Stripe emails a hosted invoice + pay page; on payment the
+    invoice.paid webhook flips the ride to paid and credits the driver via the
+    financial_events ledger. No manual "mark paid" / waive.
+
+    Idempotent: re-sending a ride that already has an open invoice re-sends THAT
+    invoice rather than creating a second one (which could be paid twice).
+    """
+    ride = await db_supabase.get_ride(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    if ride.get("status") != "completed":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Invoice is only for completed rides; ride is '{ride.get('status')}'",
+        )
+    if ride.get("payment_status") in ("paid", "waived_admin"):
+        raise HTTPException(status_code=409, detail="Ride is already settled — nothing to invoice")
+
+    rider_id = ride.get("rider_id")
+    rider = await db_supabase.get_user_by_id(rider_id) if rider_id else None
+    if not rider or not rider.get("email"):
+        raise HTTPException(status_code=422, detail="Rider has no email address on file")
+
+    settings = await get_app_settings()
+    stripe_secret = (settings or {}).get("stripe_secret_key", "")
+    if not stripe_secret:
+        raise HTTPException(status_code=503, detail="Stripe is not configured")
+
+    # Amount = grand_total (excl. tip) + any tip already attached to the ride,
+    # matching process_payment's total_charge. Decimal-only to the cents boundary.
+    grand = ride.get("grand_total")
+    if grand is None:
+        grand = ride.get("total_fare", 0)
+    total = (Decimal(str(grand or 0)) + Decimal(str(ride.get("tip_amount") or 0))).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
+    amount_cents = int(total * 100)
+    if amount_cents <= 0:
+        raise HTTPException(status_code=409, detail="Ride total is $0 — nothing to invoice")
+
+    # Ensure the rider has a Stripe customer (an invoice must target one).
+    customer_id = rider.get("stripe_customer_id")
+    try:
+        if not customer_id:
+            customer = await db_supabase.run_sync(
+                lambda: stripe.Customer.create(
+                    email=rider["email"],
+                    metadata={"user_id": rider_id},
+                    api_key=stripe_secret,
+                )
+            )
+            customer_id = customer.id
+            await db_supabase.update_one("users", {"id": rider_id}, {"stripe_customer_id": customer_id})
+
+        # Re-send an existing OPEN invoice instead of creating a duplicate.
+        existing_id = ride.get("stripe_invoice_id")
+        if existing_id:
+            existing = await db_supabase.run_sync(lambda: stripe.Invoice.retrieve(existing_id, api_key=stripe_secret))
+            if existing.get("status") == "paid":
+                raise HTTPException(status_code=409, detail="Invoice already paid — webhook will settle the ride")
+            if existing.get("status") == "open":
+                await db_supabase.run_sync(lambda: stripe.Invoice.send_invoice(existing_id, api_key=stripe_secret))
+                await log_admin_action(
+                    admin_user, "resend_ride_invoice", "ride", ride_id, {"stripe_invoice_id": existing_id}
+                )
+                return {
+                    "sent": True,
+                    "ride_id": ride_id,
+                    "stripe_invoice_id": existing_id,
+                    "invoice_url": existing.get("hosted_invoice_url"),
+                    "resent": True,
+                }
+
+        ride_code = ride.get("ride_code") or ride_id[:8].upper()
+        # Create the invoice first (auto_advance off, exclude any unrelated
+        # pending items), then attach exactly one line item scoped to it.
+        invoice = await db_supabase.run_sync(
+            lambda: stripe.Invoice.create(
+                customer=customer_id,
+                collection_method="send_invoice",
+                days_until_due=7,
+                auto_advance=False,
+                pending_invoice_items_behavior="exclude",
+                metadata={"ride_id": ride_id, "source": "admin_send_invoice"},
+                description=f"Spinr ride {ride_code}",
+                api_key=stripe_secret,
+            )
+        )
+        await db_supabase.run_sync(
+            lambda: stripe.InvoiceItem.create(
+                customer=customer_id,
+                invoice=invoice.id,
+                amount=amount_cents,
+                currency="cad",
+                description=f"Spinr ride {ride_code}",
+                api_key=stripe_secret,
+            )
+        )
+        finalized = await db_supabase.run_sync(
+            lambda: stripe.Invoice.finalize_invoice(invoice.id, api_key=stripe_secret)
+        )
+        await db_supabase.run_sync(lambda: stripe.Invoice.send_invoice(invoice.id, api_key=stripe_secret))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "admin_send_payable_invoice failed ride_id=%s: %s",
+            ride_id,
+            e,
+            exc_info=True,
+            extra={"domain": "payments", "ride_id": ride_id},
+        )
+        raise HTTPException(status_code=502, detail="Could not create Stripe invoice") from e
+
+    invoice_url = finalized.get("hosted_invoice_url")
+    await db_supabase.update_ride(
+        ride_id,
+        {
+            "stripe_invoice_id": invoice.id,
+            "invoice_url": invoice_url,
+            "invoice_sent_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    await log_admin_action(
+        admin_user,
+        "send_ride_invoice",
+        "ride",
+        ride_id,
+        {"stripe_invoice_id": invoice.id, "amount_cents": amount_cents},
+    )
+    return {"sent": True, "ride_id": ride_id, "stripe_invoice_id": invoice.id, "invoice_url": invoice_url}
 
 
 @router.get("/rides/{ride_id}/route-map.png")

@@ -62,6 +62,92 @@ _STRIPE_HANDLED_EVENTS = frozenset(
 ALLOWED_STRIPE_EVENTS = _STRIPE_HANDLED_EVENTS
 
 
+async def _handle_ride_invoice_paid(invoice: dict, ride_id: str, event_id: str) -> None:
+    """Settle a ride paid via an admin-sent payable Stripe Invoice.
+
+    Mirrors settle_card's success bookkeeping (financial_events ledger row +
+    payment_status='paid' + WS push + receipt) so the driver is credited the
+    same way as an in-app charge. Idempotent: a ride already paid/waived is a
+    no-op, so a duplicate or replayed invoice.paid never double-credits.
+    """
+    ride = await db_supabase.get_ride(ride_id)
+    if not ride:
+        logger.error(
+            "invoice.paid for unknown ride %s (invoice %s)",
+            ride_id,
+            invoice.get("id"),
+            extra={"domain": "payments", "ride_id": ride_id, "event_id": event_id},
+        )
+        return
+    if ride.get("payment_status") in ("paid", "waived_admin"):
+        logger.info(
+            "invoice.paid: ride %s already settled (%s) — skipping",
+            ride_id,
+            ride.get("payment_status"),
+            extra={"domain": "payments", "ride_id": ride_id, "event_id": event_id},
+        )
+        return
+
+    rider_id = ride.get("rider_id")
+    amount_cents = invoice.get("amount_paid")
+    if amount_cents is None:
+        amount_cents = invoice.get("amount_due") or 0
+    payment_intent_id = invoice.get("payment_intent")
+    tip_amount = Decimal(str(ride.get("tip_amount") or 0))
+
+    try:
+        from ..services.payment_service import record_payment_event, send_ride_receipt
+    except ImportError:
+        from services.payment_service import record_payment_event, send_ride_receipt  # type: ignore
+
+    # Ledger first (recovery record exists even if the ride update fails).
+    await record_payment_event(
+        ride_id=ride_id,
+        user_id=rider_id,
+        amount_cents=int(amount_cents),
+        payment_intent_id=payment_intent_id,
+        ride=ride,
+        tip_amount=tip_amount,
+    )
+    await db_supabase.update_ride(
+        ride_id,
+        {
+            "payment_status": "paid",
+            "payment_intent_id": payment_intent_id,
+            "stripe_invoice_id": invoice.get("id"),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    logger.info(
+        "Ride %s settled via Stripe invoice %s",
+        ride_id,
+        invoice.get("id"),
+        extra={"domain": "payments", "ride_id": ride_id, "event_id": event_id},
+    )
+
+    # Best-effort: nudge the rider's app out of the stuck payment screen.
+    if rider_id:
+        try:
+            from ..socket_manager import manager as _manager
+        except ImportError:
+            from socket_manager import manager as _manager  # type: ignore
+        try:
+            await _manager.send_personal_message(
+                {
+                    "type": "payment_completed",
+                    "ride_id": ride_id,
+                    "charged_amount": str(cents_to_dollars(int(amount_cents))),
+                },
+                f"rider_{rider_id}",
+            )
+        except Exception:
+            logger.warning("invoice.paid: WS payment_completed push failed", exc_info=True)
+        try:
+            await send_ride_receipt(ride, rider_id, tip_amount)
+        except Exception:
+            logger.warning("invoice.paid: receipt email failed", exc_info=True)
+
+
 def _invoice_period_end_iso(invoice: dict) -> str | None:
     """Extract the billing-period end (ISO UTC) from a Stripe Invoice.
 
@@ -747,8 +833,14 @@ async def stripe_webhook(request: Request):
         # invoice's period end — idempotent for both subscription_create and
         # subscription_cycle.
         invoice = data_object
+        _ride_invoice_id = (invoice.get("metadata") or {}).get("ride_id")
         stripe_sub_id = invoice.get("subscription")
-        if not stripe_sub_id:
+        if _ride_invoice_id:
+            # Payable ride invoice (admin "Send Invoice" remediation for a card
+            # rejected at trip end). Settle the ride + credit the driver; the
+            # subscription path below is untouched.
+            await _handle_ride_invoice_paid(invoice, _ride_invoice_id, event_id)
+        elif not stripe_sub_id:
             logger.info(
                 "invoice.paid without subscription id — skipping",
                 extra={"domain": "drivers", "event_id": event_id},

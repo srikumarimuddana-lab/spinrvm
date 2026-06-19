@@ -169,6 +169,9 @@ class ServiceAreaCreateRequest(BaseModel):
     rider_referral_rides_required: int = Field(default=1, ge=1, le=100)
     driver_referral_reward: float = Field(default=10, ge=0, le=1000)
     driver_referral_rides_required: int = Field(default=10, ge=1, le=100)
+    # Free-text referral T&C (migration 176); blank → dynamic default sentence.
+    rider_referral_terms: Optional[str] = Field(default=None, max_length=2000)
+    driver_referral_terms: Optional[str] = Field(default=None, max_length=2000)
 
 
 class ServiceAreaUpdateRequest(BaseModel):
@@ -218,6 +221,9 @@ class ServiceAreaUpdateRequest(BaseModel):
     rider_referral_rides_required: Optional[int] = Field(default=None, ge=1, le=100)
     driver_referral_reward: Optional[float] = Field(default=None, ge=0, le=1000)
     driver_referral_rides_required: Optional[int] = Field(default=None, ge=1, le=100)
+    # Free-text referral T&C (migration 176); blank → dynamic default sentence.
+    rider_referral_terms: Optional[str] = Field(default=None, max_length=2000)
+    driver_referral_terms: Optional[str] = Field(default=None, max_length=2000)
 
 
 class SurgePricingRequest(BaseModel):
@@ -419,6 +425,8 @@ async def admin_create_service_area(area: ServiceAreaCreateRequest, admin: dict 
         "rider_referral_rides_required": area.rider_referral_rides_required,
         "driver_referral_reward": area.driver_referral_reward,
         "driver_referral_rides_required": area.driver_referral_rides_required,
+        "rider_referral_terms": area.rider_referral_terms,
+        "driver_referral_terms": area.driver_referral_terms,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     # Seed vehicle_pricing with all active vehicle types so every type
@@ -552,6 +560,8 @@ async def admin_update_service_area(
         "rider_referral_rides_required",
         "driver_referral_reward",
         "driver_referral_rides_required",
+        "rider_referral_terms",
+        "driver_referral_terms",
     ]:
         val = getattr(area, field)
         if val is not None:

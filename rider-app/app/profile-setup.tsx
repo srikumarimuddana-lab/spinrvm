@@ -98,15 +98,32 @@ export default function ProfileSetupScreen() {
       if (isEditing) {
         router.back();
       } else {
-        // Optional referral code — best-effort, never blocks signup.
+        // Optional referral code — best-effort, never blocks signup. Profile
+        // save already succeeded above (network is up), so a failed apply is
+        // almost always a transient blip — retry a few times rather than
+        // silently dropping the referrer credit. "Already applied" counts as
+        // success (idempotent); only a genuine 4xx rejection toasts.
         const code = form.referralCode.trim();
         if (code) {
-          try {
-            await api.post('/users/referral/apply', { referral_code: code });
-            showToast('Referral applied', 'Your referral code was added.', 'success');
-          } catch (refErr: any) {
-            showToast('Referral code', refErr?.response?.data?.detail || "That code couldn't be applied.", 'warning');
+          let applied = false;
+          for (let attempt = 0; attempt < 3 && !applied; attempt++) {
+            try {
+              await api.post('/users/referral/apply', { referral_code: code });
+              applied = true;
+            } catch (refErr: any) {
+              const status = refErr?.response?.status;
+              const detail: string = refErr?.response?.data?.detail || '';
+              if (status === 400 && /already applied/i.test(detail)) {
+                applied = true; // already attributed — success
+              } else if (typeof status === 'number' && status >= 400 && status < 500) {
+                showToast('Referral code', detail || "That code couldn't be applied.", 'warning');
+                break; // permanent rejection (bad code) — retrying won't help
+              } else if (attempt < 2) {
+                await new Promise((r) => setTimeout(r, 400 * (attempt + 1))); // transient — back off and retry
+              }
+            }
           }
+          if (applied) showToast('Referral applied', 'Your referral code was added.', 'success');
         }
         router.replace('/(tabs)' as any);
       }

@@ -412,6 +412,95 @@ class TestAdminSendPayableInvoice:
         assert result["sent"] is True
         assert result["stripe_invoice_id"] == "in_reclaim_1"
 
+    def test_rejects_non_card_payment_method(self):
+        """Codex P2 (round-3): a payable Stripe invoice bills the rider's personal
+        card — corporate (company_allowance)/wallet rides must not be invoiced."""
+        from fastapi import HTTPException
+
+        from backend.routes.admin import rides as admin_rides
+
+        ride = _ride("completed", payment_status="failed", payment_method="company_allowance")
+        with patch("backend.routes.admin.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(
+                    admin_rides.admin_send_payable_invoice(
+                        request=_FAKE_REQUEST, ride_id=RIDE_ID, admin_user=ADMIN_USER
+                    )
+                )
+        assert exc.value.status_code == 409
+        assert "card rides" in str(exc.value.detail).lower()
+
+    def test_rejects_open_preauth_hold(self):
+        """Codex P1 (round-3): an open authorized/fare_only hold is still
+        captureable by the sweeper — invoicing now risks collecting twice."""
+        from fastapi import HTTPException
+
+        from backend.routes.admin import rides as admin_rides
+
+        ride = _ride("completed", payment_status="pending", auth_status="authorized")
+        with patch("backend.routes.admin.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(
+                    admin_rides.admin_send_payable_invoice(
+                        request=_FAKE_REQUEST, ride_id=RIDE_ID, admin_user=ADMIN_USER
+                    )
+                )
+        assert exc.value.status_code == 409
+        assert "hold" in str(exc.value.detail).lower()
+
+    def test_rollback_voids_invoice_and_clears_id_on_finalize_failure(self):
+        """Codex round-3 (#2): if finalize fails after the real id was persisted,
+        the invoice is voided (never collectible) and the row id is cleared so the
+        ride is fully recoverable — no payable invoice hidden behind a sentinel."""
+        from unittest.mock import MagicMock
+
+        from fastapi import HTTPException
+
+        from backend.routes.admin import rides as admin_rides
+
+        ride = _ride("completed", payment_status="failed", stripe_invoice_id=None, grand_total="18.50")
+        rider = {"id": RIDER_ID, "email": "rider@spinr.ca", "stripe_customer_id": "cus_1"}
+
+        async def _run_sync(fn):
+            return fn()
+
+        inv = MagicMock(id="in_fail_1")
+        void_mock = MagicMock()
+        # Capture every ride update_one so we can assert the id was cleared.
+        update_one_calls = []
+
+        async def _update_one(table, filters, patch_body):
+            update_one_calls.append((table, filters, patch_body))
+            return {"id": RIDE_ID}
+
+        with (
+            patch("backend.routes.admin.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.admin.rides.db_supabase.get_user_by_id", AsyncMock(return_value=rider)),
+            patch("backend.routes.admin.rides.get_app_settings", self._settings()),
+            patch("backend.routes.admin.rides.db_supabase.update_one", AsyncMock(side_effect=_update_one)),
+            patch("backend.routes.admin.rides.db_supabase.update_ride", AsyncMock()),
+            patch("backend.routes.admin.rides.db_supabase.run_sync", _run_sync),
+            patch("backend.routes.admin.rides.log_admin_action", AsyncMock()),
+            patch("stripe.Invoice.create", MagicMock(return_value=inv)),
+            patch("stripe.InvoiceItem.create", MagicMock(return_value=MagicMock())),
+            patch("stripe.Invoice.finalize_invoice", MagicMock(side_effect=Exception("stripe down"))),
+            patch("stripe.Invoice.void_invoice", void_mock),
+            patch("stripe.Invoice.delete", MagicMock()),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(
+                    admin_rides.admin_send_payable_invoice(
+                        request=_FAKE_REQUEST, ride_id=RIDE_ID, admin_user=ADMIN_USER
+                    )
+                )
+
+        assert exc.value.status_code == 502
+        # finalize failed AFTER id-write, so the invoice was finalized? No — it was
+        # still a draft (finalize raised), so it is DELETEd, not voided.
+        # Either way the row id must be cleared back to None for recovery.
+        cleared = [c for c in update_one_calls if c[2].get("stripe_invoice_id") is None]
+        assert cleared, "expected the stuck invoice id/sentinel to be cleared to None"
+
 
 class TestAdminGetEarnings:
     def test_returns_earnings_summary(self):

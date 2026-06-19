@@ -1487,6 +1487,29 @@ async def admin_send_payable_invoice(
         # an invoice now risks collecting twice. Make the admin retry shortly.
         raise HTTPException(status_code=409, detail="Payment is currently processing — try again in a moment")
 
+    # A payable Stripe invoice bills the rider's PERSONAL card. Corporate
+    # (company_allowance) and wallet rides settle through the allowance /
+    # master-wallet / balance paths — invoicing the rider personally would
+    # bypass corporate billing policy and double-bill. Only card rides qualify.
+    _pmethod = (ride.get("payment_method") or "card").lower()
+    if _pmethod != "card":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Payable invoices are only for card rides; this ride uses '{_pmethod}'. "
+            "Use the corporate/wallet remediation path.",
+        )
+
+    # An open pre-authorization hold (authorized / fare_only) is still captureable
+    # by the preauth-capture sweeper after the tip window. Emailing an invoice now
+    # would let BOTH the captured hold and the hosted invoice collect. Block until
+    # the hold is terminal (captured → paid, or released).
+    _auth_status = (ride.get("auth_status") or "").lower()
+    if _auth_status in ("authorized", "fare_only"):
+        raise HTTPException(
+            status_code=409,
+            detail="Ride has an open pre-authorization hold pending capture — cannot invoice yet",
+        )
+
     rider_id = ride.get("rider_id")
     rider = await db_supabase.get_user_by_id(rider_id) if rider_id else None
     if not rider or not rider.get("email"):
@@ -1512,6 +1535,8 @@ async def admin_send_payable_invoice(
     # Ensure the rider has a Stripe customer (an invoice must target one).
     customer_id = rider.get("stripe_customer_id")
     claimed_sentinel: Optional[str] = None  # set once THIS request wins the CAS claim
+    created_invoice_id: Optional[str] = None  # set once the Stripe invoice exists
+    finalized_done = False  # True once finalize succeeds (→ void on rollback, else delete)
     try:
         if not customer_id:
             customer = await db_supabase.run_sync(
@@ -1547,7 +1572,15 @@ async def admin_send_payable_invoice(
             existing_status = getattr(existing, "status", None)
             if existing_status == "paid":
                 raise HTTPException(status_code=409, detail="Invoice already paid — webhook will settle the ride")
-            if existing_status == "open":
+            if existing_status in ("open", "draft"):
+                # 'open' → already finalized+sent, just resend the email.
+                # 'draft' → a prior request crashed after we persisted the id but
+                # before finalize; finalize it now so it becomes collectible.
+                if existing_status == "draft":
+                    finalized = await db_supabase.run_sync(
+                        lambda: stripe.Invoice.finalize_invoice(existing_id, api_key=stripe_secret)
+                    )
+                    existing = finalized
                 await db_supabase.run_sync(lambda: stripe.Invoice.send_invoice(existing_id, api_key=stripe_secret))
                 await log_admin_action(
                     admin_user, "resend_ride_invoice", "ride", ride_id, {"stripe_invoice_id": existing_id}
@@ -1559,6 +1592,8 @@ async def admin_send_payable_invoice(
                     "invoice_url": getattr(existing, "hosted_invoice_url", None),
                     "resent": True,
                 }
+            # 'void' / 'uncollectible' → fall through; the CAS below swaps this dead
+            # id for a sentinel and a fresh invoice is created.
 
         # Atomic compare-and-swap claim so two concurrent admin requests can't
         # each create a separate payable invoice (which would leave the rider
@@ -1567,9 +1602,19 @@ async def admin_send_payable_invoice(
         # 'pending:' sentinel proceeds; the loser gets a 409. On Stripe failure
         # the sentinel is released below so a later retry can re-claim.
         invoice_claim_sentinel = f"pending:{datetime.now(timezone.utc).timestamp()}:{uuid.uuid4()}"
+        # The claim also asserts the ride is still in an unpaid, non-processing
+        # state. Without this, an in-app /process-payment that flips the ride to
+        # 'processing' AFTER our pre-read but BEFORE this CAS would race us: both
+        # the in-app charge and the emailed invoice could collect. Asserting the
+        # payment_status here (mirrored by stripe_invoice_id=NULL in the in-app
+        # claim) makes the two paths mutually exclusive.
         claim = await db_supabase.update_one(
             "rides",
-            {"id": ride_id, "stripe_invoice_id": existing_id},
+            {
+                "id": ride_id,
+                "stripe_invoice_id": existing_id,
+                "payment_status": {"$nin": ["processing", "paid", "waived_admin", "refunded"]},
+            },
             {"stripe_invoice_id": invoice_claim_sentinel},
         )
         if claim is None:
@@ -1577,8 +1622,8 @@ async def admin_send_payable_invoice(
         claimed_sentinel = invoice_claim_sentinel
 
         ride_code = ride.get("ride_code") or ride_id[:8].upper()
-        # Create the invoice first (auto_advance off, exclude any unrelated
-        # pending items), then attach exactly one line item scoped to it.
+        # Create a DRAFT invoice (auto_advance off → NOT collectible until we
+        # finalize), excluding any unrelated pending items.
         invoice = await db_supabase.run_sync(
             lambda: stripe.Invoice.create(
                 customer=customer_id,
@@ -1591,6 +1636,22 @@ async def admin_send_payable_invoice(
                 api_key=stripe_secret,
             )
         )
+        created_invoice_id = invoice.id
+        # Persist the REAL invoice id BEFORE finalizing. The draft is not yet
+        # collectible, so if any later step (or the process) dies, the row holds
+        # the real id (recoverable via the 'draft' resend branch above) — never a
+        # 'pending:' sentinel masking a *payable* invoice. This is what makes the
+        # age-based sentinel reclaim safe: a bare sentinel ⇒ no collectible invoice.
+        id_written = await db_supabase.update_one(
+            "rides",
+            {"id": ride_id, "stripe_invoice_id": claimed_sentinel},
+            {"stripe_invoice_id": invoice.id},
+        )
+        if id_written is None:
+            # Our sentinel was changed underneath us — abandon: delete the draft
+            # (never finalized → not collectible) and let the rollback clear up.
+            raise HTTPException(status_code=409, detail="Invoice claim changed during creation")
+        claimed_sentinel = None  # the row now holds the real id, not our sentinel
         await db_supabase.run_sync(
             lambda: stripe.InvoiceItem.create(
                 customer=customer_id,
@@ -1604,17 +1665,43 @@ async def admin_send_payable_invoice(
         finalized = await db_supabase.run_sync(
             lambda: stripe.Invoice.finalize_invoice(invoice.id, api_key=stripe_secret)
         )
+        finalized_done = True
         await db_supabase.run_sync(lambda: stripe.Invoice.send_invoice(invoice.id, api_key=stripe_secret))
     except HTTPException:
         raise
     except Exception as e:
-        # Release the creation claim (CAS on our own sentinel so a concurrent
-        # write is never clobbered) so a later retry can re-claim the ride.
-        if claimed_sentinel:
+        # Roll back so the ride is fully recoverable: no collectible invoice left
+        # in Stripe AND no stuck id/sentinel on the row.
+        if created_invoice_id:
+            try:
+                if finalized_done:
+                    # Finalized (possibly sent) → void so it can never be paid.
+                    await db_supabase.run_sync(
+                        lambda: stripe.Invoice.void_invoice(created_invoice_id, api_key=stripe_secret)
+                    )
+                else:
+                    # Still a draft → delete it outright.
+                    await db_supabase.run_sync(
+                        lambda: stripe.Invoice.delete(created_invoice_id, api_key=stripe_secret)
+                    )
+            except Exception:
+                logger.error(
+                    "admin_send_payable_invoice: failed to roll back Stripe invoice %s for ride %s",
+                    created_invoice_id,
+                    ride_id,
+                    exc_info=True,
+                    extra={"domain": "payments", "ride_id": ride_id},
+                )
+        # Clear whichever value is on the row (the real id if we got that far,
+        # else our sentinel) — CAS on the exact value so a concurrent write is
+        # never clobbered — so a later retry can re-claim the ride.
+        for _stale_val in (created_invoice_id, claimed_sentinel):
+            if not _stale_val:
+                continue
             try:
                 await db_supabase.update_one(
                     "rides",
-                    {"id": ride_id, "stripe_invoice_id": claimed_sentinel},
+                    {"id": ride_id, "stripe_invoice_id": _stale_val},
                     {"stripe_invoice_id": None},
                 )
             except Exception:

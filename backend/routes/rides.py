@@ -3583,31 +3583,6 @@ def _record_settlement_metrics(payment_method: str, result, duration_ms: float) 
     _metric_observe("spinr_payment_settlement_duration_ms", duration_ms, {"method": method})
 
 
-# Mirrors admin/rides.py + utils/payment_retry.py. A `pending:<epoch>:<uuid>`
-# value in rides.stripe_invoice_id is a transient invoice-creation CAS claim; a
-# claim older than this window is abandoned (the request crashed before Stripe
-# created the invoice) and must NOT block an in-app charge.
-_INVOICE_CLAIM_STALE_SECONDS = 300
-
-
-def _is_stale_invoice_claim(sentinel: str) -> bool:
-    """True only for an ABANDONED `pending:<epoch>:<uuid>` invoice claim.
-
-    A finalized invoice id (in_*) or a legacy `pending:<uuid>` (no timestamp)
-    returns False — i.e. it still blocks in-app payment."""
-    s = str(sentinel)
-    if not s.startswith("pending:"):
-        return False
-    try:
-        parts = s.split(":")
-        if len(parts) < 3:
-            return False
-        age = (datetime.now(timezone.utc) - datetime.fromtimestamp(float(parts[1]), tz=timezone.utc)).total_seconds()
-        return age >= _INVOICE_CLAIM_STALE_SECONDS
-    except (ValueError, OverflowError, OSError):
-        return False
-
-
 @api_router.post("/{ride_id}/process-payment")
 @payment_action_limit
 async def process_payment(
@@ -3658,18 +3633,18 @@ async def process_payment(
         logger.info(f"[PAYMENT] Ride {ride_id} processing ({_pmethod}) — skipping duplicate charge")
         return {"success": True, "charged_amount": _charged(ride), "already_paid": True}
 
-    # An admin has emailed a payable Stripe invoice for this ride — collection
-    # has moved to the hosted invoice (settled by the invoice.paid webhook).
-    # Charging in-app now would collect a second time alongside the invoice, and
-    # the later invoice.paid would see the ride already paid and skip (no refund
-    # of the extra). Block and point the rider at the emailed link. A finalized
-    # invoice (in_*) always blocks; a fresh 'pending:' creation claim blocks too;
-    # a stale/abandoned 'pending:' claim does not (the invoice was never created).
-    _inv_sid = ride.get("stripe_invoice_id")
-    if _inv_sid and not _is_stale_invoice_claim(_inv_sid):
+    # An admin has emailed (or is creating) a payable Stripe invoice for this
+    # ride — collection has moved to the hosted invoice (settled by the
+    # invoice.paid webhook). Charging in-app while ANY invoice claim is on the
+    # row would collect a second time, and the later invoice.paid would see the
+    # ride already paid and skip (no refund of the extra). Block on any non-null
+    # value: a finalized invoice (in_*) and a 'pending:' creation claim alike.
+    # We never unblock by age here — a stuck claim is recovered admin-side (which
+    # creates invoices crash-safely), not by silently re-opening in-app charging.
+    if ride.get("stripe_invoice_id"):
         raise HTTPException(
             status_code=409,
-            detail="An invoice has been emailed for this ride. Please pay using the link in that email.",
+            detail="An invoice has been issued for this ride. Please pay using the link in your email.",
         )
 
     # Validate the tip BEFORE the atomic claim — raising after the claim would
@@ -3716,7 +3691,11 @@ async def process_payment(
         _claim_states.append("processing")  # only added after the lock is held
     guard_row = await db_supabase.update_one(
         "rides",
-        {"id": ride_id, "payment_status": {"$in": _claim_states}},
+        # stripe_invoice_id=NULL is asserted atomically (mirrors admin send-invoice
+        # asserting payment_status NOT IN processing/paid/...): if an admin claimed
+        # the ride for an invoice between our pre-read invoice-guard above and this
+        # claim, 0 rows match and the rider is not charged in-app alongside it.
+        {"id": ride_id, "payment_status": {"$in": _claim_states}, "stripe_invoice_id": None},
         {
             "payment_status": "processing",
             "updated_at": datetime.now(timezone.utc).isoformat(),

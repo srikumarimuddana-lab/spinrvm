@@ -126,50 +126,35 @@ async def test_retry_skips_ride_with_open_invoice():
 
 
 @pytest.mark.anyio
-async def test_retry_skips_fresh_pending_sentinel_but_retries_stale():
-    """Codex P2 (62i9): a `pending:<epoch>:<uuid>` invoice claim is transient.
-    A FRESH claim (creation in flight) must still be skipped, but a STALE one
-    (crashed mid-creation, no real invoice in Stripe) must be retried in-app so
-    the ride is not stranded forever."""
+async def test_retry_skips_any_invoice_sentinel_fresh_or_stale():
+    """Codex round-3 (#2): the retry loop must NOT re-charge in-app while ANY
+    invoice claim is on the row — a finalized id, a fresh 'pending:' sentinel, or
+    a stale one. Re-opening by age risks collecting alongside a payable invoice;
+    recovery is admin-side (crash-safe creation), not here."""
     from datetime import timedelta
 
-    # Fresh sentinel — skipped (no claim, no confirm).
     fresh_ts = datetime.now(timezone.utc).timestamp()
-    fresh = _make_ride(stripe_invoice_id=f"pending:{fresh_ts}:abc")
-    mock_update_fresh = AsyncMock(return_value={"id": RIDE_ID})
-    mock_confirm_fresh = MagicMock()
-    with (
-        patch("utils.payment_retry.db.get_rows", AsyncMock(return_value=[fresh])),
-        patch("utils.payment_retry.get_app_settings", AsyncMock(return_value={"stripe_secret_key": STRIPE_SECRET})),
-        patch("utils.payment_retry.db.update_one", mock_update_fresh),
-        patch("utils.payment_retry.send_push_notification", AsyncMock()),
-        patch("stripe.PaymentIntent.retrieve", MagicMock(return_value=_fake_intent("requires_payment_method"))),
-        patch("stripe.PaymentIntent.confirm", mock_confirm_fresh),
-    ):
-        from utils import payment_retry
-
-        await payment_retry.retry_failed_payments()
-    mock_confirm_fresh.assert_not_called()
-    mock_update_fresh.assert_not_awaited()
-
-    # Stale sentinel (10 min old) — falls through to the normal retry path.
     stale_ts = (datetime.now(timezone.utc) - timedelta(minutes=10)).timestamp()
-    stale = _make_ride(stripe_invoice_id=f"pending:{stale_ts}:abc")
-    mock_update_stale = AsyncMock(return_value={"id": RIDE_ID})
-    mock_confirm_stale = MagicMock(return_value=_fake_intent("processing"))
-    with (
-        patch("utils.payment_retry.db.get_rows", AsyncMock(return_value=[stale])),
-        patch("utils.payment_retry.get_app_settings", AsyncMock(return_value={"stripe_secret_key": STRIPE_SECRET})),
-        patch("utils.payment_retry.db.update_one", mock_update_stale),
-        patch("utils.payment_retry.send_push_notification", AsyncMock()),
-        patch("stripe.PaymentIntent.retrieve", MagicMock(return_value=_fake_intent("requires_payment_method"))),
-        patch("stripe.PaymentIntent.confirm", mock_confirm_stale),
-    ):
-        from utils import payment_retry
+    for sid in (f"pending:{fresh_ts}:abc", f"pending:{stale_ts}:abc", "in_admin_real"):
+        ride = _make_ride(stripe_invoice_id=sid)
+        mock_update = AsyncMock(return_value={"id": RIDE_ID})
+        mock_confirm = MagicMock()
+        with (
+            patch("utils.payment_retry.db.get_rows", AsyncMock(return_value=[ride])),
+            patch(
+                "utils.payment_retry.get_app_settings",
+                AsyncMock(return_value={"stripe_secret_key": STRIPE_SECRET}),
+            ),
+            patch("utils.payment_retry.db.update_one", mock_update),
+            patch("utils.payment_retry.send_push_notification", AsyncMock()),
+            patch("stripe.PaymentIntent.retrieve", MagicMock(return_value=_fake_intent("requires_payment_method"))),
+            patch("stripe.PaymentIntent.confirm", mock_confirm),
+        ):
+            from utils import payment_retry
 
-        await payment_retry.retry_failed_payments()
-    # A stale claim is retried (confirm called) rather than skipped forever.
-    mock_confirm_stale.assert_called_once()
+            await payment_retry.retry_failed_payments()
+        mock_confirm.assert_not_called()
+        mock_update.assert_not_awaited()
 
 
 @pytest.mark.anyio

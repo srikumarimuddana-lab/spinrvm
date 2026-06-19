@@ -5,18 +5,14 @@ import {
     StyleSheet,
     TouchableOpacity,
     ScrollView,
-    Platform,
-    TextInput,
-    Modal,
-    Pressable,
-    KeyboardAvoidingView,
+    ActivityIndicator,
+    Share,
 } from 'react-native';
 import { showToast } from '../../hooks/useToast';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { Share } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -54,8 +50,7 @@ export default function ReferralScreen() {
     const [referralInfo, setReferralInfo] = useState<ReferralInfo | null>(null);
     const [referredDrivers, setReferredDrivers] = useState<ReferredDriver[]>([]);
     const [isLoading, setIsLoading] = useState(true);
-    const [showApplyModal, setShowApplyModal] = useState(false);
-    const [referralCodeInput, setReferralCodeInput] = useState('');
+    const [error, setError] = useState(false);
 
     useEffect(() => {
         fetchReferralInfo();
@@ -63,6 +58,7 @@ export default function ReferralScreen() {
 
     const fetchReferralInfo = async () => {
         setIsLoading(true);
+        setError(false);
         try {
             const res = await api.get<ReferralInfo>('/drivers/referral');
             setReferralInfo(res.data);
@@ -71,7 +67,12 @@ export default function ReferralScreen() {
             const driversRes = await api.get<{ referred_drivers: any[] }>('/drivers/referrals?limit=50');
             setReferredDrivers(driversRes.data.referred_drivers || []);
         } catch (err) {
-            console.log('Error fetching referral info:', err);
+            // Surface the failure instead of silently rendering an empty
+            // "success" state — a null `referralInfo` otherwise hides the code
+            // box and zeroes the stats, which reads as a broken/blank screen.
+            console.error('[DriverReferral] load failed:', err);
+            setReferralInfo(null);
+            setError(true);
         } finally {
             setIsLoading(false);
         }
@@ -96,23 +97,6 @@ export default function ReferralScreen() {
         }
     };
 
-    const applyReferralCode = async () => {
-        if (!referralCodeInput.trim()) {
-            showToast('error', 'Error', 'Please enter a referral code');
-            return;
-        }
-
-        try {
-            await api.post('/drivers/referral/apply', { referral_code: referralCodeInput.trim() });
-            showToast('success', 'Success', 'Referral code applied successfully!');
-            setShowApplyModal(false);
-            setReferralCodeInput('');
-        } catch (err: any) {
-            const errorMessage = err.response?.data?.detail || 'Failed to apply referral code';
-            showToast('error', 'Error', errorMessage);
-        }
-    };
-
     return (
         <View style={styles.container}>
             {/* Header */}
@@ -124,8 +108,20 @@ export default function ReferralScreen() {
                 <View style={{ width: 40 }} />
             </View>
 
-            <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-            <ScrollView style={styles.content} contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 24 }} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets={true} showsVerticalScrollIndicator={false}>
+            {isLoading ? (
+                <View style={styles.loading}><ActivityIndicator size="large" color={colors.primary} /></View>
+            ) : error ? (
+                <View style={styles.errorState}>
+                    <Ionicons name="cloud-offline-outline" size={48} color={colors.textDim} />
+                    <Text style={styles.errorTitle}>{"Couldn't load your referrals"}</Text>
+                    <Text style={styles.errorSub}>Something went wrong reaching our servers. Please try again.</Text>
+                    <TouchableOpacity style={styles.retryBtn} onPress={fetchReferralInfo} accessibilityLabel="Retry loading referrals">
+                        <Ionicons name="refresh" size={18} color="#fff" />
+                        <Text style={styles.retryBtnText}>Try Again</Text>
+                    </TouchableOpacity>
+                </View>
+            ) : (
+            <ScrollView style={styles.content} contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 24 }} showsVerticalScrollIndicator={false}>
                 {/* Hero Section */}
                 <LinearGradient
                     colors={[colors.primary, colors.primaryDark]}
@@ -162,7 +158,7 @@ export default function ReferralScreen() {
                 <View style={styles.statsRow}>
                     <View style={styles.statCard}>
                         <Text style={styles.statValue}>{referralInfo?.total_referrals || 0}</Text>
-                        <Text style={styles.statLabel}>Total</Text>
+                        <Text style={styles.statLabel}>Invited</Text>
                     </View>
                     <View style={styles.statCard}>
                         <Text style={styles.statValue}>{referralInfo?.qualified_referrals || 0}</Text>
@@ -170,25 +166,13 @@ export default function ReferralScreen() {
                     </View>
                     <View style={styles.statCard}>
                         <Text style={styles.statValue}>${parseFloat(String(referralInfo?.referral_earnings ?? 0)).toFixed(2)}</Text>
-                        <Text style={styles.statLabel}>Earnings</Text>
+                        <Text style={styles.statLabel}>Earned</Text>
                     </View>
-                </View>
-
-                {/* Apply Referral Code */}
-                <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Have a referral code?</Text>
-                    <TouchableOpacity
-                        style={styles.applyBtn}
-                        onPress={() => setShowApplyModal(true)}
-                    >
-                        <Ionicons name="add-circle-outline" size={20} color={colors.primary} />
-                        <Text style={styles.applyBtnText}>Apply Referral Code</Text>
-                    </TouchableOpacity>
                 </View>
 
                 {/* Referred Drivers List */}
                 <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Your Referrals</Text>
+                    <Text style={styles.sectionTitle}>Your Invites</Text>
                     {referredDrivers.length > 0 ? (
                         <View style={styles.referralsList}>
                             {referredDrivers.map((driver, index) => (
@@ -228,7 +212,7 @@ export default function ReferralScreen() {
                                             styles.badgeText,
                                             driver.qualified ? styles.badgeTextActive : styles.badgeTextPending
                                         ]}>
-                                            {driver.qualified ? 'Earned' : 'In progress'}
+                                            {driver.qualified ? 'Earned' : 'Pending'}
                                         </Text>
                                     </View>
                                 </View>
@@ -236,8 +220,8 @@ export default function ReferralScreen() {
                         </View>
                     ) : (
                         <View style={styles.emptyState}>
-                            <Ionicons name="people-outline" size={48} color={colors.surfaceLight} />
-                            <Text style={styles.emptyText}>No referrals yet</Text>
+                            <Ionicons name="people-outline" size={44} color={colors.surfaceLight} />
+                            <Text style={styles.emptyText}>No invites yet</Text>
                             <Text style={styles.emptySubtext}>
                                 Share your code to start earning!
                             </Text>
@@ -253,44 +237,7 @@ export default function ReferralScreen() {
                     </View>
                 )}
             </ScrollView>
-            </KeyboardAvoidingView>
-
-            {/* Apply Referral Modal */}
-            <Modal
-                visible={showApplyModal}
-                transparent
-                animationType="slide"
-                onRequestClose={() => setShowApplyModal(false)}
-            >
-                <KeyboardAvoidingView
-                    style={{ flex: 1 }}
-                    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-                >
-                <Pressable style={styles.modalOverlay} onPress={() => setShowApplyModal(false)}>
-                    <Pressable style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom + 12, 20) }]} onPress={(e) => e.stopPropagation()}>
-                        <View style={styles.modalHeader}>
-                            <Text style={styles.modalTitle}>Apply Referral Code</Text>
-                            <TouchableOpacity onPress={() => setShowApplyModal(false)}>
-                                <Ionicons name="close" size={24} color={colors.text} />
-                            </TouchableOpacity>
-                        </View>
-                        <View style={styles.modalBody}>
-                            <TextInput
-                                style={styles.input}
-                                placeholder="Enter referral code"
-                                placeholderTextColor={colors.textDim}
-                                value={referralCodeInput}
-                                onChangeText={setReferralCodeInput}
-                                autoCapitalize="characters"
-                            />
-                            <TouchableOpacity style={styles.submitBtn} onPress={applyReferralCode}>
-                                <Text style={styles.submitBtnText}>Apply Code</Text>
-                            </TouchableOpacity>
-                        </View>
-                    </Pressable>
-                </Pressable>
-                </KeyboardAvoidingView>
-            </Modal>
+            )}
         </View>
     );
 }
@@ -305,11 +252,20 @@ function createStyles(colors: ThemeColors) {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingBottom: 15,
+        paddingBottom: 14,
         paddingHorizontal: 16,
         borderBottomWidth: 1,
         borderBottomColor: colors.border,
     },
+    loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+    errorState: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },
+    errorTitle: { fontSize: 18, fontWeight: '700', color: colors.text, marginTop: 16, textAlign: 'center' },
+    errorSub: { fontSize: 14, color: colors.textDim, marginTop: 8, textAlign: 'center', lineHeight: 20 },
+    retryBtn: {
+        flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 24,
+        backgroundColor: colors.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 25,
+    },
+    retryBtnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
     backBtn: {
         width: 40,
         height: 40,
@@ -334,7 +290,7 @@ function createStyles(colors: ThemeColors) {
         alignItems: 'center',
     },
     heroTitle: {
-        fontSize: 24,
+        fontSize: 22,
         fontWeight: '700',
         color: '#fff',
         marginBottom: 8,
@@ -359,7 +315,7 @@ function createStyles(colors: ThemeColors) {
         marginBottom: 4,
     },
     referralCode: {
-        fontSize: 28,
+        fontSize: 26,
         fontWeight: '700',
         color: '#fff',
         letterSpacing: 2,
@@ -406,12 +362,12 @@ function createStyles(colors: ThemeColors) {
         alignItems: 'center',
     },
     statValue: {
-        fontSize: 24,
+        fontSize: 22,
         fontWeight: '700',
         color: colors.primary,
     },
     statLabel: {
-        fontSize: 13,
+        fontSize: 12,
         color: colors.textDim,
         marginTop: 4,
     },
@@ -423,23 +379,6 @@ function createStyles(colors: ThemeColors) {
         fontWeight: '600',
         color: colors.text,
         marginBottom: 12,
-    },
-    applyBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: colors.surface,
-        padding: 16,
-        borderRadius: 12,
-        borderWidth: 1,
-        borderColor: colors.primary,
-        borderStyle: 'dashed',
-    },
-    applyBtnText: {
-        color: colors.primary,
-        fontSize: 15,
-        fontWeight: '600',
-        marginLeft: 8,
     },
     referralsList: {
         backgroundColor: colors.surface,
@@ -492,6 +431,7 @@ function createStyles(colors: ThemeColors) {
         backgroundColor: colors.border,
         overflow: 'hidden',
         marginTop: 6,
+        maxWidth: 180,
     },
     refProgressFill: {
         height: '100%',
@@ -504,10 +444,10 @@ function createStyles(colors: ThemeColors) {
         borderRadius: 12,
     },
     badgeActive: {
-        backgroundColor: 'rgba(76,175,80,0.1)',
+        backgroundColor: 'rgba(16,185,129,0.12)',
     },
     badgePending: {
-        backgroundColor: 'rgba(255,152,0,0.1)',
+        backgroundColor: 'rgba(245,158,11,0.12)',
     },
     badgeText: {
         fontSize: 12,
@@ -517,7 +457,7 @@ function createStyles(colors: ThemeColors) {
         color: colors.success,
     },
     badgeTextPending: {
-        color: '#FF9800',
+        color: '#F59E0B',
     },
     emptyState: {
         backgroundColor: colors.surface,
@@ -553,52 +493,6 @@ function createStyles(colors: ThemeColors) {
         fontSize: 13,
         color: colors.textDim,
         lineHeight: 18,
-    },
-    // Modal styles
-    modalOverlay: {
-        flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.5)',
-        justifyContent: 'flex-end',
-    },
-    modalContent: {
-        backgroundColor: colors.background,
-        borderTopLeftRadius: 20,
-        borderTopRightRadius: 20,
-    },
-    modalHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        padding: 20,
-        borderBottomWidth: 1,
-        borderBottomColor: colors.border,
-    },
-    modalTitle: {
-        fontSize: 18,
-        fontWeight: '600',
-        color: colors.text,
-    },
-    modalBody: {
-        padding: 20,
-    },
-    input: {
-        backgroundColor: colors.surface,
-        borderRadius: 12,
-        padding: 16,
-        fontSize: 16,
-        color: colors.text,
-        marginBottom: 16,
-    },
-    submitBtn: {
-        backgroundColor: colors.primary,
-        padding: 16,
-        borderRadius: 12,
-        alignItems: 'center',
-    },
-    submitBtnText: {
-        color: '#fff',
-        fontSize: 16,
-        fontWeight: '600',
     },
     });
 }

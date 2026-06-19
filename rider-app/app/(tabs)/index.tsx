@@ -18,6 +18,7 @@ import * as Location from 'expo-location';
 import Constants from 'expo-constants';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { useAuthStore } from '@shared/store/authStore';
+import { useExitOnBackPress } from '@shared/hooks/useExitOnBackPress';
 import api from '@shared/api/client';
 import { useRideStore } from '../../store/rideStore';
 import { useAiChatStore } from '../../store/aiChatStore';
@@ -58,6 +59,10 @@ export default function HomeScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
   const { savedAddresses, fetchSavedAddresses, setUserLocation, currentRide, triggerEmergency, fetchActiveRide } = useRideStore();
+
+  // Home is a navigation root: the Android back button must background the app,
+  // not pop back into the login/OTP screens that sit beneath it in history.
+  useExitOnBackPress();
   const aiEnabled = useAiChatStore((s) => s.enabled);
   const loadAiConfig = useAiChatStore((s) => s.loadConfig);
   useEffect(() => {

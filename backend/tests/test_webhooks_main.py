@@ -1529,3 +1529,82 @@ class TestRideInvoicePaid:
         assert result["received"] is True
         record_mock.assert_not_awaited()
         update_ride_mock.assert_not_awaited()
+
+    def test_ride_invoice_paid_extracts_pi_from_basil_payments(self):
+        """Codex P2: under the pinned API version (2025-04-30.basil) the
+        top-level invoice.payment_intent is gone — the PI lives under
+        payments.data[].payment.payment_intent. The ride must still be written
+        with a payment_intent_id so refund/dispute webhooks can find it."""
+        import stripe
+
+        from backend.routes import webhooks as wh
+
+        data_obj = {
+            "id": "in_ride_basil",
+            "metadata": {"ride_id": "ride_basil"},
+            "amount_paid": 402,
+            # No top-level payment_intent — Basil shape only.
+            "payments": {"data": [{"payment": {"payment_intent": "pi_basil_1"}}]},
+        }
+        event_obj = self._event(data_obj, event_id="evt_ride_basil")
+        update_ride_mock = AsyncMock()
+        record_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch(
+                "backend.routes.webhooks.db_supabase.get_ride",
+                AsyncMock(
+                    return_value={"id": "ride_basil", "rider_id": "u1", "payment_status": "failed", "tip_amount": "0"}
+                ),
+            ),
+            patch("backend.routes.webhooks.db_supabase.update_ride", update_ride_mock),
+            patch("backend.services.payment_service.record_payment_event", record_mock),
+            patch("services.payment_service.record_payment_event", record_mock),
+            patch("backend.services.payment_service.send_ride_receipt", AsyncMock(return_value=True)),
+            patch("services.payment_service.send_ride_receipt", AsyncMock(return_value=True)),
+            patch("backend.socket_manager.manager.send_personal_message", AsyncMock()),
+            patch("socket_manager.manager.send_personal_message", AsyncMock()),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._req()))
+
+        assert result["received"] is True
+        upd = update_ride_mock.await_args.args[1]
+        assert upd["payment_intent_id"] == "pi_basil_1"
+
+    def test_ride_invoice_paid_raises_when_ride_missing(self):
+        """Codex P1: an invoice.paid whose ride_id no longer resolves must NOT be
+        acked — raising keeps processed_at NULL so the stuck-event reconciliation
+        path catches it instead of silently taking the rider's money."""
+        import stripe
+        from fastapi import HTTPException
+
+        from backend.routes import webhooks as wh
+
+        data_obj = {
+            "id": "in_ride_missing",
+            "metadata": {"ride_id": "ride_gone"},
+            "amount_paid": 402,
+            "payment_intent": "pi_missing_1",
+        }
+        event_obj = self._event(data_obj, event_id="evt_ride_missing")
+        record_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.get_ride", AsyncMock(return_value=None)),
+            patch("backend.services.payment_service.record_payment_event", record_mock),
+            patch("services.payment_service.record_payment_event", record_mock),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(wh.stripe_webhook(request=self._req()))
+
+        assert exc.value.status_code == 500
+        # No ledger write for a ride we couldn't load.
+        record_mock.assert_not_awaited()

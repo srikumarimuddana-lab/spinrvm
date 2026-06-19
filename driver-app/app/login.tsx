@@ -10,6 +10,7 @@ import {
   Platform,
   StatusBar,
   Animated,
+  ScrollView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -116,7 +117,7 @@ export default function LoginScreen() {
 
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       style={styles.container}
     >
       <StatusBar barStyle="dark-content" />
@@ -135,7 +136,12 @@ export default function LoginScreen() {
       </View>
 
       {/* Main content */}
-      <View style={styles.content}>
+      <ScrollView
+        style={styles.scrollFlex}
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
         {/* Welcome text */}
         <View style={styles.welcomeSection}>
           <Text style={styles.greeting}>Welcome back 👋</Text>
@@ -239,7 +245,7 @@ export default function LoginScreen() {
             Your number is secured and only used for verification
           </Text>
         </View>
-      </View>
+      </ScrollView>
 
       {/* Terms */}
       <View style={[styles.terms, { paddingBottom: insets.bottom + 16 }]}>
@@ -297,8 +303,11 @@ function createStyles(colors: ThemeColors) {
       fontWeight: '700',
       color: colors.primary,
     },
-    content: {
+    scrollFlex: {
       flex: 1,
+    },
+    content: {
+      flexGrow: 1,
       paddingHorizontal: 24,
       justifyContent: 'center',
     },

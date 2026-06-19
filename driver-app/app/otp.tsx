@@ -9,6 +9,7 @@ import {
   Platform,
   KeyboardAvoidingView,
   Animated,
+  ScrollView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -178,13 +179,16 @@ export default function OtpScreen() {
   return (
     <KeyboardAvoidingView
       style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <View
-        style={[
+      <ScrollView
+        style={styles.scrollFlex}
+        contentContainerStyle={[
           styles.scrollContent,
-          { flex: 1, paddingTop: insets.top + 16, paddingBottom: insets.bottom + 24 },
+          { flexGrow: 1, paddingTop: insets.top + 16, paddingBottom: insets.bottom + 24 },
         ]}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
       >
         {/* Back button */}
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
@@ -323,7 +327,7 @@ export default function OtpScreen() {
           </TouchableOpacity>
         </View>
         </View>
-      </View>
+      </ScrollView>
 
     </KeyboardAvoidingView>
   );
@@ -334,6 +338,9 @@ function createStyles(colors: ThemeColors) {
     container: {
       flex: 1,
       backgroundColor: colors.surface,
+    },
+    scrollFlex: {
+      flex: 1,
     },
     scrollContent: {
       flexGrow: 1,

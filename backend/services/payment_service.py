@@ -556,19 +556,20 @@ async def settle_card(
     stripe_customer_id = (rider_user or {}).get("stripe_customer_id")
 
     override_hold_released = False
+    override_hold_pi_to_release: Optional[str] = None
     if payment_method_id_override:
         # Rider explicitly chose a different card. Skip the hold path entirely
         # (the hold is on the old, rejected card) and always do a fresh charge.
         payment_method_id = payment_method_id_override
         confirm_pi = None
-        # Release the old card's uncaptured pre-auth hold so the rider's funds
-        # aren't reserved on the rejected card until Stripe's ~7-day auth expiry
-        # while the new card is charged. Best-effort; we only mark the hold
-        # 'released' in the DB if Stripe confirms the cancel.
+        # DEFER releasing the old card's hold until the new card actually charges
+        # (Codex P1): cancelling the guaranteed authorization up front would lose
+        # collectable fare if the new card then declines. We record the hold here
+        # and release it in the success path only.
         _old_hold_pi = ride.get("payment_intent_id")
         _old_auth = (ride.get("auth_status") or "").lower()
         if _old_hold_pi and _old_auth in ("authorized", "fare_only"):
-            override_hold_released = await cancel_authorization(ride_id=ride_id, payment_intent_id=_old_hold_pi)
+            override_hold_pi_to_release = _old_hold_pi
     else:
         payment_method_id = ride.get("payment_method_id") or (rider_user or {}).get("default_payment_method")
 
@@ -622,6 +623,14 @@ async def settle_card(
     )
 
     if outcome.status == "succeeded":
+        # New card charged successfully — NOW it's safe to release the old card's
+        # hold (deferred from the override branch so a decline couldn't have lost
+        # the guaranteed authorization). Best-effort; only mark 'released' in the
+        # DB if Stripe confirms the cancel.
+        if override_hold_pi_to_release:
+            override_hold_released = await cancel_authorization(
+                ride_id=ride_id, payment_intent_id=override_hold_pi_to_release
+            )
         await record_payment_event(
             ride_id=ride_id,
             user_id=rider_id,

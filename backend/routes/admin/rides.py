@@ -1572,10 +1572,22 @@ async def admin_send_payable_invoice(
             existing_status = getattr(existing, "status", None)
             if existing_status == "paid":
                 raise HTTPException(status_code=409, detail="Invoice already paid — webhook will settle the ride")
+            if existing_status == "draft":
+                # A prior request crashed after we persisted the id but before
+                # finalize. Defence: only finalize a draft that actually carries
+                # the fare — never finalize a $0/underfunded draft into a
+                # collectible invoice that invoice.paid would settle for nothing.
+                draft_amount = getattr(existing, "amount_due", None)
+                if draft_amount is None:
+                    draft_amount = getattr(existing, "total", 0) or 0
+                if int(draft_amount) <= 0:
+                    # Broken draft (no fare line) — delete it and fall through to
+                    # the CAS below, which swaps this dead id for a fresh invoice.
+                    await db_supabase.run_sync(lambda: stripe.Invoice.delete(existing_id, api_key=stripe_secret))
+                    existing_status = None
             if existing_status in ("open", "draft"):
                 # 'open' → already finalized+sent, just resend the email.
-                # 'draft' → a prior request crashed after we persisted the id but
-                # before finalize; finalize it now so it becomes collectible.
+                # 'draft' (with a fare line) → finalize so it becomes collectible.
                 if existing_status == "draft":
                     finalized = await db_supabase.run_sync(
                         lambda: stripe.Invoice.finalize_invoice(existing_id, api_key=stripe_secret)
@@ -1642,21 +1654,10 @@ async def admin_send_payable_invoice(
             )
         )
         created_invoice_id = invoice.id
-        # Persist the REAL invoice id BEFORE finalizing. The draft is not yet
-        # collectible, so if any later step (or the process) dies, the row holds
-        # the real id (recoverable via the 'draft' resend branch above) — never a
-        # 'pending:' sentinel masking a *payable* invoice. This is what makes the
-        # age-based sentinel reclaim safe: a bare sentinel ⇒ no collectible invoice.
-        id_written = await db_supabase.update_one(
-            "rides",
-            {"id": ride_id, "stripe_invoice_id": claimed_sentinel},
-            {"stripe_invoice_id": invoice.id},
-        )
-        if id_written is None:
-            # Our sentinel was changed underneath us — abandon: delete the draft
-            # (never finalized → not collectible) and let the rollback clear up.
-            raise HTTPException(status_code=409, detail="Invoice claim changed during creation")
-        claimed_sentinel = None  # the row now holds the real id, not our sentinel
+        # Attach the fare line item BEFORE persisting the id. Persisting only
+        # after the line exists guarantees the 'draft' resend path can never
+        # finalize a $0/underfunded invoice (which invoice.paid would then settle
+        # without collecting the fare).
         await db_supabase.run_sync(
             lambda: stripe.InvoiceItem.create(
                 customer=customer_id,
@@ -1670,6 +1671,36 @@ async def admin_send_payable_invoice(
                 idempotency_key=f"ride-invoiceitem-{invoice.id}",
             )
         )
+        # Persist the REAL invoice id BEFORE finalizing. The draft (now carrying
+        # the fare line) is not yet collectible, so if any later step (or the
+        # process) dies, the row holds the real id (recoverable via the 'draft'
+        # resend branch above) — never a 'pending:' sentinel masking a *payable*
+        # invoice. This is what makes the age-based sentinel reclaim safe: a bare
+        # sentinel ⇒ no collectible invoice.
+        id_written = await db_supabase.update_one(
+            "rides",
+            {"id": ride_id, "stripe_invoice_id": claimed_sentinel},
+            {"stripe_invoice_id": invoice.id},
+        )
+        if id_written is None:
+            # Our sentinel changed underneath us (should not happen). The draft is
+            # not finalized → not collectible; delete it so it can never be resent,
+            # and leave the row alone (the value is no longer ours to clear). This
+            # cleanup is inline because the HTTPException below bypasses the generic
+            # rollback handler (which only runs for non-HTTPException errors).
+            try:
+                await db_supabase.run_sync(lambda: stripe.Invoice.delete(invoice.id, api_key=stripe_secret))
+            except Exception:
+                logger.error(
+                    "admin_send_payable_invoice: failed to delete orphan draft %s for ride %s",
+                    invoice.id,
+                    ride_id,
+                    exc_info=True,
+                    extra={"domain": "payments", "ride_id": ride_id},
+                )
+            created_invoice_id = None  # handled here; don't double-clean in rollback
+            raise HTTPException(status_code=409, detail="Invoice claim changed during creation")
+        claimed_sentinel = None  # the row now holds the real id, not our sentinel
         finalized = await db_supabase.run_sync(
             lambda: stripe.Invoice.finalize_invoice(invoice.id, api_key=stripe_secret)
         )
@@ -1689,9 +1720,7 @@ async def admin_send_payable_invoice(
                     )
                 else:
                     # Still a draft → delete it outright.
-                    await db_supabase.run_sync(
-                        lambda: stripe.Invoice.delete(created_invoice_id, api_key=stripe_secret)
-                    )
+                    await db_supabase.run_sync(lambda: stripe.Invoice.delete(created_invoice_id, api_key=stripe_secret))
             except Exception:
                 logger.error(
                     "admin_send_payable_invoice: failed to roll back Stripe invoice %s for ride %s",

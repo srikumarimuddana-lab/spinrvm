@@ -1,4 +1,4 @@
--- Migration 176: ride payable-invoice fields for the admin "Send Invoice" flow
+-- Migration 177: ride payable-invoice fields for the admin "Send Invoice" flow
 --
 -- Rollback:
 --   DROP INDEX CONCURRENTLY IF EXISTS idx_rides_stripe_invoice_id;

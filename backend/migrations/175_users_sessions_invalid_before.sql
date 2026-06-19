@@ -1,16 +1,17 @@
 -- Migration 175: add users.sessions_invalid_before watermark for Firebase session revocation
 --
--- Rollback: ALTER TABLE users DROP COLUMN IF EXISTS sessions_invalid_before;
+-- Rollback:
+--   DROP TRIGGER IF EXISTS trg_guard_session_revocation ON public.users;
+--   DROP FUNCTION IF EXISTS public.guard_session_revocation_columns();
+--   ALTER TABLE users DROP COLUMN IF EXISTS sessions_invalid_before;
 --
 -- Why: Firebase ID tokens are minted by Firebase and never carry our
 -- token_version claim, so the token_version revocation gate cannot enforce
 -- /auth/logout-all for Firebase-authenticated riders. This nullable timestamp
 -- is set to now() by /auth/logout-all; the Firebase auth path rejects any ID
 -- token whose auth_time predates it. NULL means "never invalidated", and the
--- add is forward-compatible with in-flight traffic.
--- No RLS change: column lives on the existing users table (service role bypasses
--- RLS by design; the column is read only on the backend auth path). No index
--- needed: it is read as part of the existing primary-key users lookup.
+-- add is forward-compatible with in-flight traffic. No index needed: it is read
+-- as part of the existing primary-key users lookup.
 --
 -- Backfill: users with token_version > 0 already invoked /auth/logout-all under
 -- the old Firebase gate (which rejected their Firebase tokens via
@@ -20,22 +21,55 @@
 -- it can only over-revoke (force one re-sign-in for users who already chose
 -- "log out everywhere"), never under-revoke.
 --
--- Rolling-deploy gap (IMPORTANT): the backfill below is a point-in-time
--- snapshot. During a rolling deploy an OLD backend instance can still process
--- /auth/logout-all or the refresh-token-reuse cascade AFTER this UPDATE runs and
--- bump users.token_version WITHOUT stamping sessions_invalid_before (old code
--- doesn't know the column), leaving a token_version>0 / watermark-NULL row that
--- the new Firebase path would treat as not-revoked. New backend code always
--- stamps the watermark alongside every token_version bump, so the window is
--- bounded to this one deploy. To close it, the backfill is idempotent — re-run
--- the UPDATE below (or this whole migration) as the FINAL deploy step, once
--- 100% of instances are on the new code. We chose this over a code "fail closed
--- on NULL watermark" gate because that would force-logout legitimately-active
--- Firebase users mid-deploy with no clean self-service recovery path (a
--- re-login cannot safely distinguish a stolen pre-logout token from a fresh one
--- when Firebase's own revocation has not propagated).
+-- Trigger guard_session_revocation_columns does two jobs at the DB level so the
+-- watermark is authoritative no matter which code path or role writes the row:
+--   1. Rolling-deploy gap closure: whenever token_version INCREASES but the
+--      caller did not set the watermark in the same UPDATE, stamp it to now().
+--      This covers an OLD backend instance that bumps token_version (via
+--      /auth/logout-all or the reuse cascade) during the deploy window without
+--      knowing the new column — the runner records filenames and skips applied
+--      migrations, so a re-run of this file would NOT fire; the trigger closes
+--      the window for every bump, present and future, instead.
+--   2. Tamper protection: token_version and sessions_invalid_before are
+--      backend-managed. The users_update_self RLS policy lets an authenticated
+--      user UPDATE their own row; without this guard they could clear or move
+--      sessions_invalid_before via direct PostgREST access and bypass
+--      logout-all. Any non-service role that changes either column is rejected.
+-- SECURITY INVOKER (default) so current_user reflects the actual caller
+-- (service_role for the backend, authenticated/anon for direct PostgREST).
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS sessions_invalid_before TIMESTAMPTZ;
+
+CREATE OR REPLACE FUNCTION public.guard_session_revocation_columns()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    -- Tamper protection: only the backend (service role) / migrations may change
+    -- the revocation columns.
+    IF current_user NOT IN ('service_role', 'postgres', 'supabase_admin')
+       AND (NEW.token_version IS DISTINCT FROM OLD.token_version
+            OR NEW.sessions_invalid_before IS DISTINCT FROM OLD.sessions_invalid_before) THEN
+        RAISE EXCEPTION 'token_version and sessions_invalid_before are backend-managed';
+    END IF;
+
+    -- Rollout-gap closure: auto-stamp the watermark on any token_version bump
+    -- that did not already set it in the same UPDATE.
+    IF COALESCE(NEW.token_version, 0) > COALESCE(OLD.token_version, 0)
+       AND NEW.sessions_invalid_before IS NOT DISTINCT FROM OLD.sessions_invalid_before THEN
+        NEW.sessions_invalid_before := NOW();
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_guard_session_revocation ON public.users;
+CREATE TRIGGER trg_guard_session_revocation
+    BEFORE UPDATE ON public.users
+    FOR EACH ROW
+    EXECUTE FUNCTION public.guard_session_revocation_columns();
 
 UPDATE users
 SET sessions_invalid_before = NOW()

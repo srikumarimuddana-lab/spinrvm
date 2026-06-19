@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import * as ImagePicker from 'expo-image-picker';
 import { Image } from 'expo-image';
 import {
@@ -13,8 +13,10 @@ import {
   ActivityIndicator,
   ScrollView,
   Linking,
+  Alert,
+  BackHandler,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useNavigation } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@shared/store/authStore';
@@ -117,10 +119,39 @@ export default function ProfileSetupScreen() {
     }
   };
 
-  const handleLogout = async () => {
+  const handleLogout = useCallback(async () => {
     await logout();
     router.replace('/login');
-  };
+  }, [logout, router]);
+
+  // Setup mode is a forced step: the rider is authenticated (OTP set their
+  // token) but has no profile yet, which is why the back button is hidden
+  // here. Hardware back (Android) and the swipe-back gesture (iOS) are still
+  // active, though, and would pop to the login screen while leaving that
+  // half-finished session alive. Disable the swipe gesture and route the
+  // hardware back through a sign-out confirmation (matching "Change") so the
+  // only way out of setup is finishing the profile or signing out. In edit
+  // mode, back stays a normal "return to settings".
+  const navigation = useNavigation();
+  useEffect(() => {
+    navigation.setOptions({ gestureEnabled: isEditing });
+  }, [navigation, isEditing]);
+
+  useEffect(() => {
+    if (isEditing) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      Alert.alert(
+        'Discard sign-up?',
+        'You need to finish your profile to use Spinr. Going back will sign you out.',
+        [
+          { text: 'Keep editing', style: 'cancel' },
+          { text: 'Sign out', style: 'destructive', onPress: handleLogout },
+        ],
+      );
+      return true;
+    });
+    return () => sub.remove();
+  }, [isEditing, handleLogout]);
 
   const isFormValid = form.firstName.trim() && form.lastName.trim() && form.email.trim() && form.gender && (isEditing || tosAccepted);
   const genderOptions = ['Male', 'Female', 'Other'];

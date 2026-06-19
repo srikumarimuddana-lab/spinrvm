@@ -121,37 +121,12 @@ async def get_vehicle_types(service_area_id: Optional[str] = None):
     return serialize_doc(types)
 
 
-@api_router.get("/service-areas")
-async def get_public_service_areas():
-    """Active top-level service areas (public).
-
-    Driver onboarding (become-driver, profile-setup) and the rider app both
-    need a list of operating regions without admin auth. Returns only
-    active areas with the minimum fields the UI needs; admins use
-    /admin/service-areas for the full record including surge config.
-
-    Child/sub-areas (e.g. airport zones, which carry a
-    parent_service_area_id) are excluded — they exist only for fare
-    calculation and must never appear in a driver/rider area picker.
-    """
-    areas = await db_supabase.get_rows(
-        "service_areas",
-        {"is_active": True, "parent_service_area_id": None},
-        order="name",
-        limit=500,
-    )
-    return [
-        {
-            "id": a.get("id"),
-            "name": a.get("name"),
-            "city": a.get("city"),
-            "province": a.get("province"),
-            "country": a.get("country"),
-            "parent_service_area_id": a.get("parent_service_area_id"),
-            "polygon": get_service_area_polygon(a),
-        }
-        for a in areas
-    ]
+# NOTE: The public ``GET /service-areas`` endpoint is owned by
+# routes/service_areas.py (registered after this router in server.py).
+# A duplicate handler used to live here and, being registered first, shadowed
+# it — and it omitted the surge fields the driver dashboard reads, so the
+# driver surge badge silently fell back to 1.0×. The handler was removed so
+# the single source of truth is routes/service_areas.py.
 
 
 def _build_default_fares(vt_list, surge=1.0):

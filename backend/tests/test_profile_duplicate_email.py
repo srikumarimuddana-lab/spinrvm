@@ -1,9 +1,10 @@
 """Unit tests for POST /users/profile duplicate-email handling.
 
-Spinr requires both phone and email to be unique across accounts (no duplicates
-of either). If an email already belongs to another account, the profile route
-must block it and tell the user to use a different email address, while never
-disclosing the other account's phone number.
+Uber-style single-identity model: one person = one account (both rider and
+driver roles), keyed on a unique phone AND a unique email. If an email already
+belongs to another account, the profile route must block it and point the user
+to log into their existing account, while never disclosing the other account's
+phone number.
 """
 
 from __future__ import annotations
@@ -32,8 +33,8 @@ def _req(email: str = "Shared@Example.com", role: str | None = None) -> CreatePr
 
 
 @pytest.mark.anyio
-async def test_duplicate_email_is_blocked_with_change_email_message():
-    """Email already on another account → 400 telling the user to change their email."""
+async def test_duplicate_email_is_blocked_with_account_recovery_message():
+    """Email already on another account → 400 pointing the user to log into it."""
     current_user = {"id": "u-new", "phone": "+13060000002"}
     other_account = {"id": "u-existing", "phone": "+13060000001", "email": "shared@example.com"}
 
@@ -49,9 +50,9 @@ async def test_duplicate_email_is_blocked_with_change_email_message():
 
     assert ei.value.status_code == 400
     detail = ei.value.detail.lower()
-    # Tell the user the email is taken and to use a different one.
-    assert "already in use" in detail
-    assert "change your email" in detail
+    # Uber-style: point the user to their existing account, not a new one.
+    assert "already linked to an existing spinr account" in detail
+    assert "log in" in detail
     # Never disclose the other account's phone number (PII / enumeration).
     assert "+13060000001" not in ei.value.detail
     # The duplicate must not be written.

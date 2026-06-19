@@ -28,7 +28,12 @@ export default function ManageCardsScreen() {
   // When opened from a stuck ride-payment ("Change Card" escape), forPayment=1
   // and rideId is set: picking/adding a card bounces back to ride-completed to
   // re-charge that trip on the chosen card.
-  const { rideId, forPayment } = useLocalSearchParams<{ rideId?: string; forPayment?: string }>();
+  const { rideId, forPayment, tip, rated } = useLocalSearchParams<{
+    rideId?: string;
+    forPayment?: string;
+    tip?: string;
+    rated?: string;
+  }>();
   const payForRide = forPayment === '1' && !!rideId;
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -120,9 +125,19 @@ export default function ManageCardsScreen() {
     }
   };
 
-  // Return to the stuck ride and re-charge it on the chosen card.
+  // Return to the stuck ride and re-charge it on the chosen card. Carry the tip
+  // and rated flag through so the re-charge collects the same tip and doesn't
+  // re-rate the driver (Codex 62i6).
   const payRideWithCard = (cardId: string) => {
-    router.replace({ pathname: '/ride-completed', params: { rideId: rideId as string, payWithCard: cardId } } as any);
+    router.replace({
+      pathname: '/ride-completed',
+      params: {
+        rideId: rideId as string,
+        payWithCard: cardId,
+        ...(typeof tip === 'string' ? { tip } : {}),
+        ...(typeof rated === 'string' ? { rated } : {}),
+      },
+    } as any);
   };
 
   const handleSetDefault = async (cardId: string) => {

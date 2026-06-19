@@ -1523,3 +1523,67 @@ class TestPayoutKycGates:
 
         # Should not raise when Stripe reports the SIN on file.
         drv._require_sin_for_payout({"stripe_id_number_provided": True})
+
+
+# ---------------------------------------------------------------------------
+# get_driver_referral_info / get_referred_drivers
+#
+# Regression: GET /api/v1/drivers/referral raised
+# "TypeError: 'coroutine' object is not iterable" because the referred-users
+# read used a Mongo-style cursor pattern (`get_rows(...).to_list(...)`) on an
+# async `get_rows` that was never awaited — `list(<coroutine>)` blew up. The
+# rider saw "Couldn't load your referrals". Both endpoints must await the read
+# and iterate the referred users without error.
+# ---------------------------------------------------------------------------
+
+
+class TestDriverReferral:
+    def _get_rows_side_effect(self):
+        def side_effect(table, filters=None, **kw):
+            if table == "drivers":
+                uid = (filters or {}).get("user_id")
+                if uid == USER_ID:
+                    return [_driver(driver_code="DRV-ABCDEF", service_area_id=None)]
+                # The referred user is also a driver.
+                return [{"id": "ref_driver_1", "user_id": uid}]
+            if table == "users":
+                # One user signed up with this driver's code.
+                return [{"id": "ref_user_1", "first_name": "Ref", "last_name": "Ee", "email": "r@e.ca", "created_at": "2026-01-01"}]
+            return []
+
+        return side_effect
+
+    def test_referral_info_iterates_referred_users(self):
+        from backend.routes import drivers as drv
+
+        terms = {"rides": 10, "referrer": Decimal("10.00"), "referee": Decimal("0")}
+        with (
+            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=self._get_rows_side_effect())),
+            patch("backend.routes.drivers.db_supabase.count_documents", AsyncMock(return_value=3)),
+            patch("backend.routes.drivers.resolve_referral_terms", AsyncMock(return_value=terms)),
+            patch("backend.routes.drivers.paid_referral_earnings", AsyncMock(return_value=None)),
+        ):
+            result = asyncio.run(drv.get_driver_referral_info(current_user={"id": USER_ID}))
+
+        assert result["referral_code"] == "DRV-ABCDEF"
+        assert result["total_referrals"] == 1
+        # 3 completed < 10 required → still pending, not yet qualified.
+        assert result["qualified_referrals"] == 0
+        assert result["pending_referrals"] == 1
+
+    def test_referred_drivers_list_iterates_referred_users(self):
+        from backend.routes import drivers as drv
+
+        terms = {"rides": 10, "referrer": Decimal("10.00"), "referee": Decimal("0")}
+        with (
+            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=self._get_rows_side_effect())),
+            patch("backend.routes.drivers.db_supabase.count_documents", AsyncMock(return_value=12)),
+            patch("backend.routes.drivers.resolve_referral_terms", AsyncMock(return_value=terms)),
+        ):
+            result = asyncio.run(drv.get_referred_drivers(limit=50, offset=0, current_user={"id": USER_ID}))
+
+        assert len(result["referred_drivers"]) == 1
+        ref = result["referred_drivers"][0]
+        assert ref["total_trips"] == 12
+        # 12 completed ≥ 10 required → qualified.
+        assert ref["qualified"] is True

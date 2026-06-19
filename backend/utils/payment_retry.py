@@ -54,6 +54,26 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# Mirrors admin/rides.py::_INVOICE_CLAIM_STALE_SECONDS. A `pending:<epoch>:<uuid>`
+# claim older than this is an abandoned invoice-creation attempt (the request
+# crashed before Stripe created the invoice), so an in-app retry is safe.
+_INVOICE_CLAIM_STALE_SECONDS = 300
+
+
+def _invoice_claim_is_stale(sentinel: str) -> bool:
+    """True if a `pending:<epoch>:<uuid>` invoice claim is old enough to reclaim.
+
+    Legacy `pending:<uuid>` sentinels (no embedded timestamp) return False — they
+    are treated conservatively and left for manual ops cleanup."""
+    try:
+        parts = str(sentinel).split(":")
+        if len(parts) < 3:
+            return False
+        age = (datetime.now(timezone.utc) - datetime.fromtimestamp(float(parts[1]), tz=timezone.utc)).total_seconds()
+        return age >= _INVOICE_CLAIM_STALE_SECONDS
+    except (ValueError, OverflowError, OSError):
+        return False
+
 
 async def _alert_admins_payment_exhausted(ride: dict) -> None:
     """Notify admins when a ride's payment retries are exhausted."""
@@ -213,17 +233,24 @@ async def retry_failed_payments():
         _invoice_sid = ride.get("stripe_invoice_id")
         if _invoice_sid:
             if str(_invoice_sid).startswith("pending:"):
-                # Admin request crashed after writing the CAS sentinel but before
-                # Stripe created the invoice. The sentinel has no TTL and will block
-                # all retries indefinitely. Alert ops to investigate.
-                logger.error(
-                    "payment_retry: ride %s has stuck pending invoice sentinel '%s' — "
-                    "all automatic retries are blocked; ops must clear rides.stripe_invoice_id manually",
-                    ride_id,
-                    _invoice_sid,
-                    extra={"domain": "payments", "ride_id": ride_id},
-                )
-            continue
+                # Transient CAS claim from admin_send_payable_invoice. A claim that
+                # never cleared (crashed mid-creation) is reclaimable once stale —
+                # mirror admin/rides.py: a stale claim means Stripe almost certainly
+                # never created the invoice, so an in-app retry is safe and unblocks
+                # the ride. A fresh claim is left alone (real creation in flight).
+                if _invoice_claim_is_stale(_invoice_sid):
+                    logger.warning(
+                        "payment_retry: ride %s has a STALE pending invoice sentinel '%s' — "
+                        "retrying in-app (creation never completed)",
+                        ride_id,
+                        _invoice_sid,
+                        extra={"domain": "payments", "ride_id": ride_id},
+                    )
+                    # fall through to the normal retry path
+                else:
+                    continue
+            else:
+                continue
 
         if retry_count >= MAX_RETRIES:
             if not ride.get("admin_alerted_payment_exhausted"):

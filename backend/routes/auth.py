@@ -1097,6 +1097,24 @@ async def logout(
     return {"success": True}
 
 
+def _revoke_firebase_refresh_tokens(user_id: str) -> None:
+    """Best-effort revocation of a user's Firebase refresh tokens on logout-all.
+
+    Forces a real Firebase re-sign-in by invalidating refresh tokens. The
+    sessions_invalid_before watermark is the authoritative session-kill; this is
+    hardening on top. For OTP/JWT users with no Firebase uid this no-ops with
+    UserNotFoundError, which is expected — not an error. Isolated into a
+    module-level seam so the (best-effort, Firebase-SDK-dependent) side effect is
+    patchable without coupling tests to global firebase_admin module state.
+    """
+    try:
+        from firebase_admin import auth as _firebase_auth  # type: ignore
+
+        _firebase_auth.revoke_refresh_tokens(user_id)
+    except Exception as e:
+        logger.info(f"logout-all: firebase refresh-token revoke skipped for {user_id}: {type(e).__name__}")
+
+
 @api_router.post("/logout-all")
 @limiter.limit("5/minute")
 async def logout_all(request: Request, response: Response, current_user: dict = Depends(get_current_user)):
@@ -1136,16 +1154,8 @@ async def logout_all(request: Request, response: Response, current_user: dict = 
     # minting fresh ID tokens, forcing a real re-sign-in. Best-effort only —
     # the sessions_invalid_before watermark above is the authoritative
     # enforcement (a refreshed ID token keeps its original auth_time, so the
-    # watermark rejects it regardless). For OTP/JWT users with no Firebase uid
-    # this no-ops with UserNotFoundError, which is expected, not an error.
-    try:
-        from firebase_admin import auth as _firebase_auth  # type: ignore
-
-        _firebase_auth.revoke_refresh_tokens(user_id)
-    except Exception as e:
-        logger.info(
-            f"logout-all: firebase refresh-token revoke skipped for {user_id}: {type(e).__name__}"
-        )
+    # watermark rejects it regardless).
+    _revoke_firebase_refresh_tokens(user_id)
 
     # B-P1-11: kick any live WebSocket sockets so the user is logged
     # out instantly rather than waiting up to 30s for the heartbeat

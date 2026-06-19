@@ -27,8 +27,8 @@ interface ReferralInfo {
     total_referrals: number;
     qualified_referrals?: number;
     pending_referrals?: number;
-    referral_earnings: number;
-    reward_amount?: number;
+    referral_earnings: string | number;
+    reward_amount?: string | number;
     rides_required?: number;
     referral_link: string;
     terms: string;
@@ -41,7 +41,7 @@ interface ReferredDriver {
     total_trips: number;
     rides_required?: number;
     rides_remaining?: number;
-    reward_amount?: number;
+    reward_amount?: string | number;
     qualified?: boolean;
     status: string; // 'earned' | 'in_progress'
 }
@@ -169,7 +169,7 @@ export default function ReferralScreen() {
                         <Text style={styles.statLabel}>Rewarded</Text>
                     </View>
                     <View style={styles.statCard}>
-                        <Text style={styles.statValue}>${(referralInfo?.referral_earnings || 0).toFixed(2)}</Text>
+                        <Text style={styles.statValue}>${parseFloat(String(referralInfo?.referral_earnings ?? 0)).toFixed(2)}</Text>
                         <Text style={styles.statLabel}>Earnings</Text>
                     </View>
                 </View>
@@ -202,7 +202,7 @@ export default function ReferralScreen() {
                                         <Text style={styles.referralName}>{driver.name}</Text>
                                         {driver.qualified ? (
                                             <Text style={styles.referralEarned}>
-                                                Reward earned · ${(driver.reward_amount ?? 0).toFixed(0)}
+                                                Reward earned · ${parseFloat(String(driver.reward_amount ?? 0)).toFixed(0)}
                                             </Text>
                                         ) : (
                                             <>

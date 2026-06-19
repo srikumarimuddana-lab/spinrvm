@@ -4988,8 +4988,9 @@ async def get_driver_referral_info(current_user: dict = Depends(get_current_user
         "total_referrals": total_referrals,
         "qualified_referrals": qualified_referrals,
         "pending_referrals": total_referrals - qualified_referrals,
-        "referral_earnings": referral_earnings,
-        "reward_amount": reward_amount,
+        # Money serialised as 2-dp strings (house convention; clients parseFloat).
+        "referral_earnings": _money_str(referral_earnings),
+        "reward_amount": _money_str(reward_amount),
         "rides_required": rides_required,
         "terms": (
             f"Earn ${_fmt_money(reward_amount)} for each driver who signs up with your code "
@@ -5082,6 +5083,13 @@ async def get_referred_drivers(
     # so referees who applied an older code still appear in the list.
     codes = _driver_referral_codes(driver)
 
+    # Use the viewing driver's area terms so the per-referee progress cards agree
+    # with the summary endpoint (both follow the referrer's area). Actual payout
+    # still uses each referee's own area; this list is an estimate.
+    terms = await resolve_referral_terms(driver.get("service_area_id"), "driver")
+    rides_required = terms["rides"]
+    reward_amount = terms["referrer"]
+
     # Each referred user contributes name + email + signup date to the response
     # — project those columns and keep base64 profile_image out of the read.
     referred_users_cursor = db_supabase.get_rows(
@@ -5105,8 +5113,8 @@ async def get_referred_drivers(
                 {"driver_id": referred_driver["id"], "status": RideStatus.COMPLETED},
             )
             # Progress toward the reward: qualified once they hit the ride target.
-            qualified = completed_rides >= REFERRAL_RIDES_REQUIRED
-            rides_remaining = max(0, REFERRAL_RIDES_REQUIRED - completed_rides)
+            qualified = completed_rides >= rides_required
+            rides_remaining = max(0, rides_required - completed_rides)
             referred_drivers.append(
                 {
                     "name": f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or "Driver",
@@ -5114,9 +5122,9 @@ async def get_referred_drivers(
                     "referred_at": user.get("created_at", ""),
                     "total_trips": completed_rides,
                     # Reward-progress detail surfaced to the referrer.
-                    "rides_required": REFERRAL_RIDES_REQUIRED,
+                    "rides_required": rides_required,
                     "rides_remaining": rides_remaining,
-                    "reward_amount": REFERRAL_REWARD_AMOUNT,
+                    "reward_amount": _money_str(reward_amount),
                     "qualified": qualified,
                     # "earned"  → reward unlocked (>= target rides)
                     # "in_progress" → started but not yet at target

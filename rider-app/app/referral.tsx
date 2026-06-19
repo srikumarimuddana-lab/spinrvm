@@ -24,9 +24,9 @@ interface ReferralInfo {
     total_referrals: number;
     qualified_referrals: number;
     pending_referrals: number;
-    referral_earnings: number;
-    referrer_reward: number;
-    referee_reward: number;
+    referral_earnings: string | number;
+    referrer_reward: string | number;
+    referee_reward: string | number;
     rides_required: number;
     terms: string;
 }
@@ -141,7 +141,7 @@ export default function RiderReferralScreen() {
                     <View style={styles.statsRow}>
                         <Stat styles={styles} value={String(info?.total_referrals ?? 0)} label="Invited" />
                         <Stat styles={styles} value={String(info?.qualified_referrals ?? 0)} label="Rewarded" />
-                        <Stat styles={styles} value={`$${(info?.referral_earnings ?? 0).toFixed(2)}`} label="Earned" />
+                        <Stat styles={styles} value={`$${parseFloat(String(info?.referral_earnings ?? 0)).toFixed(2)}`} label="Earned" />
                     </View>
 
                     <Text style={styles.sectionTitle}>Your Invites</Text>

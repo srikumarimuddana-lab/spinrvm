@@ -24,9 +24,9 @@ interface ReferralInfo {
     total_referrals: number;
     qualified_referrals: number;
     pending_referrals: number;
-    referral_earnings: number;
-    referrer_reward: number;
-    referee_reward: number;
+    referral_earnings: string | number;
+    referrer_reward: string | number;
+    referee_reward: string | number;
     rides_required: number;
     terms: string;
 }
@@ -49,9 +49,11 @@ export default function RiderReferralScreen() {
     const [info, setInfo] = useState<ReferralInfo | null>(null);
     const [referees, setReferees] = useState<ReferredRider[]>([]);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(false);
 
     const load = useCallback(async () => {
         setLoading(true);
+        setError(false);
         try {
             const [infoRes, refsRes] = await Promise.all([
                 api.get<ReferralInfo>('/users/referral'),
@@ -60,7 +62,12 @@ export default function RiderReferralScreen() {
             setInfo(infoRes.data);
             setReferees(refsRes.data?.referees || []);
         } catch (err) {
-            console.log('[RiderReferral] load failed:', err);
+            // Surface the failure instead of silently rendering an empty
+            // "success" state — a null `info` otherwise hides the code box and
+            // shows zeroed stats, which reads as a broken/blank screen.
+            console.error('[RiderReferral] load failed:', err);
+            setInfo(null);
+            setError(true);
         } finally {
             setLoading(false);
         }
@@ -98,9 +105,19 @@ export default function RiderReferralScreen() {
 
             {loading ? (
                 <View style={styles.loading}><ActivityIndicator size="large" color={colors.primary} /></View>
+            ) : error ? (
+                <View style={styles.errorState}>
+                    <Ionicons name="cloud-offline-outline" size={48} color={colors.textDim} />
+                    <Text style={styles.errorTitle}>Couldn't load your referrals</Text>
+                    <Text style={styles.errorSub}>Something went wrong reaching our servers. Please try again.</Text>
+                    <TouchableOpacity style={styles.retryBtn} onPress={load} accessibilityLabel="Retry loading referrals">
+                        <Ionicons name="refresh" size={18} color="#fff" />
+                        <Text style={styles.retryBtnText}>Try Again</Text>
+                    </TouchableOpacity>
+                </View>
             ) : (
                 <ScrollView style={styles.content} contentContainerStyle={{ paddingBottom: insets.bottom + 32 }} showsVerticalScrollIndicator={false}>
-                    <LinearGradient colors={['#7C3AED', '#6D28D9']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.hero}>
+                    <LinearGradient colors={[colors.primary, colors.primaryDark]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.hero}>
                         <Text style={styles.heroTitle}>Give a ride, get a reward</Text>
                         <Text style={styles.heroSubtitle}>{info?.terms || 'Invite friends and earn when they take their first ride.'}</Text>
 
@@ -116,7 +133,7 @@ export default function RiderReferralScreen() {
                         )}
 
                         <TouchableOpacity style={styles.shareBtn} onPress={share}>
-                            <Ionicons name="share-social-outline" size={20} color="#7C3AED" />
+                            <Ionicons name="share-social-outline" size={20} color={colors.primary} />
                             <Text style={styles.shareBtnText}>Share Invite Link</Text>
                         </TouchableOpacity>
                     </LinearGradient>
@@ -124,7 +141,7 @@ export default function RiderReferralScreen() {
                     <View style={styles.statsRow}>
                         <Stat styles={styles} value={String(info?.total_referrals ?? 0)} label="Invited" />
                         <Stat styles={styles} value={String(info?.qualified_referrals ?? 0)} label="Rewarded" />
-                        <Stat styles={styles} value={`$${(info?.referral_earnings ?? 0).toFixed(2)}`} label="Earned" />
+                        <Stat styles={styles} value={`$${parseFloat(String(info?.referral_earnings ?? 0)).toFixed(2)}`} label="Earned" />
                     </View>
 
                     <Text style={styles.sectionTitle}>Your Invites</Text>
@@ -189,6 +206,14 @@ function createStyles(colors: ThemeColors) {
         backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surfaceLight, justifyContent: 'center', alignItems: 'center' },
         headerTitle: { fontSize: 18, fontWeight: '600', color: colors.text },
         loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+        errorState: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },
+        errorTitle: { fontSize: 18, fontWeight: '700', color: colors.text, marginTop: 16, textAlign: 'center' },
+        errorSub: { fontSize: 14, color: colors.textDim, marginTop: 8, textAlign: 'center', lineHeight: 20 },
+        retryBtn: {
+            flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 24,
+            backgroundColor: colors.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 25,
+        },
+        retryBtnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
         content: { flex: 1, paddingHorizontal: 16 },
         hero: { borderRadius: 16, padding: 24, marginTop: 16, alignItems: 'center' },
         heroTitle: { fontSize: 22, fontWeight: '700', color: '#fff', marginBottom: 8 },
@@ -199,7 +224,7 @@ function createStyles(colors: ThemeColors) {
         copyBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(255,255,255,0.3)', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20 },
         copyBtnText: { color: '#fff', fontSize: 14, fontWeight: '600' },
         shareBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#fff', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 25 },
-        shareBtnText: { color: '#7C3AED', fontSize: 16, fontWeight: '600' },
+        shareBtnText: { color: colors.primary, fontSize: 16, fontWeight: '600' },
         statsRow: { flexDirection: 'row', gap: 12, marginTop: 16 },
         statCard: { flex: 1, backgroundColor: colors.surface, borderRadius: 12, padding: 16, alignItems: 'center' },
         statValue: { fontSize: 22, fontWeight: '700', color: colors.primary },

@@ -28,10 +28,18 @@ try:
     from .. import db_supabase  # type: ignore
     from ..core.config import settings  # type: ignore
     from ..utils.error_handling import DuplicateRecordError  # type: ignore
+    from ..utils.referral_terms import (  # type: ignore
+        area_id_for_rider,
+        resolve_referral_terms,
+    )
 except ImportError:
     import db_supabase  # type: ignore
     from core.config import settings  # type: ignore
     from utils.error_handling import DuplicateRecordError  # type: ignore
+    from utils.referral_terms import (  # type: ignore
+        area_id_for_rider,
+        resolve_referral_terms,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -47,28 +55,6 @@ def _f(v: Decimal) -> str:
     return str(v)
 
 
-def _terms() -> dict:
-    """Reward terms, imported lazily to avoid circular imports at module load."""
-    try:
-        from ..routes.drivers import REFERRAL_REWARD_AMOUNT, REFERRAL_RIDES_REQUIRED  # type: ignore
-        from ..routes.users import (  # type: ignore
-            RIDER_REFEREE_REWARD,
-            RIDER_REFERRAL_RIDES_REQUIRED,
-            RIDER_REFERRER_REWARD,
-        )
-    except ImportError:
-        from routes.drivers import REFERRAL_REWARD_AMOUNT, REFERRAL_RIDES_REQUIRED  # type: ignore
-        from routes.users import (  # type: ignore
-            RIDER_REFEREE_REWARD,
-            RIDER_REFERRAL_RIDES_REQUIRED,
-            RIDER_REFERRER_REWARD,
-        )
-    return {
-        "driver": {"rides": REFERRAL_RIDES_REQUIRED, "referrer": REFERRAL_REWARD_AMOUNT, "referee": 0},
-        "rider": {"rides": RIDER_REFERRAL_RIDES_REQUIRED, "referrer": RIDER_REFERRER_REWARD, "referee": RIDER_REFEREE_REWARD},
-    }
-
-
 async def referral_payout_loop() -> None:
     """Every 5 min, pay any newly-qualified referral rewards. Replay-safe."""
     while True:
@@ -82,7 +68,6 @@ async def referral_payout_loop() -> None:
 async def _tick() -> None:
     if not settings.REFERRAL_PAYOUTS_ENABLED:
         return
-    terms = _terms()
 
     # Reclaim crash-stranded claims: a row stuck 'processing' past the grace
     # window means a replica died between claiming and finalising. We can't tell
@@ -107,8 +92,10 @@ async def _tick() -> None:
     except Exception:
         logger.error("referral_payout: stale-claim sweep failed", exc_info=True)
 
-    # Referees we've already claimed/paid/failed — skip them. (Transient credit
-    # failures DELETE their claim row, so those are absent here and get retried.)
+    # Referees we've already claimed/paid/failed — skip them. ('failed' rows are
+    # NOT deleted: they stay in the table (and in this `done` set) to block a
+    # re-claim and the double-credit it would risk; they need manual
+    # reconciliation, not auto-retry — see the credit-failure block below.)
     existing = await db_supabase.get_rows("referral_payouts", {}, columns="referee_user_id", limit=20000)
     done = {r["referee_user_id"] for r in existing}
 
@@ -123,16 +110,15 @@ async def _tick() -> None:
         if not code or u["id"] in done:
             continue
         try:
-            await _process_one(u, code, terms)
+            await _process_one(u, code)
         except Exception:
             logger.error("referral_payout: processing referee failed", exc_info=True, extra={"referee_id": u["id"]})
 
 
-async def _process_one(referee: dict, code: str, terms: dict) -> None:
+async def _process_one(referee: dict, code: str) -> None:
     referee_id = referee["id"]
     is_rider = str(code).upper().startswith("RIDE")
     kind = "rider" if is_rider else "driver"
-    t = terms[kind]
 
     # Resolve the referrer's USER id (wallets are per user).
     referrer_user_id = None
@@ -154,23 +140,28 @@ async def _process_one(referee: dict, code: str, terms: dict) -> None:
     applied_at = referee.get("referral_applied_at")
     since = {"created_at": {"$gte": applied_at}} if applied_at else {}
 
-    # Has the referee reached the ride threshold?
+    # Resolve the referee's service area and its per-area reward terms. The ride
+    # threshold is itself per-area, so this must precede the threshold check.
+    # area_id == None → resolve_referral_terms falls back to the global default.
     if is_rider:
-        completed = await db_supabase.count_documents(
-            "rides", {"rider_id": referee_id, "status": "completed", **since}
-        )
+        area_id = await area_id_for_rider(referee_id, applied_at)
+        completed = await db_supabase.count_documents("rides", {"rider_id": referee_id, "status": "completed", **since})
     else:
         ref_as_driver = (lambda _r: _r[0] if _r else None)(
             await db_supabase.get_rows("drivers", {"user_id": referee_id}, limit=1)
         )
         if not ref_as_driver:
             return
+        area_id = ref_as_driver.get("service_area_id")
         completed = await db_supabase.count_documents(
             "rides", {"driver_id": ref_as_driver["id"], "status": "completed", **since}
         )
+
+    t = await resolve_referral_terms(area_id, kind)
     if completed < t["rides"]:
         return
 
+    # resolve_referral_terms already returns Decimal; _d re-quantises defensively.
     referrer_reward = _d(t["referrer"])
     referee_reward = _d(t["referee"])
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -184,6 +175,9 @@ async def _process_one(referee: dict, code: str, terms: dict) -> None:
                 "referee_user_id": referee_id,
                 "referrer_user_id": referrer_user_id,
                 "kind": kind,
+                # Snapshot the area whose terms were applied (NULL = global
+                # default) so later admin edits never retro-change this payout.
+                "service_area_id": area_id,
                 "referrer_reward": _f(referrer_reward),
                 "referee_reward": _f(referee_reward),
                 "status": "processing",
@@ -204,28 +198,57 @@ async def _process_one(referee: dict, code: str, terms: dict) -> None:
     # 'failed' and stop: we deliberately do NOT delete/retry, because the claim
     # row staying in place is exactly what prevents a re-claim and a double
     # credit on the next tick. 'failed' rows surface for manual reconciliation.
+    #
+    # Which side(s) actually got credited is tracked in memory and written as
+    # part of the SAME row update that records the outcome (paid OR failed) —
+    # never in a separate write between the wallet credit and the status update.
+    # That closes the window where an intermediate timestamp write could fail and
+    # leave a referrer-paid row looking like "neither paid". A 'failed' row then
+    # reads: referrer_credited_at set + referee_credited_at NULL → pay only the
+    # referee; both NULL → neither side paid.
     meta = {"kind": kind, "referee_id": referee_id, "referrer_user_id": referrer_user_id}
+    referrer_paid = False
+    referee_paid = False
     try:
         await _credit(referrer_user_id, referrer_reward, kind, referee_id, "referral_reward", meta)
+        referrer_paid = True
         if referee_reward > 0:
             await _credit(referee_id, referee_reward, kind, referee_id, "referral_bonus", meta)
+            referee_paid = True
     except Exception:
         logger.error(
             "referral_payout: credit failed — marking claim 'failed' for manual reconciliation",
             exc_info=True,
-            extra=meta,
+            extra={**meta, "referrer_paid": referrer_paid, "referee_paid": referee_paid},
         )
         await db_supabase.update_one(
-            "referral_payouts", {"referee_user_id": referee_id}, {"$set": {"status": "failed"}}
+            "referral_payouts",
+            {"referee_user_id": referee_id},
+            {"$set": _credit_marks("failed", referrer_paid, referee_paid)},
         )
         return
 
     await db_supabase.update_one(
         "referral_payouts",
         {"referee_user_id": referee_id},
-        {"$set": {"status": "paid", "paid_at": datetime.now(timezone.utc).isoformat()}},
+        {"$set": _credit_marks("paid", referrer_paid, referee_paid)},
     )
     logger.info(f"referral_payout: paid {kind} referral reward for referee {referee_id}")
+
+
+def _credit_marks(status: str, referrer_paid: bool, referee_paid: bool) -> dict:
+    """Build the referral_payouts update recording the outcome + which sides were
+    actually credited. Timestamps come from in-memory flags so a row never
+    reports a paid side as un-paid."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    marks: dict = {"status": status}
+    if status == "paid":
+        marks["paid_at"] = now_iso
+    if referrer_paid:
+        marks["referrer_credited_at"] = now_iso
+    if referee_paid:
+        marks["referee_credited_at"] = now_iso
+    return marks
 
 
 async def _credit(user_id: str, amount: Decimal, kind: str, reference_id: str, txn_type: str, metadata: dict) -> None:

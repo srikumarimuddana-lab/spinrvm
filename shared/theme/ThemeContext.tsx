@@ -21,7 +21,6 @@ import React, {
   useMemo,
   type ReactNode,
 } from 'react';
-import { useColorScheme } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { lightColors, darkColors, type ThemeColors, type ColorScheme } from './index';
 
@@ -56,7 +55,6 @@ const ThemeContext = createContext<ThemeContextValue>({
 type ThemeProviderProps = { children: ReactNode };
 
 export function ThemeProvider({ children }: ThemeProviderProps) {
-  const systemScheme = useColorScheme(); // 'light' | 'dark' | null | undefined
   const [pref, setPref] = useState<ColorScheme>('system');
   const [hydrated, setHydrated] = useState(false);
 
@@ -79,11 +77,14 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     AsyncStorage.setItem(THEME_STORAGE_KEY, scheme).catch(() => {});
   }, []);
 
-  const isDark = useMemo(() => {
-    if (pref === 'dark') return true;
-    if (pref === 'light') return false;
-    return systemScheme === 'dark';
-  }, [pref, systemScheme]);
+  // Dark mode is OPT-IN: the app stays light unless the user explicitly turns
+  // on Settings → Dark Mode (which persists pref='dark'). We intentionally do
+  // NOT follow the OS dark setting ('system' → light) because dark-mode theming
+  // is not yet complete across every screen/input — auto-following the device
+  // would throw users into half-themed screens (white-on-white inputs). Flip
+  // the 'system' branch back to `systemScheme === 'dark'` once the dark audit
+  // is done to restore OS-follow behaviour.
+  const isDark = useMemo(() => pref === 'dark', [pref]);
 
   const colors = isDark ? darkColors : lightColors;
 

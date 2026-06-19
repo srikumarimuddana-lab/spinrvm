@@ -13,12 +13,14 @@ try:
     from ...features import send_push_notification
     from ...utils.audit_logger import log_admin_action
     from ...utils.datetime_utils import parse_iso_utc
+    from ...utils.referral_terms import paid_referral_earnings, resolve_referral_terms
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user  # noqa: F401
     from features import send_push_notification
     from utils.audit_logger import log_admin_action  # noqa: F401
     from utils.datetime_utils import parse_iso_utc
+    from utils.referral_terms import paid_referral_earnings, resolve_referral_terms  # type: ignore
 
 db = db_supabase  # legacy alias
 
@@ -1532,7 +1534,11 @@ def _driver_referral_code(driver: dict) -> str:
 
 async def _driver_referral_summary(driver: dict, *, include_referees: bool) -> dict:
     """Compute a referrer's referral stats (and optionally the referee list)."""
-    rides_required, reward_amount = _referral_terms()
+    # Per-area terms for THIS driver (the referrer), so the admin modal matches
+    # the driver app and the payout loop instead of showing the global default.
+    terms = await resolve_referral_terms(driver.get("service_area_id"), "driver")
+    rides_required = terms["rides"]
+    reward_amount = terms["referrer"]
     codes = _driver_referral_codes(driver)
     code = codes[0]
 
@@ -1571,12 +1577,16 @@ async def _driver_referral_summary(driver: dict, *, include_referees: bool) -> d
             )
 
     total = len(referred_users)
+    # Earned total from snapshotted PAID payouts (won't change retroactively when
+    # area terms change); estimate fallback until a payout has been paid.
+    paid = await paid_referral_earnings(driver["user_id"], "driver") if driver.get("user_id") else None
+    earnings = paid if paid is not None else (qualified * reward_amount)
     summary = {
         "referral_code": code,
         "total_referrals": total,
         "qualified_referrals": qualified,
         "pending_referrals": total - qualified,
-        "referral_earnings": qualified * reward_amount,
+        "referral_earnings": earnings,
         "reward_amount": reward_amount,
         "rides_required": rides_required,
     }
@@ -1642,6 +1652,9 @@ async def admin_get_referral_leaderboard(
                 if completed >= rides_required:
                     qualified += 1
         fleet_qualified += qualified
+        # Snapshotted PAID earnings when available; estimate fallback otherwise.
+        paid = await paid_referral_earnings(drv["user_id"], "driver") if drv.get("user_id") else None
+        leader_earnings = paid if paid is not None else (qualified * reward_amount)
         leaders.append(
             {
                 "driver_id": ref_driver_id,
@@ -1649,7 +1662,7 @@ async def admin_get_referral_leaderboard(
                 "name": name,
                 "total_referrals": len(referee_user_ids),
                 "qualified_referrals": qualified,
-                "referral_earnings": qualified * reward_amount,
+                "referral_earnings": leader_earnings,
             }
         )
 
@@ -1703,6 +1716,9 @@ async def admin_get_rider_referral_leaderboard(
             completed = await db_supabase.count_documents("rides", {"rider_id": ride_user_id, "status": "completed"})
             if completed >= RIDER_REFERRAL_RIDES_REQUIRED:
                 qualified += 1
+        # Snapshotted PAID earnings when available; estimate fallback otherwise.
+        paid = await paid_referral_earnings(referrer_id, "rider")
+        leader_earnings = paid if paid is not None else (qualified * RIDER_REFERRER_REWARD)
         leaders.append(
             {
                 # driver_id/driver_code reuse the shared UI fields — here they
@@ -1712,7 +1728,7 @@ async def admin_get_rider_referral_leaderboard(
                 "name": name_by_id.get(referrer_id, "Rider"),
                 "total_referrals": len(referee_ids),
                 "qualified_referrals": qualified,
-                "referral_earnings": qualified * RIDER_REFERRER_REWARD,
+                "referral_earnings": leader_earnings,
             }
         )
 

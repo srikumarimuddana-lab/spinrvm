@@ -17,6 +17,7 @@ except ImportError:
     from utils.audit_logger import log_admin_action  # type: ignore  # noqa: F811
     from utils.referral_terms import (  # type: ignore  # noqa: F811
         area_id_for_rider,
+        paid_referral_earnings,
         resolve_referral_terms,
     )
 import base64

@@ -97,7 +97,7 @@ except ImportError:
     from utils.metrics import inc as _metric_inc  # type: ignore
     from utils.metrics import observe as _metric_observe  # type: ignore
     from utils.money import dollars_to_cents, to_decimal
-    from utils.referral_terms import resolve_referral_terms  # type: ignore
+    from utils.referral_terms import paid_referral_earnings, resolve_referral_terms  # type: ignore
     from utils.t4a_pdf import generate_t4a_pdf  # noqa: F401 – used in download_t4a_pdf
 
 db = db_supabase  # legacy alias

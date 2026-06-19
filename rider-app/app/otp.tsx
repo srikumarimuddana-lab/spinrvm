@@ -171,6 +171,9 @@ export default function OtpScreen() {
           <Ionicons name="arrow-back" size={22} color={colors.text} />
         </TouchableOpacity>
 
+        {/* Vertically center the form so the screen doesn't leave a large
+            empty gap below the resend row (matches the driver OTP layout). */}
+        <View style={styles.centerArea}>
         <View style={styles.illustrationContainer}>
           <View style={styles.illustrationCircle}>
             <View style={styles.illustrationInner}>
@@ -275,6 +278,7 @@ export default function OtpScreen() {
             <Text style={styles.changeNumberText}>Change phone number</Text>
           </TouchableOpacity>
         </View>
+        </View>
       </ScrollView>
 
     </KeyboardAvoidingView>
@@ -285,6 +289,7 @@ function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.surface },
     scrollContent: { flexGrow: 1, paddingHorizontal: 24 },
+    centerArea: { flex: 1, justifyContent: 'center' },
     backBtn: {
       width: 44, height: 44, borderRadius: 14,
       backgroundColor: colors.surfaceLight,

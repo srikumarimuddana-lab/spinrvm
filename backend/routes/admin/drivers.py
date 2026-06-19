@@ -1,7 +1,7 @@
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -1772,7 +1772,9 @@ async def admin_get_referral_analytics(
             return Decimal("0")
 
     def _m(x: Decimal) -> str:
-        return str(x.quantize(Decimal("0.01")))
+        # ROUND_HALF_UP to match the house money convention (fare_service._round);
+        # default banker's rounding would disagree at the half-cent boundary.
+        return str(x.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
     def _in_range(iso_ts: str | None) -> bool:
         if not iso_ts:
@@ -1840,7 +1842,9 @@ async def admin_get_referral_analytics(
                 continue
             total_referred += 1
 
-    redemption_rate = (redeemed / total_referred) if total_referred else None
+    # A display ratio (not a monetary amount) — float is fine here; do NOT copy
+    # this pattern into any fare/payout path, which must stay Decimal.
+    redemption_rate = round(redeemed / total_referred, 4) if total_referred else None
 
     if source == "rider":
         try:

@@ -59,6 +59,7 @@ try:
     from ..utils.metrics import inc as _metric_inc
     from ..utils.metrics import observe as _metric_observe
     from ..utils.money import dollars_to_cents, to_decimal
+    from ..utils.referral_terms import paid_referral_earnings, resolve_referral_terms
     from ..utils.t4a_pdf import generate_t4a_pdf
 except ImportError:
     import db_supabase
@@ -96,6 +97,7 @@ except ImportError:
     from utils.metrics import inc as _metric_inc  # type: ignore
     from utils.metrics import observe as _metric_observe  # type: ignore
     from utils.money import dollars_to_cents, to_decimal
+    from utils.referral_terms import paid_referral_earnings, resolve_referral_terms  # type: ignore
     from utils.t4a_pdf import generate_t4a_pdf  # noqa: F401 – used in download_t4a_pdf
 
 db = db_supabase  # legacy alias
@@ -4907,6 +4909,12 @@ REFERRAL_RIDES_REQUIRED = 10
 REFERRAL_REWARD_AMOUNT = 10  # CAD, paid per referee who reaches the ride target
 
 
+def _fmt_money(v) -> str:
+    """Format a money amount for display copy: '10' for 10.00, '10.50' otherwise."""
+    d = Decimal(str(v))
+    return str(int(d)) if d == d.to_integral_value() else f"{d:.2f}"
+
+
 def _driver_referral_codes(driver: dict) -> list:
     """Every code this driver may have been shared under — the current
     driver_code plus the legacy referral_code / DRIVER<id8> defaults — so
@@ -4947,7 +4955,14 @@ async def get_driver_referral_info(current_user: dict = Depends(get_current_user
         else list(referred_users_cursor)
     )
 
-    # A referral pays out once the referred driver completes REFERRAL_RIDES_REQUIRED
+    # Reward terms follow this driver's assigned service area (global default
+    # when unassigned). The ride threshold is per-area, so resolve before the
+    # qualification loop.
+    terms = await resolve_referral_terms(driver.get("service_area_id"), "driver")
+    rides_required = terms["rides"]
+    reward_amount = terms["referrer"]
+
+    # A referral pays out once the referred driver completes rides_required
     # rides; until then it's "in progress". Earnings are the sum of qualified ones.
     total_referrals = len(referred_users)
     qualified_referrals = 0
@@ -4962,10 +4977,15 @@ async def get_driver_referral_info(current_user: dict = Depends(get_current_user
                 "rides",
                 {"driver_id": referred_driver["id"], "status": RideStatus.COMPLETED},
             )
-            if completed_rides >= REFERRAL_RIDES_REQUIRED:
+            if completed_rides >= rides_required:
                 qualified_referrals += 1
 
-    referral_earnings = qualified_referrals * REFERRAL_REWARD_AMOUNT
+    # Earned total: prefer the snapshotted sum of PAID payouts so it never changes
+    # retroactively when area terms or the driver's area change; fall back to the
+    # estimate (reward × qualified) until a payout has actually been paid (the
+    # payout loop is off by default, so this preserves current behaviour).
+    paid = await paid_referral_earnings(current_user["id"], "driver")
+    referral_earnings = paid if paid is not None else (reward_amount * qualified_referrals)
 
     return {
         "referral_code": referral_code,
@@ -4973,12 +4993,13 @@ async def get_driver_referral_info(current_user: dict = Depends(get_current_user
         "total_referrals": total_referrals,
         "qualified_referrals": qualified_referrals,
         "pending_referrals": total_referrals - qualified_referrals,
-        "referral_earnings": referral_earnings,
-        "reward_amount": REFERRAL_REWARD_AMOUNT,
-        "rides_required": REFERRAL_RIDES_REQUIRED,
+        # Money serialised as 2-dp strings (house convention; clients parseFloat).
+        "referral_earnings": _money_str(referral_earnings),
+        "reward_amount": _money_str(reward_amount),
+        "rides_required": rides_required,
         "terms": (
-            f"Earn ${REFERRAL_REWARD_AMOUNT} for each driver who signs up with your code "
-            f"and completes {REFERRAL_RIDES_REQUIRED} rides."
+            f"Earn ${_fmt_money(reward_amount)} for each driver who signs up with your code "
+            f"and completes {rides_required} rides."
         ),
     }
 
@@ -5067,6 +5088,13 @@ async def get_referred_drivers(
     # so referees who applied an older code still appear in the list.
     codes = _driver_referral_codes(driver)
 
+    # Use the viewing driver's area terms so the per-referee progress cards agree
+    # with the summary endpoint (both follow the referrer's area). Actual payout
+    # still uses each referee's own area; this list is an estimate.
+    terms = await resolve_referral_terms(driver.get("service_area_id"), "driver")
+    rides_required = terms["rides"]
+    reward_amount = terms["referrer"]
+
     # Each referred user contributes name + email + signup date to the response
     # — project those columns and keep base64 profile_image out of the read.
     referred_users_cursor = db_supabase.get_rows(
@@ -5090,8 +5118,8 @@ async def get_referred_drivers(
                 {"driver_id": referred_driver["id"], "status": RideStatus.COMPLETED},
             )
             # Progress toward the reward: qualified once they hit the ride target.
-            qualified = completed_rides >= REFERRAL_RIDES_REQUIRED
-            rides_remaining = max(0, REFERRAL_RIDES_REQUIRED - completed_rides)
+            qualified = completed_rides >= rides_required
+            rides_remaining = max(0, rides_required - completed_rides)
             referred_drivers.append(
                 {
                     "name": f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or "Driver",
@@ -5099,9 +5127,9 @@ async def get_referred_drivers(
                     "referred_at": user.get("created_at", ""),
                     "total_trips": completed_rides,
                     # Reward-progress detail surfaced to the referrer.
-                    "rides_required": REFERRAL_RIDES_REQUIRED,
+                    "rides_required": rides_required,
                     "rides_remaining": rides_remaining,
-                    "reward_amount": REFERRAL_REWARD_AMOUNT,
+                    "reward_amount": _money_str(reward_amount),
                     "qualified": qualified,
                     # "earned"  → reward unlocked (>= target rides)
                     # "in_progress" → started but not yet at target

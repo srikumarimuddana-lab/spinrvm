@@ -19,7 +19,6 @@ import { useRouter } from 'expo-router';
 import { Share } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import api from '@shared/api/client';
-import { useLanguageStore } from '../../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -28,8 +27,8 @@ interface ReferralInfo {
     total_referrals: number;
     qualified_referrals?: number;
     pending_referrals?: number;
-    referral_earnings: number;
-    reward_amount?: number;
+    referral_earnings: string | number;
+    reward_amount?: string | number;
     rides_required?: number;
     referral_link: string;
     terms: string;
@@ -42,7 +41,7 @@ interface ReferredDriver {
     total_trips: number;
     rides_required?: number;
     rides_remaining?: number;
-    reward_amount?: number;
+    reward_amount?: string | number;
     qualified?: boolean;
     status: string; // 'earned' | 'in_progress'
 }
@@ -50,7 +49,6 @@ interface ReferredDriver {
 export default function ReferralScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
-    const { t } = useLanguageStore();
     const { colors } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
     const [referralInfo, setReferralInfo] = useState<ReferralInfo | null>(null);
@@ -122,7 +120,7 @@ export default function ReferralScreen() {
                 <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
                     <Ionicons name="arrow-back" size={24} color={colors.text} />
                 </TouchableOpacity>
-                <Text style={styles.headerTitle}>{t('profile.referral') || 'Referral Program'}</Text>
+                <Text style={styles.headerTitle}>Refer & Earn</Text>
                 <View style={{ width: 40 }} />
             </View>
 
@@ -130,7 +128,7 @@ export default function ReferralScreen() {
             <ScrollView style={styles.content} contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 24 }} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets={true} showsVerticalScrollIndicator={false}>
                 {/* Hero Section */}
                 <LinearGradient
-                    colors={['#E53935', '#C62828']}
+                    colors={[colors.primary, colors.primaryDark]}
                     start={{ x: 0, y: 0 }}
                     end={{ x: 1, y: 1 }}
                     style={styles.heroCard}
@@ -140,7 +138,7 @@ export default function ReferralScreen() {
                         {/* Generic tagline only — the exact reward ($ and ride
                             threshold) is stated in the Terms section below, driven
                             by the backend so the two can never contradict. */}
-                        {t('referral.earn') || 'Invite drivers to Spinr and earn rewards when they sign up and start driving.'}
+                        Invite drivers to Spinr and earn rewards when they sign up and start driving.
                     </Text>
 
                     {referralInfo && (
@@ -155,7 +153,7 @@ export default function ReferralScreen() {
                     )}
 
                     <TouchableOpacity style={styles.shareBtn} onPress={shareReferral}>
-                        <Ionicons name="share-social-outline" size={20} color="#E53935" />
+                        <Ionicons name="share-social-outline" size={20} color={colors.primary} />
                         <Text style={styles.shareBtnText}>Share Referral Link</Text>
                     </TouchableOpacity>
                 </LinearGradient>
@@ -171,7 +169,7 @@ export default function ReferralScreen() {
                         <Text style={styles.statLabel}>Rewarded</Text>
                     </View>
                     <View style={styles.statCard}>
-                        <Text style={styles.statValue}>${(referralInfo?.referral_earnings || 0).toFixed(2)}</Text>
+                        <Text style={styles.statValue}>${parseFloat(String(referralInfo?.referral_earnings ?? 0)).toFixed(2)}</Text>
                         <Text style={styles.statLabel}>Earnings</Text>
                     </View>
                 </View>
@@ -204,7 +202,7 @@ export default function ReferralScreen() {
                                         <Text style={styles.referralName}>{driver.name}</Text>
                                         {driver.qualified ? (
                                             <Text style={styles.referralEarned}>
-                                                Reward earned · ${(driver.reward_amount ?? 0).toFixed(0)}
+                                                Reward earned · ${parseFloat(String(driver.reward_amount ?? 0)).toFixed(2)}
                                             </Text>
                                         ) : (
                                             <>
@@ -390,7 +388,7 @@ function createStyles(colors: ThemeColors) {
         borderRadius: 25,
     },
     shareBtnText: {
-        color: '#E53935',
+        color: colors.primary,
         fontSize: 16,
         fontWeight: '600',
         marginLeft: 8,

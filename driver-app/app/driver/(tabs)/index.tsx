@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDriverStore } from '../../../store/driverStore';
 import { useAuthStore } from '@shared/store/authStore';
+import { useExitOnBackPress } from '@shared/hooks/useExitOnBackPress';
 import { useVehicleTypeStore } from '@shared/store/vehicleTypeStore';
 import {
   DriverTopBar,
@@ -50,6 +51,10 @@ function DriverDashboard() {
   const { colors, isDark } = useTheme();
   const insets = useSafeAreaInsets();
   const styles = useMemo(() => createStyles(colors), [colors]);
+
+  // Home is a navigation root: the Android back button must background the app,
+  // not pop back into the login/OTP screens that sit beneath it in history.
+  useExitOnBackPress();
 
   // Driver + user live on the shared auth store — useDriverStore does not
   // hold these fields, so reading them from there always returned null and

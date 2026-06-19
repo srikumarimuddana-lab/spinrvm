@@ -78,10 +78,15 @@ class TestResolveReferralTerms:
         assert t["rides"] == 4
         assert t["referee"] == Decimal("0.00")
 
-    def test_lookup_failure_falls_back(self):
+    def test_lookup_failure_propagates(self):
+        # A real DB error must NOT be swallowed into the global default — it
+        # propagates so the payout loop retries instead of paying the wrong
+        # amount and locking it in via the unique claim.
+        import pytest
+
         with _patch_global(), _patch_rows(side_effect=RuntimeError("db down")):
-            t = asyncio.run(referral_terms.resolve_referral_terms("a", "rider"))
-        assert t == _GLOBAL["rider"]
+            with pytest.raises(RuntimeError):
+                asyncio.run(referral_terms.resolve_referral_terms("a", "rider"))
 
 
 class TestAreaIdForRider:
@@ -100,10 +105,12 @@ class TestAreaIdForRider:
             area = asyncio.run(referral_terms.area_id_for_rider("rider1"))
         assert area is None
 
-    def test_none_on_lookup_failure(self):
+    def test_lookup_failure_propagates(self):
+        import pytest
+
         with _patch_rows(side_effect=RuntimeError("db down")):
-            area = asyncio.run(referral_terms.area_id_for_rider("rider1"))
-        assert area is None
+            with pytest.raises(RuntimeError):
+                asyncio.run(referral_terms.area_id_for_rider("rider1"))
 
 
 class TestAreaIdForDriverUser:

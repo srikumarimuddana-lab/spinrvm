@@ -123,14 +123,23 @@ async def get_vehicle_types(service_area_id: Optional[str] = None):
 
 @api_router.get("/service-areas")
 async def get_public_service_areas():
-    """Active service areas (public).
+    """Active top-level service areas (public).
 
     Driver onboarding (become-driver, profile-setup) and the rider app both
     need a list of operating regions without admin auth. Returns only
     active areas with the minimum fields the UI needs; admins use
     /admin/service-areas for the full record including surge config.
+
+    Child/sub-areas (e.g. airport zones, which carry a
+    parent_service_area_id) are excluded — they exist only for fare
+    calculation and must never appear in a driver/rider area picker.
     """
-    areas = await db_supabase.get_rows("service_areas", {"is_active": True}, order="name", limit=500)
+    areas = await db_supabase.get_rows(
+        "service_areas",
+        {"is_active": True, "parent_service_area_id": None},
+        order="name",
+        limit=500,
+    )
     return [
         {
             "id": a.get("id"),

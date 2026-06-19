@@ -230,6 +230,12 @@ class TestChangeCardOverride:
         # Ride re-pointed to the card actually charged.
         assert _last(updates, "payment_method_id") == "pm_NEW"
         assert _last(updates, "payment_status") == "paid"
+        # Codex P2 (62jG): the cached brand/last4 of the OLD declined card are
+        # cleared so the admin ride-detail resolver re-derives them from the new
+        # PaymentIntent instead of showing the rejected card.
+        paid_update = next(u for u in reversed(updates) if u.get("payment_status") == "paid")
+        assert paid_update["card_brand"] is None
+        assert paid_update["card_last4"] is None
 
 
 @pytest.mark.asyncio

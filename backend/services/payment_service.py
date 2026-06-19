@@ -630,7 +630,14 @@ async def settle_card(
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                     # Re-point the ride to the card actually charged so a later
                     # retry/receipt reflects the new card, not the rejected one.
-                    **({"payment_method_id": payment_method_id} if payment_method_id_override else {}),
+                    # Also clear the cached card brand/last4 from the old (declined)
+                    # card so the admin ride-detail resolver re-derives them from
+                    # the new PaymentIntent instead of showing the rejected card.
+                    **(
+                        {"payment_method_id": payment_method_id, "card_brand": None, "card_last4": None}
+                        if payment_method_id_override
+                        else {}
+                    ),
                     **_tip_ride_update(ride, tip_amount),
                 },
             )

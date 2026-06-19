@@ -445,7 +445,7 @@ async def delete_emergency_contact(contact_id: str, current_user: dict = Depends
 # migration + money-auditor review) and is intentionally not done here.
 RIDER_REFERRAL_RIDES_REQUIRED = 1
 RIDER_REFERRER_REWARD = 5  # CAD — referrer credit once referee takes first ride
-RIDER_REFEREE_REWARD = 5   # CAD — new rider's first-ride credit
+RIDER_REFEREE_REWARD = 5  # CAD — new rider's first-ride credit
 
 
 def _rider_referral_code(user: dict) -> str:
@@ -481,9 +481,7 @@ async def _rider_referral_summary(user: dict, *, include_referees: bool) -> dict
     referees: list = []
     qualified = 0
     for u in referred:
-        completed = await db_supabase.count_documents(
-            "rides", {"rider_id": u["id"], "status": "completed"}
-        )
+        completed = await db_supabase.count_documents("rides", {"rider_id": u["id"], "status": "completed"})
         is_qualified = completed >= rides_required
         if is_qualified:
             qualified += 1
@@ -505,9 +503,10 @@ async def _rider_referral_summary(user: dict, *, include_referees: bool) -> dict
         "total_referrals": total,
         "qualified_referrals": qualified,
         "pending_referrals": total - qualified,
-        "referral_earnings": referrer_reward * qualified,
-        "referrer_reward": referrer_reward,
-        "referee_reward": referee_reward,
+        # Money serialised as 2-dp strings (house convention; clients parseFloat).
+        "referral_earnings": str(referrer_reward * qualified),
+        "referrer_reward": str(referrer_reward),
+        "referee_reward": str(referee_reward),
         "rides_required": rides_required,
         "terms": (
             f"Give ${_fmt_money(referee_reward)}, get ${_fmt_money(referrer_reward)} when your friend "

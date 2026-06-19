@@ -92,8 +92,10 @@ async def _tick() -> None:
     except Exception:
         logger.error("referral_payout: stale-claim sweep failed", exc_info=True)
 
-    # Referees we've already claimed/paid/failed — skip them. (Transient credit
-    # failures DELETE their claim row, so those are absent here and get retried.)
+    # Referees we've already claimed/paid/failed — skip them. ('failed' rows are
+    # NOT deleted: they stay in the table (and in this `done` set) to block a
+    # re-claim and the double-credit it would risk; they need manual
+    # reconciliation, not auto-retry — see the credit-failure block below.)
     existing = await db_supabase.get_rows("referral_payouts", {}, columns="referee_user_id", limit=20000)
     done = {r["referee_user_id"] for r in existing}
 
@@ -143,9 +145,7 @@ async def _process_one(referee: dict, code: str) -> None:
     # area_id == None → resolve_referral_terms falls back to the global default.
     if is_rider:
         area_id = await area_id_for_rider(referee_id, applied_at)
-        completed = await db_supabase.count_documents(
-            "rides", {"rider_id": referee_id, "status": "completed", **since}
-        )
+        completed = await db_supabase.count_documents("rides", {"rider_id": referee_id, "status": "completed", **since})
     else:
         ref_as_driver = (lambda _r: _r[0] if _r else None)(
             await db_supabase.get_rows("drivers", {"user_id": referee_id}, limit=1)

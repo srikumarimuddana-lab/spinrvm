@@ -5,13 +5,20 @@ try:
     from ..dependencies import get_current_user  # type: ignore
     from ..schemas import CreateProfileRequest, UserProfile  # type: ignore
     from ..utils.audit_logger import log_admin_action  # type: ignore
-    from ..utils.referral_terms import area_id_for_rider, resolve_referral_terms  # type: ignore
+    from ..utils.referral_terms import (  # type: ignore
+        area_id_for_rider,
+        paid_referral_earnings,
+        resolve_referral_terms,
+    )
 except ImportError:
     import db_supabase  # type: ignore
     from dependencies import get_current_user  # type: ignore
     from schemas import CreateProfileRequest, UserProfile  # type: ignore
     from utils.audit_logger import log_admin_action  # type: ignore  # noqa: F811
-    from utils.referral_terms import area_id_for_rider, resolve_referral_terms  # type: ignore  # noqa: F811
+    from utils.referral_terms import (  # type: ignore  # noqa: F811
+        area_id_for_rider,
+        resolve_referral_terms,
+    )
 import base64
 import logging
 import uuid
@@ -497,6 +504,12 @@ async def _rider_referral_summary(user: dict, *, include_referees: bool) -> dict
                 }
             )
     total = len(referred)
+    # Earned total: prefer the snapshotted sum of PAID payouts so it never changes
+    # retroactively when area terms or the rider's area change; fall back to the
+    # estimate (current reward × qualified) until any payout has actually been paid
+    # (the payout loop is off by default, so this is the current behaviour).
+    paid = await paid_referral_earnings(user["id"], "rider")
+    earnings = paid if paid is not None else (referrer_reward * qualified)
     summary = {
         "referral_code": code,
         "referral_link": f"https://spinr.app/r/{code}",
@@ -504,7 +517,7 @@ async def _rider_referral_summary(user: dict, *, include_referees: bool) -> dict
         "qualified_referrals": qualified,
         "pending_referrals": total - qualified,
         # Money serialised as 2-dp strings (house convention; clients parseFloat).
-        "referral_earnings": str(referrer_reward * qualified),
+        "referral_earnings": str(earnings),
         "referrer_reward": str(referrer_reward),
         "referee_reward": str(referee_reward),
         "rides_required": rides_required,

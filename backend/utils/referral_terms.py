@@ -128,6 +128,32 @@ async def resolve_referral_terms(service_area_id: Optional[str], kind: str) -> d
     }
 
 
+async def paid_referral_earnings(referrer_user_id: str, kind: str) -> Optional[Decimal]:
+    """Sum of ``referrer_reward`` across this referrer's PAID ``referral_payouts``
+    rows of the given kind, or None when no paid row exists yet.
+
+    Earnings are summed from the SNAPSHOTTED ledger amounts (migration 171), not
+    recomputed from today's area terms, so a referrer's historical earned total
+    can't change retroactively when an admin edits an area's reward/threshold or
+    the user moves service areas. Returns None — not 0 — when there are no paid
+    rows so callers fall back to the pre-payout estimate (the payout loop is off
+    by default; until it runs there are no paid rows and the estimate is the only
+    available signal).
+    """
+    rows = await db_supabase.get_rows(
+        "referral_payouts",
+        {"referrer_user_id": referrer_user_id, "kind": kind, "status": "paid"},
+        columns="referrer_reward",
+        limit=10000,
+    )
+    if not rows:
+        return None
+    total = Decimal("0")
+    for r in rows:
+        total += _money(r.get("referrer_reward"))
+    return total
+
+
 async def area_id_for_rider(rider_user_id: str, since_iso: Optional[str] = None) -> Optional[str]:
     """The rider's service area, derived from their most recent COMPLETED ride.
 

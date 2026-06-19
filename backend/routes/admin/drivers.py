@@ -20,7 +20,7 @@ except ImportError:
     from features import send_push_notification
     from utils.audit_logger import log_admin_action  # noqa: F401
     from utils.datetime_utils import parse_iso_utc
-    from utils.referral_terms import resolve_referral_terms  # type: ignore
+    from utils.referral_terms import paid_referral_earnings, resolve_referral_terms  # type: ignore
 
 db = db_supabase  # legacy alias
 

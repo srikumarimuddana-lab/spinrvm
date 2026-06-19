@@ -49,9 +49,11 @@ export default function RiderReferralScreen() {
     const [info, setInfo] = useState<ReferralInfo | null>(null);
     const [referees, setReferees] = useState<ReferredRider[]>([]);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(false);
 
     const load = useCallback(async () => {
         setLoading(true);
+        setError(false);
         try {
             const [infoRes, refsRes] = await Promise.all([
                 api.get<ReferralInfo>('/users/referral'),
@@ -60,7 +62,12 @@ export default function RiderReferralScreen() {
             setInfo(infoRes.data);
             setReferees(refsRes.data?.referees || []);
         } catch (err) {
-            console.log('[RiderReferral] load failed:', err);
+            // Surface the failure instead of silently rendering an empty
+            // "success" state — a null `info` otherwise hides the code box and
+            // shows zeroed stats, which reads as a broken/blank screen.
+            console.error('[RiderReferral] load failed:', err);
+            setInfo(null);
+            setError(true);
         } finally {
             setLoading(false);
         }
@@ -98,6 +105,16 @@ export default function RiderReferralScreen() {
 
             {loading ? (
                 <View style={styles.loading}><ActivityIndicator size="large" color={colors.primary} /></View>
+            ) : error ? (
+                <View style={styles.errorState}>
+                    <Ionicons name="cloud-offline-outline" size={48} color={colors.textDim} />
+                    <Text style={styles.errorTitle}>Couldn't load your referrals</Text>
+                    <Text style={styles.errorSub}>Something went wrong reaching our servers. Please try again.</Text>
+                    <TouchableOpacity style={styles.retryBtn} onPress={load} accessibilityLabel="Retry loading referrals">
+                        <Ionicons name="refresh" size={18} color="#fff" />
+                        <Text style={styles.retryBtnText}>Try Again</Text>
+                    </TouchableOpacity>
+                </View>
             ) : (
                 <ScrollView style={styles.content} contentContainerStyle={{ paddingBottom: insets.bottom + 32 }} showsVerticalScrollIndicator={false}>
                     <LinearGradient colors={['#7C3AED', '#6D28D9']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.hero}>
@@ -189,6 +206,14 @@ function createStyles(colors: ThemeColors) {
         backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surfaceLight, justifyContent: 'center', alignItems: 'center' },
         headerTitle: { fontSize: 18, fontWeight: '600', color: colors.text },
         loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+        errorState: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },
+        errorTitle: { fontSize: 18, fontWeight: '700', color: colors.text, marginTop: 16, textAlign: 'center' },
+        errorSub: { fontSize: 14, color: colors.textDim, marginTop: 8, textAlign: 'center', lineHeight: 20 },
+        retryBtn: {
+            flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 24,
+            backgroundColor: colors.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 25,
+        },
+        retryBtnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
         content: { flex: 1, paddingHorizontal: 16 },
         hero: { borderRadius: 16, padding: 24, marginTop: 16, alignItems: 'center' },
         heroTitle: { fontSize: 22, fontWeight: '700', color: '#fff', marginBottom: 8 },

@@ -4883,6 +4883,15 @@ async def rate_rider(
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
+    # Authorization: a driver may only rate the rider on a ride they actually
+    # drove. Without this guard any credentialed driver could overwrite the
+    # rider_rating/rider_comment on any ride by supplying an arbitrary ride_id.
+    ride = await db_supabase.get_ride(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get("driver_id") != driver["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to rate this ride")
+
     # Update ride with rating
     await db_supabase.update_ride(
         ride_id,

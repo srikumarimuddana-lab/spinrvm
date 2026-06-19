@@ -1575,6 +1575,46 @@ class TestRideInvoicePaid:
         upd = update_ride_mock.await_args.args[1]
         assert upd["payment_intent_id"] == "pi_basil_1"
 
+    def test_ride_invoice_paid_raises_when_pi_unresolved(self):
+        """Codex round-3 (#4): if the PI can't be resolved (no payload field and
+        the expand-retrieve fallback fails), do NOT mark the ride paid with a NULL
+        payment_intent_id — raise so Stripe retries; refund/dispute lookups depend
+        on that id."""
+        import stripe
+        from fastapi import HTTPException
+
+        from backend.routes import webhooks as wh
+
+        # No top-level payment_intent and no payments shape.
+        data_obj = {"id": "in_ride_nopi", "metadata": {"ride_id": "ride_nopi"}, "amount_paid": 402}
+        event_obj = self._event(data_obj, event_id="evt_ride_nopi")
+        update_ride_mock = AsyncMock()
+        record_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch(
+                "backend.routes.webhooks.db_supabase.get_ride",
+                AsyncMock(
+                    return_value={"id": "ride_nopi", "rider_id": "u1", "payment_status": "failed", "tip_amount": "0"}
+                ),
+            ),
+            patch("backend.routes.webhooks.db_supabase.update_ride", update_ride_mock),
+            patch("backend.services.payment_service.record_payment_event", record_mock),
+            patch("services.payment_service.record_payment_event", record_mock),
+            # The expand-retrieve fallback also fails to yield a PI.
+            patch("stripe.Invoice.retrieve", MagicMock(side_effect=Exception("stripe down"))),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(wh.stripe_webhook(request=self._req()))
+
+        assert exc.value.status_code == 500
+        # No half-settled ride: the paid write never happened.
+        update_ride_mock.assert_not_awaited()
+
     def test_ride_invoice_paid_raises_when_ride_missing(self):
         """Codex P1: an invoice.paid whose ride_id no longer resolves must NOT be
         acked — raising keeps processed_at NULL so the stuck-event reconciliation

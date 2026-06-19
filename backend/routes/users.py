@@ -431,3 +431,138 @@ async def delete_emergency_contact(contact_id: str, current_user: dict = Depends
 
     await db_supabase.delete_one("emergency_contacts", {"id": contact_id})
     return {"success": True}
+
+
+# ── Rider Referral Program ───────────────────────────────────────────
+# Riders refer riders. "First-ride bonus, both sides": the referee gets a
+# first-ride credit and the referrer earns a credit once the referee completes
+# their first paid ride. Reward terms live here as the single source of truth.
+# NOTE: like the driver referral, the figures below are TRACKED/DISPLAYED only —
+# the actual wallet crediting is a separate money task (idempotent payout +
+# migration + money-auditor review) and is intentionally not done here.
+RIDER_REFERRAL_RIDES_REQUIRED = 1
+RIDER_REFERRER_REWARD = 5  # CAD — referrer credit once referee takes first ride
+RIDER_REFEREE_REWARD = 5   # CAD — new rider's first-ride credit
+
+
+def _rider_referral_code(user: dict) -> str:
+    """Rider's shareable code — a stored custom code, else derived from the id."""
+    return user.get("referral_code") or f"RIDE{user['id'][:8].upper()}"
+
+
+async def _rider_referral_summary(user: dict, *, include_referees: bool) -> dict:
+    code = _rider_referral_code(user)
+    referred = await db_supabase.get_rows(
+        "users",
+        {"referral_code_used": code},
+        columns="id,first_name,last_name,created_at",
+        limit=200,
+    )
+    referees: list = []
+    qualified = 0
+    for u in referred:
+        completed = await db_supabase.count_documents(
+            "rides", {"rider_id": u["id"], "status": "completed"}
+        )
+        is_qualified = completed >= RIDER_REFERRAL_RIDES_REQUIRED
+        if is_qualified:
+            qualified += 1
+        if include_referees:
+            referees.append(
+                {
+                    "name": f"{u.get('first_name', '')} {u.get('last_name', '')}".strip() or "Rider",
+                    "referred_at": u.get("created_at", ""),
+                    "completed_rides": completed,
+                    "rides_required": RIDER_REFERRAL_RIDES_REQUIRED,
+                    "qualified": is_qualified,
+                    "status": "earned" if is_qualified else "in_progress",
+                }
+            )
+    total = len(referred)
+    summary = {
+        "referral_code": code,
+        "referral_link": f"https://spinr.app/r/{code}",
+        "total_referrals": total,
+        "qualified_referrals": qualified,
+        "pending_referrals": total - qualified,
+        "referral_earnings": qualified * RIDER_REFERRER_REWARD,
+        "referrer_reward": RIDER_REFERRER_REWARD,
+        "referee_reward": RIDER_REFEREE_REWARD,
+        "rides_required": RIDER_REFERRAL_RIDES_REQUIRED,
+        "terms": (
+            f"Give ${RIDER_REFEREE_REWARD}, get ${RIDER_REFERRER_REWARD} when your friend "
+            f"takes their first ride."
+        ),
+    }
+    if include_referees:
+        summary["referees"] = referees
+    return summary
+
+
+class ApplyRiderReferralRequest(BaseModel):
+    referral_code: str
+
+
+@api_router.get("/referral")
+async def get_rider_referral_info(current_user: dict = Depends(get_current_user)):
+    """The rider's own referral code, link, and progress stats."""
+    user = await db_supabase.get_user_by_id(current_user["id"])
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return await _rider_referral_summary(user, include_referees=False)
+
+
+@api_router.get("/referrals")
+async def get_rider_referrals(current_user: dict = Depends(get_current_user)):
+    """The riders this user has referred, with first-ride progress."""
+    user = await db_supabase.get_user_by_id(current_user["id"])
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return await _rider_referral_summary(user, include_referees=True)
+
+
+@api_router.post("/referral/apply")
+async def apply_rider_referral(req: ApplyRiderReferralRequest, current_user: dict = Depends(get_current_user)):
+    """Apply a referral code (at signup or later). Links the referee to the referrer."""
+    code = req.referral_code.strip().upper()
+
+    user = await db_supabase.get_user_by_id(current_user["id"])
+    if user and user.get("referral_code_used"):
+        raise HTTPException(status_code=400, detail="Referral code already applied")
+
+    # Resolve the referrer. Codes are "RIDE" + first 8 chars of the user id
+    # (case-insensitive contains match — _apply_filters maps $regex to ILIKE),
+    # or a stored custom referral_code.
+    ref_user = None
+    if code.startswith("RIDE"):
+        suffix = code[4:]
+        if len(suffix) == 8 and suffix.isalnum():
+            try:
+                ref_user = (lambda _r: _r[0] if _r else None)(
+                    await db_supabase.get_rows(
+                        "users", {"id": {"$regex": suffix, "$options": "i"}}, columns="id", limit=1
+                    )
+                )
+            except Exception as e:
+                logger.warning(f"Rider referral code lookup failed: {e}")
+    if not ref_user:
+        ref_user = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows("users", {"referral_code": code}, columns="id", limit=1)
+        )
+
+    if not ref_user:
+        raise HTTPException(status_code=404, detail="Invalid referral code")
+    if ref_user["id"] == current_user["id"]:
+        raise HTTPException(status_code=400, detail="You can't use your own referral code")
+
+    await db_supabase.update_one(
+        "users",
+        {"id": current_user["id"]},
+        {
+            "referral_code_used": code,
+            "referred_by": ref_user["id"],
+            # Recorded so the payout loop only rewards rides completed AFTER this.
+            "referral_applied_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    return {"success": True, "referral_code": code}

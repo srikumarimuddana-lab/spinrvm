@@ -4901,6 +4901,23 @@ class ApplyReferralCodeRequest(BaseModel):
     referral_code: str
 
 
+# Referral reward terms — single source of truth so the earnings calc, the
+# per-referee progress, and the displayed terms can never drift apart.
+REFERRAL_RIDES_REQUIRED = 10
+REFERRAL_REWARD_AMOUNT = 10  # CAD, paid per referee who reaches the ride target
+
+
+def _driver_referral_codes(driver: dict) -> list:
+    """Every code this driver may have been shared under — the current
+    driver_code plus the legacy referral_code / DRIVER<id8> defaults — so
+    referees who signed up with an older code still count in the summary."""
+    out: list = []
+    for c in (driver.get("driver_code"), driver.get("referral_code"), f"DRIVER{driver['id'][:8].upper()}"):
+        if c and c not in out:
+            out.append(c)
+    return out
+
+
 @api_router.get("/referral")
 async def get_driver_referral_info(current_user: dict = Depends(get_current_user)):
     """Get driver's referral code and earnings from referrals."""
@@ -4910,14 +4927,19 @@ async def get_driver_referral_info(current_user: dict = Depends(get_current_user
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    # Get or create referral code (use driver ID as default code)
-    referral_code = driver.get("referral_code", f"DRIVER{driver['id'][:8].upper()}")
+    # The shareable referral code IS the human-readable driver_code (DRV-XXXXXX)
+    # when present — it's designed to be spoken/typed. Fall back to a stored
+    # custom referral_code, then to the id-derived default for legacy rows that
+    # predate driver_code (migration 156).
+    codes = _driver_referral_codes(driver)
+    referral_code = codes[0]  # primary code shown/shared (driver_code when present)
 
-    # Find users who used this referral code
+    # Find users who used ANY of this driver's codes (incl. legacy ones) so a
+    # referrer doesn't lose progress for referees who applied an older code.
     # Only the id is used below (to look up each referred user's driver row),
     # so project it and keep base64 profile_image out of the read.
     referred_users_cursor = db_supabase.get_rows(
-        "users", {"referral_code_used": referral_code}, columns="id", limit=100
+        "users", {"referral_code_used": {"$in": codes}}, columns="id", limit=100
     )
     referred_users = (
         await referred_users_cursor.to_list(100)
@@ -4925,11 +4947,11 @@ async def get_driver_referral_info(current_user: dict = Depends(get_current_user
         else list(referred_users_cursor)
     )
 
-    # Calculate referral earnings (e.g., $10 per referred driver who completes 10 rides)
+    # A referral pays out once the referred driver completes REFERRAL_RIDES_REQUIRED
+    # rides; until then it's "in progress". Earnings are the sum of qualified ones.
     total_referrals = len(referred_users)
-    referral_earnings = 0
+    qualified_referrals = 0
 
-    # Check how many referred drivers have completed rides
     for user in referred_users:
         # Check if user became a driver and completed rides
         referred_driver = (lambda _r: _r[0] if _r else None)(
@@ -4940,15 +4962,24 @@ async def get_driver_referral_info(current_user: dict = Depends(get_current_user
                 "rides",
                 {"driver_id": referred_driver["id"], "status": RideStatus.COMPLETED},
             )
-            if completed_rides >= 10:
-                referral_earnings += 10  # $10 bonus
+            if completed_rides >= REFERRAL_RIDES_REQUIRED:
+                qualified_referrals += 1
+
+    referral_earnings = qualified_referrals * REFERRAL_REWARD_AMOUNT
 
     return {
         "referral_code": referral_code,
         "referral_link": f"https://spinr.app/join/{referral_code}",
         "total_referrals": total_referrals,
+        "qualified_referrals": qualified_referrals,
+        "pending_referrals": total_referrals - qualified_referrals,
         "referral_earnings": referral_earnings,
-        "terms": "Earn $10 for each driver who signs up with your code and completes 10 rides.",
+        "reward_amount": REFERRAL_REWARD_AMOUNT,
+        "rides_required": REFERRAL_RIDES_REQUIRED,
+        "terms": (
+            f"Earn ${REFERRAL_REWARD_AMOUNT} for each driver who signs up with your code "
+            f"and completes {REFERRAL_RIDES_REQUIRED} rides."
+        ),
     }
 
 
@@ -4962,35 +4993,58 @@ async def apply_referral_code(req: ApplyReferralCodeRequest, current_user: dict 
     if user and user.get("referral_code_used"):
         raise HTTPException(status_code=400, detail="Referral code already applied")
 
-    # Validate referral code exists (check if any driver has this code)
+    # Resolve the referrer. The primary shareable code is the human-readable
+    # driver_code (DRV-XXXXXX) shown in the profile / referral screen; also
+    # accept a stored custom referral_code for backward compatibility.
     ref_driver = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("drivers", {"referral_code": code}, limit=1)
+        await db_supabase.get_rows("drivers", {"driver_code": code}, limit=1)
     )
     if not ref_driver:
-        # Legacy fallback: allow `DRIVER<id-suffix>` format where the
-        # suffix is the last 8 chars of a driver ID. The original
-        # implementation used a `$regex` filter which (a) the Supabase
-        # translator silently dropped, so this path never matched, and
-        # (b) would have been a ReDoS vector on MongoDB.
+        ref_driver = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows("drivers", {"referral_code": code}, limit=1)
+        )
+    if not ref_driver:
+        # Fallback for the auto-generated default code, which is
+        # "DRIVER" + the first 8 chars of the driver id, upper-cased
+        # (see get_driver_referral_info). Resolve it back to the driver.
         #
-        # Replacement: accept only an 8-char alphanumeric suffix, then
-        # use a bounded PostgREST `.ilike()` lookup. The `%` suffix
-        # wildcard means "id ends with this string" — exactly what the
-        # original code was trying to do.
+        # NOTE: _apply_filters maps {"$regex": x} onto a SQL LIKE/ILIKE
+        # pattern (%x%), NOT a real regex — so the previous ".*<id>.*"
+        # value was matched *literally* (looking for ".*" inside the id)
+        # and never hit. Pass the bare 8-char token and set $options:"i"
+        # for a case-insensitive contains match (the code upper-cases the
+        # lower-case hex id, so a case-sensitive match would also miss).
         potential_id = code.replace("DRIVER", "")
-        if len(potential_id) == 8:
-            ref_driver = (lambda _r: _r[0] if _r else None)(
-                await db_supabase.get_rows("drivers", {"id": {"$regex": f".*{potential_id}.*"}}, limit=1)
-            )
+        if len(potential_id) == 8 and potential_id.isalnum():
+            try:
+                ref_driver = (lambda _r: _r[0] if _r else None)(
+                    await db_supabase.get_rows(
+                        "drivers",
+                        {"id": {"$regex": potential_id, "$options": "i"}},
+                        limit=1,
+                    )
+                )
+            except Exception as e:
+                logger.warning(f"Referral default-code fallback lookup failed: {e}")
 
     if not ref_driver:
         raise HTTPException(status_code=404, detail="Invalid referral code")
+
+    # Block self-referral — a driver can't refer themselves (now that the code
+    # can be entered at signup, this is an easy thing to try).
+    if ref_driver.get("user_id") == current_user["id"]:
+        raise HTTPException(status_code=400, detail="You can't use your own referral code")
 
     # Apply referral code to user
     await db_supabase.update_one(
         "users",
         {"id": current_user["id"]},
-        {"referral_code_used": code, "referred_by": ref_driver["id"]},
+        {
+            "referral_code_used": code,
+            "referred_by": ref_driver["id"],
+            # Recorded so the payout loop only rewards rides completed AFTER this.
+            "referral_applied_at": datetime.now(timezone.utc).isoformat(),
+        },
     )
 
     return {"success": True, "referral_code": code}
@@ -5009,13 +5063,14 @@ async def get_referred_drivers(
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    referral_code = driver.get("referral_code", f"DRIVER{driver['id'][:8].upper()}")
+    # Match every code this driver may have been shared under (incl. legacy)
+    # so referees who applied an older code still appear in the list.
+    codes = _driver_referral_codes(driver)
 
-    # Find users who used this referral code and became drivers
     # Each referred user contributes name + email + signup date to the response
     # — project those columns and keep base64 profile_image out of the read.
     referred_users_cursor = db_supabase.get_rows(
-        "users", {"referral_code_used": referral_code}, columns="id,first_name,last_name,email,created_at", limit=100
+        "users", {"referral_code_used": {"$in": codes}}, columns="id,first_name,last_name,email,created_at", limit=100
     )
     referred_users = (
         await referred_users_cursor.to_list(100)
@@ -5034,13 +5089,23 @@ async def get_referred_drivers(
                 "rides",
                 {"driver_id": referred_driver["id"], "status": RideStatus.COMPLETED},
             )
+            # Progress toward the reward: qualified once they hit the ride target.
+            qualified = completed_rides >= REFERRAL_RIDES_REQUIRED
+            rides_remaining = max(0, REFERRAL_RIDES_REQUIRED - completed_rides)
             referred_drivers.append(
                 {
                     "name": f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or "Driver",
                     "email": user.get("email", ""),
                     "referred_at": user.get("created_at", ""),
                     "total_trips": completed_rides,
-                    "status": "active" if completed_rides > 0 else "pending",
+                    # Reward-progress detail surfaced to the referrer.
+                    "rides_required": REFERRAL_RIDES_REQUIRED,
+                    "rides_remaining": rides_remaining,
+                    "reward_amount": REFERRAL_REWARD_AMOUNT,
+                    "qualified": qualified,
+                    # "earned"  → reward unlocked (>= target rides)
+                    # "in_progress" → started but not yet at target
+                    "status": "earned" if qualified else "in_progress",
                 }
             )
 

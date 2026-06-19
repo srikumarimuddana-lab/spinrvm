@@ -12,6 +12,17 @@
 // offer is silently dropped — the exact bug this fixes. require() gives us
 // guaranteed top-to-bottom order so the FCM handler wins the race.
 
+// 0. Silence the @react-native-firebase v22+ modular-API deprecation warnings.
+//    We still use the namespaced API (messaging()/appCheck()/crashlytics()) in
+//    shared/services/firebase.ts; on v24 every call logs a "Please use getApp()
+//    … migrating-to-v22" warning. These are cosmetic only — the namespaced API
+//    keeps working until the next major release. This flag (read by the SDK at
+//    @react-native-firebase/app/lib/common) suppresses the console spam without
+//    changing any behaviour. Must be set before the first Firebase call below,
+//    which is why it leads the entry file. Remove once firebase.ts is migrated
+//    to the modular API.
+globalThis.RNFB_SILENCE_MODULAR_DEPRECATION_WARNINGS = true;
+
 // 1. Register the headless FCM + Notifee background handlers FIRST, before the
 //    app component is registered. Ride offers are data-only FCM messages; when
 //    the app is killed Android delivers them via a headless JS launch where no

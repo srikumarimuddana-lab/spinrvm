@@ -574,6 +574,51 @@ export interface DriverLiveStats {
 export const getDriverLiveStats = (id: string) =>
     request<DriverLiveStats>(`/api/admin/drivers/${id}/live-stats`);
 
+export interface DriverReferee {
+    name: string;
+    email: string;
+    referred_at: string;
+    is_driver: boolean;
+    completed_rides: number;
+    rides_required: number;
+    rides_remaining: number;
+    qualified: boolean;
+    status: "earned" | "in_progress";
+}
+export interface DriverReferralSummary {
+    referral_code: string;
+    total_referrals: number;
+    qualified_referrals: number;
+    pending_referrals: number;
+    referral_earnings: number;
+    reward_amount: number;
+    rides_required: number;
+    referees: DriverReferee[];
+}
+export const getDriverReferrals = (id: string) =>
+    request<DriverReferralSummary>(`/api/admin/drivers/${id}/referrals`);
+
+export interface ReferralLeader {
+    driver_id: string;
+    driver_code: string;
+    name: string;
+    total_referrals: number;
+    qualified_referrals: number;
+    referral_earnings: number;
+}
+export interface ReferralLeaderboard {
+    leaders: ReferralLeader[];
+    fleet_total_referrals: number;
+    fleet_total_referrers: number;
+    reward_amount: number;
+    rides_required: number;
+}
+export const getReferralLeaderboard = (limit = 20) =>
+    request<ReferralLeaderboard>(`/api/admin/referrals/leaderboard?limit=${limit}`);
+
+export const getRiderReferralLeaderboard = (limit = 20) =>
+    request<ReferralLeaderboard>(`/api/admin/referrals/rider-leaderboard?limit=${limit}`);
+
 export interface DriverPayoutSummary {
     summary: {
         lifetime_earnings: number;

@@ -60,12 +60,23 @@ def _project_public(r: dict) -> dict:
 async def get_service_areas():
     """List active top-level service areas for driver registration and ride booking.
 
-    Child/sub-areas (e.g. airport zones) are excluded — they are used
-    internally for fare calculation but should never appear in a picker.
+    Airport zones are excluded two ways, because either modeling can occur in
+    the data and a picker must never show an airport regardless:
+      - ``parent_service_area_id IS NULL`` drops *correctly* modeled airport
+        zones, which are sub-regions of a city (the admin route enforces that
+        ``is_airport`` may only be set on a child row).
+      - ``is_airport != true`` drops any row flagged as an airport even if it
+        was hand-created/legacy-imported as a top-level row. The admin guard
+        only prevents *new* top-level airports; older parent rows like
+        "Regina Airport" can still exist and would otherwise leak in.
     """
     rows = await db_supabase.get_rows(
         "service_areas",
-        {"is_active": True, "parent_service_area_id": None},
+        {
+            "is_active": True,
+            "parent_service_area_id": None,
+            "is_airport": {"$ne": True},
+        },
         order="name",
         limit=200,
     )

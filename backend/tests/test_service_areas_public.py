@@ -139,6 +139,25 @@ class TestPublicServiceAreas:
         assert "parent_service_area_id" in call_filters
         assert call_filters["parent_service_area_id"] is None
 
+    def test_excludes_airport_flag_even_on_top_level_rows(self, client):
+        """Regression: the parent-id filter alone is not enough.
+
+        A correctly modeled airport is a child row, but airports also exist as
+        hand-created/legacy TOP-LEVEL rows (e.g. "Regina Airport", "riyadh
+        airport" on the driver profile-setup screen). Those have
+        parent_service_area_id IS NULL, so the parent filter lets them through.
+        The query must also constrain is_airport != true so an airport never
+        appears in the picker regardless of how the row is modeled.
+        """
+        from backend.routes import service_areas as mod
+
+        mock_get = AsyncMock(return_value=[])
+        with patch.object(mod.db_supabase, "get_rows", mock_get):
+            client.get("/api/v1/service-areas")
+
+        call_filters = mock_get.call_args[0][1]
+        assert call_filters.get("is_airport") == {"$ne": True}
+
     def test_empty_list_when_no_areas(self, client):
         from backend.routes import service_areas as mod
 

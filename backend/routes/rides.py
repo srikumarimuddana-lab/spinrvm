@@ -3583,6 +3583,31 @@ def _record_settlement_metrics(payment_method: str, result, duration_ms: float) 
     _metric_observe("spinr_payment_settlement_duration_ms", duration_ms, {"method": method})
 
 
+# Mirrors admin/rides.py + utils/payment_retry.py. A `pending:<epoch>:<uuid>`
+# value in rides.stripe_invoice_id is a transient invoice-creation CAS claim; a
+# claim older than this window is abandoned (the request crashed before Stripe
+# created the invoice) and must NOT block an in-app charge.
+_INVOICE_CLAIM_STALE_SECONDS = 300
+
+
+def _is_stale_invoice_claim(sentinel: str) -> bool:
+    """True only for an ABANDONED `pending:<epoch>:<uuid>` invoice claim.
+
+    A finalized invoice id (in_*) or a legacy `pending:<uuid>` (no timestamp)
+    returns False — i.e. it still blocks in-app payment."""
+    s = str(sentinel)
+    if not s.startswith("pending:"):
+        return False
+    try:
+        parts = s.split(":")
+        if len(parts) < 3:
+            return False
+        age = (datetime.now(timezone.utc) - datetime.fromtimestamp(float(parts[1]), tz=timezone.utc)).total_seconds()
+        return age >= _INVOICE_CLAIM_STALE_SECONDS
+    except (ValueError, OverflowError, OSError):
+        return False
+
+
 @api_router.post("/{ride_id}/process-payment")
 @payment_action_limit
 async def process_payment(
@@ -3632,6 +3657,20 @@ async def process_payment(
     if _pstatus == "processing" and _pmethod != "wallet":
         logger.info(f"[PAYMENT] Ride {ride_id} processing ({_pmethod}) — skipping duplicate charge")
         return {"success": True, "charged_amount": _charged(ride), "already_paid": True}
+
+    # An admin has emailed a payable Stripe invoice for this ride — collection
+    # has moved to the hosted invoice (settled by the invoice.paid webhook).
+    # Charging in-app now would collect a second time alongside the invoice, and
+    # the later invoice.paid would see the ride already paid and skip (no refund
+    # of the extra). Block and point the rider at the emailed link. A finalized
+    # invoice (in_*) always blocks; a fresh 'pending:' creation claim blocks too;
+    # a stale/abandoned 'pending:' claim does not (the invoice was never created).
+    _inv_sid = ride.get("stripe_invoice_id")
+    if _inv_sid and not _is_stale_invoice_claim(_inv_sid):
+        raise HTTPException(
+            status_code=409,
+            detail="An invoice has been emailed for this ride. Please pay using the link in that email.",
+        )
 
     # Validate the tip BEFORE the atomic claim — raising after the claim would
     # leave payment_status stuck at 'processing' with no charge ever attempted.

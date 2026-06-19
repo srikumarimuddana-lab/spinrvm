@@ -323,6 +323,54 @@ class TestIdempotencyGuards:
 
 
 @pytest.mark.asyncio
+class TestOpenInvoiceGuard:
+    """Codex P1 (62i3): once an admin emails a payable invoice, in-app charging
+    must be blocked so the rider can't be collected twice. The guard raises
+    before any Stripe call, so only get_ride needs stubbing."""
+
+    async def test_finalized_invoice_blocks_in_app_charge(self):
+        from backend.routes import rides as rides_mod
+
+        ride = _completed_ride(stripe_invoice_id="in_admin_123")
+        with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
+            req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
+            with pytest.raises(HTTPException) as exc:
+                await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
+
+        assert exc.value.status_code == 409
+        assert "invoice" in str(exc.value.detail).lower()
+
+    async def test_fresh_pending_claim_blocks(self):
+        from datetime import datetime, timezone
+
+        from backend.routes import rides as rides_mod
+
+        fresh = _completed_ride(stripe_invoice_id=f"pending:{datetime.now(timezone.utc).timestamp()}:u1")
+        with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=fresh)):
+            req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
+            with pytest.raises(HTTPException) as exc:
+                await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
+        assert exc.value.status_code == 409
+
+    def test_stale_claim_helper_is_not_blocking(self):
+        """The staleness helper: only an abandoned `pending:<epoch>:<uuid>` claim
+        (>5 min) is stale (non-blocking). A finalized invoice, a fresh claim, and
+        a legacy timestamp-less sentinel all still block in-app payment."""
+        from datetime import datetime, timedelta, timezone
+
+        from backend.routes import rides as rides_mod
+
+        now = datetime.now(timezone.utc)
+        stale = f"pending:{(now - timedelta(minutes=10)).timestamp()}:u1"
+        fresh = f"pending:{now.timestamp()}:u1"
+
+        assert rides_mod._is_stale_invoice_claim(stale) is True
+        assert rides_mod._is_stale_invoice_claim(fresh) is False
+        assert rides_mod._is_stale_invoice_claim("in_admin_123") is False
+        assert rides_mod._is_stale_invoice_claim("pending:legacynouuid") is False
+
+
+@pytest.mark.asyncio
 class TestAuthorization:
     async def test_other_rider_cannot_pay_for_this_ride(self):
         from backend.routes import rides as rides_mod

@@ -18,7 +18,7 @@ try:
     from ..services import corporate_allowance_service, corporate_wallet_service
     from ..services.corporate_policy_service import evaluate_policy
     from ..socket_manager import manager
-    from ..utils.stripe_charge import capture_ride, charge_ride
+    from ..utils.stripe_charge import cancel_authorization, capture_ride, charge_ride
 except ImportError:
     import db_supabase  # type: ignore
     from services import corporate_allowance_service, corporate_wallet_service  # type: ignore
@@ -555,11 +555,20 @@ async def settle_card(
     rider_user = await db_supabase.get_user_by_id(rider_id)
     stripe_customer_id = (rider_user or {}).get("stripe_customer_id")
 
+    override_hold_released = False
     if payment_method_id_override:
         # Rider explicitly chose a different card. Skip the hold path entirely
         # (the hold is on the old, rejected card) and always do a fresh charge.
         payment_method_id = payment_method_id_override
         confirm_pi = None
+        # Release the old card's uncaptured pre-auth hold so the rider's funds
+        # aren't reserved on the rejected card until Stripe's ~7-day auth expiry
+        # while the new card is charged. Best-effort; we only mark the hold
+        # 'released' in the DB if Stripe confirms the cancel.
+        _old_hold_pi = ride.get("payment_intent_id")
+        _old_auth = (ride.get("auth_status") or "").lower()
+        if _old_hold_pi and _old_auth in ("authorized", "fare_only"):
+            override_hold_released = await cancel_authorization(ride_id=ride_id, payment_intent_id=_old_hold_pi)
     else:
         payment_method_id = ride.get("payment_method_id") or (rider_user or {}).get("default_payment_method")
 
@@ -638,6 +647,9 @@ async def settle_card(
                         if payment_method_id_override
                         else {}
                     ),
+                    # Record the old hold as released only when Stripe confirmed the
+                    # cancel, so auth_status reflects reality.
+                    **({"auth_status": "released"} if override_hold_released else {}),
                     **_tip_ride_update(ride, tip_amount),
                 },
             )

@@ -619,3 +619,46 @@ async def capture_ride(
         payment_intent_id=pi_id,
         error_message=f"Unhandled capture PaymentIntent status: {status}",
     )
+
+
+async def cancel_authorization(*, ride_id: str, payment_intent_id: str) -> bool:
+    """Cancel an uncaptured pre-authorization hold so the funds are released.
+
+    Used when a rider abandons the booking-time card (the "Change Card" escape):
+    the new card is charged on a fresh PaymentIntent, so the old hold must be
+    released or the rider's funds stay reserved until Stripe's ~7-day auth
+    expiry. Returns True if the hold is cancelled (or already in a terminal
+    state that cannot/need not be cancelled). Best-effort — never raises; a
+    failure is logged (a stuck hold is a payment-path anomaly) and the caller
+    proceeds, since the fresh charge is the real settlement.
+    """
+    if not payment_intent_id:
+        return False
+    secret = await _resolve_stripe_secret(ride_id)
+    if stripe is None or secret is None:
+        return False
+
+    def _do() -> bool:
+        try:
+            stripe.PaymentIntent.cancel(
+                payment_intent_id,
+                api_key=secret,
+                idempotency_key=f"ride-cancelauth-{ride_id}-{payment_intent_id}",
+            )
+            return True
+        except _StripeBaseError as e:
+            # Already captured/canceled, or a transient ops error. Surface it
+            # (a lingering hold ties up the rider's funds) but don't block the
+            # fresh charge that actually settles the ride.
+            logger.error(
+                "Could not cancel pre-auth hold pi=%s for ride=%s: %s",
+                payment_intent_id,
+                ride_id,
+                e,
+            )
+            return False
+        except Exception as e:  # pragma: no cover — defence-in-depth
+            logger.exception("Unexpected error cancelling pre-auth hold ride=%s: %s", ride_id, e)
+            return False
+
+    return await run_sync(_do)

@@ -227,10 +227,18 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
         if target_table and user_id:
             current = await db.find_one(target_table, {"id": user_id})
             new_version = int((current or {}).get("token_version") or 0) + 1
+            bump = {"token_version": new_version}
+            if target_table == "users":
+                # Firebase ID tokens carry no token_version claim, so the Firebase
+                # auth paths (HTTP + WS) enforce revocation via the
+                # sessions_invalid_before watermark. Stamp it here so a
+                # refresh-token-reuse compromise also kills Firebase sessions,
+                # not just the JWT ones.
+                bump["sessions_invalid_before"] = datetime.now(timezone.utc).isoformat()
             await db.update_one(
                 target_table,
                 {"id": user_id},
-                {"$set": {"token_version": new_version}},
+                {"$set": bump},
             )
     except Exception as e:
         logger.error(f"reuse-cascade: token_version bump failed (table={target_table} user={user_id}): {e}")

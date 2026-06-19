@@ -638,27 +638,26 @@ async def cancel_authorization(*, ride_id: str, payment_intent_id: str) -> bool:
     if stripe is None or secret is None:
         return False
 
-    def _do() -> bool:
-        try:
-            stripe.PaymentIntent.cancel(
-                payment_intent_id,
-                api_key=secret,
-                idempotency_key=f"ride-cancelauth-{ride_id}-{payment_intent_id}",
-            )
-            return True
-        except _StripeBaseError as e:
-            # Already captured/canceled, or a transient ops error. Surface it
-            # (a lingering hold ties up the rider's funds) but don't block the
-            # fresh charge that actually settles the ride.
-            logger.error(
-                "Could not cancel pre-auth hold pi=%s for ride=%s: %s",
-                payment_intent_id,
-                ride_id,
-                e,
-            )
-            return False
-        except Exception as e:  # pragma: no cover — defence-in-depth
-            logger.exception("Unexpected error cancelling pre-auth hold ride=%s: %s", ride_id, e)
-            return False
-
-    return await run_sync(_do)
+    # Call Stripe directly (same pattern as capture_ride / authorize_ride in this
+    # module) — there is no run_sync helper here.
+    try:
+        stripe.PaymentIntent.cancel(
+            payment_intent_id,
+            api_key=secret,
+            idempotency_key=f"ride-cancelauth-{ride_id}-{payment_intent_id}",
+        )
+        return True
+    except _StripeBaseError as e:
+        # Already captured/canceled, or a transient ops error. Surface it
+        # (a lingering hold ties up the rider's funds) but don't block the
+        # fresh charge that actually settles the ride.
+        logger.error(
+            "Could not cancel pre-auth hold pi=%s for ride=%s: %s",
+            payment_intent_id,
+            ride_id,
+            e,
+        )
+        return False
+    except Exception as e:  # pragma: no cover — defence-in-depth
+        logger.exception("Unexpected error cancelling pre-auth hold ride=%s: %s", ride_id, e)
+        return False

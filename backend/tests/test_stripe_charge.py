@@ -352,3 +352,50 @@ class TestIdempotencyKey:
         mock_stripe.PaymentIntent.confirm.assert_called_once()
         kwargs = mock_stripe.PaymentIntent.confirm.call_args.kwargs
         assert kwargs["idempotency_key"] == "ride-confirm-ride_helper_1-2550"
+
+
+@pytest.mark.asyncio
+class TestCancelAuthorization:
+    """cancel_authorization releases an uncaptured pre-auth hold on Change Card.
+
+    Exercises the REAL function body (the settle_card test mocks it out, which
+    previously hid a NameError on an undefined run_sync)."""
+
+    async def test_cancels_hold_and_returns_true(self):
+        from backend.utils.stripe_charge import cancel_authorization
+
+        stripe_patch, mock_stripe = _patch_stripe()
+        with _patch_settings(), stripe_patch:
+            ok = await cancel_authorization(ride_id="r1", payment_intent_id="pi_hold")
+
+        assert ok is True
+        mock_stripe.PaymentIntent.cancel.assert_called_once()
+        kwargs = mock_stripe.PaymentIntent.cancel.call_args.kwargs
+        assert kwargs["idempotency_key"] == "ride-cancelauth-r1-pi_hold"
+
+    async def test_returns_false_when_no_payment_intent(self):
+        from backend.utils.stripe_charge import cancel_authorization
+
+        # No Stripe/settings needed — short-circuits on the empty id.
+        ok = await cancel_authorization(ride_id="r1", payment_intent_id="")
+        assert ok is False
+
+    async def test_returns_false_on_stripe_error(self):
+        """A hold already captured/expired (StripeError) is surfaced but not
+        raised — the fresh charge is the real settlement."""
+        from backend.utils.stripe_charge import cancel_authorization
+
+        class _FakeStripeError(Exception):
+            pass
+
+        mock_stripe = MagicMock()
+        mock_stripe.PaymentIntent.cancel.side_effect = _FakeStripeError("already captured")
+
+        with (
+            _patch_settings(),
+            patch("backend.utils.stripe_charge.stripe", mock_stripe),
+            patch("backend.utils.stripe_charge._StripeBaseError", _FakeStripeError),
+        ):
+            ok = await cancel_authorization(ride_id="r1", payment_intent_id="pi_x")
+
+        assert ok is False

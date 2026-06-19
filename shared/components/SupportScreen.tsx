@@ -81,9 +81,18 @@ interface Props {
   role: Role;
   /** Initial tab when the screen mounts. Defaults to 'faq'. */
   initialTab?: Tab;
+  /** Pre-fill the contact-form issue text (e.g. from a stuck payment screen). */
+  initialIssue?: string;
+  /** Category for a pre-filled ticket. Defaults to 'general'. */
+  initialCategory?: string;
 }
 
-export default function SupportScreen({ role, initialTab = 'faq' }: Props) {
+export default function SupportScreen({
+  role,
+  initialTab = 'faq',
+  initialIssue = '',
+  initialCategory = 'general',
+}: Props) {
   const router = useRouter();
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -116,7 +125,7 @@ export default function SupportScreen({ role, initialTab = 'faq' }: Props) {
   const conversationIdRef = useRef<string | null>(null);
 
   // Contact form
-  const [issue, setIssue] = useState('');
+  const [issue, setIssue] = useState(initialIssue);
   const [submitting, setSubmitting] = useState(false);
 
   const [alertState, setAlertState] = useState<{
@@ -170,9 +179,9 @@ export default function SupportScreen({ role, initialTab = 'faq' }: Props) {
     setSubmitting(true);
     try {
       await api.post('/support/tickets', {
-        subject: 'App Support Request',
+        subject: initialCategory === 'payment_failed' ? 'Payment Issue' : 'App Support Request',
         message: issue,
-        category: 'general',
+        category: initialCategory,
       });
       setIssue('');
       setAlertState({

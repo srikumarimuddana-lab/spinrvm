@@ -510,12 +510,17 @@ async def _rider_referral_summary(user: dict, *, include_referees: bool) -> dict
         "rides_required": rides_required,
         "terms": (
             f"Give ${_fmt_money(referee_reward)}, get ${_fmt_money(referrer_reward)} when your friend "
-            f"takes their first ride."
+            f"{_ride_phrase(rides_required)}."
         ),
     }
     if include_referees:
         summary["referees"] = referees
     return summary
+
+
+def _ride_phrase(rides_required: int) -> str:
+    """Human phrase for the referral ride threshold (per-area configurable)."""
+    return "takes their first ride" if rides_required == 1 else f"completes {rides_required} rides"
 
 
 class ApplyRiderReferralRequest(BaseModel):

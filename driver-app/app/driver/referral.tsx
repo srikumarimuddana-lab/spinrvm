@@ -202,7 +202,7 @@ export default function ReferralScreen() {
                                         <Text style={styles.referralName}>{driver.name}</Text>
                                         {driver.qualified ? (
                                             <Text style={styles.referralEarned}>
-                                                Reward earned · ${parseFloat(String(driver.reward_amount ?? 0)).toFixed(0)}
+                                                Reward earned · ${parseFloat(String(driver.reward_amount ?? 0)).toFixed(2)}
                                             </Text>
                                         ) : (
                                             <>

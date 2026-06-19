@@ -13,12 +13,14 @@ try:
     from ...features import send_push_notification
     from ...utils.audit_logger import log_admin_action
     from ...utils.datetime_utils import parse_iso_utc
+    from ...utils.referral_terms import resolve_referral_terms
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user  # noqa: F401
     from features import send_push_notification
     from utils.audit_logger import log_admin_action  # noqa: F401
     from utils.datetime_utils import parse_iso_utc
+    from utils.referral_terms import resolve_referral_terms  # type: ignore
 
 db = db_supabase  # legacy alias
 
@@ -1532,7 +1534,11 @@ def _driver_referral_code(driver: dict) -> str:
 
 async def _driver_referral_summary(driver: dict, *, include_referees: bool) -> dict:
     """Compute a referrer's referral stats (and optionally the referee list)."""
-    rides_required, reward_amount = _referral_terms()
+    # Per-area terms for THIS driver (the referrer), so the admin modal matches
+    # the driver app and the payout loop instead of showing the global default.
+    terms = await resolve_referral_terms(driver.get("service_area_id"), "driver")
+    rides_required = terms["rides"]
+    reward_amount = terms["referrer"]
     codes = _driver_referral_codes(driver)
     code = codes[0]
 

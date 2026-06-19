@@ -198,43 +198,57 @@ async def _process_one(referee: dict, code: str) -> None:
     # 'failed' and stop: we deliberately do NOT delete/retry, because the claim
     # row staying in place is exactly what prevents a re-claim and a double
     # credit on the next tick. 'failed' rows surface for manual reconciliation.
-    # Each side's credit timestamp is persisted IMMEDIATELY after that credit
-    # succeeds (before attempting the next side), so a later failure/crash leaves
-    # a durable record of exactly which wallets were credited. Reconciliation of
-    # a 'failed' row then reads: referrer_credited_at set + referee_credited_at
-    # NULL → pay only the referee; both NULL → neither paid.
+    #
+    # Which side(s) actually got credited is tracked in memory and written as
+    # part of the SAME row update that records the outcome (paid OR failed) —
+    # never in a separate write between the wallet credit and the status update.
+    # That closes the window where an intermediate timestamp write could fail and
+    # leave a referrer-paid row looking like "neither paid". A 'failed' row then
+    # reads: referrer_credited_at set + referee_credited_at NULL → pay only the
+    # referee; both NULL → neither side paid.
     meta = {"kind": kind, "referee_id": referee_id, "referrer_user_id": referrer_user_id}
+    referrer_paid = False
+    referee_paid = False
     try:
         await _credit(referrer_user_id, referrer_reward, kind, referee_id, "referral_reward", meta)
-        await db_supabase.update_one(
-            "referral_payouts",
-            {"referee_user_id": referee_id},
-            {"$set": {"referrer_credited_at": datetime.now(timezone.utc).isoformat()}},
-        )
+        referrer_paid = True
         if referee_reward > 0:
             await _credit(referee_id, referee_reward, kind, referee_id, "referral_bonus", meta)
-            await db_supabase.update_one(
-                "referral_payouts",
-                {"referee_user_id": referee_id},
-                {"$set": {"referee_credited_at": datetime.now(timezone.utc).isoformat()}},
-            )
+            referee_paid = True
     except Exception:
         logger.error(
             "referral_payout: credit failed — marking claim 'failed' for manual reconciliation",
             exc_info=True,
-            extra=meta,
+            extra={**meta, "referrer_paid": referrer_paid, "referee_paid": referee_paid},
         )
         await db_supabase.update_one(
-            "referral_payouts", {"referee_user_id": referee_id}, {"$set": {"status": "failed"}}
+            "referral_payouts",
+            {"referee_user_id": referee_id},
+            {"$set": _credit_marks("failed", referrer_paid, referee_paid)},
         )
         return
 
     await db_supabase.update_one(
         "referral_payouts",
         {"referee_user_id": referee_id},
-        {"$set": {"status": "paid", "paid_at": datetime.now(timezone.utc).isoformat()}},
+        {"$set": _credit_marks("paid", referrer_paid, referee_paid)},
     )
     logger.info(f"referral_payout: paid {kind} referral reward for referee {referee_id}")
+
+
+def _credit_marks(status: str, referrer_paid: bool, referee_paid: bool) -> dict:
+    """Build the referral_payouts update recording the outcome + which sides were
+    actually credited. Timestamps come from in-memory flags so a row never
+    reports a paid side as un-paid."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    marks: dict = {"status": status}
+    if status == "paid":
+        marks["paid_at"] = now_iso
+    if referrer_paid:
+        marks["referrer_credited_at"] = now_iso
+    if referee_paid:
+        marks["referee_credited_at"] = now_iso
+    return marks
 
 
 async def _credit(user_id: str, amount: Decimal, kind: str, reference_id: str, txn_type: str, metadata: dict) -> None:

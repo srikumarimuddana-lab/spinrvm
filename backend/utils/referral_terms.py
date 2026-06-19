@@ -93,25 +93,21 @@ async def resolve_referral_terms(service_area_id: Optional[str], kind: str) -> d
     """Referral terms for ``kind`` ('rider'|'driver') in ``service_area_id``.
 
     Returns ``{"rides": int, "referrer": Decimal, "referee": Decimal}``. Falls
-    back to the global constants when ``service_area_id`` is None, the area row
-    is missing, or a per-area column is NULL.
+    back to the global constants only when the area is genuinely ABSENT —
+    ``service_area_id`` is None or the row doesn't exist — or a per-area column
+    is NULL.
+
+    A DB/permission/schema error on the lookup is NOT swallowed: it propagates
+    so the caller fails loudly. In the payout loop this means the referee is
+    retried on the next tick instead of being paid the global default and having
+    that wrong amount locked in by the unique claim.
     """
     fallback = _global_terms()[kind]
     if not service_area_id:
         return fallback
 
     cols = _AREA_COLUMNS[kind]
-    try:
-        rows = await db_supabase.get_rows("service_areas", {"id": service_area_id}, limit=1)
-    except Exception:
-        # Never let a config lookup break the referral flow — fall back loudly.
-        logger.error(
-            "referral_terms: service area lookup failed; using global default",
-            exc_info=True,
-            extra={"service_area_id": service_area_id, "kind": kind},
-        )
-        return fallback
-
+    rows = await db_supabase.get_rows("service_areas", {"id": service_area_id}, limit=1)
     area = rows[0] if rows else None
     if not area:
         return fallback
@@ -133,32 +129,29 @@ async def resolve_referral_terms(service_area_id: Optional[str], kind: str) -> d
 
 
 async def area_id_for_rider(rider_user_id: str, since_iso: Optional[str] = None) -> Optional[str]:
-    """The rider's current service area, derived from their most recent ride.
+    """The rider's service area, derived from their most recent COMPLETED ride.
 
-    Riders are not pinned to an area, so we use the newest ride that resolved to
-    one (optionally only rides created at/after ``since_iso``). Returns None for
-    a brand-new rider with no area-resolved rides → caller uses the global
-    default.
+    Riders are not pinned to an area, so we use the newest *completed* ride that
+    resolved to one (optionally only rides created at/after ``since_iso``).
+    Restricting to completed rides matters for the payout path: it pins the area
+    to a ride that actually qualified the referral, so a later started/cancelled
+    ride in a different area can't hijack the reward terms. Returns None for a
+    rider with no area-resolved completed rides → caller uses the global default.
+
+    A DB error propagates (not swallowed) so the payout loop retries rather than
+    silently paying the global default.
     """
-    filters: dict = {"rider_id": rider_user_id}
+    filters: dict = {"rider_id": rider_user_id, "status": "completed"}
     if since_iso:
         filters["created_at"] = {"$gte": since_iso}
-    try:
-        rows = await db_supabase.get_rows(
-            "rides",
-            filters,
-            order="created_at",
-            desc=True,
-            limit=20,
-            columns="service_area_id,created_at",
-        )
-    except Exception:
-        logger.error(
-            "referral_terms: rider area lookup failed; using global default",
-            exc_info=True,
-            extra={"rider_id": rider_user_id},
-        )
-        return None
+    rows = await db_supabase.get_rows(
+        "rides",
+        filters,
+        order="created_at",
+        desc=True,
+        limit=20,
+        columns="service_area_id,created_at",
+    )
     for r in rows:
         if r.get("service_area_id"):
             return r["service_area_id"]
@@ -166,16 +159,12 @@ async def area_id_for_rider(rider_user_id: str, since_iso: Optional[str] = None)
 
 
 async def area_id_for_driver_user(driver_user_id: str) -> Optional[str]:
-    """The driver's assigned service area (drivers.service_area_id), or None."""
-    try:
-        rows = await db_supabase.get_rows("drivers", {"user_id": driver_user_id}, limit=1, columns="service_area_id")
-    except Exception:
-        logger.error(
-            "referral_terms: driver area lookup failed; using global default",
-            exc_info=True,
-            extra={"driver_user_id": driver_user_id},
-        )
-        return None
+    """The driver's assigned service area (drivers.service_area_id), or None.
+
+    A DB error propagates (not swallowed) so the payout loop retries rather than
+    silently paying the global default.
+    """
+    rows = await db_supabase.get_rows("drivers", {"user_id": driver_user_id}, limit=1, columns="service_area_id")
     if rows and rows[0].get("service_area_id"):
         return rows[0]["service_area_id"]
     return None

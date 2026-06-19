@@ -15,6 +15,7 @@ try:
     from ..core.csrf import clear_csrf_cookie, generate_csrf_token, set_csrf_cookie
     from ..dependencies import (
         OTP_EXPIRY_MINUTES,
+        _firebase_session_revoked,
         create_jwt_token,
         generate_otp,
         get_current_user,
@@ -57,6 +58,7 @@ except ImportError:
     from core.csrf import clear_csrf_cookie, generate_csrf_token, set_csrf_cookie
     from dependencies import (
         OTP_EXPIRY_MINUTES,
+        _firebase_session_revoked,
         create_jwt_token,
         generate_otp,
         get_current_user,
@@ -791,6 +793,21 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
                 message_key=ErrorKeys.SYSTEM_DATABASE,
             ) from e
         user["current_session_id"] = session_id
+
+        # Enforce the logout-all / reuse-cascade watermark at token EXCHANGE too.
+        # verify_id_token(check_revoked=True) only catches tokens once Firebase's
+        # own revocation propagated; our best-effort revoke_refresh_tokens can be
+        # skipped/slow, so without this a pre-logout Firebase ID token
+        # (auth_time <= sessions_invalid_before) could still be exchanged for a
+        # fresh Spinr JWT, bypassing logout-all for Firebase drivers. New users
+        # (handled above) have no watermark, so this only gates existing rows.
+        if _firebase_session_revoked(payload, user.get("sessions_invalid_before")):
+            raise SpinrException(
+                message="Session has been revoked, please sign in again",
+                error_code=ErrorCode.AUTH_INVALID_CREDENTIALS,
+                status_code=401,
+                message_key=ErrorKeys.AUTH_INVALID_CREDENTIALS,
+            )
 
     user_id = user["id"]
     token_version = int(user.get("token_version") or 0)

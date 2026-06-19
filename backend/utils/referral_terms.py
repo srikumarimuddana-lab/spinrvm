@@ -65,11 +65,14 @@ def _global_terms() -> dict:
             "rides": int(RIDER_REFERRAL_RIDES_REQUIRED),
             "referrer": _money(RIDER_REFERRER_REWARD),
             "referee": _money(RIDER_REFEREE_REWARD),
+            # No per-area override → caller generates the dynamic T&C sentence.
+            "terms": None,
         },
         "driver": {
             "rides": int(REFERRAL_RIDES_REQUIRED),
             "referrer": _money(REFERRAL_REWARD_AMOUNT),
             "referee": _money(0),
+            "terms": None,
         },
     }
 
@@ -80,11 +83,14 @@ _AREA_COLUMNS = {
         "rides": "rider_referral_rides_required",
         "referrer": "rider_referrer_reward",
         "referee": "rider_referee_reward",
+        # Free-text T&C override (migration 176); NULL → dynamic default.
+        "terms": "rider_referral_terms",
     },
     "driver": {
         "rides": "driver_referral_rides_required",
         "referrer": "driver_referral_reward",
         "referee": None,  # drivers have no referee-side reward
+        "terms": "driver_referral_terms",
     },
 }
 
@@ -121,10 +127,18 @@ async def resolve_referral_terms(service_area_id: Optional[str], kind: str) -> d
 
     rides_col = cols["rides"]
     rides_val = area.get(rides_col)
+
+    # Free-text T&C override: a non-blank value wins; blank/NULL → None so the
+    # caller falls back to the dynamically generated default sentence.
+    terms_col = cols.get("terms")
+    terms_val = area.get(terms_col) if terms_col else None
+    terms = terms_val.strip() if isinstance(terms_val, str) and terms_val.strip() else None
+
     return {
         "rides": int(rides_val) if rides_val is not None else fallback["rides"],
         "referrer": _pick("referrer", fallback["referrer"]),
         "referee": _pick("referee", fallback["referee"]),
+        "terms": terms,
     }
 
 

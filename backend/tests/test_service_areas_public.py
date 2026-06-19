@@ -119,6 +119,26 @@ class TestPublicServiceAreas:
         call_filters = mock_get.call_args[0][1]
         assert call_filters.get("is_active") is True
 
+    def test_excludes_child_airport_subareas(self, client):
+        """Regression: child/sub-areas (airport zones carry a
+        parent_service_area_id) must never reach the driver/rider picker.
+
+        The query must constrain parent_service_area_id IS NULL — the key has
+        to be present AND None so _apply_filters emits `is.null`, not merely
+        absent (which would return every active row, airports included). This
+        is the failure that put "Regina Airport" beside "Regina" on the driver
+        profile-setup screen.
+        """
+        from backend.routes import service_areas as mod
+
+        mock_get = AsyncMock(return_value=[])
+        with patch.object(mod.db_supabase, "get_rows", mock_get):
+            client.get("/api/v1/service-areas")
+
+        call_filters = mock_get.call_args[0][1]
+        assert "parent_service_area_id" in call_filters
+        assert call_filters["parent_service_area_id"] is None
+
     def test_empty_list_when_no_areas(self, client):
         from backend.routes import service_areas as mod
 

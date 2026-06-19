@@ -455,3 +455,83 @@ class TestHeartbeatTokenVersionRecheck:
 
         assert ping_seen.is_set()
         ws.close.assert_not_awaited()
+
+
+class TestHeartbeatFirebaseWatermarkRecheck:
+    """Firebase ID tokens carry no token_version claim, so the heartbeat must
+    re-check the sessions_invalid_before watermark (against the token's
+    auth_time) instead of token_version — mirroring the HTTP path and the WS
+    handshake. A Firebase connection is signalled by firebase_auth_time."""
+
+    @pytest.mark.asyncio
+    async def test_closes_firebase_socket_when_watermark_revokes(self):
+        import asyncio as _asyncio
+
+        from backend.routes import websocket as ws_mod
+
+        ws = AsyncMock()
+        with (
+            patch.object(ws_mod, "_read_firebase_session_revoked", AsyncMock(return_value=True)),
+            patch.object(ws_mod, "_read_token_version", AsyncMock(return_value=99)) as tv_reader,
+            patch.object(ws_mod.asyncio, "sleep", AsyncMock(return_value=None)),
+        ):
+            await _asyncio.wait_for(
+                ws_mod.heartbeat_task(ws, "rider_fb1", user_id="fb1", firebase_auth_time=1000),
+                timeout=1.0,
+            )
+
+        ws.send_json.assert_any_await({"type": "session_revoked", "reason": "token_revoked"})
+        ws.close.assert_awaited_once()
+        # Firebase path must NOT fall back to the token_version reader.
+        tv_reader.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_does_not_close_firebase_socket_when_watermark_ok(self):
+        import asyncio as _asyncio
+
+        from backend.routes import websocket as ws_mod
+
+        ws = AsyncMock()
+        ping_seen = _asyncio.Event()
+
+        async def maybe_break(payload):
+            if isinstance(payload, dict) and payload.get("type") == "ping":
+                ping_seen.set()
+                raise RuntimeError("simulated drop after ping")
+
+        ws.send_json.side_effect = maybe_break
+
+        with (
+            patch.object(ws_mod, "_read_firebase_session_revoked", AsyncMock(return_value=False)),
+            patch.object(ws_mod.asyncio, "sleep", AsyncMock(return_value=None)),
+        ):
+            await _asyncio.wait_for(
+                ws_mod.heartbeat_task(ws, "rider_fb2", user_id="fb2", firebase_auth_time=2000),
+                timeout=1.0,
+            )
+
+        assert ping_seen.is_set()
+        revoke_frames = [
+            c
+            for c in ws.send_json.await_args_list
+            if c.args and isinstance(c.args[0], dict) and c.args[0].get("type") == "session_revoked"
+        ]
+        assert revoke_frames == []
+        ws.close.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_read_firebase_session_revoked_compares_watermark(self):
+        from backend.routes import websocket as ws_mod
+
+        # auth_time 1000 predates a watermark of 2000s → revoked.
+        revoked_row = {"id": "fb3", "sessions_invalid_before": "1970-01-01T00:33:20+00:00"}
+        with patch.object(ws_mod.db_supabase, "get_user_by_id", AsyncMock(return_value=revoked_row)):
+            assert await ws_mod._read_firebase_session_revoked("rider_fb3", "fb3", 1000) is True
+
+        # No watermark → not revoked.
+        with patch.object(ws_mod.db_supabase, "get_user_by_id", AsyncMock(return_value={"id": "fb3"})):
+            assert await ws_mod._read_firebase_session_revoked("rider_fb3", "fb3", 1000) is False
+
+        # DB read failure → do not act.
+        with patch.object(ws_mod.db_supabase, "get_user_by_id", AsyncMock(side_effect=RuntimeError("503"))):
+            assert await ws_mod._read_firebase_session_revoked("rider_fb3", "fb3", 1000) is False

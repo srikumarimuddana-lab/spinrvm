@@ -14,7 +14,7 @@ export type AlertVariant = 'info' | 'success' | 'warning' | 'danger';
 
 export interface PaymentAlertButton {
   text: string;
-  kind?: 'change_card' | 'retry' | 'cancel';
+  kind?: 'change_card' | 'retry' | 'cancel' | 'support';
 }
 
 export interface PaymentAlert {
@@ -50,38 +50,54 @@ export interface PaymentAttemptDeps {
   stripe: StripeLike | null;
   rideId: string;
   tipAmount: number;
+  /**
+   * In-app "Change Card" escape: the card the rider picked after a decline /
+   * no-card failure. Forwarded to the backend so the failed ride is re-charged
+   * on THIS card (fresh charge) instead of the booking-time card or hold.
+   */
+  paymentMethodId?: string;
 }
+
+// Every failure on the end-of-ride payment screen must offer a way OUT — the
+// screen blocks the hardware back button, so an alert with only "OK" traps the
+// rider in a retry loop. "Contact Support" is the universal escape; "Change
+// Card" is added wherever a different card can plausibly fix the charge.
+const SUPPORT_BTN: PaymentAlertButton = { text: 'Contact Support', kind: 'support' };
+const CHANGE_CARD_BTN: PaymentAlertButton = { text: 'Change Card', kind: 'change_card' };
 
 const DECLINE_ALERT = (message: string): PaymentAlert => ({
   title: 'Card declined',
   message: message || 'Your card was declined.',
   variant: 'danger',
-  buttons: [
-    { text: 'Change Card', kind: 'change_card' },
-    { text: 'Cancel', kind: 'cancel' },
-  ],
+  buttons: [CHANGE_CARD_BTN, SUPPORT_BTN],
+});
+
+const NO_PAYMENT_METHOD_ALERT = (message: string): PaymentAlert => ({
+  title: 'Add a payment method',
+  message: message || 'There is no card on file for this trip. Add a card to pay.',
+  variant: 'danger',
+  buttons: [{ text: 'Add Card', kind: 'change_card' }, SUPPORT_BTN],
 });
 
 const AUTH_FAILED_ALERT = (message: string): PaymentAlert => ({
   title: 'Authentication failed',
   message: message || 'Card authentication did not complete.',
   variant: 'danger',
-  buttons: [
-    { text: 'Change Card', kind: 'change_card' },
-    { text: 'Try Again', kind: 'retry' },
-  ],
+  buttons: [CHANGE_CARD_BTN, { text: 'Try Again', kind: 'retry' }, SUPPORT_BTN],
 });
 
 const PROCESSOR_ERROR_ALERT: PaymentAlert = {
   title: "Can't process payment right now",
   message: 'Payment service is temporarily unavailable. Please try again shortly.',
   variant: 'warning',
+  buttons: [{ text: 'Try Again', kind: 'retry' }, SUPPORT_BTN],
 };
 
 const UNKNOWN_ERROR_ALERT: PaymentAlert = {
   title: 'Payment error',
-  message: 'Something went wrong. Please try again.',
+  message: "Something went wrong and we couldn't complete the payment. Try a different card, or contact support.",
   variant: 'danger',
+  buttons: [CHANGE_CARD_BTN, SUPPORT_BTN],
 };
 
 const STRIPE_UNAVAILABLE_ALERT: PaymentAlert = {
@@ -115,10 +131,13 @@ export async function attemptRidePayment(
   deps: PaymentAttemptDeps,
   _retryAttempt = 0,
 ): Promise<PaymentAttemptResult> {
-  const { api, stripe, rideId, tipAmount } = deps;
+  const { api, stripe, rideId, tipAmount, paymentMethodId } = deps;
+  const body: Record<string, any> = { tip_amount: tipAmount };
+  // Only include when set so a normal retry keeps charging the booking card.
+  if (paymentMethodId) body.payment_method_id = paymentMethodId;
 
   try {
-    const resp = await api.post(`/rides/${rideId}/process-payment`, { tip_amount: tipAmount });
+    const resp = await api.post(`/rides/${rideId}/process-payment`, body);
     const data = (resp && resp.data) || {};
 
     // Case 1 — straight success or already-paid idempotent return
@@ -148,7 +167,7 @@ export async function attemptRidePayment(
       // the backend side guarantees no double charge.
       const finalize = await api.post(
         `/rides/${rideId}/process-payment`,
-        { tip_amount: tipAmount },
+        body,
       );
       const fin = (finalize && finalize.data) || {};
       if (fin.success === true || fin.already_paid === true) {
@@ -172,8 +191,30 @@ export async function attemptRidePayment(
       return { ok: false, alert: DECLINE_ALERT(message || '') };
     }
 
+    // No card on file for the trip (booking-time card removed / rejected auth
+    // left nothing usable). Backend returns a structured 402; the rider needs
+    // to ADD a card, not just retry.
+    if (status === 402 && code === 'no_payment_method') {
+      return { ok: false, alert: NO_PAYMENT_METHOD_ALERT(message || '') };
+    }
+
+    // Card needs 3DS we couldn't complete off-session, or any other 402 — a
+    // different card is the most likely fix.
+    if (status === 402 && code === 'authentication_required') {
+      return { ok: false, alert: AUTH_FAILED_ALERT(message || '') };
+    }
+    if (status === 402) {
+      return { ok: false, alert: DECLINE_ALERT(message || '') };
+    }
+
     if (status === 502) {
       return { ok: false, alert: PROCESSOR_ERROR_ALERT };
+    }
+
+    // 400 (e.g. legacy no-payment-method, validation) — never a dead end on a
+    // back-blocked screen. Offer Change Card + Contact Support.
+    if (status === 400) {
+      return { ok: false, alert: UNKNOWN_ERROR_ALERT };
     }
 
     if (status === 409 && typeof message === 'string' && message.includes('requires completed state')) {

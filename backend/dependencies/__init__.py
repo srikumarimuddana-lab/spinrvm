@@ -173,7 +173,12 @@ def _firebase_session_revoked(payload: dict, invalid_before) -> bool:
     if issued is None:
         return True
     try:
-        return int(issued) < watermark
+        # `<=`, not `<`: the watermark is truncated to whole seconds by
+        # _to_epoch while Firebase auth_time is already whole seconds, so a
+        # token signed in during the same second as logout-all must be
+        # rejected. Worst case this forces one extra re-sign-in for a login
+        # that lands in the exact logout-all second — safe over-rejection.
+        return int(issued) <= watermark
     except (TypeError, ValueError):
         return True
 

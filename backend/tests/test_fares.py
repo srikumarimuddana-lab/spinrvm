@@ -164,3 +164,28 @@ async def test_get_vehicle_types_falls_back_to_fare_configs_when_no_jsonb():
         types = await get_vehicle_types(service_area_id="area_legacy")
 
     assert [vt["name"] for vt in types] == ["Premium"]
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_public_service_areas_excludes_child_airport_rows():
+    """Regression: GET /service-areas (fares.py handler) must filter out
+    child/sub-areas (airport zones carry a parent_service_area_id).
+
+    This is the route actually served at /service-areas — it is registered
+    before routes/service_areas.py and shadows it. Before the fix it queried
+    {"is_active": True} only, so airport children leaked into the driver/rider
+    area picker. The query must constrain parent_service_area_id IS NULL.
+    """
+    from backend.routes.fares import get_public_service_areas
+
+    mock_get = AsyncMock(return_value=[])
+    with patch("backend.routes.fares.db_supabase.get_rows", mock_get):
+        await get_public_service_areas()
+
+    call_filters = mock_get.call_args[0][1]
+    assert call_filters.get("is_active") is True
+    # The key must be present AND None so _apply_filters emits `is.null`,
+    # not merely absent (which would return every active row, airports too).
+    assert "parent_service_area_id" in call_filters
+    assert call_filters["parent_service_area_id"] is None

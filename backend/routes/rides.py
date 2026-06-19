@@ -3564,6 +3564,10 @@ async def add_tip(
 
 class ProcessPaymentRequest(BaseModel):
     tip_amount: Decimal = Field(default=Decimal("0"), ge=0, le=500)
+    # In-app "Change Card" escape: when set, charge THIS card (fresh charge on
+    # a card the rider picked after a decline / no-card failure) instead of the
+    # booking-time card or hold. Card rides only; ignored for wallet/corporate.
+    payment_method_id: Optional[str] = None
 
 
 def _record_settlement_metrics(payment_method: str, result, duration_ms: float) -> None:
@@ -3747,7 +3751,14 @@ async def process_payment(
     elif payment_method == "company_allowance":
         result = await settle_corporate(ride, ride_id, total_charge, tip_rounded)
     else:
-        result = await settle_card(ride, ride_id, current_user["id"], total_charge, tip_rounded)
+        result = await settle_card(
+            ride,
+            ride_id,
+            current_user["id"],
+            total_charge,
+            tip_rounded,
+            payment_method_id_override=req.payment_method_id,
+        )
 
     _record_settlement_metrics(payment_method, result, (_time_mod.monotonic() - _settle_started) * 1000.0)
 

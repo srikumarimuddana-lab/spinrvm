@@ -205,17 +205,32 @@ export default function ProfileSetupScreen() {
         if (__DEV__) console.log('[ProfileSetup] auto-register result:', regErr?.message);
       }
 
-      // Optional referral code — best-effort, never blocks signup. The user is
-      // authenticated by this point, so /drivers/referral/apply can attribute
-      // the referrer. An invalid/duplicate code just surfaces a toast.
+      // Optional referral code — best-effort, never blocks signup. Profile
+      // creation already succeeded above (so the network is up), which means a
+      // failed apply is almost always a transient blip — retry a few times
+      // rather than silently dropping the referrer credit. "Already applied"
+      // counts as success (idempotent); only a genuine 4xx rejection toasts.
       const code = referralCode.trim();
       if (code) {
-        try {
-          await api.post('/drivers/referral/apply', { referral_code: code });
-          showToast('success', 'Referral applied', 'Your referral code was added.');
-        } catch (refErr: any) {
-          showToast('error', 'Referral code', refErr?.response?.data?.detail || "That referral code couldn't be applied.");
+        let applied = false;
+        for (let attempt = 0; attempt < 3 && !applied; attempt++) {
+          try {
+            await api.post('/drivers/referral/apply', { referral_code: code });
+            applied = true;
+          } catch (refErr: any) {
+            const status = refErr?.response?.status;
+            const detail: string = refErr?.response?.data?.detail || '';
+            if (status === 400 && /already applied/i.test(detail)) {
+              applied = true; // the code was already attributed — success
+            } else if (typeof status === 'number' && status >= 400 && status < 500) {
+              showToast('error', 'Referral code', detail || "That referral code couldn't be applied.");
+              break; // permanent rejection (bad code) — retrying won't help
+            } else if (attempt < 2) {
+              await new Promise((r) => setTimeout(r, 400 * (attempt + 1))); // transient — back off and retry
+            }
+          }
         }
+        if (applied) showToast('success', 'Referral applied', 'Your referral code was added.');
       }
       router.replace('/driver' as any);
     } catch (err: any) {

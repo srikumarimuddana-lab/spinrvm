@@ -94,14 +94,15 @@ export default function ReferralScreen() {
     };
 
     const shareReferral = async () => {
-        if (!referralInfo?.referral_link) return;
+        if (!referralInfo?.referral_code) return;
+        // No deep link — invitees paste the code on the signup screen, so the
+        // message shares the CODE and tells them exactly where to enter it.
+        const message = `Join me on Spinr! Download the driver app, then paste my referral code ${referralInfo.referral_code} during signup to start driving.`;
         try {
-            await Share.share({
-                message: `Join me on Spinr! Use my referral code ${referralInfo.referral_code} to sign up and start driving. ${referralInfo.referral_link}`,
-            });
+            await Share.share({ message });
         } catch {
-            await Clipboard.setStringAsync(referralInfo.referral_link);
-            showToast('info', 'Link Copied', 'Referral link copied to clipboard');
+            await Clipboard.setStringAsync(referralInfo.referral_code);
+            showToast('info', 'Code Copied', 'Referral code copied to clipboard');
         }
     };
 
@@ -158,7 +159,7 @@ export default function ReferralScreen() {
 
                     <TouchableOpacity style={styles.shareBtn} onPress={shareReferral}>
                         <Ionicons name="share-social-outline" size={20} color={colors.primary} />
-                        <Text style={styles.shareBtnText}>Share Referral Link</Text>
+                        <Text style={styles.shareBtnText}>Share Your Code</Text>
                     </TouchableOpacity>
                 </LinearGradient>
 

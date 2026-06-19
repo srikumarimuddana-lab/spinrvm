@@ -619,6 +619,37 @@ export const getReferralLeaderboard = (limit = 20) =>
 export const getRiderReferralLeaderboard = (limit = 20) =>
     request<ReferralLeaderboard>(`/api/admin/referrals/rider-leaderboard?limit=${limit}`);
 
+export interface ReferralAnalytics {
+    source: "driver" | "rider";
+    funnel: {
+        total_referred: number | null; // null when an area filter is active
+        qualified: number;
+        redeemed: number;
+        processing: number;
+        failed: number;
+        redemption_rate: number | null;
+        total_paid: string;
+        avg_paid: string;
+    };
+    trend: { date: string; redeemed: number; paid: string }[];
+    reward_amount: number;
+    rides_required: number;
+}
+export const getReferralAnalytics = (params: {
+    source?: "driver" | "rider";
+    serviceAreaId?: string | null;
+    start?: string | null;
+    end?: string | null;
+} = {}) => {
+    const q = new URLSearchParams();
+    if (params.source) q.set("source", params.source);
+    if (params.serviceAreaId) q.set("service_area_id", params.serviceAreaId);
+    if (params.start) q.set("start", params.start);
+    if (params.end) q.set("end", params.end);
+    const qs = q.toString();
+    return request<ReferralAnalytics>(`/api/admin/referrals/analytics${qs ? `?${qs}` : ""}`);
+};
+
 export interface DriverPayoutSummary {
     summary: {
         lifetime_earnings: number;

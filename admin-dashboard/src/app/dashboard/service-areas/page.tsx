@@ -823,6 +823,20 @@ function FieldInput({ label, value, type = "text", onSave }: { label: string; va
   );
 }
 
+function FieldTextarea({ label, value, placeholder, onSave }: { label: string; value: any; placeholder?: string; onSave: (v: string) => void }) {
+  const [val, setVal] = useState(String(value ?? ''));
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => { setVal(String(value ?? '')); setDirty(false); }, [value]);
+  return (
+    <div>
+      <label className="block text-xs font-semibold text-gray-500 mb-1">{label}</label>
+      <textarea className="w-full border rounded-lg px-3 py-2 text-sm" rows={3} value={val} placeholder={placeholder}
+        onChange={e => { setVal(e.target.value); setDirty(true); }} />
+      {dirty && <button onClick={() => { onSave(val); setDirty(false); }} className="mt-1 px-3 py-1 bg-red-500 text-white text-xs rounded-lg font-semibold">Save</button>}
+    </div>
+  );
+}
+
 function _FieldSelect({ label, value, options, onSave }: { label: string; value: string; options: string[]; onSave: (v: string) => void }) {
   return (
     <div>
@@ -1327,6 +1341,13 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
                     <FieldInput label="Rider — rides required" value={area.rider_referral_rides_required ?? 1} type="number" onSave={v => onFieldUpdate(areaId, 'rider_referral_rides_required', parseInt(v))} />
                     <FieldInput label="Driver — reward ($)" value={area.driver_referral_reward ?? 10} type="number" onSave={v => onFieldUpdate(areaId, 'driver_referral_reward', parseFloat(v))} />
                     <FieldInput label="Driver — rides required" value={area.driver_referral_rides_required ?? 10} type="number" onSave={v => onFieldUpdate(areaId, 'driver_referral_rides_required', parseInt(v))} />
+                </div>
+                <p className="text-xs text-gray-500 mt-4 mb-2">
+                    Referral Terms &amp; Conditions shown on the rider/driver &quot;Refer &amp; Earn&quot; screens. Leave blank to auto-generate the default sentence from the reward amounts above.
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <FieldTextarea label="Rider — referral T&C" value={area.rider_referral_terms ?? ''} placeholder="e.g. Give $5, get $5 when your friend takes their first ride. Rewards credited to your wallet…" onSave={v => onFieldUpdate(areaId, 'rider_referral_terms', v)} />
+                    <FieldTextarea label="Driver — referral T&C" value={area.driver_referral_terms ?? ''} placeholder="e.g. Earn $10 for each driver who signs up with your code and completes 10 rides…" onSave={v => onFieldUpdate(areaId, 'driver_referral_terms', v)} />
                 </div>
             </div>
         </div>

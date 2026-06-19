@@ -357,8 +357,11 @@ function createStyles(colors: ThemeColors) {
     },
     // Vertically centers the OTP form between the back button and the
     // bottom safe-area so there is no large trailing gap at the page end.
+    // flexGrow (not flex) so it grows to center when there is room but never
+    // shrinks below its content — otherwise the keyboard would clip the
+    // Verify button instead of letting the ScrollView scroll to it.
     centerArea: {
-      flex: 1,
+      flexGrow: 1,
       justifyContent: 'center',
     },
     // Illustration

@@ -137,9 +137,10 @@ class TestSuccess:
         assert kwargs["confirm"] is True
         assert kwargs["metadata"]["ride_id"] == "ride_helper_1"
         assert kwargs["metadata"]["rider_id"] == "rider_helper_1"
-        # Idempotency key pins future retries to the same PI; the amount is
-        # part of the key so a re-charge at a different total gets a fresh key.
-        assert kwargs["idempotency_key"] == "ride-charge-ride_helper_1-2550"
+        # Idempotency key pins future retries to the same PI; the amount and the
+        # payment_method are part of the key so a re-charge at a different total
+        # OR on a different card (the Change Card escape) gets a fresh key.
+        assert kwargs["idempotency_key"] == "ride-charge-ride_helper_1-2550-pm_helper"
 
     async def test_amount_rounded_to_cents_correctly(self):
         """Float 19.999 must round to 2000 cents, not 1999 or 2001."""
@@ -310,7 +311,27 @@ class TestIdempotencyKey:
             await charge_ride(**_KW)
 
         keys = [call.kwargs["idempotency_key"] for call in mock_stripe.PaymentIntent.create.call_args_list]
-        assert keys == ["ride-charge-ride_helper_1-2550", "ride-charge-ride_helper_1-2550"]
+        assert keys == [
+            "ride-charge-ride_helper_1-2550-pm_helper",
+            "ride-charge-ride_helper_1-2550-pm_helper",
+        ]
+
+    async def test_different_card_yields_different_idempotency_key(self):
+        """Codex P1: the Change Card escape re-charges the SAME ride+amount on a
+        DIFFERENT card — that must mint a fresh key so Stripe charges the new
+        card instead of replaying the prior card's decline."""
+        from backend.utils.stripe_charge import charge_ride
+
+        intent = MagicMock(id="pi_1", status="succeeded", client_secret=None)
+        stripe_patch, mock_stripe = _patch_stripe(create_return=intent)
+
+        with _patch_settings(), stripe_patch:
+            await charge_ride(**_KW)
+            await charge_ride(**{**_KW, "payment_method_id": "pm_NEWCARD"})
+
+        keys = [call.kwargs["idempotency_key"] for call in mock_stripe.PaymentIntent.create.call_args_list]
+        assert keys[0] != keys[1]
+        assert keys[1] == "ride-charge-ride_helper_1-2550-pm_NEWCARD"
 
     async def test_confirm_path_carries_idempotency_key(self):
         """The retry/3DS confirm path must be idempotent too: two replicas

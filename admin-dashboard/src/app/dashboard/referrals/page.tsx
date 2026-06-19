@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import ReferralLeaderboard from "@/components/referral-leaderboard";
+import ReferralAnalytics from "@/components/referral-analytics";
 import { useRequireModule } from "@/hooks/useRequireModule";
 
 export default function ReferralsPage() {
@@ -13,7 +14,7 @@ export default function ReferralsPage() {
         <div className="space-y-6">
             <div>
                 <h1 className="text-3xl font-bold tracking-tight">Referrals</h1>
-                <p className="text-muted-foreground mt-1">Referral program — top referrers and fleet totals</p>
+                <p className="text-muted-foreground mt-1">Referral program — redemption funnel, payouts, trends, and top referrers</p>
             </div>
 
             <div className="flex gap-1 bg-muted rounded-xl p-1 w-fit">
@@ -27,6 +28,7 @@ export default function ReferralsPage() {
                 </button>
             </div>
 
+            <ReferralAnalytics source={source} />
             <ReferralLeaderboard limit={50} source={source} />
         </div>
     );

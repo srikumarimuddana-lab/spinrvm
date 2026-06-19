@@ -117,7 +117,7 @@ export default function RiderReferralScreen() {
                 </View>
             ) : (
                 <ScrollView style={styles.content} contentContainerStyle={{ paddingBottom: insets.bottom + 32 }} showsVerticalScrollIndicator={false}>
-                    <LinearGradient colors={['#7C3AED', '#6D28D9']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.hero}>
+                    <LinearGradient colors={[colors.primary, colors.primaryDark]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.hero}>
                         <Text style={styles.heroTitle}>Give a ride, get a reward</Text>
                         <Text style={styles.heroSubtitle}>{info?.terms || 'Invite friends and earn when they take their first ride.'}</Text>
 
@@ -133,7 +133,7 @@ export default function RiderReferralScreen() {
                         )}
 
                         <TouchableOpacity style={styles.shareBtn} onPress={share}>
-                            <Ionicons name="share-social-outline" size={20} color="#7C3AED" />
+                            <Ionicons name="share-social-outline" size={20} color={colors.primary} />
                             <Text style={styles.shareBtnText}>Share Invite Link</Text>
                         </TouchableOpacity>
                     </LinearGradient>
@@ -224,7 +224,7 @@ function createStyles(colors: ThemeColors) {
         copyBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(255,255,255,0.3)', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20 },
         copyBtnText: { color: '#fff', fontSize: 14, fontWeight: '600' },
         shareBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#fff', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 25 },
-        shareBtnText: { color: '#7C3AED', fontSize: 16, fontWeight: '600' },
+        shareBtnText: { color: colors.primary, fontSize: 16, fontWeight: '600' },
         statsRow: { flexDirection: 'row', gap: 12, marginTop: 16 },
         statCard: { flex: 1, backgroundColor: colors.surface, borderRadius: 12, padding: 16, alignItems: 'center' },
         statValue: { fontSize: 22, fontWeight: '700', color: colors.primary },

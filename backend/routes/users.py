@@ -5,15 +5,18 @@ try:
     from ..dependencies import get_current_user  # type: ignore
     from ..schemas import CreateProfileRequest, UserProfile  # type: ignore
     from ..utils.audit_logger import log_admin_action  # type: ignore
+    from ..utils.referral_terms import area_id_for_rider, resolve_referral_terms  # type: ignore
 except ImportError:
     import db_supabase  # type: ignore
     from dependencies import get_current_user  # type: ignore
     from schemas import CreateProfileRequest, UserProfile  # type: ignore
     from utils.audit_logger import log_admin_action  # type: ignore  # noqa: F811
+    from utils.referral_terms import area_id_for_rider, resolve_referral_terms  # type: ignore  # noqa: F811
 import base64
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -450,8 +453,25 @@ def _rider_referral_code(user: dict) -> str:
     return user.get("referral_code") or f"RIDE{user['id'][:8].upper()}"
 
 
+def _fmt_money(v) -> str:
+    """Format a money amount for display copy: '5' for 5.00, '5.50' otherwise."""
+    d = Decimal(str(v))
+    return str(int(d)) if d == d.to_integral_value() else f"{d:.2f}"
+
+
 async def _rider_referral_summary(user: dict, *, include_referees: bool) -> dict:
     code = _rider_referral_code(user)
+
+    # The shown reward follows the viewing rider's current service area (derived
+    # from their most recent ride); a brand-new rider with no area-resolved rides
+    # → global default. Referee progress/earnings are an estimate against the
+    # viewer's area threshold — actual payouts use each referee's own area.
+    area_id = await area_id_for_rider(user["id"])
+    terms = await resolve_referral_terms(area_id, "rider")
+    rides_required = terms["rides"]
+    referrer_reward = terms["referrer"]
+    referee_reward = terms["referee"]
+
     referred = await db_supabase.get_rows(
         "users",
         {"referral_code_used": code},
@@ -464,7 +484,7 @@ async def _rider_referral_summary(user: dict, *, include_referees: bool) -> dict
         completed = await db_supabase.count_documents(
             "rides", {"rider_id": u["id"], "status": "completed"}
         )
-        is_qualified = completed >= RIDER_REFERRAL_RIDES_REQUIRED
+        is_qualified = completed >= rides_required
         if is_qualified:
             qualified += 1
         if include_referees:
@@ -473,7 +493,7 @@ async def _rider_referral_summary(user: dict, *, include_referees: bool) -> dict
                     "name": f"{u.get('first_name', '')} {u.get('last_name', '')}".strip() or "Rider",
                     "referred_at": u.get("created_at", ""),
                     "completed_rides": completed,
-                    "rides_required": RIDER_REFERRAL_RIDES_REQUIRED,
+                    "rides_required": rides_required,
                     "qualified": is_qualified,
                     "status": "earned" if is_qualified else "in_progress",
                 }
@@ -485,12 +505,12 @@ async def _rider_referral_summary(user: dict, *, include_referees: bool) -> dict
         "total_referrals": total,
         "qualified_referrals": qualified,
         "pending_referrals": total - qualified,
-        "referral_earnings": qualified * RIDER_REFERRER_REWARD,
-        "referrer_reward": RIDER_REFERRER_REWARD,
-        "referee_reward": RIDER_REFEREE_REWARD,
-        "rides_required": RIDER_REFERRAL_RIDES_REQUIRED,
+        "referral_earnings": referrer_reward * qualified,
+        "referrer_reward": referrer_reward,
+        "referee_reward": referee_reward,
+        "rides_required": rides_required,
         "terms": (
-            f"Give ${RIDER_REFEREE_REWARD}, get ${RIDER_REFERRER_REWARD} when your friend "
+            f"Give ${_fmt_money(referee_reward)}, get ${_fmt_money(referrer_reward)} when your friend "
             f"takes their first ride."
         ),
     }

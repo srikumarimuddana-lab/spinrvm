@@ -260,6 +260,17 @@ class TestFirebaseSessionRevocation:
         }
         assert _firebase_session_revoked(payload, watermark) is True
 
+    def test_same_second_token_is_revoked(self):
+        """A Firebase token signed in during the same whole second as the
+        logout-all watermark must be revoked. _to_epoch truncates the watermark
+        to whole seconds while auth_time is already whole seconds, so the
+        comparison must be `<=`, not `<`."""
+        from backend.dependencies import _firebase_session_revoked
+
+        # Watermark 1000.7s truncates to 1000; a token whose auth_time is 1000
+        # (signed in earlier in that same second) must still be rejected.
+        assert _firebase_session_revoked({"auth_time": 1000}, "1970-01-01T00:16:40.700000+00:00") is True
+
     def test_missing_auth_time_with_watermark_fails_closed(self):
         from backend.dependencies import _firebase_session_revoked
 

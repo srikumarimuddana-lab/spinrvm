@@ -211,14 +211,22 @@ class TestChangeCardOverride:
         # Ride HAS an open hold on the old card — override must skip it.
         fresh = _outcome(status="succeeded", payment_intent_id="pi_new", charged_amount=Decimal("30.00"))
         cap_mock = AsyncMock()
+        # Codex round-3 (#6): the old card's uncaptured hold must be cancelled so
+        # the rider's funds aren't reserved until auth expiry.
+        cancel_mock = AsyncMock(return_value=True)
         patches, updates = _common_patches(charge=fresh)
         patches.append(patch("backend.services.payment_service.capture_ride", cap_mock))
+        patches.append(patch("backend.services.payment_service.cancel_authorization", cancel_mock))
 
         with ExitStack() as st:
             ctxs = [st.enter_context(p) for p in patches]
-            charge_mock = ctxs[-2]  # charge_ride is appended before capture_ride here
+            charge_mock = ctxs[-3]  # charge_ride, then capture_ride, then cancel_authorization
             result = await settle_card(
-                _held_ride(), RIDE_ID, RIDER_ID, Decimal("30.00"), Decimal("5.00"),
+                _held_ride(),
+                RIDE_ID,
+                RIDER_ID,
+                Decimal("30.00"),
+                Decimal("5.00"),
                 payment_method_id_override="pm_NEW",
             )
 
@@ -227,6 +235,10 @@ class TestChangeCardOverride:
         cap_mock.assert_not_called()
         assert charge_mock.call_args.kwargs["payment_method_id"] == "pm_NEW"
         assert charge_mock.call_args.kwargs["payment_intent_id"] is None
+        # The old hold PI was cancelled and the ride marked auth released.
+        cancel_mock.assert_awaited_once()
+        assert cancel_mock.await_args.kwargs["payment_intent_id"] == "pi_hold"
+        assert _last(updates, "auth_status") == "released"
         # Ride re-pointed to the card actually charged.
         assert _last(updates, "payment_method_id") == "pm_NEW"
         assert _last(updates, "payment_status") == "paid"

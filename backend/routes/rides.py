@@ -3564,6 +3564,10 @@ async def add_tip(
 
 class ProcessPaymentRequest(BaseModel):
     tip_amount: Decimal = Field(default=Decimal("0"), ge=0, le=500)
+    # In-app "Change Card" escape: when set, charge THIS card (fresh charge on
+    # a card the rider picked after a decline / no-card failure) instead of the
+    # booking-time card or hold. Card rides only; ignored for wallet/corporate.
+    payment_method_id: Optional[str] = None
 
 
 def _record_settlement_metrics(payment_method: str, result, duration_ms: float) -> None:
@@ -3629,6 +3633,26 @@ async def process_payment(
         logger.info(f"[PAYMENT] Ride {ride_id} processing ({_pmethod}) — skipping duplicate charge")
         return {"success": True, "charged_amount": _charged(ride), "already_paid": True}
 
+    # An admin has emailed (or is creating) a payable Stripe invoice for this
+    # ride — collection has moved to the hosted invoice (settled by the
+    # invoice.paid webhook). Charging in-app while ANY invoice claim is on the
+    # row would collect a second time, and the later invoice.paid would see the
+    # ride already paid and skip (no refund of the extra). Block on any non-null
+    # value: a finalized invoice (in_*) and a 'pending:' creation claim alike.
+    # We never unblock by age here — a stuck claim is recovered admin-side (which
+    # creates invoices crash-safely), not by silently re-opening in-app charging.
+    if ride.get("stripe_invoice_id"):
+        # Structured code so the rider app shows the "pay via emailed invoice"
+        # instruction instead of the generic Change Card/Support alert (which would
+        # just loop back into this same guard on every retry).
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "invoice_issued",
+                "message": "An invoice has been emailed for this ride. Please pay using the link in your email.",
+            },
+        )
+
     # Validate the tip BEFORE the atomic claim — raising after the claim would
     # leave payment_status stuck at 'processing' with no charge ever attempted.
     if tip_amount < 0:
@@ -3673,7 +3697,11 @@ async def process_payment(
         _claim_states.append("processing")  # only added after the lock is held
     guard_row = await db_supabase.update_one(
         "rides",
-        {"id": ride_id, "payment_status": {"$in": _claim_states}},
+        # stripe_invoice_id=NULL is asserted atomically (mirrors admin send-invoice
+        # asserting payment_status NOT IN processing/paid/...): if an admin claimed
+        # the ride for an invoice between our pre-read invoice-guard above and this
+        # claim, 0 rows match and the rider is not charged in-app alongside it.
+        {"id": ride_id, "payment_status": {"$in": _claim_states}, "stripe_invoice_id": None},
         {
             "payment_status": "processing",
             "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -3747,7 +3775,14 @@ async def process_payment(
     elif payment_method == "company_allowance":
         result = await settle_corporate(ride, ride_id, total_charge, tip_rounded)
     else:
-        result = await settle_card(ride, ride_id, current_user["id"], total_charge, tip_rounded)
+        result = await settle_card(
+            ride,
+            ride_id,
+            current_user["id"],
+            total_charge,
+            tip_rounded,
+            payment_method_id_override=req.payment_method_id,
+        )
 
     _record_settlement_metrics(payment_method, result, (_time_mod.monotonic() - _settle_started) * 1000.0)
 

@@ -595,7 +595,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                             <div className="px-4 pb-4 -mt-1">
                                                 <div className="flex items-center justify-between gap-2 pt-3 border-t">
                                                     <span className="text-[11px] font-medium text-muted-foreground">Receipt</span>
-                                                    <RideInvoice rideId={ride.id} status={ride.status} />
+                                                    <RideInvoice rideId={ride.id} status={ride.status} paymentStatus={ride.payment_status} />
                                                 </div>
                                             </div>
                                         )}

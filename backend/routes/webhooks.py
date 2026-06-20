@@ -62,6 +62,198 @@ _STRIPE_HANDLED_EVENTS = frozenset(
 ALLOWED_STRIPE_EVENTS = _STRIPE_HANDLED_EVENTS
 
 
+def _extract_invoice_payment_intent(invoice: dict, stripe_secret: str = "") -> str | None:
+    """Resolve the PaymentIntent id for a paid invoice across Stripe API versions.
+
+    Under the pinned API version (2025-04-30.basil) the top-level
+    ``invoice.payment_intent`` field is removed — the PI now lives under
+    ``invoice.payments.data[].payment.payment_intent``. We MUST persist this id
+    so later charge.refunded / dispute webhooks (which look rides up by
+    payment_intent_id) can find the ride. Tries, in order:
+      1. legacy top-level ``payment_intent`` (pre-Basil / expanded)
+      2. the Basil ``payments.data[].payment.payment_intent`` shape
+      3. a fresh ``Invoice.retrieve(expand=['payments'])`` (webhook payloads do
+         not expand ``payments`` by default)
+    Returns None only if all three fail (logged by the caller).
+    """
+
+    def _pi_id(val) -> str | None:
+        if not val:
+            return None
+        return val if isinstance(val, str) else (val.get("id") if isinstance(val, dict) else None)
+
+    def _from_payload(inv: dict) -> str | None:
+        pi = _pi_id(inv.get("payment_intent"))
+        if pi:
+            return pi
+        payments = inv.get("payments")
+        data = payments.get("data") if isinstance(payments, dict) else None
+        for entry in data or []:
+            payment = (entry or {}).get("payment") or {}
+            pi = _pi_id(payment.get("payment_intent"))
+            if pi:
+                return pi
+        return None
+
+    pi = _from_payload(invoice)
+    if pi:
+        return pi
+
+    invoice_id = invoice.get("id")
+    if not (invoice_id and stripe_secret):
+        return None
+    try:
+        import stripe as _stripe
+
+        refreshed = _stripe.Invoice.retrieve(invoice_id, expand=["payments"], api_key=stripe_secret)
+        # stripe-python returns a typed object; normalize to a plain dict.
+        as_dict = refreshed.to_dict_recursive() if hasattr(refreshed, "to_dict_recursive") else dict(refreshed)
+        return _from_payload(as_dict)
+    except Exception:
+        logger.error(
+            "invoice.paid: could not retrieve invoice %s to resolve payment_intent",
+            invoice_id,
+            exc_info=True,
+            extra={"domain": "payments"},
+        )
+        return None
+
+
+async def _handle_ride_invoice_paid(invoice: dict, ride_id: str, event_id: str, stripe_secret: str = "") -> None:
+    """Settle a ride paid via an admin-sent payable Stripe Invoice.
+
+    Mirrors settle_card's success bookkeeping (financial_events ledger row +
+    payment_status='paid' + WS push + receipt) so the driver is credited the
+    same way as an in-app charge. Idempotent: a ride already paid/waived is a
+    no-op, so a duplicate or replayed invoice.paid never double-credits.
+    """
+    ride = await db_supabase.get_ride(ride_id)
+    if not ride:
+        # The rider's invoice payment succeeded but the ride row is unreadable
+        # (transient DB failure, or a genuinely missing ride). Do NOT ack the
+        # event — raise so processed_at stays NULL and the stuck-event
+        # reconciliation path surfaces it (webhooks dispatch contract). Silently
+        # returning here would take the rider's money while leaving the ride
+        # unpaid and the driver uncredited.
+        logger.error(
+            "invoice.paid for unknown ride %s (invoice %s) — not acking; reconcile required",
+            ride_id,
+            invoice.get("id"),
+            extra={"domain": "payments", "ride_id": ride_id, "event_id": event_id},
+        )
+        raise HTTPException(status_code=500, detail="Ride not found for paid invoice — Stripe will retry")
+    _pstatus = ride.get("payment_status")
+    # 'refunded' is terminal too: if charge.refunded marked the ride refunded
+    # before a delayed invoice.paid lands, re-settling here would append another
+    # ledger row and flip payment_status back to 'paid', erasing the refund.
+    if _pstatus in ("paid", "waived_admin", "refunded"):
+        logger.info(
+            "invoice.paid: ride %s already settled (%s) — skipping",
+            ride_id,
+            _pstatus,
+            extra={"domain": "payments", "ride_id": ride_id, "event_id": event_id},
+        )
+        return
+    if _pstatus == "processing":
+        # An in-app settlement holds the atomic 'processing' claim (or a card
+        # charge was captured-but-unconfirmed). Settling the invoice here too
+        # would double-credit the driver and double-write the ledger. Do NOT ack
+        # the event: a bare return would stamp processed_at and permanently drop
+        # this paid invoice (driver never credited) if the in-app charge later
+        # fails. Raise so processed_at stays NULL — once the 'processing' claim
+        # resolves (→ paid: idempotent skip; → failed: invoice settles) a replay
+        # settles correctly. ERROR so the concurrent-charge anomaly surfaces (a
+        # refund may be owed if the in-app charge also collected).
+        logger.error(
+            "invoice.paid for ride %s while payment_status='processing' — possible "
+            "concurrent in-app charge; deferring invoice settlement, reconcile required",
+            ride_id,
+            extra={"domain": "payments", "ride_id": ride_id, "event_id": event_id},
+        )
+        raise HTTPException(status_code=500, detail="Ride payment is processing — deferring invoice settlement")
+
+    rider_id = ride.get("rider_id")
+    amount_cents = invoice.get("amount_paid")
+    if amount_cents is None:
+        amount_cents = invoice.get("amount_due") or 0
+    payment_intent_id = _extract_invoice_payment_intent(invoice, stripe_secret)
+    if not payment_intent_id:
+        # No PI means later refund/dispute webhooks (keyed on payment_intent_id)
+        # cannot find this ride. This is usually a transient Stripe-retrieve
+        # failure in the expand fallback. Do NOT write a half-settled ride
+        # (payment_status=paid with payment_intent_id=NULL); raise so the event
+        # is not acked (processed_at stays NULL) and the retry/reconciliation
+        # path re-resolves the PI. Matches the missing-ride contract above.
+        logger.error(
+            "invoice.paid: could not resolve payment_intent for ride %s (invoice %s) — not settling; Stripe will retry",
+            ride_id,
+            invoice.get("id"),
+            extra={"domain": "payments", "ride_id": ride_id, "event_id": event_id},
+        )
+        raise HTTPException(status_code=500, detail="Could not resolve invoice payment_intent — Stripe will retry")
+    tip_amount = Decimal(str(ride.get("tip_amount") or 0))
+
+    try:
+        from ..services.payment_service import _tip_ride_update, record_payment_event, send_ride_receipt
+    except ImportError:
+        from services.payment_service import _tip_ride_update, record_payment_event, send_ride_receipt  # type: ignore
+
+    # Ledger first (recovery record exists even if the ride update fails).
+    await record_payment_event(
+        ride_id=ride_id,
+        user_id=rider_id,
+        amount_cents=int(amount_cents),
+        payment_intent_id=payment_intent_id,
+        ride=ride,
+        tip_amount=tip_amount,
+    )
+    await db_supabase.update_ride(
+        ride_id,
+        {
+            "payment_status": "paid",
+            "payment_intent_id": payment_intent_id,
+            "stripe_invoice_id": invoice.get("id"),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            # Mirror settle_card: apply tip delta so driver_earnings reflects any
+            # tip that was captured before the original card decline.
+            **_tip_ride_update(ride, tip_amount),
+        },
+    )
+    logger.info(
+        "Ride %s settled via Stripe invoice %s",
+        ride_id,
+        invoice.get("id"),
+        extra={"domain": "payments", "ride_id": ride_id, "event_id": event_id},
+    )
+
+    # Best-effort: nudge the rider's app out of the stuck payment screen.
+    if rider_id:
+        try:
+            from ..socket_manager import manager as _manager
+        except ImportError:
+            from socket_manager import manager as _manager  # type: ignore
+        try:
+            await _manager.send_personal_message(
+                {
+                    "type": "payment_completed",
+                    "ride_id": ride_id,
+                    "charged_amount": str(cents_to_dollars(int(amount_cents))),
+                },
+                f"rider_{rider_id}",
+            )
+        except Exception:
+            logger.warning("invoice.paid: WS payment_completed push failed", exc_info=True)
+        # Re-fetch so the receipt reflects the just-written paid status / PI /
+        # invoice id rather than the pre-update snapshot. The receipt is the
+        # rider's tax document — a send failure is logged at ERROR (it may hide
+        # a broken email pipeline), not swallowed at warning.
+        updated_ride = await db_supabase.get_ride(ride_id) or ride
+        try:
+            await send_ride_receipt(updated_ride, rider_id, tip_amount)
+        except Exception:
+            logger.error("invoice.paid: receipt email failed for ride %s", ride_id, exc_info=True)
+
+
 def _invoice_period_end_iso(invoice: dict) -> str | None:
     """Extract the billing-period end (ISO UTC) from a Stripe Invoice.
 
@@ -747,8 +939,23 @@ async def stripe_webhook(request: Request):
         # invoice's period end — idempotent for both subscription_create and
         # subscription_cycle.
         invoice = data_object
+        _ride_invoice_id = (invoice.get("metadata") or {}).get("ride_id")
         stripe_sub_id = invoice.get("subscription")
-        if not stripe_sub_id:
+        if not _ride_invoice_id and not stripe_sub_id:
+            # A ride invoice whose metadata.ride_id was stripped/lost still settles:
+            # recover the ride by the persisted stripe_invoice_id (migration 177
+            # indexes it) before treating this as a non-ride invoice and dropping it.
+            _inv_id = invoice.get("id")
+            if _inv_id:
+                _by_inv = await db_supabase.find_one("rides", {"stripe_invoice_id": _inv_id})
+                if _by_inv:
+                    _ride_invoice_id = _by_inv.get("id")
+        if _ride_invoice_id:
+            # Payable ride invoice (admin "Send Invoice" remediation for a card
+            # rejected at trip end). Settle the ride + credit the driver; the
+            # subscription path below is untouched.
+            await _handle_ride_invoice_paid(invoice, _ride_invoice_id, event_id, stripe_secret)
+        elif not stripe_sub_id:
             logger.info(
                 "invoice.paid without subscription id — skipping",
                 extra={"domain": "drivers", "event_id": event_id},

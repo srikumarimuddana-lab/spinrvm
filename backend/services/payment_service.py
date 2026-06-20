@@ -18,7 +18,7 @@ try:
     from ..services import corporate_allowance_service, corporate_wallet_service
     from ..services.corporate_policy_service import evaluate_policy
     from ..socket_manager import manager
-    from ..utils.stripe_charge import capture_ride, charge_ride
+    from ..utils.stripe_charge import cancel_authorization, capture_ride, charge_ride
 except ImportError:
     import db_supabase  # type: ignore
     from services import corporate_allowance_service, corporate_wallet_service  # type: ignore
@@ -539,49 +539,76 @@ async def settle_card(
     rider_id: str,
     total_charge: Decimal,
     tip_amount: Decimal,
+    payment_method_id_override: Optional[str] = None,
 ) -> PaymentResult:
     """Charge rider's card via Stripe.
 
     Prefers capturing a booking-time pre-authorization hold (one Stripe fee,
     lets a within-buffer tip ride on the same PaymentIntent). Falls back to a
     fresh charge when there is no usable hold or the hold could not be captured.
+
+    ``payment_method_id_override`` is the in-app "Change Card" escape: when the
+    booking-time card was declined (or none was on file), the rider picks a
+    different card and we charge THAT card with a fresh PaymentIntent — never
+    the booking-time hold, which sits on the rejected card.
     """
     rider_user = await db_supabase.get_user_by_id(rider_id)
     stripe_customer_id = (rider_user or {}).get("stripe_customer_id")
-    payment_method_id = ride.get("payment_method_id") or (rider_user or {}).get("default_payment_method")
 
-    # Settle against a pre-authorized hold when one is open. ``auth_status``
-    # distinguishes a manual-capture hold from a prior 3DS auto-capture PI that
-    # also lives in ``payment_intent_id`` — only the former is captured here.
-    held_pi = ride.get("payment_intent_id")
-    auth_status = (ride.get("auth_status") or "").lower()
-    authorized = _round(_d(ride.get("authorized_amount") or 0))
-    # Default fresh-charge confirm target: a stored PI is only reused for the
-    # 3DS-retry case (no open hold). After an unusable hold we must NOT reconfirm
-    # the dead hold PI — pass None so charge_ride creates a fresh PaymentIntent.
-    confirm_pi = held_pi
-    if held_pi and auth_status in ("authorized", "fare_only") and authorized > 0:
-        held_result = await _settle_against_hold(
-            ride,
-            ride_id,
-            rider_id,
-            total_charge,
-            tip_amount,
-            held_pi=held_pi,
-            authorized=authorized,
-            stripe_customer_id=stripe_customer_id,
-            payment_method_id=payment_method_id,
-        )
-        if held_result is not None:
-            return held_result
-        confirm_pi = None  # hold unusable → fresh charge, not a reconfirm
+    override_hold_released = False
+    override_hold_pi_to_release: Optional[str] = None
+    if payment_method_id_override:
+        # Rider explicitly chose a different card. Skip the hold path entirely
+        # (the hold is on the old, rejected card) and always do a fresh charge.
+        payment_method_id = payment_method_id_override
+        confirm_pi = None
+        # DEFER releasing the old card's hold until the new card actually charges
+        # (Codex P1): cancelling the guaranteed authorization up front would lose
+        # collectable fare if the new card then declines. We record the hold here
+        # and release it in the success path only.
+        _old_hold_pi = ride.get("payment_intent_id")
+        _old_auth = (ride.get("auth_status") or "").lower()
+        if _old_hold_pi and _old_auth in ("authorized", "fare_only"):
+            override_hold_pi_to_release = _old_hold_pi
+    else:
+        payment_method_id = ride.get("payment_method_id") or (rider_user or {}).get("default_payment_method")
+
+        # Settle against a pre-authorized hold when one is open. ``auth_status``
+        # distinguishes a manual-capture hold from a prior 3DS auto-capture PI that
+        # also lives in ``payment_intent_id`` — only the former is captured here.
+        held_pi = ride.get("payment_intent_id")
+        auth_status = (ride.get("auth_status") or "").lower()
+        authorized = _round(_d(ride.get("authorized_amount") or 0))
+        # Default fresh-charge confirm target: a stored PI is only reused for the
+        # 3DS-retry case (no open hold). After an unusable hold we must NOT reconfirm
+        # the dead hold PI — pass None so charge_ride creates a fresh PaymentIntent.
+        confirm_pi = held_pi
+        if held_pi and auth_status in ("authorized", "fare_only") and authorized > 0:
+            held_result = await _settle_against_hold(
+                ride,
+                ride_id,
+                rider_id,
+                total_charge,
+                tip_amount,
+                held_pi=held_pi,
+                authorized=authorized,
+                stripe_customer_id=stripe_customer_id,
+                payment_method_id=payment_method_id,
+            )
+            if held_result is not None:
+                return held_result
+            confirm_pi = None  # hold unusable → fresh charge, not a reconfirm
 
     if not payment_method_id:
         await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
+        # Structured code (was a bare 400) so the rider app can surface the
+        # Change Card / Add Card escape instead of a dead-end "Payment error".
         return PaymentResult(
             success=False,
+            error_code="no_payment_method",
             error="No payment method on file. Please add a card.",
-            status_code=400,
+            status_code=402,
+            extra={"suggested_action": "change_card"},
         )
 
     outcome = await charge_ride(
@@ -596,6 +623,14 @@ async def settle_card(
     )
 
     if outcome.status == "succeeded":
+        # New card charged successfully — NOW it's safe to release the old card's
+        # hold (deferred from the override branch so a decline couldn't have lost
+        # the guaranteed authorization). Best-effort; only mark 'released' in the
+        # DB if Stripe confirms the cancel.
+        if override_hold_pi_to_release:
+            override_hold_released = await cancel_authorization(
+                ride_id=ride_id, payment_intent_id=override_hold_pi_to_release
+            )
         await record_payment_event(
             ride_id=ride_id,
             user_id=rider_id,
@@ -611,6 +646,19 @@ async def settle_card(
                     "payment_status": "paid",
                     "payment_intent_id": outcome.payment_intent_id,
                     "updated_at": datetime.now(timezone.utc).isoformat(),
+                    # Re-point the ride to the card actually charged so a later
+                    # retry/receipt reflects the new card, not the rejected one.
+                    # Also clear the cached card brand/last4 from the old (declined)
+                    # card so the admin ride-detail resolver re-derives them from
+                    # the new PaymentIntent instead of showing the rejected card.
+                    **(
+                        {"payment_method_id": payment_method_id, "card_brand": None, "card_last4": None}
+                        if payment_method_id_override
+                        else {}
+                    ),
+                    # Record the old hold as released only when Stripe confirmed the
+                    # cancel, so auth_status reflects reality.
+                    **({"auth_status": "released"} if override_hold_released else {}),
                     **_tip_ride_update(ride, tip_amount),
                 },
             )

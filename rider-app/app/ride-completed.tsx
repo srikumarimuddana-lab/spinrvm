@@ -35,7 +35,18 @@ const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
 function RideCompletedScreenContent() {
   const router = useRouter();
-  const { rideId } = useLocalSearchParams<{ rideId: string }>();
+  // payWithCard is set when the rider returns from the "Change Card" escape
+  // (manage-cards) having picked a different card for this stuck trip. tip/rated
+  // are carried back so the remounted screen re-charges the SAME tip the rider
+  // already chose (and was credited to the driver via /rate on the first
+  // attempt) instead of resetting to 0, and skips re-rating (which would
+  // overwrite the original stars/comment). See Codex 62i6.
+  const { rideId, payWithCard, tip: tipParam, rated: ratedParam } = useLocalSearchParams<{
+    rideId: string;
+    payWithCard?: string;
+    tip?: string;
+    rated?: string;
+  }>();
   const { currentRide, currentDriver, fetchRide, rateRide, clearRide } = useRideStore();
 
   // P0-5: confirmPayment is called when the backend returns
@@ -51,7 +62,11 @@ function RideCompletedScreenContent() {
   const [rating, setRating] = useState(5);
   const [comment, setComment] = useState('');
   const [selectedTip, setSelectedTip] = useState<number | null>(null);
-  const [customTip, setCustomTip] = useState('');
+  // Rehydrate the tip the rider chose before the Change Card detour so the
+  // re-charge collects it and the receipt matches (Codex 62i6).
+  const [customTip, setCustomTip] = useState(
+    typeof tipParam === 'string' && parseFloat(tipParam) > 0 ? tipParam : '',
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitPhase, setSubmitPhase] = useState<'idle' | 'rating' | 'confirming'>('idle');
   const [alreadyPaid, setAlreadyPaid] = useState(false);
@@ -181,11 +196,41 @@ function RideCompletedScreenContent() {
    * confirmSheet shape (with onPress handlers). Split from the attempt
    * itself so the attempt stays pure-data and unit-testable.
    */
+  // handleSubmit is defined below but referenced by the Retry button here;
+  // a ref breaks the definition cycle without reordering the whole component.
+  const handleSubmitRef = useRef<(overrideCardId?: string) => void>(() => {});
+  // The card the rider chose via "Change Card" — Retry must re-charge on THIS
+  // card, not silently fall back to the booking/default card (Codex P2).
+  const activeOverrideCardRef = useRef<string | undefined>(undefined);
+  // Rating + tip is posted to /rate, which ACCUMULATES tip into driver_earnings
+  // on every call. Across a retry (button or auto card-change) we must post it
+  // at most once or the driver is over-credited while only one tip is charged
+  // (Codex P1). This latches after the first attempt.
+  // Seed from the route: if the first attempt already posted /rate before its
+  // payment failed, the remounted screen must NOT re-rate (re-rating overwrites
+  // the rider's original stars/comment and /rate accumulates driver_earnings).
+  const hasRatedRef = useRef(ratedParam === '1');
+
   const showPaymentAlert = (alert: NonNullable<Awaited<ReturnType<typeof attemptRidePayment>>['alert']>) => {
     const buttons = (alert.buttons || []).map((b: PaymentAlertButton) => ({
       text: b.text,
       style: (b.kind === 'cancel' ? 'cancel' : 'default') as 'default' | 'cancel',
-      onPress: b.kind === 'change_card' ? () => router.push('/manage-cards' as any) : undefined,
+      onPress:
+        b.kind === 'change_card'
+          // Carry the ride + the already-chosen tip + whether we've rated so the
+          // re-charge collects the same tip and doesn't re-rate (Codex 62i6).
+          ? () => {
+              const _tip = selectedTip || (customTip ? parseFloat(customTip) || 0 : 0);
+              router.push(
+                `/manage-cards?rideId=${rideId}&forPayment=1&tip=${_tip}&rated=${hasRatedRef.current ? 1 : 0}` as any,
+              );
+            }
+          : b.kind === 'support'
+            // Pre-fill support with the stuck ride + a payment-failed topic.
+            ? () => router.push(`/support?rideId=${rideId}&topic=payment_failed` as any)
+            : b.kind === 'retry'
+              ? () => handleSubmitRef.current?.(activeOverrideCardRef.current)
+              : undefined,
     }));
     setConfirmSheet({
       visible: true,
@@ -196,18 +241,24 @@ function RideCompletedScreenContent() {
     });
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (overrideCardId?: string) => {
     if (isSubmitting) return; // prevent double tap
+    if (overrideCardId) activeOverrideCardRef.current = overrideCardId;
     setIsSubmitting(true);
     setSubmitPhase('rating');
     try {
       const tipAmount = selectedTip || (customTip ? parseFloat(customTip) || 0 : 0);
 
-      // 1. Rate the driver first — this is fire-and-forget because
-      //    rating may fail if already rated (idempotent upstream).
-      try {
-        await rateRide(rideId as string, rating, comment || undefined, tipAmount > 0 ? tipAmount : undefined);
-      } catch { /* rating may fail if already rated */ }
+      // 1. Rate the driver first — fire-and-forget, and ONLY once across
+      //    retries. /rate accumulates tip into driver_earnings on every call,
+      //    so re-rating on a card-change retry would over-credit the driver
+      //    while the eventual payment charges a single tip (Codex P1).
+      if (!hasRatedRef.current) {
+        try {
+          await rateRide(rideId as string, rating, comment || undefined, tipAmount > 0 ? tipAmount : undefined);
+        } catch { /* rating may fail if already rated */ }
+        hasRatedRef.current = true;
+      }
 
       // 2. Process payment. If the rider has already paid (came back to
       //    this screen), skip the attempt entirely.
@@ -220,6 +271,7 @@ function RideCompletedScreenContent() {
           stripe: { confirmPayment },
           rideId: rideId as string,
           tipAmount,
+          paymentMethodId: overrideCardId,
         });
         paymentOk = result.ok;
         chargedAmount = result.charged;
@@ -257,6 +309,18 @@ function RideCompletedScreenContent() {
       setSubmitPhase('idle');
     }
   };
+  handleSubmitRef.current = handleSubmit;
+
+  // Returned from the "Change Card" escape with a card chosen for this trip —
+  // auto-retry the charge on it once. The ref guard stops a re-run on every
+  // re-render while the param is still in the route.
+  const retriedCardRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!payWithCard || alreadyPaid) return;
+    if (retriedCardRef.current === payWithCard) return;
+    retriedCardRef.current = payWithCard;
+    handleSubmit(payWithCard);
+  }, [payWithCard, alreadyPaid]);
 
   // Google Pay path — presents the Stripe PaymentSheet modal so riders can
   // pay without re-entering a card. Only shown for card payment rides on
@@ -675,7 +739,7 @@ function RideCompletedScreenContent() {
         )}
         <TouchableOpacity
           style={styles.submitBtn}
-          onPress={handleSubmit}
+          onPress={() => handleSubmit()}
           disabled={isSubmitting || sheetLoading}
           activeOpacity={0.8}
           accessibilityRole="button"

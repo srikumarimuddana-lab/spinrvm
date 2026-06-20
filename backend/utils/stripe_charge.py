@@ -33,11 +33,13 @@ Outcome variants
 Idempotency
 -----------
 
-``idempotency_key = "ride-charge-{ride_id}-{amount_cents}"`` on the create
-path and ``"ride-confirm-{ride_id}-{amount_cents}"`` on the confirm
-(retry / 3DS) path — Stripe dedupes identical keys for 24h. The amount is
-part of the key so a legitimate re-charge at a different total (e.g. tip
-updated after a decline) gets a fresh key instead of an IdempotencyError.
+``idempotency_key = "ride-charge-{ride_id}-{amount_cents}-{payment_method_id}"``
+on the create path and ``"ride-confirm-{ride_id}-{amount_cents}"`` on the
+confirm (retry / 3DS) path — Stripe dedupes identical keys for 24h. The amount
+is part of the key so a legitimate re-charge at a different total (e.g. tip
+updated after a decline) gets a fresh key instead of an IdempotencyError; the
+payment_method is part of the create key so a re-charge on a DIFFERENT card
+(the "Change Card" escape) is not replayed as the prior card's decline.
 payment_retry.py uses the same ride-confirm key scheme so both confirm
 code paths share Stripe-side deduplication. Combined with the caller's
 atomic ``payment_status = 'processing'`` DB lock, a double-tap or retry
@@ -160,13 +162,16 @@ async def charge_ride(
     ride_id = ride.get("id") or ""
     amount_cents = dollars_to_cents(total_amount)
 
-    # Idempotency: a retry of the SAME ride for the SAME amount must not
-    # double-charge — same key → Stripe returns the original PaymentIntent.
-    # The amount (cents) is part of the key so that a legitimate re-charge at a
-    # DIFFERENT total (e.g. the rider updated their tip after a declined
-    # attempt) gets a fresh key instead of an IdempotencyError, which would
-    # otherwise leave the ride stuck in 'processing'.
-    idempotency_key = f"ride-charge-{ride_id}-{amount_cents}"
+    # Idempotency: a retry of the SAME ride for the SAME amount on the SAME card
+    # must not double-charge — same key → Stripe returns the original
+    # PaymentIntent. The amount (cents) is part of the key so a legitimate
+    # re-charge at a DIFFERENT total (e.g. the rider updated their tip after a
+    # declined attempt) gets a fresh key. The payment_method is ALSO part of the
+    # key: when the rider picks a DIFFERENT card after a decline (the in-app
+    # "Change Card" escape), the same ride+amount on a new card must mint a fresh
+    # key — otherwise Stripe replays the prior decline / raises a parameter
+    # mismatch and the new card is never charged.
+    idempotency_key = f"ride-charge-{ride_id}-{amount_cents}-{payment_method_id}"
 
     fare_amount = Decimal(str(ride.get("total_fare", 0) or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     tip = Decimal(str(total_amount)) - fare_amount
@@ -614,3 +619,45 @@ async def capture_ride(
         payment_intent_id=pi_id,
         error_message=f"Unhandled capture PaymentIntent status: {status}",
     )
+
+
+async def cancel_authorization(*, ride_id: str, payment_intent_id: str) -> bool:
+    """Cancel an uncaptured pre-authorization hold so the funds are released.
+
+    Used when a rider abandons the booking-time card (the "Change Card" escape):
+    the new card is charged on a fresh PaymentIntent, so the old hold must be
+    released or the rider's funds stay reserved until Stripe's ~7-day auth
+    expiry. Returns True if the hold is cancelled (or already in a terminal
+    state that cannot/need not be cancelled). Best-effort — never raises; a
+    failure is logged (a stuck hold is a payment-path anomaly) and the caller
+    proceeds, since the fresh charge is the real settlement.
+    """
+    if not payment_intent_id:
+        return False
+    secret = await _resolve_stripe_secret(ride_id)
+    if stripe is None or secret is None:
+        return False
+
+    # Call Stripe directly (same pattern as capture_ride / authorize_ride in this
+    # module) — there is no run_sync helper here.
+    try:
+        stripe.PaymentIntent.cancel(
+            payment_intent_id,
+            api_key=secret,
+            idempotency_key=f"ride-cancelauth-{ride_id}-{payment_intent_id}",
+        )
+        return True
+    except _StripeBaseError as e:
+        # Already captured/canceled, or a transient ops error. Surface it
+        # (a lingering hold ties up the rider's funds) but don't block the
+        # fresh charge that actually settles the ride.
+        logger.error(
+            "Could not cancel pre-auth hold pi=%s for ride=%s: %s",
+            payment_intent_id,
+            ride_id,
+            e,
+        )
+        return False
+    except Exception as e:  # pragma: no cover — defence-in-depth
+        logger.exception("Unexpected error cancelling pre-auth hold ride=%s: %s", ride_id, e)
+        return False

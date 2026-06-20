@@ -98,6 +98,66 @@ async def test_retry_skips_when_stripe_already_succeeded():
 
 
 @pytest.mark.anyio
+async def test_retry_skips_ride_with_open_invoice():
+    """Codex P1: once an admin has sent a payable Stripe invoice
+    (stripe_invoice_id set), the retry loop must NOT confirm the stored PI on
+    the old card — that would collect twice alongside the invoice. The ride is
+    skipped entirely (no claim, no confirm)."""
+    ride = _make_ride(stripe_invoice_id="in_admin_123")
+
+    mock_db_update = AsyncMock(return_value={"id": RIDE_ID})
+    mock_confirm = MagicMock()
+    fake_settings = {"stripe_secret_key": STRIPE_SECRET}
+
+    with (
+        patch("utils.payment_retry.db.get_rows", AsyncMock(return_value=[ride])),
+        patch("utils.payment_retry.get_app_settings", AsyncMock(return_value=fake_settings)),
+        patch("utils.payment_retry.db.update_one", mock_db_update),
+        patch("utils.payment_retry.send_push_notification", AsyncMock()),
+        patch("stripe.PaymentIntent.retrieve", MagicMock(return_value=_fake_intent("requires_payment_method"))),
+        patch("stripe.PaymentIntent.confirm", mock_confirm),
+    ):
+        from utils import payment_retry
+
+        await payment_retry.retry_failed_payments()
+
+    mock_confirm.assert_not_called()
+    mock_db_update.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_retry_skips_any_invoice_sentinel_fresh_or_stale():
+    """Codex round-3 (#2): the retry loop must NOT re-charge in-app while ANY
+    invoice claim is on the row — a finalized id, a fresh 'pending:' sentinel, or
+    a stale one. Re-opening by age risks collecting alongside a payable invoice;
+    recovery is admin-side (crash-safe creation), not here."""
+    from datetime import timedelta
+
+    fresh_ts = datetime.now(timezone.utc).timestamp()
+    stale_ts = (datetime.now(timezone.utc) - timedelta(minutes=10)).timestamp()
+    for sid in (f"pending:{fresh_ts}:abc", f"pending:{stale_ts}:abc", "in_admin_real"):
+        ride = _make_ride(stripe_invoice_id=sid)
+        mock_update = AsyncMock(return_value={"id": RIDE_ID})
+        mock_confirm = MagicMock()
+        with (
+            patch("utils.payment_retry.db.get_rows", AsyncMock(return_value=[ride])),
+            patch(
+                "utils.payment_retry.get_app_settings",
+                AsyncMock(return_value={"stripe_secret_key": STRIPE_SECRET}),
+            ),
+            patch("utils.payment_retry.db.update_one", mock_update),
+            patch("utils.payment_retry.send_push_notification", AsyncMock()),
+            patch("stripe.PaymentIntent.retrieve", MagicMock(return_value=_fake_intent("requires_payment_method"))),
+            patch("stripe.PaymentIntent.confirm", mock_confirm),
+        ):
+            from utils import payment_retry
+
+            await payment_retry.retry_failed_payments()
+        mock_confirm.assert_not_called()
+        mock_update.assert_not_awaited()
+
+
+@pytest.mark.anyio
 async def test_retry_proceeds_when_stripe_failed():
     """
     When Stripe reports the PI as 'requires_payment_method', the loop must:
@@ -147,6 +207,15 @@ async def test_retry_proceeds_when_stripe_failed():
     ]
     assert len(processing_calls) == 1
     assert processing_calls[0][0][2]["$set"]["payment_retry_count"] == 2
+
+    # Codex round-5 (81Sa): the atomic 'retrying' claim must assert
+    # stripe_invoice_id IS NULL so an admin send-invoice that wins the row between
+    # the read and the claim excludes this ride from in-app retry.
+    claim_calls = [
+        c for c in mock_db_update.await_args_list if c[0][2].get("$set", {}).get("payment_status") == "retrying"
+    ]
+    assert len(claim_calls) == 1
+    assert claim_calls[0][0][1]["stripe_invoice_id"] is None
 
 
 @pytest.mark.anyio

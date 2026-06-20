@@ -132,6 +132,10 @@ async def _process_one(wallet: dict, stripe_secret: str) -> None:
             payment_method=pm_id,
             off_session=True,
             confirm=True,
+            # Server-side off_session confirm: disable redirect-based payment
+            # methods so Stripe doesn't require a `return_url` and reject the
+            # auto-top-up with invalid_request_error.
+            automatic_payment_methods={"enabled": True, "allow_redirects": "never"},
             metadata={
                 "scope": "corporate_topup",
                 "company_id": company["id"],

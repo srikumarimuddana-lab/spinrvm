@@ -121,6 +121,10 @@ async def manual_topup(
             payment_method=body.payment_method_id,
             off_session=True,
             confirm=True,
+            # Server-side off_session confirm: disable redirect-based payment
+            # methods so Stripe doesn't demand a `return_url` (it has no browser
+            # to return to) and reject the top-up with invalid_request_error.
+            automatic_payment_methods={"enabled": True, "allow_redirects": "never"},
         )
     # Always set an idempotency key so retries after network timeouts don't
     # create duplicate PaymentIntents. Client may supply one (e.g. a UUID they

@@ -188,6 +188,14 @@ async def charge_ride(
         # runs the 3DS sheet with the returned client_secret.
         "off_session": True,
         "confirm": True,
+        # Enable payment methods but never the redirect-based ones (e.g.
+        # iDEAL, Klarna) the account may have toggled on in the Stripe
+        # Dashboard. A server-side off_session confirm has no browser to
+        # redirect back to, so without this Stripe rejects the call with
+        # invalid_request_error ("you must provide a `return_url`"), which
+        # broke every ride charge. Card-only keeps the hold/charge path
+        # non-redirecting and return_url-free.
+        "automatic_payment_methods": {"enabled": True, "allow_redirects": "never"},
         "metadata": {
             "ride_id": ride_id,
             "rider_id": rider_id,
@@ -372,6 +380,12 @@ async def authorize_ride(
         "capture_method": "manual",
         "confirm": True,
         "off_session": off_session,
+        # Disable redirect-based payment methods (see charge_ride above):
+        # a confirmed PaymentIntent with redirect methods enabled requires a
+        # `return_url`, which a server-side hold can't supply — Stripe was
+        # rejecting every booking pre-auth with invalid_request_error
+        # ("[preauth] authorization ops error"). Card-only avoids it.
+        "automatic_payment_methods": {"enabled": True, "allow_redirects": "never"},
         "metadata": {
             "ride_id": ride_id,
             "rider_id": rider_id,

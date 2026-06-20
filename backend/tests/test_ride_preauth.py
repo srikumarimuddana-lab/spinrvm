@@ -105,6 +105,12 @@ class TestAuthorize:
         assert kwargs["capture_method"] == "manual"  # HOLD, not charge
         assert kwargs["confirm"] is True
         assert kwargs["off_session"] is False  # rider present at booking
+        # Redirect-based payment methods disabled so a server-side confirm
+        # doesn't require a return_url (Stripe invalid_request_error otherwise).
+        assert kwargs["automatic_payment_methods"] == {
+            "enabled": True,
+            "allow_redirects": "never",
+        }
         assert kwargs["metadata"]["source"] == "ride_booking_authorization"
         assert kwargs["metadata"]["authorized_amount"] == "35.00"
         # amount-pinned idempotency key: a re-auth at a revised estimate gets a

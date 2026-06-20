@@ -8,11 +8,22 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 ADMIN_USER = {"id": "admin_1", "role": "admin", "email": "admin@spinr.ca"}
+
+
+def _fake_request():
+    """Minimal FastAPI Request stub for endpoints decorated with @limiter.limit."""
+    req = MagicMock()
+    req.scope = {"type": "http"}
+    req.state = MagicMock()
+    return req
+
+
+_FAKE_REQUEST = _fake_request()
 DRIVER_ID = "driver_admin_ext"
 DRIVER_USER_ID = "user_admin_ext"
 RIDE_ID = "ride_admin_ext"
@@ -260,6 +271,285 @@ class TestAdminCompleteRide:
             with pytest.raises((HTTPException, SpinrException)) as exc:
                 asyncio.run(admin_rides.admin_complete_ride(ride_id=RIDE_ID, admin_user=ADMIN_USER))
         assert exc.value.status_code == 400
+
+
+class TestAdminSendPayableInvoice:
+    """POST /admin/rides/{id}/send-invoice — Codex P2 guards."""
+
+    def _settings(self):
+        return AsyncMock(return_value={"stripe_secret_key": "sk_test"})
+
+    def test_rejects_refunded_ride(self):
+        """A refunded ride is terminal — re-invoicing would re-collect a refund."""
+        from fastapi import HTTPException
+
+        from backend.routes.admin import rides as admin_rides
+
+        ride = _ride("completed", payment_status="refunded")
+        with patch("backend.routes.admin.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(admin_rides.admin_send_payable_invoice(request=_FAKE_REQUEST, ride_id=RIDE_ID, admin_user=ADMIN_USER))
+        assert exc.value.status_code == 409
+        assert "terminal" in str(exc.value.detail).lower()
+
+    def test_concurrent_claim_returns_409(self):
+        """When the atomic CAS claim loses (another request is mid-creation),
+        the endpoint 409s instead of creating a duplicate invoice."""
+        from fastapi import HTTPException
+
+        from backend.routes.admin import rides as admin_rides
+
+        ride = _ride("completed", payment_status="failed", stripe_invoice_id=None)
+        rider = {"id": RIDER_ID, "email": "rider@spinr.ca", "stripe_customer_id": "cus_1"}
+
+        with (
+            patch("backend.routes.admin.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.admin.rides.db_supabase.get_user_by_id", AsyncMock(return_value=rider)),
+            patch("backend.routes.admin.rides.get_app_settings", self._settings()),
+            # CAS claim loses → update_one returns None.
+            patch("backend.routes.admin.rides.db_supabase.update_one", AsyncMock(return_value=None)),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(admin_rides.admin_send_payable_invoice(request=_FAKE_REQUEST, ride_id=RIDE_ID, admin_user=ADMIN_USER))
+        assert exc.value.status_code == 409
+        assert "already being created" in str(exc.value.detail).lower()
+
+    def test_happy_path_creates_and_sends_invoice(self):
+        from unittest.mock import MagicMock
+
+        from backend.routes.admin import rides as admin_rides
+
+        ride = _ride("completed", payment_status="failed", stripe_invoice_id=None, grand_total="18.50")
+        rider = {"id": RIDER_ID, "email": "rider@spinr.ca", "stripe_customer_id": "cus_1"}
+
+        async def _run_sync(fn):
+            return fn()
+
+        inv = MagicMock(id="in_new_1")
+        fin = MagicMock()
+        fin.hosted_invoice_url = "https://pay.stripe/x"
+        update_ride_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.admin.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.admin.rides.db_supabase.get_user_by_id", AsyncMock(return_value=rider)),
+            patch("backend.routes.admin.rides.get_app_settings", self._settings()),
+            patch("backend.routes.admin.rides.db_supabase.update_one", AsyncMock(return_value={"id": RIDE_ID})),
+            patch("backend.routes.admin.rides.db_supabase.update_ride", update_ride_mock),
+            patch("backend.routes.admin.rides.db_supabase.run_sync", _run_sync),
+            patch("backend.routes.admin.rides.log_admin_action", AsyncMock()),
+            patch("stripe.Invoice.create", MagicMock(return_value=inv)),
+            patch("stripe.InvoiceItem.create", MagicMock(return_value=MagicMock())),
+            patch("stripe.Invoice.finalize_invoice", MagicMock(return_value=fin)),
+            patch("stripe.Invoice.send_invoice", MagicMock(return_value=MagicMock())),
+        ):
+            result = asyncio.run(admin_rides.admin_send_payable_invoice(request=_FAKE_REQUEST, ride_id=RIDE_ID, admin_user=ADMIN_USER))
+
+        assert result["sent"] is True
+        assert result["stripe_invoice_id"] == "in_new_1"
+        assert result["invoice_url"] == "https://pay.stripe/x"
+        # Final write persists the real invoice id (replacing the sentinel).
+        final = update_ride_mock.await_args.args[1]
+        assert final["stripe_invoice_id"] == "in_new_1"
+
+    def test_fresh_pending_sentinel_blocks_but_stale_reclaims(self):
+        """Codex P2 (62i9): a fresh `pending:` claim 409s (concurrent creation),
+        but a stale one (crashed request) is reclaimed via the CAS instead of
+        blocking the ride forever."""
+        from datetime import timedelta
+        from unittest.mock import MagicMock
+
+        from fastapi import HTTPException
+
+        from backend.routes.admin import rides as admin_rides
+
+        rider = {"id": RIDER_ID, "email": "rider@spinr.ca", "stripe_customer_id": "cus_1"}
+
+        # Fresh sentinel → 409, no Stripe calls.
+        fresh_ts = datetime.now(timezone.utc).timestamp()
+        fresh_ride = _ride("completed", payment_status="failed", stripe_invoice_id=f"pending:{fresh_ts}:u1")
+        with (
+            patch("backend.routes.admin.rides.db_supabase.get_ride", AsyncMock(return_value=fresh_ride)),
+            patch("backend.routes.admin.rides.db_supabase.get_user_by_id", AsyncMock(return_value=rider)),
+            patch("backend.routes.admin.rides.get_app_settings", self._settings()),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(
+                    admin_rides.admin_send_payable_invoice(
+                        request=_FAKE_REQUEST, ride_id=RIDE_ID, admin_user=ADMIN_USER
+                    )
+                )
+        assert exc.value.status_code == 409
+
+        # Stale sentinel (10 min old) → reclaimed; a new invoice is created.
+        stale_ts = (datetime.now(timezone.utc) - timedelta(minutes=10)).timestamp()
+        stale_ride = _ride(
+            "completed", payment_status="failed", stripe_invoice_id=f"pending:{stale_ts}:u1", grand_total="18.50"
+        )
+
+        async def _run_sync(fn):
+            return fn()
+
+        inv = MagicMock(id="in_reclaim_1")
+        fin = MagicMock()
+        fin.hosted_invoice_url = "https://pay.stripe/reclaim"
+        with (
+            patch("backend.routes.admin.rides.db_supabase.get_ride", AsyncMock(return_value=stale_ride)),
+            patch("backend.routes.admin.rides.db_supabase.get_user_by_id", AsyncMock(return_value=rider)),
+            patch("backend.routes.admin.rides.get_app_settings", self._settings()),
+            patch("backend.routes.admin.rides.db_supabase.update_one", AsyncMock(return_value={"id": RIDE_ID})),
+            patch("backend.routes.admin.rides.db_supabase.update_ride", AsyncMock()),
+            patch("backend.routes.admin.rides.db_supabase.run_sync", _run_sync),
+            patch("backend.routes.admin.rides.log_admin_action", AsyncMock()),
+            patch("stripe.Invoice.create", MagicMock(return_value=inv)),
+            patch("stripe.InvoiceItem.create", MagicMock(return_value=MagicMock())),
+            patch("stripe.Invoice.finalize_invoice", MagicMock(return_value=fin)),
+            patch("stripe.Invoice.send_invoice", MagicMock(return_value=MagicMock())),
+        ):
+            result = asyncio.run(
+                admin_rides.admin_send_payable_invoice(request=_FAKE_REQUEST, ride_id=RIDE_ID, admin_user=ADMIN_USER)
+            )
+        assert result["sent"] is True
+        assert result["stripe_invoice_id"] == "in_reclaim_1"
+
+    def test_rejects_non_card_payment_method(self):
+        """Codex P2 (round-3): a payable Stripe invoice bills the rider's personal
+        card — corporate (company_allowance)/wallet rides must not be invoiced."""
+        from fastapi import HTTPException
+
+        from backend.routes.admin import rides as admin_rides
+
+        ride = _ride("completed", payment_status="failed", payment_method="company_allowance")
+        with patch("backend.routes.admin.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(
+                    admin_rides.admin_send_payable_invoice(
+                        request=_FAKE_REQUEST, ride_id=RIDE_ID, admin_user=ADMIN_USER
+                    )
+                )
+        assert exc.value.status_code == 409
+        assert "card rides" in str(exc.value.detail).lower()
+
+    def test_rejects_open_preauth_hold(self):
+        """Codex P1 (round-3): an open authorized/fare_only hold is still
+        captureable by the sweeper — invoicing now risks collecting twice."""
+        from fastapi import HTTPException
+
+        from backend.routes.admin import rides as admin_rides
+
+        ride = _ride("completed", payment_status="pending", auth_status="authorized")
+        with patch("backend.routes.admin.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(
+                    admin_rides.admin_send_payable_invoice(
+                        request=_FAKE_REQUEST, ride_id=RIDE_ID, admin_user=ADMIN_USER
+                    )
+                )
+        assert exc.value.status_code == 409
+        assert "hold" in str(exc.value.detail).lower()
+
+    def test_rollback_voids_invoice_and_clears_id_on_finalize_failure(self):
+        """Codex round-3 (#2): if finalize fails after the real id was persisted,
+        the invoice is voided (never collectible) and the row id is cleared so the
+        ride is fully recoverable — no payable invoice hidden behind a sentinel."""
+        from unittest.mock import MagicMock
+
+        from fastapi import HTTPException
+
+        from backend.routes.admin import rides as admin_rides
+
+        ride = _ride("completed", payment_status="failed", stripe_invoice_id=None, grand_total="18.50")
+        rider = {"id": RIDER_ID, "email": "rider@spinr.ca", "stripe_customer_id": "cus_1"}
+
+        async def _run_sync(fn):
+            return fn()
+
+        inv = MagicMock(id="in_fail_1")
+        void_mock = MagicMock()
+        # Capture every ride update_one so we can assert the id was cleared.
+        update_one_calls = []
+
+        async def _update_one(table, filters, patch_body):
+            update_one_calls.append((table, filters, patch_body))
+            return {"id": RIDE_ID}
+
+        with (
+            patch("backend.routes.admin.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.admin.rides.db_supabase.get_user_by_id", AsyncMock(return_value=rider)),
+            patch("backend.routes.admin.rides.get_app_settings", self._settings()),
+            patch("backend.routes.admin.rides.db_supabase.update_one", AsyncMock(side_effect=_update_one)),
+            patch("backend.routes.admin.rides.db_supabase.update_ride", AsyncMock()),
+            patch("backend.routes.admin.rides.db_supabase.run_sync", _run_sync),
+            patch("backend.routes.admin.rides.log_admin_action", AsyncMock()),
+            patch("stripe.Invoice.create", MagicMock(return_value=inv)),
+            patch("stripe.InvoiceItem.create", MagicMock(return_value=MagicMock())),
+            patch("stripe.Invoice.finalize_invoice", MagicMock(side_effect=Exception("stripe down"))),
+            patch("stripe.Invoice.void_invoice", void_mock),
+            patch("stripe.Invoice.delete", MagicMock()),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(
+                    admin_rides.admin_send_payable_invoice(
+                        request=_FAKE_REQUEST, ride_id=RIDE_ID, admin_user=ADMIN_USER
+                    )
+                )
+
+        assert exc.value.status_code == 502
+        # finalize failed AFTER id-write, so the invoice was finalized? No — it was
+        # still a draft (finalize raised), so it is DELETEd, not voided.
+        # Either way the row id must be cleared back to None for recovery.
+        cleared = [c for c in update_one_calls if c[2].get("stripe_invoice_id") is None]
+        assert cleared, "expected the stuck invoice id/sentinel to be cleared to None"
+
+    def test_reclaims_when_persisted_invoice_missing_in_stripe(self):
+        """Codex round-5 (81Sc): if the persisted invoice was deleted in Stripe,
+        retrieve raises resource_missing — the endpoint clears the dead id and
+        creates a fresh invoice rather than 502ing forever."""
+        import stripe
+        from unittest.mock import MagicMock
+
+        from backend.routes.admin import rides as admin_rides
+
+        ride = _ride("completed", payment_status="failed", stripe_invoice_id="in_deleted_1", grand_total="18.50")
+        rider = {"id": RIDER_ID, "email": "rider@spinr.ca", "stripe_customer_id": "cus_1"}
+
+        async def _run_sync(fn):
+            return fn()
+
+        inv = MagicMock(id="in_fresh_after_missing")
+        fin = MagicMock()
+        fin.hosted_invoice_url = "https://pay.stripe/fresh"
+        update_one_calls = []
+
+        async def _update_one(table, filters, patch_body):
+            update_one_calls.append((table, filters, patch_body))
+            return {"id": RIDE_ID}
+
+        missing_err = stripe.error.InvalidRequestError("No such invoice", param="id", code="resource_missing")
+
+        with (
+            patch("backend.routes.admin.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.admin.rides.db_supabase.get_user_by_id", AsyncMock(return_value=rider)),
+            patch("backend.routes.admin.rides.get_app_settings", self._settings()),
+            patch("backend.routes.admin.rides.db_supabase.update_one", AsyncMock(side_effect=_update_one)),
+            patch("backend.routes.admin.rides.db_supabase.update_ride", AsyncMock()),
+            patch("backend.routes.admin.rides.db_supabase.run_sync", _run_sync),
+            patch("backend.routes.admin.rides.log_admin_action", AsyncMock()),
+            patch("stripe.Invoice.retrieve", MagicMock(side_effect=missing_err)),
+            patch("stripe.Invoice.create", MagicMock(return_value=inv)),
+            patch("stripe.InvoiceItem.create", MagicMock(return_value=MagicMock())),
+            patch("stripe.Invoice.finalize_invoice", MagicMock(return_value=fin)),
+            patch("stripe.Invoice.send_invoice", MagicMock(return_value=MagicMock())),
+        ):
+            result = asyncio.run(
+                admin_rides.admin_send_payable_invoice(request=_FAKE_REQUEST, ride_id=RIDE_ID, admin_user=ADMIN_USER)
+            )
+
+        # Dead id cleared, fresh invoice created and sent.
+        assert result["sent"] is True
+        assert result["stripe_invoice_id"] == "in_fresh_after_missing"
+        cleared = [c for c in update_one_calls if c[2].get("stripe_invoice_id") is None]
+        assert cleared, "expected the dead invoice id to be cleared to None"
 
 
 class TestAdminGetEarnings:

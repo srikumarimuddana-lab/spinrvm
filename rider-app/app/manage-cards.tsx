@@ -4,7 +4,7 @@ import {
   Platform, ActivityIndicator, KeyboardAvoidingView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { CardField, CardFieldInput, useStripe } from '@stripe/stripe-react-native';
 import { StripeKeyContext } from './_layout';
@@ -25,6 +25,16 @@ interface Card {
 
 export default function ManageCardsScreen() {
   const router = useRouter();
+  // When opened from a stuck ride-payment ("Change Card" escape), forPayment=1
+  // and rideId is set: picking/adding a card bounces back to ride-completed to
+  // re-charge that trip on the chosen card.
+  const { rideId, forPayment, tip, rated } = useLocalSearchParams<{
+    rideId?: string;
+    forPayment?: string;
+    tip?: string;
+    rated?: string;
+  }>();
+  const payForRide = forPayment === '1' && !!rideId;
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const stripeKey = useContext(StripeKeyContext);
@@ -100,6 +110,12 @@ export default function ManageCardsScreen() {
       await api.post('/payments/cards', { payment_method_id: paymentMethod.id });
       setShowAdd(false);
       resetForm();
+      // Paying for a stuck ride: charge the freshly added card immediately.
+      if (payForRide) {
+        showToast('Card Added', 'Charging your ride…', 'success');
+        payRideWithCard(paymentMethod.id);
+        return;
+      }
       fetchCards();
       showToast('Card Added', 'Card added successfully', 'success');
     } catch (err: any) {
@@ -107,6 +123,21 @@ export default function ManageCardsScreen() {
     } finally {
       setSaving(false);
     }
+  };
+
+  // Return to the stuck ride and re-charge it on the chosen card. Carry the tip
+  // and rated flag through so the re-charge collects the same tip and doesn't
+  // re-rate the driver (Codex 62i6).
+  const payRideWithCard = (cardId: string) => {
+    router.replace({
+      pathname: '/ride-completed',
+      params: {
+        rideId: rideId as string,
+        payWithCard: cardId,
+        ...(typeof tip === 'string' ? { tip } : {}),
+        ...(typeof rated === 'string' ? { rated } : {}),
+      },
+    } as any);
   };
 
   const handleSetDefault = async (cardId: string) => {
@@ -168,10 +199,16 @@ export default function ManageCardsScreen() {
         <Text style={styles.cardExpiry}>Expires {String(item.exp_month).padStart(2, '0')}/{item.exp_year}</Text>
       </View>
       <View style={styles.cardActions}>
-        {!item.is_default && (
-          <TouchableOpacity style={styles.setDefaultBtn} onPress={() => handleSetDefault(item.id)}>
-            <Text style={styles.setDefaultText}>Set Default</Text>
+        {payForRide ? (
+          <TouchableOpacity style={styles.payWithBtn} onPress={() => payRideWithCard(item.id)}>
+            <Text style={styles.payWithText}>Use &amp; Pay</Text>
           </TouchableOpacity>
+        ) : (
+          !item.is_default && (
+            <TouchableOpacity style={styles.setDefaultBtn} onPress={() => handleSetDefault(item.id)}>
+              <Text style={styles.setDefaultText}>Set Default</Text>
+            </TouchableOpacity>
+          )
         )}
         <TouchableOpacity onPress={() => handleDeleteCard(item.id)}>
           <Ionicons name="trash-outline" size={20} color={colors.textDim} />
@@ -187,9 +224,16 @@ export default function ManageCardsScreen() {
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={24} color={colors.text} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Payment Methods</Text>
+        <Text style={styles.headerTitle}>{payForRide ? 'Choose a Card' : 'Payment Methods'}</Text>
         <View style={{ width: 44 }} />
       </View>
+
+      {payForRide && (
+        <View style={styles.payBanner}>
+          <Ionicons name="card" size={16} color={colors.primary} />
+          <Text style={styles.payBannerText}>Pick or add a card to pay for your trip.</Text>
+        </View>
+      )}
 
       {loading ? (
         <View style={styles.loadingWrap}>
@@ -326,6 +370,17 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.border,
     },
     setDefaultText: { fontSize: 11, fontWeight: '600', color: colors.textDim },
+    payWithBtn: {
+      paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8,
+      backgroundColor: colors.primary,
+    },
+    payWithText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
+    payBanner: {
+      flexDirection: 'row', alignItems: 'center', gap: 8,
+      paddingHorizontal: 20, paddingVertical: 12,
+      backgroundColor: '#FEF2F2',
+    },
+    payBannerText: { fontSize: 13, fontWeight: '600', color: colors.text },
 
     // Empty
     emptyState: { alignItems: 'center', paddingVertical: 40 },

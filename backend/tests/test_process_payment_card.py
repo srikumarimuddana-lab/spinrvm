@@ -323,6 +323,57 @@ class TestIdempotencyGuards:
 
 
 @pytest.mark.asyncio
+class TestOpenInvoiceGuard:
+    """Codex P1 (62i3): once an admin emails a payable invoice, in-app charging
+    must be blocked so the rider can't be collected twice. The guard raises
+    before any Stripe call, so only get_ride needs stubbing."""
+
+    async def test_finalized_invoice_blocks_in_app_charge(self):
+        from backend.routes import rides as rides_mod
+
+        ride = _completed_ride(stripe_invoice_id="in_admin_123")
+        with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
+            req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
+            with pytest.raises(HTTPException) as exc:
+                await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
+
+        assert exc.value.status_code == 409
+        # Codex round-5 (81SZ): structured code so the rider app shows the
+        # pay-by-email instruction instead of looping on Change Card.
+        assert isinstance(exc.value.detail, dict)
+        assert exc.value.detail["code"] == "invoice_issued"
+
+    async def test_fresh_pending_claim_blocks(self):
+        from datetime import datetime, timezone
+
+        from backend.routes import rides as rides_mod
+
+        fresh = _completed_ride(stripe_invoice_id=f"pending:{datetime.now(timezone.utc).timestamp()}:u1")
+        with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=fresh)):
+            req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
+            with pytest.raises(HTTPException) as exc:
+                await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
+        assert exc.value.status_code == 409
+
+    async def test_stale_pending_claim_also_blocks(self):
+        """Codex round-3 (#2): in-app charging must NOT unblock by claim age — a
+        stale 'pending:' sentinel blocks just like a fresh one. Recovery is
+        admin-side (crash-safe), never by silently re-opening the in-app charge."""
+        from datetime import datetime, timedelta, timezone
+
+        from backend.routes import rides as rides_mod
+
+        stale = _completed_ride(
+            stripe_invoice_id=f"pending:{(datetime.now(timezone.utc) - timedelta(minutes=10)).timestamp()}:u1"
+        )
+        with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=stale)):
+            req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
+            with pytest.raises(HTTPException) as exc:
+                await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
+        assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
 class TestAuthorization:
     async def test_other_rider_cannot_pay_for_this_ride(self):
         from backend.routes import rides as rides_mod

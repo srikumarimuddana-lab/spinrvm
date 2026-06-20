@@ -198,6 +198,117 @@ class TestCaptureFailureModes:
 
 
 @pytest.mark.asyncio
+class TestChangeCardOverride:
+    """The in-app 'Change Card' escape: payment_method_id_override forces a
+    fresh charge on the chosen card and never captures the booking-time hold
+    (which sits on the rejected card)."""
+
+    async def test_override_fresh_charges_new_card_ignoring_hold(self):
+        from contextlib import ExitStack
+
+        from backend.services.payment_service import settle_card
+
+        # Ride HAS an open hold on the old card — override must skip it.
+        fresh = _outcome(status="succeeded", payment_intent_id="pi_new", charged_amount=Decimal("30.00"))
+        cap_mock = AsyncMock()
+        # Codex round-3 (#6): the old card's uncaptured hold must be cancelled so
+        # the rider's funds aren't reserved until auth expiry.
+        cancel_mock = AsyncMock(return_value=True)
+        patches, updates = _common_patches(charge=fresh)
+        patches.append(patch("backend.services.payment_service.capture_ride", cap_mock))
+        patches.append(patch("backend.services.payment_service.cancel_authorization", cancel_mock))
+
+        with ExitStack() as st:
+            ctxs = [st.enter_context(p) for p in patches]
+            charge_mock = ctxs[-3]  # charge_ride, then capture_ride, then cancel_authorization
+            result = await settle_card(
+                _held_ride(),
+                RIDE_ID,
+                RIDER_ID,
+                Decimal("30.00"),
+                Decimal("5.00"),
+                payment_method_id_override="pm_NEW",
+            )
+
+        assert result.success is True
+        # Hold never captured; fresh PI (no reconfirm of the dead hold).
+        cap_mock.assert_not_called()
+        assert charge_mock.call_args.kwargs["payment_method_id"] == "pm_NEW"
+        assert charge_mock.call_args.kwargs["payment_intent_id"] is None
+        # The old hold PI was cancelled and the ride marked auth released.
+        cancel_mock.assert_awaited_once()
+        assert cancel_mock.await_args.kwargs["payment_intent_id"] == "pi_hold"
+        assert _last(updates, "auth_status") == "released"
+        # Ride re-pointed to the card actually charged.
+        assert _last(updates, "payment_method_id") == "pm_NEW"
+        assert _last(updates, "payment_status") == "paid"
+        # Codex P2 (62jG): the cached brand/last4 of the OLD declined card are
+        # cleared so the admin ride-detail resolver re-derives them from the new
+        # PaymentIntent instead of showing the rejected card.
+        paid_update = next(u for u in reversed(updates) if u.get("payment_status") == "paid")
+        assert paid_update["card_brand"] is None
+        assert paid_update["card_last4"] is None
+
+    async def test_override_decline_does_not_release_old_hold(self):
+        """Codex round-3 (#6 follow-up, P1): the old hold must be released only
+        AFTER the new card charges. If the new card declines, the guaranteed
+        authorization must be left intact (not cancelled) so fare is still
+        collectable."""
+        from contextlib import ExitStack
+
+        from backend.services.payment_service import settle_card
+
+        # New card declines.
+        declined = _outcome(status="declined", decline_code="card_declined", error_message="Declined")
+        cancel_mock = AsyncMock(return_value=True)
+        patches, updates = _common_patches(charge=declined)
+        patches.append(patch("backend.services.payment_service.capture_ride", AsyncMock()))
+        patches.append(patch("backend.services.payment_service.cancel_authorization", cancel_mock))
+
+        with ExitStack() as st:
+            for p in patches:
+                st.enter_context(p)
+            result = await settle_card(
+                _held_ride(), RIDE_ID, RIDER_ID, Decimal("30.00"), Decimal("5.00"),
+                payment_method_id_override="pm_NEW",
+            )
+
+        assert result.success is False
+        # The old hold was NOT cancelled — it stays authorized and collectable.
+        cancel_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+class TestNoPaymentMethod:
+    async def test_no_card_returns_structured_402_change_card(self):
+        """No override, no ride card, no default → 402 no_payment_method with a
+        change_card hint so the app shows Add Card instead of a dead-end."""
+        from contextlib import ExitStack
+
+        from backend.services.payment_service import settle_card
+
+        ride = _held_ride(auth_status=None, authorized_amount=0, pi=None)
+        ride["payment_method_id"] = None
+        patches, updates = _common_patches()
+        # User has no default payment method either.
+        patches[0] = patch(
+            "backend.services.payment_service.db_supabase.get_user_by_id",
+            AsyncMock(return_value={"stripe_customer_id": "cus_X", "default_payment_method": None}),
+        )
+
+        with ExitStack() as st:
+            for p in patches:
+                st.enter_context(p)
+            result = await settle_card(ride, RIDE_ID, RIDER_ID, Decimal("30.00"), Decimal("0"))
+
+        assert result.success is False
+        assert result.status_code == 402
+        assert result.error_code == "no_payment_method"
+        assert (result.extra or {}).get("suggested_action") == "change_card"
+        assert _last(updates, "payment_status") == "pending"
+
+
+@pytest.mark.asyncio
 class TestNoHoldUnchanged:
     async def test_no_hold_uses_fresh_charge_path(self):
         """A ride with no auth_status hold settles via charge_ride exactly as

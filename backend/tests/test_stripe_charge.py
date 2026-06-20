@@ -137,9 +137,10 @@ class TestSuccess:
         assert kwargs["confirm"] is True
         assert kwargs["metadata"]["ride_id"] == "ride_helper_1"
         assert kwargs["metadata"]["rider_id"] == "rider_helper_1"
-        # Idempotency key pins future retries to the same PI; the amount is
-        # part of the key so a re-charge at a different total gets a fresh key.
-        assert kwargs["idempotency_key"] == "ride-charge-ride_helper_1-2550"
+        # Idempotency key pins future retries to the same PI; the amount and the
+        # payment_method are part of the key so a re-charge at a different total
+        # OR on a different card (the Change Card escape) gets a fresh key.
+        assert kwargs["idempotency_key"] == "ride-charge-ride_helper_1-2550-pm_helper"
 
     async def test_amount_rounded_to_cents_correctly(self):
         """Float 19.999 must round to 2000 cents, not 1999 or 2001."""
@@ -310,7 +311,27 @@ class TestIdempotencyKey:
             await charge_ride(**_KW)
 
         keys = [call.kwargs["idempotency_key"] for call in mock_stripe.PaymentIntent.create.call_args_list]
-        assert keys == ["ride-charge-ride_helper_1-2550", "ride-charge-ride_helper_1-2550"]
+        assert keys == [
+            "ride-charge-ride_helper_1-2550-pm_helper",
+            "ride-charge-ride_helper_1-2550-pm_helper",
+        ]
+
+    async def test_different_card_yields_different_idempotency_key(self):
+        """Codex P1: the Change Card escape re-charges the SAME ride+amount on a
+        DIFFERENT card — that must mint a fresh key so Stripe charges the new
+        card instead of replaying the prior card's decline."""
+        from backend.utils.stripe_charge import charge_ride
+
+        intent = MagicMock(id="pi_1", status="succeeded", client_secret=None)
+        stripe_patch, mock_stripe = _patch_stripe(create_return=intent)
+
+        with _patch_settings(), stripe_patch:
+            await charge_ride(**_KW)
+            await charge_ride(**{**_KW, "payment_method_id": "pm_NEWCARD"})
+
+        keys = [call.kwargs["idempotency_key"] for call in mock_stripe.PaymentIntent.create.call_args_list]
+        assert keys[0] != keys[1]
+        assert keys[1] == "ride-charge-ride_helper_1-2550-pm_NEWCARD"
 
     async def test_confirm_path_carries_idempotency_key(self):
         """The retry/3DS confirm path must be idempotent too: two replicas
@@ -331,3 +352,50 @@ class TestIdempotencyKey:
         mock_stripe.PaymentIntent.confirm.assert_called_once()
         kwargs = mock_stripe.PaymentIntent.confirm.call_args.kwargs
         assert kwargs["idempotency_key"] == "ride-confirm-ride_helper_1-2550"
+
+
+@pytest.mark.asyncio
+class TestCancelAuthorization:
+    """cancel_authorization releases an uncaptured pre-auth hold on Change Card.
+
+    Exercises the REAL function body (the settle_card test mocks it out, which
+    previously hid a NameError on an undefined run_sync)."""
+
+    async def test_cancels_hold_and_returns_true(self):
+        from backend.utils.stripe_charge import cancel_authorization
+
+        stripe_patch, mock_stripe = _patch_stripe()
+        with _patch_settings(), stripe_patch:
+            ok = await cancel_authorization(ride_id="r1", payment_intent_id="pi_hold")
+
+        assert ok is True
+        mock_stripe.PaymentIntent.cancel.assert_called_once()
+        kwargs = mock_stripe.PaymentIntent.cancel.call_args.kwargs
+        assert kwargs["idempotency_key"] == "ride-cancelauth-r1-pi_hold"
+
+    async def test_returns_false_when_no_payment_intent(self):
+        from backend.utils.stripe_charge import cancel_authorization
+
+        # No Stripe/settings needed — short-circuits on the empty id.
+        ok = await cancel_authorization(ride_id="r1", payment_intent_id="")
+        assert ok is False
+
+    async def test_returns_false_on_stripe_error(self):
+        """A hold already captured/expired (StripeError) is surfaced but not
+        raised — the fresh charge is the real settlement."""
+        from backend.utils.stripe_charge import cancel_authorization
+
+        class _FakeStripeError(Exception):
+            pass
+
+        mock_stripe = MagicMock()
+        mock_stripe.PaymentIntent.cancel.side_effect = _FakeStripeError("already captured")
+
+        with (
+            _patch_settings(),
+            patch("backend.utils.stripe_charge.stripe", mock_stripe),
+            patch("backend.utils.stripe_charge._StripeBaseError", _FakeStripeError),
+        ):
+            ok = await cancel_authorization(ride_id="r1", payment_intent_id="pi_x")
+
+        assert ok is False

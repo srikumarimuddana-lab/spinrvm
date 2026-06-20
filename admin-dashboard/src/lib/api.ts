@@ -447,6 +447,13 @@ export const sendRideInvoice = (rideId: string) =>
     request<any>(`/api/admin/rides/${rideId}/send-receipt`, {
         method: "POST",
     });
+// Payable Stripe Invoice for a stuck unpaid ride — Stripe emails the rider a
+// hosted pay page; invoice.paid settles the ride. Returns { invoice_url }.
+export const sendPayableRideInvoice = (rideId: string) =>
+    request<{ invoice_url?: string; stripe_invoice_id?: string }>(
+        `/api/admin/rides/${rideId}/send-invoice`,
+        { method: "POST" },
+    );
 export const getFlags = (opts: {
     limit?: number;
     offset?: number;

@@ -3642,9 +3642,15 @@ async def process_payment(
     # We never unblock by age here — a stuck claim is recovered admin-side (which
     # creates invoices crash-safely), not by silently re-opening in-app charging.
     if ride.get("stripe_invoice_id"):
+        # Structured code so the rider app shows the "pay via emailed invoice"
+        # instruction instead of the generic Change Card/Support alert (which would
+        # just loop back into this same guard on every retry).
         raise HTTPException(
             status_code=409,
-            detail="An invoice has been issued for this ride. Please pay using the link in your email.",
+            detail={
+                "code": "invoice_issued",
+                "message": "An invoice has been emailed for this ride. Please pay using the link in your email.",
+            },
         )
 
     # Validate the tip BEFORE the atomic claim — raising after the claim would

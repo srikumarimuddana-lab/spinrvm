@@ -1567,9 +1567,34 @@ async def admin_send_payable_invoice(
             # Fall through: the CAS claim filters on this stale sentinel value, so
             # only one caller wins the reclaim; others get a 409 on the CAS.
         if existing_id and not str(existing_id).startswith("pending:"):
-            existing = await db_supabase.run_sync(lambda: stripe.Invoice.retrieve(existing_id, api_key=stripe_secret))
-            # stripe-python v5+ returns typed model objects — use attribute access.
-            existing_status = getattr(existing, "status", None)
+            try:
+                existing = await db_supabase.run_sync(
+                    lambda: stripe.Invoice.retrieve(existing_id, api_key=stripe_secret)
+                )
+                # stripe-python v5+ returns typed model objects — attribute access.
+                existing_status = getattr(existing, "status", None)
+            except stripe.error.InvalidRequestError as e:
+                # The persisted invoice no longer exists in Stripe (e.g. a prior
+                # rollback deleted the draft but the DB clear failed). Without this,
+                # the retrieve would raise into the generic rollback — which has no
+                # sentinel/created id to clear — stranding the dead id, 502ing every
+                # future attempt and blocking in-app pay forever. Treat a missing
+                # invoice like void/uncollectible: clear the dead id and fall through
+                # to the CAS so a fresh invoice is created.
+                if getattr(e, "code", None) == "resource_missing" or "resource_missing" in str(e).lower():
+                    logger.warning(
+                        "admin_send_payable_invoice: persisted invoice %s missing in Stripe for ride %s — reclaiming",
+                        existing_id,
+                        ride_id,
+                        extra={"domain": "payments", "ride_id": ride_id},
+                    )
+                    await db_supabase.update_one(
+                        "rides", {"id": ride_id, "stripe_invoice_id": existing_id}, {"stripe_invoice_id": None}
+                    )
+                    existing_id = None
+                    existing_status = None
+                else:
+                    raise
             if existing_status == "paid":
                 raise HTTPException(status_code=409, detail="Invoice already paid — webhook will settle the ride")
             if existing_status == "draft":

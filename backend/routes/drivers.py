@@ -4540,6 +4540,18 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     except Exception as _exc:  # pragma: no cover - best effort
         logger.warning(f"complete_ride: admin broadcast failed: {_exc}")
 
+    # Advance any active driver quests this completion contributes to. Runs once
+    # per ride because the atomic in_progress→completed guard above lets only the
+    # winning completion path reach here. Best-effort: never block the response.
+    try:
+        try:
+            from ..utils.quest_tracker import update_quest_progress_on_ride_complete
+        except ImportError:
+            from utils.quest_tracker import update_quest_progress_on_ride_complete
+        await update_quest_progress_on_ride_complete(driver["id"], completed_ride or ride)
+    except Exception:
+        logger.error("complete_ride: quest progress update failed for ride %s", ride_id, exc_info=True)
+
     return serialize_doc(completed_ride)
 
 

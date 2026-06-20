@@ -536,3 +536,59 @@ class TestAdminGetParticipants:
             resp = client.get("/api/v1/quests/admin/bad_quest/participants")
 
         assert resp.status_code == 404
+
+
+class TestQuestTrackerOnRideComplete:
+    """utils.quest_tracker.update_quest_progress_on_ride_complete — the hook the
+    ride-completion paths (drivers.py::complete_ride, rides.py::rider_complete_ride)
+    call so joined quests actually advance instead of sitting at 0%."""
+
+    @pytest.mark.anyio
+    async def test_ride_count_increments_and_completes(self):
+        from utils.quest_tracker import update_quest_progress_on_ride_complete
+
+        active_progress = {
+            "id": "progress_1",
+            "quest_id": "quest_1",
+            "driver_id": "driver_123",
+            "current_value": 9,  # one ride short of the target of 10
+            "status": "active",
+        }
+        mock_db = make_mock_db()
+        mock_db.get_rows = AsyncMock(return_value=[active_progress])
+        mock_db.quests.find_one = AsyncMock(return_value=SAMPLE_QUEST)
+        captured = {}
+
+        async def _update_one(table, filters, update, **kwargs):
+            captured["table"] = table
+            captured["update"] = update
+            return {"id": "progress_1"}
+
+        mock_db.update_one = _update_one
+
+        with patch("utils.quest_tracker.db", mock_db):
+            await update_quest_progress_on_ride_complete("driver_123", {"id": "ride_1"})
+
+        assert captured["table"] == "quest_progress"
+        changes = captured["update"]["$set"]
+        assert changes["current_value"] == 10
+        assert changes["status"] == "completed"
+        assert "completed_at" in changes
+
+    @pytest.mark.anyio
+    async def test_no_active_progress_is_noop(self):
+        from utils.quest_tracker import update_quest_progress_on_ride_complete
+
+        mock_db = make_mock_db()
+        mock_db.get_rows = AsyncMock(return_value=[])
+        called = {"update": False}
+
+        async def _update_one(*args, **kwargs):
+            called["update"] = True
+
+        mock_db.update_one = _update_one
+
+        with patch("utils.quest_tracker.db", mock_db):
+            await update_quest_progress_on_ride_complete("driver_123", {"id": "ride_1"})
+
+        assert called["update"] is False

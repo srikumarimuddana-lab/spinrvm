@@ -208,6 +208,15 @@ async def test_retry_proceeds_when_stripe_failed():
     assert len(processing_calls) == 1
     assert processing_calls[0][0][2]["$set"]["payment_retry_count"] == 2
 
+    # Codex round-5 (81Sa): the atomic 'retrying' claim must assert
+    # stripe_invoice_id IS NULL so an admin send-invoice that wins the row between
+    # the read and the claim excludes this ride from in-app retry.
+    claim_calls = [
+        c for c in mock_db_update.await_args_list if c[0][2].get("$set", {}).get("payment_status") == "retrying"
+    ]
+    assert len(claim_calls) == 1
+    assert claim_calls[0][0][1]["stripe_invoice_id"] is None
+
 
 @pytest.mark.anyio
 async def test_retry_marks_ride_failed_when_retrieve_raises():

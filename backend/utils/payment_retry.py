@@ -289,6 +289,11 @@ async def retry_failed_payments():
                 "id": ride_id,
                 "payment_status": current_status,
                 "payment_retry_count": retry_count,
+                # Mirror /process-payment: assert no invoice claim landed between
+                # the read above and this claim. Without it, an admin send-invoice
+                # that wins the row right here would leave the retry loop confirming
+                # the old PI while the hosted invoice is also collectible.
+                "stripe_invoice_id": None,
             },
             {
                 "$set": {

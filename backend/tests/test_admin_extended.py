@@ -501,6 +501,56 @@ class TestAdminSendPayableInvoice:
         cleared = [c for c in update_one_calls if c[2].get("stripe_invoice_id") is None]
         assert cleared, "expected the stuck invoice id/sentinel to be cleared to None"
 
+    def test_reclaims_when_persisted_invoice_missing_in_stripe(self):
+        """Codex round-5 (81Sc): if the persisted invoice was deleted in Stripe,
+        retrieve raises resource_missing — the endpoint clears the dead id and
+        creates a fresh invoice rather than 502ing forever."""
+        import stripe
+        from unittest.mock import MagicMock
+
+        from backend.routes.admin import rides as admin_rides
+
+        ride = _ride("completed", payment_status="failed", stripe_invoice_id="in_deleted_1", grand_total="18.50")
+        rider = {"id": RIDER_ID, "email": "rider@spinr.ca", "stripe_customer_id": "cus_1"}
+
+        async def _run_sync(fn):
+            return fn()
+
+        inv = MagicMock(id="in_fresh_after_missing")
+        fin = MagicMock()
+        fin.hosted_invoice_url = "https://pay.stripe/fresh"
+        update_one_calls = []
+
+        async def _update_one(table, filters, patch_body):
+            update_one_calls.append((table, filters, patch_body))
+            return {"id": RIDE_ID}
+
+        missing_err = stripe.error.InvalidRequestError("No such invoice", param="id", code="resource_missing")
+
+        with (
+            patch("backend.routes.admin.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.admin.rides.db_supabase.get_user_by_id", AsyncMock(return_value=rider)),
+            patch("backend.routes.admin.rides.get_app_settings", self._settings()),
+            patch("backend.routes.admin.rides.db_supabase.update_one", AsyncMock(side_effect=_update_one)),
+            patch("backend.routes.admin.rides.db_supabase.update_ride", AsyncMock()),
+            patch("backend.routes.admin.rides.db_supabase.run_sync", _run_sync),
+            patch("backend.routes.admin.rides.log_admin_action", AsyncMock()),
+            patch("stripe.Invoice.retrieve", MagicMock(side_effect=missing_err)),
+            patch("stripe.Invoice.create", MagicMock(return_value=inv)),
+            patch("stripe.InvoiceItem.create", MagicMock(return_value=MagicMock())),
+            patch("stripe.Invoice.finalize_invoice", MagicMock(return_value=fin)),
+            patch("stripe.Invoice.send_invoice", MagicMock(return_value=MagicMock())),
+        ):
+            result = asyncio.run(
+                admin_rides.admin_send_payable_invoice(request=_FAKE_REQUEST, ride_id=RIDE_ID, admin_user=ADMIN_USER)
+            )
+
+        # Dead id cleared, fresh invoice created and sent.
+        assert result["sent"] is True
+        assert result["stripe_invoice_id"] == "in_fresh_after_missing"
+        cleared = [c for c in update_one_calls if c[2].get("stripe_invoice_id") is None]
+        assert cleared, "expected the dead invoice id to be cleared to None"
+
 
 class TestAdminGetEarnings:
     def test_returns_earnings_summary(self):

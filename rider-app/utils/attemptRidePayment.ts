@@ -106,6 +106,17 @@ const STRIPE_UNAVAILABLE_ALERT: PaymentAlert = {
   variant: 'danger',
 };
 
+// An admin has emailed a payable invoice for this trip. In-app charging is
+// blocked server-side, so Change Card/Retry would just loop on the same 409 —
+// direct the rider to the emailed pay link instead.
+const INVOICE_ISSUED_ALERT: PaymentAlert = {
+  title: 'Invoice emailed',
+  message:
+    'We’ve emailed you a secure link to pay for this trip. Please use that link to complete payment — there’s nothing more to do here.',
+  variant: 'info',
+  buttons: [SUPPORT_BTN],
+};
+
 /**
  * Attempt to charge the rider's card for a completed ride. Wraps the
  * POST /rides/{id}/process-payment call with 3DS + decline handling.
@@ -215,6 +226,13 @@ export async function attemptRidePayment(
     // back-blocked screen. Offer Change Card + Contact Support.
     if (status === 400) {
       return { ok: false, alert: UNKNOWN_ERROR_ALERT };
+    }
+
+    // An admin has issued a payable invoice for this ride — collection has moved
+    // to the emailed link. Retrying/Change Card would re-hit this 409, so show the
+    // pay-by-email instruction instead of the generic alert.
+    if (status === 409 && code === 'invoice_issued') {
+      return { ok: false, alert: INVOICE_ISSUED_ALERT };
     }
 
     if (status === 409 && typeof message === 'string' && message.includes('requires completed state')) {

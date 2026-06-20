@@ -941,6 +941,15 @@ async def stripe_webhook(request: Request):
         invoice = data_object
         _ride_invoice_id = (invoice.get("metadata") or {}).get("ride_id")
         stripe_sub_id = invoice.get("subscription")
+        if not _ride_invoice_id and not stripe_sub_id:
+            # A ride invoice whose metadata.ride_id was stripped/lost still settles:
+            # recover the ride by the persisted stripe_invoice_id (migration 177
+            # indexes it) before treating this as a non-ride invoice and dropping it.
+            _inv_id = invoice.get("id")
+            if _inv_id:
+                _by_inv = await db_supabase.find_one("rides", {"stripe_invoice_id": _inv_id})
+                if _by_inv:
+                    _ride_invoice_id = _by_inv.get("id")
         if _ride_invoice_id:
             # Payable ride invoice (admin "Send Invoice" remediation for a card
             # rejected at trip end). Settle the ride + credit the driver; the

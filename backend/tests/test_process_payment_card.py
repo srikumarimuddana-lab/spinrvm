@@ -338,7 +338,10 @@ class TestOpenInvoiceGuard:
                 await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
 
         assert exc.value.status_code == 409
-        assert "invoice" in str(exc.value.detail).lower()
+        # Codex round-5 (81SZ): structured code so the rider app shows the
+        # pay-by-email instruction instead of looping on Change Card.
+        assert isinstance(exc.value.detail, dict)
+        assert exc.value.detail["code"] == "invoice_issued"
 
     async def test_fresh_pending_claim_blocks(self):
         from datetime import datetime, timezone

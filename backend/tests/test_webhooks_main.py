@@ -565,6 +565,56 @@ class TestAllowedStripeEvents:
         assert "checkout.session.completed" in ALLOWED_STRIPE_EVENTS
 
 
+class TestStripeWebhookEventLogLevel:
+    """Routine lifecycle events log at debug; truly-unknown ones still warn."""
+
+    def _run(self, event_type: str):
+        from backend.routes import webhooks as wh
+
+        async def mock_get_app_settings():
+            return {"stripe_webhook_secret": "ws", "stripe_secret_key": "sk"}
+
+        raw_event = _make_stripe_event(event_type, {"id": "obj_1"})
+        event_obj = MagicMock()
+        event_obj.get = lambda k, d=None: raw_event.get(k, d)
+        event_obj.to_dict_recursive = lambda: raw_event
+
+        req = MagicMock()
+        req.body = AsyncMock(return_value=b"payload")
+        req.headers = {"stripe-signature": "sig"}
+
+        import stripe
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", mock_get_app_settings),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()) as mark,
+            patch("backend.routes.webhooks.logger") as mock_logger,
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=req))
+        return result, mock_logger, mark
+
+    def test_ignored_lifecycle_event_logs_debug_not_warning(self):
+        # The exact events the rider's webhook log was noisy with.
+        for evt in (
+            "payment_intent.created",
+            "payment_intent.amount_capturable_updated",
+            "charge.succeeded",
+        ):
+            result, mock_logger, mark = self._run(evt)
+            assert result.get("unhandled") is True, evt
+            mock_logger.warning.assert_not_called()
+            assert mock_logger.debug.called, evt
+            # Unknown/ignored events stay replayable: processed_at left NULL.
+            mark.assert_not_called()
+
+    def test_truly_unknown_event_still_warns(self):
+        result, mock_logger, _ = self._run("some.brand.new.event")
+        assert result.get("unhandled") is True
+        mock_logger.warning.assert_called()
+
+
 class TestLoopMonitor:
     def test_record_heartbeat(self):
         from backend.utils.loop_monitor import _heartbeats, record_heartbeat

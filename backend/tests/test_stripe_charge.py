@@ -135,6 +135,12 @@ class TestSuccess:
         assert kwargs["payment_method"] == "pm_helper"
         assert kwargs["off_session"] is True
         assert kwargs["confirm"] is True
+        # Redirect-based payment methods disabled so a server-side confirm
+        # doesn't require a return_url (Stripe invalid_request_error otherwise).
+        assert kwargs["automatic_payment_methods"] == {
+            "enabled": True,
+            "allow_redirects": "never",
+        }
         assert kwargs["metadata"]["ride_id"] == "ride_helper_1"
         assert kwargs["metadata"]["rider_id"] == "rider_helper_1"
         # Idempotency key pins future retries to the same PI; the amount and the

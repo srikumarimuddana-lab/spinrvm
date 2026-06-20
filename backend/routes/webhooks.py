@@ -61,6 +61,40 @@ _STRIPE_HANDLED_EVENTS = frozenset(
 # Public alias exported for tests
 ALLOWED_STRIPE_EVENTS = _STRIPE_HANDLED_EVENTS
 
+# Routine Stripe lifecycle events we knowingly do NOT act on. They fire during
+# normal payment flows (e.g. a manual-capture hold emits
+# payment_intent.amount_capturable_updated; a capture emits charge.succeeded)
+# when the Dashboard webhook is configured to send "all events". They are not
+# bugs and not actionable, so log them at debug rather than warning to keep the
+# signal-to-noise high — a genuinely unexpected event type still logs a warning
+# so a missing handler stands out. Not exhaustive: anything not listed here and
+# not handled still warns, by design.
+_STRIPE_IGNORED_EVENTS = frozenset(
+    {
+        "payment_intent.created",
+        "payment_intent.amount_capturable_updated",
+        "payment_intent.canceled",
+        "payment_intent.processing",
+        "payment_intent.requires_action",
+        "charge.succeeded",
+        "charge.captured",
+        "charge.updated",
+        "charge.pending",
+        "payment_method.attached",
+        "payment_method.detached",
+        "payment_method.updated",
+        "customer.created",
+        "customer.updated",
+        "setup_intent.created",
+        "setup_intent.succeeded",
+        "invoice.created",
+        "invoice.finalized",
+        "invoice.updated",
+        "invoice.payment_succeeded",
+        "payout.created",
+    }
+)
+
 
 def _extract_invoice_payment_intent(invoice: dict, stripe_secret: str = "") -> str | None:
     """Resolve the PaymentIntent id for a paid invoice across Stripe API versions.
@@ -1243,10 +1277,18 @@ async def stripe_webhook(request: Request):
                 event_type,
                 extra={"domain": "payments", "event_id": event_id},
             )
+        elif event_type in _STRIPE_IGNORED_EVENTS:
+            # Routine lifecycle echo we deliberately don't process — debug, not
+            # warning, so it doesn't drown out genuinely unexpected event types.
+            logger.debug(
+                "[WEBHOOK] Ignoring routine Stripe lifecycle event %r (not actionable).",
+                event_type,
+                extra={"domain": "payments", "event_id": event_id},
+            )
         else:
             logger.warning(
                 "[WEBHOOK] Unhandled Stripe event type %r — not in _STRIPE_HANDLED_EVENTS. "
-                "Update Stripe dashboard to send only subscribed events.",
+                "Either add a handler or stop sending it from the Stripe dashboard.",
                 event_type,
                 extra={"domain": "payments", "event_id": event_id},
             )

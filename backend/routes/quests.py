@@ -196,6 +196,15 @@ async def join_quest(quest_id: str, current_user: dict = Depends(get_current_use
     if end_dt and end_dt < datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="Quest has ended")
 
+    # Enforce service-area scoping at join time. GET /quests already hides
+    # area-scoped quests from drivers outside the area (line ~133), but a money-
+    # bearing reward must not be claimable just because a driver learned the
+    # quest id — re-check eligibility here so a foreign-area driver can't join,
+    # progress, and claim a reward meant for another area.
+    area_id = quest.get("service_area_id")
+    if area_id and driver.get("service_area_id") != area_id:
+        raise HTTPException(status_code=403, detail="This quest isn't available in your service area")
+
     # Check if already joined
     existing = await db.find_one("quest_progress", {"quest_id": quest_id, "driver_id": driver["id"]})
     if existing:

@@ -4542,15 +4542,17 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
 
     # Advance any active driver quests this completion contributes to. Runs once
     # per ride because the atomic in_progress→completed guard above lets only the
-    # winning completion path reach here. Best-effort: never block the response.
+    # winning completion path reach here. Scheduled as a background task so the
+    # per-quest queries/updates never block the completion response (the ride is
+    # already completed); the tracker swallows its own errors internally.
     try:
         try:
             from ..utils.quest_tracker import update_quest_progress_on_ride_complete
         except ImportError:
             from utils.quest_tracker import update_quest_progress_on_ride_complete
-        await update_quest_progress_on_ride_complete(driver["id"], completed_ride or ride)
+        asyncio.create_task(update_quest_progress_on_ride_complete(driver["id"], completed_ride or ride))
     except Exception:
-        logger.error("complete_ride: quest progress update failed for ride %s", ride_id, exc_info=True)
+        logger.error("complete_ride: scheduling quest progress update failed for ride %s", ride_id, exc_info=True)
 
     return serialize_doc(completed_ride)
 

@@ -22,8 +22,16 @@ export type RideMapCoords = {
 };
 
 export function finiteNumber(value: unknown): number | null {
-  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
-  return Number.isFinite(n) ? n : null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string') {
+    // Number('') and Number('  ') are 0, not NaN — an empty/blank coord must
+    // be rejected, not silently treated as 0 (which maps to the Gulf of Guinea).
+    const trimmed = value.trim();
+    if (trimmed === '') return null;
+    const n = Number(trimmed);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
 }
 
 export function getRideMapCoords(ride: any): RideMapCoords | null {

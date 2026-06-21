@@ -534,7 +534,10 @@ async def websocket_endpoint(
         # Replay missed sequenced messages (if any)
         if last_seq is not None:
             try:
-                from ..utils.ws_pubsub import pubsub
+                try:
+                    from ..utils.ws_pubsub import pubsub
+                except ImportError:
+                    from utils.ws_pubsub import pubsub
 
                 messages = await pubsub.get_outbox(connection_key)
                 replayed = 0
@@ -958,6 +961,11 @@ async def websocket_endpoint(
                     except ImportError:
                         from utils.driver_online import intent_online  # type: ignore
 
+                    try:
+                        from ..geo_utils import calculate_distance
+                    except ImportError:
+                        from geo_utils import calculate_distance  # type: ignore
+
                     nearby = []
                     for driver in drivers:
                         # Authoritative intent gate (migration 97): trust the
@@ -972,8 +980,6 @@ async def websocket_endpoint(
                         if d_lat is None or d_lng is None or (d_lat == 0 and d_lng == 0):
                             continue
                         # Calculate distance
-                        from ..geo_utils import calculate_distance
-
                         dist = calculate_distance(lat, lng, d_lat, d_lng)
                         if dist <= radius:
                             nearby.append(

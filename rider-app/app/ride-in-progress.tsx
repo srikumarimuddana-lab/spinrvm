@@ -46,6 +46,7 @@ import { CarMarker } from '@shared/components/CarMarker';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { TrackBaseUrlContext } from './_layout';
+import { getRideMapCoords } from '../utils/rideMapCoords';
 
 function RideInProgressScreenContent() {
   const router = useRouter();
@@ -91,6 +92,11 @@ function RideInProgressScreenContent() {
   const mapRef = React.useRef<MapView>(null);
   const bottomSheetRef = React.useRef<any>(null);
   const resumeKey = useAppResumeKey();
+
+  // Validated map coords — react-native-maps native-crashes (white screen,
+  // uncatchable by the JS ErrorBoundary) on a non-finite lat/lng. Only mount
+  // the MapView once all four coords are finite; otherwise show a placeholder.
+  const rideCoords = useMemo(() => getRideMapCoords(currentRide), [currentRide]);
 
   const { height, width } = useWindowDimensions();
   const isLandscape = height < width;
@@ -171,19 +177,19 @@ function RideInProgressScreenContent() {
   // Directions API once per ride instead of once per driver GPS ping.
   const routeOrigin = useMemo(
     () =>
-      currentRide
-        ? { latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }
+      rideCoords
+        ? { latitude: rideCoords.pickupLat, longitude: rideCoords.pickupLng }
         : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [currentRide?.id],
+    [currentRide?.id, rideCoords?.pickupLat, rideCoords?.pickupLng],
   );
   const routeDestination = useMemo(
     () =>
-      currentRide
-        ? { latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }
+      rideCoords
+        ? { latitude: rideCoords.dropoffLat, longitude: rideCoords.dropoffLng }
         : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [currentRide?.id],
+    [currentRide?.id, rideCoords?.dropoffLat, rideCoords?.dropoffLng],
   );
 
   // Reactive flag: true once the pickup→dropoff route is known (either from the
@@ -624,14 +630,14 @@ I've shared my live location with you for safety.
               <Text style={styles.retryBtnText}>Retry</Text>
             </TouchableOpacity>
           </View>
-        ) : currentRide ? (
+        ) : currentRide && rideCoords ? (
           <MapView
             {...({ ref: mapRef } as any)}
             provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
             style={styles.map}
             initialRegion={{
-              latitude: currentRide.pickup_lat,
-              longitude: currentRide.pickup_lng,
+              latitude: rideCoords.pickupLat,
+              longitude: rideCoords.pickupLng,
               latitudeDelta: 0.05,
               longitudeDelta: 0.05,
             }}
@@ -710,7 +716,7 @@ I've shared my live location with you for safety.
 
             {/* Pickup Marker (green) */}
             <Marker
-              coordinate={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
+              coordinate={{ latitude: rideCoords.pickupLat, longitude: rideCoords.pickupLng }}
               anchor={{ x: 0.5, y: 0.5 }}
             >
               <View style={styles.pickupMarker}>
@@ -720,7 +726,7 @@ I've shared my live location with you for safety.
 
             {/* Destination Marker (red) */}
             <Marker
-              coordinate={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
+              coordinate={{ latitude: rideCoords.dropoffLat, longitude: rideCoords.dropoffLng }}
               anchor={{ x: 0.5, y: 0.5 }}
             >
               <View style={styles.dropoffMarker}>

@@ -1,5 +1,10 @@
 import Constants from 'expo-constants';
 
+// Hardcoded production safety net — must stay in sync with the same constant in
+// spinr.config.ts. The load-balanced CNAME (NOT a provider host) so Fly-primary
+// cutover / fail-back still reaches clients that hit the fallback. See ADR-007.
+const PRODUCTION_BACKEND_URL = 'https://api-spinr.spinr.ca';
+
 /**
  * Resolve the Spinr backend URL for the current runtime.
  *
@@ -32,14 +37,23 @@ const getBackendUrl = (): string => {
         const host = Constants.expoConfig.hostUri.split(':')[0];
         return `http://${host}:8000`;
     }
+    // Production safety net. A release build that shipped without
+    // EXPO_PUBLIC_BACKEND_URL (e.g. EAS env not set, or an OTA update where
+    // Metro didn't load .env) must NOT fall through to an empty string: an
+    // empty API_URL makes the rider/driver WebSocket URL scheme-less
+    // ("/ws/rider/..."), which the native WebSocket module rejects with a
+    // FATAL IllegalArgumentException and crashes the whole app on launch.
+    // Mirror spinr.config.ts and return the load-balanced production CNAME so
+    // HTTP and WebSocket both reach the real backend. (Dev still fails loudly.)
+    if (typeof __DEV__ === 'undefined' || !__DEV__) {
+        console.warn('[SpinrConfig] No backend env var — using hardcoded production URL');
+        return PRODUCTION_BACKEND_URL;
+    }
     console.error(
         '[SpinrConfig] Backend URL not configured. Set EXPO_PUBLIC_BACKEND_URL ' +
         'in your .env file (e.g. http://192.168.x.x:8000 for LAN dev, or your ' +
         'deployed backend URL for production builds).'
     );
-    // Return an empty string rather than a stale production URL so
-    // requests fail fast with a clear "invalid URL" error instead of
-    // silently hitting a wrong host.
     return '';
 };
 

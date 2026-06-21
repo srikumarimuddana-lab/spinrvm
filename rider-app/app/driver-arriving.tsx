@@ -35,6 +35,7 @@ import { FreeCancelTimer } from '../components/FreeCancelTimer';
 import { useResponsive } from '@shared/utils/responsive';
 import BottomSheet, { BottomSheetScrollView } from '../components/SafeBottomSheet';
 import { useAppResumeKey } from '../hooks/useAppResumeKey';
+import { getRideMapCoords } from '../utils/rideMapCoords';
 
 function DriverArrivingScreenContent() {
   const { height: SCREEN_HEIGHT } = useWindowDimensions();
@@ -106,6 +107,7 @@ function DriverArrivingScreenContent() {
     }
   }, [currentRide?.status]);
 
+  const rideCoords = useMemo(() => getRideMapCoords(currentRide), [currentRide]);
   const cancellationFee = (currentRide as any)?.cancellation_fee ?? 3.0;
 
   // Capture the driver's position the first time valid coords arrive.
@@ -142,19 +144,19 @@ function DriverArrivingScreenContent() {
   // Stable pickup→dropoff refs — ride endpoints never change mid-ride.
   const rideRouteOrigin = useMemo(
     () =>
-      currentRide
-        ? { latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }
+      rideCoords
+        ? { latitude: rideCoords.pickupLat, longitude: rideCoords.pickupLng }
         : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [currentRide?.id],
+    [currentRide?.id, rideCoords?.pickupLat, rideCoords?.pickupLng],
   );
   const rideRouteDestination = useMemo(
     () =>
-      currentRide
-        ? { latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }
+      rideCoords
+        ? { latitude: rideCoords.dropoffLat, longitude: rideCoords.dropoffLng }
         : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [currentRide?.id],
+    [currentRide?.id, rideCoords?.dropoffLat, rideCoords?.dropoffLng],
   );
   const freeCancelWindowSeconds = (currentRide as any)?.free_cancel_window_seconds ?? 120;
 
@@ -210,18 +212,18 @@ function DriverArrivingScreenContent() {
 
   // ── Map fitting ──
   useEffect(() => {
-    if (currentRide && mapRef.current) {
+    if (currentRide && rideCoords && mapRef.current) {
       if (currentDriver?.lat != null && currentDriver?.lng != null) {
         mapRef.current.fitToCoordinates(
           [
-            { latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng },
+            { latitude: rideCoords.pickupLat, longitude: rideCoords.pickupLng },
             { latitude: currentDriver.lat, longitude: currentDriver.lng },
           ],
           { edgePadding: { top: 80, right: 50, bottom: SCREEN_HEIGHT * 0.5, left: 50 }, animated: true },
         );
       }
     }
-  }, [currentDriver?.lat, currentDriver?.lng, currentRide?.id]);
+  }, [currentDriver?.lat, currentDriver?.lng, currentRide?.id, rideCoords?.pickupLat, rideCoords?.pickupLng]);
 
   // ── Cancel handler (fixed: errors are caught, user stays on page) ──
   const performCancel = async (reason?: string) => {
@@ -325,13 +327,13 @@ function DriverArrivingScreenContent() {
   return (
     <View style={styles.container}>
       {/* ═══ Full-screen map ═══ */}
-      {currentRide ? (
+      {currentRide && rideCoords ? (
         <MapView
           ref={mapRef}
           provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
           style={StyleSheet.absoluteFill}
           initialRegion={{
-            latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng,
+            latitude: rideCoords.pickupLat, longitude: rideCoords.pickupLng,
             latitudeDelta: 0.02, longitudeDelta: 0.02,
           }}
         >
@@ -344,7 +346,7 @@ function DriverArrivingScreenContent() {
           {driverOriginSnapshot && activeDriverRouteCoords === null && (
             <MapViewDirections
               origin={driverOriginSnapshot}
-              destination={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
+              destination={{ latitude: rideCoords.pickupLat, longitude: rideCoords.pickupLng }}
               apikey={process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || ''}
               strokeWidth={0} strokeColor="transparent"
               onReady={(r: any) => {
@@ -378,12 +380,12 @@ function DriverArrivingScreenContent() {
           {rideRouteCoords.length > 1 && renderGradientPolyline(rideRouteCoords, false)}
 
           {/* Pickup marker */}
-          <Marker coordinate={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }} anchor={{ x: 0.5, y: 0.5 }} zIndex={103}>
+          <Marker coordinate={{ latitude: rideCoords.pickupLat, longitude: rideCoords.pickupLng }} anchor={{ x: 0.5, y: 0.5 }} zIndex={103}>
             <View style={styles.markerWrap}><View style={[styles.markerDot, { backgroundColor: '#10B981' }]} /></View>
           </Marker>
 
           {/* Dropoff marker */}
-          <Marker coordinate={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }} anchor={{ x: 0.5, y: 0.5 }} zIndex={103}>
+          <Marker coordinate={{ latitude: rideCoords.dropoffLat, longitude: rideCoords.dropoffLng }} anchor={{ x: 0.5, y: 0.5 }} zIndex={103}>
             <View style={styles.markerWrap}><View style={[styles.markerDot, { backgroundColor: '#EF4444' }]} /></View>
           </Marker>
 
@@ -405,7 +407,7 @@ function DriverArrivingScreenContent() {
       ) : (
         <View style={styles.mapPlaceholder}>
           <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={styles.loadingText}>Loading ride...</Text>
+          <Text style={styles.loadingText}>{currentRide ? 'Loading map...' : 'Loading ride...'}</Text>
         </View>
       )}
 
@@ -652,6 +654,7 @@ function DriverArrivingScreenContent() {
     </View>
   );
 }
+
 
 function renderGradientPolyline(coords: any[], dashed: boolean) {
   const total = coords.length;

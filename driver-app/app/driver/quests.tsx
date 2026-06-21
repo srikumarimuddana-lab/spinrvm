@@ -32,7 +32,7 @@ const QUEST_TYPE_LABELS: Record<string, string> = {
 export default function QuestsScreen() {
   const router = useRouter();
   const {
-    availableQuests, myQuests, isLoading,
+    availableQuests, myQuests, isLoading, error,
     fetchAvailableQuests, fetchMyQuests, joinQuest, claimReward,
   } = useQuestStore();
   const { colors } = useTheme();
@@ -239,7 +239,7 @@ export default function QuestsScreen() {
           onPress={() => setTab('available')}
         >
           <Text style={[styles.tabText, tab === 'available' && styles.tabTextActive]}>
-            Available ({availableQuests.filter(q => q.status === 'available').length})
+            Available ({availableQuests.length})
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -260,6 +260,19 @@ export default function QuestsScreen() {
         {isLoading && !refreshing ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color={colors.primary} />
+          </View>
+        ) : error && availableQuests.length === 0 && myQuests.length === 0 ? (
+          // Surface a real failure instead of a silent empty screen — without a
+          // distinct error state, a failed /quests fetch looks identical to
+          // "no quests available", which hides the actual problem.
+          <View style={styles.emptyContainer}>
+            <Ionicons name="cloud-offline-outline" size={48} color={colors.textDim} />
+            <Text style={styles.emptyText}>Couldn’t load quests</Text>
+            <Text style={styles.emptySubtext}>Check your connection and try again.</Text>
+            <TouchableOpacity style={styles.retryButton} onPress={onRefresh}>
+              <Ionicons name="refresh" size={16} color="#FFF" />
+              <Text style={styles.retryButtonText}>Retry</Text>
+            </TouchableOpacity>
           </View>
         ) : tab === 'available' ? (
           availableQuests.length === 0 ? (
@@ -395,5 +408,11 @@ function createStyles(colors: ThemeColors) {
     emptyContainer: { alignItems: 'center', paddingTop: 60 },
     emptyText: { fontSize: 16, fontWeight: '600', color: colors.textSecondary, marginTop: 12 },
     emptySubtext: { fontSize: 14, color: colors.border, marginTop: 4 },
+    retryButton: {
+      flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 16,
+      backgroundColor: colors.primary, borderRadius: 12,
+      paddingVertical: 10, paddingHorizontal: 20,
+    },
+    retryButtonText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
   });
 }

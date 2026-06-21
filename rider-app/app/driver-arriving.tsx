@@ -35,6 +35,7 @@ import { FreeCancelTimer } from '../components/FreeCancelTimer';
 import { useResponsive } from '@shared/utils/responsive';
 import BottomSheet, { BottomSheetScrollView } from '../components/SafeBottomSheet';
 import { useAppResumeKey } from '../hooks/useAppResumeKey';
+import { getRideMapCoords } from '../utils/rideMapCoords';
 
 function DriverArrivingScreenContent() {
   const { height: SCREEN_HEIGHT } = useWindowDimensions();
@@ -654,30 +655,6 @@ function DriverArrivingScreenContent() {
   );
 }
 
-
-type RideMapCoords = {
-  pickupLat: number;
-  pickupLng: number;
-  dropoffLat: number;
-  dropoffLng: number;
-};
-
-function finiteNumber(value: unknown): number | null {
-  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
-  return Number.isFinite(n) ? n : null;
-}
-
-function getRideMapCoords(ride: any): RideMapCoords | null {
-  if (!ride) return null;
-  const pickupLat = finiteNumber(ride.pickup_lat ?? ride.pickup?.lat);
-  const pickupLng = finiteNumber(ride.pickup_lng ?? ride.pickup?.lng);
-  const dropoffLat = finiteNumber(ride.dropoff_lat ?? ride.dropoff?.lat);
-  const dropoffLng = finiteNumber(ride.dropoff_lng ?? ride.dropoff?.lng);
-  if (pickupLat === null || pickupLng === null || dropoffLat === null || dropoffLng === null) {
-    return null;
-  }
-  return { pickupLat, pickupLng, dropoffLat, dropoffLng };
-}
 
 function renderGradientPolyline(coords: any[], dashed: boolean) {
   const total = coords.length;

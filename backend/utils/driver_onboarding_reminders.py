@@ -31,7 +31,7 @@ try:
         reminder_message,
         should_skip_driver,
     )
-    from ..utils.error_handling import DuplicateRecordError
+    from ..utils.error_handling import DuplicateRecordError, db_error_text
 except ImportError:
     import db_supabase as db  # type: ignore
     from features import send_push_notification  # type: ignore
@@ -46,7 +46,7 @@ except ImportError:
         reminder_message,
         should_skip_driver,
     )
-    from utils.error_handling import DuplicateRecordError  # type: ignore
+    from utils.error_handling import DuplicateRecordError, db_error_text  # type: ignore
 
 
 logger = logging.getLogger(__name__)
@@ -97,6 +97,17 @@ async def _claim(driver_id: str, user_id: str, kind: str, local_date: str, now: 
     except DuplicateRecordError:
         return None
     except Exception as exc:
+        # Already-claimed today is the expected, benign outcome of the daily
+        # unique index (driver_id, reminder_type, local_date) — another replica,
+        # an earlier tick, or a lost-response retry already wrote the row. It
+        # should be a silent skip, not an error. We still reach here (rather than
+        # the DuplicateRecordError branch above) when the wrapped exception class
+        # differs by import path under the dual-import pattern, so fall back to
+        # matching the unique-violation by its text, the same way scheduled_rides
+        # and insurance_periods do.
+        text = db_error_text(exc)
+        if "duplicate key" in text or "unique constraint" in text or "23505" in text:
+            return None
         original = getattr(exc, "details", {}).get("original") if hasattr(exc, "details") else None
         logger.error(
             "onboarding reminders: claim failed for %s/%s: %s original=%s",

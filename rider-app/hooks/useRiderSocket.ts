@@ -244,6 +244,16 @@ export function useRiderSocket() {
 
     const wsScheme = API_URL.startsWith('https') ? 'wss' : 'ws';
     const wsUrl = `${API_URL.replace(/^https?/, wsScheme)}/ws/rider/${userId}`;
+    // Guard: an empty/scheme-less API_URL produces "/ws/rider/..." which the
+    // native WebSocket module rejects with a FATAL IllegalArgumentException
+    // ("Expected URL scheme 'http'/'https' but no colon was found"), taking the
+    // whole app down on launch. Skip connecting (polling remains the fallback)
+    // rather than crash; reconnect once a valid URL is configured.
+    if (!/^wss?:\/\/.+/.test(wsUrl)) {
+      console.error('[WS] Backend URL not configured — skipping WebSocket connect:', wsUrl);
+      setConnectionState('disconnected');
+      return;
+    }
     console.log('[WS] Rider connecting:', wsUrl);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;

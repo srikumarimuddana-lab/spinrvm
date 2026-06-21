@@ -5,6 +5,7 @@ Multi-stop Rides, Safety Toolkit, Push Notifications.
 """
 
 import asyncio
+import json
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -1258,6 +1259,35 @@ async def _send_expo_push(token: str, title: str, body: str, data: Dict[str, str
         return False
 
 
+def _stringify_push_data(data: Dict[str, Any] | None) -> Dict[str, str]:
+    """Coerce a push data payload to all-string values.
+
+    FCM (messaging.Message.data) and Expo both require every data value to be a
+    string and reject the whole message otherwise ("Message.data must not
+    contain non-string values."). Callers occasionally pass a bool / int / None
+    (e.g. ``{"is_auto": True}``), which would drop the notification entirely.
+    Normalise here, at the single delivery choke point, so no caller can break
+    delivery:
+      - None        → key dropped (FCM has no null; an empty string is ambiguous)
+      - bool        → "true" / "false" (lowercase, for JS-side equality checks)
+      - dict / list → JSON string (client JSON.parses it)
+      - everything  → str(value)
+    """
+    if not data:
+        return {}
+    out: Dict[str, str] = {}
+    for key, value in data.items():
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            out[str(key)] = "true" if value else "false"
+        elif isinstance(value, (dict, list)):
+            out[str(key)] = json.dumps(value, separators=(",", ":"))
+        else:
+            out[str(key)] = str(value)
+    return out
+
+
 async def _deliver_push_now(
     token: str,
     title: str,
@@ -1273,6 +1303,7 @@ async def _deliver_push_now(
     purged so the next login re-registers. Never raises — returns False on any
     failure so the caller can decide whether to enqueue a retry.
     """
+    data = _stringify_push_data(data)
     if _is_expo_token(token):
         return await _send_expo_push(token, title, body, data)
 

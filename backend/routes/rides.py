@@ -1818,7 +1818,7 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                 current_ride["rider_id"],
                 "Ride Cancelled ❌",
                 "No nearby drivers were found. Your ride has been automatically cancelled. Please try again.",
-                {"type": "ride_cancelled", "ride_id": r_id, "is_auto": True},
+                {"type": "ride_cancelled", "ride_id": r_id, "is_auto": "true"},
             )
             logger.info(f"Ride {r_id} auto-cancelled after {timeout_seconds}s - no driver found")
     except Exception as e:

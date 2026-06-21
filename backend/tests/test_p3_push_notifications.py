@@ -704,3 +704,43 @@ class TestDebugRideOffer:
                 )
 
         assert exc.value.status_code == 404
+
+
+class TestStringifyPushData:
+    """Regression for FCM 'Message.data must not contain non-string values.'
+
+    The auto-cancel push to the rider sent {"is_auto": True} (a bool), which
+    Firebase rejects outright — dropping the whole notification. _deliver_push_now
+    now normalises every value to a string at the delivery choke point.
+    """
+
+    def test_bool_int_none_dict_coerced(self):
+        from backend.features import _stringify_push_data
+
+        out = _stringify_push_data(
+            {
+                "type": "ride_cancelled",
+                "ride_id": "r-1",
+                "is_auto": True,
+                "missed": False,
+                "count": 3,
+                "ignored": None,
+                "extra": {"k": 1},
+            }
+        )
+
+        # Every value is a string (the FCM contract).
+        assert all(isinstance(v, str) for v in out.values())
+        assert out["type"] == "ride_cancelled"
+        assert out["ride_id"] == "r-1"
+        assert out["is_auto"] == "true"   # JS-friendly lowercase
+        assert out["missed"] == "false"
+        assert out["count"] == "3"
+        assert out["extra"] == '{"k":1}'  # nested → JSON string
+        assert "ignored" not in out       # None dropped (FCM has no null)
+
+    def test_none_and_empty_return_empty_dict(self):
+        from backend.features import _stringify_push_data
+
+        assert _stringify_push_data(None) == {}
+        assert _stringify_push_data({}) == {}

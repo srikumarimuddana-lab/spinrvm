@@ -13,8 +13,18 @@ def _reset_completed_windows(monkeypatch):
 
 
 class FakeReminderDB:
-    def __init__(self, *, duplicate_claims: bool = False, docs: list[dict] | None = None):
+    def __init__(
+        self,
+        *,
+        duplicate_claims: bool = False,
+        raw_duplicate_claims: bool = False,
+        docs: list[dict] | None = None,
+    ):
         self.duplicate_claims = duplicate_claims
+        # Simulate the duplicate surfacing as a generic exception whose text
+        # carries the unique-violation (not the typed DuplicateRecordError) —
+        # the dual-import-class-mismatch case the text fallback must still skip.
+        self.raw_duplicate_claims = raw_duplicate_claims
         self.docs = docs or []
         self.claims: list[dict] = []
         self.updates: list[tuple[dict, dict]] = []
@@ -63,6 +73,11 @@ class FakeReminderDB:
             from utils.driver_onboarding_reminders import DuplicateRecordError
 
             raise DuplicateRecordError("duplicate daily reminder")
+        if self.raw_duplicate_claims:
+            raise RuntimeError(
+                'duplicate key value violates unique constraint '
+                '"driver_onboarding_reminder_log_daily_uidx"'
+            )
         row = {**doc, "id": f"log-{len(self.claims) + 1}"}
         self.claims.append(row)
         return row
@@ -110,6 +125,28 @@ async def test_duplicate_daily_claim_suppresses_duplicate_pushes(monkeypatch):
 
     stats = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 5, tzinfo=timezone.utc))
 
+    assert stats == {"drivers_scanned": 1, "claims_attempted": 2, "pushes_delivered": 0}
+    assert fake_db.claims == []
+    assert fake_db.updates == []
+    send_push.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_raw_unique_violation_treated_as_already_claimed(monkeypatch):
+    """A duplicate that surfaces as a generic exception (not the typed
+    DuplicateRecordError — e.g. dual-import class mismatch) must still be a
+    silent skip, not an error-logged claim failure that re-sends next tick."""
+    from utils import driver_onboarding_reminders as reminders
+
+    fake_db = FakeReminderDB(raw_duplicate_claims=True)
+    send_push = AsyncMock(return_value=True)
+    monkeypatch.setattr(reminders, "db", fake_db)
+    monkeypatch.setattr(reminders, "send_push_notification", send_push)
+
+    stats = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 5, tzinfo=timezone.utc))
+
+    # Same observable outcome as the typed-duplicate case: no push, no claim
+    # row, no update — and crucially the window still completes (no _CLAIM_ERROR).
     assert stats == {"drivers_scanned": 1, "claims_attempted": 2, "pushes_delivered": 0}
     assert fake_db.claims == []
     assert fake_db.updates == []

@@ -69,6 +69,8 @@ interface Participant {
   claimed_at: string | null;
 }
 
+// All quest types, used for rendering a human label wherever a quest's type is
+// shown (table, existing quests of any type).
 const QUEST_TYPES = [
   { value: "ride_count", label: "Ride Count" },
   { value: "earnings_target", label: "Earnings Target" },
@@ -77,6 +79,18 @@ const QUEST_TYPES = [
   { value: "consecutive_days", label: "Consecutive Days" },
   { value: "rating_maintained", label: "Rating Maintained" },
 ];
+
+// Only these types have progression logic wired in the backend
+// (utils/quest_tracker.py advances them on ride completion). The others
+// (online_hours, consecutive_days, rating_maintained) need dedicated trackers —
+// online-session time aggregation, timezone-aware day-streak counting, and an
+// end-of-window rating evaluator respectively — so a quest created with them
+// would silently never progress. Keep them out of the create dropdown until
+// those trackers exist; QUEST_TYPES above still renders their labels for any
+// pre-existing quests.
+const CREATABLE_QUEST_TYPES = QUEST_TYPES.filter((t) =>
+  ["ride_count", "earnings_target", "peak_rides"].includes(t.value),
+);
 
 const STATUS_COLORS: Record<string, string> = {
   active: "bg-blue-100 text-blue-700",
@@ -440,7 +454,7 @@ export default function QuestsPage() {
                 <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {QUEST_TYPES.map((t) => (
+                    {CREATABLE_QUEST_TYPES.map((t) => (
                       <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
                     ))}
                   </SelectContent>

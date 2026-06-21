@@ -244,6 +244,38 @@ class TestJoinQuest:
 
         assert resp.status_code == 400
 
+    def test_join_foreign_area_scoped_quest_returns_403(self, client):
+        """An area-scoped quest must reject a driver from a different service
+        area at join time — not just hide it from GET /quests — so its reward
+        can't be claimed by someone outside the intended area."""
+        scoped_quest = {**SAMPLE_QUEST, "service_area_id": "area_2"}
+        mock_db = make_mock_db()
+        mock_db.drivers.find_one = AsyncMock(return_value=SAMPLE_DRIVER)  # area_1
+        mock_db.quests.find_one = AsyncMock(return_value=scoped_quest)
+        mock_db.quest_progress.find_one = AsyncMock(return_value=None)
+        insert = AsyncMock(return_value=None)
+        mock_db.quest_progress.insert_one = insert
+
+        with patch("routes.quests.db", mock_db):
+            resp = client.post("/api/v1/quests/quest_1/join")
+
+        assert resp.status_code == 403
+        assert "service area" in resp.json()["detail"].lower()
+        insert.assert_not_awaited()  # never created progress for an ineligible driver
+
+    def test_join_matching_area_scoped_quest_succeeds(self, client):
+        """A driver in the quest's own service area can still join."""
+        scoped_quest = {**SAMPLE_QUEST, "service_area_id": "area_1"}
+        mock_db = make_mock_db()
+        mock_db.drivers.find_one = AsyncMock(return_value=SAMPLE_DRIVER)  # area_1
+        mock_db.quests.find_one = AsyncMock(return_value=scoped_quest)
+        mock_db.quest_progress.find_one = AsyncMock(return_value=None)
+
+        with patch("routes.quests.db", mock_db):
+            resp = client.post("/api/v1/quests/quest_1/join")
+
+        assert resp.status_code == 200
+
 
 class TestGetMyQuests:
     """GET /api/v1/quests/my-quests"""
@@ -536,3 +568,105 @@ class TestAdminGetParticipants:
             resp = client.get("/api/v1/quests/admin/bad_quest/participants")
 
         assert resp.status_code == 404
+
+
+class TestQuestTrackerOnRideComplete:
+    """utils.quest_tracker.update_quest_progress_on_ride_complete — the hook the
+    ride-completion paths (drivers.py::complete_ride, rides.py::rider_complete_ride)
+    call so joined quests actually advance instead of sitting at 0%."""
+
+    @pytest.mark.anyio
+    async def test_ride_count_increments_and_completes(self):
+        from utils.quest_tracker import update_quest_progress_on_ride_complete
+
+        active_progress = {
+            "id": "progress_1",
+            "quest_id": "quest_1",
+            "driver_id": "driver_123",
+            "current_value": 9,  # one ride short of the target of 10
+            "status": "active",
+        }
+        mock_db = make_mock_db()
+        mock_db.get_rows = AsyncMock(return_value=[active_progress])
+        mock_db.quests.find_one = AsyncMock(return_value=SAMPLE_QUEST)
+        captured = {}
+
+        async def _update_one(table, filters, update, **kwargs):
+            captured["table"] = table
+            captured["update"] = update
+            return {"id": "progress_1"}
+
+        mock_db.update_one = _update_one
+
+        with patch("utils.quest_tracker.db", mock_db):
+            await update_quest_progress_on_ride_complete("driver_123", {"id": "ride_1"})
+
+        assert captured["table"] == "quest_progress"
+        changes = captured["update"]["$set"]
+        assert changes["current_value"] == 10
+        assert changes["status"] == "completed"
+        assert "completed_at" in changes
+
+    @pytest.mark.anyio
+    async def test_no_active_progress_is_noop(self):
+        from utils.quest_tracker import update_quest_progress_on_ride_complete
+
+        mock_db = make_mock_db()
+        mock_db.get_rows = AsyncMock(return_value=[])
+        called = {"update": False}
+
+        async def _update_one(*args, **kwargs):
+            called["update"] = True
+
+        mock_db.update_one = _update_one
+
+        with patch("utils.quest_tracker.db", mock_db):
+            await update_quest_progress_on_ride_complete("driver_123", {"id": "ride_1"})
+
+        assert called["update"] is False
+
+    @staticmethod
+    def _peak_setup(completed_at_utc):
+        """Wire a peak_rides quest at current_value 2 and capture the update."""
+        peak_quest = {**SAMPLE_QUEST, "id": "quest_peak", "type": "peak_rides", "target_value": 5.0}
+        active_progress = {
+            "id": "progress_peak", "quest_id": "quest_peak", "driver_id": "driver_123",
+            "current_value": 2, "status": "active",
+        }
+        mock_db = make_mock_db()
+        mock_db.get_rows = AsyncMock(return_value=[active_progress])
+        mock_db.quests.find_one = AsyncMock(return_value=peak_quest)
+        captured = {}
+
+        async def _update_one(table, filters, update, **kwargs):
+            captured["update"] = update
+            return {"id": "progress_peak"}
+
+        mock_db.update_one = _update_one
+        # No service_area_id on the ride → tracker falls back to America/Regina (UTC-6).
+        ride = {"id": "ride_1", "ride_completed_at": completed_at_utc, "service_area_id": None}
+        return mock_db, ride, captured
+
+    @pytest.mark.anyio
+    async def test_peak_rides_counts_in_local_evening_peak(self):
+        """23:30 UTC is 17:30 in America/Regina (5:30 PM) — inside the 5-8 PM
+        peak window, so the quest advances even though the UTC hour (23) is not."""
+        from utils.quest_tracker import update_quest_progress_on_ride_complete
+
+        mock_db, ride, captured = self._peak_setup("2026-06-21T23:30:00+00:00")
+        with patch("utils.quest_tracker.db", mock_db):
+            await update_quest_progress_on_ride_complete("driver_123", ride)
+
+        assert captured["update"]["$set"]["current_value"] == 3
+
+    @pytest.mark.anyio
+    async def test_peak_rides_ignores_utc_only_peak_hour(self):
+        """08:30 UTC looks like a 7-9 AM peak in UTC, but it is 02:30 local in
+        America/Regina — off-peak — so the quest must NOT advance."""
+        from utils.quest_tracker import update_quest_progress_on_ride_complete
+
+        mock_db, ride, captured = self._peak_setup("2026-06-21T08:30:00+00:00")
+        with patch("utils.quest_tracker.db", mock_db):
+            await update_quest_progress_on_ride_complete("driver_123", ride)
+
+        assert captured["update"]["$set"]["current_value"] == 2

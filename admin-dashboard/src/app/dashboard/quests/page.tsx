@@ -20,7 +20,19 @@ import {
   Trophy, Plus, Users,
   RefreshCw, ChevronDown, ChevronUp, BarChart3,
 } from "lucide-react";
-import { getQuests, createQuest, updateQuest, getQuestParticipants } from "@/lib/api";
+import { getQuests, createQuest, updateQuest, getQuestParticipants, getServiceAreas } from "@/lib/api";
+
+// datetime-local inputs hold a *local* wall-clock string. Format a Date into
+// that shape in LOCAL time — using toISOString() here would stuff a UTC clock
+// into a local-interpreted field, so on submit new Date(value).toISOString()
+// would double-convert and push the quest's start hours into the future
+// (Saskatchewan is UTC−6), hiding it from drivers until then.
+function toLocalInput(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+const ALL_AREAS = "__all__";
 
 interface Quest {
   id: string;
@@ -57,6 +69,8 @@ interface Participant {
   claimed_at: string | null;
 }
 
+// All quest types, used for rendering a human label wherever a quest's type is
+// shown (table, existing quests of any type).
 const QUEST_TYPES = [
   { value: "ride_count", label: "Ride Count" },
   { value: "earnings_target", label: "Earnings Target" },
@@ -65,6 +79,18 @@ const QUEST_TYPES = [
   { value: "consecutive_days", label: "Consecutive Days" },
   { value: "rating_maintained", label: "Rating Maintained" },
 ];
+
+// Only these types have progression logic wired in the backend
+// (utils/quest_tracker.py advances them on ride completion). The others
+// (online_hours, consecutive_days, rating_maintained) need dedicated trackers —
+// online-session time aggregation, timezone-aware day-streak counting, and an
+// end-of-window rating evaluator respectively — so a quest created with them
+// would silently never progress. Keep them out of the create dropdown until
+// those trackers exist; QUEST_TYPES above still renders their labels for any
+// pre-existing quests.
+const CREATABLE_QUEST_TYPES = QUEST_TYPES.filter((t) =>
+  ["ride_count", "earnings_target", "peak_rides"].includes(t.value),
+);
 
 const STATUS_COLORS: Record<string, string> = {
   active: "bg-blue-100 text-blue-700",
@@ -80,6 +106,7 @@ export default function QuestsPage() {
   const [expandedQuest, setExpandedQuest] = useState<string | null>(null);
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [participantsLoading, setParticipantsLoading] = useState(false);
+  const [serviceAreas, setServiceAreas] = useState<{ id: string; name: string }[]>([]);
 
   // Form state
   const [form, setForm] = useState({
@@ -89,10 +116,11 @@ export default function QuestsPage() {
     target_value: 20,
     reward_amount: 25,
     reward_type: "wallet_credit",
-    start_date: new Date().toISOString().slice(0, 16),
-    end_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 16),
+    start_date: toLocalInput(new Date()),
+    end_date: toLocalInput(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)),
     max_participants: "",
     min_driver_rating: "",
+    service_area_id: ALL_AREAS,
   });
 
   const fetchQuests = useCallback(async () => {
@@ -109,6 +137,12 @@ export default function QuestsPage() {
 
   useEffect(() => { fetchQuests(); }, [fetchQuests]);
 
+  useEffect(() => {
+    getServiceAreas()
+      .then((areas) => setServiceAreas((areas || []).map((a: { id: string; name: string }) => ({ id: a.id, name: a.name }))))
+      .catch((err) => console.error("Failed to fetch service areas:", err));
+  }, []);
+
   const handleCreate = async () => {
     try {
       await createQuest({
@@ -118,10 +152,15 @@ export default function QuestsPage() {
         target_value: Number(form.target_value),
         reward_amount: Number(form.reward_amount),
         reward_type: form.reward_type,
+        // datetime-local value is local wall-clock; toISOString() converts it to UTC.
         start_date: new Date(form.start_date).toISOString(),
         end_date: new Date(form.end_date).toISOString(),
         max_participants: form.max_participants ? Number(form.max_participants) : null,
         min_driver_rating: form.min_driver_rating ? Number(form.min_driver_rating) : null,
+        // ALL_AREAS → null so the quest is global; otherwise scope it to the area
+        // (the driver-facing /quests endpoint hides quests whose area ≠ the
+        // driver's service_area_id).
+        service_area_id: form.service_area_id === ALL_AREAS ? null : form.service_area_id,
       });
       setShowCreate(false);
       resetForm();
@@ -162,9 +201,9 @@ export default function QuestsPage() {
     setForm({
       title: "", description: "", type: "ride_count",
       target_value: 20, reward_amount: 25, reward_type: "wallet_credit",
-      start_date: new Date().toISOString().slice(0, 16),
-      end_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 16),
-      max_participants: "", min_driver_rating: "",
+      start_date: toLocalInput(new Date()),
+      end_date: toLocalInput(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)),
+      max_participants: "", min_driver_rating: "", service_area_id: ALL_AREAS,
     });
   };
 
@@ -172,6 +211,9 @@ export default function QuestsPage() {
     new Date(d).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" });
 
   const isExpired = (endDate: string) => new Date(endDate) < new Date();
+
+  const areaName = (id: string | null) =>
+    id ? (serviceAreas.find((a) => a.id === id)?.name ?? "Scoped area") : "All areas";
 
   // Stats
   const totalQuests = quests.length;
@@ -267,6 +309,9 @@ export default function QuestsPage() {
                         <div className="text-xs text-muted-foreground truncate max-w-[200px]">
                           {quest.description}
                         </div>
+                        <Badge variant="outline" className="text-[10px] mt-1 font-normal">
+                          {areaName(quest.service_area_id)}
+                        </Badge>
                       </TableCell>
                       <TableCell>
                         <Badge variant="outline">
@@ -409,7 +454,7 @@ export default function QuestsPage() {
                 <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {QUEST_TYPES.map((t) => (
+                    {CREATABLE_QUEST_TYPES.map((t) => (
                       <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
                     ))}
                   </SelectContent>
@@ -455,6 +500,21 @@ export default function QuestsPage() {
                 <Label htmlFor="minr">Min Driver Rating (optional)</Label>
                 <Input id="minr" type="number" step="0.1" value={form.min_driver_rating} onChange={(e) => setForm({ ...form, min_driver_rating: e.target.value })} placeholder="Any" />
               </div>
+            </div>
+            <div>
+              <Label>Service Area</Label>
+              <Select value={form.service_area_id} onValueChange={(v) => setForm({ ...form, service_area_id: v })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_AREAS}>All areas</SelectItem>
+                  {serviceAreas.map((a) => (
+                    <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground mt-1">
+                Scoped quests only show to drivers whose home service area matches.
+              </p>
             </div>
           </div>
           <div className="flex justify-end gap-2">

@@ -90,6 +90,13 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             foregroundImage: './assets/images/adaptive-icon.png',
             backgroundColor: '#FFFFFF'
         },
+        // Force adjustResize so the window shrinks when the soft keyboard opens.
+        // Our forms wrap a ScrollView in KeyboardAvoidingView with an inert
+        // (undefined) Android behavior and rely on the OS resize to make the
+        // focused field + submit button scroll into view instead of being
+        // covered by the keyboard. Without this pinned, an adjustPan default
+        // leaves the keyboard floating over the inputs (sign-up screens).
+        softwareKeyboardLayoutMode: 'resize',
         package: BUNDLE_ID,
         googleServicesFile: './google-services.json',
         config: {

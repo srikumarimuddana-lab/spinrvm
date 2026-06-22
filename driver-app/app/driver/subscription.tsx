@@ -31,6 +31,15 @@ interface Subscription {
   expires_at: string;
 }
 
+interface Payment {
+  id: string;
+  plan_name: string;
+  amount: string;
+  currency: string;
+  billing_reason: string | null;
+  created_at: string;
+}
+
 export default function SubscriptionScreen() {
   const router = useRouter();
   const [plans, setPlans] = useState<Plan[]>([]);
@@ -39,6 +48,7 @@ export default function SubscriptionScreen() {
   const [freeMessage, setFreeMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [subscribing, setSubscribing] = useState<string | null>(null);
+  const [payments, setPayments] = useState<Payment[]>([]);
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
@@ -82,9 +92,10 @@ export default function SubscriptionScreen() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [plansRes, subRes] = await Promise.all([
+      const [plansRes, subRes, paymentsRes] = await Promise.all([
         api.get<{ plans?: Plan[]; free_mode?: boolean; message?: string } | Plan[]>('/drivers/subscription/plans'),
         api.get<any>('/drivers/subscription/current'),
+        api.get<{ payments: Payment[] }>('/drivers/subscription/payments?limit=10').catch(() => ({ data: { payments: [] } })),
       ]);
       const data = plansRes.data;
       // Backend returns {plans, free_mode, message} when Spinr Pass is off
@@ -99,6 +110,7 @@ export default function SubscriptionScreen() {
         setFreeMode(false);
       }
       setCurrentSub(subRes.data);
+      setPayments(paymentsRes.data?.payments || []);
     } catch (e) { console.log('Sub load error:', e); }
     finally { setLoading(false); }
   };
@@ -349,6 +361,32 @@ export default function SubscriptionScreen() {
           </View>
         )}
 
+        {/* Payment History */}
+        {payments.length > 0 && (
+          <>
+            <Text style={styles.sectionTitle}>Payment History</Text>
+            <Text style={styles.sectionSubtitle}>Your last 10 Spinr Pass charges</Text>
+            {payments.map((p) => (
+              <View key={p.id} style={styles.paymentRow}>
+                <View style={styles.paymentIcon}>
+                  <Ionicons name="receipt-outline" size={20} color={colors.primary} />
+                </View>
+                <View style={styles.paymentInfo}>
+                  <Text style={styles.paymentPlan}>{p.plan_name || 'Spinr Pass'}</Text>
+                  <Text style={styles.paymentMeta}>
+                    {p.billing_reason === 'subscription_cycle' ? 'Auto-renewal' : 'One-time purchase'}
+                    {'  ·  '}
+                    {formatDate(p.created_at)}
+                  </Text>
+                </View>
+                <Text style={styles.paymentAmount}>
+                  ${parseFloat(p.amount).toFixed(2)} {p.currency}
+                </Text>
+              </View>
+            ))}
+          </>
+        )}
+
       </ScrollView>
 
     </SafeAreaView>
@@ -434,5 +472,19 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: '#D1FAE5', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 12,
     },
     freeBadgeText: { fontSize: 13, fontWeight: '700', color: '#065F46' },
+
+    // Payment history
+    paymentRow: {
+      flexDirection: 'row', alignItems: 'center', marginHorizontal: 16, marginBottom: 8,
+      backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 14, gap: 12,
+    },
+    paymentIcon: {
+      width: 40, height: 40, borderRadius: 12, backgroundColor: colors.surface,
+      justifyContent: 'center', alignItems: 'center',
+    },
+    paymentInfo: { flex: 1 },
+    paymentPlan: { fontSize: 14, fontWeight: '600', color: colors.text },
+    paymentMeta: { fontSize: 12, color: colors.textDim, marginTop: 2 },
+    paymentAmount: { fontSize: 15, fontWeight: '700', color: colors.text },
   });
 }

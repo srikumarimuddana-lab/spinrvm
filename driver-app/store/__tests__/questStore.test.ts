@@ -96,6 +96,14 @@ describe('questStore — fetchAvailableQuests', () => {
         expect(useQuestStore.getState().availableQuests).toEqual([]);
     });
 
+    it('accepts wrapped available quest payloads from API variants', async () => {
+        mockGet.mockResolvedValue({ data: { quests: [sampleQuest], count: 1 } });
+
+        await useQuestStore.getState().fetchAvailableQuests();
+
+        expect(useQuestStore.getState().availableQuests).toEqual([sampleQuest]);
+    });
+
     it('sets error message on API failure', async () => {
         const err = new Error('Network error');
         mockGet.mockRejectedValue(err);
@@ -136,6 +144,14 @@ describe('questStore — fetchMyQuests', () => {
         await useQuestStore.getState().fetchMyQuests();
 
         expect(useQuestStore.getState().myQuests).toEqual([]);
+    });
+
+    it('accepts wrapped my quest payloads from API variants', async () => {
+        mockGet.mockResolvedValue({ data: { my_quests: [sampleProgress], count: 1 } });
+
+        await useQuestStore.getState().fetchMyQuests();
+
+        expect(useQuestStore.getState().myQuests).toEqual([sampleProgress]);
     });
 
     it('clears isLoadingMine on API failure without setting error', async () => {

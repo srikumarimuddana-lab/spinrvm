@@ -275,11 +275,7 @@ export default function QuestsScreen() {
               </TouchableOpacity>
             </View>
           ) : availableQuests.length === 0 ? (
-            <View style={styles.emptyContainer}>
-              <Ionicons name="trophy-outline" size={48} color="#CCC" />
-              <Text style={styles.emptyText}>No quests available right now</Text>
-              <Text style={styles.emptySubtext}>Check back soon for new challenges!</Text>
-            </View>
+            <Text style={styles.emptyText}>No quests available right now</Text>
           ) : (
             availableQuests.map(renderAvailableQuest)
           )
@@ -289,11 +285,7 @@ export default function QuestsScreen() {
               <ActivityIndicator size="large" color={colors.primary} />
             </View>
           ) : myQuests.length === 0 ? (
-            <View style={styles.emptyContainer}>
-              <Ionicons name="flag-outline" size={48} color="#CCC" />
-              <Text style={styles.emptyText}>No active quests</Text>
-              <Text style={styles.emptySubtext}>Join a quest to start earning bonus rewards!</Text>
-            </View>
+            <Text style={styles.emptyText}>No active quests yet</Text>
           ) : (
             <>
               {activeQuests.length > 0 && (
@@ -415,7 +407,7 @@ function createStyles(colors: ThemeColors) {
 
     loadingContainer: { alignItems: 'center', justifyContent: 'center', paddingTop: 80 },
     emptyContainer: { alignItems: 'center', paddingTop: 60 },
-    emptyText: { fontSize: 16, fontWeight: '600', color: colors.textSecondary, marginTop: 12 },
+    emptyText: { fontSize: 15, color: '#AAAAAA', textAlign: 'center', marginTop: 40 },
     emptySubtext: { fontSize: 14, color: colors.border, marginTop: 4 },
     retryButton: {
       flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 16,

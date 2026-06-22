@@ -190,8 +190,8 @@ async def top_up_wallet(
 
     try:
         ephemeral_key = stripe.EphemeralKey.create(
-            {"customer": stripe_customer_id},
-            api_version=stripe.api_version,
+            customer=stripe_customer_id,
+            stripe_version=stripe.api_version,
             api_key=stripe_secret,
         )
 

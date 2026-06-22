@@ -362,6 +362,13 @@ function RideOptionsScreenContent() {
       const corpId = useCorporate && selectedCorporateId ? selectedCorporateId : null;
       const pmId = selectedPayment === 'card' ? (selectedCardId ?? undefined) : undefined;
       const ride = await createRide(selectedPayment, corpId, pmId);
+      if ('requires_action' in ride) {
+        // A card needing on-device 3DS returns RideRequiresAction, but this
+        // screen can't run the Stripe confirm (only payment-confirm does).
+        // Surface it instead of navigating on with an undefined ride id.
+        showToast('Card authentication needed', 'This card needs extra verification. Please pick another payment method or try again.', 'warning');
+        return;
+      }
       if ((ride as any).promo_error) {
         showToast('Promo not applied', (ride as any).promo_error, 'warning');
       }

@@ -6903,39 +6903,6 @@ async def check_expiring_subscriptions():
                     enforced_count += 1
                     continue
 
-                # ── Warning branch: 3-day advance notice ─────────────────
-                # Gate to the exclusive window (24h, 72h] so subs already
-                # inside the 24h window only get the 24h push, not both.
-                # Claim the flag atomically (WHERE expiry_warned_3d = false)
-                # BEFORE sending — prevents duplicate pushes across replicas
-                # when Redis is unavailable and the lock falls back to all-run.
-                if not sub.get("expiry_warned_3d") and window_24h < expires_dt <= window_3d:
-                    claimed = await db.update_one(
-                        "driver_subscriptions",
-                        {"id": sub["id"], "expiry_warned_3d": False},
-                        {"$set": {"expiry_warned_3d": True}},
-                    )
-                    if claimed is None:
-                        # Another replica already claimed this row; skip.
-                        continue
-                    driver_3d = await db.find_one("drivers", {"id": sub["driver_id"]})
-                    if driver_3d and driver_3d.get("user_id"):
-                        days_left = max(1, int((expires_dt - now).total_seconds() / 86400))
-                        plan_name = sub.get("plan_name", "Spinr Pass")
-                        try:
-                            await send_push_notification(
-                                driver_3d["user_id"],
-                                "Spinr Pass Expiring in 3 Days",
-                                f"Your {plan_name} plan expires in ~{days_left} day{'s' if days_left != 1 else ''}. Renew now to keep driving!",
-                                {
-                                    "type": "subscription_expiring_3d",
-                                    "days_left": str(days_left),
-                                },
-                            )
-                            warned_count += 1
-                        except Exception as e:
-                            logger.warning(f"[SUB-EXPIRY] 3d push failed for driver {sub['driver_id']}: {e}")
-
                 # ── Warning branch: 24-hour final notice ─────────────────
                 if sub.get("expiry_warned"):
                     continue
@@ -6965,9 +6932,68 @@ async def check_expiring_subscriptions():
                         {"$set": {"expiry_warned": True}},
                     )
 
+            # ── 3-day advance warning: dedicated targeted query ──────────
+            # Query only the subs in the (24h, 72h] expiry window that
+            # haven't been warned yet, bypassing the 500-row active_subs cap
+            # so no expiring row is silently skipped on a busy platform.
+            subs_3d = (
+                await db.get_rows(
+                    "driver_subscriptions",
+                    {
+                        "$and": [
+                            {"status": "active"},
+                            {"expiry_warned_3d": False},
+                            {"expires_at": {"$gt": window_24h.isoformat()}},
+                            {"expires_at": {"$lte": window_3d.isoformat()}},
+                        ]
+                    },
+                    limit=500,
+                )
+                or []
+            )
+            warned_3d_count = 0
+            for sub_3d in subs_3d:
+                try:
+                    _exp_str = sub_3d.get("expires_at")
+                    if not _exp_str:
+                        continue
+                    expires_3d = datetime.fromisoformat(str(_exp_str).replace("Z", "+00:00"))
+                    if expires_3d.tzinfo is None:
+                        expires_3d = expires_3d.replace(tzinfo=timezone.utc)
+                except (ValueError, TypeError):
+                    continue
+                claimed = await db.update_one(
+                    "driver_subscriptions",
+                    {"id": sub_3d["id"], "expiry_warned_3d": False},
+                    {"$set": {"expiry_warned_3d": True}},
+                )
+                if claimed is None:
+                    continue
+                drv_3d = await db.find_one("drivers", {"id": sub_3d["driver_id"]})
+                if drv_3d and drv_3d.get("user_id"):
+                    days_left = max(1, int((expires_3d - now).total_seconds() / 86400))
+                    plan_name = sub_3d.get("plan_name", "Spinr Pass")
+                    try:
+                        await send_push_notification(
+                            drv_3d["user_id"],
+                            "Spinr Pass Expiring in 3 Days",
+                            f"Your {plan_name} plan expires in ~{days_left} day{'s' if days_left != 1 else ''}. Renew now to keep driving!",
+                            {"type": "subscription_expiring_3d", "days_left": str(days_left)},
+                        )
+                        warned_3d_count += 1
+                    except Exception as e:
+                        logger.warning(
+                            "[SUB-EXPIRY] 3d push failed for driver %s: %s",
+                            sub_3d["driver_id"],
+                            e,
+                        )
+
             logger.info(
-                f"[SUB-EXPIRY] Check complete. {len(active_subs)} scanned, "
-                f"{warned_count} warned, {enforced_count} enforced offline."
+                "[SUB-EXPIRY] Check complete. %d scanned, %d 24h warned, %d 3d warned, %d enforced offline.",
+                len(active_subs),
+                warned_count,
+                warned_3d_count,
+                enforced_count,
             )
 
         except Exception as e:

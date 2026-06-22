@@ -77,7 +77,7 @@ pandas>=3.0.2
 numpy>=2.4.4
 
 # Payments
-stripe>=15.0.1
+stripe>=15.2.1
 
 # SMS
 twilio>=9.10.5

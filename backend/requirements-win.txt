@@ -113,7 +113,7 @@ staticmap==0.5.7          # via -r requirements.in
 storage3==2.29.0          # via supabase
 strenum==0.4.15           # via supabase-functions
 strictyaml==1.7.3         # via pyiceberg
-stripe==15.1.0            # via -r requirements.in
+stripe==15.2.1            # via -r requirements.in
 supabase==2.29.0          # via -r requirements.in
 supabase-auth==2.29.0     # via supabase
 supabase-functions==2.29.0  # via supabase

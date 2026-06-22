@@ -6,7 +6,6 @@ import {
     TextInput,
     TouchableOpacity,
     KeyboardAvoidingView,
-    Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -56,7 +55,7 @@ export default function ReportSafetyScreen() {
 
             <KeyboardAvoidingView
                 style={styles.container}
-                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                behavior="padding"
             >
                 <View style={styles.content}>
                     <View style={styles.warningBox}>

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useContext } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
-  TextInput, ActivityIndicator, Platform, KeyboardAvoidingView,
+  TextInput, ActivityIndicator, KeyboardAvoidingView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -229,7 +229,7 @@ export default function WalletScreen() {
 
       {/* Top Up Panel */}
       {showTopUp && (
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        <KeyboardAvoidingView behavior="padding">
           <View style={styles.topUpSection}>
             <Text style={styles.topUpTitle}>Add Funds</Text>
             <View style={styles.topUpGrid}>

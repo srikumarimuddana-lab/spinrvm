@@ -90,12 +90,13 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             foregroundImage: './assets/images/adaptive-icon.png',
             backgroundColor: '#FFFFFF'
         },
-        // Force adjustResize so the window shrinks when the soft keyboard opens.
-        // Our forms wrap a ScrollView in KeyboardAvoidingView with an inert
-        // (undefined) Android behavior and rely on the OS resize to make the
-        // focused field + submit button scroll into view instead of being
-        // covered by the keyboard. Without this pinned, an adjustPan default
-        // leaves the keyboard floating over the inputs (sign-up screens).
+        // Force adjustResize so the window shrinks when the soft keyboard opens
+        // (complements the KeyboardAvoidingView behavior="padding" our forms use
+        // — under resize the KAV measures a shrunk frame and adds ~0 padding, so
+        // there is no double-adjust). The padding behavior is what actually
+        // lifts inputs on the current builds; this just makes resize the mode
+        // once a native rebuild ships. Note: this is a native AndroidManifest
+        // setting — it does NOT take effect over OTA, only in a new build.
         softwareKeyboardLayoutMode: 'resize',
         package: BUNDLE_ID,
         googleServicesFile: './google-services.json',

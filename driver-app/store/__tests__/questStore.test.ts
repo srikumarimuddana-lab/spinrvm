@@ -73,7 +73,7 @@ const sampleProgress = {
 
 beforeEach(() => {
     jest.clearAllMocks();
-    useQuestStore.setState({ availableQuests: [], myQuests: [], isLoading: false, error: null });
+    useQuestStore.setState({ availableQuests: [], myQuests: [], isLoadingAvailable: false, isLoadingMine: false, error: null });
 });
 
 describe('questStore — fetchAvailableQuests', () => {
@@ -84,7 +84,7 @@ describe('questStore — fetchAvailableQuests', () => {
 
         expect(mockGet).toHaveBeenCalledWith('/quests');
         expect(useQuestStore.getState().availableQuests).toEqual([sampleQuest]);
-        expect(useQuestStore.getState().isLoading).toBe(false);
+        expect(useQuestStore.getState().isLoadingAvailable).toBe(false);
         expect(useQuestStore.getState().error).toBeNull();
     });
 
@@ -103,19 +103,19 @@ describe('questStore — fetchAvailableQuests', () => {
         await useQuestStore.getState().fetchAvailableQuests();
 
         expect(useQuestStore.getState().error).toBe('Network error');
-        expect(useQuestStore.getState().isLoading).toBe(false);
+        expect(useQuestStore.getState().isLoadingAvailable).toBe(false);
     });
 
-    it('sets isLoading during fetch', async () => {
+    it('sets isLoadingAvailable during fetch', async () => {
         let resolveGet!: (v: any) => void;
         mockGet.mockReturnValue(new Promise((res) => { resolveGet = res; }));
 
         const fetchPromise = useQuestStore.getState().fetchAvailableQuests();
-        expect(useQuestStore.getState().isLoading).toBe(true);
+        expect(useQuestStore.getState().isLoadingAvailable).toBe(true);
 
         resolveGet({ data: [sampleQuest] });
         await fetchPromise;
-        expect(useQuestStore.getState().isLoading).toBe(false);
+        expect(useQuestStore.getState().isLoadingAvailable).toBe(false);
     });
 });
 
@@ -127,7 +127,7 @@ describe('questStore — fetchMyQuests', () => {
 
         expect(mockGet).toHaveBeenCalledWith('/quests/my-quests');
         expect(useQuestStore.getState().myQuests).toEqual([sampleProgress]);
-        expect(useQuestStore.getState().isLoading).toBe(false);
+        expect(useQuestStore.getState().isLoadingMine).toBe(false);
     });
 
     it('defaults to empty array when API returns null', async () => {
@@ -138,14 +138,13 @@ describe('questStore — fetchMyQuests', () => {
         expect(useQuestStore.getState().myQuests).toEqual([]);
     });
 
-    it('sets error message on API failure', async () => {
+    it('clears isLoadingMine on API failure without setting error', async () => {
         const err = new Error('Server error');
         mockGet.mockRejectedValue(err);
 
         await useQuestStore.getState().fetchMyQuests();
 
-        expect(useQuestStore.getState().error).toBe('Server error');
-        expect(useQuestStore.getState().isLoading).toBe(false);
+        expect(useQuestStore.getState().isLoadingMine).toBe(false);
     });
 });
 
@@ -164,7 +163,7 @@ describe('questStore — joinQuest', () => {
         expect(mockGet).toHaveBeenCalledWith('/quests/my-quests');
         expect(useQuestStore.getState().availableQuests).toEqual([sampleQuest]);
         expect(useQuestStore.getState().myQuests).toEqual([sampleProgress]);
-        expect(useQuestStore.getState().isLoading).toBe(false);
+        expect(useQuestStore.getState().isLoadingAvailable).toBe(false);
     });
 
     it('sets error from response.data.detail on API failure and rethrows', async () => {
@@ -174,7 +173,7 @@ describe('questStore — joinQuest', () => {
         await expect(useQuestStore.getState().joinQuest('q-missing')).rejects.toEqual(err);
 
         expect(useQuestStore.getState().error).toBe('Quest not found');
-        expect(useQuestStore.getState().isLoading).toBe(false);
+        expect(useQuestStore.getState().isLoadingAvailable).toBe(false);
     });
 
     it('falls back to error.message when response detail is absent', async () => {
@@ -198,7 +197,7 @@ describe('questStore — claimReward', () => {
         expect(mockPost).toHaveBeenCalledWith('/quests/progress/p1/claim');
         expect(mockGet).toHaveBeenCalledWith('/quests/my-quests');
         expect(result).toEqual(rewardData);
-        expect(useQuestStore.getState().isLoading).toBe(false);
+        expect(useQuestStore.getState().isLoadingMine).toBe(false);
     });
 
     it('sets error from response.data.detail on failure and rethrows', async () => {
@@ -208,7 +207,7 @@ describe('questStore — claimReward', () => {
         await expect(useQuestStore.getState().claimReward('p1')).rejects.toEqual(err);
 
         expect(useQuestStore.getState().error).toBe('Already claimed');
-        expect(useQuestStore.getState().isLoading).toBe(false);
+        expect(useQuestStore.getState().isLoadingMine).toBe(false);
     });
 
     it('falls back to error.message when response detail is absent', async () => {

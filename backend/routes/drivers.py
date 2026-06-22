@@ -5793,6 +5793,12 @@ async def get_subscription_plans(current_user: dict = Depends(get_current_user))
                 filtered.append(p)
         plans = filtered
 
+    # Filter by driver's vehicle type — only show plans that cover this vehicle.
+    # A null/empty vehicle_types list means the plan accepts all types.
+    if driver:
+        driver_vt = driver.get("vehicle_type_id")
+        plans = [p for p in plans if not p.get("vehicle_types") or driver_vt in p["vehicle_types"]]
+
     return {"plans": plans, "free_mode": False, "message": None}
 
 
@@ -5943,6 +5949,21 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
     )
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found or inactive")
+
+    # Reject checkout before Stripe if this plan's vehicle_types don't cover
+    # the driver. Mirrors the go-online gate so a driver can't subscribe to an
+    # incompatible plan and then be silently blocked at go-online time.
+    allowed_vt = plan.get("vehicle_types")
+    if allowed_vt:
+        driver_vt = driver.get("vehicle_type_id")
+        if driver_vt not in allowed_vt:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Your vehicle type is not compatible with this plan. "
+                    "Please choose a plan that supports your vehicle."
+                ),
+            )
 
     # Check for existing active subscription
     existing = (lambda _r: _r[0] if _r else None)(
@@ -6885,14 +6906,18 @@ async def check_expiring_subscriptions():
                 # ── Warning branch: 3-day advance notice ─────────────────
                 # Gate to the exclusive window (24h, 72h] so subs already
                 # inside the 24h window only get the 24h push, not both.
-                # Claim the flag BEFORE sending so a transient DB failure on
-                # the update (after a successful push) can't fire a duplicate.
+                # Claim the flag atomically (WHERE expiry_warned_3d = false)
+                # BEFORE sending — prevents duplicate pushes across replicas
+                # when Redis is unavailable and the lock falls back to all-run.
                 if not sub.get("expiry_warned_3d") and window_24h < expires_dt <= window_3d:
-                    await db.update_one(
+                    claimed = await db.update_one(
                         "driver_subscriptions",
-                        {"id": sub["id"]},
+                        {"id": sub["id"], "expiry_warned_3d": False},
                         {"$set": {"expiry_warned_3d": True}},
                     )
+                    if claimed is None:
+                        # Another replica already claimed this row; skip.
+                        continue
                     driver_3d = await db.find_one("drivers", {"id": sub["driver_id"]})
                     if driver_3d and driver_3d.get("user_id"):
                         days_left = max(1, int((expires_dt - now).total_seconds() / 86400))

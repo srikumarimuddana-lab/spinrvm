@@ -90,9 +90,20 @@ export default function BookingProposalCard({ proposal }: Props) {
       applyPromo(proposedPromo);
       setScheduledTime(scheduledDate);
       const ride = await createRide(paymentMethod);
+      if ('requires_action' in ride) {
+        // A card needing on-device 3DS returns RideRequiresAction, which this
+        // in-chat card can't complete — deep-link to the standard flow per the
+        // contract in this file's header.
+        setErrorInfo({
+          message: 'This card needs extra authentication — finish booking on the payment screen.',
+          link: { label: 'Open booking', href: '/(tabs)' },
+        });
+        setPhase('error');
+        return;
+      }
       bookedRef.current = true;
       setPhase('booked');
-      const route = postBookingRoute(ride?.id, scheduledDate);
+      const route = postBookingRoute(ride.id, scheduledDate);
       if (route) router.replace(route as never);
     } catch (error: unknown) {
       setErrorInfo(mapBookingError(error));

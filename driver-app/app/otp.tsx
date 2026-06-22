@@ -179,7 +179,7 @@ export default function OtpScreen() {
   return (
     <KeyboardAvoidingView
       style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <ScrollView
         style={styles.scrollFlex}
@@ -188,6 +188,7 @@ export default function OtpScreen() {
           { flexGrow: 1, paddingTop: insets.top + 16, paddingBottom: insets.bottom + 24 },
         ]}
         keyboardShouldPersistTaps="handled"
+        automaticallyAdjustKeyboardInsets={true}
         showsVerticalScrollIndicator={false}
       >
         {/* Back button */}

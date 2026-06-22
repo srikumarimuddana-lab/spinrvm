@@ -5595,6 +5595,39 @@ async def update_driver_status(
                         action_hint="Activate Spinr Pass",
                     )
 
+            # Vehicle-type enforcement: if the subscription plan restricts
+            # to specific vehicle type IDs, the driver's registered vehicle
+            # must be one of them. A null/empty list means all types allowed.
+            if sub.get("plan_id"):
+                try:
+                    plan = await db_supabase.find_one("subscription_plans", {"id": sub["plan_id"]})
+                    allowed_vt = plan.get("vehicle_types") if plan else None
+                    if allowed_vt:  # non-null, non-empty list
+                        driver_vt = driver.get("vehicle_type_id")
+                        if driver_vt not in allowed_vt:
+                            raise SpinrException(
+                                message=(
+                                    "Your vehicle type is not covered by your active Spinr Pass plan. "
+                                    "Please switch to a compatible plan or update your vehicle."
+                                ),
+                                error_code=ErrorCode.PAYMENT_FAILED,
+                                status_code=402,
+                                message_key=ErrorKeys.DRIVER_SUBSCRIPTION_REQUIRED,
+                                action_hint="Update Spinr Pass",
+                            )
+                except SpinrException:
+                    raise
+                except Exception as e:
+                    logger.error(
+                        "vehicle_type check failed for driver=%s plan=%s: %s",
+                        driver_id,
+                        sub.get("plan_id"),
+                        e,
+                        exc_info=True,
+                    )
+                    # Fail open on DB errors rather than blocking the driver —
+                    # the plan lookup is best-effort enforcement.
+
     logger.info(
         f"[GO-ONLINE] handler CALL update_one driver_id={driver_id} "
         f"requested_is_online={is_online} "

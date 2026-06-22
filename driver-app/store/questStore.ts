@@ -84,10 +84,13 @@ export const useQuestStore = create<QuestState>((set, get) => ({
   fetchAvailableQuests: async () => {
     try {
       set({ isLoadingAvailable: true, error: null });
+      console.log('[questStore] GET /quests →');
       const res = await api.get<Quest[] | { quests?: Quest[]; available_quests?: Quest[]; data?: Quest[] }>('/quests');
       const availableQuests = arrayFromApi<Quest>(res.data, ['quests', 'available_quests', 'data']);
+      console.log('[questStore] GET /quests ← HTTP', res.status, '| raw:', JSON.stringify(res.data), '| parsed count:', availableQuests.length);
       set({ availableQuests, isLoadingAvailable: false });
     } catch (error: unknown) {
+      console.log('[questStore] GET /quests ERROR:', isAxiosError(error) ? `${error.message} | body:${JSON.stringify(error.response?.data)}` : String(error));
       set({ error: isAxiosError(error) ? (error.message ?? 'Failed to fetch quests') : 'Failed to fetch quests', isLoadingAvailable: false });
     }
   },
@@ -95,10 +98,13 @@ export const useQuestStore = create<QuestState>((set, get) => ({
   fetchMyQuests: async () => {
     try {
       set({ isLoadingMine: true });
+      console.log('[questStore] GET /quests/my-quests →');
       const res = await api.get<MyQuestProgress[] | { quests?: MyQuestProgress[]; my_quests?: MyQuestProgress[]; data?: MyQuestProgress[] }>('/quests/my-quests');
       const myQuests = arrayFromApi<MyQuestProgress>(res.data, ['quests', 'my_quests', 'data']);
+      console.log('[questStore] GET /quests/my-quests ← HTTP', res.status, '| count:', myQuests.length);
       set({ myQuests, isLoadingMine: false });
     } catch (error: unknown) {
+      console.log('[questStore] GET /quests/my-quests ERROR:', isAxiosError(error) ? `${error.message} | body:${JSON.stringify(error.response?.data)}` : String(error));
       set({ isLoadingMine: false });
     }
   },

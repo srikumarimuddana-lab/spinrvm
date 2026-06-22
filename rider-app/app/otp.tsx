@@ -170,8 +170,11 @@ export default function OtpScreen() {
           <Ionicons name="arrow-back" size={22} color={colors.text} />
         </TouchableOpacity>
 
-        {/* Vertically center the form so the screen doesn't leave a large
-            empty gap below the resend row (matches the driver OTP layout). */}
+        {/* Top-anchored so that when the keyboard opens (autoFocus fires it
+            immediately) the code boxes and Verify button flow from the top and
+            stay scrollable above the keyboard. Vertically centering here made
+            the overflow un-scrollable on Android, leaving Verify behind the
+            keyboard. */}
         <View style={styles.centerArea}>
         <View style={styles.illustrationContainer}>
           <View style={styles.illustrationCircle}>
@@ -288,10 +291,11 @@ function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.surface },
     scrollContent: { flexGrow: 1, paddingHorizontal: 24 },
-    // flexGrow (not flex) so it centers when there is room but never shrinks
-    // below its content — otherwise the keyboard clips the Verify button
-    // instead of letting the ScrollView scroll to it.
-    centerArea: { flexGrow: 1, justifyContent: 'center' },
+    // flexGrow (not flex) so the ScrollView fills the screen but never shrinks
+    // below its content. Content is top-anchored (no justifyContent: center)
+    // so that when the keyboard is up the overflow stays scrollable and the
+    // Verify button can be reached instead of being clipped behind it.
+    centerArea: { flexGrow: 1 },
     backBtn: {
       width: 44, height: 44, borderRadius: 14,
       backgroundColor: colors.surfaceLight,

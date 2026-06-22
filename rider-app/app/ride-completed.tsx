@@ -351,7 +351,7 @@ function RideCompletedScreenContent() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
 
         {/* ═══ Animated Success Header ═══ */}
@@ -769,7 +769,7 @@ function RideCompletedScreenContent() {
       <Modal visible={lostItemVisible} transparent animationType="fade" onRequestClose={() => setLostItemVisible(false)}>
         <KeyboardAvoidingView
           style={styles.modalKeyboardAvoider}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior="padding"
           keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
         >
           <View style={[styles.modalOverlay, { paddingBottom: Math.max(insets.bottom, 24) }]}>

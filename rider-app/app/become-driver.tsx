@@ -285,7 +285,7 @@ export default function BecomeDriverScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+      <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
         <View style={styles.header}>
           <TouchableOpacity onPress={() => currentStep > 0 ? prevStep() : router.back()} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color={colors.text} />

@@ -8,7 +8,6 @@ import {
   ScrollView,
   ActivityIndicator,
   KeyboardAvoidingView,
-  Platform,
   Animated,
 } from 'react-native';
 import CustomToggle from '../components/CustomToggle';
@@ -231,7 +230,7 @@ function PaymentConfirmScreenContent() {
         <View style={{ width: 44 }} />
       </View>
 
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
       <ScrollView style={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
         {/* Ride Summary */}
         <Animated.View style={[styles.rideSummary, { opacity: sectionAnims[0], transform: [{ translateY: slideAnims[0] }] }]}>

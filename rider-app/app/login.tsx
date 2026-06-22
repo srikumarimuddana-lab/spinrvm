@@ -61,7 +61,11 @@ export default function LoginScreen() {
 
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      // Android relies on windowSoftInputMode=adjustResize (pinned in
+      // app.config) to shrink the window; an explicit 'height' behavior
+      // double-adjusts and leaves a phantom gap after the keyboard is
+      // dismissed. Keep it inert on Android, padding on iOS.
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       style={styles.container}
     >
       <View style={[styles.topStrip, { paddingTop: insets.top }]}>

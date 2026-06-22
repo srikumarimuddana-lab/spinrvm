@@ -329,13 +329,18 @@ export default function ProfileSetupScreen() {
 
   return (
     <View style={styles.container}>
-      {Platform.OS === 'ios' ? (
-        <KeyboardAvoidingView behavior="padding" style={styles.container}>
-          {contentNode}
-        </KeyboardAvoidingView>
-      ) : (
-        contentNode
-      )}
+      {/* Wrap on both platforms. iOS uses padding; Android stays inert and
+          relies on windowSoftInputMode=adjustResize (pinned in app.config) to
+          shrink the window so the ScrollView can scroll the focused field and
+          the Create Profile button above the keyboard. Previously Android had
+          no keyboard handling at all, so the lower fields and submit button sat
+          behind the keyboard. */}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.container}
+      >
+        {contentNode}
+      </KeyboardAvoidingView>
       <ConfirmSheet
         visible={showPhotoPicker}
         title="Update Photo"
@@ -356,7 +361,7 @@ function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.surfaceLight },
     scrollView: { flex: 1 },
-    scrollContent: { paddingHorizontal: 24 },
+    scrollContent: { flexGrow: 1, paddingHorizontal: 24 },
     headerContainer: { alignItems: 'center', marginBottom: 32, position: 'relative' },
     backButton: {
       position: 'absolute', left: 0, top: 0, padding: 8,

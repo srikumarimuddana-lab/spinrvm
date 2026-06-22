@@ -867,8 +867,8 @@ async def create_payment_sheet(
         # ACTION REQUIRED on SDK upgrade: verify the Stripe dashboard webhook
         # endpoint API version matches stripe.api_version after upgrading.
         ephemeral_key = stripe.EphemeralKey.create(
-            {"customer": customer_id},
-            api_version=stripe.api_version,
+            customer=customer_id,
+            stripe_version=stripe.api_version,
             api_key=stripe_secret,
         )
 

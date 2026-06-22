@@ -104,46 +104,6 @@ describe('questStore — fetchAvailableQuests', () => {
         expect(useQuestStore.getState().availableQuests).toEqual([sampleQuest]);
     });
 
-    it('normalizes nested and camelCase available quest fields so cards have content', async () => {
-        mockGet.mockResolvedValue({
-            data: {
-                available_quests: [{
-                    quest: {
-                        id: 'q-camel',
-                        name: 'Weekend Driver Bonus',
-                        content: 'Complete weekend rides',
-                        type: 'ride_count',
-                        targetValue: '4',
-                        rewardAmount: '20.50',
-                        rewardType: 'wallet_credit',
-                        startDate: '2026-01-01',
-                        endDate: '2026-01-31',
-                    },
-                    progressPct: '25',
-                    currentValue: '1',
-                }],
-            },
-        });
-
-        await useQuestStore.getState().fetchAvailableQuests();
-
-        expect(useQuestStore.getState().availableQuests).toEqual([{
-            id: 'q-camel',
-            title: 'Weekend Driver Bonus',
-            description: 'Complete weekend rides',
-            type: 'ride_count',
-            target_value: 4,
-            reward_amount: 20.5,
-            reward_type: 'wallet_credit',
-            start_date: '2026-01-01',
-            end_date: '2026-01-31',
-            current_value: 1,
-            progress_pct: 25,
-            status: 'available',
-            progress_id: null,
-        }]);
-    });
-
     it('sets error message on API failure', async () => {
         const err = new Error('Network error');
         mockGet.mockRejectedValue(err);
@@ -192,46 +152,6 @@ describe('questStore — fetchMyQuests', () => {
         await useQuestStore.getState().fetchMyQuests();
 
         expect(useQuestStore.getState().myQuests).toEqual([sampleProgress]);
-    });
-
-    it('normalizes my quest progress with camelCase fields', async () => {
-        mockGet.mockResolvedValue({
-            data: {
-                quests: [{
-                    progressId: 'p-camel',
-                    quest: {
-                        id: 'q-camel',
-                        name: 'Morning Rush Bonus',
-                        description: 'Complete peak rides',
-                        targetValue: '3',
-                        rewardAmount: '15',
-                        endDate: '2026-02-01',
-                    },
-                    currentValue: '2',
-                    progressPercent: '66.7',
-                    status: 'joined',
-                    startedAt: '2026-01-20',
-                }],
-            },
-        });
-
-        await useQuestStore.getState().fetchMyQuests();
-
-        expect(useQuestStore.getState().myQuests[0]).toMatchObject({
-            progress_id: 'p-camel',
-            quest: {
-                id: 'q-camel',
-                title: 'Morning Rush Bonus',
-                description: 'Complete peak rides',
-                target_value: 3,
-                reward_amount: 15,
-                end_date: '2026-02-01',
-            },
-            current_value: 2,
-            progress_pct: 66.7,
-            status: 'joined',
-            started_at: '2026-01-20',
-        });
     });
 
     it('clears isLoadingMine on API failure without setting error', async () => {

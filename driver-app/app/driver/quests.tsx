@@ -219,8 +219,9 @@ export default function QuestsScreen() {
     );
   };
 
-  const activeQuests = myQuests.filter(q => q.status === 'active');
+  const activeQuests = myQuests.filter(q => q.status !== 'completed' && q.status !== 'claimed' && q.status !== 'expired');
   const completedQuests = myQuests.filter(q => q.status === 'completed' || q.status === 'claimed');
+  const expiredQuests = myQuests.filter(q => q.status === 'expired');
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -305,6 +306,12 @@ export default function QuestsScreen() {
                 <>
                   <Text style={styles.sectionLabel}>Completed</Text>
                   {completedQuests.map(renderMyQuest)}
+                </>
+              )}
+              {expiredQuests.length > 0 && (
+                <>
+                  <Text style={styles.sectionLabel}>Expired</Text>
+                  {expiredQuests.map(renderMyQuest)}
                 </>
               )}
             </>

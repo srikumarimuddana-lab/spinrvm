@@ -5625,8 +5625,10 @@ async def update_driver_status(
                         e,
                         exc_info=True,
                     )
-                    # Fail open on DB errors rather than blocking the driver —
-                    # the plan lookup is best-effort enforcement.
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Could not verify subscription plan vehicle restrictions. Please try again.",
+                    ) from e
 
     logger.info(
         f"[GO-ONLINE] handler CALL update_one driver_id={driver_id} "
@@ -6881,9 +6883,16 @@ async def check_expiring_subscriptions():
                     continue
 
                 # ── Warning branch: 3-day advance notice ─────────────────
-                # Sends first push ~72 h before expiry; claim-flag prevents
-                # re-sending on subsequent loop ticks.
-                if not sub.get("expiry_warned_3d") and now < expires_dt <= window_3d:
+                # Gate to the exclusive window (24h, 72h] so subs already
+                # inside the 24h window only get the 24h push, not both.
+                # Claim the flag BEFORE sending so a transient DB failure on
+                # the update (after a successful push) can't fire a duplicate.
+                if not sub.get("expiry_warned_3d") and window_24h < expires_dt <= window_3d:
+                    await db.update_one(
+                        "driver_subscriptions",
+                        {"id": sub["id"]},
+                        {"$set": {"expiry_warned_3d": True}},
+                    )
                     driver_3d = await db.find_one("drivers", {"id": sub["driver_id"]})
                     if driver_3d and driver_3d.get("user_id"):
                         days_left = max(1, int((expires_dt - now).total_seconds() / 86400))
@@ -6901,11 +6910,6 @@ async def check_expiring_subscriptions():
                             warned_count += 1
                         except Exception as e:
                             logger.warning(f"[SUB-EXPIRY] 3d push failed for driver {sub['driver_id']}: {e}")
-                    await db.update_one(
-                        "driver_subscriptions",
-                        {"id": sub["id"]},
-                        {"$set": {"expiry_warned_3d": True}},
-                    )
 
                 # ── Warning branch: 24-hour final notice ─────────────────
                 if sub.get("expiry_warned"):

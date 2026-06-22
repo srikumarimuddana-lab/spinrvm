@@ -353,35 +353,69 @@ async def get_offer_analytics(
     else:
         end_dt = now
 
-    # Push the date window into the DB query via $and so the fetch is
-    # bounded even when ride_offers grows past the Python-side cap.
-    offers_in_window = (
-        await db_supabase.get_rows(
-            "ride_offers",
-            {
-                "$and": [
-                    {"offered_at": {"$gte": start_dt.isoformat()}},
-                    {"offered_at": {"$lte": end_dt.isoformat()}},
-                ]
-            },
-            order="offered_at",
-            desc=True,
-            limit=10_000,
+    if service_area_id:
+        # When filtering to a single area, fetch that area's rides first so
+        # the offer query is scoped to those ride IDs. This avoids the 10k
+        # platform-wide cap cutting off quieter-area offers when other areas
+        # are busier during the same date window.
+        area_ride_rows = await db_supabase.get_rows("rides", {"service_area_id": service_area_id}, limit=20_000) or []
+        if not area_ride_rows:
+            return {
+                "window": {"start": start_dt.isoformat(), "end": end_dt.isoformat()},
+                "areas": [],
+                "totals": _offer_totals([]),
+            }
+        area_ride_ids = [r["id"] for r in area_ride_rows]
+        offers_in_window: List[Dict] = []
+        for batch_start in range(0, len(area_ride_ids), 500):
+            batch = area_ride_ids[batch_start : batch_start + 500]
+            chunk = (
+                await db_supabase.get_rows(
+                    "ride_offers",
+                    {
+                        "$and": [
+                            {"ride_id": {"$in": batch}},
+                            {"offered_at": {"$gte": start_dt.isoformat()}},
+                            {"offered_at": {"$lte": end_dt.isoformat()}},
+                        ]
+                    },
+                    limit=len(batch) * 20,
+                )
+                or []
+            )
+            offers_in_window.extend(chunk)
+        rides = area_ride_rows
+    else:
+        # Global view: push date window into DB so the fetch is bounded even
+        # when ride_offers grows past the Python-side cap.
+        offers_in_window = (
+            await db_supabase.get_rows(
+                "ride_offers",
+                {
+                    "$and": [
+                        {"offered_at": {"$gte": start_dt.isoformat()}},
+                        {"offered_at": {"$lte": end_dt.isoformat()}},
+                    ]
+                },
+                order="offered_at",
+                desc=True,
+                limit=10_000,
+            )
+            or []
         )
-        or []
-    )
+        ride_ids = list({o["ride_id"] for o in offers_in_window if o.get("ride_id")})
+        rides = []
+        for batch_start in range(0, len(ride_ids), 100):
+            batch = ride_ids[batch_start : batch_start + 100]
+            chunk = await db_supabase.get_rows("rides", {"id": {"$in": batch}}, limit=len(batch)) or []
+            rides.extend(chunk)
 
     if not offers_in_window:
-        return {"areas": [], "totals": _offer_totals([])}
-
-    # Batch-fetch rides by ID using $in so we never miss a ride that
-    # happens not to be in the first N rows of an unfiltered scan.
-    ride_ids = list({o["ride_id"] for o in offers_in_window if o.get("ride_id")})
-    rides = []
-    for batch_start in range(0, len(ride_ids), 100):
-        batch = ride_ids[batch_start : batch_start + 100]
-        chunk = await db_supabase.get_rows("rides", {"id": {"$in": batch}}, limit=len(batch)) or []
-        rides.extend(chunk)
+        return {
+            "window": {"start": start_dt.isoformat(), "end": end_dt.isoformat()},
+            "areas": [],
+            "totals": _offer_totals([]),
+        }
 
     ride_area = {r["id"]: r.get("service_area_id") for r in rides}
 

@@ -258,7 +258,7 @@ export default function QuestsScreen() {
         refreshControl={<SafeRefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
         showsVerticalScrollIndicator={false}
       >
-        {tab === ‘available’ ? (
+        {tab === 'available' ? (
           isLoadingAvailable && availableQuests.length === 0 && !refreshing ? (
             <View style={styles.loadingContainer}>
               <ActivityIndicator size="large" color={colors.primary} />
@@ -266,7 +266,7 @@ export default function QuestsScreen() {
           ) : error && availableQuests.length === 0 ? (
             <View style={styles.emptyContainer}>
               <Ionicons name="cloud-offline-outline" size={48} color={colors.textDim} />
-              <Text style={styles.emptyText}>Couldn’t load quests</Text>
+              <Text style={styles.emptyText}>Couldn't load quests</Text>
               <Text style={styles.emptySubtext}>Check your connection and try again.</Text>
               <TouchableOpacity style={styles.retryButton} onPress={onRefresh}>
                 <Ionicons name="refresh" size={16} color="#FFF" />

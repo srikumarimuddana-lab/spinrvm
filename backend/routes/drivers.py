@@ -6574,8 +6574,9 @@ async def check_expiring_subscriptions():
 
     Two jobs, both run every 6 hours from the FastAPI lifespan:
 
-    1. **Warn** drivers whose active subscription expires within 24 h
-       (push notification, once per subscription via ``expiry_warned``).
+    1. **Warn** drivers whose active subscription expires within 72 h (3 days)
+       via ``expiry_warned_3d``, then again within 24 h via ``expiry_warned``.
+       Both are claim-flags so only one push fires per window per subscription.
     2. **Enforce** expiry on subscriptions whose ``expires_at`` is in the
        past — but only when the admin toggle
        ``require_driver_subscription`` is on. Enforcement:
@@ -6621,7 +6622,8 @@ async def check_expiring_subscriptions():
             continue
         try:
             now = datetime.now(timezone.utc)
-            window = now + timedelta(hours=24)
+            window_24h = now + timedelta(hours=24)
+            window_3d = now + timedelta(hours=72)
 
             # Retry subscriptions stuck in cancel_pending — a plan-switch Stripe
             # cancel that failed transiently. On success, finalize as cancelled;
@@ -6794,11 +6796,38 @@ async def check_expiring_subscriptions():
                     enforced_count += 1
                     continue
 
-                # ── Warning branch: expires within 24 h ───────────────────
+                # ── Warning branch: 3-day advance notice ─────────────────
+                # Sends first push ~72 h before expiry; claim-flag prevents
+                # re-sending on subsequent loop ticks.
+                if not sub.get("expiry_warned_3d") and now < expires_dt <= window_3d:
+                    driver_3d = await db.find_one("drivers", {"id": sub["driver_id"]})
+                    if driver_3d and driver_3d.get("user_id"):
+                        days_left = max(1, int((expires_dt - now).total_seconds() / 86400))
+                        plan_name = sub.get("plan_name", "Spinr Pass")
+                        try:
+                            await send_push_notification(
+                                driver_3d["user_id"],
+                                "Spinr Pass Expiring in 3 Days",
+                                f"Your {plan_name} plan expires in ~{days_left} day{'s' if days_left != 1 else ''}. Renew now to keep driving!",
+                                {
+                                    "type": "subscription_expiring_3d",
+                                    "days_left": str(days_left),
+                                },
+                            )
+                            warned_count += 1
+                        except Exception as e:
+                            logger.warning(f"[SUB-EXPIRY] 3d push failed for driver {sub['driver_id']}: {e}")
+                    await db.update_one(
+                        "driver_subscriptions",
+                        {"id": sub["id"]},
+                        {"$set": {"expiry_warned_3d": True}},
+                    )
+
+                # ── Warning branch: 24-hour final notice ─────────────────
                 if sub.get("expiry_warned"):
                     continue
 
-                if now < expires_dt <= window:
+                if now < expires_dt <= window_24h:
                     driver = await db.find_one("drivers", {"id": sub["driver_id"]})
                     if driver and driver.get("user_id"):
                         hours_left = max(1, int((expires_dt - now).total_seconds() / 3600))
@@ -6806,7 +6835,7 @@ async def check_expiring_subscriptions():
                         try:
                             await send_push_notification(
                                 driver["user_id"],
-                                "Spinr Pass Expiring Soon ⏰",
+                                "Spinr Pass Expiring Soon",
                                 f"Your {plan_name} plan expires in ~{hours_left} hours. Renew now to keep driving!",
                                 {
                                     "type": "subscription_expiring",

@@ -940,7 +940,11 @@ class TestRecurringIntervalAndModeLedger:
             patch("backend.settings_loader.get_app_settings", AsyncMock(return_value=mock_settings)),
             patch(
                 "stripe.Price.retrieve",
-                return_value={"unit_amount": 4999, "currency": "cad", "recurring": {"interval": "week", "interval_count": 1}},
+                return_value={
+                    "unit_amount": 4999,
+                    "currency": "cad",
+                    "recurring": {"interval": "week", "interval_count": 1},
+                },
             ),
             patch("stripe.checkout.Session.create") as mock_session_create,
         ):
@@ -1008,13 +1012,16 @@ class TestVehicleTypeEnforcement:
     """Go-online gate rejects drivers whose vehicle type is not covered by their plan."""
 
     async def test_go_online_blocked_when_vehicle_type_not_in_plan(self):
-        from backend.routes.drivers import do_location_update
+        from backend.routes.drivers import update_driver_status
 
         driver = {"id": "d1", "user_id": "u1", "vehicle_type_id": "vt-sedan", "status": "active"}
         plan = {"id": "plan-1", "vehicle_types": ["vt-suv", "vt-van"]}
         active_sub = {
-            "id": "sub-1", "driver_id": "d1", "plan_id": "plan-1",
-            "status": "active", "expires_at": "2099-01-01T00:00:00+00:00",
+            "id": "sub-1",
+            "driver_id": "d1",
+            "plan_id": "plan-1",
+            "status": "active",
+            "expires_at": "2099-01-01T00:00:00+00:00",
         }
 
         def fake_get_rows(table, filters, **kw):
@@ -1032,6 +1039,7 @@ class TestVehicleTypeEnforcement:
             return None
 
         with (
+            patch("backend.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
             patch("backend.db_supabase.get_rows", side_effect=fake_get_rows),
             patch("backend.db_supabase.find_one", side_effect=fake_find_one),
             patch("backend.db_supabase.update_one", AsyncMock()),
@@ -1041,22 +1049,36 @@ class TestVehicleTypeEnforcement:
             ),
         ):
             with pytest.raises(Exception) as exc_info:
-                await do_location_update(is_online=True, current_user={"id": "u1"})
+                await update_driver_status(
+                    driver_id="d1",
+                    is_online=True,
+                    lat=None,
+                    lng=None,
+                    current_user={"id": "u1"},
+                )
             assert "vehicle" in str(exc_info.value).lower() or "402" in str(exc_info.value)
 
     async def test_go_online_allowed_when_plan_vehicle_types_null(self):
         """Null vehicle_types on plan = all types allowed (no 402 raised from vt gate)."""
-        from backend.routes.drivers import do_location_update
+        from backend.routes.drivers import update_driver_status
 
         driver = {
-            "id": "d1", "user_id": "u1", "vehicle_type_id": "vt-sedan",
-            "status": "active", "is_online": False, "is_available": False,
-            "lat": 52.1, "lng": -106.6,
+            "id": "d1",
+            "user_id": "u1",
+            "vehicle_type_id": "vt-sedan",
+            "status": "active",
+            "is_online": False,
+            "is_available": False,
+            "lat": 52.1,
+            "lng": -106.6,
         }
         plan = {"id": "plan-1", "vehicle_types": None}
         active_sub = {
-            "id": "sub-1", "driver_id": "d1", "plan_id": "plan-1",
-            "status": "active", "expires_at": "2099-01-01T00:00:00+00:00",
+            "id": "sub-1",
+            "driver_id": "d1",
+            "plan_id": "plan-1",
+            "status": "active",
+            "expires_at": "2099-01-01T00:00:00+00:00",
         }
 
         def fake_get_rows(table, filters, **kw):
@@ -1076,6 +1098,7 @@ class TestVehicleTypeEnforcement:
             return None
 
         with (
+            patch("backend.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
             patch("backend.db_supabase.get_rows", side_effect=fake_get_rows),
             patch("backend.db_supabase.find_one", side_effect=fake_find_one),
             patch("backend.db_supabase.update_one", AsyncMock()),
@@ -1089,7 +1112,13 @@ class TestVehicleTypeEnforcement:
             patch("backend.routes.drivers.manager", MagicMock()),
         ):
             try:
-                await do_location_update(is_online=True, current_user={"id": "u1"})
+                await update_driver_status(
+                    driver_id="d1",
+                    is_online=True,
+                    lat=None,
+                    lng=None,
+                    current_user={"id": "u1"},
+                )
             except Exception as e:
                 assert "vehicle" not in str(e).lower(), f"Unexpected vehicle type block: {e}"
 
@@ -1103,22 +1132,31 @@ class TestPaymentHistoryEndpoint:
         driver = {"id": "d1", "user_id": "u1"}
         payments = [
             {
-                "id": "pay-1", "driver_id": "d1", "plan_id": "plan-1",
-                "plan_name": "Premium Pass", "amount": "49.99", "currency": "CAD",
-                "billing_reason": "one_off", "stripe_invoice_id": None,
+                "id": "pay-1",
+                "driver_id": "d1",
+                "plan_id": "plan-1",
+                "plan_name": "Premium Pass",
+                "amount": "49.99",
+                "currency": "CAD",
+                "billing_reason": "one_off",
+                "stripe_invoice_id": None,
                 "created_at": "2025-06-01T10:00:00+00:00",
             }
         ]
 
         with (
-            patch("backend.db_supabase.get_rows", AsyncMock(side_effect=[
-                [driver], payments,
-            ])),
+            patch(
+                "backend.db_supabase.get_rows",
+                AsyncMock(
+                    side_effect=[
+                        [driver],
+                        payments,
+                    ]
+                ),
+            ),
             patch("backend.db_supabase.count_documents", AsyncMock(return_value=1)),
         ):
-            result = await get_subscription_payment_history(
-                limit=20, offset=0, current_user={"id": "u1"}
-            )
+            result = await get_subscription_payment_history(limit=20, offset=0, current_user={"id": "u1"})
 
         assert result["total"] == 1
         assert result["payments"][0]["plan_name"] == "Premium Pass"
@@ -1131,9 +1169,7 @@ class TestPaymentHistoryEndpoint:
 
         with patch("backend.db_supabase.get_rows", AsyncMock(return_value=[])):
             with pytest.raises(HTTPException) as exc:
-                await get_subscription_payment_history(
-                    limit=20, offset=0, current_user={"id": "u-nobody"}
-                )
+                await get_subscription_payment_history(limit=20, offset=0, current_user={"id": "u-nobody"})
             assert exc.value.status_code == 404
 
     async def test_amount_is_decimal_string_two_dp(self):
@@ -1143,22 +1179,31 @@ class TestPaymentHistoryEndpoint:
         driver = {"id": "d1", "user_id": "u1"}
         payments = [
             {
-                "id": "pay-2", "driver_id": "d1", "plan_id": "plan-1",
-                "plan_name": "Standard Pass", "amount": "29.9",
-                "currency": "CAD", "billing_reason": "one_off",
-                "stripe_invoice_id": None, "created_at": "2025-06-15T08:00:00+00:00",
+                "id": "pay-2",
+                "driver_id": "d1",
+                "plan_id": "plan-1",
+                "plan_name": "Standard Pass",
+                "amount": "29.9",
+                "currency": "CAD",
+                "billing_reason": "one_off",
+                "stripe_invoice_id": None,
+                "created_at": "2025-06-15T08:00:00+00:00",
             }
         ]
 
         with (
-            patch("backend.db_supabase.get_rows", AsyncMock(side_effect=[
-                [driver], payments,
-            ])),
+            patch(
+                "backend.db_supabase.get_rows",
+                AsyncMock(
+                    side_effect=[
+                        [driver],
+                        payments,
+                    ]
+                ),
+            ),
             patch("backend.db_supabase.count_documents", AsyncMock(return_value=1)),
         ):
-            result = await get_subscription_payment_history(
-                limit=20, offset=0, current_user={"id": "u1"}
-            )
+            result = await get_subscription_payment_history(limit=20, offset=0, current_user={"id": "u1"})
 
         assert result["payments"][0]["amount"] == "29.90"
 
@@ -1170,12 +1215,27 @@ class TestOfferAnalyticsEndpoint:
         from backend.routes.admin.subscriptions import get_offer_analytics
 
         offers = [
-            {"id": "o1", "ride_id": "r1", "status": "accepted",
-             "offered_at": "2025-06-01T10:00:00+00:00", "responded_at": "2025-06-01T10:00:05+00:00"},
-            {"id": "o2", "ride_id": "r1", "status": "declined",
-             "offered_at": "2025-06-01T10:00:00+00:00", "responded_at": "2025-06-01T10:00:08+00:00"},
-            {"id": "o3", "ride_id": "r2", "status": "accepted",
-             "offered_at": "2025-06-02T10:00:00+00:00", "responded_at": "2025-06-02T10:00:03+00:00"},
+            {
+                "id": "o1",
+                "ride_id": "r1",
+                "status": "accepted",
+                "offered_at": "2025-06-01T10:00:00+00:00",
+                "responded_at": "2025-06-01T10:00:05+00:00",
+            },
+            {
+                "id": "o2",
+                "ride_id": "r1",
+                "status": "declined",
+                "offered_at": "2025-06-01T10:00:00+00:00",
+                "responded_at": "2025-06-01T10:00:08+00:00",
+            },
+            {
+                "id": "o3",
+                "ride_id": "r2",
+                "status": "accepted",
+                "offered_at": "2025-06-02T10:00:00+00:00",
+                "responded_at": "2025-06-02T10:00:03+00:00",
+            },
         ]
         rides = [
             {"id": "r1", "service_area_id": "area-a"},
@@ -1214,10 +1274,20 @@ class TestOfferAnalyticsEndpoint:
         from backend.routes.admin.subscriptions import get_offer_analytics
 
         offers = [
-            {"id": "o1", "ride_id": "r1", "status": "accepted",
-             "offered_at": "2025-06-01T10:00:00+00:00", "responded_at": "2025-06-01T10:00:05+00:00"},
-            {"id": "o2", "ride_id": "r2", "status": "expired",
-             "offered_at": "2025-06-01T10:00:00+00:00", "responded_at": None},
+            {
+                "id": "o1",
+                "ride_id": "r1",
+                "status": "accepted",
+                "offered_at": "2025-06-01T10:00:00+00:00",
+                "responded_at": "2025-06-01T10:00:05+00:00",
+            },
+            {
+                "id": "o2",
+                "ride_id": "r2",
+                "status": "expired",
+                "offered_at": "2025-06-01T10:00:00+00:00",
+                "responded_at": None,
+            },
         ]
         rides = [
             {"id": "r1", "service_area_id": "area-a"},
@@ -1257,7 +1327,9 @@ class TestExpiryWarning3Day:
 
         now = datetime.now(timezone.utc)
         sub = {
-            "id": "sub-1", "driver_id": "d1", "plan_name": "Premium Pass",
+            "id": "sub-1",
+            "driver_id": "d1",
+            "plan_name": "Premium Pass",
             "status": "active",
             "expires_at": (now + timedelta(days=2)).isoformat(),
             "expiry_warned": False,
@@ -1300,7 +1372,9 @@ class TestExpiryWarning3Day:
 
         now = datetime.now(timezone.utc)
         sub = {
-            "id": "sub-1", "driver_id": "d1", "plan_name": "Premium Pass",
+            "id": "sub-1",
+            "driver_id": "d1",
+            "plan_name": "Premium Pass",
             "status": "active",
             "expires_at": (now + timedelta(days=2)).isoformat(),
             "expiry_warned": False,
@@ -1328,8 +1402,5 @@ class TestExpiryWarning3Day:
                     raise
 
         # No 3d warning push should have fired
-        three_day_pushes = [
-            c for c in push_mock.await_args_list
-            if "3" in str(c.args[1]) or "Days" in str(c.args[1])
-        ]
+        three_day_pushes = [c for c in push_mock.await_args_list if "3" in str(c.args[1]) or "Days" in str(c.args[1])]
         assert len(three_day_pushes) == 0

@@ -6553,6 +6553,57 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
                 logger.warning(f"[SUBSCRIBE] Push notification failed: {push_err}")
 
 
+@api_router.get("/subscription/payments")
+async def get_subscription_payment_history(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    current_user: dict = Depends(get_current_user),
+):
+    """Return paginated Spinr Pass payment history for the authenticated driver.
+
+    Only returns rows for the calling driver's own account — driver_id is
+    resolved from the authenticated user's token, never from a query param.
+    """
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    payments = (
+        await db_supabase.get_rows(
+            "subscription_payments",
+            {"driver_id": driver["id"]},
+            order="created_at",
+            desc=True,
+            limit=limit,
+            offset=offset,
+        )
+        or []
+    )
+
+    total = await db_supabase.count_documents("subscription_payments", {"driver_id": driver["id"]})
+
+    return {
+        "payments": [
+            {
+                "id": p["id"],
+                "plan_id": p.get("plan_id"),
+                "plan_name": p.get("plan_name"),
+                "amount": str(Decimal(str(p["amount"])).quantize(Decimal("0.01"))),
+                "currency": p.get("currency", "CAD"),
+                "billing_reason": p.get("billing_reason"),
+                "stripe_invoice_id": p.get("stripe_invoice_id"),
+                "created_at": p.get("created_at"),
+            }
+            for p in payments
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
 @api_router.post("/subscription/cancel")
 async def cancel_subscription(current_user: dict = Depends(get_current_user)):
     """Cancel driver's active subscription."""

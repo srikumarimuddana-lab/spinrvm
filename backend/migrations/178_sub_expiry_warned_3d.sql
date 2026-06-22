@@ -1,4 +1,6 @@
--- Rollback: ALTER TABLE driver_subscriptions DROP COLUMN IF EXISTS expiry_warned_3d;
+-- Rollback:
+--   DROP INDEX CONCURRENTLY IF EXISTS idx_driver_subscriptions_expiry_warn_3d;
+--   ALTER TABLE driver_subscriptions DROP COLUMN IF EXISTS expiry_warned_3d;
 --
 -- Adds a second claim-flag for the 3-day expiry warning push notification.
 -- The existing `expiry_warned` column gates the 24-hour push; this new column
@@ -23,6 +25,6 @@ WHERE  expiry_warned = TRUE;
 -- Index for the background loop query so the 6-hour sweep is fast even with
 -- many rows. The partial index only covers active subscriptions because those
 -- are the only ones the loop checks.
-CREATE INDEX IF NOT EXISTS idx_driver_subscriptions_expiry_warn_3d
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_driver_subscriptions_expiry_warn_3d
   ON driver_subscriptions (expires_at, expiry_warned_3d)
   WHERE status = 'active';

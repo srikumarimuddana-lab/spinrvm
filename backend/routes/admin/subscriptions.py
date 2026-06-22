@@ -353,6 +353,8 @@ async def get_offer_analytics(
     else:
         end_dt = now
 
+    _truncated = False  # set True by the global path when 200k hard cap is hit
+
     if service_area_id:
         # When filtering to a single area, fetch that area's rides first so
         # the offer query is scoped to those ride IDs. This avoids the 10k
@@ -386,23 +388,41 @@ async def get_offer_analytics(
             offers_in_window.extend(chunk)
         rides = area_ride_rows
     else:
-        # Global view: push date window into DB so the fetch is bounded even
-        # when ride_offers grows past the Python-side cap.
-        offers_in_window = (
-            await db_supabase.get_rows(
-                "ride_offers",
-                {
-                    "$and": [
-                        {"offered_at": {"$gte": start_dt.isoformat()}},
-                        {"offered_at": {"$lte": end_dt.isoformat()}},
-                    ]
-                },
-                order="offered_at",
-                desc=True,
-                limit=10_000,
+        # Global view: page through ALL offers in the date window so quieter
+        # areas are never silently dropped. A 200k hard safety cap is applied
+        # to prevent runaway admin queries; the response includes a `truncated`
+        # flag when it's hit so the caller can narrow the date range.
+        _PAGE = 5_000
+        _HARD_CAP = 200_000
+        offers_in_window: List[Dict] = []
+        _offset = 0
+        _truncated = False
+        _date_filter = {
+            "$and": [
+                {"offered_at": {"$gte": start_dt.isoformat()}},
+                {"offered_at": {"$lte": end_dt.isoformat()}},
+            ]
+        }
+        while True:
+            _page = (
+                await db_supabase.get_rows(
+                    "ride_offers",
+                    _date_filter,
+                    order="offered_at",
+                    desc=True,
+                    limit=_PAGE,
+                    offset=_offset,
+                )
+                or []
             )
-            or []
-        )
+            offers_in_window.extend(_page)
+            if len(_page) < _PAGE:
+                break
+            _offset += _PAGE
+            if _offset >= _HARD_CAP:
+                _truncated = True
+                break
+
         ride_ids = list({o["ride_id"] for o in offers_in_window if o.get("ride_id")})
         rides = []
         for batch_start in range(0, len(ride_ids), 100):
@@ -445,11 +465,15 @@ async def get_offer_analytics(
     # so the summary matches the breakdown — not the platform-wide count.
     filtered_offers = [o for b in buckets.values() for o in b] if service_area_id else offers_in_window
 
-    return {
+    result: Dict = {
         "window": {"start": start_dt.isoformat(), "end": end_dt.isoformat()},
         "areas": areas,
         "totals": _offer_totals(filtered_offers),
     }
+    if _truncated:
+        result["truncated"] = True
+        result["warning"] = "Result set capped at 200,000 offers. Narrow the date range for full accuracy."
+    return result
 
 
 def _parse_ts(value: str) -> datetime:

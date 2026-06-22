@@ -32,7 +32,7 @@ const QUEST_TYPE_LABELS: Record<string, string> = {
 export default function QuestsScreen() {
   const router = useRouter();
   const {
-    availableQuests, myQuests, isLoading, error,
+    availableQuests, myQuests, isLoadingAvailable, isLoadingMine, error,
     fetchAvailableQuests, fetchMyQuests, joinQuest, claimReward,
   } = useQuestStore();
   const { colors } = useTheme();
@@ -254,28 +254,26 @@ export default function QuestsScreen() {
 
       <ScrollView
         style={styles.content}
+        contentContainerStyle={styles.contentContainer}
         refreshControl={<SafeRefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
         showsVerticalScrollIndicator={false}
       >
-        {isLoading && !refreshing ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color={colors.primary} />
-          </View>
-        ) : error && availableQuests.length === 0 && myQuests.length === 0 ? (
-          // Surface a real failure instead of a silent empty screen — without a
-          // distinct error state, a failed /quests fetch looks identical to
-          // "no quests available", which hides the actual problem.
-          <View style={styles.emptyContainer}>
-            <Ionicons name="cloud-offline-outline" size={48} color={colors.textDim} />
-            <Text style={styles.emptyText}>Couldn’t load quests</Text>
-            <Text style={styles.emptySubtext}>Check your connection and try again.</Text>
-            <TouchableOpacity style={styles.retryButton} onPress={onRefresh}>
-              <Ionicons name="refresh" size={16} color="#FFF" />
-              <Text style={styles.retryButtonText}>Retry</Text>
-            </TouchableOpacity>
-          </View>
-        ) : tab === 'available' ? (
-          availableQuests.length === 0 ? (
+        {tab === ‘available’ ? (
+          isLoadingAvailable && availableQuests.length === 0 && !refreshing ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color={colors.primary} />
+            </View>
+          ) : error && availableQuests.length === 0 ? (
+            <View style={styles.emptyContainer}>
+              <Ionicons name="cloud-offline-outline" size={48} color={colors.textDim} />
+              <Text style={styles.emptyText}>Couldn’t load quests</Text>
+              <Text style={styles.emptySubtext}>Check your connection and try again.</Text>
+              <TouchableOpacity style={styles.retryButton} onPress={onRefresh}>
+                <Ionicons name="refresh" size={16} color="#FFF" />
+                <Text style={styles.retryButtonText}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          ) : availableQuests.length === 0 ? (
             <View style={styles.emptyContainer}>
               <Ionicons name="trophy-outline" size={48} color="#CCC" />
               <Text style={styles.emptyText}>No quests available right now</Text>
@@ -285,7 +283,11 @@ export default function QuestsScreen() {
             availableQuests.map(renderAvailableQuest)
           )
         ) : (
-          myQuests.length === 0 ? (
+          isLoadingMine && myQuests.length === 0 && !refreshing ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color={colors.primary} />
+            </View>
+          ) : myQuests.length === 0 ? (
             <View style={styles.emptyContainer}>
               <Ionicons name="flag-outline" size={48} color="#CCC" />
               <Text style={styles.emptyText}>No active quests</Text>
@@ -308,7 +310,6 @@ export default function QuestsScreen() {
             </>
           )
         )}
-        <View style={{ height: 40 }} />
       </ScrollView>
     </SafeAreaView>
   );
@@ -340,7 +341,8 @@ function createStyles(colors: ThemeColors) {
     tabText: { fontSize: 14, fontWeight: '600', color: colors.textDim },
     tabTextActive: { color: '#FFF' },
 
-    content: { flex: 1, padding: 16 },
+    content: { flex: 1 },
+    contentContainer: { padding: 16, paddingBottom: 40, flexGrow: 1 },
 
     questCard: {
       backgroundColor: colors.surface, borderRadius: 16, padding: 18, marginBottom: 12,
@@ -404,7 +406,7 @@ function createStyles(colors: ThemeColors) {
       letterSpacing: 0.5, marginBottom: 10, marginTop: 8,
     },
 
-    loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 60 },
+    loadingContainer: { alignItems: 'center', justifyContent: 'center', paddingTop: 80 },
     emptyContainer: { alignItems: 'center', paddingTop: 60 },
     emptyText: { fontSize: 16, fontWeight: '600', color: colors.textSecondary, marginTop: 12 },
     emptySubtext: { fontSize: 14, color: colors.border, marginTop: 4 },

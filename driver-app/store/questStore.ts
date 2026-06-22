@@ -5,6 +5,24 @@ function isAxiosError(e: unknown): e is { response?: { data?: { detail?: string 
   return typeof e === 'object' && e !== null && ('response' in e || 'message' in e);
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null;
+}
+
+function arrayFromApi<T>(payload: unknown, keys: string[]): T[] {
+  if (Array.isArray(payload)) return payload.filter(Boolean) as T[];
+
+  const record = asRecord(payload);
+  if (!record) return [];
+
+  for (const key of keys) {
+    const candidate = record[key];
+    if (Array.isArray(candidate)) return candidate.filter(Boolean) as T[];
+  }
+
+  return [];
+}
+
 export interface Quest {
   id: string;
   title: string;
@@ -66,8 +84,9 @@ export const useQuestStore = create<QuestState>((set, get) => ({
   fetchAvailableQuests: async () => {
     try {
       set({ isLoadingAvailable: true, error: null });
-      const res = await api.get<Quest[]>('/quests');
-      set({ availableQuests: res.data || [], isLoadingAvailable: false });
+      const res = await api.get<Quest[] | { quests?: Quest[]; available_quests?: Quest[]; data?: Quest[] }>('/quests');
+      const availableQuests = arrayFromApi<Quest>(res.data, ['quests', 'available_quests', 'data']);
+      set({ availableQuests, isLoadingAvailable: false });
     } catch (error: unknown) {
       set({ error: isAxiosError(error) ? (error.message ?? 'Failed to fetch quests') : 'Failed to fetch quests', isLoadingAvailable: false });
     }
@@ -76,8 +95,9 @@ export const useQuestStore = create<QuestState>((set, get) => ({
   fetchMyQuests: async () => {
     try {
       set({ isLoadingMine: true });
-      const res = await api.get<MyQuestProgress[]>('/quests/my-quests');
-      set({ myQuests: res.data || [], isLoadingMine: false });
+      const res = await api.get<MyQuestProgress[] | { quests?: MyQuestProgress[]; my_quests?: MyQuestProgress[]; data?: MyQuestProgress[] }>('/quests/my-quests');
+      const myQuests = arrayFromApi<MyQuestProgress>(res.data, ['quests', 'my_quests', 'data']);
+      set({ myQuests, isLoadingMine: false });
     } catch (error: unknown) {
       set({ isLoadingMine: false });
     }

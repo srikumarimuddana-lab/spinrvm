@@ -71,6 +71,7 @@ from .safety import router as safety_router
 from .service_areas import router as service_areas_router
 from .settings import router as settings_router
 from .staff import router as staff_router
+from .subscriptions import offer_analytics_router
 from .subscriptions import router as subscriptions_router
 from .support import router as support_router
 from .support_tickets import router as support_tickets_router
@@ -116,6 +117,7 @@ admin_router.include_router(legal_documents_router, dependencies=[Depends(requir
 admin_router.include_router(documents_router, dependencies=[Depends(require_module("documents"))])
 admin_router.include_router(staff_router, dependencies=[Depends(require_module("staff"))])
 admin_router.include_router(subscriptions_router, dependencies=[Depends(require_module("earnings"))])
+admin_router.include_router(offer_analytics_router, dependencies=[Depends(require_module("dashboard"))])
 admin_router.include_router(messaging_router, dependencies=[Depends(require_module("notifications"))])
 admin_router.include_router(maintenance_router, dependencies=[Depends(require_module("dashboard"))])
 admin_router.include_router(analytics_router, dependencies=[Depends(require_module("dashboard"))])

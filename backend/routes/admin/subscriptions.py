@@ -313,3 +313,174 @@ async def admin_get_subscription_stats(
             if not a.get("parent_service_area_id")
         ],
     }
+
+
+# ============================================================
+# Per-Service-Area Offer Analytics
+# Mounted separately under require_module("dashboard") in __init__.py
+# so analytics-access admins can reach it without earnings permission.
+# ============================================================
+
+offer_analytics_router = APIRouter()
+
+
+@offer_analytics_router.get("/offer-analytics")
+async def get_offer_analytics(
+    start_date: Optional[str] = Query(None, description="ISO date, e.g. 2025-01-01"),
+    end_date: Optional[str] = Query(None, description="ISO date, e.g. 2025-12-31"),
+    service_area_id: Optional[str] = Query(None, description="Filter to a single area"),
+    _admin=Depends(get_admin_user),
+):
+    """Offer acceptance rates, avg response time, and offer counts grouped by service area.
+
+    Reads ride_offers joined to rides (in Python via batch lookup) for the given
+    date window. Defaults to the last 30 days when no dates are supplied.
+    """
+    now = datetime.now(timezone.utc)
+    if start_date:
+        try:
+            start_dt = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
+        except ValueError:
+            start_dt = now - timedelta(days=30)
+    else:
+        start_dt = now - timedelta(days=30)
+
+    if end_date:
+        try:
+            end_dt = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
+            # Date-only inputs (no "T") land at midnight of that day, which
+            # excludes all offers later on the same day. Extend to end-of-day.
+            if "T" not in end_date:
+                end_dt = end_dt + timedelta(days=1) - timedelta(seconds=1)
+        except ValueError:
+            end_dt = now
+    else:
+        end_dt = now
+
+    _truncated = False  # set True when the 200k hard cap is hit
+
+    # Single paginated offer fetch for both the global and per-area paths.
+    # Paging through all offers in the date window ensures no row is silently
+    # dropped. When service_area_id is provided the ride lookup below is
+    # additionally filtered by area, so unrelated offers are bucketed as
+    # unknown and dropped by the aggregation loop — no separate area-first
+    # ride query needed, and no 20k lifetime-rides cap.
+    _PAGE = 5_000
+    _HARD_CAP = 200_000
+    offers_in_window: List[Dict] = []
+    _offset = 0
+    _date_filter = {
+        "$and": [
+            {"offered_at": {"$gte": start_dt.isoformat()}},
+            {"offered_at": {"$lte": end_dt.isoformat()}},
+        ]
+    }
+    while True:
+        _page = (
+            await db_supabase.get_rows(
+                "ride_offers",
+                _date_filter,
+                order="offered_at",
+                desc=True,
+                limit=_PAGE,
+                offset=_offset,
+            )
+            or []
+        )
+        offers_in_window.extend(_page)
+        if len(_page) < _PAGE:
+            break
+        _offset += _PAGE
+        if _offset >= _HARD_CAP:
+            _truncated = True
+            break
+
+    if not offers_in_window:
+        return {
+            "window": {"start": start_dt.isoformat(), "end": end_dt.isoformat()},
+            "areas": [],
+            "totals": _offer_totals([]),
+        }
+
+    ride_ids = list({o["ride_id"] for o in offers_in_window if o.get("ride_id")})
+    rides: List[Dict] = []
+    _ride_filter_base: Dict = {"id": {"$in": []}}
+    if service_area_id:
+        _ride_filter_base = {"id": {"$in": []}, "service_area_id": service_area_id}
+    for batch_start in range(0, len(ride_ids), 100):
+        batch = ride_ids[batch_start : batch_start + 100]
+        _batch_filter = {**_ride_filter_base, "id": {"$in": batch}}
+        chunk = await db_supabase.get_rows("rides", _batch_filter, limit=len(batch)) or []
+        rides.extend(chunk)
+
+    ride_area = {r["id"]: r.get("service_area_id") for r in rides}
+
+    # Fetch service area names once
+    area_rows = await db_supabase.get_rows("service_areas", {}, limit=500) or []
+    area_name = {a["id"]: a.get("name", "Unknown") for a in area_rows}
+
+    # Aggregate per service area
+    buckets: Dict[str, List[Dict]] = {}
+    for offer in offers_in_window:
+        area_id = ride_area.get(offer.get("ride_id")) or "__unknown__"
+        if service_area_id and area_id != service_area_id:
+            continue
+        buckets.setdefault(area_id, []).append(offer)
+
+    areas = []
+    for area_id, bucket in sorted(buckets.items(), key=lambda kv: -(len(kv[1]))):
+        areas.append(
+            {
+                "service_area_id": area_id if area_id != "__unknown__" else None,
+                "service_area_name": area_name.get(area_id, "Unknown") if area_id != "__unknown__" else "Unknown area",
+                **_offer_totals(bucket),
+            }
+        )
+
+    # When filtering to a single area, totals must reflect only those offers
+    # so the summary matches the breakdown — not the platform-wide count.
+    filtered_offers = [o for b in buckets.values() for o in b] if service_area_id else offers_in_window
+
+    result: Dict = {
+        "window": {"start": start_dt.isoformat(), "end": end_dt.isoformat()},
+        "areas": areas,
+        "totals": _offer_totals(filtered_offers),
+    }
+    if _truncated:
+        result["truncated"] = True
+        result["warning"] = "Result set capped at 200,000 offers. Narrow the date range for full accuracy."
+    return result
+
+
+def _parse_ts(value: str) -> datetime:
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except (ValueError, AttributeError):
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _offer_totals(offers: List[Dict]) -> Dict:
+    total = len(offers)
+    accepted = sum(1 for o in offers if o.get("status") == "accepted")
+    declined = sum(1 for o in offers if o.get("status") == "declined")
+    expired = sum(1 for o in offers if o.get("status") == "expired")
+
+    response_times = []
+    for o in offers:
+        if o.get("responded_at") and o.get("offered_at"):
+            delta = _parse_ts(o["responded_at"]) - _parse_ts(o["offered_at"])
+            secs = delta.total_seconds()
+            if 0 <= secs < 3600:  # sanity cap at 1 hour
+                response_times.append(secs)
+
+    avg_response_s = (sum(response_times) / len(response_times)) if response_times else None
+
+    return {
+        "total_offers": total,
+        "accepted": accepted,
+        "declined": declined,
+        "expired": expired,
+        "acceptance_rate": round(accepted / total, 4) if total else 0.0,
+        "avg_response_seconds": round(avg_response_s, 1) if avg_response_s is not None else None,
+    }

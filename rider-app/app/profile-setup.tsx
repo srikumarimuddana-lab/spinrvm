@@ -8,7 +8,6 @@ import {
   TextInput,
   TouchableOpacity,
   KeyboardAvoidingView,
-  Platform,
   Keyboard,
   ActivityIndicator,
   ScrollView,
@@ -329,14 +328,13 @@ export default function ProfileSetupScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Wrap on both platforms. iOS uses padding; Android stays inert and
-          relies on windowSoftInputMode=adjustResize (pinned in app.config) to
-          shrink the window so the ScrollView can scroll the focused field and
-          the Create Profile button above the keyboard. Previously Android had
-          no keyboard handling at all, so the lower fields and submit button sat
-          behind the keyboard. */}
+      {/* "padding" lifts the form above the keyboard via JS keyboard events on
+          both platforms, so the lower fields and the Create Profile button stay
+          reachable regardless of the native windowSoftInputMode — works on
+          OTA-only builds. (Previously Android had no keyboard handling, so the
+          lower fields and submit button sat behind the keyboard.) */}
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior="padding"
         style={styles.container}
       >
         {contentNode}

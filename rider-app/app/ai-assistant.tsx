@@ -18,7 +18,6 @@ import {
   BackHandler,
   FlatList,
   KeyboardAvoidingView,
-  Platform,
   Share,
   StyleSheet,
   Text,
@@ -326,7 +325,7 @@ export default function AiAssistantScreen() {
 
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior="padding"
       >
         {showWelcome ? (
           <View style={styles.welcomeWrap}>

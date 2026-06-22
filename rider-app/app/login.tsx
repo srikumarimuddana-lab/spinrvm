@@ -7,7 +7,6 @@ import {
   StyleSheet,
   ActivityIndicator,
   KeyboardAvoidingView,
-  Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -61,11 +60,12 @@ export default function LoginScreen() {
 
   return (
     <KeyboardAvoidingView
-      // Android relies on windowSoftInputMode=adjustResize (pinned in
-      // app.config) to shrink the window; an explicit 'height' behavior
-      // double-adjusts and leaves a phantom gap after the keyboard is
-      // dismissed. Keep it inert on Android, padding on iOS.
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      // "padding" works off JS keyboard events on both platforms, so it lifts
+      // the input + button above the keyboard regardless of the native
+      // windowSoftInputMode (works on OTA-only builds, no rebuild needed).
+      // Avoid Android "height" (phantom gap on dismiss) and "undefined" (a
+      // no-op unless the native build is adjustResize).
+      behavior="padding"
       style={styles.container}
     >
       <View style={[styles.topStrip, { paddingTop: insets.top }]}>

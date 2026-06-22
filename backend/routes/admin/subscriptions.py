@@ -344,33 +344,44 @@ async def get_offer_analytics(
     if end_date:
         try:
             end_dt = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
+            # Date-only inputs (no "T") land at midnight of that day, which
+            # excludes all offers later on the same day. Extend to end-of-day.
+            if "T" not in end_date:
+                end_dt = end_dt + timedelta(days=1) - timedelta(seconds=1)
         except ValueError:
             end_dt = now
     else:
         end_dt = now
 
-    # Fetch offers in the window. Supabase get_rows doesn't support GTE/LTE
-    # filters natively, so we over-fetch with a large limit and filter in Python.
-    # For analytics on ride_offers (append-only, indexed on offered_at) this is
-    # acceptable up to ~50k rows; add a DB-side date-range RPC if this grows.
-    all_offers = await db_supabase.get_rows("ride_offers", {}, limit=50_000) or []
-    offers_in_window = [
-        o
-        for o in all_offers
-        if o.get("offered_at") and _parse_ts(o["offered_at"]) >= start_dt and _parse_ts(o["offered_at"]) <= end_dt
-    ]
+    # Push the date window into the DB query via $and so the fetch is
+    # bounded even when ride_offers grows past the Python-side cap.
+    offers_in_window = (
+        await db_supabase.get_rows(
+            "ride_offers",
+            {
+                "$and": [
+                    {"offered_at": {"$gte": start_dt.isoformat()}},
+                    {"offered_at": {"$lte": end_dt.isoformat()}},
+                ]
+            },
+            order="offered_at",
+            desc=True,
+            limit=10_000,
+        )
+        or []
+    )
 
     if not offers_in_window:
         return {"areas": [], "totals": _offer_totals([])}
 
-    # Batch-fetch associated rides to get service_area_id
+    # Batch-fetch rides by ID using $in so we never miss a ride that
+    # happens not to be in the first N rows of an unfiltered scan.
     ride_ids = list({o["ride_id"] for o in offers_in_window if o.get("ride_id")})
     rides = []
     for batch_start in range(0, len(ride_ids), 100):
         batch = ride_ids[batch_start : batch_start + 100]
-        chunk = await db_supabase.get_rows("rides", {}, limit=len(batch)) or []
-        # Filter client-side because get_rows doesn't support .in_() style here
-        rides.extend(r for r in chunk if r.get("id") in batch)
+        chunk = await db_supabase.get_rows("rides", {"id": {"$in": batch}}, limit=len(batch)) or []
+        rides.extend(chunk)
 
     ride_area = {r["id"]: r.get("service_area_id") for r in rides}
 
@@ -396,10 +407,14 @@ async def get_offer_analytics(
             }
         )
 
+    # When filtering to a single area, totals must reflect only those offers
+    # so the summary matches the breakdown — not the platform-wide count.
+    filtered_offers = [o for b in buckets.values() for o in b] if service_area_id else offers_in_window
+
     return {
         "window": {"start": start_dt.isoformat(), "end": end_dt.isoformat()},
         "areas": areas,
-        "totals": _offer_totals(offers_in_window),
+        "totals": _offer_totals(filtered_offers),
     }
 
 

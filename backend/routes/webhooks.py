@@ -1056,6 +1056,7 @@ async def stripe_webhook(request: Request):
                         "payment_status": "paid",
                         "expires_at": new_expires,
                         "expiry_warned": False,
+                        "expiry_warned_3d": False,
                     },
                 )
                 logger.info(

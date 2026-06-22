@@ -5595,6 +5595,41 @@ async def update_driver_status(
                         action_hint="Activate Spinr Pass",
                     )
 
+            # Vehicle-type enforcement: if the subscription plan restricts
+            # to specific vehicle type IDs, the driver's registered vehicle
+            # must be one of them. A null/empty list means all types allowed.
+            if sub.get("plan_id"):
+                try:
+                    plan = await db_supabase.find_one("subscription_plans", {"id": sub["plan_id"]})
+                    allowed_vt = plan.get("vehicle_types") if plan else None
+                    if allowed_vt:  # non-null, non-empty list
+                        driver_vt = driver.get("vehicle_type_id")
+                        if driver_vt not in allowed_vt:
+                            raise SpinrException(
+                                message=(
+                                    "Your vehicle type is not covered by your active Spinr Pass plan. "
+                                    "Please switch to a compatible plan or update your vehicle."
+                                ),
+                                error_code=ErrorCode.PAYMENT_FAILED,
+                                status_code=402,
+                                message_key=ErrorKeys.DRIVER_SUBSCRIPTION_REQUIRED,
+                                action_hint="Update Spinr Pass",
+                            )
+                except SpinrException:
+                    raise
+                except Exception as e:
+                    logger.error(
+                        "vehicle_type check failed for driver=%s plan=%s: %s",
+                        driver_id,
+                        sub.get("plan_id"),
+                        e,
+                        exc_info=True,
+                    )
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Could not verify subscription plan vehicle restrictions. Please try again.",
+                    ) from e
+
     logger.info(
         f"[GO-ONLINE] handler CALL update_one driver_id={driver_id} "
         f"requested_is_online={is_online} "
@@ -5758,6 +5793,12 @@ async def get_subscription_plans(current_user: dict = Depends(get_current_user))
                 filtered.append(p)
         plans = filtered
 
+    # Filter by driver's vehicle type — only show plans that cover this vehicle.
+    # A null/empty vehicle_types list means the plan accepts all types.
+    if driver:
+        driver_vt = driver.get("vehicle_type_id")
+        plans = [p for p in plans if not p.get("vehicle_types") or driver_vt in p["vehicle_types"]]
+
     return {"plans": plans, "free_mode": False, "message": None}
 
 
@@ -5908,6 +5949,21 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
     )
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found or inactive")
+
+    # Reject checkout before Stripe if this plan's vehicle_types don't cover
+    # the driver. Mirrors the go-online gate so a driver can't subscribe to an
+    # incompatible plan and then be silently blocked at go-online time.
+    allowed_vt = plan.get("vehicle_types")
+    if allowed_vt:
+        driver_vt = driver.get("vehicle_type_id")
+        if driver_vt not in allowed_vt:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Your vehicle type is not compatible with this plan. "
+                    "Please choose a plan that supports your vehicle."
+                ),
+            )
 
     # Check for existing active subscription
     existing = (lambda _r: _r[0] if _r else None)(
@@ -6520,6 +6576,57 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
                 logger.warning(f"[SUBSCRIBE] Push notification failed: {push_err}")
 
 
+@api_router.get("/subscription/payments")
+async def get_subscription_payment_history(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    current_user: dict = Depends(get_current_user),
+):
+    """Return paginated Spinr Pass payment history for the authenticated driver.
+
+    Only returns rows for the calling driver's own account — driver_id is
+    resolved from the authenticated user's token, never from a query param.
+    """
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    payments = (
+        await db_supabase.get_rows(
+            "subscription_payments",
+            {"driver_id": driver["id"]},
+            order="created_at",
+            desc=True,
+            limit=limit,
+            offset=offset,
+        )
+        or []
+    )
+
+    total = await db_supabase.count_documents("subscription_payments", {"driver_id": driver["id"]})
+
+    return {
+        "payments": [
+            {
+                "id": p["id"],
+                "plan_id": p.get("plan_id"),
+                "plan_name": p.get("plan_name"),
+                "amount": str(Decimal(str(p["amount"])).quantize(Decimal("0.01"))),
+                "currency": p.get("currency", "CAD"),
+                "billing_reason": p.get("billing_reason"),
+                "stripe_invoice_id": p.get("stripe_invoice_id"),
+                "created_at": p.get("created_at"),
+            }
+            for p in payments
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
 @api_router.post("/subscription/cancel")
 async def cancel_subscription(current_user: dict = Depends(get_current_user)):
     """Cancel driver's active subscription."""
@@ -6574,8 +6681,9 @@ async def check_expiring_subscriptions():
 
     Two jobs, both run every 6 hours from the FastAPI lifespan:
 
-    1. **Warn** drivers whose active subscription expires within 24 h
-       (push notification, once per subscription via ``expiry_warned``).
+    1. **Warn** drivers whose active subscription expires within 72 h (3 days)
+       via ``expiry_warned_3d``, then again within 24 h via ``expiry_warned``.
+       Both are claim-flags so only one push fires per window per subscription.
     2. **Enforce** expiry on subscriptions whose ``expires_at`` is in the
        past — but only when the admin toggle
        ``require_driver_subscription`` is on. Enforcement:
@@ -6621,7 +6729,8 @@ async def check_expiring_subscriptions():
             continue
         try:
             now = datetime.now(timezone.utc)
-            window = now + timedelta(hours=24)
+            window_24h = now + timedelta(hours=24)
+            window_3d = now + timedelta(hours=72)
 
             # Retry subscriptions stuck in cancel_pending — a plan-switch Stripe
             # cancel that failed transiently. On success, finalize as cancelled;
@@ -6794,11 +6903,11 @@ async def check_expiring_subscriptions():
                     enforced_count += 1
                     continue
 
-                # ── Warning branch: expires within 24 h ───────────────────
+                # ── Warning branch: 24-hour final notice ─────────────────
                 if sub.get("expiry_warned"):
                     continue
 
-                if now < expires_dt <= window:
+                if now < expires_dt <= window_24h:
                     driver = await db.find_one("drivers", {"id": sub["driver_id"]})
                     if driver and driver.get("user_id"):
                         hours_left = max(1, int((expires_dt - now).total_seconds() / 3600))
@@ -6806,7 +6915,7 @@ async def check_expiring_subscriptions():
                         try:
                             await send_push_notification(
                                 driver["user_id"],
-                                "Spinr Pass Expiring Soon ⏰",
+                                "Spinr Pass Expiring Soon",
                                 f"Your {plan_name} plan expires in ~{hours_left} hours. Renew now to keep driving!",
                                 {
                                     "type": "subscription_expiring",
@@ -6823,9 +6932,79 @@ async def check_expiring_subscriptions():
                         {"$set": {"expiry_warned": True}},
                     )
 
+            # ── 3-day advance warning: dedicated targeted query ──────────
+            # Query only the subs in the (24h, 72h] expiry window that
+            # haven't been warned yet, bypassing the 500-row active_subs cap
+            # so no expiring row is silently skipped on a busy platform.
+            subs_3d = (
+                await db.get_rows(
+                    "driver_subscriptions",
+                    {
+                        "$and": [
+                            {"status": "active"},
+                            {"expiry_warned_3d": False},
+                            {"expires_at": {"$gt": window_24h.isoformat()}},
+                            {"expires_at": {"$lte": window_3d.isoformat()}},
+                        ]
+                    },
+                    limit=500,
+                )
+                or []
+            )
+            warned_3d_count = 0
+            for sub_3d in subs_3d:
+                try:
+                    _exp_str = sub_3d.get("expires_at")
+                    if not _exp_str:
+                        continue
+                    expires_3d = datetime.fromisoformat(str(_exp_str).replace("Z", "+00:00"))
+                    if expires_3d.tzinfo is None:
+                        expires_3d = expires_3d.replace(tzinfo=timezone.utc)
+                except (ValueError, TypeError):
+                    continue
+                # Claim atomically: also recheck status and the expiry window
+                # so a renewal or cancellation between the query and this write
+                # does not mark a stale or renewed row as warned.
+                claimed = await db.update_one(
+                    "driver_subscriptions",
+                    {
+                        "id": sub_3d["id"],
+                        "expiry_warned_3d": False,
+                        "status": "active",
+                        "$and": [
+                            {"expires_at": {"$gt": window_24h.isoformat()}},
+                            {"expires_at": {"$lte": window_3d.isoformat()}},
+                        ],
+                    },
+                    {"$set": {"expiry_warned_3d": True}},
+                )
+                if claimed is None:
+                    continue
+                drv_3d = await db.find_one("drivers", {"id": sub_3d["driver_id"]})
+                if drv_3d and drv_3d.get("user_id"):
+                    days_left = max(1, int((expires_3d - now).total_seconds() / 86400))
+                    plan_name = sub_3d.get("plan_name", "Spinr Pass")
+                    try:
+                        await send_push_notification(
+                            drv_3d["user_id"],
+                            "Spinr Pass Expiring in 3 Days",
+                            f"Your {plan_name} plan expires in ~{days_left} day{'s' if days_left != 1 else ''}. Renew now to keep driving!",
+                            {"type": "subscription_expiring_3d", "days_left": str(days_left)},
+                        )
+                        warned_3d_count += 1
+                    except Exception as e:
+                        logger.warning(
+                            "[SUB-EXPIRY] 3d push failed for driver %s: %s",
+                            sub_3d["driver_id"],
+                            e,
+                        )
+
             logger.info(
-                f"[SUB-EXPIRY] Check complete. {len(active_subs)} scanned, "
-                f"{warned_count} warned, {enforced_count} enforced offline."
+                "[SUB-EXPIRY] Check complete. %d scanned, %d 24h warned, %d 3d warned, %d enforced offline.",
+                len(active_subs),
+                warned_count,
+                warned_3d_count,
+                enforced_count,
             )
 
         except Exception as e:

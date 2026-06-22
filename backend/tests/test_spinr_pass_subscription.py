@@ -940,7 +940,11 @@ class TestRecurringIntervalAndModeLedger:
             patch("backend.settings_loader.get_app_settings", AsyncMock(return_value=mock_settings)),
             patch(
                 "stripe.Price.retrieve",
-                return_value={"unit_amount": 4999, "currency": "cad", "recurring": {"interval": "week", "interval_count": 1}},
+                return_value={
+                    "unit_amount": 4999,
+                    "currency": "cad",
+                    "recurring": {"interval": "week", "interval_count": 1},
+                },
             ),
             patch("stripe.checkout.Session.create") as mock_session_create,
         ):
@@ -999,3 +1003,404 @@ class TestRecurringIntervalAndModeLedger:
         ):
             await drv._activate_subscription("s1", "p1", "subscription")
         record_mock.assert_not_awaited()
+
+
+# ── New tests for the four gap-closure features ──────────────────────────────
+
+
+class TestVehicleTypeEnforcement:
+    """Go-online gate rejects drivers whose vehicle type is not covered by their plan."""
+
+    async def test_go_online_blocked_when_vehicle_type_not_in_plan(self):
+        from backend.routes.drivers import update_driver_status
+
+        driver = {"id": "d1", "user_id": "u1", "vehicle_type_id": "vt-sedan", "status": "active"}
+        plan = {"id": "plan-1", "vehicle_types": ["vt-suv", "vt-van"]}
+        active_sub = {
+            "id": "sub-1",
+            "driver_id": "d1",
+            "plan_id": "plan-1",
+            "status": "active",
+            "expires_at": "2099-01-01T00:00:00+00:00",
+        }
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "drivers":
+                return [driver]
+            if table == "driver_subscriptions":
+                return [active_sub]
+            return []
+
+        async def fake_find_one(table, filters, **kw):
+            if table == "drivers":
+                return driver
+            if table == "subscription_plans":
+                return plan
+            return None
+
+        with (
+            patch("backend.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("backend.db_supabase.get_rows", side_effect=fake_get_rows),
+            patch("backend.db_supabase.find_one", side_effect=fake_find_one),
+            patch("backend.db_supabase.update_one", AsyncMock()),
+            patch(
+                "backend.settings_loader.get_app_settings",
+                AsyncMock(return_value={"require_driver_subscription": True}),
+            ),
+        ):
+            with pytest.raises(Exception) as exc_info:
+                await update_driver_status(
+                    driver_id="d1",
+                    is_online=True,
+                    lat=None,
+                    lng=None,
+                    current_user={"id": "u1"},
+                )
+            assert "vehicle" in str(exc_info.value).lower() or "402" in str(exc_info.value)
+
+    async def test_go_online_allowed_when_plan_vehicle_types_null(self):
+        """Null vehicle_types on plan = all types allowed (no 402 raised from vt gate)."""
+        from backend.routes.drivers import update_driver_status
+
+        driver = {
+            "id": "d1",
+            "user_id": "u1",
+            "vehicle_type_id": "vt-sedan",
+            "status": "active",
+            "is_online": False,
+            "is_available": False,
+            "lat": 52.1,
+            "lng": -106.6,
+        }
+        plan = {"id": "plan-1", "vehicle_types": None}
+        active_sub = {
+            "id": "sub-1",
+            "driver_id": "d1",
+            "plan_id": "plan-1",
+            "status": "active",
+            "expires_at": "2099-01-01T00:00:00+00:00",
+        }
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "drivers":
+                return [driver]
+            if table == "driver_subscriptions":
+                return [active_sub]
+            if table == "driver_document_status":
+                return []
+            return []
+
+        async def fake_find_one(table, filters, **kw):
+            if table == "drivers":
+                return driver
+            if table == "subscription_plans":
+                return plan
+            return None
+
+        with (
+            patch("backend.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("backend.db_supabase.get_rows", side_effect=fake_get_rows),
+            patch("backend.db_supabase.find_one", side_effect=fake_find_one),
+            patch("backend.db_supabase.update_one", AsyncMock()),
+            patch(
+                "backend.settings_loader.get_app_settings",
+                AsyncMock(return_value={"require_driver_subscription": True}),
+            ),
+            patch("backend.routes.drivers.clear_presence", AsyncMock()),
+            patch("backend.routes.drivers.set_presence", AsyncMock()),
+            patch("backend.routes.drivers.record_period_transition", AsyncMock()),
+            patch("backend.routes.drivers.manager", MagicMock()),
+        ):
+            try:
+                await update_driver_status(
+                    driver_id="d1",
+                    is_online=True,
+                    lat=None,
+                    lng=None,
+                    current_user={"id": "u1"},
+                )
+            except Exception as e:
+                assert "vehicle" not in str(e).lower(), f"Unexpected vehicle type block: {e}"
+
+
+class TestPaymentHistoryEndpoint:
+    """GET /drivers/subscription/payments scopes to the authenticated driver."""
+
+    async def test_returns_own_payments(self):
+        from backend.routes.drivers import get_subscription_payment_history
+
+        driver = {"id": "d1", "user_id": "u1"}
+        payments = [
+            {
+                "id": "pay-1",
+                "driver_id": "d1",
+                "plan_id": "plan-1",
+                "plan_name": "Premium Pass",
+                "amount": "49.99",
+                "currency": "CAD",
+                "billing_reason": "one_off",
+                "stripe_invoice_id": None,
+                "created_at": "2025-06-01T10:00:00+00:00",
+            }
+        ]
+
+        with (
+            patch(
+                "backend.db_supabase.get_rows",
+                AsyncMock(
+                    side_effect=[
+                        [driver],
+                        payments,
+                    ]
+                ),
+            ),
+            patch("backend.db_supabase.count_documents", AsyncMock(return_value=1)),
+        ):
+            result = await get_subscription_payment_history(limit=20, offset=0, current_user={"id": "u1"})
+
+        assert result["total"] == 1
+        assert result["payments"][0]["plan_name"] == "Premium Pass"
+        assert result["payments"][0]["amount"] == "49.99"
+
+    async def test_returns_404_when_no_driver_profile(self):
+        from fastapi import HTTPException
+
+        from backend.routes.drivers import get_subscription_payment_history
+
+        with patch("backend.db_supabase.get_rows", AsyncMock(return_value=[])):
+            with pytest.raises(HTTPException) as exc:
+                await get_subscription_payment_history(limit=20, offset=0, current_user={"id": "u-nobody"})
+            assert exc.value.status_code == 404
+
+    async def test_amount_is_decimal_string_two_dp(self):
+        """Amount must always be serialised to exactly 2 decimal places."""
+        from backend.routes.drivers import get_subscription_payment_history
+
+        driver = {"id": "d1", "user_id": "u1"}
+        payments = [
+            {
+                "id": "pay-2",
+                "driver_id": "d1",
+                "plan_id": "plan-1",
+                "plan_name": "Standard Pass",
+                "amount": "29.9",
+                "currency": "CAD",
+                "billing_reason": "one_off",
+                "stripe_invoice_id": None,
+                "created_at": "2025-06-15T08:00:00+00:00",
+            }
+        ]
+
+        with (
+            patch(
+                "backend.db_supabase.get_rows",
+                AsyncMock(
+                    side_effect=[
+                        [driver],
+                        payments,
+                    ]
+                ),
+            ),
+            patch("backend.db_supabase.count_documents", AsyncMock(return_value=1)),
+        ):
+            result = await get_subscription_payment_history(limit=20, offset=0, current_user={"id": "u1"})
+
+        assert result["payments"][0]["amount"] == "29.90"
+
+
+class TestOfferAnalyticsEndpoint:
+    """GET /admin/offer-analytics groups by service area correctly."""
+
+    async def test_groups_by_service_area(self):
+        from backend.routes.admin.subscriptions import get_offer_analytics
+
+        offers = [
+            {
+                "id": "o1",
+                "ride_id": "r1",
+                "status": "accepted",
+                "offered_at": "2025-06-01T10:00:00+00:00",
+                "responded_at": "2025-06-01T10:00:05+00:00",
+            },
+            {
+                "id": "o2",
+                "ride_id": "r1",
+                "status": "declined",
+                "offered_at": "2025-06-01T10:00:00+00:00",
+                "responded_at": "2025-06-01T10:00:08+00:00",
+            },
+            {
+                "id": "o3",
+                "ride_id": "r2",
+                "status": "accepted",
+                "offered_at": "2025-06-02T10:00:00+00:00",
+                "responded_at": "2025-06-02T10:00:03+00:00",
+            },
+        ]
+        rides = [
+            {"id": "r1", "service_area_id": "area-a"},
+            {"id": "r2", "service_area_id": "area-b"},
+        ]
+        areas = [
+            {"id": "area-a", "name": "Downtown"},
+            {"id": "area-b", "name": "Airport"},
+        ]
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "ride_offers":
+                return offers
+            if table == "rides":
+                return rides
+            if table == "service_areas":
+                return areas
+            return []
+
+        with patch("backend.db_supabase.get_rows", side_effect=fake_get_rows):
+            result = await get_offer_analytics(
+                start_date="2025-06-01",
+                end_date="2025-06-30",
+                service_area_id=None,
+                _admin={"id": "admin-1", "role": "admin"},
+            )
+
+        assert result["totals"]["total_offers"] == 3
+        assert result["totals"]["accepted"] == 2
+        assert result["totals"]["acceptance_rate"] == pytest.approx(2 / 3, abs=0.001)
+        area_ids = {a["service_area_id"] for a in result["areas"]}
+        assert "area-a" in area_ids
+        assert "area-b" in area_ids
+
+    async def test_filters_to_single_area(self):
+        from backend.routes.admin.subscriptions import get_offer_analytics
+
+        offers = [
+            {
+                "id": "o1",
+                "ride_id": "r1",
+                "status": "accepted",
+                "offered_at": "2025-06-01T10:00:00+00:00",
+                "responded_at": "2025-06-01T10:00:05+00:00",
+            },
+            {
+                "id": "o2",
+                "ride_id": "r2",
+                "status": "expired",
+                "offered_at": "2025-06-01T10:00:00+00:00",
+                "responded_at": None,
+            },
+        ]
+        rides = [
+            {"id": "r1", "service_area_id": "area-a"},
+            {"id": "r2", "service_area_id": "area-b"},
+        ]
+
+        def fake_get_rows(table, filters, **kw):
+            if table == "ride_offers":
+                return offers
+            if table == "rides":
+                return rides
+            if table == "service_areas":
+                return [{"id": "area-a", "name": "Downtown"}, {"id": "area-b", "name": "Airport"}]
+            return []
+
+        with patch("backend.db_supabase.get_rows", side_effect=fake_get_rows):
+            result = await get_offer_analytics(
+                start_date="2025-06-01",
+                end_date="2025-06-30",
+                service_area_id="area-a",
+                _admin={"id": "admin-1", "role": "admin"},
+            )
+
+        assert len(result["areas"]) == 1
+        assert result["areas"][0]["service_area_id"] == "area-a"
+        assert result["areas"][0]["total_offers"] == 1
+        assert result["areas"][0]["accepted"] == 1
+
+
+class TestExpiryWarning3Day:
+    """3-day warning sets expiry_warned_3d flag; 24h warning still fires later."""
+
+    async def test_3d_warning_push_sent_and_flag_set(self):
+        from datetime import datetime, timedelta, timezone
+
+        from backend.routes import drivers as drv
+
+        now = datetime.now(timezone.utc)
+        sub = {
+            "id": "sub-1",
+            "driver_id": "d1",
+            "plan_name": "Premium Pass",
+            "status": "active",
+            "expires_at": (now + timedelta(days=2)).isoformat(),
+            "expiry_warned": False,
+            "expiry_warned_3d": False,
+        }
+        driver = {"id": "d1", "user_id": "u1"}
+
+        push_mock = AsyncMock()
+        update_mock = AsyncMock()
+
+        with (
+            patch("backend.db_supabase.get_rows", AsyncMock(return_value=[sub])),
+            patch("backend.db_supabase.find_one", AsyncMock(return_value=driver)),
+            patch("backend.db_supabase.update_one", update_mock),
+            patch("backend.routes.drivers.send_push_notification", push_mock),
+            patch(
+                "backend.settings_loader.get_app_settings",
+                AsyncMock(return_value={"require_driver_subscription": False}),
+            ),
+            patch("backend.routes.drivers.asyncio.sleep", AsyncMock(side_effect=Exception("stop"))),
+        ):
+            try:
+                await drv.check_expiring_subscriptions()
+            except Exception as e:
+                if "stop" not in str(e):
+                    raise
+
+        assert push_mock.await_count >= 1
+        all_titles = [str(c.args[1]) for c in push_mock.await_args_list]
+        assert any("3" in t or "Days" in t or "days" in t.lower() for t in all_titles)
+
+        update_calls_str = [str(c) for c in update_mock.await_args_list]
+        assert any("expiry_warned_3d" in c for c in update_calls_str)
+
+    async def test_3d_warning_skipped_when_flag_already_set(self):
+        """expiry_warned_3d=True means no second 3-day push."""
+        from datetime import datetime, timedelta, timezone
+
+        from backend.routes import drivers as drv
+
+        now = datetime.now(timezone.utc)
+        sub = {
+            "id": "sub-1",
+            "driver_id": "d1",
+            "plan_name": "Premium Pass",
+            "status": "active",
+            "expires_at": (now + timedelta(days=2)).isoformat(),
+            "expiry_warned": False,
+            "expiry_warned_3d": True,  # already warned
+        }
+        driver = {"id": "d1", "user_id": "u1"}
+
+        push_mock = AsyncMock()
+
+        with (
+            patch("backend.db_supabase.get_rows", AsyncMock(return_value=[sub])),
+            patch("backend.db_supabase.find_one", AsyncMock(return_value=driver)),
+            patch("backend.db_supabase.update_one", AsyncMock()),
+            patch("backend.routes.drivers.send_push_notification", push_mock),
+            patch(
+                "backend.settings_loader.get_app_settings",
+                AsyncMock(return_value={"require_driver_subscription": False}),
+            ),
+            patch("backend.routes.drivers.asyncio.sleep", AsyncMock(side_effect=Exception("stop"))),
+        ):
+            try:
+                await drv.check_expiring_subscriptions()
+            except Exception as e:
+                if "stop" not in str(e):
+                    raise
+
+        # No 3d warning push should have fired
+        three_day_pushes = [c for c in push_mock.await_args_list if "3" in str(c.args[1]) or "Days" in str(c.args[1])]
+        assert len(three_day_pushes) == 0

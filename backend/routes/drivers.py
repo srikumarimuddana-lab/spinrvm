@@ -6962,9 +6962,20 @@ async def check_expiring_subscriptions():
                         expires_3d = expires_3d.replace(tzinfo=timezone.utc)
                 except (ValueError, TypeError):
                     continue
+                # Claim atomically: also recheck status and the expiry window
+                # so a renewal or cancellation between the query and this write
+                # does not mark a stale or renewed row as warned.
                 claimed = await db.update_one(
                     "driver_subscriptions",
-                    {"id": sub_3d["id"], "expiry_warned_3d": False},
+                    {
+                        "id": sub_3d["id"],
+                        "expiry_warned_3d": False,
+                        "status": "active",
+                        "$and": [
+                            {"expires_at": {"$gt": window_24h.isoformat()}},
+                            {"expires_at": {"$lte": window_3d.isoformat()}},
+                        ],
+                    },
                     {"$set": {"expiry_warned_3d": True}},
                 )
                 if claimed is None:

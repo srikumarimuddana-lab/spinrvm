@@ -160,7 +160,7 @@ function RideCompletedScreenContent() {
       const user = useAuthStore.getState().user;
       showToast('Receipt Sent', `Receipt emailed to ${user?.email || 'your registered email'}.`, 'success');
     } catch (e: any) {
-      showToast('Failed', e?.response?.data?.detail || e?.message || 'Could not send receipt email.', 'danger');
+      showToast('Email Not Sent', 'Could not send receipt email. Please try again.', 'danger');
     } finally {
       setEmailSending(false);
     }
@@ -182,7 +182,7 @@ function RideCompletedScreenContent() {
       setLostItemText('');
       showToast('Report Submitted', "Your driver has been notified. They'll get back to you if the item is found.", 'success');
     } catch (e: any) {
-      showToast('Failed', e?.response?.data?.detail || e?.message || 'Could not submit report.', 'danger');
+      showToast('Report Not Sent', 'Could not submit report. Please try again.', 'danger');
     } finally {
       setLostItemSending(false);
     }
@@ -303,7 +303,7 @@ function RideCompletedScreenContent() {
       clearRide();
       router.replace('/(tabs)');
     } catch {
-      showToast('Error', 'Failed to submit. Please try again.', 'danger');
+      showToast('Submit Failed', 'Failed to submit. Please try again.', 'danger');
     } finally {
       setIsSubmitting(false);
       setSubmitPhase('idle');

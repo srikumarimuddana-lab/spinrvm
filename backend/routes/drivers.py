@@ -6219,14 +6219,18 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
             # PaymentIntent and not flag it as a STRIPE_ORPHAN ride.
             "scope": "driver_subscription",
         }
-        # Stripe redirects the in-app browser back to the driver app via its
-        # deep-link scheme (app.config.ts SCHEME = "spinr-driver"). The
-        # subscription screen listens for spinr-driver://subscription/success
-        # and then calls verify-session with its authenticated API client.
-        # Pointing success_url at the backend API would land the browser on an
-        # unauthenticated endpoint and strand the driver outside the app.
-        _success_url = "spinr-driver://subscription/success?session_id={CHECKOUT_SESSION_ID}"
-        _cancel_url = "spinr-driver://subscription/cancel"
+        # The client supplies success_url so the in-app browser (openAuthSessionAsync)
+        # can intercept the redirect back to the correct scheme for the current
+        # environment: spinr-driver:// in production, exp:// in Expo Go.
+        # We validate the prefix so an attacker cannot redirect to an arbitrary URL.
+        _RETURN_PREFIXES = ("spinr-driver://", "exp://", "https://spinr.app/")
+        _client_return: str = data.get("success_url", "")
+        if _client_return and any(_client_return.startswith(p) for p in _RETURN_PREFIXES):
+            _success_url = _client_return + "?session_id={CHECKOUT_SESSION_ID}"
+            _cancel_url = _client_return.replace("/success", "/cancel")
+        else:
+            _success_url = "spinr-driver://subscription/success?session_id={CHECKOUT_SESSION_ID}"
+            _cancel_url = "spinr-driver://subscription/cancel"
 
         if _stripe_secret and _price_id:
             # Guard against a Stripe Price that disagrees with the DB price the

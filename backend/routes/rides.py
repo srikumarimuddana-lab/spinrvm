@@ -752,7 +752,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
         from utils.redis_client import redis_mget as _redis_mget  # type: ignore
     _skip_keys = [f"spinr:offer_skip:{ride_id}:{_d['id']}" for _d in all_drivers]
     _skip_vals = await _redis_mget(_skip_keys)
-    _skip_ids: set = {_d["id"] for _d, _v in zip(all_drivers, _skip_vals) if _v}
+    _skip_ids: set = {_d["id"] for _d, _v in zip(all_drivers, _skip_vals, strict=False) if _v}
     if _skip_ids:
         all_drivers = [d for d in all_drivers if d["id"] not in _skip_ids]
         logger.info(f"[DISPATCH] skipped {len(_skip_ids)} driver(s) with recent timeout/decline for ride {ride_id}")
@@ -761,6 +761,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
     # filter out candidates without an active subscription.  One batch IN
     # query — no N+1 per driver.  Fails open on DB error so a transient fault
     # cannot halt dispatch entirely; the accept_ride guard is the backstop.
+    _sub_required: bool = False  # pre-init so cascade block can read it if try block skips
     if all_drivers and ride.get("service_area_id"):
         try:
             _disp_area = await db_supabase.find_one("service_areas", {"id": ride["service_area_id"]})
@@ -844,6 +845,11 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
         try:
             _casc_area = await db_supabase.find_one("service_areas", {"id": ride["service_area_id"]})
             _casc_map: list = (_casc_area or {}).get("vehicle_cascade_map") or []
+            # Fix 6: child areas (airport sub-regions) inherit parent's cascade map
+            # when the child row has none configured — mirrors subscription_required inheritance.
+            if not _casc_map and (_casc_area or {}).get("parent_service_area_id"):
+                _casc_parent = await db_supabase.find_one("service_areas", {"id": _casc_area["parent_service_area_id"]})
+                _casc_map = (_casc_parent or {}).get("vehicle_cascade_map") or []
             _casc_to: list = next(
                 (rule.get("to") or [] for rule in _casc_map if rule.get("from") == ride["vehicle_type_id"]),
                 [],
@@ -865,26 +871,88 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
                 if ride.get("requires_wav"):
                     _casc_filter["is_wav"] = True
                 _casc_pool = await db_supabase.get_rows("drivers", _casc_filter, limit=500)
-                # Presence filter — re-import utilities locally so this block
-                # is self-contained even if the earlier import try/except failed.
+                # Fix 4: Presence filter using _checked variant so a Redis outage
+                # (configured-but-unavailable) cannot silently empty the cascade pool.
+                # present_driver_ids_checked returns (set, reachable=False) on failure;
+                # we only apply the filter when the presence store was actually reached.
                 try:
                     try:
-                        from ..utils.driver_presence import present_driver_ids as _casc_present_ids  # type: ignore
-                        from ..utils.redis_client import _get_redis as _casc_check_redis  # type: ignore
+                        from ..utils.driver_presence import (
+                            present_driver_ids_checked as _casc_presence_checked,  # type: ignore
+                        )
                         from ..utils.redis_client import redis_mget as _casc_mget
                     except ImportError:
-                        from utils.driver_presence import present_driver_ids as _casc_present_ids  # type: ignore
-                        from utils.redis_client import _get_redis as _casc_check_redis  # type: ignore
+                        from utils.driver_presence import (
+                            present_driver_ids_checked as _casc_presence_checked,  # type: ignore
+                        )
                         from utils.redis_client import redis_mget as _casc_mget
-                    if await _casc_check_redis() is not None:
-                        _casc_live_ids = await _casc_present_ids([d["id"] for d in _casc_pool])
-                        _casc_pool = [d for d in _casc_pool if d["id"] in _casc_live_ids]
+                    _casc_present_set, _casc_reachable = await _casc_presence_checked([d["id"] for d in _casc_pool])
+                    if _casc_reachable:
+                        _casc_pool = [d for d in _casc_pool if d["id"] in _casc_present_set]
+                    else:
+                        logger.warning(
+                            "[DISPATCH] cascade: Redis unavailable — presence filter skipped for ride %s",
+                            ride_id,
+                        )
                     # Skip drivers who already timed-out / declined this ride
                     _casc_skip_keys = [f"spinr:offer_skip:{ride_id}:{d['id']}" for d in _casc_pool]
                     _casc_skip_vals = await _casc_mget(_casc_skip_keys)
                     _casc_pool = [d for d, v in zip(_casc_pool, _casc_skip_vals, strict=False) if not v]
                 except Exception as _casc_redis_exc:
                     logger.debug("[DISPATCH] cascade Redis filter skipped (unavailable): %s", _casc_redis_exc)
+                # Fix 2: apply subscription filter to cascade pool when the service area
+                # requires a Spinr Pass — cascade must not offer rides to non-subscribers.
+                if _sub_required and _casc_pool:
+                    try:
+                        _casc_cand_ids = [d["id"] for d in _casc_pool]
+                        _casc_subs = await db_supabase.get_rows(
+                            "driver_subscriptions",
+                            {"driver_id": {"$in": _casc_cand_ids}, "status": "active"},
+                            columns="driver_id,expires_at,plan_id",
+                            limit=len(_casc_cand_ids),
+                        )
+                        _casc_now = datetime.now(timezone.utc)
+                        _casc_valid_subs = []
+                        for _cs in _casc_subs or []:
+                            if _cs.get("expires_at"):
+                                _cs_exp = parse_iso_utc(_cs["expires_at"])
+                                if _cs_exp is not None and _cs_exp <= _casc_now:
+                                    continue
+                            _casc_valid_subs.append(_cs)
+                        _casc_plan_ids = {_cs["plan_id"] for _cs in _casc_valid_subs if _cs.get("plan_id")}
+                        _casc_plan_areas: dict = {}
+                        if _casc_plan_ids:
+                            _casc_plans = await db_supabase.get_rows(
+                                "subscription_plans",
+                                {"id": {"$in": list(_casc_plan_ids)}},
+                                columns="id,service_areas",
+                                limit=len(_casc_plan_ids),
+                            )
+                            _casc_plan_areas = {p["id"]: p.get("service_areas") for p in (_casc_plans or [])}
+                        _casc_sa_id = ride["service_area_id"]
+                        _casc_parent_sa_id = (_casc_area or {}).get("parent_service_area_id")
+                        _casc_subscribed: set = set()
+                        for _cs in _casc_valid_subs:
+                            _cs_allowed = _casc_plan_areas.get(_cs.get("plan_id"))
+                            if _cs_allowed and _casc_sa_id not in _cs_allowed:
+                                if not (_casc_parent_sa_id and _casc_parent_sa_id in _cs_allowed):
+                                    continue
+                            _casc_subscribed.add(_cs["driver_id"])
+                        _casc_before_sub = len(_casc_pool)
+                        _casc_pool = [d for d in _casc_pool if d["id"] in _casc_subscribed]
+                        logger.info(
+                            "[DISPATCH] cascade subscription filter: kept %d/%d drivers for ride %s",
+                            len(_casc_pool),
+                            _casc_before_sub,
+                            ride_id,
+                        )
+                    except Exception:
+                        logger.error(
+                            "[DISPATCH] cascade subscription filter failed for area=%s — failing closed",
+                            ride.get("service_area_id"),
+                            exc_info=True,
+                        )
+                        _casc_pool = []  # fail closed; non-subscriber cascade would bypass the gate
                 drivers_with_distance = filter_and_rank_drivers(ride, _casc_pool, algorithm, min_rating, search_radius)
                 if drivers_with_distance:
                     logger.info(
@@ -1751,6 +1819,21 @@ async def compute_ride_estimates(
         [f.get("vehicle_type", {}).get("name", "?") for f in fares],
     )
 
+    # Fix 3: pre-resolve the cascade map once so each vehicle-type iteration can check
+    # whether cascade upgrade types have drivers even when the exact type has none.
+    # Child areas inherit the parent's map (same pattern as dispatch).
+    _est_cascade_map: list = []
+    if _est_matched_area:
+        _est_cascade_map = _est_matched_area.get("vehicle_cascade_map") or []
+        if not _est_cascade_map and _est_matched_area.get("parent_service_area_id"):
+            try:
+                _est_parent_area = await db_supabase.find_one(
+                    "service_areas", {"id": _est_matched_area["parent_service_area_id"]}
+                )
+                _est_cascade_map = (_est_parent_area or {}).get("vehicle_cascade_map") or []
+            except Exception as _est_casc_exc:
+                logger.debug("[estimate] parent cascade map fetch skipped: %s", _est_casc_exc)
+
     estimates = []
     for fare_info in fares:
         surge = Decimal("1.0") if corporate_bypass else _d(fare_info.get("surge_multiplier", 1.0))
@@ -1797,6 +1880,24 @@ async def compute_ride_estimates(
             closest = min(nearby_for_type, key=lambda x: x["distance_km"])
             closest_driver_km = round(closest["distance_km"], 1)
             eta_minutes = max(2, int(closest["distance_km"] / 30 * 60) + 1)
+
+        # Fix 3: when no exact-type drivers are nearby, check cascade upgrade types.
+        # If cascade drivers exist the vehicle type is still bookable — dispatch will
+        # find them — so we must not show it as unavailable.
+        if not is_available and _est_cascade_map:
+            _est_casc_to = next(
+                (rule.get("to") or [] for rule in _est_cascade_map if rule.get("from") == vt_id),
+                [],
+            )
+            for _est_casc_vt_id in _est_casc_to:
+                _est_casc_drivers = drivers_by_type.get(_est_casc_vt_id, [])
+                if _est_casc_drivers:
+                    is_available = True
+                    driver_count = len(_est_casc_drivers)
+                    _est_casc_closest = min(_est_casc_drivers, key=lambda x: x["distance_km"])
+                    closest_driver_km = round(_est_casc_closest["distance_km"], 1)
+                    eta_minutes = max(2, int(_est_casc_closest["distance_km"] / 30 * 60) + 1)
+                    break
 
         # P0-4 surge-lock: sign a token per vehicle_type so POST /rides can
         # reuse the surge_multiplier shown here instead of re-reading the

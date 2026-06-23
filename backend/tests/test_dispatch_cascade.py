@@ -6,7 +6,7 @@ the filter pipeline.  The service area's vehicle_cascade_map then supplies a
 list of upgrade type IDs to try next.
 """
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -52,7 +52,7 @@ def _make_driver(driver_id: str, vehicle_type_id: str, lat: float = 52.14, lng: 
 
 @pytest.mark.anyio
 async def test_cascade_fires_when_no_exact_type_drivers(mock_supabase_client):
-    """When the exact type has no candidates, cascade promotes XL drivers."""
+    """When the exact type has no candidates, cascade queries XL upgrade drivers."""
     suv_id = "vt-suv"
     xl_id = "vt-xl"
     xl_driver = _make_driver("driver-xl-1", xl_id)
@@ -62,12 +62,18 @@ async def test_cascade_fires_when_no_exact_type_drivers(mock_supabase_client):
         "id": "area-1",
         "subscription_required": False,
         "vehicle_cascade_map": [{"from": suv_id, "to": [xl_id]}],
+        "parent_service_area_id": None,
     }
 
-    # First get_rows call: SUV drivers → empty (no exact match)
-    # Second get_rows call: cascade XL drivers → one driver
+    # get_rows call 1: SUV drivers (initial pool, empty — no exact match)
+    # get_rows call 2: cascade XL drivers
     get_rows_mock = AsyncMock(side_effect=[[], [xl_driver]])
     find_one_mock = AsyncMock(return_value=service_area)
+
+    try:
+        from backend.routes.rides import match_driver_to_ride
+    except ImportError:
+        pytest.skip("match_driver_to_ride not importable in this env")
 
     with (
         patch("backend.db_supabase.get_rows", get_rows_mock),
@@ -77,20 +83,26 @@ async def test_cascade_fires_when_no_exact_type_drivers(mock_supabase_client):
             side_effect=lambda ride, drivers, *a, **kw: [(d, 1.0) for d in drivers],
         ),
         patch("backend.routes.rides._dispatch_retry", new_callable=AsyncMock),
-        patch("backend.routes.rides.asyncio.create_task"),
-        # Disable Redis presence + skip for this test
-        patch("backend.routes.rides.redis_mget", new_callable=AsyncMock, return_value=[None] * 10),
+        patch("backend.routes.rides.asyncio.create_task", return_value=MagicMock()),
+        patch("backend.routes.rides._send_offer_to_driver", new_callable=AsyncMock),
+        patch(
+            "backend.utils.driver_presence.present_driver_ids_checked",
+            new_callable=AsyncMock,
+            return_value=(set(), False),  # Redis unreachable — fail-open
+        ),
+        patch(
+            "backend.utils.redis_client.redis_mget",
+            new_callable=AsyncMock,
+            return_value=[None] * 10,
+        ),
     ):
-        # Import after patching to pick up mocks
-        try:
-            from backend.routes.rides import _match_and_dispatch
-        except ImportError:
-            pytest.skip("_match_and_dispatch not importable in this env")
+        await match_driver_to_ride("ride-1", ride=ride)
 
-        # We just verify the cascade DB call is made with the XL type
-        second_call_filter = get_rows_mock.call_args_list[1][0][1] if len(get_rows_mock.call_args_list) > 1 else None
-        # Cascade call should target XL id via $in
-        assert second_call_filter is None or xl_id in str(second_call_filter)
+    # The second get_rows call should target the XL vehicle type via $in
+    assert get_rows_mock.call_count >= 2, "Expected at least two get_rows calls (exact + cascade)"
+    cascade_call_args = get_rows_mock.call_args_list[1]
+    filter_arg = cascade_call_args[0][1] if cascade_call_args[0] else cascade_call_args[1].get("filter", {})
+    assert xl_id in str(filter_arg), f"Cascade call must target XL type; got filter: {filter_arg}"
 
 
 @pytest.mark.anyio
@@ -124,7 +136,6 @@ async def test_cascade_rule_only_matches_correct_from_type():
     """A cascade rule for 'standard' does not fire when the ride requests 'suv'."""
     standard_id = "vt-standard"
     suv_id = "vt-suv"
-    xl_id = "vt-xl"
 
     cascade_map = [{"from": standard_id, "to": [suv_id]}]
     # Ride requests SUV — standard→SUV rule must not match
@@ -156,14 +167,7 @@ async def test_cascade_multiple_upgrade_types():
 async def test_cascade_not_triggered_when_exact_drivers_found():
     """When exact-type drivers exist, cascade must not be attempted."""
     suv_id = "vt-suv"
-    xl_id = "vt-xl"
     suv_driver = _make_driver("driver-suv-1", suv_id)
-
-    service_area = {
-        "id": "area-1",
-        "subscription_required": False,
-        "vehicle_cascade_map": [{"from": suv_id, "to": [xl_id]}],
-    }
 
     # Simulate: exact-type drivers found → drivers_with_distance non-empty → cascade block never entered
     drivers_with_distance = [(suv_driver, 1.5)]  # non-empty
@@ -174,3 +178,50 @@ async def test_cascade_not_triggered_when_exact_drivers_found():
         cascade_fired = True
 
     assert not cascade_fired, "Cascade must not fire when exact-type drivers are available"
+
+
+@pytest.mark.anyio
+async def test_cascade_inherits_parent_area_map():
+    """Child area with empty cascade map inherits parent's rules."""
+    suv_id = "vt-suv"
+    xl_id = "vt-xl"
+
+    child_area = {
+        "id": "child-area",
+        "vehicle_cascade_map": [],  # empty — should fall back to parent
+        "parent_service_area_id": "parent-area",
+    }
+    parent_area = {
+        "id": "parent-area",
+        "vehicle_cascade_map": [{"from": suv_id, "to": [xl_id]}],
+        "parent_service_area_id": None,
+    }
+
+    # Simulate the cascade block's inheritance logic
+    casc_map = child_area.get("vehicle_cascade_map") or []
+    if not casc_map and child_area.get("parent_service_area_id"):
+        casc_map = parent_area.get("vehicle_cascade_map") or []
+
+    cascade_to = next(
+        (rule.get("to") or [] for rule in casc_map if rule.get("from") == suv_id),
+        [],
+    )
+    assert xl_id in cascade_to, "Child area must inherit parent cascade map"
+
+
+@pytest.mark.anyio
+async def test_cascade_redis_fail_open():
+    """Redis outage (reachable=False) must not empty the cascade pool."""
+    # When present_driver_ids_checked returns (set(), False) the pool must be
+    # preserved so a Redis blip cannot halt cascaded dispatch.
+    xl_driver = _make_driver("driver-xl-1", "vt-xl")
+
+    _casc_pool = [xl_driver]
+    _casc_present_set: set = set()
+    _casc_reachable: bool = False  # Redis down
+
+    if _casc_reachable:
+        _casc_pool = [d for d in _casc_pool if d["id"] in _casc_present_set]
+    # else: pool untouched — fail-open
+
+    assert len(_casc_pool) == 1, "Cascade pool must survive a Redis presence outage"

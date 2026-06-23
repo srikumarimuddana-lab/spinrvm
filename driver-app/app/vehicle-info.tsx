@@ -171,10 +171,10 @@ export default function VehicleInfoScreen() {
                             // migrated to the hook yet see the updated row.
                             await fetchDriverProfile();
                             await refreshProfile();
-                            showToast('success', 'Success', 'Vehicle information updated. Please wait for admin approval.');
+                            showToast('success', 'Vehicle Saved', 'Vehicle information updated. Please wait for admin approval.');
                             router.back();
                         } catch (err: any) {
-                            showToast('error', 'Error', err.response?.data?.detail || 'Failed to update vehicle info');
+                            showToast('error', 'Update Failed', err.response?.data?.detail || 'Failed to update vehicle information');
                         } finally {
                             setSaving(false);
                         }

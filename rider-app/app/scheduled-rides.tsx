@@ -58,7 +58,7 @@ export default function ScheduledRidesScreen() {
               cancelReminder(rideId).catch(() => {});
               showToast('Cancelled', 'Your scheduled ride has been cancelled.', 'success');
             } catch (err: any) {
-              showToast('Error', err.message || 'Failed to cancel ride', 'danger');
+              showToast('Cancel Failed', 'Failed to cancel your scheduled ride. Please try again.', 'danger');
             }
           },
         },

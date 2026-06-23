@@ -108,6 +108,17 @@ logger = logging.getLogger(__name__)
 _TWO_PLACES = Decimal("0.01")
 
 
+def _d(v) -> Decimal:
+    """Parse a money value to an exact 2-dp Decimal. Money is Decimal-only —
+    never accumulate fares/bonuses/payouts as float."""
+    from decimal import InvalidOperation
+
+    try:
+        return Decimal(str(v)).quantize(_TWO_PLACES, rounding=ROUND_HALF_UP)
+    except (TypeError, ValueError, InvalidOperation):
+        return Decimal("0")
+
+
 def _money_str(v) -> str:
     """Serialise a money value as an exact 2-dp Decimal string (never float)."""
     from decimal import InvalidOperation
@@ -951,14 +962,19 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
             },
             limit=10000,
         )
+        # Decimal-only money: float accumulation over many rows drifts cents,
+        # and this feeds payable_balance which bounds the Stripe payout Transfer.
         total_earnings = sum(
-            float(r.get("base_fare") or 0)
-            + float(r.get("distance_fare") or 0)
-            + float(r.get("time_fare") or 0)
-            + float(r.get("tip_amount") or 0)
-            for r in rides
+            (
+                _d(r.get("base_fare") or 0)
+                + _d(r.get("distance_fare") or 0)
+                + _d(r.get("time_fare") or 0)
+                + _d(r.get("tip_amount") or 0)
+                for r in rides
+            ),
+            Decimal("0"),
         )
-        total_tips = sum(r.get("tip_amount", 0) or 0 for r in rides)
+        total_tips = sum((_d(r.get("tip_amount") or 0) for r in rides), Decimal("0"))
         total_rides = len(rides)
 
         payouts = await db_supabase.get_rows(
@@ -969,22 +985,71 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
             },
             limit=1000,
         )
-        pending_payouts = sum(p.get("amount", 0) or 0 for p in payouts)
+        pending_payouts = sum((_d(p.get("amount") or 0) for p in payouts), Decimal("0"))
     except Exception as e:
-        logger.error(f"Error fetching balance: {e}")
-        total_earnings = total_tips = total_rides = pending_payouts = 0
+        logger.error(f"Error fetching balance: {e}", exc_info=True)
+        total_earnings = total_tips = pending_payouts = Decimal("0")
+        total_rides = 0
+
+    # Quest (and, later, referral) bonuses are payable earnings (driver_bonuses
+    # ledger) — they fold into payable_balance and pay out via the normal Stripe
+    # Transfer, like ride earnings. Fetched in a SEPARATE try so a driver_bonuses
+    # error (e.g. migration not yet applied) never zeroes the driver's ride
+    # earnings/balance.
+    total_bonuses = Decimal("0")
+    try:
+        bonus_rows = await db_supabase.get_rows("driver_bonuses", {"driver_id": driver["id"]}, limit=10000)
+        total_bonuses = sum((_d(b.get("amount") or 0) for b in bonus_rows), Decimal("0"))
+    except Exception as e:
+        logger.error(f"Error fetching driver bonuses for balance: {e}", exc_info=True)
 
     return {
-        "total_earnings": _money_str(total_earnings),
-        # payable_balance = total_earnings - pending_payouts (NOT the same as wallet.balance)
-        "payable_balance": _money_str(Decimal(str(total_earnings)) - Decimal(str(pending_payouts))),
+        "total_earnings": _money_str(total_earnings + total_bonuses),
+        # payable_balance = ride earnings + bonuses - pending_payouts
+        "payable_balance": _money_str(total_earnings + total_bonuses - pending_payouts),
         "pending_payouts": _money_str(pending_payouts),
         "total_paid_out": "0.00",
+        "total_bonuses": _money_str(total_bonuses),
         "has_bank_account": bool(driver.get("bank_account")),
         "stripe_account_onboarded": bool(driver.get("stripe_account_onboarded", False)),
         "stripe_id_number_provided": bool(driver.get("stripe_id_number_provided", False)),
         "total_tips": _money_str(total_tips),
         "total_rides": total_rides,
+    }
+
+
+@api_router.get("/bonuses")
+async def get_driver_bonuses(
+    limit: int = Query(50, ge=1, le=200),
+    current_user: dict = Depends(get_current_user),
+):
+    """List the driver's bonus credits (quest + referral) — the payable-earnings
+    line items behind the bonus portion of payable_balance, for the earnings /
+    payout history view."""
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+    try:
+        rows = await db_supabase.get_rows(
+            "driver_bonuses", {"driver_id": driver["id"]}, limit=limit, order="created_at", desc=True
+        )
+    except Exception as e:
+        logger.error(f"Error fetching driver bonuses: {e}", exc_info=True)
+        rows = []
+    return {
+        "bonuses": [
+            {
+                "id": b.get("id"),
+                "amount": _money_str(b.get("amount") or 0),
+                "kind": b.get("kind"),
+                "description": b.get("description"),
+                "created_at": b.get("created_at"),
+            }
+            for b in rows
+        ],
+        "total": _money_str(sum((_d(b.get("amount") or 0) for b in rows), Decimal("0"))),
     }
 
 

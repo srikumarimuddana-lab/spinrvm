@@ -341,17 +341,38 @@ async def claim_quest_reward(progress_id: str, current_user: dict = Depends(get_
     if not claimed:
         raise HTTPException(status_code=409, detail="Quest reward already claimed")
 
-    # Pay reward to wallet via the atomic RPC — never read-modify-write a
-    # wallet balance (lost update against concurrent wallet activity).
-    if quest.get("reward_type", "wallet_credit") == "wallet_credit":
-        from .wallet import _record_transaction, get_or_create_wallet
-
-        wallet = await get_or_create_wallet(current_user["id"])
+    # Quest rewards are PAYABLE driver earnings — record a driver_bonuses row so
+    # the amount folds into payable_balance (get_driver_balance), pays out via
+    # the normal platform->connect Stripe Transfer, and shows in earnings /
+    # payout history. The old path credited the rider `wallets` table, which the
+    # driver app has no UI for and which is excluded from payouts, so the money
+    # was recorded but invisible and unpayable. Append-only ledger; the
+    # (kind, source_id) unique index makes a retried claim idempotent.
+    try:
+        await db.insert_one(
+            "driver_bonuses",
+            {
+                "id": str(uuid.uuid4()),
+                "driver_id": driver["id"],
+                "user_id": current_user["id"],
+                "amount": _f(reward_amount),
+                "kind": "quest",
+                "source_id": progress_id,
+                "description": f"Quest reward: {quest['title']}",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except Exception as credit_err:
+        # Idempotency: a bonus row for this claim already existing (retry /
+        # unique-index conflict) means the money is already recorded — treat as
+        # success. Otherwise it's a real failure: release the claim so the
+        # driver can retry, and surface a 503.
+        already = None
         try:
-            new_balance = await db.wallet_increment_balance(wallet["id"], reward_amount)
-        except Exception as credit_err:
-            # Release the claim so the driver can retry — otherwise the
-            # progress row stays 'claimed' with no money paid.
+            already = await db.find_one("driver_bonuses", {"kind": "quest", "source_id": progress_id})
+        except Exception:
+            already = None
+        if not already:
             logger.error(
                 f"Quest reward credit failed for progress {progress_id}; releasing claim: {credit_err}",
                 exc_info=True,
@@ -368,54 +389,27 @@ async def claim_quest_reward(progress_id: str, current_user: dict = Depends(get_
                     exc_info=True,
                 )
             raise HTTPException(status_code=503, detail="Reward payout failed — please retry") from credit_err
-
+        # The bonus row already exists (idempotent retry) — re-assert the claim
+        # so the row can't be left at 'completed' (re-claimable in the UI) while
+        # the money is already recorded.
+        logger.info(f"Quest bonus already recorded for progress {progress_id} — idempotent claim")
         try:
-            await _record_transaction(
-                wallet_id=wallet["id"],
-                user_id=current_user["id"],
-                txn_type="quest_reward",
-                amount=_f(reward_amount),
-                balance_after=_f(new_balance),
-                reference_id=quest["id"],
-                description=f"Quest reward: {quest['title']}",
+            await db.update_one(
+                "quest_progress",
+                {"id": progress_id},
+                {"$set": {"status": "claimed", "updated_at": datetime.now(timezone.utc).isoformat()}},
             )
-        except Exception as ledger_err:
-            # Money moved but the ledger write failed. Compensate (reverse the
-            # credit), and only release the claim once the reversal succeeded —
-            # releasing with the credit still applied would allow a double pay.
+        except Exception:
             logger.error(
-                f"Quest reward ledger write failed for progress {progress_id}; reversing credit: {ledger_err}",
+                f"Quest claim re-assert failed for progress {progress_id} — bonus recorded but status "
+                "may show 'completed'; manual fix may be needed",
                 exc_info=True,
             )
-            reversed_ok = False
-            try:
-                await db.wallet_increment_balance(wallet["id"], -reward_amount)
-                reversed_ok = True
-            except Exception:
-                logger.error(
-                    f"Compensating debit failed for progress {progress_id} — claim stays claimed with an "
-                    "unrecorded credit; manual reconciliation required",
-                    exc_info=True,
-                )
-            if reversed_ok:
-                try:
-                    await db.update_one(
-                        "quest_progress",
-                        {"id": progress_id, "status": "claimed"},
-                        {"$set": {"status": "completed", "updated_at": datetime.now(timezone.utc).isoformat()}},
-                    )
-                except Exception:
-                    logger.error(
-                        f"Quest claim release failed for progress {progress_id} — reward reversed but row "
-                        "stays claimed; manual fix required",
-                        exc_info=True,
-                    )
-            raise HTTPException(status_code=503, detail="Reward payout failed — please retry") from ledger_err
 
     return {
         "status": "claimed",
         "reward_amount": reward_amount,
-        "reward_type": quest.get("reward_type", "wallet_credit"),
+        "reward_type": "driver_bonus",
     }
 
 

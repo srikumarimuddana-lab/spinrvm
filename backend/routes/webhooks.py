@@ -1081,17 +1081,44 @@ async def stripe_webhook(request: Request):
                 _amount_cents = invoice.get("amount_paid")
                 if _amount_cents is None:
                     _amount_cents = invoice.get("amount_due") or 0
+                _inv_billing_reason = invoice.get("billing_reason") or "subscription_cycle"
+                _inv_amount = cents_to_dollars(_amount_cents)
                 await _record_subscription_payment(
                     driver_id=row.get("driver_id"),
                     subscription_id=row["id"],
                     plan_id=row.get("plan_id"),
                     plan_name=row.get("plan_name"),
-                    amount=cents_to_dollars(_amount_cents),
-                    billing_reason=invoice.get("billing_reason") or "subscription_cycle",
+                    amount=_inv_amount,
+                    billing_reason=_inv_billing_reason,
                     stripe_invoice_id=invoice.get("id"),
                 )
 
-                # Only notify on actual renewal cycles — the initial invoice's
+                # Send invoice email for every recurring charge (subscription_create
+                # = first charge on a recurring plan, subscription_cycle = renewal).
+                # One-off plans email from _activate_subscription instead.
+                if _inv_amount and Decimal(str(_inv_amount)) > 0:
+                    try:
+                        from ..routes.drivers import _send_subscription_invoice_email  # type: ignore
+                    except ImportError:
+                        from routes.drivers import _send_subscription_invoice_email  # type: ignore
+                    _inv_plan = None
+                    if row.get("plan_id"):
+                        _inv_plan = await db_supabase.find_one("subscription_plans", {"id": row["plan_id"]})
+                    _inv_days = (_inv_plan or {}).get("duration_days", 30)
+                    _dur_map = {1: "Daily", 7: "Weekly", 30: "Monthly", 365: "Annual"}
+                    _inv_dur = _dur_map.get(_inv_days, f"{_inv_days}-day")
+                    _inv_date = datetime.now(timezone.utc).strftime("%B %d, %Y")
+                    await _send_subscription_invoice_email(
+                        driver_id=row.get("driver_id"),
+                        plan_name=row.get("plan_name") or "Spinr Pass",
+                        duration_label=_inv_dur,
+                        amount=Decimal(str(_inv_amount)),
+                        billing_reason=_inv_billing_reason,
+                        payment_date=_inv_date,
+                        stripe_invoice_url=invoice.get("hosted_invoice_url"),
+                    )
+
+                # Only push-notify on actual renewal cycles — the initial invoice's
                 # activation push already went out from the checkout handler.
                 if invoice.get("billing_reason") == "subscription_cycle":
                     driver_row = await db_supabase.find_one("drivers", {"id": row.get("driver_id")})

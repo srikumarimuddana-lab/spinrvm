@@ -6221,9 +6221,10 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
         }
         # The client supplies success_url so the in-app browser (openAuthSessionAsync)
         # can intercept the redirect back to the correct scheme for the current
-        # environment: spinr-driver:// in production, exp:// in Expo Go.
-        # We validate the prefix so an attacker cannot redirect to an arbitrary URL.
-        _RETURN_PREFIXES = ("spinr-driver://", "exp://", "https://spinr.app/")
+        # environment: spinr-driver:// in production builds, exp://... in Expo Go.
+        # https:// universal links are NOT in the allowlist — they require server-side
+        # AASA / assetlinks.json and are not reliable without that infrastructure.
+        _RETURN_PREFIXES = ("spinr-driver://", "exp://")
         _client_return: str = data.get("success_url", "")
         if _client_return and any(_client_return.startswith(p) for p in _RETURN_PREFIXES):
             _success_url = _client_return + "?session_id={CHECKOUT_SESSION_ID}"
@@ -6653,6 +6654,93 @@ async def _record_subscription_payment(
             )
 
 
+async def _send_subscription_invoice_email(
+    *,
+    driver_id: str,
+    plan_name: str,
+    duration_label: str,
+    amount: Decimal,
+    billing_reason: str,
+    payment_date: str,
+    stripe_invoice_url: str | None = None,
+) -> None:
+    """Email the driver a Saskatchewan-compliant invoice for their Spinr Pass charge.
+
+    Taxes are back-computed from the tax-inclusive plan price:
+      subtotal = amount / 1.11
+      GST (5%) = subtotal * 0.05
+      PST (6%) = amount - subtotal - GST   (computed last — guaranteed to tie out)
+
+    Never raises — a failed invoice email must not block the activation flow.
+    """
+    try:
+        driver = await db.find_one("drivers", {"id": driver_id})
+        if not driver:
+            return
+        user = await db.find_one("users", {"id": driver.get("user_id")})
+        email = (user or {}).get("email", "")
+        if not email:
+            return
+
+        _TAX_DIVISOR = Decimal("1.11")
+        _GST_RATE = Decimal("0.05")
+        _total = amount.quantize(Decimal("0.01"))
+        _subtotal = (_total / _TAX_DIVISOR).quantize(Decimal("0.01"))
+        _gst = (_subtotal * _GST_RATE).quantize(Decimal("0.01"))
+        _pst = _total - _subtotal - _gst
+
+        billing_label = "Auto-renewal" if billing_reason == "subscription_cycle" else "One-time purchase"
+        driver_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "Driver"
+
+        receipt_line = f"\nView your Stripe receipt: {stripe_invoice_url}" if stripe_invoice_url else ""
+
+        body = (
+            f"Hi {driver_name or 'Driver'},\n\n"
+            f"Thank you for your Spinr Pass subscription.\n"
+            f"Here is your invoice for this charge.\n\n"
+            f"{'=' * 44}\n"
+            f"SPINR PASS SUBSCRIPTION INVOICE\n"
+            f"{'=' * 44}\n"
+            f"Invoice Date : {payment_date}\n"
+            f"Plan         : {plan_name} ({duration_label})\n"
+            f"Billing      : {billing_label}\n\n"
+            f"{'─' * 44}\n"
+            f"{'Description':<28} {'CAD':>14}\n"
+            f"{'─' * 44}\n"
+            f"{'Spinr Pass ' + plan_name:<28} {'$' + str(_subtotal):>14}\n"
+            f"{'GST (5%)':<28} {'$' + str(_gst):>14}\n"
+            f"{'PST — Saskatchewan (6%)':<28} {'$' + str(_pst):>14}\n"
+            f"{'─' * 44}\n"
+            f"{'TOTAL':<28} {'$' + str(_total):>14}\n"
+            f"{'─' * 44}\n\n"
+            f"Payment was charged to your card on file."
+            f"{receipt_line}\n\n"
+            f"Questions? Reply to this email or contact support@spinr.ca\n\n"
+            f"— The Spinr Team\n"
+        )
+
+        await send_email(
+            to=email,
+            subject=f"Your Spinr Pass Invoice — {plan_name} ({payment_date})",
+            body=body,
+        )
+        logger.info(
+            "[SUBSCRIBE] Invoice email sent driver=%s plan=%s amount=%s",
+            driver_id,
+            plan_name,
+            _total,
+            extra={"domain": "payments", "driver_id": driver_id},
+        )
+    except Exception as _mail_err:
+        logger.error(
+            "[SUBSCRIBE] Invoice email failed driver=%s: %s",
+            driver_id,
+            _mail_err,
+            exc_info=True,
+            extra={"domain": "payments", "driver_id": driver_id},
+        )
+
+
 async def _activate_subscription(subscription_id: str, plan_id: str | None = None, checkout_mode: str | None = None):
     """Activate a pending subscription after payment confirmation.
 
@@ -6771,7 +6859,7 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
 
     logger.info(f"[SUBSCRIBE] Subscription {subscription_id} activated for driver {driver_id}")
 
-    # Push notification to driver.
+    # Push notification + invoice email to driver.
     if driver_id:
         driver = await db.find_one("drivers", {"id": driver_id})
         if driver and driver.get("user_id"):
@@ -6783,6 +6871,22 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
                 )
             except Exception as push_err:
                 logger.warning(f"[SUBSCRIBE] Push notification failed: {push_err}")
+
+        # Invoice email — one-off and dev plans only. Recurring plans receive
+        # their invoice email from the invoice.paid webhook (which has the
+        # authoritative Stripe invoice URL and amount for every charge).
+        if plan and _is_one_off:
+            _days = plan.get("duration_days", 30)
+            _dur_map = {1: "Daily", 7: "Weekly", 30: "Monthly", 365: "Annual"}
+            _dur_label = _dur_map.get(_days, f"{_days}-day")
+            await _send_subscription_invoice_email(
+                driver_id=driver_id,
+                plan_name=plan.get("name", "Spinr Pass"),
+                duration_label=_dur_label,
+                amount=Decimal(str(plan.get("price") or 0)),
+                billing_reason="one_off",
+                payment_date=now.strftime("%B %d, %Y"),
+            )
 
 
 @api_router.get("/subscription/payments")

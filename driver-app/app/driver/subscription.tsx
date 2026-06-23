@@ -3,6 +3,8 @@ import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
   ActivityIndicator, Platform, Linking, Alert,
 } from 'react-native';
+import * as ExpoLinking from 'expo-linking';
+import * as WebBrowser from 'expo-web-browser';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import api from '@shared/api/client';
@@ -140,41 +142,47 @@ export default function SubscriptionScreen() {
   const doSubscribe = async (plan: Plan) => {
     setSubscribing(plan.id);
     try {
-      const res = await api.post<{ checkout_url?: string; session_id?: string }>('/drivers/subscription/subscribe', { plan_id: plan.id });
+      // createURL generates the correct scheme for the current environment:
+      // 'spinr-driver://subscription/success' in production builds,
+      // 'exp://host:port/--/subscription/success' in Expo Go.
+      const successUrl = ExpoLinking.createURL('subscription/success');
+      const res = await api.post<{ checkout_url?: string; session_id?: string }>(
+        '/drivers/subscription/subscribe',
+        { plan_id: plan.id, success_url: successUrl },
+      );
 
       if (res.data?.checkout_url) {
-        // Stripe Checkout path — open the payment page in the browser.
-        // After payment, Stripe redirects to spinr-driver://subscription/success
-        // which brings the driver back to the app.
-        await Linking.openURL(res.data.checkout_url);
+        // openAuthSessionAsync opens an in-app browser (SFSafariViewController on
+        // iOS, Chrome Custom Tab on Android) that properly intercepts the redirect
+        // back to successUrl, unlike Linking.openURL which opens the external
+        // browser where custom-scheme redirects are unreliable.
+        const result = await WebBrowser.openAuthSessionAsync(
+          res.data.checkout_url,
+          successUrl,
+        );
 
-        // The user is now in the browser paying. When they come back
-        // (via deep-link), the app will call verify-session. For now
-        // we poll briefly to catch the webhook activation.
-        // G11: Retry verification 3 times over 30s instead of a single 5s
-        // attempt. Stripe webhooks can take 5-15s depending on network and
-        // event queue depth; a single 5s poll often missed the activation.
-        const sessionId = res.data.session_id;
-        if (sessionId) {
-          const retryDelays = [5000, 10000, 15000]; // 5s, 10s, 15s (cumulative ~30s)
-          for (const delay of retryDelays) {
-            await new Promise(r => setTimeout(r, delay));
+        if (result.type === 'success') {
+          const sessionId = result.url?.match(/session_id=([^&]+)/)?.[1];
+          if (sessionId) {
+            setLoading(true);
             try {
-              const verifyRes = await api.get<{ status?: string }>(`/drivers/subscription/verify-session?session_id=${sessionId}`);
+              const verifyRes = await api.get<{ status?: string }>(
+                `/drivers/subscription/verify-session?session_id=${sessionId}`,
+              );
               if (verifyRes.data?.status === 'active') {
                 showToast('success', 'Subscribed!', `You're now on the ${plan.name} plan. Go online and start earning!`);
-                loadData();
-                return;
+              } else {
+                showToast('info', 'Processing...', 'Your payment is being confirmed. This may take a moment.');
               }
-            } catch { /* keep retrying */ }
+            } catch {
+              showToast('info', 'Processing...', 'Your payment is being confirmed. This may take a moment.');
+            }
+            loadData();
           }
-          // All retries exhausted — still pending. The deep-link handler
-          // or next screen load will catch it.
-          showToast('info', 'Processing...', 'Your payment is being confirmed. This may take a moment.');
-          loadData();
         }
+        // result.type === 'cancel' means the driver closed the browser — no action needed.
       } else {
-        // Dev/test mode — subscription activated immediately
+        // Dev/test mode — subscription activated immediately (no Stripe checkout)
         showToast('success', 'Subscribed!', `You're now on the ${plan.name} plan. Go online and start earning!`);
         loadData();
       }

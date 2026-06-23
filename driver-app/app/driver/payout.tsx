@@ -61,6 +61,7 @@ function PayoutScreen() {
     const [stripeAccountStatus, setStripeAccountStatus] = useState<string | null>(null);
     const [sinOnFile, setSinOnFile] = useState(false);
     const [initialLoading, setInitialLoading] = useState(true);
+    const [bonuses, setBonuses] = useState<{ id: string; amount: string; kind: string; description: string; created_at: string }[]>([]);
 
     useEffect(() => {
         loadData();
@@ -73,12 +74,22 @@ function PayoutScreen() {
                 fetchDriverBalance(),
                 fetchBankAccount(),
                 loadStripeStatus(),
+                loadBonuses(),
                 // GST is sourced from useDriverMe — no manual fetch needed.
             ]);
         } catch (err) {
             // Errors are handled individually in each function
         } finally {
             setInitialLoading(false);
+        }
+    };
+
+    const loadBonuses = async () => {
+        try {
+            const res = await api.get<{ bonuses?: typeof bonuses }>('/drivers/bonuses');
+            setBonuses(res.data?.bonuses || []);
+        } catch {
+            setBonuses([]);
         }
     };
 
@@ -387,6 +398,37 @@ function PayoutScreen() {
                         </View>
                     </View>
                 </View>
+
+                {/* Bonuses & Rewards — quest/referral payable earnings, included in balance */}
+                {bonuses.length > 0 && (
+                    <View style={styles.section}>
+                        <Text style={styles.sectionTitle}>Bonuses & Rewards</Text>
+                        {bonuses.map((b) => (
+                            <View
+                                key={b.id}
+                                style={{
+                                    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+                                    paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border,
+                                }}
+                            >
+                                <View style={{ flex: 1, paddingRight: 12 }}>
+                                    <Text style={{ fontSize: 14, fontWeight: '600', color: colors.text }} numberOfLines={1}>
+                                        {b.description || (b.kind === 'quest' ? 'Quest reward' : 'Bonus')}
+                                    </Text>
+                                    <Text style={{ fontSize: 12, color: colors.textDim, marginTop: 2 }}>
+                                        {b.kind === 'referral' ? 'Referral bonus' : 'Quest bonus'} · {new Date(b.created_at).toLocaleDateString()}
+                                    </Text>
+                                </View>
+                                <Text style={{ fontSize: 15, fontWeight: '800', color: colors.success }}>
+                                    +{formatCurrency(b.amount)}
+                                </Text>
+                            </View>
+                        ))}
+                        <Text style={{ fontSize: 12, color: colors.textDim, marginTop: 10 }}>
+                            Bonuses are included in your available balance and paid out with your earnings.
+                        </Text>
+                    </View>
+                )}
 
                 {/* Next Payout Schedule — only once fully set up and able to cash out */}
                 {allReady && (

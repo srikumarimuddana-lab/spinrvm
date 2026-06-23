@@ -157,6 +157,7 @@ class ServiceAreaCreateRequest(BaseModel):
     hst_rate: float = Field(default=0.0, ge=0, le=100)
     spinr_pass_enabled: bool = True
     subscription_plan_ids: List[str] = []
+    subscription_required: bool = False
     driver_matching_algorithm: str = "nearest"
     search_radius_km: float = Field(default=10.0, ge=1, le=100)
     min_driver_rating: float = Field(default=4.0, ge=1.0, le=5.0)
@@ -196,6 +197,7 @@ class ServiceAreaUpdateRequest(BaseModel):
     required_documents: Optional[Any] = None
     spinr_pass_enabled: Optional[bool] = None
     subscription_plan_ids: Optional[List[str]] = None
+    subscription_required: Optional[bool] = None
     driver_matching_algorithm: Optional[str] = None
     search_radius_km: Optional[float] = Field(default=None, ge=1, le=100)
     min_driver_rating: Optional[float] = Field(default=None, ge=1.0, le=5.0)
@@ -414,6 +416,7 @@ async def admin_create_service_area(area: ServiceAreaCreateRequest, admin: dict 
         "hst_rate": area.hst_rate,
         "spinr_pass_enabled": area.spinr_pass_enabled,
         "subscription_plan_ids": area.subscription_plan_ids,
+        "subscription_required": area.subscription_required,
         "driver_matching_algorithm": area.driver_matching_algorithm,
         "search_radius_km": area.search_radius_km,
         "min_driver_rating": area.min_driver_rating,
@@ -429,6 +432,11 @@ async def admin_create_service_area(area: ServiceAreaCreateRequest, admin: dict 
         "driver_referral_terms": area.driver_referral_terms,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    # Invariant: subscription_required=True ⟹ spinr_pass_enabled=True.
+    # Guard on create as well as update so a direct API call with both flags
+    # conflicting can't produce a locked-out area from the first insert.
+    if doc.get("subscription_required"):
+        doc["spinr_pass_enabled"] = True
     # Seed vehicle_pricing with all active vehicle types so every type
     # appears on the rider's ride-options screen from day one.
     if not doc.get("vehicle_pricing"):
@@ -538,6 +546,7 @@ async def admin_update_service_area(
         "required_documents",
         "spinr_pass_enabled",
         "subscription_plan_ids",
+        "subscription_required",
         "driver_matching_algorithm",
         "search_radius_km",
         "min_driver_rating",
@@ -570,6 +579,19 @@ async def admin_update_service_area(
         update_payload["polygon"] = polygon
     if surge_active is not None:
         update_payload["surge_active"] = surge_active
+
+    # Invariant: subscription_required=True ⟹ spinr_pass_enabled=True.
+    # Two cases to guard:
+    # (a) payload sets subscription_required=True → always force spinr_pass_enabled on
+    # (b) payload sets spinr_pass_enabled=False without touching subscription_required →
+    #     check the existing DB row; if it already has subscription_required=True, the
+    #     combination would lock drivers out, so coerce spinr_pass_enabled back to True.
+    if update_payload.get("subscription_required") is True:
+        update_payload["spinr_pass_enabled"] = True
+    elif update_payload.get("spinr_pass_enabled") is False and "subscription_required" not in update_payload:
+        _existing_area = await db_supabase.find_one("service_areas", {"id": area_id})
+        if (_existing_area or {}).get("subscription_required"):
+            update_payload["spinr_pass_enabled"] = True
 
     # Per-area surge master toggle. Persist it explicitly (it is not in the
     # allow-list above). Disabling surge must immediately clear any live surge

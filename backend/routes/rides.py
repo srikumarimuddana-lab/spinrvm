@@ -757,6 +757,76 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
         all_drivers = [d for d in all_drivers if d["id"] not in _skip_ids]
         logger.info(f"[DISPATCH] skipped {len(_skip_ids)} driver(s) with recent timeout/decline for ride {ride_id}")
 
+    # Subscription guard: if the ride's service area requires a Spinr Pass,
+    # filter out candidates without an active subscription.  One batch IN
+    # query — no N+1 per driver.  Fails open on DB error so a transient fault
+    # cannot halt dispatch entirely; the accept_ride guard is the backstop.
+    if all_drivers and ride.get("service_area_id"):
+        try:
+            _disp_area = await db_supabase.find_one("service_areas", {"id": ride["service_area_id"]})
+            # Finding F: child areas (airport sub-regions) inherit subscription_required
+            # from their parent so airport pickups in a required city don't bypass the gate.
+            _sub_required = bool(_disp_area and _disp_area.get("subscription_required"))
+            if not _sub_required and _disp_area and _disp_area.get("parent_service_area_id"):
+                _parent_area = await db_supabase.find_one("service_areas", {"id": _disp_area["parent_service_area_id"]})
+                _sub_required = bool(_parent_area and _parent_area.get("subscription_required"))
+            if _sub_required:
+                _candidate_ids = [d["id"] for d in all_drivers]
+                _active_subs = await db_supabase.get_rows(
+                    "driver_subscriptions",
+                    {"driver_id": {"$in": _candidate_ids}, "status": "active"},
+                    columns="driver_id,expires_at,plan_id",
+                    limit=len(_candidate_ids),
+                )
+                _now_utc = datetime.now(timezone.utc)
+                # Filter by expiry; guard None from parse_iso_utc so one malformed
+                # row can't zero out all candidates via TypeError → except → all_drivers=[].
+                _valid_subs = []
+                for _s in _active_subs or []:
+                    if _s.get("expires_at"):
+                        _exp = parse_iso_utc(_s["expires_at"])
+                        if _exp is not None and _exp <= _now_utc:
+                            continue  # expired
+                    _valid_subs.append(_s)
+                # Finding B: also filter by plan service_area scope so drivers with a
+                # pass for another area don't receive offers they'll 402 on acceptance.
+                _plan_ids = {_s["plan_id"] for _s in _valid_subs if _s.get("plan_id")}
+                _plan_areas: dict = {}
+                if _plan_ids:
+                    _plans = await db_supabase.get_rows(
+                        "subscription_plans",
+                        {"id": {"$in": list(_plan_ids)}},
+                        columns="id,service_areas",
+                        limit=len(_plan_ids),
+                    )
+                    _plan_areas = {p["id"]: p.get("service_areas") for p in (_plans or [])}
+                _ride_service_area = ride["service_area_id"]
+                # A plan scoped to the parent area is valid for child (e.g. airport) areas.
+                _ride_parent_area_id = (_disp_area or {}).get("parent_service_area_id")
+                _subscribed_ids = set()
+                for _s in _valid_subs:
+                    _allowed = _plan_areas.get(_s.get("plan_id"))
+                    if _allowed and _ride_service_area not in _allowed:
+                        # Accept if the plan covers the parent area.
+                        if not (_ride_parent_area_id and _ride_parent_area_id in _allowed):
+                            continue
+                    _subscribed_ids.add(_s["driver_id"])
+                _before = len(all_drivers)
+                all_drivers = [d for d in all_drivers if d["id"] in _subscribed_ids]
+                logger.info(
+                    "[DISPATCH] subscription filter: area=%s kept %d/%d drivers",
+                    ride["service_area_id"],
+                    len(all_drivers),
+                    _before,
+                )
+        except Exception:
+            logger.error(
+                "[DISPATCH] subscription filter failed for area=%s — aborting dispatch attempt",
+                ride.get("service_area_id"),
+                exc_info=True,
+            )
+            all_drivers = []  # fail closed; the no-drivers path below schedules a retry
+
     # Pure filter+rank: drops orphan/no-location/low-rated drivers and
     # attaches per-driver distance. Pure function — no I/O.
     drivers_with_distance = filter_and_rank_drivers(ride, all_drivers, algorithm, min_rating, search_radius)
@@ -5267,7 +5337,9 @@ async def rider_complete_ride(
                 from utils.quest_tracker import update_quest_progress_on_ride_complete
             asyncio.create_task(update_quest_progress_on_ride_complete(driver_id, completed_ride or ride))
         except Exception:
-            logger.error("rider_complete_ride: scheduling quest progress update failed for ride %s", ride_id, exc_info=True)
+            logger.error(
+                "rider_complete_ride: scheduling quest progress update failed for ride %s", ride_id, exc_info=True
+            )
 
     return completed_ride or ride
 

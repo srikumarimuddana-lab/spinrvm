@@ -1072,9 +1072,17 @@ async def stripe_webhook(request: Request):
                 # recurring renewals. Deduped on the unique stripe_invoice_id
                 # index, so a replay is a no-op.
                 try:
-                    from ..routes.drivers import _record_subscription_payment  # type: ignore
+                    from ..routes.drivers import (  # type: ignore
+                        _compute_subscription_tax,
+                        _record_subscription_payment,
+                        _send_subscription_invoice_email,
+                    )
                 except ImportError:
-                    from routes.drivers import _record_subscription_payment  # type: ignore
+                    from routes.drivers import (  # type: ignore
+                        _compute_subscription_tax,
+                        _record_subscription_payment,
+                        _send_subscription_invoice_email,
+                    )
                 # amount_paid is the authoritative charged amount; it can be a
                 # legitimate 0 (100% coupon / trial), which is falsy, so test
                 # for None rather than truthiness before falling back.
@@ -1083,13 +1091,33 @@ async def stripe_webhook(request: Request):
                     _amount_cents = invoice.get("amount_due") or 0
                 _inv_billing_reason = invoice.get("billing_reason") or "subscription_cycle"
                 _inv_amount = cents_to_dollars(_amount_cents)
+
+                # Fetch plan for duration label and pre-tax price.
+                _inv_plan = None
+                if row.get("plan_id"):
+                    _inv_plan = await db_supabase.find_one("subscription_plans", {"id": row["plan_id"]})
+                _inv_days = (_inv_plan or {}).get("duration_days", 30)
+                _dur_map = {1: "Daily", 7: "Weekly", 30: "Monthly", 365: "Annual"}
+                _inv_dur = _dur_map.get(_inv_days, f"{_inv_days}-day")
+                _inv_date = datetime.now(timezone.utc).strftime("%B %d, %Y")
+
+                # Compute tax breakdown from the driver's service-area config.
+                _plan_price = Decimal(str((_inv_plan or {}).get("price") or _inv_amount or 0))
+                _wh_tax = await _compute_subscription_tax(row.get("driver_id"), _plan_price)
+
                 await _record_subscription_payment(
                     driver_id=row.get("driver_id"),
                     subscription_id=row["id"],
                     plan_id=row.get("plan_id"),
                     plan_name=row.get("plan_name"),
-                    amount=_inv_amount,
+                    amount=_wh_tax["total"],
                     billing_reason=_inv_billing_reason,
+                    subtotal=_wh_tax["subtotal"],
+                    gst_amount=_wh_tax["gst_amount"],
+                    pst_amount=_wh_tax["pst_amount"],
+                    hst_amount=_wh_tax["hst_amount"],
+                    tax_total=_wh_tax["tax_total"],
+                    province=_wh_tax["province"],
                     stripe_invoice_id=invoice.get("id"),
                 )
 
@@ -1097,22 +1125,17 @@ async def stripe_webhook(request: Request):
                 # = first charge on a recurring plan, subscription_cycle = renewal).
                 # One-off plans email from _activate_subscription instead.
                 if _inv_amount and Decimal(str(_inv_amount)) > 0:
-                    try:
-                        from ..routes.drivers import _send_subscription_invoice_email  # type: ignore
-                    except ImportError:
-                        from routes.drivers import _send_subscription_invoice_email  # type: ignore
-                    _inv_plan = None
-                    if row.get("plan_id"):
-                        _inv_plan = await db_supabase.find_one("subscription_plans", {"id": row["plan_id"]})
-                    _inv_days = (_inv_plan or {}).get("duration_days", 30)
-                    _dur_map = {1: "Daily", 7: "Weekly", 30: "Monthly", 365: "Annual"}
-                    _inv_dur = _dur_map.get(_inv_days, f"{_inv_days}-day")
-                    _inv_date = datetime.now(timezone.utc).strftime("%B %d, %Y")
                     await _send_subscription_invoice_email(
                         driver_id=row.get("driver_id"),
                         plan_name=row.get("plan_name") or "Spinr Pass",
                         duration_label=_inv_dur,
-                        amount=Decimal(str(_inv_amount)),
+                        subtotal=_wh_tax["subtotal"],
+                        gst_amount=_wh_tax["gst_amount"],
+                        pst_amount=_wh_tax["pst_amount"],
+                        hst_amount=_wh_tax["hst_amount"],
+                        tax_total=_wh_tax["tax_total"],
+                        total=_wh_tax["total"],
+                        province=_wh_tax["province"],
                         billing_reason=_inv_billing_reason,
                         payment_date=_inv_date,
                         stripe_invoice_url=invoice.get("hosted_invoice_url"),

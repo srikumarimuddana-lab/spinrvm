@@ -6097,6 +6097,42 @@ async def _cancel_stripe_subscription(stripe_subscription_id: str | None, *, rai
             raise
 
 
+async def _compute_subscription_tax(driver_id: str, plan_price: Decimal) -> dict:
+    """Return pre-tax subtotal plus per-component tax amounts for a subscription charge.
+
+    Reads the driver's service area's subscription_tax_config (migration 185).
+    Falls back to zero tax on any error so checkout is never blocked.
+    """
+    _ZERO = Decimal("0")
+    _q2 = lambda v: v.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)  # noqa: E731
+    subtotal = _q2(plan_price)
+    gst = pst = hst = _ZERO
+    province = "SK"
+    try:
+        _drv = await db_supabase.find_one("drivers", {"id": driver_id})
+        _area_id = (_drv or {}).get("service_area_id")
+        if _area_id:
+            _area = await db_supabase.find_one("service_areas", {"id": _area_id})
+            _cfg = (_area or {}).get("subscription_tax_config") or {}
+            if _cfg.get("enabled", True):
+                province = str(_cfg.get("province", "SK") or "SK")
+                gst = _q2(subtotal * Decimal(str(_cfg.get("gst_rate", 5) or 0)) / Decimal("100"))
+                pst = _q2(subtotal * Decimal(str(_cfg.get("pst_rate", 6) or 0)) / Decimal("100"))
+                hst = _q2(subtotal * Decimal(str(_cfg.get("hst_rate", 0) or 0)) / Decimal("100"))
+    except Exception:
+        logger.warning("[SUBSCRIBE] Tax config lookup failed for driver %s — zero tax applied", driver_id)
+    tax_total = gst + pst + hst
+    return {
+        "subtotal": subtotal,
+        "gst_amount": gst,
+        "pst_amount": pst,
+        "hst_amount": hst,
+        "tax_total": tax_total,
+        "total": subtotal + tax_total,
+        "province": province,
+    }
+
+
 @api_router.post("/subscription/subscribe")
 async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_current_user)):
     """Subscribe driver to a plan.
@@ -6317,7 +6353,9 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
             # One-off Checkout (no recurring Price on this plan). The webhook
             # (checkout.session.completed) activates the subscription; renewal
             # is expiry-driven (driver re-subscribes each period).
-            _amount_cents = dollars_to_cents(plan_price)
+            # Compute province tax and charge the inclusive total to Stripe.
+            _tax = await _compute_subscription_tax(driver["id"], plan_price)
+            _amount_cents = dollars_to_cents(_tax["total"])
             _session = stripe.checkout.Session.create(
                 payment_method_types=["card"],
                 mode="payment",
@@ -6498,13 +6536,20 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
     )
     # Dev/immediate activation realizes revenue without a Stripe invoice —
     # record it in the ledger so admin stats see it.
+    _dev_tax = await _compute_subscription_tax(driver["id"], plan_price)
     await _record_subscription_payment(
         driver_id=driver["id"],
         subscription_id=subscription_id,
         plan_id=plan_id,
         plan_name=plan.get("name"),
-        amount=plan.get("price"),
+        amount=_dev_tax["total"],
         billing_reason="dev",
+        subtotal=_dev_tax["subtotal"],
+        gst_amount=_dev_tax["gst_amount"],
+        pst_amount=_dev_tax["pst_amount"],
+        hst_amount=_dev_tax["hst_amount"],
+        tax_total=_dev_tax["tax_total"],
+        province=_dev_tax["province"],
     )
     return {"success": True, "subscription": subscription, "mode": "dev"}
 
@@ -6596,40 +6641,63 @@ async def _record_subscription_payment(
     plan_name: str | None,
     amount,
     billing_reason: str,
+    subtotal: Decimal | None = None,
+    gst_amount: Decimal | None = None,
+    pst_amount: Decimal | None = None,
+    hst_amount: Decimal | None = None,
+    tax_total: Decimal | None = None,
+    province: str | None = None,
     stripe_invoice_id: str | None = None,
     stripe_session_id: str | None = None,
     stripe_payment_intent_id: str | None = None,
-) -> None:
+) -> str | None:
     """Append a realized-payment row to the subscription_payments ledger.
 
+    Returns the new row id (used by resend-invoice), or None on failure/skip.
     The ledger (migration 151) is the source of truth for admin subscription
     revenue/transaction stats — driver_subscriptions tracks current STATE, this
     tracks money MOVED, so recurring renewals are captured (not just the first
     charge). Recurring inserts dedupe on the unique stripe_invoice_id index, so
-    a replay is benign. Never raises — a ledger failure must not break the
+    a replay is benign. Never raises — a ledger failure must not block the
     activation/webhook flow that already moved the money.
     """
     try:
         amt = Decimal(str(amount or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         if amt <= 0:
-            return  # nothing realized — don't clutter the ledger
-        await db_supabase.insert_one(
-            "subscription_payments",
-            {
-                "id": str(uuid.uuid4()),
-                "driver_id": driver_id,
-                "subscription_id": subscription_id,
-                "plan_id": plan_id,
-                "plan_name": plan_name,
-                "amount": str(amt),
-                "currency": "cad",
-                "billing_reason": billing_reason,
-                "stripe_invoice_id": stripe_invoice_id,
-                "stripe_session_id": stripe_session_id,
-                "stripe_payment_intent_id": stripe_payment_intent_id,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            },
-        )
+            return None  # nothing realized — don't clutter the ledger
+        row_id = str(uuid.uuid4())
+        row: dict = {
+            "id": row_id,
+            "driver_id": driver_id,
+            "subscription_id": subscription_id,
+            "plan_id": plan_id,
+            "plan_name": plan_name,
+            "amount": str(amt),
+            "currency": "cad",
+            "billing_reason": billing_reason,
+            "stripe_invoice_id": stripe_invoice_id,
+            "stripe_session_id": stripe_session_id,
+            "stripe_payment_intent_id": stripe_payment_intent_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        # Tax columns (migration 186) — stored when computed at checkout.
+        _q2 = lambda v: (
+            str(Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)) if v is not None else None
+        )  # noqa: E731
+        if subtotal is not None:
+            row["subtotal"] = _q2(subtotal)
+        if gst_amount is not None:
+            row["gst_amount"] = _q2(gst_amount)
+        if pst_amount is not None:
+            row["pst_amount"] = _q2(pst_amount)
+        if hst_amount is not None:
+            row["hst_amount"] = _q2(hst_amount)
+        if tax_total is not None:
+            row["tax_total"] = _q2(tax_total)
+        if province:
+            row["province"] = province
+        await db_supabase.insert_one("subscription_payments", row)
+        return row_id
     except Exception as _ledger_err:
         # Distinguish a benign duplicate (unique stripe_invoice_id replay) from a
         # real write failure. A duplicate means the row already exists — nothing
@@ -6659,19 +6727,23 @@ async def _send_subscription_invoice_email(
     driver_id: str,
     plan_name: str,
     duration_label: str,
-    amount: Decimal,
+    subtotal: Decimal,
+    gst_amount: Decimal,
+    pst_amount: Decimal,
+    hst_amount: Decimal,
+    tax_total: Decimal,
+    total: Decimal,
+    province: str = "SK",
     billing_reason: str,
     payment_date: str,
+    invoice_number: str | None = None,
     stripe_invoice_url: str | None = None,
 ) -> None:
-    """Email the driver a Saskatchewan-compliant invoice for their Spinr Pass charge.
+    """Email the driver a rich HTML invoice (+ PDF attachment) for their Spinr Pass charge.
 
-    Taxes are back-computed from the tax-inclusive plan price:
-      subtotal = amount / 1.11
-      GST (5%) = subtotal * 0.05
-      PST (6%) = amount - subtotal - GST   (computed last — guaranteed to tie out)
-
-    Never raises — a failed invoice email must not block the activation flow.
+    Tax amounts are supplied by the caller (computed from service-area tax config
+    at checkout time) so the invoice reflects actual rates, not a back-computed
+    guess.  Never raises — email failure must not block the activation flow.
     """
     try:
         driver = await db.find_one("drivers", {"id": driver_id})
@@ -6682,53 +6754,149 @@ async def _send_subscription_invoice_email(
         if not email:
             return
 
-        _TAX_DIVISOR = Decimal("1.11")
-        _GST_RATE = Decimal("0.05")
-        _total = amount.quantize(Decimal("0.01"))
-        _subtotal = (_total / _TAX_DIVISOR).quantize(Decimal("0.01"))
-        _gst = (_subtotal * _GST_RATE).quantize(Decimal("0.01"))
-        _pst = _total - _subtotal - _gst
-
-        billing_label = "Auto-renewal" if billing_reason == "subscription_cycle" else "One-time purchase"
         driver_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "Driver"
+        billing_label = "Auto-renewal" if billing_reason == "subscription_cycle" else "One-time purchase"
+        inv_number = invoice_number or f"SPX-{driver_id[:6].upper()}-{payment_date.replace(' ', '').replace(',', '')}"
 
-        receipt_line = f"\nView your Stripe receipt: {stripe_invoice_url}" if stripe_invoice_url else ""
+        # ── Tax line rows for HTML ────────────────────────────────────────────
+        def _row(label: str, amount: Decimal, bold: bool = False, color: str = "#666") -> str:
+            style = f"color:{color};font-weight:{'700' if bold else '400'}"
+            return (
+                f"<tr>"
+                f"<td style='padding:6px 0;font-size:14px;{style}'>{label}</td>"
+                f"<td style='padding:6px 0;font-size:14px;text-align:right;{style}'>${amount:.2f} CAD</td>"
+                f"</tr>"
+            )
 
-        body = (
-            f"Hi {driver_name or 'Driver'},\n\n"
-            f"Thank you for your Spinr Pass subscription.\n"
-            f"Here is your invoice for this charge.\n\n"
-            f"{'=' * 44}\n"
-            f"SPINR PASS SUBSCRIPTION INVOICE\n"
-            f"{'=' * 44}\n"
-            f"Invoice Date : {payment_date}\n"
-            f"Plan         : {plan_name} ({duration_label})\n"
-            f"Billing      : {billing_label}\n\n"
-            f"{'─' * 44}\n"
-            f"{'Description':<28} {'CAD':>14}\n"
-            f"{'─' * 44}\n"
-            f"{'Spinr Pass ' + plan_name:<28} {'$' + str(_subtotal):>14}\n"
-            f"{'GST (5%)':<28} {'$' + str(_gst):>14}\n"
-            f"{'PST — Saskatchewan (6%)':<28} {'$' + str(_pst):>14}\n"
-            f"{'─' * 44}\n"
-            f"{'TOTAL':<28} {'$' + str(_total):>14}\n"
-            f"{'─' * 44}\n\n"
-            f"Payment was charged to your card on file."
-            f"{receipt_line}\n\n"
-            f"Questions? Reply to this email or contact support@spinr.ca\n\n"
-            f"— The Spinr Team\n"
+        tax_rows_html = ""
+        if gst_amount > 0:
+            tax_rows_html += _row("GST (5%) — Federal", gst_amount)
+        if pst_amount > 0:
+            tax_rows_html += _row(f"PST (6%) — {province}", pst_amount)
+        if hst_amount > 0:
+            tax_rows_html += _row(f"HST — {province}", hst_amount)
+
+        stripe_link_html = (
+            f"<p style='margin:8px 0 0;font-size:13px;'>"
+            f"<a href='{stripe_invoice_url}' style='color:#ee2b2b;'>View Stripe receipt →</a></p>"
+            if stripe_invoice_url
+            else ""
         )
 
-        await send_email(
+        html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#f5f5f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:24px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 2px 16px rgba(0,0,0,0.08);">
+  <!-- Header -->
+  <tr><td style="background:#ee2b2b;padding:28px 32px;">
+    <h1 style="color:#fff;margin:0;font-size:28px;font-weight:800;letter-spacing:-0.5px;">Spinr</h1>
+    <p style="color:rgba(255,255,255,0.8);margin:4px 0 0;font-size:13px;">Subscription Invoice</p>
+  </td></tr>
+
+  <!-- Greeting -->
+  <tr><td style="padding:28px 32px 0;">
+    <p style="color:#1a1a1a;font-size:16px;margin:0;">Hi {driver_name},</p>
+    <p style="color:#888;font-size:14px;margin:6px 0 0;">
+      Thank you for your Spinr Pass subscription. Your invoice is attached as a PDF.
+    </p>
+  </td></tr>
+
+  <!-- Amount callout -->
+  <tr><td style="padding:20px 32px;">
+    <div style="background:#fef2f2;border-radius:12px;padding:20px;text-align:center;">
+      <p style="color:#ee2b2b;font-size:40px;font-weight:800;margin:0;">${total:.2f} CAD</p>
+      <p style="color:#999;font-size:12px;margin:6px 0 0;">{payment_date} · {billing_label}</p>
+      <p style="color:#999;font-size:11px;margin:4px 0 0;letter-spacing:0.4px;">Invoice <strong style="color:#1a1a1a">{inv_number}</strong></p>
+    </div>
+  </td></tr>
+
+  <!-- Line items -->
+  <tr><td style="padding:0 32px 24px;">
+    <table width="100%" cellpadding="0" cellspacing="0">
+      <tr style="border-bottom:2px solid #f0f0f0;">
+        <td style="padding:8px 0;font-size:11px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:0.6px;">Description</td>
+        <td style="padding:8px 0;font-size:11px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:0.6px;text-align:right;">Amount (CAD)</td>
+      </tr>
+      {_row(f"Spinr Pass {plan_name} — {duration_label}", subtotal, color="#1a1a1a")}
+      <tr><td colspan="2" style="padding:4px 0;border-top:1px solid #f0f0f0;"></td></tr>
+      {tax_rows_html}
+      <tr><td colspan="2" style="padding:4px 0;border-top:2px solid #1a1a1a;"></td></tr>
+      {_row("Total", total, bold=True, color="#1a1a1a")}
+    </table>
+  </td></tr>
+
+  <!-- Payment note -->
+  <tr><td style="padding:0 32px 28px;">
+    <div style="background:#f9f9f9;border-radius:10px;padding:16px;">
+      <p style="margin:0;font-size:13px;color:#666;">Payment successfully charged to your card on file.</p>
+      {stripe_link_html}
+    </div>
+  </td></tr>
+
+  <!-- Footer -->
+  <tr><td style="padding:16px 32px 24px;border-top:1px solid #f0f0f0;text-align:center;">
+    <p style="color:#bbb;font-size:11px;margin:0;">Spinr Technologies Inc. · Saskatoon, SK, Canada</p>
+    <p style="color:#bbb;font-size:11px;margin:4px 0 0;">support@spinr.ca · www.spinr.ca</p>
+  </td></tr>
+</table>
+</body></html>"""
+
+        # ── PDF attachment ────────────────────────────────────────────────────
+        attachments = None
+        try:
+            try:
+                from ..utils.subscription_invoice_pdf import generate_subscription_invoice_pdf
+            except ImportError:
+                from utils.subscription_invoice_pdf import generate_subscription_invoice_pdf  # type: ignore
+
+            pdf_bytes = generate_subscription_invoice_pdf(
+                invoice_number=inv_number,
+                payment_date=payment_date,
+                driver_name=driver_name,
+                driver_email=email,
+                plan_name=plan_name,
+                duration_label=duration_label,
+                billing_reason=billing_reason,
+                subtotal=subtotal,
+                gst_amount=gst_amount,
+                pst_amount=pst_amount,
+                hst_amount=hst_amount,
+                tax_total=tax_total,
+                total=total,
+                province=province,
+                stripe_invoice_url=stripe_invoice_url,
+            )
+            safe_plan = plan_name.replace(" ", "-")
+            attachments = [
+                {
+                    "filename": f"Spinr-Pass-Invoice-{safe_plan}-{payment_date.replace(' ', '-').replace(',', '')}.pdf",
+                    "content": pdf_bytes,
+                    "mime": "application/pdf",
+                }
+            ]
+        except Exception:
+            logger.error("[SUBSCRIBE] Invoice PDF generation failed — sending HTML only", exc_info=True)
+
+        try:
+            from ..utils.email_provider import send_transactional_email
+        except ImportError:
+            from utils.email_provider import send_transactional_email  # type: ignore
+
+        await send_transactional_email(
             to=email,
             subject=f"Your Spinr Pass Invoice — {plan_name} ({payment_date})",
-            body=body,
+            html=html,
+            default_from="invoices@spinr.ca",
+            log_id=driver_id,
+            email_type="subscription_invoice",
+            attachments=attachments,
         )
         logger.info(
-            "[SUBSCRIBE] Invoice email sent driver=%s plan=%s amount=%s",
+            "[SUBSCRIBE] Invoice email sent driver=%s plan=%s total=%s",
             driver_id,
             plan_name,
-            _total,
+            total,
             extra={"domain": "payments", "driver_id": driver_id},
         )
     except Exception as _mail_err:
@@ -6847,13 +7015,20 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
     else:
         _is_one_off = bool(plan) and not plan.get("stripe_price_id")
     if plan and _is_one_off:
+        _one_off_tax = await _compute_subscription_tax(driver_id, Decimal(str(plan.get("price") or 0)))
         await _record_subscription_payment(
             driver_id=driver_id,
             subscription_id=subscription_id,
             plan_id=plan_id,
             plan_name=sub.get("plan_name") or plan.get("name"),
-            amount=plan.get("price"),
+            amount=_one_off_tax["total"],
             billing_reason="one_off",
+            subtotal=_one_off_tax["subtotal"],
+            gst_amount=_one_off_tax["gst_amount"],
+            pst_amount=_one_off_tax["pst_amount"],
+            hst_amount=_one_off_tax["hst_amount"],
+            tax_total=_one_off_tax["tax_total"],
+            province=_one_off_tax["province"],
             stripe_session_id=sub.get("stripe_session_id"),
         )
 
@@ -6883,7 +7058,13 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
                 driver_id=driver_id,
                 plan_name=plan.get("name", "Spinr Pass"),
                 duration_label=_dur_label,
-                amount=Decimal(str(plan.get("price") or 0)),
+                subtotal=_one_off_tax["subtotal"],
+                gst_amount=_one_off_tax["gst_amount"],
+                pst_amount=_one_off_tax["pst_amount"],
+                hst_amount=_one_off_tax["hst_amount"],
+                tax_total=_one_off_tax["tax_total"],
+                total=_one_off_tax["total"],
+                province=_one_off_tax["province"],
                 billing_reason="one_off",
                 payment_date=now.strftime("%B %d, %Y"),
             )
@@ -6920,44 +7101,119 @@ async def get_subscription_payment_history(
 
     total = await db_supabase.count_documents("subscription_payments", {"driver_id": driver["id"]})
 
-    # Saskatchewan taxes are included in the plan price (tax-inclusive pricing).
-    # Back out GST (5%) and PST (6%) from the charged amount so each invoice
-    # row satisfies CLAUDE.md / regulatory receipt line-item requirements.
-    _TAX_DIVISOR = Decimal("1.11")
-    _GST_RATE = Decimal("0.05")
+    def _payment_row(p: dict) -> dict:
+        """Serialize a subscription_payments row with tax breakdown.
 
-    def _tax_breakdown(raw_amount) -> tuple:
-        """Returns (total, subtotal, gst, pst) as Decimal, all rounded to cents."""
-        _total = Decimal(str(raw_amount)).quantize(Decimal("0.01"))
-        _subtotal = (_total / _TAX_DIVISOR).quantize(Decimal("0.01"))
-        _gst = (_subtotal * _GST_RATE).quantize(Decimal("0.01"))
-        _pst = _total - _subtotal - _gst  # computed last so the three sum to total exactly
-        return _total, _subtotal, _gst, _pst
+        Prefers stored tax columns (migration 186). Falls back to back-computing
+        GST+PST from the total for legacy rows written before migration 186.
+        """
+        _q2 = lambda v: Decimal(str(v)).quantize(Decimal("0.01"))
+        total_d = _q2(p.get("amount") or 0)
+        if p.get("subtotal") is not None:
+            subtotal_d = _q2(p["subtotal"])
+            gst_d = _q2(p.get("gst_amount") or 0)
+            pst_d = _q2(p.get("pst_amount") or 0)
+            hst_d = _q2(p.get("hst_amount") or 0)
+        else:
+            # Legacy back-compute (SK rates)
+            subtotal_d = (total_d / Decimal("1.11")).quantize(Decimal("0.01"))
+            gst_d = (subtotal_d * Decimal("0.05")).quantize(Decimal("0.01"))
+            pst_d = total_d - subtotal_d - gst_d
+            hst_d = Decimal("0")
+        return {
+            "id": p["id"],
+            "plan_id": p.get("plan_id"),
+            "plan_name": p.get("plan_name"),
+            "amount": str(total_d),
+            "subtotal": str(subtotal_d),
+            "gst_amount": str(gst_d),
+            "pst_amount": str(pst_d),
+            "hst_amount": str(hst_d),
+            "province": p.get("province") or "SK",
+            "currency": (p.get("currency") or "cad").upper(),
+            "billing_reason": p.get("billing_reason"),
+            "stripe_invoice_id": p.get("stripe_invoice_id"),
+            "created_at": p.get("created_at"),
+        }
 
     return {
-        "payments": [
-            {
-                "id": p["id"],
-                "plan_id": p.get("plan_id"),
-                "plan_name": p.get("plan_name"),
-                **dict(
-                    zip(
-                        ("amount", "subtotal", "gst_amount", "pst_amount"),
-                        (str(v) for v in _tax_breakdown(p["amount"])),
-                    )
-                ),
-                "currency": (p.get("currency") or "cad").upper(),
-                "billing_reason": p.get("billing_reason"),
-                "stripe_invoice_id": p.get("stripe_invoice_id"),
-                "created_at": p.get("created_at"),
-            }
-            for p in payments
-        ],
+        "payments": [_payment_row(p) for p in payments],
         "total": total,
         "has_more": (offset + len(payments)) < total,
         "limit": limit,
         "offset": offset,
     }
+
+
+@api_router.post("/subscription/payments/{payment_id}/resend-invoice")
+async def resend_subscription_invoice(
+    payment_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Re-send the invoice email for a specific Spinr Pass payment.
+
+    Drivers can trigger a resend from the payment history screen.
+    Only the owning driver may request resend — payment_id is verified
+    against their driver account, never taken on trust.
+    """
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    payment = await db_supabase.find_one("subscription_payments", {"id": payment_id})
+    if not payment or payment.get("driver_id") != driver["id"]:
+        raise HTTPException(status_code=404, detail="Payment not found")
+
+    plan = None
+    if payment.get("plan_id"):
+        plan = await db_supabase.find_one("subscription_plans", {"id": payment["plan_id"]})
+    _days = (plan or {}).get("duration_days", 30)
+    _dur_map = {1: "Daily", 7: "Weekly", 30: "Monthly", 365: "Annual"}
+    _dur_label = _dur_map.get(_days, f"{_days}-day")
+
+    _q2 = lambda v: Decimal(str(v)).quantize(Decimal("0.01"))
+    total_d = _q2(payment.get("amount") or 0)
+    if payment.get("subtotal") is not None:
+        subtotal_d = _q2(payment["subtotal"])
+        gst_d = _q2(payment.get("gst_amount") or 0)
+        pst_d = _q2(payment.get("pst_amount") or 0)
+        hst_d = _q2(payment.get("hst_amount") or 0)
+        tax_total_d = _q2(payment.get("tax_total") or 0)
+        province = payment.get("province") or "SK"
+    else:
+        subtotal_d = (total_d / Decimal("1.11")).quantize(Decimal("0.01"))
+        gst_d = (subtotal_d * Decimal("0.05")).quantize(Decimal("0.01"))
+        pst_d = total_d - subtotal_d - gst_d
+        hst_d = Decimal("0")
+        tax_total_d = gst_d + pst_d
+        province = "SK"
+
+    from datetime import datetime as _dt
+
+    _raw_date = payment.get("created_at") or ""
+    try:
+        _payment_date = _dt.fromisoformat(_raw_date.replace("Z", "+00:00")).strftime("%B %d, %Y")
+    except Exception:
+        _payment_date = _dt.now(timezone.utc).strftime("%B %d, %Y")
+
+    await _send_subscription_invoice_email(
+        driver_id=driver["id"],
+        plan_name=payment.get("plan_name") or "Spinr Pass",
+        duration_label=_dur_label,
+        subtotal=subtotal_d,
+        gst_amount=gst_d,
+        pst_amount=pst_d,
+        hst_amount=hst_d,
+        tax_total=tax_total_d,
+        total=total_d,
+        province=province,
+        billing_reason=payment.get("billing_reason") or "one_off",
+        payment_date=_payment_date,
+        invoice_number=f"SPX-{payment['id'][:8].upper()}",
+    )
+    return {"success": True}
 
 
 @api_router.post("/subscription/cancel")

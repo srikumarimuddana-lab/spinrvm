@@ -16,6 +16,7 @@ push / asyncio.create_task machinery in the tests.
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ except ImportError:  # pragma: no cover - allow direct module imports in tests
     from geo_utils import calculate_distance
     from settings_loader import get_app_settings
     from utils.breadcrumbs import invalidate_active_rides_cache  # type: ignore
+    from utils.datetime_utils import parse_iso_utc  # type: ignore
     from utils.driver_presence import present_driver_ids
     from utils.metrics import inc as _metric_inc  # type: ignore
 

@@ -7,9 +7,12 @@
 -- never catches up.
 --
 -- This migration recomputes the count from the current state of driver_subscriptions.
--- It counts ALL non-cancelled rows (active + expired) to match the intent of
--- "total subscribers ever", not "currently active subscribers". If the intent
--- changes to active-only, invert the WHERE clause.
+-- It counts only rows that represent a paid subscription (active or expired).
+-- Excluded: 'pending' (checkout started, payment not confirmed),
+--           'superseded' (replaced by an upgrade/renewal),
+--           'cancelled' (driver cancelled or refunded).
+-- This matches the intent of subscriber_count increments in the application
+-- code, which only fires on Stripe webhook activation (not on checkout creation).
 --
 -- Rollback: UPDATE public.subscription_plans SET subscriber_count = 0;
 -- (safe to re-run: DEFAULT 0 is the same as resetting)
@@ -19,7 +22,7 @@ SET subscriber_count = sub_counts.cnt
 FROM (
     SELECT plan_id, COUNT(*) AS cnt
     FROM public.driver_subscriptions
-    WHERE status <> 'cancelled'
+    WHERE status IN ('active', 'expired')
     GROUP BY plan_id
 ) sub_counts
 WHERE p.id = sub_counts.plan_id;

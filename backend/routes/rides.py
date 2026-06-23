@@ -801,11 +801,15 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
                     )
                     _plan_areas = {p["id"]: p.get("service_areas") for p in (_plans or [])}
                 _ride_service_area = ride["service_area_id"]
+                # A plan scoped to the parent area is valid for child (e.g. airport) areas.
+                _ride_parent_area_id = (_disp_area or {}).get("parent_service_area_id")
                 _subscribed_ids = set()
                 for _s in _valid_subs:
                     _allowed = _plan_areas.get(_s.get("plan_id"))
                     if _allowed and _ride_service_area not in _allowed:
-                        continue  # plan doesn't cover this area
+                        # Accept if the plan covers the parent area.
+                        if not (_ride_parent_area_id and _ride_parent_area_id in _allowed):
+                            continue
                     _subscribed_ids.add(_s["driver_id"])
                 _before = len(all_drivers)
                 all_drivers = [d for d in all_drivers if d["id"] in _subscribed_ids]

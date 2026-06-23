@@ -112,7 +112,7 @@ def _make_sub(driver_id="d1", status="active"):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 class TestGoOnlineSubscriptionGuard:
     """Replays the subscription-check logic from update_driver_status."""
 
@@ -184,7 +184,7 @@ class TestGoOnlineSubscriptionGuard:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 class TestDispatchSubscriptionFilter:
     """find_candidate_drivers filters unsubscribed drivers in required areas."""
 
@@ -299,7 +299,7 @@ class TestDispatchSubscriptionFilter:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 class TestAcceptRideSubscriptionGuard:
     """Replays the subscription-check block from accept_ride."""
 

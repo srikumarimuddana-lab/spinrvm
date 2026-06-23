@@ -320,7 +320,11 @@ class DispatchService:
         if rows and ride.get("service_area_id"):
             try:
                 _area = await self.db.find_one("service_areas", {"id": ride["service_area_id"]})
-                if _area and _area.get("subscription_required"):
+                _svc_sub_required = bool(_area and _area.get("subscription_required"))
+                if not _svc_sub_required and _area and _area.get("parent_service_area_id"):
+                    _parent = await self.db.find_one("service_areas", {"id": _area["parent_service_area_id"]})
+                    _svc_sub_required = bool(_parent and _parent.get("subscription_required"))
+                if _svc_sub_required:
                     candidate_ids = [d["id"] for d in rows]
                     active_subs = await self.db.get_rows(
                         "driver_subscriptions",
@@ -329,11 +333,13 @@ class DispatchService:
                         limit=len(candidate_ids),
                     )
                     _now = datetime.now(timezone.utc)
-                    subscribed_ids = {
-                        s["driver_id"]
-                        for s in (active_subs or [])
-                        if not s.get("expires_at") or parse_iso_utc(s["expires_at"]) > _now
-                    }
+                    subscribed_ids = set()
+                    for _s in active_subs or []:
+                        if _s.get("expires_at"):
+                            _exp = parse_iso_utc(_s["expires_at"])
+                            if _exp is not None and _exp <= _now:
+                                continue  # expired
+                        subscribed_ids.add(_s["driver_id"])
                     rows = [d for d in rows if d["id"] in subscribed_ids]
                     logger.info(
                         "Subscription filter: area=%s kept %d/%d drivers",

@@ -192,9 +192,11 @@ async def _process_one(referee: dict, code: str) -> None:
     # the outer handler in _tick, which logs it as an error rather than silently
     # treating it as 'already claimed'.
 
-    # Credit the referrer, then the referee (rider only). Each _credit is
-    # self-atomic — it reverses its own increment if the ledger write fails, so
-    # money is never left unrecorded. On ANY credit failure we mark the claim
+    # Credit the referrer, then the referee (when their reward > 0). _credit
+    # routes DRIVER rewards to the payable driver_bonuses ledger (append-only
+    # insert) and RIDER rewards to the wallet (self-atomic: reverses its own
+    # increment if the ledger write fails, so money is never left unrecorded).
+    # On ANY credit failure we mark the claim
     # 'failed' and stop: we deliberately do NOT delete/retry, because the claim
     # row staying in place is exactly what prevents a re-claim and a double
     # credit on the next tick. 'failed' rows surface for manual reconciliation.
@@ -252,13 +254,37 @@ def _credit_marks(status: str, referrer_paid: bool, referee_paid: bool) -> dict:
 
 
 async def _credit(user_id: str, amount: Decimal, kind: str, reference_id: str, txn_type: str, metadata: dict) -> None:
-    """Credit a wallet and write the immutable ledger entry — atomically.
+    """Credit a referral reward. Decimal-only.
 
-    If the ledger write fails after the balance already moved, reverse the
-    increment so money is never left without a matching ledger entry, then
-    re-raise. (Same compensate-on-ledger-failure pattern as the quest-reward
-    payout.) Decimal-only.
+    DRIVER referrals pay a driver — record a PAYABLE driver_bonuses row (folds
+    into payable_balance + the Stripe payout), not the rider wallet the driver
+    app can't see. RIDER referrals keep the wallet credit + immutable ledger
+    entry; if that ledger write fails after the balance moved, reverse the
+    increment so money is never left unrecorded, then re-raise.
     """
+    if kind == "driver":
+        # driver_bonuses is append-only and idempotent at the referral_payouts
+        # claim level (one _credit call per side, no retry on failure), so no
+        # source_id dedup is needed here. id defaults to gen_random_uuid().
+        driver = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows("drivers", {"user_id": user_id}, limit=1)
+        )
+        if not driver:
+            raise RuntimeError(f"referral_payout: no driver row for user {user_id} — cannot credit referral bonus")
+        await db_supabase.insert_one(
+            "driver_bonuses",
+            {
+                "driver_id": driver["id"],
+                "user_id": user_id,
+                "amount": _f(amount),
+                "kind": "referral",
+                "description": f"{kind.capitalize()} referral reward",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        return
+
+    # Rider referral → wallet credit + immutable ledger entry.
     try:
         from ..routes.wallet import _record_transaction, get_or_create_wallet  # type: ignore
     except ImportError:

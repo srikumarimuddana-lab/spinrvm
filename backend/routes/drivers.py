@@ -991,7 +991,7 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         total_earnings = total_tips = pending_payouts = Decimal("0")
         total_rides = 0
 
-    # Quest (and, later, referral) bonuses are payable earnings (driver_bonuses
+    # Quest + driver-referral bonuses are payable earnings (driver_bonuses
     # ledger) — they fold into payable_balance and pay out via the normal Stripe
     # Transfer, like ride earnings. Fetched in a SEPARATE try so a driver_bonuses
     # error (e.g. migration not yet applied) never zeroes the driver's ride

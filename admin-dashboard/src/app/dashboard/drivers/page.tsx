@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, reviewDriverPhoto, getDriverVehicleHistory, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, getDriverReferrals, retryPayout, refreshDriverStripeKyc, revealDriverSin, logPiiReveal, type DriverLiveStats, type DriverPayoutSummary, type DriverReferralSummary } from "@/lib/api";
+import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, reviewDriverPhoto, getDriverVehicleHistory, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, getDriverReferrals, retryPayout, refreshDriverStripeKyc, revealDriverSin, logPiiReveal, getAdminSubscriptionPayments, type DriverLiveStats, type DriverPayoutSummary, type DriverReferralSummary } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
@@ -117,6 +117,9 @@ export default function DriversPage() {
     const [referrals, setReferrals] = useState<DriverReferralSummary | null>(null);
     const [referralsLoading, setReferralsLoading] = useState(false);
     const [referralsLoaded, setReferralsLoaded] = useState<string | null>(null);
+    const [driverSubPayments, setDriverSubPayments] = useState<any[]>([]);
+    const [subPaymentsLoading, setSubPaymentsLoading] = useState(false);
+    const [subPaymentsLoaded, setSubPaymentsLoaded] = useState<string | null>(null);
     const [liveStats, setLiveStats] = useState<DriverLiveStats | null>(null);
     const [payoutSummary, setPayoutSummary] = useState<DriverPayoutSummary | null>(null);
     const [payoutLoading, setPayoutLoading] = useState(false);
@@ -168,6 +171,20 @@ export default function DriversPage() {
             setReferralsLoading(false);
         }
     }, [referralsLoaded]);
+
+    const loadDriverSubscriptions = useCallback(async (driverId: string) => {
+        if (subPaymentsLoaded === driverId) return;
+        setSubPaymentsLoading(true);
+        try {
+            const res = await getAdminSubscriptionPayments({ driver_id: driverId, limit: 100 });
+            setDriverSubPayments(res?.payments ?? []);
+            setSubPaymentsLoaded(driverId);
+        } catch {
+            setDriverSubPayments([]);
+        } finally {
+            setSubPaymentsLoading(false);
+        }
+    }, [subPaymentsLoaded]);
 
     const loadData = useCallback(() => {
         setLoading(true);
@@ -284,6 +301,8 @@ export default function DriversPage() {
             setReferralsLoaded(null);
             setLiveStats(null);
             setPayoutSummary(null);
+            setDriverSubPayments([]);
+            setSubPaymentsLoaded(null);
             return;
         }
         setDetailTab("overview");
@@ -825,13 +844,14 @@ export default function DriversPage() {
                             </div>
                         </div>
 
-                        <Tabs value={detailTab} onValueChange={(v) => { setDetailTab(v); if (v === "rides") loadDriverRides(selected.id); if (v === "referrals") loadDriverReferrals(selected.id); }} className="flex-1 overflow-hidden flex flex-col">
+                        <Tabs value={detailTab} onValueChange={(v) => { setDetailTab(v); if (v === "rides") loadDriverRides(selected.id); if (v === "referrals") loadDriverReferrals(selected.id); if (v === "subscriptions") loadDriverSubscriptions(selected.id); }} className="flex-1 overflow-hidden flex flex-col">
                             <TabsList className="mx-6 mt-4 w-fit">
                                 <TabsTrigger value="overview">Overview</TabsTrigger>
                                 <TabsTrigger value="documents">Documents{pendingDocsCount > 0 && <span className="ml-1.5 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full" title={`${pendingDocsCount} document${pendingDocsCount === 1 ? "" : "s"} awaiting review`}>{pendingDocsCount}</span>}</TabsTrigger>
                                 <TabsTrigger value="rides">Rides{selected.total_rides > 0 && <span className="ml-1.5 bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full">{(selected.total_rides || 0).toLocaleString()}</span>}</TabsTrigger>
                                 <TabsTrigger value="payouts">Payouts{payoutSummary && payoutSummary.summary.pending_balance > 0 && <span className="ml-1.5 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full" title={`${formatCurrency(payoutSummary.summary.pending_balance)} pending payout`}>!</span>}</TabsTrigger>
                                 <TabsTrigger value="referrals">Referrals</TabsTrigger>
+                                <TabsTrigger value="subscriptions">Subscriptions</TabsTrigger>
                                 <TabsTrigger value="verification">Actions</TabsTrigger>
                                 <TabsTrigger value="notes">Notes</TabsTrigger>
                                 <TabsTrigger value="history">History</TabsTrigger>
@@ -1193,6 +1213,50 @@ export default function DriversPage() {
                                 <TabsContent value="history" className="mt-4 space-y-6">
                                     <DriverActivity driverId={selected.id} />
                                     <DriverTimeline driverId={selected.id} driver={selected} />
+                                </TabsContent>
+
+                                {/* Subscription payment history */}
+                                <TabsContent value="subscriptions" className="mt-4">
+                                    {subPaymentsLoading ? (
+                                        <div className="py-12 flex justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+                                    ) : driverSubPayments.length === 0 ? (
+                                        <div className="py-12 text-center text-sm text-muted-foreground">No subscription payments found for this driver.</div>
+                                    ) : (
+                                        <Table>
+                                            <TableHeader>
+                                                <TableRow>
+                                                    <TableHead>Date</TableHead>
+                                                    <TableHead>Plan</TableHead>
+                                                    <TableHead>Type</TableHead>
+                                                    <TableHead className="text-right">Subtotal</TableHead>
+                                                    <TableHead className="text-right">GST</TableHead>
+                                                    <TableHead className="text-right">PST</TableHead>
+                                                    <TableHead className="text-right">HST</TableHead>
+                                                    <TableHead className="text-right">Total</TableHead>
+                                                </TableRow>
+                                            </TableHeader>
+                                            <TableBody>
+                                                {driverSubPayments.map((p) => (
+                                                    <TableRow key={p.id}>
+                                                        <TableCell className="text-xs whitespace-nowrap">
+                                                            {p.created_at ? new Date(p.created_at).toLocaleDateString("en-CA", { year: "numeric", month: "short", day: "numeric" }) : "—"}
+                                                        </TableCell>
+                                                        <TableCell className="text-xs">{p.plan_name ?? "—"}</TableCell>
+                                                        <TableCell>
+                                                            <Badge variant="secondary" className="text-xs">
+                                                                {p.billing_reason === "subscription_cycle" ? "Renewal" : p.billing_reason === "one_off" ? "One-off" : p.billing_reason ?? "—"}
+                                                            </Badge>
+                                                        </TableCell>
+                                                        <TableCell className="text-right text-xs tabular-nums">{formatCurrency(p.subtotal)}</TableCell>
+                                                        <TableCell className="text-right text-xs tabular-nums text-muted-foreground">{p.gst_amount > 0 ? formatCurrency(p.gst_amount) : "—"}</TableCell>
+                                                        <TableCell className="text-right text-xs tabular-nums text-muted-foreground">{p.pst_amount > 0 ? formatCurrency(p.pst_amount) : "—"}</TableCell>
+                                                        <TableCell className="text-right text-xs tabular-nums text-muted-foreground">{p.hst_amount > 0 ? formatCurrency(p.hst_amount) : "—"}</TableCell>
+                                                        <TableCell className="text-right text-xs font-semibold tabular-nums">{formatCurrency(p.amount)}</TableCell>
+                                                    </TableRow>
+                                                ))}
+                                            </TableBody>
+                                        </Table>
+                                    )}
                                 </TabsContent>
                             </div>
                         </Tabs>

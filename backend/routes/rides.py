@@ -757,6 +757,37 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
         all_drivers = [d for d in all_drivers if d["id"] not in _skip_ids]
         logger.info(f"[DISPATCH] skipped {len(_skip_ids)} driver(s) with recent timeout/decline for ride {ride_id}")
 
+    # Subscription guard: if the ride's service area requires a Spinr Pass,
+    # filter out candidates without an active subscription.  One batch IN
+    # query — no N+1 per driver.  Fails open on DB error so a transient fault
+    # cannot halt dispatch entirely; the accept_ride guard is the backstop.
+    if all_drivers and ride.get("service_area_id"):
+        try:
+            _disp_area = await db_supabase.find_one("service_areas", {"id": ride["service_area_id"]})
+            if _disp_area and _disp_area.get("subscription_required"):
+                _candidate_ids = [d["id"] for d in all_drivers]
+                _active_subs = await db_supabase.get_rows(
+                    "driver_subscriptions",
+                    {"driver_id": {"$in": _candidate_ids}, "status": "active"},
+                    columns="driver_id",
+                    limit=len(_candidate_ids),
+                )
+                _subscribed_ids = {s["driver_id"] for s in (_active_subs or [])}
+                _before = len(all_drivers)
+                all_drivers = [d for d in all_drivers if d["id"] in _subscribed_ids]
+                logger.info(
+                    "[DISPATCH] subscription filter: area=%s kept %d/%d drivers",
+                    ride["service_area_id"],
+                    len(all_drivers),
+                    _before,
+                )
+        except Exception:
+            logger.error(
+                "[DISPATCH] subscription filter failed for area=%s — dispatching unfiltered",
+                ride.get("service_area_id"),
+                exc_info=True,
+            )
+
     # Pure filter+rank: drops orphan/no-location/low-rated drivers and
     # attaches per-driver distance. Pure function — no I/O.
     drivers_with_distance = filter_and_rank_drivers(ride, all_drivers, algorithm, min_rating, search_radius)
@@ -5267,7 +5298,9 @@ async def rider_complete_ride(
                 from utils.quest_tracker import update_quest_progress_on_ride_complete
             asyncio.create_task(update_quest_progress_on_ride_complete(driver_id, completed_ride or ride))
         except Exception:
-            logger.error("rider_complete_ride: scheduling quest progress update failed for ride %s", ride_id, exc_info=True)
+            logger.error(
+                "rider_complete_ride: scheduling quest progress update failed for ride %s", ride_id, exc_info=True
+            )
 
     return completed_ride or ride
 

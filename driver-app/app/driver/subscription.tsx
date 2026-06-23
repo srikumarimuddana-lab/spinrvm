@@ -240,6 +240,20 @@ export default function SubscriptionScreen() {
     );
   };
 
+  const [resendingId, setResendingId] = useState<string | null>(null);
+
+  const resendInvoice = async (paymentId: string) => {
+    setResendingId(paymentId);
+    try {
+      await api.post(`/drivers/subscription/payments/${paymentId}/resend-invoice`);
+      showToast('success', 'Invoice Sent', 'Invoice emailed to your address on file.');
+    } catch (e: any) {
+      showToast('error', 'Error', e.response?.data?.detail || 'Failed to send invoice');
+    } finally {
+      setResendingId(null);
+    }
+  };
+
   const getDurationLabel = (days: number) => {
     if (days === 1) return 'Day';
     if (days === 7) return 'Week';
@@ -425,6 +439,17 @@ export default function SubscriptionScreen() {
                       {'  ·  PST $'}{parseFloat(p.pst_amount).toFixed(2)}
                     </Text>
                   )}
+                  <TouchableOpacity
+                    onPress={() => resendInvoice(p.id)}
+                    disabled={resendingId === p.id}
+                    style={styles.resendBtn}
+                  >
+                    {resendingId === p.id ? (
+                      <ActivityIndicator size="small" color={colors.primary} />
+                    ) : (
+                      <Text style={[styles.resendText, { color: colors.primary }]}>Send Invoice</Text>
+                    )}
+                  </TouchableOpacity>
                 </View>
                 <View style={styles.paymentAmountCol}>
                   <Text style={styles.paymentAmount}>
@@ -541,6 +566,8 @@ function createStyles(colors: ThemeColors) {
     paymentPlan: { fontSize: 14, fontWeight: '600', color: colors.text },
     paymentMeta: { fontSize: 12, color: colors.textDim, marginTop: 2 },
     paymentTax: { fontSize: 11, color: colors.textDim, marginTop: 3, opacity: 0.8 },
+    resendBtn: { marginTop: 6, alignSelf: 'flex-start' },
+    resendText: { fontSize: 12, fontWeight: '600' },
     paymentAmountCol: { alignItems: 'flex-end', flexShrink: 0 },
     paymentAmount: { fontSize: 15, fontWeight: '700', color: colors.text },
     paymentCurrency: { fontSize: 10, color: colors.textDim, marginTop: 1 },

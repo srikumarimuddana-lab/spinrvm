@@ -308,7 +308,40 @@ class DispatchService:
             return rows
         if not present:
             return rows
-        return [d for d in rows if d["id"] in present]
+        rows = [d for d in rows if d["id"] in present]
+
+        # Subscription guard: if the ride's service area requires a Spinr Pass,
+        # filter out drivers who don't have an active subscription.
+        # One area lookup + one batch IN-query — no N+1 per driver.
+        if rows and ride.get("service_area_id"):
+            try:
+                _area = await self.db.find_one("service_areas", {"id": ride["service_area_id"]})
+                if _area and _area.get("subscription_required"):
+                    candidate_ids = [d["id"] for d in rows]
+                    active_subs = await self.db.get_rows(
+                        "driver_subscriptions",
+                        {"driver_id": {"$in": candidate_ids}, "status": "active"},
+                        columns="driver_id",
+                        limit=len(candidate_ids),
+                    )
+                    subscribed_ids = {s["driver_id"] for s in (active_subs or [])}
+                    rows = [d for d in rows if d["id"] in subscribed_ids]
+                    logger.info(
+                        "Subscription filter: area=%s kept %d/%d drivers",
+                        ride["service_area_id"],
+                        len(rows),
+                        len(candidate_ids),
+                    )
+            except Exception:
+                # Fail open: a DB error here must not block dispatch entirely.
+                # The go-online check is the primary enforcement gate.
+                logger.error(
+                    "Subscription filter failed for area=%s — dispatching unfiltered",
+                    ride.get("service_area_id"),
+                    exc_info=True,
+                )
+
+        return rows
 
     async def assign_driver_to_ride(self, ride_id: str, driver_id: str, now) -> None:
         """

@@ -68,11 +68,11 @@ export default function EmergencyContactsScreen() {
     const trimmedPhone = phone.trim().replace(/\D/g, '');
 
     if (!trimmedName) {
-      showToast('info', 'Missing Name', 'Please enter a contact name.');
+      showToast('warning', 'Missing Name', 'Please enter a contact name.');
       return;
     }
     if (trimmedPhone.length < 10) {
-      showToast('info', 'Invalid Phone', 'Please enter a valid phone number (at least 10 digits).');
+      showToast('warning', 'Invalid Phone', 'Please enter a valid phone number (at least 10 digits).');
       return;
     }
 

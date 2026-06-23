@@ -79,11 +79,11 @@ export default function ReportSafetyScreen() {
 
     const handleSubmit = async () => {
         if (!category) {
-            showToast('info', 'Category Required', 'Please select a category for your safety report.');
+            showToast('warning', 'Category Required', 'Please select a category for your safety report.');
             return;
         }
         if (!issue.trim()) {
-            showToast('info', 'Description Required', 'Please describe the safety issue before submitting.');
+            showToast('warning', 'Description Required', 'Please describe the safety issue before submitting.');
             return;
         }
 

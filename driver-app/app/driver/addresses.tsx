@@ -123,7 +123,7 @@ export default function AddressesScreen() {
             // Geocode the address to get real coordinates
             const coords = await geocodeAddress(newAddress.address.trim());
             if (!coords) {
-                showToast('info', 'Address not found', 'We could not locate that address on the map. Please enter a more specific address (include city/province).');
+                showToast('warning', 'Address not found', 'We could not locate that address on the map. Please enter a more specific address (include city/province).');
                 return;
             }
 

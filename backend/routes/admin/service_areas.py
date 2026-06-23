@@ -157,6 +157,7 @@ class ServiceAreaCreateRequest(BaseModel):
     hst_rate: float = Field(default=0.0, ge=0, le=100)
     spinr_pass_enabled: bool = True
     subscription_plan_ids: List[str] = []
+    subscription_required: bool = False
     driver_matching_algorithm: str = "nearest"
     search_radius_km: float = Field(default=10.0, ge=1, le=100)
     min_driver_rating: float = Field(default=4.0, ge=1.0, le=5.0)
@@ -196,6 +197,7 @@ class ServiceAreaUpdateRequest(BaseModel):
     required_documents: Optional[Any] = None
     spinr_pass_enabled: Optional[bool] = None
     subscription_plan_ids: Optional[List[str]] = None
+    subscription_required: Optional[bool] = None
     driver_matching_algorithm: Optional[str] = None
     search_radius_km: Optional[float] = Field(default=None, ge=1, le=100)
     min_driver_rating: Optional[float] = Field(default=None, ge=1.0, le=5.0)
@@ -414,6 +416,7 @@ async def admin_create_service_area(area: ServiceAreaCreateRequest, admin: dict 
         "hst_rate": area.hst_rate,
         "spinr_pass_enabled": area.spinr_pass_enabled,
         "subscription_plan_ids": area.subscription_plan_ids,
+        "subscription_required": area.subscription_required,
         "driver_matching_algorithm": area.driver_matching_algorithm,
         "search_radius_km": area.search_radius_km,
         "min_driver_rating": area.min_driver_rating,
@@ -538,6 +541,7 @@ async def admin_update_service_area(
         "required_documents",
         "spinr_pass_enabled",
         "subscription_plan_ids",
+        "subscription_required",
         "driver_matching_algorithm",
         "search_radius_km",
         "min_driver_rating",

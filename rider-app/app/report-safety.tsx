@@ -24,7 +24,7 @@ export default function ReportSafetyScreen() {
 
     const handleSubmit = async () => {
         if (!issue.trim()) {
-            showToast('Error', 'Please describe the safety issue before submitting.', 'warning');
+            showToast('Description Required', 'Please describe the safety issue before submitting.', 'warning');
             return;
         }
 
@@ -34,7 +34,7 @@ export default function ReportSafetyScreen() {
             showToast('Report Submitted', 'Your safety report has been submitted. Our trust and safety team will review it immediately.', 'success');
             router.back();
         } catch (e) {
-            showToast('Error', 'Failed to submit report. Please try again.', 'danger');
+            showToast('Submit Failed', 'Failed to submit report. Please try again.', 'danger');
             setSubmitting(false);
         }
     };

@@ -54,7 +54,7 @@ export default function NotificationsScreen() {
     const iconMap: Record<string, { name: string; color: string }> = {
         ride_update: { name: 'car', color: colors.primary },
         ride: { name: 'car', color: colors.primary },
-        earnings: { name: 'wallet', color: colors.gold },
+        earnings: { name: 'wallet', color: colors.orange },
         promotion: { name: 'gift', color: colors.orange },
         general: { name: 'notifications', color: colors.textDim },
         system: { name: 'settings', color: colors.textDim },

@@ -134,7 +134,7 @@ export default function StripeOnboardingScreen() {
         if (exitedRef.current) return;
         exitedRef.current = true;
         clearTimer();
-        if (opts.message) showToast(opts.type ?? 'info', opts.type === 'error' ? 'Error' : 'Done', opts.message);
+        if (opts.message) showToast(opts.type ?? 'success', opts.type === 'error' ? 'Verification Failed' : 'Verification Complete', opts.message);
         if (opts.refresh) void refetch();
         router.back();
     };

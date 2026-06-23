@@ -68,11 +68,11 @@ export default function EmergencyContactsScreen() {
     const trimmedPhone = phone.trim().replace(/\D/g, '');
 
     if (!trimmedName) {
-      showToast('info', 'Missing Name', 'Please enter a contact name.');
+      showToast('warning', 'Missing Name', 'Please enter a contact name.');
       return;
     }
     if (trimmedPhone.length < 10) {
-      showToast('info', 'Invalid Phone', 'Please enter a valid phone number (at least 10 digits).');
+      showToast('warning', 'Invalid Phone', 'Please enter a valid phone number (at least 10 digits).');
       return;
     }
 
@@ -91,7 +91,7 @@ export default function EmergencyContactsScreen() {
       showToast('success', 'Contact Added', `${trimmedName} has been added as an emergency contact.`);
     } catch (error: any) {
       const msg = error?.response?.data?.detail || 'Could not add contact.';
-      showToast('error', 'Error', msg);
+      showToast('error', 'Could Not Add', msg);
     } finally {
       setSaving(false);
     }
@@ -111,7 +111,7 @@ export default function EmergencyContactsScreen() {
               await api.delete(`/users/emergency-contacts/${contact.id}`);
               await fetchContacts();
             } catch {
-              showToast('error', 'Error', 'Could not remove contact.');
+              showToast('error', 'Remove Failed', 'Could not remove contact.');
             }
           },
         },

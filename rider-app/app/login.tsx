@@ -47,7 +47,7 @@ export default function LoginScreen() {
       if (response.data.success) {
         router.push({ pathname: '/otp', params: { phoneNumber: formattedNumber } } as any);
       } else {
-        showToast('Failed', 'Could not send verification code. Please try again.', 'danger');
+        showToast('Code Not Sent', 'Could not send verification code. Please try again.', 'danger');
       }
     } catch (error: any) {
       showToast('Connection Error', error.response?.data?.detail || 'Unable to reach server. Please check your connection.', 'danger');

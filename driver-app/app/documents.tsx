@@ -71,7 +71,7 @@ export default function DocumentsScreen() {
             setRequirements(reqRes.data as Requirement[]);
             setDocuments(docRes.data as DriverDocument[]);
         } catch (err: any) {
-            showToast('error', 'Error', `Failed to load documents: ${err.message}`);
+            showToast('error', 'Load Failed', 'Failed to load your documents. Please check your connection and try again.');
         } finally {
             setLoading(false);
         }
@@ -203,13 +203,13 @@ export default function DocumentsScreen() {
             if (useCamera) {
                 const { status } = await ImagePicker.requestCameraPermissionsAsync();
                 if (status !== 'granted') {
-                    showToast('info', 'Permission needed', 'Camera permission is required to take photos.');
+                    showToast('warning', 'Permission needed', 'Camera permission is required to take photos.');
                     return;
                 }
             } else {
                 const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
                 if (status !== 'granted') {
-                    showToast('info', 'Permission needed', 'Gallery permission is required to upload photos.');
+                    showToast('warning', 'Permission needed', 'Gallery permission is required to upload photos.');
                     return;
                 }
             }

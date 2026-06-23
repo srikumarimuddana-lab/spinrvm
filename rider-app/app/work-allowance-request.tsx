@@ -56,7 +56,7 @@ export default function WorkAllowanceRequestScreen() {
       setReason('');
     } catch (e: any) {
       const msg = e?.response?.data?.detail || e?.message || 'Failed to submit request';
-      showToast('Error', msg, 'danger');
+      showToast('Request Failed', msg, 'danger');
     } finally {
       setSubmitting(false);
     }

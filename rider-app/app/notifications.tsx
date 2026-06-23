@@ -38,13 +38,13 @@ function getTypeIcon(type: string): { name: string; color: string } {
   switch (type) {
     case 'ride_update':
     case 'ride':
-      return { name: 'car', color: '' }; // primary color — filled at render time
+      return { name: 'car', color: '' }; // colors.primary — filled at render time
     case 'promotion':
-      return { name: 'gift', color: '#F59E0B' };
+      return { name: 'gift', color: '' }; // colors.orange — filled at render time
     case 'safety':
-      return { name: 'shield-checkmark', color: '#DC2626' };
+      return { name: 'shield-checkmark', color: '' }; // colors.danger — filled at render time
     default:
-      return { name: 'notifications', color: '' }; // textDim — filled at render time
+      return { name: 'notifications', color: '' }; // colors.textDim — filled at render time
   }
 }
 
@@ -110,9 +110,14 @@ export default function NotificationsScreen() {
 
   const renderNotification = ({ item }: { item: AppNotification }) => {
     const typeInfo = getTypeIcon(item.type);
-    const iconColor = typeInfo.color || (
-      typeInfo.name === 'car' ? colors.primary : colors.textDim
-    );
+    const iconColor = typeInfo.color || (() => {
+      switch (typeInfo.name) {
+        case 'car': return colors.primary;
+        case 'gift': return colors.orange;
+        case 'shield-checkmark': return colors.danger;
+        default: return colors.textDim;
+      }
+    })();
 
     return (
       <TouchableOpacity

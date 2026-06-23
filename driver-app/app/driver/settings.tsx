@@ -110,7 +110,7 @@ export default function SettingsScreen() {
             await api.post('/drivers/me/export-data');
             showToast('success', 'Export Requested', 'Your data export is on its way — check your email.');
         } catch {
-            showToast('error', 'Error', 'Failed to request data export. Please try again.');
+            showToast('error', 'Export Failed', 'Failed to request data export. Please try again.');
         } finally {
             setExportingData(false);
         }
@@ -129,7 +129,7 @@ export default function SettingsScreen() {
 
     const executeDelete = async () => {
         if (deleteInput.trim().toUpperCase() !== 'DELETE') {
-            showToast('info', 'Not Confirmed', 'You must type DELETE to confirm account deletion.');
+            showToast('warning', 'Not Confirmed', 'You must type DELETE to confirm account deletion.');
             return;
         }
         try {
@@ -144,7 +144,7 @@ export default function SettingsScreen() {
             router.replace('/login' as any);
         } catch (err: any) {
             setShowDeleteStep2(false);
-            showToast('error', 'Error', err.message || 'Failed to delete account. Please contact support.');
+            showToast('error', 'Delete Failed', 'Could not delete account. Please contact support.');
         }
     };
 

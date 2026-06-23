@@ -239,7 +239,7 @@ export default function QuestsScreen() {
               const cur = num(m.current_value), tgt = num(q.target_value);
               const pct = tgt > 0 ? pctOf(cur, tgt) : pctOf(num(m.progress_pct), 100);
               const completed = m.status === 'completed', claimed = m.status === 'claimed', expired = m.status === 'expired';
-              const tone = claimed ? colors.gold : completed ? colors.success : expired ? colors.textSecondary : colors.primary;
+              const tone = claimed ? colors.success : completed ? colors.success : expired ? colors.textSecondary : colors.primary;
               const rem = timeLeft(q.end_date);
               return (
                 <View key={m.progress_id || `m${i}`} style={[styles.card, completed && { borderColor: colors.success, borderWidth: 1.5 }]}>
@@ -266,8 +266,8 @@ export default function QuestsScreen() {
 
                   <View style={styles.meta}>
                     <View style={styles.metaItem}>
-                      <Ionicons name="gift-outline" size={14} color={colors.gold} />
-                      <Text style={[styles.metaText, { color: colors.gold, fontWeight: '700' }]}>{money(q.reward_amount)} {q.reward_type === 'cash' ? 'cash' : 'wallet credit'}</Text>
+                      <Ionicons name="gift-outline" size={14} color={colors.orange} />
+                      <Text style={[styles.metaText, { color: colors.orange, fontWeight: '700' }]}>{money(q.reward_amount)} {q.reward_type === 'cash' ? 'cash' : 'wallet credit'}</Text>
                     </View>
                     {!claimed && !expired && (
                       <View style={styles.metaItem}>
@@ -288,9 +288,9 @@ export default function QuestsScreen() {
                     </TouchableOpacity>
                   )}
                   {claimed && (
-                    <View style={[styles.pill, { backgroundColor: colors.gold + '1A' }]}>
-                      <Ionicons name="checkmark-done-circle" size={16} color={colors.gold} />
-                      <Text style={[styles.pillText, { color: colors.gold }]}>Reward added to your wallet</Text>
+                    <View style={[styles.pill, { backgroundColor: colors.successBg }]}>
+                      <Ionicons name="checkmark-done-circle" size={16} color={colors.success} />
+                      <Text style={[styles.pillText, { color: colors.success }]}>Reward added to your wallet</Text>
                     </View>
                   )}
                 </View>
@@ -370,7 +370,7 @@ function createStyles(colors: ThemeColors) {
     titleWrap: { flex: 1 },
     cardTitle: { fontSize: 16, fontWeight: '800', color: colors.text },
     cardSub: { fontSize: 13, color: colors.textSecondary, marginTop: 2 },
-    coin: { alignItems: 'center', backgroundColor: colors.gold + '22', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 6, marginLeft: 8 },
+    coin: { alignItems: 'center', backgroundColor: colors.orange + '18', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 6, marginLeft: 8 },
     coinAmt: { fontSize: 16, fontWeight: '900', color: colors.orange },
     coinLbl: { fontSize: 10, fontWeight: '700', color: colors.orange, marginTop: 1, textTransform: 'uppercase', letterSpacing: 0.4 },
 

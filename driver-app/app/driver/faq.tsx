@@ -13,11 +13,11 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { ScreenHeader } from '../../components/ScreenHeader';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
     UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -111,31 +111,24 @@ export default function FaqScreen() {
 
     return (
         <View style={styles.container}>
-            {/* Header */}
-            <LinearGradient
-                colors={[colors.surface, colors.background]}
-                style={[styles.header, { paddingTop: insets.top + 12 }]}
-            >
-                <View style={styles.headerRow}>
-                    <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-                        <Ionicons name="arrow-back" size={22} color={colors.text} />
-                    </TouchableOpacity>
-                    <Text style={styles.headerTitle}>Help Center</Text>
+            <ScreenHeader
+                title="Help Center"
+                rightAction={
                     <TouchableOpacity
                         onPress={() => router.push('/driver/help' as any)}
                         style={styles.chatBtn}
                     >
-                        <Ionicons name="chatbubble-ellipses-outline" size={22} color={colors.primary} />
+                        <Ionicons name="chatbubble-ellipses-outline" size={22} color="#fff" />
                     </TouchableOpacity>
-                </View>
-
+                }
+            >
                 {/* Search bar */}
                 <View style={styles.searchRow}>
-                    <Ionicons name="search" size={18} color={colors.textDim} style={styles.searchIcon} />
+                    <Ionicons name="search" size={18} color="#fff" style={styles.searchIcon} />
                     <TextInput
                         style={styles.searchInput}
                         placeholder="Search questions..."
-                        placeholderTextColor={colors.textDim}
+                        placeholderTextColor="rgba(255,255,255,0.7)"
                         value={search}
                         onChangeText={setSearch}
                         returnKeyType="search"
@@ -143,11 +136,11 @@ export default function FaqScreen() {
                     />
                     {search.length > 0 && (
                         <TouchableOpacity onPress={() => setSearch('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                            <Ionicons name="close-circle" size={18} color={colors.textDim} />
+                            <Ionicons name="close-circle" size={18} color="#fff" />
                         </TouchableOpacity>
                     )}
                 </View>
-            </LinearGradient>
+            </ScreenHeader>
 
             {loading ? (
                 <ActivityIndicator size="large" color={colors.primary} style={{ marginTop: 60 }} />
@@ -231,25 +224,6 @@ function createStyles(colors: ThemeColors) {
     return StyleSheet.create({
         container: { flex: 1, backgroundColor: colors.background },
 
-        header: {
-            paddingBottom: 16,
-            paddingHorizontal: 16,
-        },
-        headerRow: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            marginBottom: 14,
-        },
-        backBtn: {
-            width: 40,
-            height: 40,
-            borderRadius: 20,
-            backgroundColor: colors.surfaceLight,
-            justifyContent: 'center',
-            alignItems: 'center',
-        },
-        headerTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
         chatBtn: {
             width: 40,
             height: 40,
@@ -260,17 +234,16 @@ function createStyles(colors: ThemeColors) {
         searchRow: {
             flexDirection: 'row',
             alignItems: 'center',
-            backgroundColor: colors.surface,
+            backgroundColor: 'rgba(255,255,255,0.18)',
             borderRadius: 12,
             paddingHorizontal: 12,
-            borderWidth: 1,
-            borderColor: colors.border,
+            marginTop: 12,
             height: 44,
         },
         searchIcon: { marginRight: 8 },
         searchInput: {
             flex: 1,
-            color: colors.text,
+            color: '#fff',
             fontSize: 15,
             paddingVertical: 0,
         },

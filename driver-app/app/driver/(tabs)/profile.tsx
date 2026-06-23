@@ -31,6 +31,7 @@ import { showToast } from '../../../hooks/useToast';
 import * as Clipboard from 'expo-clipboard';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { ScreenHeader } from '../../../components/ScreenHeader';
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -652,13 +653,7 @@ export default function ProfileScreen() {
           <LinearGradient colors={[colors.surface, '#F8F9FA']} style={StyleSheet.absoluteFill} />
 
           {/* Header */}
-          <View style={[modalStyles.header, { paddingTop: insets.top + 12 }]}>
-            <TouchableOpacity onPress={() => setShowEditModal(false)} style={modalStyles.backBtn}>
-              <Ionicons name="arrow-back" size={24} color={colors.text} />
-            </TouchableOpacity>
-            <Text style={modalStyles.headerTitle}>Personal Information</Text>
-            <View style={{ width: 32 }} />
-          </View>
+          <ScreenHeader title="Personal Information" onBack={() => setShowEditModal(false)} />
 
           <KeyboardAvoidingView
             style={{ flex: 1 }}

@@ -3,7 +3,6 @@ import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator
 import { showToast } from '../hooks/useToast';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
-import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -12,6 +11,7 @@ import { useAuthStore } from '@shared/store/authStore';
 import SpinrConfig from '@shared/config/spinr.config';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { ScreenHeader } from '../components/ScreenHeader';
 
 
 // Derive a proper MIME type from a file URI / name.
@@ -52,7 +52,6 @@ interface DriverDocument {
 }
 
 export default function DocumentsScreen() {
-    const router = useRouter();
     const insets = useSafeAreaInsets();
     const { driver, fetchDriverProfile } = useAuthStore();
     const { colors } = useTheme();
@@ -325,13 +324,7 @@ export default function DocumentsScreen() {
     return (
         <View style={styles.container}>
             <StatusBar barStyle="dark-content" />
-            <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
-                <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-                    <Ionicons name="arrow-back" size={24} color="#000" />
-                </TouchableOpacity>
-                <Text style={styles.headerTitle}>Documents</Text>
-                <View style={{ width: 24 }} />
-            </View>
+            <ScreenHeader title="Documents" />
 
             <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 40 }]}>
                 <View style={styles.infoBox}>
@@ -600,18 +593,6 @@ function createStyles(colors: ThemeColors) {
     return StyleSheet.create({
         container: { flex: 1, backgroundColor: colors.background },
         center: { justifyContent: 'center', alignItems: 'center' },
-        header: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            paddingBottom: 20,
-            paddingHorizontal: 20,
-            backgroundColor: colors.surface,
-            borderBottomWidth: 1,
-            borderBottomColor: colors.border,
-        },
-        backBtn: { padding: 4 },
-        headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
         content: { padding: 20 },
         infoBox: {
             flexDirection: 'row',

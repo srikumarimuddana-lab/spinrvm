@@ -3442,6 +3442,16 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
                             "driver_subscriptions", {"id": _active_sub["id"]}, {"status": "expired"}
                         )
                         _active_sub = None
+                # Service-area scope check: a pass from another area must not
+                # satisfy enforcement in this area. Plans with a null or empty
+                # service_areas list apply globally; non-empty lists are explicit
+                # allowlists (same logic used by get_subscription_plans).
+                if _active_sub and ride.get("service_area_id"):
+                    _sub_plan = await db_supabase.find_one("subscription_plans", {"id": _active_sub.get("plan_id")})
+                    if _sub_plan:
+                        _plan_areas = _sub_plan.get("service_areas")
+                        if _plan_areas and ride["service_area_id"] not in _plan_areas:
+                            _active_sub = None
                 if not _active_sub:
                     raise SpinrException(
                         message="An active Spinr Pass subscription is required to accept rides in this area.",

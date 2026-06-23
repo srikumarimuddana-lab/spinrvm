@@ -10,22 +10,34 @@
 -- intentionally narrow: rows that were explicitly set to 30 days via the new admin
 -- UI (after migration 181) are left alone because they already carry the right value.
 --
+-- The UPDATE is wrapped in a DO block so environments built from migration 09
+-- (which never had billing_period) don't raise "undefined_column" and halt
+-- the migration runner — the block checks information_schema first.
+--
 -- Rollback: no-op (values are already stored; re-run with inverted CASE if needed).
 
-UPDATE public.subscription_plans
-SET duration_days = CASE billing_period
-    WHEN 'daily'   THEN 1
-    WHEN 'weekly'  THEN 7
-    WHEN 'monthly' THEN 30
-    WHEN 'yearly'  THEN 365
-    ELSE 30
-END
-WHERE
-    -- billing_period column exists only on tables created by migration 08;
-    -- migration 09 tables never had billing_period so this WHERE is a no-op there.
-    billing_period IS NOT NULL
-    AND billing_period <> 'monthly'
-    AND duration_days = 30;  -- only fix rows still carrying the migration-set default
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name   = 'subscription_plans'
+          AND column_name  = 'billing_period'
+    ) THEN
+        UPDATE public.subscription_plans
+        SET duration_days = CASE billing_period
+            WHEN 'daily'   THEN 1
+            WHEN 'weekly'  THEN 7
+            WHEN 'monthly' THEN 30
+            WHEN 'yearly'  THEN 365
+            ELSE 30
+        END
+        WHERE
+            billing_period IS NOT NULL
+            AND billing_period <> 'monthly'
+            AND duration_days = 30;
+    END IF;
+END $$;
 
 COMMENT ON COLUMN public.subscription_plans.duration_days IS
     'Plan length in days: 1=daily, 7=weekly, 30=monthly, 365=yearly. '

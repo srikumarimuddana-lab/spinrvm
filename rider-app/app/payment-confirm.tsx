@@ -202,7 +202,7 @@ function PaymentConfirmScreenContent() {
           ],
         });
       } else {
-        showToast('Error', error.message || 'Failed to book ride', 'danger');
+        showToast('Booking Failed', 'Could not complete your booking. Please try again.', 'danger');
       }
     } finally {
       setIsBooking(false);

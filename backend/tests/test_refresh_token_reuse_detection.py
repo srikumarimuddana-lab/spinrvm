@@ -96,6 +96,63 @@ async def test_revoked_token_replay_triggers_cascade_and_returns_none():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Rotation-race grace window — benign retries must NOT cascade (incident fix)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _recently_revoked_rotated_row(**over) -> dict:
+    """A token revoked by NORMAL rotation moments ago (replaced_by set, fresh
+    revoked_at) — i.e. a client retry / concurrent-refresh race."""
+    from datetime import datetime, timezone
+
+    row = _revoked_row()
+    row["revoked_at"] = datetime.now(timezone.utc).isoformat()
+    row["replaced_by"] = "rtk-newer-002"
+    row.update(over)
+    return row
+
+
+@pytest.mark.asyncio
+async def test_benign_rotation_replay_within_grace_does_not_cascade():
+    """A just-rotated token replayed within the grace window (lost rotation
+    response / two near-simultaneous refreshes) must return a clean 401 WITHOUT
+    the cascade. This is the regression for the mass-logout + perpetual-WS-
+    reconnect incident."""
+    cascade_mock = AsyncMock()
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=_recently_revoked_rotated_row())),
+        patch("utils.refresh_tokens._handle_refresh_token_reuse", cascade_mock),
+    ):
+        from utils.refresh_tokens import lookup_refresh_token
+
+        result = await lookup_refresh_token("rotated-raw")
+
+    assert result is None, "benign replay still returns None (no oracle), just no cascade"
+    cascade_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_recent_revocation_without_rotation_still_cascades():
+    """A token revoked WITHOUT a replacement (explicit logout / a prior
+    cascade), even moments ago, is a real signal — replaying it MUST still
+    cascade. The grace applies only to rotated-forward tokens."""
+    cascade_mock = AsyncMock()
+    row = _recently_revoked_rotated_row(replaced_by=None)
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=row)),
+        patch("utils.refresh_tokens._handle_refresh_token_reuse", cascade_mock),
+    ):
+        from utils.refresh_tokens import lookup_refresh_token
+
+        result = await lookup_refresh_token("logged-out-raw")
+
+    assert result is None
+    cascade_mock.assert_called_once()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Cascade for rider audience bumps users.token_version
 # ─────────────────────────────────────────────────────────────────────────────
 

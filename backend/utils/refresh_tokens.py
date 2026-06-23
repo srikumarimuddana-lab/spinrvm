@@ -49,6 +49,52 @@ _ADMIN_STAFF_AUDIENCES = {"admin"}
 # exceeds any practical brute-force budget.
 _REFRESH_TOKEN_BYTES = 48
 
+# Grace window for refresh-token ROTATION races. Every successful /auth/refresh
+# revokes the token it rotated from (issue_refresh_token(..., replaces=...) sets
+# revoked_at + replaced_by). A client that retries after a lost rotation
+# response, or fires two near-simultaneous refreshes, then legitimately replays
+# that JUST-rotated token. Treating that as theft runs the full cascade —
+# token_version bump + revoke-all + WS kick — which logs every device out and
+# wedges live driver sockets on "Reconnecting…". Within this window a replay of
+# a rotated-forward token is treated as a benign race (clean 401, no cascade); a
+# stolen token replayed later, or a token revoked WITHOUT rotation (explicit
+# logout / a prior cascade), still escalates.
+REFRESH_REUSE_GRACE_SECONDS = 60
+
+
+def _parse_iso_dt(value) -> Optional[datetime]:
+    """Parse a tz-aware UTC datetime from a DB timestamp value, or None."""
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str):
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return None
+
+
+def _is_benign_rotation_replay(row: dict) -> bool:
+    """True when a revoked-token replay is a normal rotation race, not theft.
+
+    Requires BOTH:
+      • ``replaced_by`` is set — the token was rotated forward by a successful
+        refresh. A token revoked WITHOUT a replacement was killed by an explicit
+        logout or a prior cascade, and replaying that is always a real signal.
+      • It was revoked within ``REFRESH_REUSE_GRACE_SECONDS`` — a stolen token
+        replayed minutes/hours later still escalates.
+    """
+    if not row.get("replaced_by"):
+        return False
+    revoked_at = _parse_iso_dt(row.get("revoked_at"))
+    if not revoked_at:
+        return False
+    age = (datetime.now(timezone.utc) - revoked_at).total_seconds()
+    return 0 <= age <= REFRESH_REUSE_GRACE_SECONDS
+
 
 def _hash_refresh_token(raw: str) -> str:
     """sha256 hex of the raw refresh token.
@@ -143,6 +189,22 @@ async def lookup_refresh_token(raw: str) -> Optional[dict]:
     # every session for the user, bump token_version (kills in-flight
     # access tokens), and write a high-signal audit_logs row.
     if row.get("revoked_at"):
+        # Replaying a revoked token is the OAuth2 BCP §4.14.2 theft signal — but
+        # normal rotation also revokes the prior token, so a client retry (lost
+        # rotation response) or two near-simultaneous refreshes legitimately
+        # replay a just-rotated token. Escalating that mass-revokes every
+        # session (token_version bump) and wedges live WebSockets. Suppress the
+        # cascade for a benign rotation race inside the grace window; a real
+        # theft replay (outside the window, or a non-rotated revocation) still
+        # cascades. Either way the client gets a generic 401 (no oracle).
+        if _is_benign_rotation_replay(row):
+            logger.warning(
+                "refresh: benign rotation replay within grace window — "
+                "returning 401 without cascade "
+                f"(row_id={row.get('id')} user_id={row.get('user_id')} "
+                f"audience={row.get('audience')})"
+            )
+            return None
         await _handle_refresh_token_reuse(row)
         return None
 

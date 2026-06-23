@@ -11,6 +11,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request as StarletteRequest
+
+
+def _req() -> StarletteRequest:
+    """A real (header-less) request so @idempotent_endpoint opts out cleanly.
+    A MagicMock here makes request.headers.get() return a Mock, which the
+    decorator then sha256-hashes → TypeError. Empty headers → no Idempotency-Key
+    → the decorator runs the handler normally."""
+    return StarletteRequest(
+        {"type": "http", "method": "POST", "path": "/drivers/payouts/instant", "query_string": b"", "headers": []}
+    )
+
 
 # ── Fee math ─────────────────────────────────────────────────────────────
 
@@ -58,6 +70,10 @@ def _driver(**extra):
         # rule). Default to a valid BN so eligibility tests reach the Stripe path;
         # override with gst_bn=None to exercise the block.
         "gst_bn": "123456789RT0001",
+        # SIN-on-file is the other CRA precondition (enforced right after GST).
+        # Default true so eligibility tests reach the Stripe path; override false
+        # to exercise the SIN block.
+        "stripe_id_number_provided": True,
         **extra,
     }
 
@@ -98,7 +114,7 @@ class TestRequestInstantPayout:
                 asyncio.run(
                     drv.request_instant_payout(
                         req=req,
-                        request=MagicMock(),
+                        request=_req(),
                         current_user={"id": USER_ID},
                     )
                 )
@@ -127,7 +143,7 @@ class TestRequestInstantPayout:
                 asyncio.run(
                     drv.request_instant_payout(
                         req=req,
-                        request=MagicMock(),
+                        request=_req(),
                         current_user={"id": USER_ID},
                     )
                 )
@@ -157,7 +173,7 @@ class TestRequestInstantPayout:
                 asyncio.run(
                     drv.request_instant_payout(
                         req=req,
-                        request=MagicMock(),
+                        request=_req(),
                         current_user={"id": USER_ID},
                     )
                 )
@@ -205,7 +221,7 @@ class TestRequestInstantPayout:
             result = asyncio.run(
                 drv.request_instant_payout(
                     req=req,
-                    request=MagicMock(),
+                    request=_req(),
                     current_user={"id": USER_ID},
                 )
             )
@@ -276,7 +292,7 @@ class TestRequestInstantPayout:
                 asyncio.run(
                     drv.request_instant_payout(
                         req=req,
-                        request=MagicMock(),
+                        request=_req(),
                         current_user={"id": USER_ID},
                     )
                 )
@@ -343,7 +359,7 @@ class TestRequestInstantPayout:
                 asyncio.run(
                     drv.request_instant_payout(
                         req=req,
-                        request=MagicMock(),
+                        request=_req(),
                         current_user={"id": USER_ID},
                     )
                 )
@@ -395,7 +411,7 @@ class TestRequestInstantPayout:
                 asyncio.run(
                     drv.request_instant_payout(
                         req=req,
-                        request=MagicMock(),
+                        request=_req(),
                         current_user={"id": USER_ID},
                     )
                 )

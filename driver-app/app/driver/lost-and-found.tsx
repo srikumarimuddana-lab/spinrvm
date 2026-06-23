@@ -8,13 +8,14 @@ import {
   ActivityIndicator,
   RefreshControl,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { ScreenHeader } from '../../components/ScreenHeader';
 
 interface LostFoundCase {
   id: string;
@@ -64,6 +65,7 @@ const CATEGORY_ICONS: Record<string, string> = {
 export default function DriverLostAndFoundScreen() {
   const router = useRouter();
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   const [cases, setCases] = useState<LostFoundCase[]>([]);
@@ -132,14 +134,8 @@ export default function DriverLostAndFoundScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.back}>
-          <Ionicons name="chevron-back" size={28} color={colors.text} />
-        </TouchableOpacity>
-        <Text style={styles.title}>Lost & Found</Text>
-        <View style={{ width: 44 }} />
-      </View>
+    <View style={styles.container}>
+      <ScreenHeader title="Lost & Found" />
 
       {loading ? (
         <View style={styles.center}>
@@ -159,31 +155,20 @@ export default function DriverLostAndFoundScreen() {
           data={cases}
           keyExtractor={c => c.id}
           renderItem={renderCase}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + 16 }]}
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
           }
         />
       )}
-    </SafeAreaView>
+    </View>
   );
 }
 
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
-    header: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingHorizontal: 16,
-      paddingVertical: 12,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.border,
-    },
-    back: { padding: 4 },
-    title: { fontSize: 18, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text },
     center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 12 },
     emptyTitle: { fontSize: 16, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text },
     emptyHint: { fontSize: 14, color: colors.textDim, textAlign: 'center', lineHeight: 20 },

@@ -15,8 +15,8 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
+import { ScreenHeader } from '../../components/ScreenHeader';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLanguageStore } from '../../store/languageStore';
 import { languages, Language } from '../../i18n';
@@ -185,16 +185,7 @@ export default function SettingsScreen() {
 
     return (
         <View style={styles.container}>
-            {/* Header */}
-            <LinearGradient colors={[colors.surface, colors.background]} style={[styles.header, { paddingTop: insets.top + 12 }]}>
-                <View style={styles.headerRow}>
-                    <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-                        <Ionicons name="arrow-back" size={22} color={colors.text} />
-                    </TouchableOpacity>
-                    <Text style={styles.headerTitle}>Settings</Text>
-                    <View style={{ width: 40 }} />
-                </View>
-            </LinearGradient>
+            <ScreenHeader title="Settings" />
 
             <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 40 }} showsVerticalScrollIndicator={false}>
                 {/* Notifications Section */}
@@ -487,24 +478,6 @@ export default function SettingsScreen() {
 function createStyles(colors: ThemeColors) {
     return StyleSheet.create({
         container: { flex: 1, backgroundColor: colors.background },
-        header: {
-            paddingBottom: 12,
-            paddingHorizontal: 16,
-        },
-        headerRow: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-        },
-        backBtn: {
-            width: 40,
-            height: 40,
-            borderRadius: 20,
-            backgroundColor: colors.surfaceLight,
-            justifyContent: 'center',
-            alignItems: 'center',
-        },
-        headerTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
         section: { paddingHorizontal: 16, marginTop: 20 },
         sectionTitle: {
             color: colors.text,

@@ -25,6 +25,7 @@ import { useAuthStore } from '@shared/store/authStore';
 import { useUpdateDriverMe } from '@shared/hooks/queries';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { ScreenHeader } from '../components/ScreenHeader';
 
 interface VehicleType {
     id: string;
@@ -187,14 +188,7 @@ export default function VehicleInfoScreen() {
         <View style={styles.container}>
             <LinearGradient colors={[colors.background, '#F8F9FA']} style={StyleSheet.absoluteFill} />
 
-            {/* Header */}
-            <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
-                <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-                    <Ionicons name="arrow-back" size={24} color={colors.text} />
-                </TouchableOpacity>
-                <Text style={styles.headerTitle}>Vehicle Information</Text>
-                <View style={{ width: 32 }} />
-            </View>
+            <ScreenHeader title="Vehicle Information" />
 
             <KeyboardAvoidingView
                 style={{ flex: 1 }}
@@ -474,18 +468,6 @@ const FormField: React.FC<FormFieldProps> = ({
 function createStyles(colors: ThemeColors) {
     return StyleSheet.create({
         container: { flex: 1, backgroundColor: colors.background },
-        header: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            paddingBottom: 16,
-            paddingHorizontal: 20,
-            backgroundColor: colors.surface,
-            borderBottomWidth: 1,
-            borderBottomColor: colors.border,
-        },
-        backBtn: { padding: 4, width: 32 },
-        headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text, flex: 1, textAlign: 'center' },
 
         content: { padding: 20 },
 

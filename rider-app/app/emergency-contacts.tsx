@@ -96,7 +96,7 @@ export default function EmergencyContactsScreen() {
       showToast('Contact Added', `${trimmedName} has been added as an emergency contact.`, 'success');
     } catch (error: any) {
       const msg = error?.response?.data?.detail || 'Could not add contact.';
-      showToast('Error', msg, 'danger');
+      showToast('Could Not Add', msg, 'danger');
     } finally {
       setSaving(false);
     }
@@ -117,7 +117,7 @@ export default function EmergencyContactsScreen() {
               await api.delete(`/users/emergency-contacts/${contact.id}`);
               await fetchContacts();
             } catch {
-              showToast('Error', 'Could not remove contact.', 'danger');
+              showToast('Remove Failed', 'Could not remove contact.', 'danger');
             }
           },
         },

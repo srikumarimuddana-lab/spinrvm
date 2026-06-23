@@ -86,8 +86,8 @@ export default function ManageCardsScreen() {
   };
 
   const handleAddCard = async () => {
-    if (!cardDetailsComplete) { showToast('Error', 'Enter complete card details', 'warning'); return; }
-    if (!cardName.trim()) { showToast('Error', 'Enter cardholder name', 'warning'); return; }
+    if (!cardDetailsComplete) { showToast('Missing Details', 'Please enter complete card details', 'warning'); return; }
+    if (!cardName.trim()) { showToast('Missing Name', 'Please enter the cardholder name', 'warning'); return; }
     if (!createPaymentMethod) {
       showToast('Payments unavailable', 'Payment processing is still starting up. Try again in a moment.', 'warning');
       return;
@@ -103,7 +103,7 @@ export default function ManageCardsScreen() {
       });
 
       if (error || !paymentMethod) {
-        showToast('Error', error?.message || 'Could not process card', 'danger');
+        showToast('Processing Failed', error?.message || 'Could not process card. Please try again.', 'danger');
         return;
       }
 
@@ -119,7 +119,7 @@ export default function ManageCardsScreen() {
       fetchCards();
       showToast('Card Added', 'Card added successfully', 'success');
     } catch (err: any) {
-      showToast('Error', err.response?.data?.detail || 'Failed to add card', 'danger');
+      showToast('Card Not Added', err.response?.data?.detail || 'Failed to add card. Please try again.', 'danger');
     } finally {
       setSaving(false);
     }
@@ -145,7 +145,7 @@ export default function ManageCardsScreen() {
       await api.post(`/payments/cards/${cardId}/default`);
       fetchCards();
     } catch {
-      showToast('Error', 'Failed to set default card', 'danger');
+      showToast('Update Failed', 'Could not set default card. Please try again.', 'danger');
     }
   };
 
@@ -164,7 +164,7 @@ export default function ManageCardsScreen() {
               await api.delete(`/payments/cards/${cardId}`);
               fetchCards();
             } catch {
-              showToast('Error', 'Failed to remove card', 'danger');
+              showToast('Remove Failed', 'Could not remove card. Please try again.', 'danger');
             }
           },
         },

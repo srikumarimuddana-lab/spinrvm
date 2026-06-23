@@ -37,10 +37,15 @@ interface Payment {
   id: string;
   plan_name: string;
   amount: string;
+  subtotal: string;
+  gst_amount: string;
+  pst_amount: string;
   currency: string;
   billing_reason: string | null;
   created_at: string;
 }
+
+const PAGE_SIZE = 10;
 
 export default function SubscriptionScreen() {
   const [plans, setPlans] = useState<Plan[]>([]);
@@ -50,6 +55,9 @@ export default function SubscriptionScreen() {
   const [loading, setLoading] = useState(true);
   const [subscribing, setSubscribing] = useState<string | null>(null);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [paymentsTotal, setPaymentsTotal] = useState(0);
+  const [paymentsOffset, setPaymentsOffset] = useState(0);
+  const [paymentsLoadingMore, setPaymentsLoadingMore] = useState(false);
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -97,24 +105,43 @@ export default function SubscriptionScreen() {
       const [plansRes, subRes, paymentsRes] = await Promise.all([
         api.get<{ plans?: Plan[]; free_mode?: boolean; message?: string } | Plan[]>('/drivers/subscription/plans'),
         api.get<any>('/drivers/subscription/current'),
-        api.get<{ payments: Payment[] }>('/drivers/subscription/payments?limit=10').catch(() => ({ data: { payments: [] } })),
+        api.get<{ payments: Payment[]; total: number }>(
+          `/drivers/subscription/payments?limit=${PAGE_SIZE}&offset=0`
+        ).catch(() => ({ data: { payments: [], total: 0 } })),
       ]);
       const data = plansRes.data;
-      // Backend returns {plans, free_mode, message} when Spinr Pass is off
       if (data && typeof data === 'object' && 'free_mode' in data) {
         const d = data as { plans?: Plan[]; free_mode?: boolean; message?: string };
         setPlans(d.plans || []);
         setFreeMode(d.free_mode || false);
         setFreeMessage(d.message || '');
       } else {
-        // Fallback for old response format (plain array)
         setPlans(Array.isArray(data) ? data : []);
         setFreeMode(false);
       }
       setCurrentSub(subRes.data);
-      setPayments(paymentsRes.data?.payments || []);
+      const firstPage = paymentsRes.data?.payments || [];
+      const total = paymentsRes.data?.total || 0;
+      setPayments(firstPage);
+      setPaymentsTotal(total);
+      setPaymentsOffset(firstPage.length);
     } catch (e) { console.log('Sub load error:', e); }
     finally { setLoading(false); }
+  };
+
+  const loadMorePayments = async () => {
+    if (paymentsLoadingMore || paymentsOffset >= paymentsTotal) return;
+    setPaymentsLoadingMore(true);
+    try {
+      const res = await api.get<{ payments: Payment[]; total: number }>(
+        `/drivers/subscription/payments?limit=${PAGE_SIZE}&offset=${paymentsOffset}`
+      );
+      const next = res.data?.payments || [];
+      setPayments(prev => [...prev, ...next]);
+      setPaymentsTotal(res.data?.total || paymentsTotal);
+      setPaymentsOffset(prev => prev + next.length);
+    } catch { /* silent — user can scroll again */ }
+    finally { setPaymentsLoadingMore(false); }
   };
 
   const handleSubscribe = async (plan: Plan) => {
@@ -240,6 +267,12 @@ export default function SubscriptionScreen() {
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 40 }]}
         showsVerticalScrollIndicator={false}
+        onMomentumScrollEnd={({ nativeEvent: { layoutMeasurement, contentOffset, contentSize } }) => {
+          if (layoutMeasurement.height + contentOffset.y >= contentSize.height - 300) {
+            loadMorePayments();
+          }
+        }}
+        scrollEventThrottle={400}
       >
 
         {/* Current Subscription */}
@@ -291,8 +324,10 @@ export default function SubscriptionScreen() {
           return (
             <View key={plan.id} style={[styles.planCard, isCurrentPlan && styles.planCardActive]}>
               {isCurrentPlan && (
-                <View style={styles.currentTag}>
-                  <Text style={styles.currentTagText}>CURRENT</Text>
+                <View style={styles.currentTagRow}>
+                  <View style={styles.currentTag}>
+                    <Text style={styles.currentTagText}>CURRENT</Text>
+                  </View>
                 </View>
               )}
 
@@ -368,7 +403,9 @@ export default function SubscriptionScreen() {
         {payments.length > 0 && (
           <>
             <Text style={styles.sectionTitle}>Payment History</Text>
-            <Text style={styles.sectionSubtitle}>Your last 10 Spinr Pass charges</Text>
+            <Text style={styles.sectionSubtitle}>
+              {paymentsTotal > 0 ? `${paymentsTotal} charge${paymentsTotal === 1 ? '' : 's'} · includes GST & PST` : 'Spinr Pass charges'}
+            </Text>
             {payments.map((p) => (
               <View key={p.id} style={styles.paymentRow}>
                 <View style={styles.paymentIcon}>
@@ -381,12 +418,33 @@ export default function SubscriptionScreen() {
                     {'  ·  '}
                     {formatDate(p.created_at)}
                   </Text>
+                  {p.gst_amount && (
+                    <Text style={styles.paymentTax}>
+                      Subtotal ${parseFloat(p.subtotal).toFixed(2)}
+                      {'  ·  GST $'}{parseFloat(p.gst_amount).toFixed(2)}
+                      {'  ·  PST $'}{parseFloat(p.pst_amount).toFixed(2)}
+                    </Text>
+                  )}
                 </View>
-                <Text style={styles.paymentAmount}>
-                  ${parseFloat(p.amount).toFixed(2)} {p.currency}
-                </Text>
+                <View style={styles.paymentAmountCol}>
+                  <Text style={styles.paymentAmount}>
+                    ${parseFloat(p.amount).toFixed(2)}
+                  </Text>
+                  <Text style={styles.paymentCurrency}>{p.currency}</Text>
+                </View>
               </View>
             ))}
+            {paymentsOffset < paymentsTotal && (
+              <View style={styles.loadMoreRow}>
+                {paymentsLoadingMore ? (
+                  <ActivityIndicator size="small" color={colors.primary} />
+                ) : (
+                  <TouchableOpacity onPress={loadMorePayments}>
+                    <Text style={styles.loadMoreText}>Load more</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
           </>
         )}
 
@@ -433,8 +491,8 @@ function createStyles(colors: ThemeColors) {
       borderRadius: 18, padding: 20, borderWidth: 1.5, borderColor: 'transparent',
     },
     planCardActive: { borderColor: colors.primary, backgroundColor: colors.surfaceLight },
+    currentTagRow: { flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 8 },
     currentTag: {
-      position: 'absolute', top: 12, right: 12,
       backgroundColor: colors.primary, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6,
     },
     currentTagText: { fontSize: 9, fontWeight: '700', color: '#FFF', letterSpacing: 0.5 },
@@ -472,16 +530,21 @@ function createStyles(colors: ThemeColors) {
 
     // Payment history
     paymentRow: {
-      flexDirection: 'row', alignItems: 'center', marginHorizontal: 16, marginBottom: 8,
+      flexDirection: 'row', alignItems: 'flex-start', marginHorizontal: 16, marginBottom: 8,
       backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 14, gap: 12,
     },
     paymentIcon: {
       width: 40, height: 40, borderRadius: 12, backgroundColor: colors.surface,
-      justifyContent: 'center', alignItems: 'center',
+      justifyContent: 'center', alignItems: 'center', flexShrink: 0,
     },
     paymentInfo: { flex: 1 },
     paymentPlan: { fontSize: 14, fontWeight: '600', color: colors.text },
     paymentMeta: { fontSize: 12, color: colors.textDim, marginTop: 2 },
+    paymentTax: { fontSize: 11, color: colors.textDim, marginTop: 3, opacity: 0.8 },
+    paymentAmountCol: { alignItems: 'flex-end', flexShrink: 0 },
     paymentAmount: { fontSize: 15, fontWeight: '700', color: colors.text },
+    paymentCurrency: { fontSize: 10, color: colors.textDim, marginTop: 1 },
+    loadMoreRow: { alignItems: 'center', paddingVertical: 16 },
+    loadMoreText: { fontSize: 14, color: colors.primary, fontWeight: '600' },
   });
 }

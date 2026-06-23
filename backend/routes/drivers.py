@@ -6816,14 +6816,33 @@ async def get_subscription_payment_history(
 
     total = await db_supabase.count_documents("subscription_payments", {"driver_id": driver["id"]})
 
+    # Saskatchewan taxes are included in the plan price (tax-inclusive pricing).
+    # Back out GST (5%) and PST (6%) from the charged amount so each invoice
+    # row satisfies CLAUDE.md / regulatory receipt line-item requirements.
+    _TAX_DIVISOR = Decimal("1.11")
+    _GST_RATE = Decimal("0.05")
+
+    def _tax_breakdown(raw_amount) -> tuple:
+        """Returns (total, subtotal, gst, pst) as Decimal, all rounded to cents."""
+        _total = Decimal(str(raw_amount)).quantize(Decimal("0.01"))
+        _subtotal = (_total / _TAX_DIVISOR).quantize(Decimal("0.01"))
+        _gst = (_subtotal * _GST_RATE).quantize(Decimal("0.01"))
+        _pst = _total - _subtotal - _gst  # computed last so the three sum to total exactly
+        return _total, _subtotal, _gst, _pst
+
     return {
         "payments": [
             {
                 "id": p["id"],
                 "plan_id": p.get("plan_id"),
                 "plan_name": p.get("plan_name"),
-                "amount": str(Decimal(str(p["amount"])).quantize(Decimal("0.01"))),
-                "currency": p.get("currency", "CAD"),
+                **dict(
+                    zip(
+                        ("amount", "subtotal", "gst_amount", "pst_amount"),
+                        (str(v) for v in _tax_breakdown(p["amount"])),
+                    )
+                ),
+                "currency": (p.get("currency") or "cad").upper(),
                 "billing_reason": p.get("billing_reason"),
                 "stripe_invoice_id": p.get("stripe_invoice_id"),
                 "created_at": p.get("created_at"),
@@ -6831,6 +6850,7 @@ async def get_subscription_payment_history(
             for p in payments
         ],
         "total": total,
+        "has_more": (offset + len(payments)) < total,
         "limit": limit,
         "offset": offset,
     }

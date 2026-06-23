@@ -378,6 +378,7 @@ export default function ServiceAreasPage() {
                           area={area}
                           plans={plans}
                           onToggle={v => handleFieldUpdate(area.id, 'spinr_pass_enabled', v)}
+                          onRequiredToggle={v => handleFieldUpdate(area.id, 'subscription_required', v)}
                           onPlansChanged={load}
                         />
                       )}
@@ -1450,8 +1451,8 @@ const DURATION_OPTIONS = [
   { label: "Yearly", value: 365 },
 ];
 
-function SpinrPassAreaTab({ area, plans, onToggle, onPlansChanged }: {
-  area: any; plans: any[]; onToggle: (v: boolean) => void; onPlansChanged: () => void;
+function SpinrPassAreaTab({ area, plans, onToggle, onRequiredToggle, onPlansChanged }: {
+  area: any; plans: any[]; onToggle: (v: boolean) => void; onRequiredToggle: (v: boolean) => void; onPlansChanged: () => void;
 }) {
   const { toast } = useToast();
   const [planDeleteTarget, setPlanDeleteTarget] = useState<{ id: string; name: string } | null>(null);
@@ -1507,11 +1508,12 @@ function SpinrPassAreaTab({ area, plans, onToggle, onPlansChanged }: {
   const getDurationLabel = (days: number) => DURATION_OPTIONS.find(d => d.value === days)?.label || `${days} days`;
 
   const enabled = area.spinr_pass_enabled !== false;
+  const required = area.subscription_required === true;
 
   return (
     <div>
       {/* Kill switch */}
-      <div className={`flex items-center justify-between p-4 rounded-xl mb-5 ${enabled ? 'bg-green-50 border border-green-200' : 'bg-gray-50 border border-gray-200'}`}>
+      <div className={`flex items-center justify-between p-4 rounded-xl mb-3 ${enabled ? 'bg-green-50 border border-green-200' : 'bg-gray-50 border border-gray-200'}`}>
         <div>
           <h4 className="font-bold text-gray-800">Spinr Pass for {area.name}</h4>
           <p className="text-sm text-gray-500">
@@ -1519,6 +1521,19 @@ function SpinrPassAreaTab({ area, plans, onToggle, onPlansChanged }: {
           </p>
         </div>
         <FieldToggle label={enabled ? "ON" : "OFF"} value={enabled} onSave={onToggle} />
+      </div>
+
+      {/* Mandatory-subscription toggle */}
+      <div className={`flex items-center justify-between p-4 rounded-xl mb-5 ${required ? 'bg-amber-50 border border-amber-200' : 'bg-gray-50 border border-gray-200'}`}>
+        <div>
+          <h4 className="font-bold text-gray-800">Require Subscription to Drive</h4>
+          <p className="text-sm text-gray-500">
+            {required
+              ? 'Drivers must have an active Spinr Pass to go online, receive offers, and accept rides'
+              : 'Spinr Pass is optional — all verified drivers can work in this area'}
+          </p>
+        </div>
+        <FieldToggle label={required ? "Required" : "Optional"} value={required} onSave={onRequiredToggle} />
       </div>
 
       {/* Plan management */}

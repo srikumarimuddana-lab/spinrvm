@@ -173,6 +173,8 @@ class ServiceAreaCreateRequest(BaseModel):
     # Free-text referral T&C (migration 176); blank → dynamic default sentence.
     rider_referral_terms: Optional[str] = Field(default=None, max_length=2000)
     driver_referral_terms: Optional[str] = Field(default=None, max_length=2000)
+    # Dispatch cascade rules (migration 185): [{from: uuid, to: [uuid, ...]}]
+    vehicle_cascade_map: List[Any] = []
 
 
 class ServiceAreaUpdateRequest(BaseModel):
@@ -226,6 +228,8 @@ class ServiceAreaUpdateRequest(BaseModel):
     # Free-text referral T&C (migration 176); blank → dynamic default sentence.
     rider_referral_terms: Optional[str] = Field(default=None, max_length=2000)
     driver_referral_terms: Optional[str] = Field(default=None, max_length=2000)
+    # Dispatch cascade rules (migration 185): [{from: uuid, to: [uuid, ...]}]
+    vehicle_cascade_map: Optional[List[Any]] = None
 
 
 class SurgePricingRequest(BaseModel):

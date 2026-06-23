@@ -3433,6 +3433,15 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
                         limit=1,
                     )
                 )
+                # Expiry check: the background sweeper runs periodically so an
+                # active row may have passed expires_at before it was flipped.
+                if _active_sub and _active_sub.get("expires_at"):
+                    _exp = parse_iso_utc(_active_sub["expires_at"])
+                    if _exp is not None and _exp < datetime.now(timezone.utc):
+                        await db_supabase.update_one(
+                            "driver_subscriptions", {"id": _active_sub["id"]}, {"status": "expired"}
+                        )
+                        _active_sub = None
                 if not _active_sub:
                     raise SpinrException(
                         message="An active Spinr Pass subscription is required to accept rides in this area.",
@@ -3444,8 +3453,13 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
         except SpinrException:
             raise
         except Exception:
-            # Fail open: a DB error must not block all ride acceptance.
+            # Last-resort gate: fail closed so a DB error cannot bypass
+            # subscription enforcement in a required area.
             logger.error("accept_ride: subscription check failed for driver=%s", driver["id"], exc_info=True)
+            raise HTTPException(
+                status_code=503,
+                detail="Could not verify subscription for this area. Please try again.",
+            )
 
     diag_logger.info(
         f"[ACCEPT] entry ride_id={ride_id} driver_id={driver.get('id')} "

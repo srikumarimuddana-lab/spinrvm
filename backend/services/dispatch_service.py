@@ -296,19 +296,22 @@ class DispatchService:
         try:
             present = await present_driver_ids([d["id"] for d in rows])
         except Exception as exc:
-            # Graceful degradation (Redis presence is best-effort) — keep the
-            # fallback, but emit a metric so a sustained outage on this KPI path
-            # (match rate, P95 dispatch) is visible on dashboards rather than
-            # buried at warning level.
+            # Redis unavailable — skip presence filter but still apply
+            # subscription filter below. Emit metric so a sustained outage
+            # is visible on dashboards rather than buried at warning level.
             logger.warning(
                 "Presence filter failed, dispatching all DB-online drivers",
                 exc_info=exc,
             )
             _metric_inc("spinr_dispatch_presence_filter_failed_total")
-            return rows
-        if not present:
-            return rows
-        rows = [d for d in rows if d["id"] in present]
+            present = None  # sentinel: presence filter skipped
+
+        if present is not None:
+            if present:
+                rows = [d for d in rows if d["id"] in present]
+            # else: empty presence set — ambiguous (bootstrap / Redis failover /
+            # dev); treat all DB-online drivers as present (fail-open for
+            # presence) but still apply the subscription filter below.
 
         # Subscription guard: if the ride's service area requires a Spinr Pass,
         # filter out drivers who don't have an active subscription.

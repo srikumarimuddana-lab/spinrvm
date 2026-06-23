@@ -575,6 +575,13 @@ async def admin_update_service_area(
     if surge_active is not None:
         update_payload["surge_active"] = surge_active
 
+    # Invariant: subscription_required=True ⟹ spinr_pass_enabled=True.
+    # If an admin sets subscription_required without Spinr Pass enabled,
+    # drivers are locked out with no way to purchase a pass. Coerce here
+    # so the combination is always self-consistent regardless of request order.
+    if update_payload.get("subscription_required") is True:
+        update_payload["spinr_pass_enabled"] = True
+
     # Per-area surge master toggle. Persist it explicitly (it is not in the
     # allow-list above). Disabling surge must immediately clear any live surge
     # so a parked multiplier / surge_active flag can't keep pricing rides while

@@ -3416,6 +3416,37 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
     if ride.get("rider_id") == current_user["id"]:
         raise HTTPException(status_code=403, detail="Cannot accept your own ride")
 
+    # Subscription guard: if the ride's service area requires a Spinr Pass,
+    # verify the driver has an active subscription before allowing acceptance.
+    # This is the last-resort gate — go-online and dispatch already block
+    # unsubscribed drivers, but a driver whose subscription expired mid-shift
+    # (or who was grandfathered online before the policy was enabled) could
+    # still reach this point.
+    if ride.get("service_area_id"):
+        try:
+            _ride_area = await db_supabase.find_one("service_areas", {"id": ride["service_area_id"]})
+            if _ride_area and _ride_area.get("subscription_required"):
+                _active_sub = (lambda _r: _r[0] if _r else None)(
+                    await db_supabase.get_rows(
+                        "driver_subscriptions",
+                        {"driver_id": driver["id"], "status": "active"},
+                        limit=1,
+                    )
+                )
+                if not _active_sub:
+                    raise SpinrException(
+                        message="An active Spinr Pass subscription is required to accept rides in this area.",
+                        error_code=ErrorCode.PAYMENT_FAILED,
+                        status_code=402,
+                        message_key=ErrorKeys.DRIVER_SUBSCRIPTION_REQUIRED,
+                        action_hint="Subscribe to Spinr Pass",
+                    )
+        except SpinrException:
+            raise
+        except Exception:
+            # Fail open: a DB error must not block all ride acceptance.
+            logger.error("accept_ride: subscription check failed for driver=%s", driver["id"], exc_info=True)
+
     diag_logger.info(
         f"[ACCEPT] entry ride_id={ride_id} driver_id={driver.get('id')} "
         f"pre_status={ride.get('status')} pre_driver_id={ride.get('driver_id')}"

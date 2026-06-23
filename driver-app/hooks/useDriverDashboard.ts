@@ -39,6 +39,10 @@ const { height } = Dimensions.get('window');
 // hiccup). ±500ms at 30 s base is only 1.7% dispersal — too tight.
 const RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000];
 const MAX_RECONNECT_ATTEMPTS = 10;
+// If a socket opens but the auth handshake never completes (no auth_success),
+// force-reconnect after this window instead of waiting out the server's ~30s
+// auth timeout, which otherwise leaves the driver stuck on "Reconnecting…".
+const AUTH_WATCHDOG_MS = 10000;
 
 const LOCATION_CONFIGS: Record<string, { timeInterval: number; distanceInterval: number; accuracy: Location.Accuracy }> = {
   idle:                  { timeInterval: 10_000, distanceInterval: 30, accuracy: Location.Accuracy.Balanced },
@@ -283,6 +287,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const reconnectAttemptRef = useRef(0);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Auth watchdog: a socket can open but never complete the auth handshake
+  // (lost first message, half-open TLS through a flaky proxy). The server only
+  // times that out after ~30s; this self-heals far faster.
+  const authWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const locationBufferRef = useRef<any[]>([]);
   const wsBatchRef = useRef<any[]>([]);
   const lastWsFlushRef = useRef<number>(Date.now());
@@ -959,6 +967,18 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // auth_success so we never send location before the session is verified.
     let wsAuthenticated = false;
 
+    // Arm the auth watchdog. If auth_success doesn't arrive within the window
+    // (lost first message / half-open socket), force-close so onclose schedules
+    // a reconnect — instead of sitting on "Reconnecting…" until the server's
+    // 30s auth timeout fires.
+    if (authWatchdogRef.current) clearTimeout(authWatchdogRef.current);
+    authWatchdogRef.current = setTimeout(() => {
+      if (wsRef.current === ws && !wsAuthenticated) {
+        console.warn('[WS] auth watchdog fired — no auth_success, forcing reconnect');
+        try { ws.close(); } catch { }
+      }
+    }, AUTH_WATCHDOG_MS);
+
     ws.onopen = () => {
       const currentToken = useAuthStore.getState().token;
       ws.send(JSON.stringify({
@@ -1000,6 +1020,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           setConnectionState('connected');
           setWsError(null);
           wsAuthenticated = true;
+          if (authWatchdogRef.current) { clearTimeout(authWatchdogRef.current); authWatchdogRef.current = null; }
           // Re-sync active ride state — server buffers no WS events, so any
           // transitions that fired while disconnected are recovered via HTTP.
           // Always fetch on reconnect (even when holding an offer) so stale
@@ -1041,6 +1062,8 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       // then has onclose fire again — producing a connection-storm.
       if (ws !== wsRef.current) return;
 
+      if (authWatchdogRef.current) { clearTimeout(authWatchdogRef.current); authWatchdogRef.current = null; }
+
       if (isOnlineRef.current && userRef.current) {
         if (reconnectAttemptRef.current >= MAX_RECONNECT_ATTEMPTS) {
           setConnectionState('disconnected');
@@ -1072,6 +1095,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = null;
       }
+      if (authWatchdogRef.current) {
+        clearTimeout(authWatchdogRef.current);
+        authWatchdogRef.current = null;
+      }
       if (wsRef.current) {
         try { wsRef.current.close(); } catch (e) { console.log('[WS] close error (going offline):', e); }
         wsRef.current = null;
@@ -1085,6 +1112,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     return () => {
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
+      }
+      if (authWatchdogRef.current) {
+        clearTimeout(authWatchdogRef.current);
+        authWatchdogRef.current = null;
       }
       if (wsRef.current) {
         try { wsRef.current.close(); } catch (e) { console.log('[WS] close error (cleanup):', e); }

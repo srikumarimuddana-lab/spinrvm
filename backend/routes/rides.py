@@ -836,6 +836,67 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
         f"rating>={min_rating if algorithm in ('rating_based', 'combined') else 'n/a'}"
     )
 
+    if not drivers_with_distance and ride.get("service_area_id") and ride.get("vehicle_type_id"):
+        # Vehicle cascade: the area may define upgrade types to try when no
+        # driver of the exact requested type is available (e.g. SUV → XL).
+        # This runs after all other filters so only genuinely-available
+        # upgrade drivers are offered the ride.
+        try:
+            _casc_area = await db_supabase.find_one("service_areas", {"id": ride["service_area_id"]})
+            _casc_map: list = (_casc_area or {}).get("vehicle_cascade_map") or []
+            _casc_to: list = next(
+                (rule.get("to") or [] for rule in _casc_map if rule.get("from") == ride["vehicle_type_id"]),
+                [],
+            )
+            if _casc_to:
+                logger.info(
+                    "[DISPATCH] cascade: ride %s — no %s drivers, trying upgrade types %s",
+                    ride_id,
+                    ride["vehicle_type_id"],
+                    _casc_to,
+                )
+                _casc_filter: dict = {
+                    "is_online": True,
+                    "is_available": True,
+                    "is_verified": True,
+                    "status": "active",
+                    "vehicle_type_id": {"$in": _casc_to},
+                }
+                if ride.get("requires_wav"):
+                    _casc_filter["is_wav"] = True
+                _casc_pool = await db_supabase.get_rows("drivers", _casc_filter, limit=500)
+                # Presence filter — re-import utilities locally so this block
+                # is self-contained even if the earlier import try/except failed.
+                try:
+                    try:
+                        from ..utils.driver_presence import present_driver_ids as _casc_present_ids  # type: ignore
+                        from ..utils.redis_client import _get_redis as _casc_check_redis  # type: ignore
+                        from ..utils.redis_client import redis_mget as _casc_mget
+                    except ImportError:
+                        from utils.driver_presence import present_driver_ids as _casc_present_ids  # type: ignore
+                        from utils.redis_client import _get_redis as _casc_check_redis  # type: ignore
+                        from utils.redis_client import redis_mget as _casc_mget
+                    if await _casc_check_redis() is not None:
+                        _casc_live_ids = await _casc_present_ids([d["id"] for d in _casc_pool])
+                        _casc_pool = [d for d in _casc_pool if d["id"] in _casc_live_ids]
+                    # Skip drivers who already timed-out / declined this ride
+                    _casc_skip_keys = [f"spinr:offer_skip:{ride_id}:{d['id']}" for d in _casc_pool]
+                    _casc_skip_vals = await _casc_mget(_casc_skip_keys)
+                    _casc_pool = [d for d, v in zip(_casc_pool, _casc_skip_vals, strict=False) if not v]
+                except Exception as _casc_redis_exc:
+                    logger.debug("[DISPATCH] cascade Redis filter skipped (unavailable): %s", _casc_redis_exc)
+                drivers_with_distance = filter_and_rank_drivers(ride, _casc_pool, algorithm, min_rating, search_radius)
+                if drivers_with_distance:
+                    logger.info(
+                        "[DISPATCH] cascade found %d eligible driver(s) for ride %s",
+                        len(drivers_with_distance),
+                        ride_id,
+                    )
+                else:
+                    logger.info("[DISPATCH] cascade also found no eligible drivers for ride %s", ride_id)
+        except Exception:
+            logger.error("[DISPATCH] cascade lookup failed for ride %s", ride_id, exc_info=True)
+
     if not drivers_with_distance:
         logger.info(f"[DISPATCH] no eligible drivers for ride {ride_id} — scheduling retry in 10s (attempt {attempt})")
         asyncio.create_task(_dispatch_retry(ride_id, delay=10, attempt=attempt + 1))

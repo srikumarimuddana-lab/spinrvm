@@ -78,7 +78,6 @@ async def create_subscription_plan(req: SubscriptionPlanCreate, admin: dict = De
         "service_areas": req.service_areas,
         "is_active": req.is_active,
         "stripe_price_id": req.stripe_price_id,
-        "subscriber_count": 0,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db_supabase.insert_one("subscription_plans", plan)

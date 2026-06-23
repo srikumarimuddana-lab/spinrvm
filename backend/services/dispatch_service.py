@@ -16,6 +16,7 @@ push / asyncio.create_task machinery in the tests.
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -24,12 +25,14 @@ try:
     from ..geo_utils import calculate_distance
     from ..settings_loader import get_app_settings
     from ..utils.breadcrumbs import invalidate_active_rides_cache
+    from ..utils.datetime_utils import parse_iso_utc
     from ..utils.driver_presence import present_driver_ids
     from ..utils.metrics import inc as _metric_inc
 except ImportError:  # pragma: no cover - allow direct module imports in tests
     from geo_utils import calculate_distance
     from settings_loader import get_app_settings
     from utils.breadcrumbs import invalidate_active_rides_cache  # type: ignore
+    from utils.datetime_utils import parse_iso_utc  # type: ignore
     from utils.driver_presence import present_driver_ids
     from utils.metrics import inc as _metric_inc  # type: ignore
 
@@ -296,19 +299,66 @@ class DispatchService:
         try:
             present = await present_driver_ids([d["id"] for d in rows])
         except Exception as exc:
-            # Graceful degradation (Redis presence is best-effort) — keep the
-            # fallback, but emit a metric so a sustained outage on this KPI path
-            # (match rate, P95 dispatch) is visible on dashboards rather than
-            # buried at warning level.
+            # Redis unavailable — skip presence filter but still apply
+            # subscription filter below. Emit metric so a sustained outage
+            # is visible on dashboards rather than buried at warning level.
             logger.warning(
                 "Presence filter failed, dispatching all DB-online drivers",
                 exc_info=exc,
             )
             _metric_inc("spinr_dispatch_presence_filter_failed_total")
-            return rows
-        if not present:
-            return rows
-        return [d for d in rows if d["id"] in present]
+            present = None  # sentinel: presence filter skipped
+
+        if present is not None:
+            if present:
+                rows = [d for d in rows if d["id"] in present]
+            # else: empty presence set — ambiguous (bootstrap / Redis failover /
+            # dev); treat all DB-online drivers as present (fail-open for
+            # presence) but still apply the subscription filter below.
+
+        # Subscription guard: if the ride's service area requires a Spinr Pass,
+        # filter out drivers who don't have an active subscription.
+        # One area lookup + one batch IN-query — no N+1 per driver.
+        if rows and ride.get("service_area_id"):
+            try:
+                _area = await self.db.find_one("service_areas", {"id": ride["service_area_id"]})
+                _svc_sub_required = bool(_area and _area.get("subscription_required"))
+                if not _svc_sub_required and _area and _area.get("parent_service_area_id"):
+                    _parent = await self.db.find_one("service_areas", {"id": _area["parent_service_area_id"]})
+                    _svc_sub_required = bool(_parent and _parent.get("subscription_required"))
+                if _svc_sub_required:
+                    candidate_ids = [d["id"] for d in rows]
+                    active_subs = await self.db.get_rows(
+                        "driver_subscriptions",
+                        {"driver_id": {"$in": candidate_ids}, "status": "active"},
+                        columns="driver_id,expires_at",
+                        limit=len(candidate_ids),
+                    )
+                    _now = datetime.now(timezone.utc)
+                    subscribed_ids = set()
+                    for _s in active_subs or []:
+                        if _s.get("expires_at"):
+                            _exp = parse_iso_utc(_s["expires_at"])
+                            if _exp is not None and _exp <= _now:
+                                continue  # expired
+                        subscribed_ids.add(_s["driver_id"])
+                    rows = [d for d in rows if d["id"] in subscribed_ids]
+                    logger.info(
+                        "Subscription filter: area=%s kept %d/%d drivers",
+                        ride["service_area_id"],
+                        len(rows),
+                        len(candidate_ids),
+                    )
+            except Exception:
+                # Fail open: a DB error here must not block dispatch entirely.
+                # The go-online check is the primary enforcement gate.
+                logger.error(
+                    "Subscription filter failed for area=%s — dispatching unfiltered",
+                    ride.get("service_area_id"),
+                    exc_info=True,
+                )
+
+        return rows
 
     async def assign_driver_to_ride(self, ride_id: str, driver_id: str, now) -> None:
         """

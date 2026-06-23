@@ -3416,6 +3416,72 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
     if ride.get("rider_id") == current_user["id"]:
         raise HTTPException(status_code=403, detail="Cannot accept your own ride")
 
+    # Subscription guard: if the ride's service area requires a Spinr Pass,
+    # verify the driver has an active subscription before allowing acceptance.
+    # This is the last-resort gate — go-online and dispatch already block
+    # unsubscribed drivers, but a driver whose subscription expired mid-shift
+    # (or who was grandfathered online before the policy was enabled) could
+    # still reach this point.
+    if ride.get("service_area_id"):
+        try:
+            _ride_area = await db_supabase.find_one("service_areas", {"id": ride["service_area_id"]})
+            # Finding F: child areas (airport sub-regions) inherit subscription_required
+            # from their parent; check parent when child flag is False.
+            _accept_sub_required = bool(_ride_area and _ride_area.get("subscription_required"))
+            if not _accept_sub_required and _ride_area and _ride_area.get("parent_service_area_id"):
+                _parent = await db_supabase.find_one("service_areas", {"id": _ride_area["parent_service_area_id"]})
+                _accept_sub_required = bool(_parent and _parent.get("subscription_required"))
+            if _accept_sub_required:
+                _active_sub = (lambda _r: _r[0] if _r else None)(
+                    await db_supabase.get_rows(
+                        "driver_subscriptions",
+                        {"driver_id": driver["id"], "status": "active"},
+                        limit=1,
+                    )
+                )
+                # Expiry check: the background sweeper runs periodically so an
+                # active row may have passed expires_at before it was flipped.
+                if _active_sub and _active_sub.get("expires_at"):
+                    _exp = parse_iso_utc(_active_sub["expires_at"])
+                    if _exp is not None and _exp < datetime.now(timezone.utc):
+                        await db_supabase.update_one(
+                            "driver_subscriptions", {"id": _active_sub["id"]}, {"status": "expired"}
+                        )
+                        _active_sub = None
+                # Plan scope checks: service_areas and vehicle_types allowlists.
+                # Plans with null/empty lists apply globally.
+                if _active_sub:
+                    _sub_plan = await db_supabase.find_one("subscription_plans", {"id": _active_sub.get("plan_id")})
+                    if _sub_plan:
+                        _plan_areas = _sub_plan.get("service_areas")
+                        if _plan_areas and ride["service_area_id"] not in _plan_areas:
+                            # Also accept plans covering the parent area (child areas inherit).
+                            _accept_parent_id = (_ride_area or {}).get("parent_service_area_id")
+                            if not (_accept_parent_id and _accept_parent_id in _plan_areas):
+                                _active_sub = None
+                        if _active_sub:
+                            _plan_vt = _sub_plan.get("vehicle_types")
+                            if _plan_vt and driver.get("vehicle_type_id") not in _plan_vt:
+                                _active_sub = None
+                if not _active_sub:
+                    raise SpinrException(
+                        message="An active Spinr Pass subscription is required to accept rides in this area.",
+                        error_code=ErrorCode.PAYMENT_FAILED,
+                        status_code=402,
+                        message_key=ErrorKeys.DRIVER_SUBSCRIPTION_REQUIRED,
+                        action_hint="Subscribe to Spinr Pass",
+                    )
+        except SpinrException:
+            raise
+        except Exception:
+            # Last-resort gate: fail closed so a DB error cannot bypass
+            # subscription enforcement in a required area.
+            logger.error("accept_ride: subscription check failed for driver=%s", driver["id"], exc_info=True)
+            raise HTTPException(
+                status_code=503,
+                detail="Could not verify subscription for this area. Please try again.",
+            )
+
     diag_logger.info(
         f"[ACCEPT] entry ride_id={ride_id} driver_id={driver.get('id')} "
         f"pre_status={ride.get('status')} pre_driver_id={ride.get('driver_id')}"
@@ -5619,20 +5685,31 @@ async def update_driver_status(
         # is_verified check removed — status field is the single source of truth now.
         # Only status='active' drivers reach this point (blocked above).
 
-        # Check active Spinr Pass subscription. The enforcement is toggled
-        # by the admin-controlled app setting `require_driver_subscription`
-        # so the business team can flip it without a redeploy. When the
-        # setting is false (default, pre-launch), we skip the subscription
-        # query entirely — the `driver_subscriptions` table may not even
-        # exist in the database yet during pre-launch, so querying it would
-        # raise PostgREST PGRST205. The query only runs when enforcement
-        # is actively turned on.
+        # Check active Spinr Pass subscription.
+        # Enforcement triggers when EITHER:
+        #   a) the global app setting `require_driver_subscription` is True, OR
+        #   b) the driver's service area has `subscription_required=True`
+        # When neither is set (default) we skip the DB query entirely — the
+        # driver_subscriptions table may not exist yet pre-launch.
         try:
             from ..settings_loader import get_app_settings  # type: ignore
         except ImportError:
             from settings_loader import get_app_settings  # type: ignore
         app_settings = await get_app_settings()
         require_sub = bool(app_settings.get("require_driver_subscription", False))
+
+        if not require_sub and driver.get("service_area_id"):
+            _driver_area = await db_supabase.find_one("service_areas", {"id": driver["service_area_id"]})
+            if _driver_area and _driver_area.get("subscription_required"):
+                require_sub = True
+            # Finding F: inherit subscription_required from parent area (airport sub-regions
+            # should require the same pass as the parent city area).
+            elif _driver_area and _driver_area.get("parent_service_area_id"):
+                _parent_area = await db_supabase.find_one(
+                    "service_areas", {"id": _driver_area["parent_service_area_id"]}
+                )
+                if _parent_area and _parent_area.get("subscription_required"):
+                    require_sub = True
 
         if require_sub:
             try:
@@ -5686,14 +5763,13 @@ async def update_driver_status(
                         action_hint="Activate Spinr Pass",
                     )
 
-            # Vehicle-type enforcement: if the subscription plan restricts
-            # to specific vehicle type IDs, the driver's registered vehicle
-            # must be one of them. A null/empty list means all types allowed.
+            # Plan scope enforcement: check vehicle_types and service_areas allowlists.
+            # A null/empty list means all types/areas allowed.
             if sub.get("plan_id"):
                 try:
                     plan = await db_supabase.find_one("subscription_plans", {"id": sub["plan_id"]})
                     allowed_vt = plan.get("vehicle_types") if plan else None
-                    if allowed_vt:  # non-null, non-empty list
+                    if allowed_vt:
                         driver_vt = driver.get("vehicle_type_id")
                         if driver_vt not in allowed_vt:
                             raise SpinrException(
@@ -5706,11 +5782,32 @@ async def update_driver_status(
                                 message_key=ErrorKeys.DRIVER_SUBSCRIPTION_REQUIRED,
                                 action_hint="Update Spinr Pass",
                             )
+                    # Finding C: service-area scope — a pass for another area must
+                    # not satisfy enforcement in this driver's area.
+                    # Also accept plans covering the parent area (child areas inherit).
+                    allowed_areas = plan.get("service_areas") if plan else None
+                    if allowed_areas and driver.get("service_area_id") not in allowed_areas:
+                        if driver.get("service_area_id"):
+                            _sa_row = await db_supabase.find_one("service_areas", {"id": driver["service_area_id"]})
+                            _go_parent_id = (_sa_row or {}).get("parent_service_area_id")
+                        else:
+                            _go_parent_id = None
+                        if not (_go_parent_id and _go_parent_id in allowed_areas):
+                            raise SpinrException(
+                                message=(
+                                    "Your Spinr Pass plan does not cover this service area. "
+                                    "Please subscribe to a plan for your area."
+                                ),
+                                error_code=ErrorCode.PAYMENT_FAILED,
+                                status_code=402,
+                                message_key=ErrorKeys.DRIVER_SUBSCRIPTION_REQUIRED,
+                                action_hint="Subscribe to Spinr Pass",
+                            )
                 except SpinrException:
                     raise
                 except Exception as e:
                     logger.error(
-                        "vehicle_type check failed for driver=%s plan=%s: %s",
+                        "plan scope check failed for driver=%s plan=%s: %s",
                         driver_id,
                         sub.get("plan_id"),
                         e,
@@ -5718,7 +5815,7 @@ async def update_driver_status(
                     )
                     raise HTTPException(
                         status_code=503,
-                        detail="Could not verify subscription plan vehicle restrictions. Please try again.",
+                        detail="Could not verify subscription plan restrictions. Please try again.",
                     ) from e
 
     logger.info(
@@ -6056,6 +6153,23 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
                 ),
             )
 
+    # Reject checkout if this plan's service_areas don't cover the driver's area.
+    # Also accepts plans covering the parent area (child areas inherit parent scope).
+    allowed_plan_areas = plan.get("service_areas")
+    if allowed_plan_areas and driver.get("service_area_id") not in allowed_plan_areas:
+        if driver.get("service_area_id"):
+            _checkout_area = await db_supabase.find_one("service_areas", {"id": driver["service_area_id"]})
+            _checkout_parent_id = (_checkout_area or {}).get("parent_service_area_id")
+        else:
+            _checkout_parent_id = None
+        if not (_checkout_parent_id and _checkout_parent_id in allowed_plan_areas):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "This plan is not available for your service area. Please choose a plan that covers your area."
+                ),
+            )
+
     # Check for existing active subscription
     existing = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows(
@@ -6209,7 +6323,7 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
                             "currency": "cad",
                             "product_data": {
                                 "name": plan.get("name", "Spinr Pass"),
-                                "description": plan.get("description", ""),
+                                **({} if not plan.get("description") else {"description": plan["description"]}),
                             },
                             "unit_amount": _amount_cents,
                         },

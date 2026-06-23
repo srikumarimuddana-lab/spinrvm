@@ -140,7 +140,7 @@ export default function VehicleInfoScreen() {
 
     const handleSubmit = async () => {
         if (!isFormValid) {
-            showToast('info', 'Missing Information', 'Please fill in all required fields marked with *');
+            showToast('warning', 'Missing Information', 'Please fill in all required fields marked with *');
             return;
         }
         Alert.alert(

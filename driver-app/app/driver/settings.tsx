@@ -129,7 +129,7 @@ export default function SettingsScreen() {
 
     const executeDelete = async () => {
         if (deleteInput.trim().toUpperCase() !== 'DELETE') {
-            showToast('info', 'Not Confirmed', 'You must type DELETE to confirm account deletion.');
+            showToast('warning', 'Not Confirmed', 'You must type DELETE to confirm account deletion.');
             return;
         }
         try {

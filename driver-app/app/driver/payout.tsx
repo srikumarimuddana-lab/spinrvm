@@ -176,7 +176,7 @@ function PayoutScreen() {
         // Validate GST/BN format: 9 digits or 15 chars (9-digit BN + RT0001)
         const cleaned = gstNumber.replace(/\s/g, '');
         if (cleaned && !/^\d{9}(RT\d{4})?$/.test(cleaned)) {
-            showToast('info', 'Invalid Format', 'Enter your 9-digit Business Number (BN) or full GST number (e.g., 123456789RT0001)');
+            showToast('warning', 'Invalid Format', 'Enter your 9-digit Business Number (BN) or full GST number (e.g., 123456789RT0001)');
             return;
         }
 

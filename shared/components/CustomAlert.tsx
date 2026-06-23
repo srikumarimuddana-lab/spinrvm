@@ -296,7 +296,7 @@ function createStyles(colors: ThemeColors) {
       fontWeight: '600',
     },
     destructiveButton: {
-      backgroundColor: '#EF4444',
+      backgroundColor: colors.danger,
     },
     cancelButton: {
       backgroundColor: colors.surfaceLight,

@@ -100,7 +100,7 @@ export default function SavedPlacesScreen() {
   };
 
   const handleSave = async () => {
-    if (!selectedPlace) { showToast('Error', 'Search and select an address', 'warning'); return; }
+    if (!selectedPlace) { showToast('Address Required', 'Please search for and select an address', 'warning'); return; }
     const name = placeName.trim() || selectedType;
     setSaving(true);
     try {
@@ -114,7 +114,7 @@ export default function SavedPlacesScreen() {
       setShowAdd(false);
       resetForm();
     } catch (err: any) {
-      showToast('Error', err.response?.data?.detail || err.message || 'Failed to save place', 'danger');
+      showToast('Save Failed', err.response?.data?.detail || 'Failed to save place. Please try again.', 'danger');
     } finally { setSaving(false); }
   };
 

@@ -56,10 +56,10 @@ export const lightColors: ThemeColors = {
   overlay: 'rgba(255, 255, 255, 0.95)',
   error: '#DC2626',
   success: '#34C759',
-  warning: '#FFCC00',
+  warning: '#d97706',
   info: '#3B82F6',           // iOS-system-blue
   successBg: '#ECFDF5',
-  warningBg: '#FFFBEB',
+  warningBg: '#FFF7ED',
   dangerBg:  '#FEF2F2',
   infoBg:    '#EFF6FF',
   accent: '#FF3B30',
@@ -82,13 +82,13 @@ export const darkColors: ThemeColors = {
   overlay: 'rgba(0, 0, 0, 0.92)',
   error: '#FF453A',
   success: '#30D158',       // iOS system green (dark)
-  warning: '#FFD60A',       // iOS system yellow (dark)
+  warning: '#F59E0B',       // amber — readable on dark surfaces
   info: '#0A84FF',          // iOS system blue (dark)
   // Surface tints — NOT just inverted; very-low-luminance versions of the
   // foreground hue so they read as a tinted dark surface, not a near-white
   // tint inverted to off-tone aubergine.
   successBg: '#0B3D2E',
-  warningBg: '#3D2E0B',
+  warningBg: '#431A03',
   dangerBg:  '#3D0B0B',
   infoBg:    '#0B243D',
   accent: '#FF453A',

@@ -102,7 +102,7 @@ export default function ReferralScreen() {
             await Share.share({ message });
         } catch {
             await Clipboard.setStringAsync(referralInfo.referral_code);
-            showToast('info', 'Code Copied', 'Referral code copied to clipboard');
+            showToast('success', 'Copied!', 'Referral code copied to clipboard');
         }
     };
 

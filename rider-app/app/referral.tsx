@@ -90,7 +90,7 @@ export default function RiderReferralScreen() {
             await Share.share({ message });
         } catch {
             await Clipboard.setStringAsync(info.referral_code);
-            showToast('Code copied', 'Referral code copied to clipboard', 'info');
+            showToast('Copied!', 'Referral code copied to clipboard', 'success');
         }
     };
 

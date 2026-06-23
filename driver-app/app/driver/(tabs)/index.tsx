@@ -440,7 +440,7 @@ function DriverDashboard() {
   useEffect(() => {
     const { error } = useDriverStore.getState();
     if (error) {
-      showToast('error', 'Error', error);
+      showToast('error', 'Something Went Wrong', error || 'Please try again.');
       clearError();
     }
   }, [useDriverStore.getState().error]);

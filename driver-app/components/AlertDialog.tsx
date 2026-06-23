@@ -155,10 +155,10 @@ const createStyles = (colors: ThemeColors) =>
       paddingHorizontal: 48,
     },
     buttonPrimary: {
-      backgroundColor: '#EF4444',
+      backgroundColor: colors.primary,
     },
     buttonDestructive: {
-      backgroundColor: '#EF4444',
+      backgroundColor: colors.danger,
     },
     buttonCancel: {
       backgroundColor: colors.border,

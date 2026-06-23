@@ -88,7 +88,7 @@ export default function AddressesScreen() {
             // PIPEDA: never spread the raw error body into logs — backend error
             // payloads can contain saved-address strings or user identifiers.
             console.error('Error fetching addresses', { code: err?.code, status: err?.status });
-            showToast('error', 'Error', 'Failed to load saved addresses');
+            showToast('error', 'Load Failed', 'Failed to load saved addresses');
         } finally {
             setLoading(false);
         }
@@ -104,9 +104,9 @@ export default function AddressesScreen() {
                     try {
                         await api.delete(`/addresses/${id}`);
                         await fetchAddresses();
-                        showToast('success', 'Success', 'Address deleted');
+                        showToast('success', 'Address Deleted', 'Address has been removed.');
                     } catch (err: any) {
-                        showToast('error', 'Error', 'Failed to delete address');
+                        showToast('error', 'Delete Failed', 'Failed to delete address');
                     }
                 },
             },
@@ -115,7 +115,7 @@ export default function AddressesScreen() {
 
     const handleAddAddress = async () => {
         if (!newAddress.name.trim() || !newAddress.address.trim()) {
-            showToast('info', 'Error', 'Please fill in both fields');
+            showToast('error', 'Missing Fields', 'Please fill in both fields');
             return;
         }
 
@@ -123,7 +123,7 @@ export default function AddressesScreen() {
             // Geocode the address to get real coordinates
             const coords = await geocodeAddress(newAddress.address.trim());
             if (!coords) {
-                showToast('info', 'Address not found', 'We could not locate that address on the map. Please enter a more specific address (include city/province).');
+                showToast('warning', 'Address not found', 'We could not locate that address on the map. Please enter a more specific address (include city/province).');
                 return;
             }
 
@@ -137,10 +137,10 @@ export default function AddressesScreen() {
             setShowAddModal(false);
             setNewAddress({ name: '', address: '' });
             await fetchAddresses();
-            showToast('success', 'Success', 'Address saved');
+            showToast('success', 'Address Saved', 'Address has been saved.');
         } catch (err: any) {
             const errorMessage = err.response?.data?.detail || 'Failed to save address';
-            showToast('error', 'Error', errorMessage);
+            showToast('error', 'Save Failed', errorMessage);
         }
     };
 

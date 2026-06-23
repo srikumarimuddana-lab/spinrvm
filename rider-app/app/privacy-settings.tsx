@@ -38,7 +38,7 @@ export default function PrivacySettingsScreen() {
       await api.post('/users/data-export');
       showToast(t('privacy.download_requested'), t('privacy.download_requested_msg'), 'success');
     } catch (err: any) {
-      showToast('Error', err?.response?.data?.detail || 'Failed to request data export. Please try again.', 'danger');
+      showToast('Export Failed', 'Failed to request data export. Please try again.', 'danger');
     }
   };
 
@@ -59,7 +59,7 @@ export default function PrivacySettingsScreen() {
               await logout();
               router.replace('/login' as any);
             } catch (err: any) {
-              showToast('Error', err?.response?.data?.detail || 'Failed to delete account. Please contact support.', 'danger');
+              showToast('Delete Failed', 'Could not delete account. Please contact support.', 'danger');
             }
           },
         },

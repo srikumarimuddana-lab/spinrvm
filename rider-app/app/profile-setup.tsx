@@ -129,7 +129,7 @@ export default function ProfileSetupScreen() {
         router.replace('/(tabs)' as any);
       }
     } catch (err: any) {
-      showToast('Error', err.message || 'Failed to save profile', 'danger');
+      showToast('Profile Not Saved', 'Failed to save your profile. Please try again.', 'danger');
     } finally {
       setIsSubmitting(false);
     }

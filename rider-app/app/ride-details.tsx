@@ -130,7 +130,7 @@ export default function RideDetailsScreen() {
       const user = useAuthStore.getState().user;
       showToast('Receipt Sent', `Receipt emailed to ${user?.email || 'your registered email'}.`, 'success');
     } catch (e: any) {
-      showToast('Failed', e?.response?.data?.detail || e?.message || 'Could not send receipt email.', 'danger');
+      showToast('Email Not Sent', 'Could not send receipt email. Please try again.', 'danger');
     } finally {
       setEmailSending(false);
     }
@@ -151,7 +151,7 @@ export default function RideDetailsScreen() {
         showToast('Saved', 'Receipt PDF generated.', 'success');
       }
     } catch (e: any) {
-      showToast('Unavailable', 'Updating to the latest app version enables PDF export.', 'danger');
+      showToast('PDF Unavailable', 'PDF export requires the latest app version. Please update the app and try again.', 'warning');
     } finally {
       setPdfBusy(false);
     }

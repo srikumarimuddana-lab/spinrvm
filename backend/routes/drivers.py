@@ -6209,7 +6209,7 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
                             "currency": "cad",
                             "product_data": {
                                 "name": plan.get("name", "Spinr Pass"),
-                                "description": plan.get("description", ""),
+                                **({} if not plan.get("description") else {"description": plan["description"]}),
                             },
                             "unit_amount": _amount_cents,
                         },

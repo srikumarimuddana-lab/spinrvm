@@ -977,18 +977,29 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         total_tips = sum((_d(r.get("tip_amount") or 0) for r in rides), Decimal("0"))
         total_rides = len(rides)
 
-        payouts = await db_supabase.get_rows(
-            "payouts",
-            {
-                "driver_id": driver["id"],
-                "status": "pending",
-            },
-            limit=1000,
+        # Deduct EVERY payout that represents money sent or in-flight — only
+        # explicitly reversed/failed payouts (money returned or never left) are
+        # excluded. The filter defaults to deducting, so an unknown/new status
+        # still counts as money-out: worst case a driver is temporarily
+        # under-paid (recoverable), NEVER a double-withdraw of platform money.
+        # (Before, only status='pending' was deducted — a 'completed' /
+        # 'transfer_completed' payout silently stopped reducing the balance, so
+        # the driver could re-withdraw the same earnings.)
+        payout_rows = await db_supabase.get_rows("payouts", {"driver_id": driver["id"]}, limit=5000)
+        _not_money_out = {"reversed", "failed"}
+        total_payouts = sum(
+            (_d(p.get("amount") or 0) for p in payout_rows if str(p.get("status") or "").lower() not in _not_money_out),
+            Decimal("0"),
         )
-        pending_payouts = sum((_d(p.get("amount") or 0) for p in payouts), Decimal("0"))
+        # 'pending' = recorded but not yet transferred (shown as "Pending");
+        # the rest of total_payouts is money already sent ("Paid Out").
+        pending_payouts = sum(
+            (_d(p.get("amount") or 0) for p in payout_rows if str(p.get("status") or "").lower() == "pending"),
+            Decimal("0"),
+        )
     except Exception as e:
         logger.error(f"Error fetching balance: {e}", exc_info=True)
-        total_earnings = total_tips = pending_payouts = Decimal("0")
+        total_earnings = total_tips = pending_payouts = total_payouts = Decimal("0")
         total_rides = 0
 
     # Quest + driver-referral bonuses are payable earnings (driver_bonuses
@@ -1005,10 +1016,10 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
 
     return {
         "total_earnings": _money_str(total_earnings + total_bonuses),
-        # payable_balance = ride earnings + bonuses - pending_payouts
-        "payable_balance": _money_str(total_earnings + total_bonuses - pending_payouts),
+        # payable_balance = ride earnings + bonuses - ALL money-out payouts
+        "payable_balance": _money_str(total_earnings + total_bonuses - total_payouts),
         "pending_payouts": _money_str(pending_payouts),
-        "total_paid_out": "0.00",
+        "total_paid_out": _money_str(total_payouts - pending_payouts),
         "total_bonuses": _money_str(total_bonuses),
         "has_bank_account": bool(driver.get("bank_account")),
         "stripe_account_onboarded": bool(driver.get("stripe_account_onboarded", False)),

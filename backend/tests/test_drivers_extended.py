@@ -219,8 +219,9 @@ class TestGetDriverBalance:
     def test_returns_balance_summary(self):
         from backend.routes import drivers as drv
 
-        rides = [{"driver_earnings": 20.0, "tip_amount": 2.0}]
-        payouts = [{"amount": 5.0}]
+        # total_earnings sums the fare components (base/distance/time) + tip.
+        rides = [{"base_fare": 18.0, "tip_amount": 2.0}]
+        payouts = [{"amount": 5.0, "status": "pending"}]
 
         def get_rows_mock(table, filters=None, **kw):
             if table == "drivers":
@@ -237,6 +238,37 @@ class TestGetDriverBalance:
         assert result["total_earnings"] == "20.00"
         assert result["total_tips"] == "2.00"
         assert result["total_rides"] == 1
+
+    def test_balance_deducts_all_money_out_payouts_not_just_pending(self):
+        """payable_balance must subtract EVERY payout except reversed/failed —
+        not only 'pending' — so a completed payout can't be re-withdrawn."""
+        from backend.routes import drivers as drv
+
+        rides = [{"base_fare": 100.0}]  # $100 earned
+        payouts = [
+            {"amount": 30.0, "status": "completed"},  # money sent — deduct
+            {"amount": 10.0, "status": "transfer_completed"},  # money sent — deduct
+            {"amount": 5.0, "status": "pending"},  # in-flight — deduct
+            {"amount": 50.0, "status": "reversed"},  # returned — do NOT deduct
+            {"amount": 25.0, "status": "failed"},  # never sent — do NOT deduct
+        ]
+
+        def get_rows_mock(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                return rides
+            if table == "payouts":
+                return payouts
+            return []
+
+        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)):
+            result = asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
+
+        # 100 earned - (30 + 10 + 5 deducted) = 55; reversed/failed excluded.
+        assert result["payable_balance"] == "55.00"
+        assert result["pending_payouts"] == "5.00"
+        assert result["total_paid_out"] == "40.00"  # 30 + 10 sent (not pending)
 
     def test_returns_zeros_when_driver_not_found(self):
         from fastapi import HTTPException
@@ -1548,7 +1580,15 @@ class TestDriverReferral:
                 return [{"id": "ref_driver_1", "user_id": uid}]
             if table == "users":
                 # One user signed up with this driver's code.
-                return [{"id": "ref_user_1", "first_name": "Ref", "last_name": "Ee", "email": "r@e.ca", "created_at": "2026-01-01"}]
+                return [
+                    {
+                        "id": "ref_user_1",
+                        "first_name": "Ref",
+                        "last_name": "Ee",
+                        "email": "r@e.ca",
+                        "created_at": "2026-01-01",
+                    }
+                ]
             return []
 
         return side_effect

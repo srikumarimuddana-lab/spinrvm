@@ -432,6 +432,11 @@ async def admin_create_service_area(area: ServiceAreaCreateRequest, admin: dict 
         "driver_referral_terms": area.driver_referral_terms,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    # Invariant: subscription_required=True ⟹ spinr_pass_enabled=True.
+    # Guard on create as well as update so a direct API call with both flags
+    # conflicting can't produce a locked-out area from the first insert.
+    if doc.get("subscription_required"):
+        doc["spinr_pass_enabled"] = True
     # Seed vehicle_pricing with all active vehicle types so every type
     # appears on the rider's ride-options screen from day one.
     if not doc.get("vehicle_pricing"):

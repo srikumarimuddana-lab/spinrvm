@@ -3425,7 +3425,13 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
     if ride.get("service_area_id"):
         try:
             _ride_area = await db_supabase.find_one("service_areas", {"id": ride["service_area_id"]})
-            if _ride_area and _ride_area.get("subscription_required"):
+            # Finding F: child areas (airport sub-regions) inherit subscription_required
+            # from their parent; check parent when child flag is False.
+            _accept_sub_required = bool(_ride_area and _ride_area.get("subscription_required"))
+            if not _accept_sub_required and _ride_area and _ride_area.get("parent_service_area_id"):
+                _parent = await db_supabase.find_one("service_areas", {"id": _ride_area["parent_service_area_id"]})
+                _accept_sub_required = bool(_parent and _parent.get("subscription_required"))
+            if _accept_sub_required:
                 _active_sub = (lambda _r: _r[0] if _r else None)(
                     await db_supabase.get_rows(
                         "driver_subscriptions",
@@ -5691,6 +5697,14 @@ async def update_driver_status(
             _driver_area = await db_supabase.find_one("service_areas", {"id": driver["service_area_id"]})
             if _driver_area and _driver_area.get("subscription_required"):
                 require_sub = True
+            # Finding F: inherit subscription_required from parent area (airport sub-regions
+            # should require the same pass as the parent city area).
+            elif _driver_area and _driver_area.get("parent_service_area_id"):
+                _parent_area = await db_supabase.find_one(
+                    "service_areas", {"id": _driver_area["parent_service_area_id"]}
+                )
+                if _parent_area and _parent_area.get("subscription_required"):
+                    require_sub = True
 
         if require_sub:
             try:
@@ -5744,14 +5758,13 @@ async def update_driver_status(
                         action_hint="Activate Spinr Pass",
                     )
 
-            # Vehicle-type enforcement: if the subscription plan restricts
-            # to specific vehicle type IDs, the driver's registered vehicle
-            # must be one of them. A null/empty list means all types allowed.
+            # Plan scope enforcement: check vehicle_types and service_areas allowlists.
+            # A null/empty list means all types/areas allowed.
             if sub.get("plan_id"):
                 try:
                     plan = await db_supabase.find_one("subscription_plans", {"id": sub["plan_id"]})
                     allowed_vt = plan.get("vehicle_types") if plan else None
-                    if allowed_vt:  # non-null, non-empty list
+                    if allowed_vt:
                         driver_vt = driver.get("vehicle_type_id")
                         if driver_vt not in allowed_vt:
                             raise SpinrException(
@@ -5764,11 +5777,25 @@ async def update_driver_status(
                                 message_key=ErrorKeys.DRIVER_SUBSCRIPTION_REQUIRED,
                                 action_hint="Update Spinr Pass",
                             )
+                    # Finding C: service-area scope — a pass for another area must
+                    # not satisfy enforcement in this driver's area.
+                    allowed_areas = plan.get("service_areas") if plan else None
+                    if allowed_areas and driver.get("service_area_id") not in allowed_areas:
+                        raise SpinrException(
+                            message=(
+                                "Your Spinr Pass plan does not cover this service area. "
+                                "Please subscribe to a plan for your area."
+                            ),
+                            error_code=ErrorCode.PAYMENT_FAILED,
+                            status_code=402,
+                            message_key=ErrorKeys.DRIVER_SUBSCRIPTION_REQUIRED,
+                            action_hint="Subscribe to Spinr Pass",
+                        )
                 except SpinrException:
                     raise
                 except Exception as e:
                     logger.error(
-                        "vehicle_type check failed for driver=%s plan=%s: %s",
+                        "plan scope check failed for driver=%s plan=%s: %s",
                         driver_id,
                         sub.get("plan_id"),
                         e,
@@ -5776,7 +5803,7 @@ async def update_driver_status(
                     )
                     raise HTTPException(
                         status_code=503,
-                        detail="Could not verify subscription plan vehicle restrictions. Please try again.",
+                        detail="Could not verify subscription plan restrictions. Please try again.",
                     ) from e
 
     logger.info(

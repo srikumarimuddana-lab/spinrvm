@@ -188,29 +188,29 @@ function PayoutScreen() {
             setShowGstForm(false);
             showToast('success', 'Saved', 'GST/BN number updated successfully');
         } catch (err: any) {
-            showToast('error', 'Error', err.response?.data?.detail || 'Failed to save GST number');
+            showToast('error', 'Save Failed', err.response?.data?.detail || 'Failed to save GST number');
         }
     };
 
     const handleRequestPayout = async () => {
         const amount = parseFloat(payoutAmount);
         if (isNaN(amount) || amount <= 0) {
-            showToast('error', 'Error', 'Please enter a valid amount');
+            showToast('error', 'Invalid Amount', 'Please enter a valid amount');
             return;
         }
         if (amount < 10) {
-            showToast('error', 'Error', 'Minimum payout amount is $10');
+            showToast('error', 'Amount Too Low', 'Minimum payout amount is $10');
             return;
         }
         if (driverBalance && amount > parseFloat(driverBalance.payable_balance)) {
-            showToast('error', 'Error', `Insufficient balance. Available: $${parseFloat(driverBalance.payable_balance).toFixed(2)}`);
+            showToast('error', 'Insufficient Balance', `Available balance: $${parseFloat(driverBalance.payable_balance).toFixed(2)}`);
             return;
         }
 
         const result = await requestPayout(amount);
         if (result.success) {
             setPayoutAmount('');
-            showToast('success', 'Success', 'Payout request submitted. Funds will arrive in 2-3 business days.');
+            showToast('success', 'Payout Requested', 'Funds will arrive in 2–3 business days.');
         }
     };
 
@@ -234,7 +234,7 @@ function PayoutScreen() {
                 showToast('info', 'Unavailable', 'T4A document is not yet available. Please try again later.');
             }
         } catch (err: any) {
-            showToast('error', 'Error', err.response?.data?.detail || 'Failed to generate T4A download link.');
+            showToast('error', 'Download Failed', err.response?.data?.detail || 'Could not download T4A. Please try again.');
         } finally {
             setDownloadingT4A(false);
         }
@@ -257,7 +257,7 @@ function PayoutScreen() {
                 showToast('info', 'Unavailable', 'Earnings CSV is not yet available. Please try again later.');
             }
         } catch (err: any) {
-            showToast('error', 'Error', err.response?.data?.detail || 'Failed to generate earnings CSV download link.');
+            showToast('error', 'Download Failed', err.response?.data?.detail || 'Could not download earnings CSV. Please try again.');
         } finally {
             setDownloadingCSV(false);
         }

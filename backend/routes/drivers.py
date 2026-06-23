@@ -129,6 +129,15 @@ def _money_str(v) -> str:
         return "0.00"
 
 
+def _ride_income(r: dict) -> Decimal:
+    """A completed ride's driver income as a Decimal — the canonical
+    driver_earnings, falling back to the fare components only for legacy rows
+    that predate that column. Shared by the earnings + T4A summaries."""
+    if r.get("driver_earnings") is not None:
+        return _d(r.get("driver_earnings"))
+    return _d(r.get("base_fare")) + _d(r.get("distance_fare")) + _d(r.get("time_fare")) + _d(r.get("tip_amount"))
+
+
 # ── Vault encryption for driver PII (P2-5) ───────────────────────────────────
 # licence_number and vehicle_vin live in plain TEXT columns, but the values
 # stored there are vault.secrets UUIDs, not plaintext — actual ciphertext is
@@ -1147,13 +1156,9 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
             _total_tax += _t
 
         stats = {
-            "total_earnings": sum(
-                float(r.get("base_fare") or 0)
-                + float(r.get("distance_fare") or 0)
-                + float(r.get("time_fare") or 0)
-                + float(r.get("tip_amount") or 0)
-                for r in rides
-            ),
+            # Driver INCOME = driver_earnings (canonical), fare-component fallback
+            # for legacy rows. Matches the T4A summary and the trips view.
+            "total_earnings": sum((_ride_income(r) for r in rides), Decimal("0")),
             "total_tips": sum(r.get("tip_amount", 0) or 0 for r in rides),
             "total_incentives": float(_incentive_total),
             "total_cancel_fees": float(_cancel_fees_total),
@@ -1172,17 +1177,32 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
             "total_duration_minutes": 0,
         }
 
+    # Quest + referral bonuses earned in this period (driver_bonuses ledger).
+    # Isolated so a bonus-fetch error never zeroes ride earnings. Distinct from
+    # total_incentives (per-ride pickup/surge bonuses) — don't conflate them.
+    _total_bonuses = Decimal("0")
+    try:
+        _bonus_filters: Dict[str, Any] = {"driver_id": driver["id"]}
+        if use_date_filter and start_date:
+            _bonus_filters["created_at"] = {"$gte": start_date.isoformat()}
+        _bonus_rows = await db_supabase.get_rows("driver_bonuses", _bonus_filters, limit=10000)
+        _total_bonuses = sum((_d(b.get("amount") or 0) for b in _bonus_rows), Decimal("0"))
+    except Exception:
+        logger.error("earnings: driver_bonuses lookup failed", exc_info=True)
+
     _total_with_extras = (
         Decimal(str(stats.get("total_earnings", 0)))
         + Decimal(str(stats.get("total_incentives", 0)))
         + Decimal(str(stats.get("total_cancel_fees", 0)))
         + Decimal(str(stats.get("total_tax", 0)))
+        + _total_bonuses
     )
     return {
         "period": period,
         "total_earnings": _money_str(_total_with_extras),
         "total_tips": _money_str(stats.get("total_tips", 0)),
         "total_incentives": _money_str(stats.get("total_incentives", 0)),
+        "total_bonuses": _money_str(_total_bonuses),
         "total_cancel_fees": _money_str(stats.get("total_cancel_fees", 0)),
         "total_tax": _money_str(stats.get("total_tax", 0)),
         "total_rides": stats.get("total_rides", 0),
@@ -2845,16 +2865,9 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
         limit=10000,
     )
 
-    # T4A reports the driver's INCOME — sum driver_earnings (their actual cut),
-    # not the gross fare. They are equal under Spinr's 0% commission, but
-    # driver_earnings is the canonical income field (the trips view uses it too);
-    # summing gross fare would misreport income to the CRA if they ever diverge.
-    # Fall back to the fare components only for legacy rows lacking the column.
-    def _ride_income(r: dict) -> Decimal:
-        if r.get("driver_earnings") is not None:
-            return _d(r.get("driver_earnings"))
-        return _d(r.get("base_fare")) + _d(r.get("distance_fare")) + _d(r.get("time_fare")) + _d(r.get("tip_amount"))
-
+    # T4A reports the driver's INCOME — sum driver_earnings (see _ride_income),
+    # not the gross fare; that would misreport income to the CRA if they ever
+    # diverge under a future fee model.
     total_earnings = _money_str(sum((_ride_income(r) for r in rides), Decimal("0")))
 
     driver_name = f"{current_user.get('first_name', '')} {current_user.get('last_name', '')}".strip() or None

@@ -61,8 +61,10 @@ export default function ActivityView() {
   const totalEarnings = parseMoney(earnings?.total_earnings);
   const totalTips = parseMoney(earnings?.total_tips);
   const totalIncentives = parseMoney(earnings?.total_incentives);
+  // Quest + referral rewards (driver_bonuses) — distinct from per-ride incentives.
+  const totalBonuses = parseMoney((earnings as any)?.total_bonuses);
   const totalTax = parseMoney(earnings?.total_tax);
-  const fareEarnings = Math.max(totalEarnings - totalTips - totalIncentives - totalTax, 0);
+  const fareEarnings = Math.max(totalEarnings - totalTips - totalIncentives - totalBonuses - totalTax, 0);
   const periodRideTotal = period === 'all' ? historyTotal : Number(earnings?.total_rides ?? 0);
   const hasMoreHistory = rideHistory.length < historyTotal;
 
@@ -269,7 +271,8 @@ export default function ActivityView() {
               <View style={styles.breakdownItem}>
                 <Ionicons name="flash" size={18} color="#8b5cf6" />
                 <Text style={styles.label}>Bonus</Text>
-                <Text style={[styles.value, { color: '#8b5cf6' }]}>${toMoney(totalIncentives)}</Text>
+                {/* Per-ride incentives + quest/referral rewards, combined. */}
+                <Text style={[styles.value, { color: '#8b5cf6' }]}>${toMoney(totalIncentives + totalBonuses)}</Text>
               </View>
               <View style={styles.divider} />
               <View style={styles.breakdownItem}>

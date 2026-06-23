@@ -15,6 +15,7 @@ import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJa
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Toast from 'react-native-toast-message';
 import { AlertDialog } from '../components/AlertDialog';
+import { toastConfig } from '../components/toastConfig';
 
 // Minimum time the branded splash (logo + tagline) stays on screen, even when
 // auth/location init finishes sooner — otherwise the tagline animation (which
@@ -522,7 +523,7 @@ function DriverRootLayoutInner({
             <Stack.Screen name="driver" options={{ animation: "none", gestureEnabled: false }} />
           </Stack>
           <AlertDialog />
-          <Toast />
+          <Toast config={toastConfig} />
         </SafeAreaProvider>
       </GestureHandlerRootView>
     </ErrorBoundary>

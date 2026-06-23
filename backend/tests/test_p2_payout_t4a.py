@@ -28,12 +28,18 @@ DRIVER_USER_ID = "driver_user_p2_16"
 DRIVER_ID = "driver_row_p2_16"
 
 
-def _driver_row(stripe_account_id: str | None = None) -> dict:
+def _driver_row(stripe_account_id: str | None = None, **extra) -> dict:
     return {
         "id": DRIVER_ID,
         "user_id": DRIVER_USER_ID,
         "stripe_account_id": stripe_account_id,
         "bank_account": None,
+        # CRA payout preconditions (enforced before the balance/bank checks):
+        # a valid GST/HST BN and SIN on file. Default them so eligibility tests
+        # reach the logic they pin; override to exercise the GST/SIN blocks.
+        "gst_bn": "123456789RT0001",
+        "stripe_id_number_provided": True,
+        **extra,
     }
 
 
@@ -349,7 +355,7 @@ class TestGetT4ASummary:
         """Driver rows without GST columns default to False / empty string."""
         from backend.routes.drivers import get_t4a_summary
 
-        driver = _driver_row()  # no gst_registered / gst_bn keys
+        driver = _driver_row(gst_bn=None)  # no gst_registered; gst_bn absent
 
         with (
             patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),

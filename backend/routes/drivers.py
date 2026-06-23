@@ -2845,15 +2845,17 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
         limit=10000,
     )
 
-    total_earnings = _money_str(
-        sum(
-            Decimal(str(r.get("base_fare") or 0))
-            + Decimal(str(r.get("distance_fare") or 0))
-            + Decimal(str(r.get("time_fare") or 0))
-            + Decimal(str(r.get("tip_amount") or 0))
-            for r in rides
-        )
-    )
+    # T4A reports the driver's INCOME — sum driver_earnings (their actual cut),
+    # not the gross fare. They are equal under Spinr's 0% commission, but
+    # driver_earnings is the canonical income field (the trips view uses it too);
+    # summing gross fare would misreport income to the CRA if they ever diverge.
+    # Fall back to the fare components only for legacy rows lacking the column.
+    def _ride_income(r: dict) -> Decimal:
+        if r.get("driver_earnings") is not None:
+            return _d(r.get("driver_earnings"))
+        return _d(r.get("base_fare")) + _d(r.get("distance_fare")) + _d(r.get("time_fare")) + _d(r.get("tip_amount"))
+
+    total_earnings = _money_str(sum((_ride_income(r) for r in rides), Decimal("0")))
 
     driver_name = f"{current_user.get('first_name', '')} {current_user.get('last_name', '')}".strip() or None
     return {

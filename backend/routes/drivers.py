@@ -5619,20 +5619,23 @@ async def update_driver_status(
         # is_verified check removed — status field is the single source of truth now.
         # Only status='active' drivers reach this point (blocked above).
 
-        # Check active Spinr Pass subscription. The enforcement is toggled
-        # by the admin-controlled app setting `require_driver_subscription`
-        # so the business team can flip it without a redeploy. When the
-        # setting is false (default, pre-launch), we skip the subscription
-        # query entirely — the `driver_subscriptions` table may not even
-        # exist in the database yet during pre-launch, so querying it would
-        # raise PostgREST PGRST205. The query only runs when enforcement
-        # is actively turned on.
+        # Check active Spinr Pass subscription.
+        # Enforcement triggers when EITHER:
+        #   a) the global app setting `require_driver_subscription` is True, OR
+        #   b) the driver's service area has `subscription_required=True`
+        # When neither is set (default) we skip the DB query entirely — the
+        # driver_subscriptions table may not exist yet pre-launch.
         try:
             from ..settings_loader import get_app_settings  # type: ignore
         except ImportError:
             from settings_loader import get_app_settings  # type: ignore
         app_settings = await get_app_settings()
         require_sub = bool(app_settings.get("require_driver_subscription", False))
+
+        if not require_sub and driver.get("service_area_id"):
+            _driver_area = await db_supabase.find_one("service_areas", {"id": driver["service_area_id"]})
+            if _driver_area and _driver_area.get("subscription_required"):
+                require_sub = True
 
         if require_sub:
             try:

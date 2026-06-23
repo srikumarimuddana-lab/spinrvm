@@ -575,6 +575,7 @@ async def admin_update_service_area(
         "driver_referral_rides_required",
         "rider_referral_terms",
         "driver_referral_terms",
+        "vehicle_cascade_map",
     ]:
         val = getattr(area, field)
         if val is not None:

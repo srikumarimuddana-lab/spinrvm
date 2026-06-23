@@ -25,10 +25,15 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# Known emulator brands/models
+# Known emulator brands/models.
+# NOTE: "google" is intentionally NOT a brand indicator — real Pixel phones
+# report brand="google", so flagging it falsely marks every Pixel "untrusted".
+# Genuine emulators are still caught by `isDevice == False` and the model list
+# below (the Android emulator reports model "sdk_gphone64_*"), so dropping the
+# brand check loses no real coverage.
 _EMULATOR_INDICATORS = {
-    "brands": {"google", "generic", "unknown", "sdk_gphone"},
-    "models": {"sdk_gphone64_arm64", "emulator", "android sdk built for x86", "vbox86p"},
+    "brands": {"generic", "unknown", "sdk_gphone"},
+    "models": {"sdk_gphone64_arm64", "sdk_gphone_x86", "emulator", "android sdk built for x86", "vbox86p"},
 }
 
 # Suspicious OS versions (very old = likely test device or emulator)

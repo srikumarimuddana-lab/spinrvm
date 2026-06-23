@@ -71,7 +71,7 @@ export default function DocumentsScreen() {
             setRequirements(reqRes.data as Requirement[]);
             setDocuments(docRes.data as DriverDocument[]);
         } catch (err: any) {
-            showToast('error', 'Error', `Failed to load documents: ${err.message}`);
+            showToast('error', 'Load Failed', 'Failed to load your documents. Please check your connection and try again.');
         } finally {
             setLoading(false);
         }

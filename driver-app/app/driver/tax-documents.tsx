@@ -60,7 +60,7 @@ function TaxDocumentsScreen() {
             }));
             setDocuments(synthesized);
         } catch {
-            showToast('error', 'Error', 'Failed to load tax documents. Please try again.');
+            showToast('error', 'Load Failed', 'Failed to load tax documents. Please try again.');
         } finally {
             setLoading(false);
             setRefreshing(false);
@@ -96,7 +96,7 @@ function TaxDocumentsScreen() {
                 showToast('info', 'Unavailable', 'This document is not yet available for download.');
             }
         } catch (err) {
-            showToast('error', 'Error', 'Could not open the document. Please try again.');
+            showToast('error', 'Open Failed', 'Could not open the document. Please try again.');
         } finally {
             setDownloadingId(null);
         }

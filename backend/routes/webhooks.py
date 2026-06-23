@@ -1105,12 +1105,15 @@ async def stripe_webhook(request: Request):
                 _plan_price = Decimal(str((_inv_plan or {}).get("price") or _inv_amount or 0))
                 _wh_tax = await _compute_subscription_tax(row.get("driver_id"), _plan_price)
 
+                # Use the actual Stripe-charged amount as the authoritative ledger
+                # figure — _wh_tax["total"] is computed from the plan price and may
+                # differ from _inv_amount when a coupon or proration is applied.
                 await _record_subscription_payment(
                     driver_id=row.get("driver_id"),
                     subscription_id=row["id"],
                     plan_id=row.get("plan_id"),
                     plan_name=row.get("plan_name"),
-                    amount=_wh_tax["total"],
+                    amount=_inv_amount,
                     billing_reason=_inv_billing_reason,
                     subtotal=_wh_tax["subtotal"],
                     gst_amount=_wh_tax["gst_amount"],
@@ -1124,21 +1127,26 @@ async def stripe_webhook(request: Request):
                 # Send invoice email for every recurring charge (subscription_create
                 # = first charge on a recurring plan, subscription_cycle = renewal).
                 # One-off plans email from _activate_subscription instead.
+                # Fire-and-forget so we don't hold Stripe's webhook response open.
                 if _inv_amount and Decimal(str(_inv_amount)) > 0:
-                    await _send_subscription_invoice_email(
-                        driver_id=row.get("driver_id"),
-                        plan_name=row.get("plan_name") or "Spinr Pass",
-                        duration_label=_inv_dur,
-                        subtotal=_wh_tax["subtotal"],
-                        gst_amount=_wh_tax["gst_amount"],
-                        pst_amount=_wh_tax["pst_amount"],
-                        hst_amount=_wh_tax["hst_amount"],
-                        tax_total=_wh_tax["tax_total"],
-                        total=_wh_tax["total"],
-                        province=_wh_tax["province"],
-                        billing_reason=_inv_billing_reason,
-                        payment_date=_inv_date,
-                        stripe_invoice_url=invoice.get("hosted_invoice_url"),
+                    import asyncio as _asyncio
+
+                    _asyncio.create_task(
+                        _send_subscription_invoice_email(
+                            driver_id=row.get("driver_id"),
+                            plan_name=row.get("plan_name") or "Spinr Pass",
+                            duration_label=_inv_dur,
+                            subtotal=_wh_tax["subtotal"],
+                            gst_amount=_wh_tax["gst_amount"],
+                            pst_amount=_wh_tax["pst_amount"],
+                            hst_amount=_wh_tax["hst_amount"],
+                            tax_total=_wh_tax["tax_total"],
+                            total=_wh_tax["total"],
+                            province=_wh_tax["province"],
+                            billing_reason=_inv_billing_reason,
+                            payment_date=_inv_date,
+                            stripe_invoice_url=invoice.get("hosted_invoice_url"),
+                        )
                     )
 
                 # Only push-notify on actual renewal cycles — the initial invoice's

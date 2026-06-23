@@ -516,7 +516,9 @@ export default function ServiceAreasPage() {
                       {editTab === 'cascade' && (
                         <CascadeEditor
                           cascadeMap={area.vehicle_cascade_map || []}
-                          vehicleTypes={vehicleTypes}
+                          vehicleTypes={vehicleTypes.filter(vt =>
+                            (area.vehicle_pricing || []).some((p: any) => p.vehicle_type === vt.name)
+                          )}
                           onSave={async (map) => {
                             try {
                               await updateServiceArea(area.id, { vehicle_cascade_map: map });
@@ -1774,14 +1776,23 @@ function CascadeEditor({
       <div className="mb-4">
         <h4 className="font-bold text-gray-800">Dispatch Cascade Rules</h4>
         <p className="text-sm text-gray-500 mt-0.5">
-          When a ride is booked for a vehicle type and no driver is available, dispatch
-          automatically tries the upgrade types listed here — in the order shown.
-          Example: SUV → XL means an SUV request will also be offered to XL drivers if
-          no SUV driver is reachable.
+          When a ride is booked for a vehicle type and no driver of that type is available,
+          dispatch automatically tries the upgrade types listed here.
+          Only vehicle types configured under <span className="font-semibold">Vehicle Pricing</span> for
+          this area appear below.
         </p>
       </div>
 
-      {rules.length === 0 ? (
+      {vehicleTypes.length === 0 ? (
+        <div className="text-center py-10 bg-amber-50 rounded-xl border-2 border-dashed border-amber-200">
+          <Car className="h-10 w-10 text-amber-300 mx-auto mb-3" />
+          <p className="text-amber-700 font-medium">No vehicle types configured for this area</p>
+          <p className="text-amber-600 text-sm mt-1">
+            Add vehicle types under the <span className="font-semibold">Vehicle Pricing</span> tab first,
+            then return here to set up cascade rules.
+          </p>
+        </div>
+      ) : rules.length === 0 ? (
         <div className="text-center py-10 bg-gray-50 rounded-xl border-2 border-dashed border-gray-200">
           <ArrowRightLeft className="h-10 w-10 text-gray-300 mx-auto mb-3" />
           <p className="text-gray-500 font-medium">No cascade rules</p>

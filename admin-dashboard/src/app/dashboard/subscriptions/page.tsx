@@ -34,6 +34,7 @@ import {
     getSubscriptionStats,
     getAdminSubscriptionPayments,
     updateSubscriptionTaxConfig,
+    getServiceAreas,
 } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
@@ -499,7 +500,7 @@ export default function SubscriptionsPage() {
                 getSubscriptionPlans(),
                 getDriverSubscriptions(statusFilter === "all" ? undefined : statusFilter),
                 getSubscriptionStats(),
-                fetch("/api/admin/service-areas?limit=200").then((r) => r.json()).catch(() => []),
+                getServiceAreas().catch(() => []),
             ]);
             setPlans(plansData ?? []);
             setDriverSubs(subsData ?? []);

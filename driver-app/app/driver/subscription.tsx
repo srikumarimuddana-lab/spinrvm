@@ -40,6 +40,8 @@ interface Payment {
   subtotal: string;
   gst_amount: string;
   pst_amount: string;
+  hst_amount: string;
+  province: string;
   currency: string;
   billing_reason: string | null;
   created_at: string;
@@ -418,7 +420,7 @@ export default function SubscriptionScreen() {
           <>
             <Text style={styles.sectionTitle}>Payment History</Text>
             <Text style={styles.sectionSubtitle}>
-              {paymentsTotal > 0 ? `${paymentsTotal} charge${paymentsTotal === 1 ? '' : 's'} · includes GST & PST` : 'Spinr Pass charges'}
+              {paymentsTotal > 0 ? `${paymentsTotal} charge${paymentsTotal === 1 ? '' : 's'} · tax included` : 'Spinr Pass charges'}
             </Text>
             {payments.map((p) => (
               <View key={p.id} style={styles.paymentRow}>
@@ -432,11 +434,12 @@ export default function SubscriptionScreen() {
                     {'  ·  '}
                     {formatDate(p.created_at)}
                   </Text>
-                  {p.gst_amount && (
+                  {parseFloat(p.subtotal) > 0 && (
                     <Text style={styles.paymentTax}>
-                      Subtotal ${parseFloat(p.subtotal).toFixed(2)}
-                      {'  ·  GST $'}{parseFloat(p.gst_amount).toFixed(2)}
-                      {'  ·  PST $'}{parseFloat(p.pst_amount).toFixed(2)}
+                      {`Subtotal $${parseFloat(p.subtotal).toFixed(2)}`}
+                      {parseFloat(p.gst_amount) > 0 ? `  ·  GST $${parseFloat(p.gst_amount).toFixed(2)}` : ''}
+                      {parseFloat(p.pst_amount) > 0 ? `  ·  PST $${parseFloat(p.pst_amount).toFixed(2)}` : ''}
+                      {parseFloat(p.hst_amount) > 0 ? `  ·  HST $${parseFloat(p.hst_amount).toFixed(2)}` : ''}
                     </Text>
                   )}
                   <TouchableOpacity

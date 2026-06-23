@@ -6101,26 +6101,24 @@ async def _compute_subscription_tax(driver_id: str, plan_price: Decimal) -> dict
     """Return pre-tax subtotal plus per-component tax amounts for a subscription charge.
 
     Reads the driver's service area's subscription_tax_config (migration 185).
-    Falls back to zero tax on any error so checkout is never blocked.
+    Raises on DB error — callers at checkout time must propagate the failure
+    so we never issue a Stripe session with silently-zeroed tax.
     """
     _ZERO = Decimal("0")
     _q2 = lambda v: v.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)  # noqa: E731
     subtotal = _q2(plan_price)
     gst = pst = hst = _ZERO
     province = "SK"
-    try:
-        _drv = await db_supabase.find_one("drivers", {"id": driver_id})
-        _area_id = (_drv or {}).get("service_area_id")
-        if _area_id:
-            _area = await db_supabase.find_one("service_areas", {"id": _area_id})
-            _cfg = (_area or {}).get("subscription_tax_config") or {}
-            if _cfg.get("enabled", True):
-                province = str(_cfg.get("province", "SK") or "SK")
-                gst = _q2(subtotal * Decimal(str(_cfg.get("gst_rate", 5) or 0)) / Decimal("100"))
-                pst = _q2(subtotal * Decimal(str(_cfg.get("pst_rate", 6) or 0)) / Decimal("100"))
-                hst = _q2(subtotal * Decimal(str(_cfg.get("hst_rate", 0) or 0)) / Decimal("100"))
-    except Exception:
-        logger.warning("[SUBSCRIBE] Tax config lookup failed for driver %s — zero tax applied", driver_id)
+    _drv = await db_supabase.find_one("drivers", {"id": driver_id})
+    _area_id = (_drv or {}).get("service_area_id")
+    if _area_id:
+        _area = await db_supabase.find_one("service_areas", {"id": _area_id})
+        _cfg = (_area or {}).get("subscription_tax_config") or {}
+        if _cfg.get("enabled", True):
+            province = str(_cfg.get("province", "SK") or "SK")
+            gst = _q2(subtotal * Decimal(str(_cfg.get("gst_rate", 5) or 0)) / Decimal("100"))
+            pst = _q2(subtotal * Decimal(str(_cfg.get("pst_rate", 6) or 0)) / Decimal("100"))
+            hst = _q2(subtotal * Decimal(str(_cfg.get("hst_rate", 0) or 0)) / Decimal("100"))
     tax_total = gst + pst + hst
     return {
         "subtotal": subtotal,
@@ -6738,21 +6736,21 @@ async def _send_subscription_invoice_email(
     payment_date: str,
     invoice_number: str | None = None,
     stripe_invoice_url: str | None = None,
-) -> None:
+) -> bool:
     """Email the driver a rich HTML invoice (+ PDF attachment) for their Spinr Pass charge.
 
-    Tax amounts are supplied by the caller (computed from service-area tax config
-    at checkout time) so the invoice reflects actual rates, not a back-computed
-    guess.  Never raises — email failure must not block the activation flow.
+    Returns True on success, False on any failure.  Never raises — the caller
+    decides whether to surface the failure (resend endpoint raises 502; activation
+    flow logs and continues).
     """
     try:
         driver = await db.find_one("drivers", {"id": driver_id})
         if not driver:
-            return
+            return False
         user = await db.find_one("users", {"id": driver.get("user_id")})
         email = (user or {}).get("email", "")
         if not email:
-            return
+            return False
 
         driver_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "Driver"
         billing_label = "Auto-renewal" if billing_reason == "subscription_cycle" else "One-time purchase"
@@ -6768,13 +6766,21 @@ async def _send_subscription_invoice_email(
                 f"</tr>"
             )
 
+        def _pct_label(amt: Decimal, base: Decimal) -> str:
+            if base <= 0:
+                return ""
+            from decimal import ROUND_HALF_UP as _RHU
+
+            pct = (amt / base * 100).quantize(Decimal("0.01"), rounding=_RHU).normalize()
+            return f" ({pct}%)"
+
         tax_rows_html = ""
         if gst_amount > 0:
-            tax_rows_html += _row("GST (5%) — Federal", gst_amount)
+            tax_rows_html += _row(f"GST{_pct_label(gst_amount, subtotal)} — Federal", gst_amount)
         if pst_amount > 0:
-            tax_rows_html += _row(f"PST (6%) — {province}", pst_amount)
+            tax_rows_html += _row(f"PST{_pct_label(pst_amount, subtotal)} — {province}", pst_amount)
         if hst_amount > 0:
-            tax_rows_html += _row(f"HST — {province}", hst_amount)
+            tax_rows_html += _row(f"HST{_pct_label(hst_amount, subtotal)} — {province}", hst_amount)
 
         stripe_link_html = (
             f"<p style='margin:8px 0 0;font-size:13px;'>"
@@ -6883,7 +6889,7 @@ async def _send_subscription_invoice_email(
         except ImportError:
             from utils.email_provider import send_transactional_email  # type: ignore
 
-        await send_transactional_email(
+        _ok = await send_transactional_email(
             to=email,
             subject=f"Your Spinr Pass Invoice — {plan_name} ({payment_date})",
             html=html,
@@ -6892,13 +6898,22 @@ async def _send_subscription_invoice_email(
             email_type="subscription_invoice",
             attachments=attachments,
         )
-        logger.info(
-            "[SUBSCRIBE] Invoice email sent driver=%s plan=%s total=%s",
-            driver_id,
-            plan_name,
-            total,
-            extra={"domain": "payments", "driver_id": driver_id},
-        )
+        if _ok:
+            logger.info(
+                "[SUBSCRIBE] Invoice email sent driver=%s plan=%s total=%s",
+                driver_id,
+                plan_name,
+                total,
+                extra={"domain": "payments", "driver_id": driver_id},
+            )
+        else:
+            logger.error(
+                "[SUBSCRIBE] Invoice email delivery failed driver=%s plan=%s",
+                driver_id,
+                plan_name,
+                extra={"domain": "payments", "driver_id": driver_id},
+            )
+        return bool(_ok)
     except Exception as _mail_err:
         logger.error(
             "[SUBSCRIBE] Invoice email failed driver=%s: %s",
@@ -6907,6 +6922,7 @@ async def _send_subscription_invoice_email(
             exc_info=True,
             extra={"domain": "payments", "driver_id": driver_id},
         )
+        return False
 
 
 async def _activate_subscription(subscription_id: str, plan_id: str | None = None, checkout_mode: str | None = None):
@@ -7115,11 +7131,10 @@ async def get_subscription_payment_history(
             pst_d = _q2(p.get("pst_amount") or 0)
             hst_d = _q2(p.get("hst_amount") or 0)
         else:
-            # Legacy back-compute (SK rates)
-            subtotal_d = (total_d / Decimal("1.11")).quantize(Decimal("0.01"))
-            gst_d = (subtotal_d * Decimal("0.05")).quantize(Decimal("0.01"))
-            pst_d = total_d - subtotal_d - gst_d
-            hst_d = Decimal("0")
+            # Legacy rows written before migration 186 — return zero tax rather
+            # than fabricating amounts that were never collected.
+            subtotal_d = total_d
+            gst_d = pst_d = hst_d = Decimal("0")
         return {
             "id": p["id"],
             "plan_id": p.get("plan_id"),
@@ -7183,11 +7198,9 @@ async def resend_subscription_invoice(
         tax_total_d = _q2(payment.get("tax_total") or 0)
         province = payment.get("province") or "SK"
     else:
-        subtotal_d = (total_d / Decimal("1.11")).quantize(Decimal("0.01"))
-        gst_d = (subtotal_d * Decimal("0.05")).quantize(Decimal("0.01"))
-        pst_d = total_d - subtotal_d - gst_d
-        hst_d = Decimal("0")
-        tax_total_d = gst_d + pst_d
+        # Legacy row (before migration 186) — zero tax rather than fabricating amounts.
+        subtotal_d = total_d
+        gst_d = pst_d = hst_d = tax_total_d = Decimal("0")
         province = "SK"
 
     from datetime import datetime as _dt
@@ -7198,7 +7211,7 @@ async def resend_subscription_invoice(
     except Exception:
         _payment_date = _dt.now(timezone.utc).strftime("%B %d, %Y")
 
-    await _send_subscription_invoice_email(
+    _sent = await _send_subscription_invoice_email(
         driver_id=driver["id"],
         plan_name=payment.get("plan_name") or "Spinr Pass",
         duration_label=_dur_label,
@@ -7213,6 +7226,8 @@ async def resend_subscription_invoice(
         payment_date=_payment_date,
         invoice_number=f"SPX-{payment['id'][:8].upper()}",
     )
+    if not _sent:
+        raise HTTPException(status_code=502, detail="Invoice email could not be delivered")
     return {"success": True}
 
 

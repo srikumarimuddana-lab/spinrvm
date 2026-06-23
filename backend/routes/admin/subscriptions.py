@@ -5,7 +5,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 try:
     from ... import db_supabase
@@ -339,33 +339,34 @@ async def admin_list_subscription_payments(
     if billing_reason:
         filters["billing_reason"] = billing_reason
 
-    payments = (
-        await db_supabase.get_rows(
-            "subscription_payments",
-            filters,
-            order="created_at",
-            desc=True,
-            limit=limit,
-            offset=offset,
-        )
-        or []
-    )
-    total = await db_supabase.count_documents("subscription_payments", filters)
+    def _parse_dt(s: str | None):
+        if not s:
+            return None
+        try:
+            return datetime.fromisoformat(s.replace("Z", "").replace("+00:00", ""))
+        except Exception:
+            return None
 
-    # Date filter (applied post-fetch — Supabase helper doesn't expose range queries)
     if start_date or end_date:
-
-        def _dt(s: str):
-            try:
-                return datetime.fromisoformat(s.replace("Z", "").replace("+00:00", ""))
-            except Exception:
-                return None
-
-        _start = _dt(start_date) if start_date else None
-        _end = _dt(end_date) if end_date else None
-        filtered = []
-        for p in payments:
-            _pd = _dt(p.get("created_at") or "")
+        # When a date range is requested, fetch all matching non-date rows so the
+        # count and pagination are computed over the fully filtered set rather than
+        # a pre-paginated slice whose total would be wrong.
+        _all = (
+            await db_supabase.get_rows(
+                "subscription_payments",
+                filters,
+                order="created_at",
+                desc=True,
+                limit=10_000,
+                offset=0,
+            )
+            or []
+        )
+        _start = _parse_dt(start_date)
+        _end = _parse_dt(end_date)
+        filtered: list = []
+        for p in _all:
+            _pd = _parse_dt(p.get("created_at") or "")
             if _pd is None:
                 continue
             if _start and _pd < _start:
@@ -373,7 +374,21 @@ async def admin_list_subscription_payments(
             if _end and _pd > _end:
                 continue
             filtered.append(p)
-        payments = filtered
+        total = len(filtered)
+        payments = filtered[offset : offset + limit]
+    else:
+        payments = (
+            await db_supabase.get_rows(
+                "subscription_payments",
+                filters,
+                order="created_at",
+                desc=True,
+                limit=limit,
+                offset=offset,
+            )
+            or []
+        )
+        total = await db_supabase.count_documents("subscription_payments", filters)
 
     # Batch-fetch driver names.
     d_ids = list({p["driver_id"] for p in payments if p.get("driver_id")})
@@ -394,10 +409,10 @@ async def admin_list_subscription_payments(
             pst_d = _q2(p.get("pst_amount"))
             hst_d = _q2(p.get("hst_amount"))
         else:
-            subtotal_d = (total_d / Decimal("1.11")).quantize(Decimal("0.01"))
-            gst_d = (subtotal_d * Decimal("0.05")).quantize(Decimal("0.01"))
-            pst_d = total_d - subtotal_d - gst_d
-            hst_d = Decimal("0")
+            # Legacy rows written before migration 186 have no stored tax breakdown.
+            # Return zeroes rather than fabricating tax that was never collected.
+            subtotal_d = total_d
+            gst_d = pst_d = hst_d = Decimal("0")
         _did = p.get("driver_id") or ""
         return {
             "id": p["id"],
@@ -428,10 +443,10 @@ async def admin_list_subscription_payments(
 
 class SubscriptionTaxConfig(BaseModel):
     enabled: bool = True
-    province: str = "SK"
-    gst_rate: float = 5.0
-    pst_rate: float = 6.0
-    hst_rate: float = 0.0
+    province: str = Field(default="SK", min_length=2, max_length=2, pattern=r"^[A-Z]{2}$")
+    gst_rate: float = Field(default=5.0, ge=0.0, le=50.0)
+    pst_rate: float = Field(default=6.0, ge=0.0, le=50.0)
+    hst_rate: float = Field(default=0.0, ge=0.0, le=50.0)
 
 
 @router.put("/service-areas/{area_id}/subscription-tax")
@@ -466,17 +481,17 @@ async def update_subscription_tax_config(
         {"$set": {"subscription_tax_config": tax_config}},
     )
     await log_admin_action(
-        admin_id=admin["id"],
-        action="update_subscription_tax_config",
-        resource_type="service_area",
-        resource_id=area_id,
-        details=tax_config,
+        admin,
+        "update_subscription_tax_config",
+        "service_area",
+        area_id,
+        tax_config,
     )
     logger.info(
         "[ADMIN] subscription_tax_config updated for area=%s config=%s admin=%s",
         area_id,
         tax_config,
-        admin.get("email"),
+        admin.get("id"),
         extra={"domain": "payments"},
     )
     return {"success": True, "area_id": area_id, "subscription_tax_config": tax_config}

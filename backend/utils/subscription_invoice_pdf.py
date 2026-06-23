@@ -116,7 +116,7 @@ def generate_subscription_invoice_pdf(
     pdf.set_xy(left + 4, pdf.get_y() + 3)
     pdf.set_font("Helvetica", "B", 11)
     pdf.set_text_color(*_GRAY)
-    pdf.cell(W * 0.5, 6, f"Spinr Pass — {plan_name} ({duration_label})", border=0)
+    pdf.cell(W * 0.5, 6, f"Spinr Pass - {plan_name} ({duration_label})", border=0)
     pdf.set_font("Helvetica", "B", 20)
     pdf.set_text_color(*_BRAND)
     pdf.cell(W * 0.5 - 4, 12, _fmt(total) + " CAD", border=0, align="R")
@@ -152,16 +152,22 @@ def generate_subscription_invoice_pdf(
         pdf.ln(3)
 
     _header_row()
-    _item_row(f"Spinr Pass {plan_name} — {duration_label}", subtotal)
+    _item_row(f"Spinr Pass {plan_name} - {duration_label}", subtotal)
 
     _rule()
 
+    def _pct(amt: Decimal, base: Decimal) -> str:
+        if base <= 0:
+            return ""
+        pct = (amt / base * 100).quantize(Decimal("0.01")).normalize()
+        return f" ({pct}%)"
+
     if gst_amount > 0:
-        _item_row("GST (5%) — Federal", gst_amount, color=_GRAY)
+        _item_row(f"GST{_pct(gst_amount, subtotal)} - Federal", gst_amount, color=_GRAY)
     if pst_amount > 0:
-        _item_row(f"PST (6%) — {province}", pst_amount, color=_GRAY)
+        _item_row(f"PST{_pct(pst_amount, subtotal)} - {province}", pst_amount, color=_GRAY)
     if hst_amount > 0:
-        _item_row(f"HST — {province}", hst_amount, color=_GRAY)
+        _item_row(f"HST{_pct(hst_amount, subtotal)} - {province}", hst_amount, color=_GRAY)
 
     _rule()
 

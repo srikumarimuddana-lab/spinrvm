@@ -24,6 +24,7 @@ try:
     from ..geo_utils import calculate_distance
     from ..settings_loader import get_app_settings
     from ..utils.breadcrumbs import invalidate_active_rides_cache
+    from ..utils.datetime_utils import parse_iso_utc
     from ..utils.driver_presence import present_driver_ids
     from ..utils.metrics import inc as _metric_inc
 except ImportError:  # pragma: no cover - allow direct module imports in tests
@@ -324,10 +325,15 @@ class DispatchService:
                     active_subs = await self.db.get_rows(
                         "driver_subscriptions",
                         {"driver_id": {"$in": candidate_ids}, "status": "active"},
-                        columns="driver_id",
+                        columns="driver_id,expires_at",
                         limit=len(candidate_ids),
                     )
-                    subscribed_ids = {s["driver_id"] for s in (active_subs or [])}
+                    _now = datetime.now(timezone.utc)
+                    subscribed_ids = {
+                        s["driver_id"]
+                        for s in (active_subs or [])
+                        if not s.get("expires_at") or parse_iso_utc(s["expires_at"]) > _now
+                    }
                     rows = [d for d in rows if d["id"] in subscribed_ids]
                     logger.info(
                         "Subscription filter: area=%s kept %d/%d drivers",

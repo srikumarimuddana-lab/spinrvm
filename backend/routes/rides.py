@@ -769,10 +769,15 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
                 _active_subs = await db_supabase.get_rows(
                     "driver_subscriptions",
                     {"driver_id": {"$in": _candidate_ids}, "status": "active"},
-                    columns="driver_id",
+                    columns="driver_id,expires_at",
                     limit=len(_candidate_ids),
                 )
-                _subscribed_ids = {s["driver_id"] for s in (_active_subs or [])}
+                _now_utc = datetime.now(timezone.utc)
+                _subscribed_ids = {
+                    s["driver_id"]
+                    for s in (_active_subs or [])
+                    if not s.get("expires_at") or parse_iso_utc(s["expires_at"]) > _now_utc
+                }
                 _before = len(all_drivers)
                 all_drivers = [d for d in all_drivers if d["id"] in _subscribed_ids]
                 logger.info(
@@ -783,10 +788,11 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
                 )
         except Exception:
             logger.error(
-                "[DISPATCH] subscription filter failed for area=%s — dispatching unfiltered",
+                "[DISPATCH] subscription filter failed for area=%s — aborting dispatch attempt",
                 ride.get("service_area_id"),
                 exc_info=True,
             )
+            all_drivers = []  # fail closed; the no-drivers path below schedules a retry
 
     # Pure filter+rank: drops orphan/no-location/low-rated drivers and
     # attaches per-driver distance. Pure function — no I/O.

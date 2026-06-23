@@ -334,8 +334,8 @@ export default function ServiceAreasPage() {
                         { key: 'subscriptions', label: 'Spinr Pass', icon: CreditCard },
                         { key: 'documents', label: 'Documents', icon: FileText },
                         { key: 'incentives', label: 'Incentives', icon: Gift },
-                        { key: 'cascade', label: 'Dispatch Cascade', icon: ArrowRightLeft },
                         { key: 'subregions', label: 'Airport Zones', icon: Plane },
+                        { key: 'cascade', label: 'Dispatch Cascade', icon: ArrowRightLeft },
                       ].map(tab => (
                         <button key={tab.key} onClick={() => setEditTab(tab.key)}
                           className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold rounded-t-lg transition ${editTab === tab.key ? 'bg-white text-red-500 border-t-2 border-red-500' : 'text-gray-500 hover:text-gray-700'}`}>

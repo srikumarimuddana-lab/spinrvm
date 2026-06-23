@@ -19,18 +19,21 @@
 --   DELETE FROM driver_bonuses WHERE kind = 'quest' AND description LIKE 'Quest reward:%';
 --   (or restore from backup) — only removes backfilled quest bonus rows.
 
+-- NOTE: drivers.id is TEXT while quest_progress.driver_id is UUID in this
+-- schema, so the join and the user_id insert are cast explicitly
+-- (uuid->text for the join; ->text->uuid for user_id) to handle either type.
 INSERT INTO driver_bonuses (driver_id, user_id, amount, kind, source_id, description, created_at)
 SELECT
-    qp.driver_id,
-    d.user_id,
+    qp.driver_id,                       -- uuid -> driver_bonuses.driver_id (uuid)
+    d.user_id::text::uuid,              -- text-or-uuid -> uuid
     q.reward_amount,
     'quest',
     qp.id,
     'Quest reward: ' || q.title,
     COALESCE(qp.claimed_at, qp.updated_at, now())
 FROM quest_progress qp
-JOIN quests q   ON q.id = qp.quest_id
-JOIN drivers d  ON d.id = qp.driver_id
+JOIN quests  q ON q.id = qp.quest_id
+JOIN drivers d ON d.id = qp.driver_id::text
 WHERE qp.status = 'claimed'
   AND q.reward_amount IS NOT NULL
   AND NOT EXISTS (

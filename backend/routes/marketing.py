@@ -21,22 +21,30 @@ response never reveals whether the user/address exists.
 """
 
 import logging
+from typing import Literal, Optional
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel
 
 try:
     from .. import db_supabase
+    from ..dependencies import get_current_user
     from ..services import marketing_consent
     from ..utils.rate_limiter import default_limiter as limiter
     from ..utils.unsubscribe_token import UnsubscribeTokenError, verify_unsubscribe_token
 except ImportError:  # pragma: no cover - direct module imports in tests
     import db_supabase  # type: ignore
+    from dependencies import get_current_user  # type: ignore
     from services import marketing_consent  # type: ignore
     from utils.rate_limiter import default_limiter as limiter  # type: ignore
     from utils.unsubscribe_token import UnsubscribeTokenError, verify_unsubscribe_token  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+# Version of the marketing-consent language in effect. Bump when the consent
+# wording materially changes (PIPEDA: material changes require re-consent).
+CONSENT_VERSION = "1"
 
 api_router = APIRouter(prefix="/marketing", tags=["Marketing"])
 
@@ -105,3 +113,54 @@ async def unsubscribe_page(request: Request, token: str = Query(default="")):
         return HTMLResponse(_ERROR_HTML, status_code=400)
     label = "emails" if channel == "email" else "messages"
     return HTMLResponse(_CONFIRM_HTML.format(channel=label), status_code=200)
+
+
+# ── Authenticated consent preferences (rider/driver apps) ───────────────────
+
+
+class MarketingPreferencesUpdate(BaseModel):
+    """Partial update — only provided channels change. Source attributes the
+    consent to the originating app for the CASL audit trail."""
+
+    email_opt_in: Optional[bool] = None
+    sms_opt_in: Optional[bool] = None
+    push_opt_in: Optional[bool] = None
+    source: Literal["rider_app", "driver_app"] = "rider_app"
+
+
+@api_router.get("/preferences")
+async def get_marketing_preferences(current_user: dict = Depends(get_current_user)):
+    """Current user's marketing opt-in state per channel (default all false)."""
+    prefs = await marketing_consent.get_preferences(current_user["id"])
+    return {
+        "email_opt_in": bool(prefs.get("email_opt_in")),
+        "sms_opt_in": bool(prefs.get("sms_opt_in")),
+        "push_opt_in": bool(prefs.get("push_opt_in")),
+        "consent_version": prefs.get("consent_version"),
+    }
+
+
+@api_router.put("/preferences")
+async def update_marketing_preferences(
+    body: MarketingPreferencesUpdate,
+    current_user: dict = Depends(get_current_user),
+):
+    """Set the current user's marketing consent. Each provided channel is
+    written with an audit event (CASL proof-of-consent). On opt-out the contact
+    is also added to the marketing suppression list so an in-flight broadcast
+    can't still reach it."""
+    user_id = current_user["id"]
+    changes = {"email": body.email_opt_in, "sms": body.sms_opt_in, "push": body.push_opt_in}
+    for channel, value in changes.items():
+        if value is None:
+            continue
+        await marketing_consent.set_consent(
+            user_id, channel, value, source=body.source, consent_version=CONSENT_VERSION if value else None
+        )
+        if not value and channel in ("email", "sms"):
+            target = current_user.get("email") if channel == "email" else current_user.get("phone")
+            if target:
+                await marketing_consent.add_marketing_suppression(
+                    channel, target, reason="unsubscribe", source="unsubscribe_link", user_id=user_id
+                )
+    return await get_marketing_preferences(current_user)

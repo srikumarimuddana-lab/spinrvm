@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
 } from 'react-native';
@@ -22,8 +22,41 @@ export default function PrivacySettingsScreen() {
   const { t } = useTranslation();
   const [locationAlways, setLocationAlways] = useState(false);
   const [shareRideData, setShareRideData] = useState(true);
-  const [marketingEmails, setMarketingEmails] = useState(true);
   const [pushNotifications, setPushNotifications] = useState(true);
+  // Marketing consent (CASL): express opt-in, so every channel DEFAULTS OFF.
+  // Hydrated from the backend on mount; each toggle persists immediately.
+  const [marketingEmails, setMarketingEmails] = useState(false);
+  const [marketingSms, setMarketingSms] = useState(false);
+  const [marketingPush, setMarketingPush] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    api.get('/marketing/preferences')
+      .then((res: any) => {
+        const p = res?.data ?? res ?? {};
+        if (!active) return;
+        setMarketingEmails(!!p.email_opt_in);
+        setMarketingSms(!!p.sms_opt_in);
+        setMarketingPush(!!p.push_opt_in);
+      })
+      .catch(() => { /* default off on failure */ });
+    return () => { active = false; };
+  }, []);
+
+  // Persist one marketing channel; optimistic with revert on failure.
+  const saveMarketing = async (
+    field: 'email_opt_in' | 'sms_opt_in' | 'push_opt_in',
+    value: boolean,
+    setter: (v: boolean) => void,
+  ) => {
+    setter(value);
+    try {
+      await api.put('/marketing/preferences', { [field]: value, source: 'rider_app' });
+    } catch (err: any) {
+      setter(!value);
+      showToast('Update Failed', 'Could not save your preference. Please try again.', 'danger');
+    }
+  };
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;
     title: string;
@@ -112,7 +145,21 @@ export default function PrivacySettingsScreen() {
             icon="mail" iconColor="#8B5CF6" iconBg="#EDE9FE"
             title={t('privacy.marketing_emails')}
             subtitle={t('privacy.marketing_emails_subtitle')}
-            toggle value={marketingEmails} onToggle={setMarketingEmails}
+            toggle value={marketingEmails} onToggle={(v) => saveMarketing('email_opt_in', v, setMarketingEmails)}
+            colors={colors}
+          />
+          <SettingRow
+            icon="chatbubble-ellipses" iconColor="#8B5CF6" iconBg="#EDE9FE"
+            title={t('privacy.marketing_sms')}
+            subtitle={t('privacy.marketing_sms_subtitle')}
+            toggle value={marketingSms} onToggle={(v) => saveMarketing('sms_opt_in', v, setMarketingSms)}
+            colors={colors}
+          />
+          <SettingRow
+            icon="megaphone" iconColor="#8B5CF6" iconBg="#EDE9FE"
+            title={t('privacy.marketing_push')}
+            subtitle={t('privacy.marketing_push_subtitle')}
+            toggle value={marketingPush} onToggle={(v) => saveMarketing('push_opt_in', v, setMarketingPush)}
             colors={colors}
           />
         </View>

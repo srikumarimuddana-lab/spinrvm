@@ -14,8 +14,20 @@ from backend.utils import referral_terms
 # Fixed stand-in for the global constants so assertions don't drift if the real
 # RIDER_*/REFERRAL_* constants are later retuned.
 _GLOBAL = {
-    "rider": {"rides": 1, "referrer": Decimal("5.00"), "referee": Decimal("5.00"), "terms": None},
-    "driver": {"rides": 10, "referrer": Decimal("10.00"), "referee": Decimal("0.00"), "terms": None},
+    "rider": {
+        "rides": 1,
+        "referrer": Decimal("5.00"),
+        "referee": Decimal("5.00"),
+        "window_days": 30,
+        "terms": None,
+    },
+    "driver": {
+        "rides": 10,
+        "referrer": Decimal("10.00"),
+        "referee": Decimal("0.00"),
+        "window_days": 30,
+        "terms": None,
+    },
 }
 
 
@@ -82,6 +94,26 @@ class TestResolveReferralTerms:
         with _patch_global(), _patch_rows([area]):
             t = asyncio.run(referral_terms.resolve_referral_terms("a", "driver"))
         assert t["terms"] is None
+
+    def test_window_days_override_wins(self):
+        # A per-area deadline overrides the global default.
+        area = {"id": "a", "driver_referral_window_days": 14}
+        with _patch_global(), _patch_rows([area]):
+            t = asyncio.run(referral_terms.resolve_referral_terms("a", "driver"))
+        assert t["window_days"] == 14
+
+    def test_window_days_zero_is_a_valid_override_not_fallback(self):
+        # 0 means "no deadline for this area" and must NOT fall back to 30.
+        area = {"id": "a", "rider_referral_window_days": 0}
+        with _patch_global(), _patch_rows([area]):
+            t = asyncio.run(referral_terms.resolve_referral_terms("a", "rider"))
+        assert t["window_days"] == 0
+
+    def test_window_days_null_falls_back_to_global(self):
+        area = {"id": "a", "driver_referral_window_days": None}
+        with _patch_global(), _patch_rows([area]):
+            t = asyncio.run(referral_terms.resolve_referral_terms("a", "driver"))
+        assert t["window_days"] == 30
 
     def test_driver_referee_always_zero(self):
         area = {"id": "a", "driver_referral_reward": 25, "driver_referral_rides_required": 4}

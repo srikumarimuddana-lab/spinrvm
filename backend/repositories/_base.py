@@ -484,6 +484,12 @@ def _build_or_clause(clauses: List[Dict[str, Any]]) -> str:
 def _apply_filters(q, filters: Optional[Dict[str, Any]]):
     if not filters:
         return q
+    if not isinstance(filters, dict):
+        # A non-dict filter (almost always a bare id string passed where a
+        # {"id": ...} dict was expected) would otherwise blow up inside
+        # supabase-py as the opaque "'str' object has no attribute 'items'".
+        # Surface it loudly with the offending value so the caller is obvious.
+        raise TypeError(f"_apply_filters expected a dict of filters, got {type(filters).__name__}: {filters!r}")
     for k, v in filters.items():
         if k == "$or" and isinstance(v, list):
             clause = _build_or_clause(v)
@@ -583,6 +589,8 @@ async def find_one(table: str, filters: Optional[Dict[str, Any]] = None) -> Opti
 async def insert_one(table: str, doc: Dict[str, Any]):
     if not supabase:
         return None
+    if not isinstance(doc, dict):
+        raise TypeError(f"insert_one({table!r}) doc must be a dict, got {type(doc).__name__}: {doc!r}")
     doc = _serialize_for_api(doc)
     return await run_sync(lambda: _single_row_from_res(supabase.table(table).insert(doc).execute()))
 
@@ -591,6 +599,9 @@ async def insert_many(table: str, docs: List[Dict[str, Any]]):
     """Bulk insert using Supabase's native batch insert (single round-trip)."""
     if not supabase or not docs:
         return []
+    _bad = next((d for d in docs if not isinstance(d, dict)), None)
+    if _bad is not None:
+        raise TypeError(f"insert_many({table!r}) every doc must be a dict, got {type(_bad).__name__}: {_bad!r}")
     serialized = [_serialize_for_api(d) for d in docs]
     return await run_sync(lambda: _rows_from_res(supabase.table(table).insert(serialized).execute()))
 
@@ -605,6 +616,13 @@ async def update_one(table: str, filters: Dict[str, Any], update: Dict[str, Any]
 
     def _fn():
         update_data = update.get("$set", update)
+        if not isinstance(update_data, dict):
+            # supabase-py .update(<non-dict>) fails deep inside as the opaque
+            # "'str' object has no attribute 'items'". Name the table and the
+            # offending payload so the bad caller is identifiable from one log.
+            raise TypeError(
+                f"update_one({table!r}) payload must be a dict, got {type(update_data).__name__}: {update_data!r}"
+            )
         update_data = _serialize_for_api(update_data)
 
         if table == "drivers":

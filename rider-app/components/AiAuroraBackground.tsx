@@ -127,7 +127,7 @@ export default function AiAuroraBackground({ visible = true }: { visible?: boole
 }
 
 const styles = StyleSheet.create({
-  container: { ...StyleSheet.absoluteFillObject, overflow: 'hidden' },
+  container: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, overflow: 'hidden' },
   blob: {
     position: 'absolute',
     width: BLOB,

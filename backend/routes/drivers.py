@@ -5089,6 +5089,10 @@ class ApplyReferralCodeRequest(BaseModel):
 # per-referee progress, and the displayed terms can never drift apart.
 REFERRAL_RIDES_REQUIRED = 10
 REFERRAL_REWARD_AMOUNT = 10  # CAD, paid per referee who reaches the ride target
+# Days the referee has to reach REFERRAL_RIDES_REQUIRED (from referral_applied_at)
+# before the referral expires unpaid. 0 = no deadline. Per-area override lives in
+# service_areas.driver_referral_window_days (migration 189).
+REFERRAL_WINDOW_DAYS = 30
 
 
 def _fmt_money(v) -> str:
@@ -6154,9 +6158,7 @@ async def subscription_checkout_return(session_id: str = "", to: str = ""):
 
     _allowed_prefixes = ("spinr-driver://", "exp://")
     _safe = bool(
-        to
-        and any(to.startswith(p) for p in _allowed_prefixes)
-        and _re.fullmatch(r"[A-Za-z0-9:/._%@!$&()*+,;=~-]+", to)
+        to and any(to.startswith(p) for p in _allowed_prefixes) and _re.fullmatch(r"[A-Za-z0-9:/._%@!$&()*+,;=~-]+", to)
     )
     _target = to if _safe else "spinr-driver://subscription/success"
     _sid = session_id if _re.fullmatch(r"[A-Za-z0-9_]+", session_id or "") else ""

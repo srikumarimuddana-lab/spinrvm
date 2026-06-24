@@ -6648,6 +6648,7 @@ async def _record_subscription_payment(
     stripe_invoice_id: str | None = None,
     stripe_session_id: str | None = None,
     stripe_payment_intent_id: str | None = None,
+    stripe_invoice_url: str | None = None,
 ) -> str | None:
     """Append a realized-payment row to the subscription_payments ledger.
 
@@ -6694,6 +6695,10 @@ async def _record_subscription_payment(
             row["tax_total"] = _q2(tax_total)
         if province:
             row["province"] = province
+        # Stripe receipt link (migration 188) — only present on recurring charges;
+        # written conditionally so dev/one-off rows omit the column cleanly.
+        if stripe_invoice_url:
+            row["stripe_invoice_url"] = stripe_invoice_url
         await db_supabase.insert_one("subscription_payments", row)
         return row_id
     except Exception as _ledger_err:

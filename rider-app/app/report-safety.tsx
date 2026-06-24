@@ -12,6 +12,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import api from '@shared/api/client';
 import { showToast } from '../store/toastStore';
+import { submitErrorMessage } from '../utils/submitErrorMessage';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -34,7 +35,15 @@ export default function ReportSafetyScreen() {
             showToast('Report Submitted', 'Your safety report has been submitted. Our trust and safety team will review it immediately.', 'success');
             router.back();
         } catch (e) {
-            showToast('Submit Failed', 'Failed to submit report. Please try again.', 'danger');
+            // Do not swallow — a failed *safety* report must be observable
+            // (CLAUDE.md: "Do not silently swallow errors"). Log it, and surface
+            // a rate-limit retry hint when present instead of a blanket message.
+            console.error('[report-safety] safety report submit failed', e);
+            showToast(
+                'Submit Failed',
+                submitErrorMessage(e, 'Failed to submit report. Please try again.'),
+                'danger',
+            );
             setSubmitting(false);
         }
     };

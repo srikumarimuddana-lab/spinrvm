@@ -47,17 +47,27 @@ def _global_terms() -> dict:
     risk a circular import.
     """
     try:
-        from ..routes.drivers import REFERRAL_REWARD_AMOUNT, REFERRAL_RIDES_REQUIRED  # type: ignore
+        from ..routes.drivers import (  # type: ignore
+            REFERRAL_REWARD_AMOUNT,
+            REFERRAL_RIDES_REQUIRED,
+            REFERRAL_WINDOW_DAYS,
+        )
         from ..routes.users import (  # type: ignore
             RIDER_REFEREE_REWARD,
             RIDER_REFERRAL_RIDES_REQUIRED,
+            RIDER_REFERRAL_WINDOW_DAYS,
             RIDER_REFERRER_REWARD,
         )
     except ImportError:
-        from routes.drivers import REFERRAL_REWARD_AMOUNT, REFERRAL_RIDES_REQUIRED  # type: ignore
+        from routes.drivers import (  # type: ignore
+            REFERRAL_REWARD_AMOUNT,
+            REFERRAL_RIDES_REQUIRED,
+            REFERRAL_WINDOW_DAYS,
+        )
         from routes.users import (  # type: ignore
             RIDER_REFEREE_REWARD,
             RIDER_REFERRAL_RIDES_REQUIRED,
+            RIDER_REFERRAL_WINDOW_DAYS,
             RIDER_REFERRER_REWARD,
         )
     return {
@@ -65,6 +75,8 @@ def _global_terms() -> dict:
             "rides": int(RIDER_REFERRAL_RIDES_REQUIRED),
             "referrer": _money(RIDER_REFERRER_REWARD),
             "referee": _money(RIDER_REFEREE_REWARD),
+            # Days to reach the threshold before the referral expires; 0 = none.
+            "window_days": int(RIDER_REFERRAL_WINDOW_DAYS),
             # No per-area override → caller generates the dynamic T&C sentence.
             "terms": None,
         },
@@ -72,6 +84,7 @@ def _global_terms() -> dict:
             "rides": int(REFERRAL_RIDES_REQUIRED),
             "referrer": _money(REFERRAL_REWARD_AMOUNT),
             "referee": _money(0),
+            "window_days": int(REFERRAL_WINDOW_DAYS),
             "terms": None,
         },
     }
@@ -83,6 +96,8 @@ _AREA_COLUMNS = {
         "rides": "rider_referral_rides_required",
         "referrer": "rider_referrer_reward",
         "referee": "rider_referee_reward",
+        # Completion deadline in days (migration 189); NULL → global default.
+        "window_days": "rider_referral_window_days",
         # Free-text T&C override (migration 176); NULL → dynamic default.
         "terms": "rider_referral_terms",
     },
@@ -90,6 +105,7 @@ _AREA_COLUMNS = {
         "rides": "driver_referral_rides_required",
         "referrer": "driver_referral_reward",
         "referee": None,  # drivers have no referee-side reward
+        "window_days": "driver_referral_window_days",
         "terms": "driver_referral_terms",
     },
 }
@@ -128,6 +144,11 @@ async def resolve_referral_terms(service_area_id: Optional[str], kind: str) -> d
     rides_col = cols["rides"]
     rides_val = area.get(rides_col)
 
+    # Completion deadline (days). NULL → global default; 0 is a valid override
+    # meaning "no deadline for this area" and must NOT fall back.
+    window_col = cols.get("window_days")
+    window_val = area.get(window_col) if window_col else None
+
     # Free-text T&C override: a non-blank value wins; blank/NULL → None so the
     # caller falls back to the dynamically generated default sentence.
     terms_col = cols.get("terms")
@@ -138,6 +159,7 @@ async def resolve_referral_terms(service_area_id: Optional[str], kind: str) -> d
         "rides": int(rides_val) if rides_val is not None else fallback["rides"],
         "referrer": _pick("referrer", fallback["referrer"]),
         "referee": _pick("referee", fallback["referee"]),
+        "window_days": int(window_val) if window_val is not None else fallback["window_days"],
         "terms": terms,
     }
 

@@ -73,9 +73,19 @@ function DriftingBlob({ spec, animate }: { spec: BlobSpec; animate: boolean }) {
   );
 }
 
-export default function AiAuroraBackground() {
+export default function AiAuroraBackground({ visible = true }: { visible?: boolean }) {
   const { colors, isDark } = useTheme();
   const [reduceMotion, setReduceMotion] = React.useState(false);
+  const fade = useSharedValue(visible ? 1 : 0);
+
+  useEffect(() => {
+    fade.value = withTiming(visible ? 1 : 0, {
+      duration: 450,
+      easing: Easing.inOut(Easing.ease),
+    });
+  }, [visible, fade]);
+
+  const fadeStyle = useAnimatedStyle(() => ({ opacity: fade.value }));
 
   useEffect(() => {
     let mounted = true;
@@ -102,9 +112,9 @@ export default function AiAuroraBackground() {
   ];
 
   return (
-    <View style={styles.container} pointerEvents="none">
+    <Animated.View style={[styles.container, fadeStyle]} pointerEvents="none">
       {blobs.map((spec, i) => (
-        <DriftingBlob key={i} spec={spec} animate={!reduceMotion} />
+        <DriftingBlob key={i} spec={spec} animate={visible && !reduceMotion} />
       ))}
       {/* Smear the hard circles into a single continuous gradient. */}
       <BlurView
@@ -112,7 +122,7 @@ export default function AiAuroraBackground() {
         tint={isDark ? 'dark' : 'light'}
         style={StyleSheet.absoluteFill}
       />
-    </View>
+    </Animated.View>
   );
 }
 

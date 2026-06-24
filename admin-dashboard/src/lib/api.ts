@@ -2167,6 +2167,40 @@ export const getAdminSubscriptionPayments = (opts: {
     return request<any>(`/api/admin/subscription/payments?${sp.toString()}`);
 };
 
+/** Download the Spinr Pass invoice PDF for one subscription payment and trigger
+ *  a browser save. Returns true on success. The request<T> helper assumes JSON,
+ *  so use a raw authed fetch like getRideRouteMapDataUrl. */
+export const downloadSubscriptionInvoice = async (paymentId: string): Promise<boolean> => {
+    const token = useAuthStore.getState().token;
+    try {
+        const res = await fetch(`/api/admin/subscription/payments/${paymentId}/invoice.pdf`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!res.ok) return false;
+        const blob = await res.blob();
+        const cd = res.headers.get("content-disposition") || "";
+        const filename = cd.match(/filename="?([^"]+)"?/)?.[1] || `SpinrPass_Invoice_${paymentId}.pdf`;
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        return true;
+    } catch (e) {
+        if (process.env.NODE_ENV === "development") console.log("Invoice download failed:", e);
+        return false;
+    }
+};
+
+/** Email the Spinr Pass invoice to the driver's address on file (admin-triggered). */
+export const resendAdminSubscriptionInvoice = (paymentId: string) =>
+    request<{ success: boolean }>(`/api/admin/subscription/payments/${paymentId}/resend-invoice`, {
+        method: "POST",
+    });
+
 export const updateSubscriptionTaxConfig = (
     areaId: string,
     config: { enabled: boolean; province: string; gst_rate: number; pst_rate: number; hst_rate: number },

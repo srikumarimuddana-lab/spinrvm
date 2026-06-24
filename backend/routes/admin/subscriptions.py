@@ -155,6 +155,15 @@ async def admin_get_subscription_stats(
     else:
         range_end = now
 
+    # parse_dt() (and the explicit start/end branches) strip tz and yield NAIVE
+    # datetimes, but the default branches derive from a tz-aware `now`. Force
+    # both bounds naive so the `range_start <= dt <= range_end` comparisons
+    # below never mix offset-aware and offset-naive datetimes (TypeError).
+    if range_start.tzinfo is not None:
+        range_start = range_start.replace(tzinfo=None)
+    if range_end.tzinfo is not None:
+        range_end = range_end.replace(tzinfo=None)
+
     # Fetch all subscriptions
     all_subs = await db_supabase.get_rows("driver_subscriptions", {}, limit=10000)
 

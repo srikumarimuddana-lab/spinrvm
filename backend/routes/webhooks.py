@@ -1462,6 +1462,37 @@ async def _suppress_address(email: str, *, reason: str, detail, message_id) -> N
         raise
 
 
+async def _suppress_marketing_email(email: str, *, reason: str, detail, message_id) -> None:
+    """Add an address to the MARKETING suppression list (email channel).
+
+    Product rule: ANY bounce — transient OR permanent — permanently blocks
+    MARKETING to that address, while transactional mail keeps flowing until a
+    hard bounce (handled separately by _suppress_address). Complaints block
+    both. Best-effort user attribution for the admin view; the suppression
+    itself keys on the address. Errors propagate so the webhook 503s and SNS
+    retries (add_marketing_suppression is idempotent).
+    """
+    try:
+        from ..services import marketing_consent
+    except ImportError:
+        from services import marketing_consent  # type: ignore
+
+    norm = marketing_consent.normalize_target("email", email)
+    if not norm:
+        return
+    user_id = None
+    try:
+        u = await db_supabase.find_one("users", {"email": norm})
+        if u:
+            user_id = u.get("id")
+    except Exception:
+        # Attribution is best-effort; a lookup hiccup must not skip suppression.
+        logger.error("[SES] marketing-suppression user lookup failed message_id=%s", message_id or "-", exc_info=True)
+    await marketing_consent.add_marketing_suppression(
+        "email", norm, reason=reason, source="ses", user_id=user_id, message_id=message_id
+    )
+
+
 async def _handle_ses_notification(payload: dict) -> dict:
     """Parse an SES notification and suppress hard-bounced/complained recipients."""
     import json
@@ -1478,27 +1509,27 @@ async def _handle_ses_notification(payload: dict) -> dict:
 
     if ntype == "Bounce":
         bounce = inner.get("bounce") or {}
-        # Only PERMANENT (hard) bounces suppress; transient bounces may recover.
-        if bounce.get("bounceType") == "Permanent":
-            for r in bounce.get("bouncedRecipients") or []:
-                await _suppress_address(
-                    r.get("emailAddress"),
-                    reason="bounce",
-                    detail=bounce.get("bounceSubType"),
-                    message_id=message_id,
-                )
-                suppressed += 1
+        subtype = bounce.get("bounceSubType")
+        is_permanent = bounce.get("bounceType") == "Permanent"
+        for r in bounce.get("bouncedRecipients") or []:
+            addr = r.get("emailAddress")
+            # MARKETING: any bounce (transient or permanent) blocks marketing.
+            await _suppress_marketing_email(addr, reason="bounce", detail=subtype, message_id=message_id)
+            # TRANSACTIONAL: only PERMANENT (hard) bounces suppress all mail;
+            # transient bounces may recover, so receipts keep trying.
+            if is_permanent:
+                await _suppress_address(addr, reason="bounce", detail=subtype, message_id=message_id)
+            suppressed += 1
     elif ntype == "Complaint":
         complaint = inner.get("complaint") or {}
+        subtype = complaint.get("complaintFeedbackType")
         for r in complaint.get("complainedRecipients") or []:
-            await _suppress_address(
-                r.get("emailAddress"),
-                reason="complaint",
-                detail=complaint.get("complaintFeedbackType"),
-                message_id=message_id,
-            )
+            addr = r.get("emailAddress")
+            # A complaint blocks BOTH transactional and marketing mail.
+            await _suppress_address(addr, reason="complaint", detail=subtype, message_id=message_id)
+            await _suppress_marketing_email(addr, reason="complaint", detail=subtype, message_id=message_id)
             suppressed += 1
-    # Delivery / transient bounce / other: acknowledged, no suppression.
+    # Delivery / other: acknowledged, no suppression.
 
     return {"received": True, "type": ntype, "suppressed": suppressed}
 

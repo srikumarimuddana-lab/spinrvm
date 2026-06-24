@@ -18,6 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 import api from '@shared/api/client';
 import CustomAlert from '@shared/components/CustomAlert';
+import AiAuroraBackground from '@shared/components/AiAuroraBackground';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -418,6 +419,12 @@ export default function SupportScreen({
           style={{ flex: 1 }}
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         >
+          {/* Ambient gradient on the idle chat (only the welcome message, no
+              draft typed); fades to plain background once the conversation
+              starts — same behaviour as the rider AI assistant. */}
+          <AiAuroraBackground
+            visible={chatMessages.length <= 1 && chatInput.trim().length === 0}
+          />
           <FlatList
             ref={chatListRef}
             data={chatMessages}

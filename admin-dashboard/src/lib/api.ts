@@ -1635,6 +1635,8 @@ export const sendCloudMessage = (data: {
     type?: string;
     particular_ids?: string[];
     scheduled_at?: string;
+    is_marketing?: boolean;
+    service_area_id?: string;
 }) =>
     request<any>("/api/admin/cloud-messaging/send", {
         method: "POST",
@@ -1646,6 +1648,32 @@ export const getCloudMessageStats = () =>
 
 export const deleteCloudMessage = (id: string) =>
     request<any>(`/api/admin/cloud-messaging/${id}`, { method: "DELETE" });
+
+/* ── Marketing audience preview + suppression list ──────────────────── */
+
+export const getCloudMessageAudiencePreview = (audience: string, serviceAreaId?: string) => {
+    const params = new URLSearchParams({ audience });
+    if (serviceAreaId) params.set("service_area_id", serviceAreaId);
+    return request<{
+        audience: string;
+        audience_total: number;
+        email_opted_in: number | null;
+        sms_opted_in: number | null;
+        push_opted_in: number | null;
+    }>(`/api/admin/cloud-messaging/audience-preview?${params.toString()}`);
+};
+
+export const getMarketingSuppressions = (channel?: string) => {
+    const params = new URLSearchParams();
+    if (channel) params.set("channel", channel);
+    return request<any[]>(`/api/admin/marketing/suppressions?${params.toString()}`);
+};
+
+export const addMarketingSuppression = (data: { channel: string; target: string; reason?: string }) =>
+    request<any>("/api/admin/marketing/suppressions", { method: "POST", body: JSON.stringify(data) });
+
+export const deleteMarketingSuppression = (id: string) =>
+    request<any>(`/api/admin/marketing/suppressions/${id}`, { method: "DELETE" });
 
 /* ── Promotions Usage & Stats ──────────────────── */
 export const getPromoUsage = (params?: { promo_id?: string; date_from?: string; date_to?: string; limit?: number; offset?: number }) => {

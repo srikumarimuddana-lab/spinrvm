@@ -99,7 +99,7 @@ const NAV_GROUPS: NavGroup[] = [
             { href: "/dashboard/safety", label: "Safety", icon: ShieldAlert, module: "support" },
             { href: "/dashboard/disputes", label: "Disputes & Refunds", icon: Shield, module: "support" },
             { href: "/dashboard/faqs", label: "FAQs", icon: HelpCircle, module: "support" },
-            { href: "/dashboard/cloud-messaging", label: "Cloud Messaging", icon: Cloud, module: "notifications" },
+            { href: "/dashboard/cloud-messaging", label: "Notifications", icon: Cloud, module: "notifications" },
         ],
     },
     {

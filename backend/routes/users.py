@@ -464,6 +464,10 @@ async def delete_emergency_contact(contact_id: str, current_user: dict = Depends
 RIDER_REFERRAL_RIDES_REQUIRED = 1
 RIDER_REFERRER_REWARD = 5  # CAD — referrer credit once referee takes first ride
 RIDER_REFEREE_REWARD = 5  # CAD — new rider's first-ride credit
+# Days the referee has to reach RIDER_REFERRAL_RIDES_REQUIRED (from
+# referral_applied_at) before the referral expires unpaid. 0 = no deadline.
+# Per-area override lives in service_areas.rider_referral_window_days (migration 189).
+RIDER_REFERRAL_WINDOW_DAYS = 30
 
 
 def _rider_referral_code(user: dict) -> str:

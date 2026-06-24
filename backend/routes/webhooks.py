@@ -1,9 +1,10 @@
 from decimal import ROUND_HALF_UP, Decimal
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 
 try:
     from .. import db_supabase
+    from ..core.config import settings as app_config
     from ..db_supabase import DatabaseError, DuplicateRecordError, claim_stripe_event, mark_stripe_event_processed
     from ..features import send_push_notification
     from ..settings_loader import get_app_settings
@@ -11,6 +12,7 @@ try:
     from ..utils.rate_limiter import default_limiter
 except ImportError:
     import db_supabase
+    from core.config import settings as app_config
     from db_supabase import DatabaseError, DuplicateRecordError, claim_stripe_event, mark_stripe_event_processed
     from features import send_push_notification
     from settings_loader import get_app_settings
@@ -1462,6 +1464,37 @@ async def _suppress_address(email: str, *, reason: str, detail, message_id) -> N
         raise
 
 
+async def _suppress_marketing_email(email: str, *, reason: str, detail, message_id) -> None:
+    """Add an address to the MARKETING suppression list (email channel).
+
+    Product rule: ANY bounce — transient OR permanent — permanently blocks
+    MARKETING to that address, while transactional mail keeps flowing until a
+    hard bounce (handled separately by _suppress_address). Complaints block
+    both. Best-effort user attribution for the admin view; the suppression
+    itself keys on the address. Errors propagate so the webhook 503s and SNS
+    retries (add_marketing_suppression is idempotent).
+    """
+    try:
+        from ..services import marketing_consent
+    except ImportError:
+        from services import marketing_consent  # type: ignore
+
+    norm = marketing_consent.normalize_target("email", email)
+    if not norm:
+        return
+    user_id = None
+    try:
+        u = await db_supabase.find_one("users", {"email": norm})
+        if u:
+            user_id = u.get("id")
+    except Exception:
+        # Attribution is best-effort; a lookup hiccup must not skip suppression.
+        logger.error("[SES] marketing-suppression user lookup failed message_id=%s", message_id or "-", exc_info=True)
+    await marketing_consent.add_marketing_suppression(
+        "email", norm, reason=reason, source="ses", user_id=user_id, message_id=message_id
+    )
+
+
 async def _handle_ses_notification(payload: dict) -> dict:
     """Parse an SES notification and suppress hard-bounced/complained recipients."""
     import json
@@ -1474,33 +1507,39 @@ async def _handle_ses_notification(payload: dict) -> dict:
 
     ntype = inner.get("notificationType") or inner.get("eventType")
     message_id = (inner.get("mail") or {}).get("messageId")
+    # `suppressed` counts TRANSACTIONAL suppressions (the historical contract:
+    # addresses blocked from all mail). `marketing_suppressed` counts the
+    # marketing-only blocks, which fire far more eagerly.
     suppressed = 0
+    marketing_suppressed = 0
 
     if ntype == "Bounce":
         bounce = inner.get("bounce") or {}
-        # Only PERMANENT (hard) bounces suppress; transient bounces may recover.
-        if bounce.get("bounceType") == "Permanent":
-            for r in bounce.get("bouncedRecipients") or []:
-                await _suppress_address(
-                    r.get("emailAddress"),
-                    reason="bounce",
-                    detail=bounce.get("bounceSubType"),
-                    message_id=message_id,
-                )
+        subtype = bounce.get("bounceSubType")
+        is_permanent = bounce.get("bounceType") == "Permanent"
+        for r in bounce.get("bouncedRecipients") or []:
+            addr = r.get("emailAddress")
+            # TRANSACTIONAL: only PERMANENT (hard) bounces suppress all mail;
+            # transient bounces may recover, so receipts keep trying.
+            if is_permanent:
+                await _suppress_address(addr, reason="bounce", detail=subtype, message_id=message_id)
                 suppressed += 1
+            # MARKETING: any bounce (transient OR permanent) blocks marketing.
+            await _suppress_marketing_email(addr, reason="bounce", detail=subtype, message_id=message_id)
+            marketing_suppressed += 1
     elif ntype == "Complaint":
         complaint = inner.get("complaint") or {}
+        subtype = complaint.get("complaintFeedbackType")
         for r in complaint.get("complainedRecipients") or []:
-            await _suppress_address(
-                r.get("emailAddress"),
-                reason="complaint",
-                detail=complaint.get("complaintFeedbackType"),
-                message_id=message_id,
-            )
+            addr = r.get("emailAddress")
+            # A complaint blocks BOTH transactional and marketing mail.
+            await _suppress_address(addr, reason="complaint", detail=subtype, message_id=message_id)
             suppressed += 1
-    # Delivery / transient bounce / other: acknowledged, no suppression.
+            await _suppress_marketing_email(addr, reason="complaint", detail=subtype, message_id=message_id)
+            marketing_suppressed += 1
+    # Delivery / other: acknowledged, no suppression.
 
-    return {"received": True, "type": ntype, "suppressed": suppressed}
+    return {"received": True, "type": ntype, "suppressed": suppressed, "marketing_suppressed": marketing_suppressed}
 
 
 @api_router.post("/ses")
@@ -1543,3 +1582,94 @@ async def ses_sns_webhook(request: Request):
 
     # UnsubscribeConfirmation / unknown — acknowledge without action.
     return {"received": True, "ignored": msg_type}
+
+
+# ── Inbound SMS (Twilio): STOP/START for marketing consent ──────────────────
+
+# Twilio's standard opt-out / opt-in keywords (carriers also honour these).
+_SMS_STOP_KEYWORDS = frozenset({"STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"})
+_SMS_START_KEYWORDS = frozenset({"START", "YES", "UNSTOP"})
+_EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+
+
+async def _resolve_user_id_by_phone(phone: str) -> "str | None":
+    """Best-effort user_id for an inbound number. Never raises."""
+    try:
+        try:
+            from ..services import marketing_consent
+        except ImportError:
+            from services import marketing_consent  # type: ignore
+        norm = marketing_consent.normalize_target("sms", phone)
+        user = await db_supabase.find_one("users", {"phone": norm})
+        return user.get("id") if user else None
+    except Exception:
+        logger.error("[TWILIO] inbound user lookup failed", exc_info=True)
+        return None
+
+
+async def _handle_sms_keyword(phone: str, opted_in: bool) -> None:
+    """Apply an SMS opt-in/opt-out for the number. On opt-out we also add the
+    number to the marketing suppression list so a future broadcast can't reach
+    it even before the preference is re-read."""
+    try:
+        from ..services import marketing_consent
+    except ImportError:
+        from services import marketing_consent  # type: ignore
+
+    user_id = await _resolve_user_id_by_phone(phone)
+    if user_id:
+        await marketing_consent.set_consent(
+            user_id, "sms", opted_in, source="sms_stop" if not opted_in else "rider_app"
+        )
+    if not opted_in:
+        await marketing_consent.add_marketing_suppression(
+            "sms", phone, reason="sms_stop", source="twilio", user_id=user_id
+        )
+
+
+@api_router.post("/twilio-inbound")
+@default_limiter.limit("60/minute")
+async def twilio_inbound_sms(request: Request):
+    """Inbound SMS webhook (Twilio). Honours STOP/START for marketing SMS.
+
+    Signature-verified with the Twilio auth token over the PUBLIC URL + POST
+    params (RequestValidator). When the auth token is unset (dev) we skip
+    verification and warn, mirroring the SES topic-blank behaviour. Always
+    returns empty TwiML so Twilio doesn't surface a delivery error.
+    """
+    form = await request.form()
+    body = (form.get("Body") or "").strip()
+    from_phone = (form.get("From") or "").strip()
+
+    settings = await get_app_settings()
+    auth_token = (settings.get("twilio_auth_token") or "").strip()
+    signature = request.headers.get("X-Twilio-Signature", "")
+    if auth_token:
+        try:
+            from twilio.request_validator import RequestValidator
+        except ImportError:  # pragma: no cover - twilio always installed in prod
+            RequestValidator = None  # type: ignore
+        if RequestValidator is not None:
+            # Twilio signs the PUBLIC URL configured in its console, not the
+            # internal one FastAPI sees behind the proxy — rebuild from config.
+            base = (app_config.PUBLIC_API_BASE_URL or "").rstrip("/")
+            url = f"{base}{request.url.path}"
+            params = {k: v for k, v in form.items()}
+            if not RequestValidator(auth_token).validate(url, params, signature):
+                logger.warning("[TWILIO] inbound SMS signature invalid — rejecting")
+                return Response(status_code=403)
+    else:
+        logger.warning("[TWILIO] inbound SMS not signature-verified (twilio_auth_token unset)")
+
+    if not from_phone:
+        return Response(content=_EMPTY_TWIML, media_type="application/xml")
+
+    keyword = body.upper()
+    if keyword in _SMS_STOP_KEYWORDS:
+        await _handle_sms_keyword(from_phone, opted_in=False)
+        logger.info("[TWILIO] inbound STOP processed")
+    elif keyword in _SMS_START_KEYWORDS:
+        await _handle_sms_keyword(from_phone, opted_in=True)
+        logger.info("[TWILIO] inbound START processed")
+
+    return Response(content=_EMPTY_TWIML, media_type="application/xml")

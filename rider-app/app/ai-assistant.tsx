@@ -306,7 +306,10 @@ export default function AiAssistantScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <AiAuroraBackground />
+      {/* Ambient gradient lives on the idle welcome screen; the moment the
+          rider starts typing (or a conversation exists) it fades to plain
+          white, mirroring Gemini's home → chat transition. */}
+      <AiAuroraBackground visible={showWelcome && input.length === 0} />
       <View style={styles.header}>
         <TouchableOpacity
           onPress={() => {

@@ -68,6 +68,9 @@ _LOCK_KEY = "spinr:stripe:reconcile:lock"
 _LOCK_TTL_SECONDS = 23 * 60 * 60
 _RUN_HOUR_UTC = 2  # 02:00 UTC daily
 _WINDOW_DAYS = 1  # reconcile the previous calendar day
+# A ride should never sit in payment_status='processing' longer than a
+# settlement round-trip; past this it is treated as stranded and surfaced.
+_STUCK_PROCESSING_AFTER = timedelta(minutes=15)
 
 
 def _pod_id() -> str:
@@ -257,12 +260,20 @@ async def _run_reconciliation_tick() -> None:
     payout_discrepancies = await _reconcile_payouts()
     discrepancies.extend(payout_discrepancies)
 
+    # ── 3d. Stuck-processing ride backstop ──────────────────────────────
+    # Rides stranded in payment_status='processing' (settlement crashed, or
+    # Stripe captured but the DB write failed). Detection only — never moves
+    # money. See _reconcile_stuck_processing_rides.
+    stuck_processing = await _reconcile_stuck_processing_rides()
+    discrepancies.extend(stuck_processing)
+
     # ── 4. Write summary to audit_logs ──────────────────────────────────
     summary = {
         "date": yesterday.isoformat(),
         "stripe_pis_checked": len(stripe_pis),
         "db_rides_checked": len(db_rides),
         "payouts_flagged": len(payout_discrepancies),
+        "rides_stuck_processing": len(stuck_processing),
         "discrepancies": len(discrepancies),
         "discrepancy_detail": discrepancies[:50],  # cap at 50 to avoid huge rows
     }
@@ -348,6 +359,59 @@ async def _reconcile_payouts() -> List[Dict[str, Any]]:
             kind,
             row["id"],
             row.get("driver_id"),
+            row.get("status"),
+            extra={"domain": "payments"},
+        )
+    return discrepancies
+
+
+async def _reconcile_stuck_processing_rides() -> List[Dict[str, Any]]:
+    """Detect rides stranded in payment_status='processing'.
+
+    process_payment claims a ride by flipping payment_status to 'processing'
+    (routes/rides.py) before it settles; a crash mid-settlement, or the
+    Stripe-captured-but-DB-write-failed branch in
+    services/payment_service.settle_card (which returns 503 "do not retry"),
+    can leave the ride in 'processing' indefinitely. The paid-vs-Stripe pass
+    above only notices the subset whose PI *succeeded* (STRIPE_ORPHAN); a
+    processing ride whose charge failed, is requires_action, or never reached
+    Stripe is otherwise invisible to this job.
+
+    Rows updated more recently than ``_STUCK_PROCESSING_AFTER`` are skipped — a
+    settlement may still be in flight. Detection only: surfaced to logs + the
+    audit summary, never mutated, so this can never double-charge a rider or
+    wrongly mark a ride paid.
+    """
+    discrepancies: List[Dict[str, Any]] = []
+    cutoff = datetime.now(timezone.utc) - _STUCK_PROCESSING_AFTER
+    cols = "id,payment_intent_id,payment_status,status,updated_at,completed_at"
+    try:
+        rows = await db_supabase.get_rows("rides", {"payment_status": "processing"}, columns=cols, limit=500) or []
+    except Exception:
+        logger.error("stripe_reconcile: stuck-processing query failed", exc_info=True)
+        return discrepancies
+
+    for row in rows:
+        # Defensive: re-assert the state, never trust the query filter alone.
+        if row.get("payment_status") != "processing":
+            continue
+        # updated_at moves on every write; fall back to completed_at. A row with
+        # neither timestamp is surfaced rather than hidden (_is_older_than → True).
+        ts = row.get("updated_at") or row.get("completed_at")
+        if ts and not _is_older_than(ts, cutoff):
+            continue  # still in-flight — a settlement may be mid-round-trip
+        discrepancies.append(
+            {
+                "type": "RIDE_PAYMENT_STUCK_PROCESSING",
+                "ride_id": row["id"],
+                "payment_intent_id": row.get("payment_intent_id"),
+                "ride_status": row.get("status"),
+            }
+        )
+        logger.error(
+            "stripe_reconcile: RIDE_PAYMENT_STUCK_PROCESSING ride=%s pi=%s ride_status=%s",
+            row["id"],
+            row.get("payment_intent_id"),
             row.get("status"),
             extra={"domain": "payments"},
         )

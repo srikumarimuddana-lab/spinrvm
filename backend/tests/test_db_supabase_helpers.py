@@ -390,3 +390,71 @@ class TestGetHelpers:
             result = asyncio.run(get_driver_by_id("drv_1"))
 
         assert result == driver
+
+
+# ---------------------------------------------------------------------------
+# Non-dict payload/filter guards (diagnostic for the opaque supabase-py
+# "'str' object has no attribute 'items'" failure). A bare string passed where
+# a dict is expected must fail loudly, naming the table and the bad value,
+# instead of blowing up deep inside supabase-py with no context.
+# ---------------------------------------------------------------------------
+
+
+class TestNonDictGuards:
+    def test_apply_filters_rejects_string_filter(self):
+        import pytest
+
+        from backend.repositories._base import _apply_filters
+
+        with pytest.raises(TypeError) as exc:
+            _apply_filters(MagicMock(), "drv_1")  # bare id where {"id": ...} expected
+        assert "expected a dict" in str(exc.value)
+        assert "drv_1" in str(exc.value)
+
+    def test_apply_filters_allows_none_and_empty(self):
+        from backend.repositories._base import _apply_filters
+
+        q = MagicMock()
+        # None / empty must pass through untouched (no filter applied).
+        assert _apply_filters(q, None) is q
+        assert _apply_filters(q, {}) is q
+
+    def test_insert_one_rejects_non_dict_doc(self):
+        import pytest
+
+        import backend.repositories._base as base
+
+        with patch.object(base, "supabase", MagicMock()):
+            with pytest.raises(TypeError) as exc:
+                asyncio.run(base.insert_one("drivers", "not-a-dict"))
+        assert "drivers" in str(exc.value)
+        assert "must be a dict" in str(exc.value)
+
+    def test_insert_many_rejects_non_dict_element(self):
+        import pytest
+
+        import backend.repositories._base as base
+
+        with patch.object(base, "supabase", MagicMock()):
+            with pytest.raises(TypeError) as exc:
+                asyncio.run(base.insert_many("drivers", [{"id": "ok"}, "bad-row"]))
+        assert "drivers" in str(exc.value)
+        assert "must be a dict" in str(exc.value)
+
+    def test_update_one_rejects_string_set_payload(self):
+        import pytest
+
+        import backend.repositories._base as base
+        from backend.repositories._base import DatabaseError
+
+        # {"$set": <str>} unwraps to a string payload; the guard inside _fn
+        # raises TypeError, which run_sync wraps into DatabaseError carrying
+        # the clear, table-named message.
+        with (
+            patch.object(base, "supabase", MagicMock()),
+            patch.object(base, "_pre_invalidate_for_table", AsyncMock()),
+        ):
+            with pytest.raises(DatabaseError) as exc:
+                asyncio.run(base.update_one("drivers", {"id": "drv_1"}, {"$set": "oops"}))
+        assert "must be a dict" in str(exc.value.details.get("original", ""))
+        assert "drivers" in str(exc.value.details.get("original", ""))

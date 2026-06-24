@@ -1,10 +1,15 @@
 """Referral reward payout loop (rider + driver).
 
-Pays a referrer once their referee reaches the ride threshold:
+Pays a referrer once their referee reaches the ride threshold WITHIN the
+completion deadline (window_days from referral_terms; 0 = no deadline):
   - driver referral: referrer earns $10 once the referee (a driver) completes
     REFERRAL_RIDES_REQUIRED (10) rides.
   - rider referral: referrer AND referee each earn $5 once the referee completes
     RIDER_REFERRAL_RIDES_REQUIRED (1) ride ("first-ride bonus, both sides").
+
+If the deadline passes before the threshold is met, the referral is recorded as
+'expired' (rewards 0) and never paid — this forces referred drivers to complete
+their rides promptly.
 
 Money safety:
   - OFF by default (settings.REFERRAL_PAYOUTS_ENABLED) — enable after staging.
@@ -53,6 +58,12 @@ def _d(v) -> Decimal:
 
 def _f(v: Decimal) -> str:
     return str(v)
+
+
+def _parse_iso(value: str) -> datetime:
+    """Parse an ISO-8601 timestamp to a tz-aware UTC datetime (assume UTC if naive)."""
+    dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 async def referral_payout_loop() -> None:
@@ -134,18 +145,17 @@ async def _process_one(referee: dict, code: str) -> None:
     if not referrer_user_id or referrer_user_id == referee_id:
         return  # unresolved or self — nothing to pay
 
-    # Count only rides completed AFTER the referral was applied — never pay
-    # retroactively for rides that predate the referral. (Legacy rows with no
-    # referral_applied_at fall back to lifetime count.)
+    # Never pay retroactively for rides that predate the referral. (Legacy rows
+    # with no referral_applied_at fall back to a lifetime count.)
     applied_at = referee.get("referral_applied_at")
-    since = {"created_at": {"$gte": applied_at}} if applied_at else {}
 
-    # Resolve the referee's service area and its per-area reward terms. The ride
-    # threshold is itself per-area, so this must precede the threshold check.
-    # area_id == None → resolve_referral_terms falls back to the global default.
+    # Resolve the referee's service area + the ride base filter. The ride
+    # threshold AND the completion deadline are both per-area, so resolve terms
+    # before counting. area_id == None → resolve_referral_terms falls back to the
+    # global default.
     if is_rider:
         area_id = await area_id_for_rider(referee_id, applied_at)
-        completed = await db_supabase.count_documents("rides", {"rider_id": referee_id, "status": "completed", **since})
+        ride_filter: dict = {"rider_id": referee_id, "status": "completed"}
     else:
         ref_as_driver = (lambda _r: _r[0] if _r else None)(
             await db_supabase.get_rows("drivers", {"user_id": referee_id}, limit=1)
@@ -153,12 +163,41 @@ async def _process_one(referee: dict, code: str) -> None:
         if not ref_as_driver:
             return
         area_id = ref_as_driver.get("service_area_id")
-        completed = await db_supabase.count_documents(
-            "rides", {"driver_id": ref_as_driver["id"], "status": "completed", **since}
-        )
+        ride_filter = {"driver_id": ref_as_driver["id"], "status": "completed"}
 
     t = await resolve_referral_terms(area_id, kind)
+
+    # Completion deadline: the referee must reach the ride threshold within
+    # window_days of referral_applied_at, or the referral expires unpaid. This is
+    # what forces referred drivers to complete their rides promptly. window_days
+    # <= 0 (or no applied_at, e.g. a legacy referral) → no deadline, preserving
+    # the original "count forever" behaviour.
+    window_days = int(t.get("window_days") or 0)
+    deadline = None
+    if applied_at and window_days > 0:
+        deadline = _parse_iso(applied_at) + timedelta(days=window_days)
+
+    # Count completed rides from referral_applied_at, capped at the deadline so a
+    # ride taken after the window closed can never qualify the referral. The
+    # filter translator honours only one operator per field, so AND the two
+    # bounds via $and (see repositories/_base._apply_filters).
+    bounds = []
+    if applied_at:
+        bounds.append({"created_at": {"$gte": applied_at}})
+    if deadline is not None:
+        bounds.append({"created_at": {"$lte": deadline.isoformat()}})
+    count_filter = dict(ride_filter)
+    if bounds:
+        count_filter["$and"] = bounds
+    completed = await db_supabase.count_documents("rides", count_filter)
+
     if completed < t["rides"]:
+        # Threshold not met. If the window has closed, the referral has expired:
+        # record a terminal 'expired' claim (rewards 0) so it's never paid and the
+        # referee is excluded from every future tick by the same unique claim.
+        # Until the deadline passes, just wait for the next tick.
+        if deadline is not None and datetime.now(timezone.utc) > deadline:
+            await _record_expiry(referee_id, referrer_user_id, kind, area_id)
         return
 
     # resolve_referral_terms already returns Decimal; _d re-quantises defensively.
@@ -236,6 +275,33 @@ async def _process_one(referee: dict, code: str) -> None:
         {"$set": _credit_marks("paid", referrer_paid, referee_paid)},
     )
     logger.info(f"referral_payout: paid {kind} referral reward for referee {referee_id}")
+
+
+async def _record_expiry(referee_id: str, referrer_user_id: str, kind: str, area_id) -> None:
+    """Record a terminal, never-paid 'expired' claim for a referee who missed the
+    completion deadline. Reuses the UNIQUE(referee_user_id) claim (rewards 0) so
+    the referee is excluded from every future tick and is never paid. A duplicate
+    means another replica/tick already finalised this referee — expected, skip."""
+    try:
+        await db_supabase.insert_one(
+            "referral_payouts",
+            {
+                "referee_user_id": referee_id,
+                "referrer_user_id": referrer_user_id,
+                "kind": kind,
+                "service_area_id": area_id,
+                "referrer_reward": _f(_d(0)),
+                "referee_reward": _f(_d(0)),
+                "status": "expired",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        logger.info(
+            "referral_payout: referral expired unpaid (completion deadline missed)",
+            extra={"referee_id": referee_id, "kind": kind},
+        )
+    except DuplicateRecordError:
+        logger.info(f"referral_payout: claim already exists for referee {referee_id} — skipping expiry")
 
 
 def _credit_marks(status: str, referrer_paid: bool, referee_paid: bool) -> dict:

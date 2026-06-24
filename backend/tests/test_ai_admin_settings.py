@@ -66,6 +66,15 @@ class TestUpdateValidation:
         fields = body.model_dump(exclude_none=True)
         assert fields == {"ai_assistant_enabled": True}
 
+    def test_auto_heal_flag_is_settable_and_defaults_unset(self):
+        # The stripe_auto_heal_processing flag must round-trip through the
+        # settings model so ops can toggle it via PUT /api/admin/settings.
+        body = SettingsUpdateRequest(stripe_auto_heal_processing=True)
+        assert body.model_dump(exclude_none=True) == {"stripe_auto_heal_processing": True}
+        # Left unset it is never persisted — the reconcile default keeps it OFF,
+        # so a routine settings save can't accidentally enable money movement.
+        assert "stripe_auto_heal_processing" not in SettingsUpdateRequest().model_dump(exclude_none=True)
+
 
 class TestCatalog:
     def test_every_provider_is_supported_and_keyed(self):

@@ -131,7 +131,7 @@ async def _run_reconciliation_tick() -> None:
                 {
                     "payment_status": "paid",
                 },
-                columns="id,payment_intent_id,grand_total,total_fare,tip_amount,authorized_amount,status,completed_at",
+                columns="id,payment_intent_id,grand_total,total_fare,tip_amount,authorized_amount,status,ride_completed_at",
                 limit=2000,
             )
             or []
@@ -141,8 +141,8 @@ async def _run_reconciliation_tick() -> None:
             r
             for r in db_rides
             if r.get("payment_intent_id")
-            and r.get("completed_at")
-            and _in_window(r["completed_at"], window_start, window_end)
+            and r.get("ride_completed_at")
+            and _in_window(r["ride_completed_at"], window_start, window_end)
         ]
     except Exception:
         logger.error("stripe_reconcile: DB rides query failed", exc_info=True)

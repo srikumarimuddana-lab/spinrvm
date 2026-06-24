@@ -64,6 +64,7 @@ def _send_ses_sync(
     html: Optional[str],
     text: Optional[str],
     attachments: Optional[list] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
 ) -> str:
     """Blocking SES SendRawEmail. Returns the SES MessageId. Raises on failure.
 
@@ -81,7 +82,15 @@ def _send_ses_sync(
         # SES rejects an empty body; guard so we surface a clear error.
         raise ValueError("send_transactional_email requires html or text")
 
-    message = _build_mime(source=source, to=to, subject=subject, html=html, text=text, attachments=attachments)
+    message = _build_mime(
+        source=source,
+        to=to,
+        subject=subject,
+        html=html,
+        text=text,
+        attachments=attachments,
+        extra_headers=extra_headers,
+    )
 
     client = boto3.client(
         "ses",
@@ -106,12 +115,16 @@ def _build_mime(
     html: Optional[str],
     text: Optional[str],
     attachments: Optional[list] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
 ):
     """Build the MIME message SES SendRawEmail expects.
 
     The body is multipart/alternative when both text+html are present (clients
     prefer html, fall back to text), or a single MIMEText. When attachments are
     supplied the whole thing is wrapped in multipart/mixed.
+
+    ``extra_headers`` adds top-level headers (e.g. ``List-Unsubscribe`` for
+    marketing mail). Subject/From/To are set here and take precedence.
     """
     from email.mime.application import MIMEApplication
     from email.mime.multipart import MIMEMultipart
@@ -141,6 +154,14 @@ def _build_mime(
     else:
         msg = body
 
+    if extra_headers:
+        for hk, hv in extra_headers.items():
+            # Skip the headers we set authoritatively below; never let a caller
+            # spoof From/To/Subject via extra_headers.
+            if hk.lower() in ("subject", "from", "to"):
+                continue
+            msg[hk] = hv
+
     msg["Subject"] = subject
     msg["From"] = source
     msg["To"] = to
@@ -157,12 +178,17 @@ async def _try_ses(
     default_from: str,
     log_id: str,
     attachments: Optional[list] = None,
+    from_email: Optional[str] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
 ) -> Optional[str]:
     """Attempt delivery via AWS SES.
 
     Returns the SES MessageId (possibly "") on success, or None when SES is
     unconfigured (so the caller falls through to the Resend guardrail) or a
     runtime failure occurs (already logged here).
+
+    ``from_email`` overrides the configured sender (e.g. the marketing sender);
+    ``extra_headers`` adds headers such as ``List-Unsubscribe``.
     """
     access_key_id = (settings.get("aws_ses_access_key_id") or "").strip()
     secret_access_key = (settings.get("aws_ses_secret_access_key") or "").strip()
@@ -170,8 +196,8 @@ async def _try_ses(
         return None  # unconfigured — fall through to Resend
 
     region = (settings.get("aws_ses_region") or "").strip() or _DEFAULT_SES_REGION
-    from_email = (settings.get("aws_ses_from_email") or "").strip() or default_from
-    source = f"Spinr <{from_email}>"
+    sender = (from_email or "").strip() or (settings.get("aws_ses_from_email") or "").strip() or default_from
+    source = f"Spinr <{sender}>"
 
     try:
         message_id = await asyncio.to_thread(
@@ -185,6 +211,7 @@ async def _try_ses(
             html=html,
             text=text,
             attachments=attachments,
+            extra_headers=extra_headers,
         )
         logger.info(
             "[EMAIL] SES sent log_id=%s subject=%r message_id=%s",
@@ -220,11 +247,16 @@ async def _try_resend(
     default_from: str,
     log_id: str,
     attachments: Optional[list] = None,
+    from_email: Optional[str] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
 ) -> Optional[str]:
     """Attempt delivery via Resend (the guardrail).
 
     Returns the Resend message id (possibly "") on a 2xx, or None when Resend
     is unconfigured or the call fails (already logged here).
+
+    ``from_email`` overrides the configured sender; ``extra_headers`` adds
+    headers such as ``List-Unsubscribe``.
     """
     import base64
 
@@ -232,12 +264,14 @@ async def _try_resend(
     if not resend_key:
         return None  # unconfigured
 
-    from_email = (settings.get("resend_from_email") or "").strip() or default_from
+    sender = (from_email or "").strip() or (settings.get("resend_from_email") or "").strip() or default_from
     payload: Dict[str, Any] = {
-        "from": f"Spinr <{from_email}>",
+        "from": f"Spinr <{sender}>",
         "to": [to],
         "subject": subject,
     }
+    if extra_headers:
+        payload["headers"] = {k: v for k, v in extra_headers.items() if k.lower() not in ("subject", "from", "to")}
     if html:
         payload["html"] = html
     if text:
@@ -365,6 +399,8 @@ async def send_transactional_email(
     email_type: Optional[str] = "transactional",
     recipient_user_id: Optional[str] = None,
     attachments: Optional[list] = None,
+    from_email: Optional[str] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
 ) -> bool:
     """Send one transactional email: AWS SES primary, Resend guardrail.
 
@@ -382,6 +418,8 @@ async def send_transactional_email(
             The recipient address is never logged.
         email_type: Category recorded in email_send_log (receipt, dsar, …).
         recipient_user_id: PIPEDA-safe user id recorded in email_send_log.
+        from_email: Optional sender override (e.g. the marketing sender).
+        extra_headers: Optional top-level headers (e.g. List-Unsubscribe).
 
     Returns:
         True if either provider accepted the message, False otherwise.
@@ -417,6 +455,8 @@ async def send_transactional_email(
         default_from=default_from,
         log_id=log_id,
         attachments=attachments,
+        from_email=from_email,
+        extra_headers=extra_headers,
     )
     if ses_id is not None:
         await _log_send(
@@ -438,6 +478,8 @@ async def send_transactional_email(
         default_from=default_from,
         log_id=log_id,
         attachments=attachments,
+        from_email=from_email,
+        extra_headers=extra_headers,
     )
     if resend_id is not None:
         await _log_send(

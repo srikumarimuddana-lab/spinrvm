@@ -19,65 +19,197 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+_AUDIENCES = Literal[
+    "customers", "drivers", "particular_customer", "particular_driver", "all", "service_area"
+]
+
+
 class CloudMessageRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=100)
     description: str = Field(..., min_length=1, max_length=500)
-    audience: Literal["customers", "drivers", "particular_customer", "particular_driver", "all"] = "customers"
+    audience: _AUDIENCES = "customers"
     type: str = "info"
     channels: List[Literal["push", "sms", "email"]] = ["push"]
     particular_ids: Optional[List[str]] = None
     scheduled_at: Optional[str] = None
+    # When true the message is a CASL commercial electronic message: every
+    # recipient is gated on express consent + suppression per channel, and the
+    # marketing senders (footer + unsubscribe / STOP) are used. When false it
+    # is an operational/service notice (no consent gate — e.g. safety, outage).
+    is_marketing: bool = False
+    # Required when audience == "service_area": target riders with recent rides
+    # in this service area.
+    service_area_id: Optional[str] = None
 
 
 def _target_app_for_audience(audience: str) -> str | None:
     """Map audience to the target_app param for send_push_notification."""
     if audience in ("drivers", "particular_driver"):
         return "driver"
-    if audience in ("customers", "particular_customer"):
+    if audience in ("customers", "particular_customer", "service_area"):
         return "rider"
     return None
 
 
-async def _fan_out_push(
-    message_id: str,
-    target_users: list,
-    title: str,
-    description: str,
-    target_app: str | None = None,
-) -> None:
-    """Fan-out push notifications concurrently and persist final stats."""
+async def _resolve_recipients(
+    audience: str,
+    particular_ids: list,
+    service_area_id: Optional[str],
+    *,
+    need_contact: bool,
+) -> list:
+    """Resolve an audience to a list of recipient rows.
+
+    ``need_contact`` adds email+phone columns (required for the email/SMS
+    channels); push only needs the id, so we avoid dragging contact PII when
+    it isn't used. service_area targets riders via their rides in that area.
+    """
+    cols = "id,email,phone" if need_contact else "id"
+    if audience in ("particular_customer", "particular_driver"):
+        if not particular_ids:
+            return []
+        if need_contact:
+            return await db.get_rows("users", {"id": {"$in": particular_ids}}, columns=cols, limit=10000)
+        return [{"id": uid} for uid in particular_ids]
+    if audience == "customers":
+        return await db.get_rows("users", {"is_rider": True}, columns=cols, limit=10000)
+    if audience == "drivers":
+        return await db.get_rows("users", {"is_driver": True}, columns=cols, limit=10000)
+    if audience == "all":
+        return await db.get_rows("users", {}, columns=cols, limit=10000)
+    if audience == "service_area":
+        if not service_area_id:
+            return []
+        rides = await db.get_rows(
+            "rides", {"service_area_id": service_area_id}, columns="rider_id", limit=50000
+        )
+        ids = list({r.get("rider_id") for r in rides if r.get("rider_id")})
+        if not ids:
+            return []
+        return await db.get_rows("users", {"id": {"$in": ids}}, columns=cols, limit=10000)
+    return []
+
+
+async def _count_audience(audience: str, particular_ids: list) -> int:
+    """Recipient count without materialising the list — used for scheduled
+    sends (the list is resolved at dispatch time)."""
+    if audience in ("particular_customer", "particular_driver"):
+        return len(particular_ids)
+    if audience == "customers":
+        return await db_supabase.count_documents("users", {"is_rider": True})
+    if audience == "drivers":
+        return await db_supabase.count_documents("users", {"is_driver": True})
+    if audience == "all":
+        return await db_supabase.count_documents("users", {})
+    # service_area is resolved at dispatch; size is unknown until then.
+    return 0
+
+
+async def _send_push_one(uid: str, title: str, description: str, target_app: str | None) -> bool:
     try:
         from ...features import send_push_notification
     except ImportError:
         from features import send_push_notification  # type: ignore
+    try:
+        return bool(await send_push_notification(uid, title, description, target_app=target_app))
+    except Exception:
+        logger.error("cloud message: push send raised", exc_info=True)
+        return False
 
+
+async def _send_email_one(row: dict, title: str, description: str, is_marketing: bool) -> bool:
+    to = (row.get("email") or "").strip()
+    uid = row.get("id")
+    if not to or not uid:
+        return False
+    html = f"<h2>{title}</h2><p>{description}</p>"
+    if is_marketing:
+        try:
+            from ...utils.marketing_email import send_marketing_email
+        except ImportError:
+            from utils.marketing_email import send_marketing_email  # type: ignore
+        return await send_marketing_email(to=to, user_id=uid, subject=title, html=html, text=description, log_id="cm")
+    try:
+        from ...utils.email_provider import send_transactional_email
+    except ImportError:
+        from utils.email_provider import send_transactional_email  # type: ignore
+    return await send_transactional_email(
+        to=to, subject=title, html=html, text=description, email_type="broadcast", recipient_user_id=uid, log_id="cm"
+    )
+
+
+async def _send_sms_one(row: dict, title: str, description: str, is_marketing: bool, settings: dict) -> bool:
+    to = (row.get("phone") or "").strip()
+    uid = row.get("id")
+    if not to or not uid:
+        return False
+    body = f"{title}\n{description}"
+    if is_marketing:
+        try:
+            from ...utils.marketing_sms import send_marketing_sms
+        except ImportError:
+            from utils.marketing_sms import send_marketing_sms  # type: ignore
+        return await send_marketing_sms(to=to, user_id=uid, message=body, log_id="cm")
+    try:
+        from ...sms_service import send_sms
+    except ImportError:
+        from sms_service import send_sms  # type: ignore
+    res = await send_sms(
+        to,
+        body,
+        twilio_sid=(settings.get("twilio_account_sid") or ""),
+        twilio_token=(settings.get("twilio_auth_token") or ""),
+        twilio_from=(settings.get("twilio_from_number") or ""),
+    )
+    return bool(res.get("success"))
+
+
+async def _fan_out(
+    message_id: str,
+    recipients: list,
+    *,
+    title: str,
+    description: str,
+    channels: list,
+    is_marketing: bool,
+    target_app: str | None,
+) -> None:
+    """Fan-out across every selected channel concurrently and persist stats.
+
+    For marketing messages each channel's sender independently enforces the
+    consent + suppression gate (services.marketing_consent), so an unconsented
+    or suppressed recipient is silently skipped (counts as a non-success). The
+    aggregate successful/failed_count across all channels is written back.
+
+    NOTE: marketing gating does a per-recipient consent lookup. Broadcasts run
+    in the background (not request-latency-critical); bulk-loading preferences
+    is a future optimisation if list sizes grow large.
+    """
+    rows = [r for r in recipients if isinstance(r, dict) and r.get("id")]
     sem = asyncio.Semaphore(50)
+    settings: dict = {}
+    if "sms" in channels and not is_marketing:
+        try:
+            from ...settings_loader import get_app_settings
+        except ImportError:
+            from settings_loader import get_app_settings  # type: ignore
+        settings = await get_app_settings()
 
-    async def _send_one(uid: str) -> bool:
+    async def _one(row: dict) -> bool:
         async with sem:
-            try:
-                result = await send_push_notification(uid, title, description, target_app=target_app)
-                if not result:
-                    logger.warning(
-                        f"Cloud message {message_id}: push to {uid} returned False (target_app={target_app})"
-                    )
-                return bool(result)
-            except Exception as e:
-                logger.error(f"Cloud message {message_id}: push to {uid} raised {e}", exc_info=True)
-                return False
+            ok = False
+            if "push" in channels and await _send_push_one(row["id"], title, description, target_app):
+                ok = True
+            if "email" in channels and await _send_email_one(row, title, description, is_marketing):
+                ok = True
+            if "sms" in channels and await _send_sms_one(row, title, description, is_marketing, settings):
+                ok = True
+            return ok
 
-    uids = [u.get("id") if isinstance(u, dict) else u for u in target_users]
-    uids = [uid for uid in uids if uid]
-
-    logger.info(f"Cloud message {message_id}: starting fan-out to {len(uids)} user(s) (target_app={target_app})")
-
-    if not uids:
-        logger.warning(f"Cloud message {message_id}: no target users found — skipping fan-out")
-
-    results = await asyncio.gather(*[_send_one(uid) for uid in uids], return_exceptions=True)
+    logger.info(f"Cloud message {message_id}: fan-out to {len(rows)} recipient(s) channels={channels}")
+    results = await asyncio.gather(*[_one(r) for r in rows], return_exceptions=True)
     successful = sum(1 for r in results if r is True)
     failed_count = len(results) - successful
-
     logger.info(f"Cloud message {message_id} fan-out complete: success={successful} failed={failed_count}")
 
     try:
@@ -114,38 +246,27 @@ async def admin_send_cloud_message(
     channels = payload.channels
     particular_ids = payload.particular_ids or []
     scheduled_at = payload.scheduled_at
+    is_marketing = payload.is_marketing
+    service_area_id = payload.service_area_id
+
+    if audience == "service_area" and not service_area_id:
+        raise HTTPException(status_code=422, detail="service_area_id is required for the service_area audience")
 
     is_scheduled = bool(scheduled_at)
     status = "scheduled" if is_scheduled else "sent"
 
-    total_recipients = 1
+    # Email and SMS need the contact columns; push only needs the id.
+    need_contact = any(c in channels for c in ("email", "sms"))
     target_app = _target_app_for_audience(audience)
 
-    if audience in ("particular_customer", "particular_driver"):
-        total_recipients = len(particular_ids) if particular_ids else 1
-    elif audience == "customers":
-        count = await db_supabase.count_documents("users", {"is_rider": True})
-        total_recipients = count if count > 0 else 0
-    elif audience == "drivers":
-        count = await db_supabase.count_documents("users", {"is_driver": True})
-        total_recipients = count if count > 0 else 0
-    elif audience == "all":
-        count = await db_supabase.count_documents("users", {})
-        total_recipients = count if count > 0 else 0
-
-    target_users: list = []
+    # Resolve the recipient list only for an immediate send; a scheduled send
+    # is materialised at dispatch time, so we only need its size now.
+    recipients: list = []
     if not is_scheduled:
-        # Only the id is needed for fan-out (_fan_out_push reads u["id"]). Project
-        # it explicitly so a broadcast doesn't drag up to 10k base64 profile_image
-        # blobs out of the DB and into memory.
-        if audience in ("particular_customer", "particular_driver"):
-            target_users = [{"id": uid} for uid in particular_ids]
-        elif audience == "customers":
-            target_users = await db.get_rows("users", {"is_rider": True}, columns="id", limit=10000)
-        elif audience == "drivers":
-            target_users = await db.get_rows("users", {"is_driver": True}, columns="id", limit=10000)
-        elif audience == "all":
-            target_users = await db.get_rows("users", {}, columns="id", limit=10000)
+        recipients = await _resolve_recipients(audience, particular_ids, service_area_id, need_contact=need_contact)
+        total_recipients = len(recipients)
+    else:
+        total_recipients = await _count_audience(audience, particular_ids)
 
     doc = {
         "id": str(uuid.uuid4()),
@@ -155,6 +276,8 @@ async def admin_send_cloud_message(
         "type": msg_type,
         "channel": channels[0],
         "channels": channels,
+        "is_marketing": is_marketing,
+        "service_area_id": service_area_id,
         "particular_id": particular_ids[0] if particular_ids else None,
         "particular_ids": particular_ids,
         "status": status,
@@ -176,10 +299,46 @@ async def admin_send_cloud_message(
         ) from e
 
     if not is_scheduled:
-        background_tasks.add_task(_fan_out_push, doc["id"], target_users, title, description, target_app)
+        background_tasks.add_task(
+            _fan_out,
+            doc["id"],
+            recipients,
+            title=title,
+            description=description,
+            channels=channels,
+            is_marketing=is_marketing,
+            target_app=target_app,
+        )
         response.status_code = 202
 
     return {"success": True, "message": doc}
+
+
+@router.get("/cloud-messaging/audience-preview")
+async def admin_cloud_message_audience_preview(
+    audience: _AUDIENCES = Query("customers"),
+    service_area_id: Optional[str] = Query(None),
+):
+    """Estimate reach before sending: the audience size plus, for marketing,
+    the number of users who have opted in on each channel.
+
+    The opt-in figures are the GLOBAL opted-in pool (not intersected with the
+    audience) — a guidance number. Exact per-recipient consent filtering still
+    happens at send time, so the delivered count can be lower.
+    """
+    if audience == "service_area" and not service_area_id:
+        raise HTTPException(status_code=422, detail="service_area_id is required for the service_area audience")
+
+    recipients = await _resolve_recipients(audience, [], service_area_id, need_contact=False)
+    out: Dict[str, Any] = {"audience": audience, "audience_total": len(recipients)}
+    try:
+        out["email_opted_in"] = await db_supabase.count_documents("marketing_preferences", {"email_opt_in": True})
+        out["sms_opted_in"] = await db_supabase.count_documents("marketing_preferences", {"sms_opt_in": True})
+        out["push_opted_in"] = await db_supabase.count_documents("marketing_preferences", {"push_opt_in": True})
+    except Exception:
+        logger.error("audience-preview consent counts failed", exc_info=True)
+        out["email_opted_in"] = out["sms_opted_in"] = out["push_opted_in"] = None
+    return out
 
 
 @router.get("/cloud-messaging")
@@ -236,6 +395,65 @@ async def admin_get_cloud_message_stats():
         "total_recipients_reached": total_reached,
         "success_rate": success_rate,
     }
+
+
+class ManualSuppressionRequest(BaseModel):
+    channel: Literal["email", "sms"]
+    target: str = Field(..., min_length=1, max_length=320)
+    reason: Literal["manual", "bounce", "complaint", "unsubscribe"] = "manual"
+
+
+@router.get("/marketing/suppressions")
+async def admin_list_marketing_suppressions(
+    channel: Optional[str] = Query(None),
+    limit: int = Query(100),
+    offset: int = Query(0),
+):
+    """List the marketing suppression list (the 'do-not-market' list).
+
+    PIPEDA: the target (email/phone) is intrinsic to a suppression record — an
+    operator must see WHO is suppressed to manage the list — so it is returned
+    here, behind the admin auth + the notifications module gate.
+    """
+    filters: Dict[str, Any] = {}
+    if channel:
+        filters["channel"] = channel
+    try:
+        rows = await db_supabase.get_rows(
+            "marketing_suppressions", filters, order="created_at", desc=True, limit=limit, offset=offset
+        )
+    except Exception:
+        logger.error("marketing_suppressions query failed", exc_info=True)
+        return []
+    return rows
+
+
+@router.post("/marketing/suppressions")
+async def admin_add_marketing_suppression(payload: ManualSuppressionRequest):
+    """Manually add an address/number to the marketing suppression list."""
+    try:
+        from ...services import marketing_consent
+    except ImportError:
+        from services import marketing_consent  # type: ignore
+    added = await marketing_consent.add_marketing_suppression(
+        payload.channel, payload.target, reason=payload.reason, source="admin"
+    )
+    return {"success": True, "added": added}
+
+
+@router.delete("/marketing/suppressions/{suppression_id}")
+async def admin_delete_marketing_suppression(suppression_id: str):
+    """Remove a suppression (re-allow marketing to this target).
+
+    Use with care: lifting a bounce/complaint suppression re-enables marketing
+    to an address that previously bounced or complained. The deletion is
+    audited via the standard admin audit trail.
+    """
+    existing = await db_supabase.find_one("marketing_suppressions", {"id": suppression_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Suppression not found")
+    await db_supabase.delete_many("marketing_suppressions", {"id": suppression_id})
+    return {"success": True}
 
 
 @router.delete("/cloud-messaging/{message_id}")

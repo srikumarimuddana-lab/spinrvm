@@ -27,12 +27,15 @@ import {
     Cloud, Send, Users, Car, Bell, Mail, Calendar, Clock, Download, Search,
     CheckCircle2, XCircle, Timer, Trash2, Eye, RefreshCw, FileText, User,
     Phone, ChevronLeft, ChevronRight, Info, AlertCircle, MapPin, Flame, X, Check,
+    Megaphone, ShieldOff, Plus,
 } from "lucide-react";
 import { cn, formatDate } from "@/lib/utils";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import {
     getCloudMessages, sendCloudMessage, getCloudMessageStats,
-    deleteCloudMessage, getUsers, getDrivers,
+    deleteCloudMessage, getUsers, getDrivers, getServiceAreas,
+    getCloudMessageAudiencePreview, getMarketingSuppressions,
+    addMarketingSuppression, deleteMarketingSuppression,
 } from "@/lib/api";
 
 // --- Types ---
@@ -79,6 +82,7 @@ const AUDIENCE_OPTIONS = [
     { value: "drivers", label: "Drivers", icon: Car },
     { value: "particular_customer", label: "Particular Customer", icon: User },
     { value: "particular_driver", label: "Particular Driver", icon: User },
+    { value: "service_area", label: "Service Area", icon: MapPin },
 ];
 
 const NOTIFICATION_TYPES = [
@@ -115,9 +119,19 @@ export default function CloudMessagingPage() {
     const [historyPage, setHistoryPage] = useState(1);
     const [selectedMessage, setSelectedMessage] = useState<CloudMessage | null>(null);
     const [sending, setSending] = useState(false);
-    const [activeTab, setActiveTab] = useState<"compose" | "scheduled" | "history">("compose");
+    const [activeTab, setActiveTab] = useState<"compose" | "scheduled" | "history" | "suppressions">("compose");
     const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
     const { toast } = useToast();
+
+    // Service areas (for the service_area audience) + live audience preview.
+    const [serviceAreas, setServiceAreas] = useState<{ id: string; name: string }[]>([]);
+    const [preview, setPreview] = useState<{ audience_total: number; email_opted_in: number | null; sms_opted_in: number | null; push_opted_in: number | null } | null>(null);
+
+    // Suppression list (do-not-market).
+    const [suppressions, setSuppressions] = useState<any[]>([]);
+    const [suppLoading, setSuppLoading] = useState(false);
+    const [suppChannel, setSuppChannel] = useState("all");
+    const [newSupp, setNewSupp] = useState({ channel: "email", target: "" });
 
     // Multi-select user/driver
     const [userOptions, setUserOptions] = useState<UserOption[]>([]);
@@ -135,11 +149,14 @@ export default function CloudMessagingPage() {
         send_push: true,
         send_email: false,
         send_sms: false,
+        is_marketing: false,
+        service_area_id: "",
         is_scheduled: false,
         scheduled_at: "",
     });
 
     useEffect(() => { fetchData(); }, []);
+    useEffect(() => { getServiceAreas().then((a) => setServiceAreas(a || [])).catch(() => setServiceAreas([])); }, []);
 
     const fetchData = async () => {
         setLoading(true);
@@ -206,6 +223,59 @@ export default function CloudMessagingPage() {
         setSelectedUsers((prev) => prev.filter((u) => u.id !== id));
     };
 
+    // Live audience preview — only meaningful for broadcast audiences (not the
+    // particular_* selectors) and most useful when marketing (shows opt-in pool).
+    useEffect(() => {
+        const isParticular = form.audience.startsWith("particular");
+        if (isParticular || (form.audience === "service_area" && !form.service_area_id)) {
+            setPreview(null);
+            return;
+        }
+        let cancelled = false;
+        getCloudMessageAudiencePreview(form.audience, form.service_area_id || undefined)
+            .then((p) => { if (!cancelled) setPreview(p); })
+            .catch(() => { if (!cancelled) setPreview(null); });
+        return () => { cancelled = true; };
+    }, [form.audience, form.service_area_id]);
+
+    // Suppression list loader.
+    const fetchSuppressions = useCallback(async () => {
+        setSuppLoading(true);
+        try {
+            const rows = await getMarketingSuppressions(suppChannel === "all" ? undefined : suppChannel);
+            setSuppressions(Array.isArray(rows) ? rows : []);
+        } catch {
+            setSuppressions([]);
+        } finally {
+            setSuppLoading(false);
+        }
+    }, [suppChannel]);
+
+    useEffect(() => {
+        if (activeTab === "suppressions") fetchSuppressions();
+    }, [activeTab, fetchSuppressions]);
+
+    const handleAddSuppression = async () => {
+        if (!newSupp.target.trim()) { toast({ title: "Missing value", description: "Enter an email or phone to suppress.", variant: "destructive" }); return; }
+        try {
+            await addMarketingSuppression({ channel: newSupp.channel, target: newSupp.target.trim(), reason: "manual" });
+            setNewSupp({ channel: newSupp.channel, target: "" });
+            await fetchSuppressions();
+            toast({ title: "Suppressed", description: "Added to the do-not-market list." });
+        } catch (e: any) {
+            toast({ title: "Failed", description: e?.message || "Could not add suppression.", variant: "destructive" });
+        }
+    };
+
+    const handleRemoveSuppression = async (id: string) => {
+        try {
+            await deleteMarketingSuppression(id);
+            setSuppressions((prev) => prev.filter((s) => s.id !== id));
+        } catch (e: any) {
+            toast({ title: "Failed", description: e?.message || "Could not remove suppression.", variant: "destructive" });
+        }
+    };
+
     // Filtered messages
     const filtered = useMemo(() => {
         return messages.filter((m) => {
@@ -232,6 +302,7 @@ export default function CloudMessagingPage() {
         if (!form.title.trim() || !form.description.trim()) { toast({ title: "Missing fields", description: "Please fill in title and description.", variant: "destructive" }); return; }
         const isParticular = form.audience === "particular_customer" || form.audience === "particular_driver";
         if (isParticular && form.particular_ids.length === 0) { toast({ title: "No recipients selected", description: "Please select at least one user/driver.", variant: "destructive" }); return; }
+        if (form.audience === "service_area" && !form.service_area_id) { toast({ title: "No service area", description: "Please pick a service area to target.", variant: "destructive" }); return; }
         if (form.is_scheduled && !form.scheduled_at) { toast({ title: "Missing schedule time", description: "Please select a date and time.", variant: "destructive" }); return; }
         const channels: string[] = [];
         if (form.send_push) channels.push("push");
@@ -247,8 +318,10 @@ export default function CloudMessagingPage() {
                 audience: form.audience,
                 channels,
                 type: form.type,
+                is_marketing: form.is_marketing,
             };
             if (isParticular) payload.particular_ids = form.particular_ids;
+            if (form.audience === "service_area") payload.service_area_id = form.service_area_id;
             if (form.is_scheduled && form.scheduled_at) {
                 payload.scheduled_at = new Date(form.scheduled_at).toISOString();
             }
@@ -263,7 +336,7 @@ export default function CloudMessagingPage() {
     };
 
     const resetForm = () => {
-        setForm({ title: "", description: "", audience: "customers", particular_ids: [], type: "info", send_push: true, send_email: false, send_sms: false, is_scheduled: false, scheduled_at: "" });
+        setForm({ title: "", description: "", audience: "customers", particular_ids: [], type: "info", send_push: true, send_email: false, send_sms: false, is_marketing: false, service_area_id: "", is_scheduled: false, scheduled_at: "" });
         setSelectedUsers([]);
         setUserSearch("");
         setUserOptions([]);
@@ -321,9 +394,9 @@ export default function CloudMessagingPage() {
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
                         <Cloud className="h-8 w-8 text-violet-500" />
-                        Cloud Messaging
+                        Notifications
                     </h1>
-                    <p className="text-muted-foreground mt-1">Send push notifications, emails, and SMS to customers and drivers.</p>
+                    <p className="text-muted-foreground mt-1">Send push, email, and SMS — service notices or consent-gated marketing — to customers and drivers.</p>
                 </div>
                 <Button variant="outline" size="sm" onClick={fetchData} disabled={loading}>
                     <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
@@ -360,6 +433,7 @@ export default function CloudMessagingPage() {
                     { key: "compose", label: "Compose Message", icon: Send },
                     { key: "scheduled", label: `Upcoming (${scheduledMessages.length})`, icon: Timer },
                     { key: "history", label: "Message History", icon: FileText },
+                    { key: "suppressions", label: "Unsubscribe List", icon: ShieldOff },
                 ].map((tab) => (
                     <button key={tab.key} onClick={() => setActiveTab(tab.key as any)} className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${activeTab === tab.key ? "border-red-500 text-red-600 dark:text-red-400" : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"}`}>
                         <tab.icon className="h-4 w-4" /> {tab.label}
@@ -384,7 +458,7 @@ export default function CloudMessagingPage() {
                                         return (
                                             <button
                                                 key={opt.value}
-                                                onClick={() => { setForm({ ...form, audience: opt.value, particular_ids: [] }); setSelectedUsers([]); setUserSearch(""); setUserOptions([]); }}
+                                                onClick={() => { setForm({ ...form, audience: opt.value, particular_ids: [], service_area_id: "" }); setSelectedUsers([]); setUserSearch(""); setUserOptions([]); }}
                                                 className={cn(
                                                     "flex items-center gap-2 rounded-lg border px-3 py-2.5 text-sm font-medium transition-colors",
                                                     isActive
@@ -437,6 +511,30 @@ export default function CloudMessagingPage() {
                                         {!userSearchLoading && userSearch && userOptions.length === 0 && <p className="text-xs text-muted-foreground">No results found</p>}
                                     </div>
                                 )}
+
+                                {/* Service-area picker */}
+                                {form.audience === "service_area" && (
+                                    <div className="space-y-2 pt-1 max-w-sm">
+                                        <Label className="text-sm font-medium">Service Area <span className="text-destructive">*</span></Label>
+                                        <Select value={form.service_area_id} onValueChange={(v) => setForm({ ...form, service_area_id: v })}>
+                                            <SelectTrigger><SelectValue placeholder="Select a service area" /></SelectTrigger>
+                                            <SelectContent>
+                                                {serviceAreas.map((a) => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}
+                                            </SelectContent>
+                                        </Select>
+                                        <p className="text-xs text-muted-foreground">Targets riders with recent rides in this area.</p>
+                                    </div>
+                                )}
+
+                                {/* Live reach preview */}
+                                {preview && (
+                                    <div className="rounded-lg border bg-muted/30 px-3 py-2.5 text-xs text-muted-foreground">
+                                        <span className="font-medium text-foreground">{preview.audience_total.toLocaleString()}</span> in audience
+                                        {form.is_marketing && (
+                                            <span> · opted in — email <span className="font-medium text-foreground">{preview.email_opted_in ?? "—"}</span>, SMS <span className="font-medium text-foreground">{preview.sms_opted_in ?? "—"}</span>, push <span className="font-medium text-foreground">{preview.push_opted_in ?? "—"}</span></span>
+                                        )}
+                                    </div>
+                                )}
                             </CardContent>
                         </Card>
 
@@ -473,6 +571,28 @@ export default function CloudMessagingPage() {
 
                     {/* ── Right Column: Settings & Send (1/3 width) ── */}
                     <div className="space-y-6">
+                        {/* Marketing (CASL) */}
+                        <Card>
+                            <CardHeader className="pb-3">
+                                <CardTitle className="text-base flex items-center gap-2"><Megaphone className="h-4 w-4 text-pink-500" /> Marketing message</CardTitle>
+                            </CardHeader>
+                            <CardContent className="space-y-3">
+                                <div className="flex items-center justify-between rounded-lg border px-3 py-2.5">
+                                    <div className="flex items-center gap-2.5"><Megaphone className="h-4 w-4 text-muted-foreground" /><span className="text-sm font-medium">This is marketing</span></div>
+                                    <Switch checked={form.is_marketing} onCheckedChange={(v) => setForm({ ...form, is_marketing: v })} />
+                                </div>
+                                {form.is_marketing ? (
+                                    <p className="text-xs text-muted-foreground">
+                                        CASL applies: only recipients who gave express consent receive this, and email/SMS include an unsubscribe (STOP) option. Unsubscribed and bounced contacts are skipped automatically.
+                                    </p>
+                                ) : (
+                                    <p className="text-xs text-muted-foreground">
+                                        Operational/service notice — sent to all targeted recipients without a consent gate. Do not use for promotions.
+                                    </p>
+                                )}
+                            </CardContent>
+                        </Card>
+
                         {/* Delivery Channels */}
                         <Card>
                             <CardHeader className="pb-3">
@@ -646,6 +766,74 @@ export default function CloudMessagingPage() {
                                         </div>
                                     </div>
                                 )}
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+            )}
+
+            {/* ═══ UNSUBSCRIBE / SUPPRESSION TAB ═══ */}
+            {activeTab === "suppressions" && (
+                <Card>
+                    <CardHeader className="pb-3">
+                        <div className="flex items-center justify-between">
+                            <CardTitle className="flex items-center gap-2 text-lg"><ShieldOff className="h-5 w-5 text-red-500" /> Marketing Unsubscribe List</CardTitle>
+                            <div className="flex items-center gap-2">
+                                <Select value={suppChannel} onValueChange={setSuppChannel}>
+                                    <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">All channels</SelectItem>
+                                        <SelectItem value="email">Email</SelectItem>
+                                        <SelectItem value="sms">SMS</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                                <Button variant="outline" size="sm" onClick={fetchSuppressions} disabled={suppLoading}><RefreshCw className={`mr-2 h-4 w-4 ${suppLoading ? "animate-spin" : ""}`} /> Refresh</Button>
+                            </div>
+                        </div>
+                        <p className="text-sm text-muted-foreground mt-1">Contacts here are never sent marketing. Bounces, complaints, and STOP/unsubscribe actions are added automatically; you can also add or lift entries manually.</p>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        {/* Manual add */}
+                        <div className="flex flex-wrap items-end gap-2">
+                            <div className="space-y-1.5">
+                                <Label className="text-xs text-muted-foreground">Channel</Label>
+                                <Select value={newSupp.channel} onValueChange={(v) => setNewSupp({ ...newSupp, channel: v })}>
+                                    <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
+                                    <SelectContent><SelectItem value="email">Email</SelectItem><SelectItem value="sms">SMS</SelectItem></SelectContent>
+                                </Select>
+                            </div>
+                            <div className="space-y-1.5 flex-1 min-w-[220px]">
+                                <Label className="text-xs text-muted-foreground">Email or phone to suppress</Label>
+                                <Input placeholder={newSupp.channel === "email" ? "name@example.com" : "+13065551234"} value={newSupp.target} onChange={(e) => setNewSupp({ ...newSupp, target: e.target.value })} />
+                            </div>
+                            <Button onClick={handleAddSuppression}><Plus className="mr-2 h-4 w-4" /> Suppress</Button>
+                        </div>
+
+                        {suppLoading ? (
+                            <div className="flex items-center justify-center p-12"><div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>
+                        ) : (
+                            <div className="border rounded-lg">
+                                <Table>
+                                    <TableHeader><TableRow>
+                                        <TableHead>Channel</TableHead><TableHead>Target</TableHead><TableHead>Reason</TableHead><TableHead>Source</TableHead><TableHead>Added</TableHead><TableHead className="text-right">Actions</TableHead>
+                                    </TableRow></TableHeader>
+                                    <TableBody>
+                                        {suppressions.length === 0 ? (
+                                            <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-12">No suppressed contacts.</TableCell></TableRow>
+                                        ) : suppressions.map((s) => (
+                                            <TableRow key={s.id}>
+                                                <TableCell><Badge variant="outline" className="text-xs capitalize">{s.channel}</Badge></TableCell>
+                                                <TableCell className="font-mono text-xs">{s.target}</TableCell>
+                                                <TableCell><span className="text-sm capitalize">{s.reason}</span></TableCell>
+                                                <TableCell><span className="text-xs text-muted-foreground">{s.source}</span></TableCell>
+                                                <TableCell className="text-xs text-muted-foreground">{s.created_at ? formatDate(s.created_at) : "—"}</TableCell>
+                                                <TableCell className="text-right">
+                                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" title="Lift suppression (re-allow marketing)" onClick={() => handleRemoveSuppression(s.id)}><Trash2 className="h-4 w-4" /></Button>
+                                                </TableCell>
+                                            </TableRow>
+                                        ))}
+                                    </TableBody>
+                                </Table>
                             </div>
                         )}
                     </CardContent>

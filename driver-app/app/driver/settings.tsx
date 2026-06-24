@@ -57,6 +57,36 @@ export default function SettingsScreen() {
     const [soundEffects, setSoundEffects] = useState(true);
     const [vibration, setVibration] = useState(true);
 
+    // Marketing consent (CASL): express opt-in → DEFAULTS OFF. Backed by
+    // /marketing/preferences (separate from notification_preferences above:
+    // those are operational push toggles; these are commercial-message consent).
+    const [marketingEmails, setMarketingEmails] = useState(false);
+    const [marketingSms, setMarketingSms] = useState(false);
+    useEffect(() => {
+        let active = true;
+        api.get('/marketing/preferences')
+            .then((res: any) => {
+                const p = res?.data ?? res ?? {};
+                if (!active) return;
+                setMarketingEmails(Boolean(p.email_opt_in));
+                setMarketingSms(Boolean(p.sms_opt_in));
+            })
+            .catch(() => { /* default off on failure */ });
+        return () => { active = false; };
+    }, []);
+    const handleMarketingToggle = (
+        field: 'email_opt_in' | 'sms_opt_in',
+        setter: (v: boolean) => void,
+    ) => async (value: boolean) => {
+        setter(value);
+        try {
+            await api.put('/marketing/preferences', { [field]: value, source: 'driver_app' });
+        } catch {
+            setter(!value);
+            showToast('error', 'Preference not saved', 'Could not reach the server. Your setting has been reverted — please try again.');
+        }
+    };
+
     // /notifications/preferences is owned by the useNotificationPreferences
     // hook. The persisted cache means revisiting Settings shows toggles
     // instantly with no spinner; the background refetch keeps them honest.
@@ -199,6 +229,16 @@ export default function SettingsScreen() {
                         {renderToggle('Daily Earnings Summary', 'Get notified about daily earnings', earningsSummary, handleToggle('earnings_summary', setEarningsSummary), 'wallet', colors.gold)}
                         <View style={styles.cardDivider} />
                         {renderToggle('Promotions & Offers', 'Special offers and promotions', promotions, handleToggle('promotions', setPromotions), 'gift', colors.primaryDark)}
+                    </View>
+                </View>
+
+                {/* Marketing (CASL consent) */}
+                <View style={styles.section}>
+                    <Text style={styles.sectionTitle}>Marketing</Text>
+                    <View style={styles.card}>
+                        {renderToggle('Marketing Emails', 'Offers, news, and updates by email', marketingEmails, handleMarketingToggle('email_opt_in', setMarketingEmails), 'mail', colors.primary)}
+                        <View style={styles.cardDivider} />
+                        {renderToggle('Marketing SMS', 'Offers and updates by text', marketingSms, handleMarketingToggle('sms_opt_in', setMarketingSms), 'chatbubble-ellipses', colors.primary)}
                     </View>
                 </View>
 

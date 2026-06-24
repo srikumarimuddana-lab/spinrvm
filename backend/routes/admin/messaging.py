@@ -397,6 +397,65 @@ async def admin_get_cloud_message_stats():
     }
 
 
+class ManualSuppressionRequest(BaseModel):
+    channel: Literal["email", "sms"]
+    target: str = Field(..., min_length=1, max_length=320)
+    reason: Literal["manual", "bounce", "complaint", "unsubscribe"] = "manual"
+
+
+@router.get("/marketing/suppressions")
+async def admin_list_marketing_suppressions(
+    channel: Optional[str] = Query(None),
+    limit: int = Query(100),
+    offset: int = Query(0),
+):
+    """List the marketing suppression list (the 'do-not-market' list).
+
+    PIPEDA: the target (email/phone) is intrinsic to a suppression record — an
+    operator must see WHO is suppressed to manage the list — so it is returned
+    here, behind the admin auth + the notifications module gate.
+    """
+    filters: Dict[str, Any] = {}
+    if channel:
+        filters["channel"] = channel
+    try:
+        rows = await db_supabase.get_rows(
+            "marketing_suppressions", filters, order="created_at", desc=True, limit=limit, offset=offset
+        )
+    except Exception:
+        logger.error("marketing_suppressions query failed", exc_info=True)
+        return []
+    return rows
+
+
+@router.post("/marketing/suppressions")
+async def admin_add_marketing_suppression(payload: ManualSuppressionRequest):
+    """Manually add an address/number to the marketing suppression list."""
+    try:
+        from ...services import marketing_consent
+    except ImportError:
+        from services import marketing_consent  # type: ignore
+    added = await marketing_consent.add_marketing_suppression(
+        payload.channel, payload.target, reason=payload.reason, source="admin"
+    )
+    return {"success": True, "added": added}
+
+
+@router.delete("/marketing/suppressions/{suppression_id}")
+async def admin_delete_marketing_suppression(suppression_id: str):
+    """Remove a suppression (re-allow marketing to this target).
+
+    Use with care: lifting a bounce/complaint suppression re-enables marketing
+    to an address that previously bounced or complained. The deletion is
+    audited via the standard admin audit trail.
+    """
+    existing = await db_supabase.find_one("marketing_suppressions", {"id": suppression_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Suppression not found")
+    await db_supabase.delete_many("marketing_suppressions", {"id": suppression_id})
+    return {"success": True}
+
+
 @router.delete("/cloud-messaging/{message_id}")
 async def admin_delete_cloud_message(message_id: str):
     """Cancel/delete a scheduled cloud message."""

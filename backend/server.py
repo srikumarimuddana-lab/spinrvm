@@ -128,6 +128,7 @@ from routes.legal_documents import api_router as legal_documents_router
 from routes.lost_and_found import api_router as lost_and_found_router
 from routes.loyalty import api_router as loyalty_router
 from routes.maps_proxy import api_router as maps_router
+from routes.marketing import api_router as marketing_router
 from routes.notifications import api_router as notifications_router
 from routes.offer_card import router as offer_card_router
 from routes.payments import api_router as payments_router

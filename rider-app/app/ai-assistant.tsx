@@ -28,13 +28,17 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import type { AiChatMessage, LocationSuggestionCandidate } from '@shared/types/ai';
+import { useAuthStore } from '@shared/store/authStore';
 import BookingProposalCard from '../components/BookingProposalCard';
 import FareQuoteCard from '../components/FareQuoteCard';
+import AiAuroraBackground from '../components/AiAuroraBackground';
+import AiWelcomeOrb from '../components/AiWelcomeOrb';
 import { useAiChatStore } from '../store/aiChatStore';
 import { useRideStore } from '../store/rideStore';
 import { activeRideRouteFor } from '../utils/activeRideRoute';
@@ -177,6 +181,8 @@ export default function AiAssistantScreen() {
   const styles = createStyles(colors);
   const listRef = useRef<FlatList>(null);
 
+  const firstName = useAuthStore((s) => s.user?.first_name);
+
   const messages = useAiChatStore((s) => s.messages);
   const isStreaming = useAiChatStore((s) => s.isStreaming);
   const toolStatus = useAiChatStore((s) => s.toolStatus);
@@ -300,6 +306,7 @@ export default function AiAssistantScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+      <AiAuroraBackground />
       <View style={styles.header}>
         <TouchableOpacity
           onPress={() => {
@@ -329,16 +336,21 @@ export default function AiAssistantScreen() {
       >
         {showWelcome ? (
           <View style={styles.welcomeWrap}>
-            <View style={styles.welcomeIcon}>
-              <Ionicons name="sparkles" size={28} color={colors.primary} />
-            </View>
-            <Text style={styles.welcomeTitle}>Hi! I&apos;m your Spinr assistant.</Text>
+            <AiWelcomeOrb />
+            <Text style={styles.welcomeTitle}>
+              {firstName ? `Hi ${firstName}, let's get going` : "Hi! Let's get going"}
+            </Text>
             <Text style={styles.welcomeSubtitle}>
               Ask about your rides, fares, wallet or promos — or ask me to get you a ride quote.
             </Text>
             <View style={styles.chipsWrap}>
               {QUICK_PROMPTS.map((prompt) => (
-                <TouchableOpacity key={prompt} style={styles.chip} onPress={() => handleSend(prompt)}>
+                <TouchableOpacity
+                  key={prompt}
+                  style={styles.chip}
+                  onPress={() => handleSend(prompt)}
+                  activeOpacity={0.7}
+                >
                   <Text style={styles.chipText}>{prompt}</Text>
                 </TouchableOpacity>
               ))}
@@ -365,33 +377,46 @@ export default function AiAssistantScreen() {
         ) : null}
 
         <View style={styles.inputRow}>
-          <TextInput
-            style={styles.input}
-            value={input}
-            onChangeText={setInput}
-            placeholder="Ask me anything…"
-            placeholderTextColor={colors.textDim}
-            multiline
-            maxLength={1000}
-            editable={!isStreaming}
-            onSubmitEditing={() => handleSend()}
-            returnKeyType="send"
-            blurOnSubmit={false}
-          />
-          {isStreaming ? (
-            <TouchableOpacity style={styles.sendButton} onPress={stopStreaming} accessibilityLabel="Stop">
-              <Ionicons name="stop" size={18} color="#fff" />
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity
-              style={[styles.sendButton, !input.trim() && styles.sendButtonDisabled]}
-              onPress={() => handleSend()}
-              disabled={!input.trim()}
-              accessibilityLabel="Send"
-            >
-              <Ionicons name="send" size={20} color="#fff" />
-            </TouchableOpacity>
-          )}
+          <View style={styles.inputPill}>
+            <TextInput
+              style={styles.input}
+              value={input}
+              onChangeText={setInput}
+              placeholder="Ask me anything…"
+              placeholderTextColor={colors.textDim}
+              multiline
+              maxLength={1000}
+              editable={!isStreaming}
+              onSubmitEditing={() => handleSend()}
+              returnKeyType="send"
+              blurOnSubmit={false}
+            />
+            {isStreaming ? (
+              <TouchableOpacity style={styles.stopButton} onPress={stopStreaming} accessibilityLabel="Stop">
+                <Ionicons name="stop" size={18} color="#fff" />
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                onPress={() => handleSend()}
+                disabled={!input.trim()}
+                accessibilityLabel="Send"
+                activeOpacity={0.8}
+              >
+                <LinearGradient
+                  colors={
+                    input.trim()
+                      ? [colors.primary, colors.orange]
+                      : [colors.border, colors.border]
+                  }
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.sendButton}
+                >
+                  <Ionicons name="arrow-up" size={20} color="#fff" />
+                </LinearGradient>
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
 
         <Text style={styles.disclaimer}>
@@ -404,6 +429,7 @@ export default function AiAssistantScreen() {
 
 const createStyles = (colors: ThemeColors) =>
   StyleSheet.create({
+    // Transparent so the animated aurora (rendered behind) shows through.
     container: { flex: 1, backgroundColor: colors.background },
     flex: { flex: 1 },
     header: {
@@ -412,40 +438,38 @@ const createStyles = (colors: ThemeColors) =>
       justifyContent: 'space-between',
       paddingHorizontal: 8,
       paddingVertical: 10,
-      borderBottomWidth: StyleSheet.hairlineWidth,
-      borderBottomColor: colors.border,
     },
     headerButton: { padding: 8 },
     headerTitleWrap: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     headerTitle: { fontSize: 17, fontWeight: '600', color: colors.text },
     welcomeWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
-    welcomeIcon: {
-      width: 64,
-      height: 64,
-      borderRadius: 32,
-      backgroundColor: colors.surfaceLight,
-      alignItems: 'center',
-      justifyContent: 'center',
-      marginBottom: 16,
+    welcomeTitle: {
+      fontSize: 27,
+      fontWeight: '600',
+      color: colors.text,
+      marginTop: 8,
+      marginBottom: 10,
+      textAlign: 'center',
+      letterSpacing: -0.3,
     },
-    welcomeTitle: { fontSize: 20, fontWeight: '700', color: colors.text, marginBottom: 8 },
     welcomeSubtitle: {
       fontSize: 14,
       color: colors.textDim,
       textAlign: 'center',
-      marginBottom: 24,
+      marginBottom: 28,
       lineHeight: 20,
+      maxWidth: 300,
     },
     chipsWrap: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8 },
     chip: {
-      paddingHorizontal: 14,
-      paddingVertical: 9,
-      borderRadius: 18,
-      backgroundColor: colors.surface,
+      paddingHorizontal: 15,
+      paddingVertical: 10,
+      borderRadius: 20,
+      backgroundColor: colors.surface + 'E6',
       borderWidth: 1,
       borderColor: colors.border,
     },
-    chipText: { fontSize: 13, color: colors.text },
+    chipText: { fontSize: 13, fontWeight: '500', color: colors.text },
     listContent: { padding: 16, gap: 10 },
     bubbleRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
     bubbleRowUser: { justifyContent: 'flex-end' },
@@ -457,9 +481,14 @@ const createStyles = (colors: ThemeColors) =>
       alignItems: 'center',
       justifyContent: 'center',
     },
-    bubble: { maxWidth: '80%', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 10 },
-    bubbleAssistant: { backgroundColor: colors.surface, borderBottomLeftRadius: 4 },
-    bubbleUser: { backgroundColor: colors.primary, borderBottomRightRadius: 4 },
+    bubble: { maxWidth: '80%', borderRadius: 18, paddingHorizontal: 14, paddingVertical: 10 },
+    bubbleAssistant: {
+      backgroundColor: colors.surface + 'F2',
+      borderBottomLeftRadius: 5,
+      borderWidth: 1,
+      borderColor: colors.border + '99',
+    },
+    bubbleUser: { backgroundColor: colors.primary, borderBottomRightRadius: 5 },
     bubbleText: { fontSize: 15, lineHeight: 21, color: colors.text },
     bubbleTextUser: { color: '#fff' },
     actionCard: {
@@ -532,38 +561,52 @@ const createStyles = (colors: ThemeColors) =>
       paddingVertical: 6,
     },
     toolStatusText: { fontSize: 13, color: colors.textDim, fontStyle: 'italic' },
-    // Input area mirrors the help-centre chat tab (shared SupportScreen) so
-    // both AI entry points type and look the same.
+    // Floating pill input — a single rounded surface holding the text field
+    // and the gradient send button, lifted off the gradient with a shadow.
     inputRow: {
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+    },
+    inputPill: {
       flexDirection: 'row',
       alignItems: 'flex-end',
-      gap: 10,
-      paddingHorizontal: 16,
-      paddingVertical: 10,
-      borderTopWidth: 1,
-      borderTopColor: colors.border,
+      gap: 8,
+      backgroundColor: colors.surface + 'F2',
+      borderRadius: 26,
+      paddingLeft: 18,
+      paddingRight: 6,
+      paddingVertical: 6,
+      borderWidth: 1,
+      borderColor: colors.border,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.12,
+      shadowRadius: 12,
+      elevation: 4,
     },
     input: {
       flex: 1,
-      backgroundColor: colors.surfaceLight,
-      borderRadius: 20,
-      paddingHorizontal: 16,
-      paddingVertical: 10,
       fontSize: 15,
       color: colors.text,
       maxHeight: 100,
-      borderWidth: 1,
-      borderColor: colors.border,
+      paddingVertical: 8,
+      paddingRight: 4,
     },
     sendButton: {
-      width: 44,
-      height: 44,
-      borderRadius: 22,
-      backgroundColor: colors.primary,
+      width: 38,
+      height: 38,
+      borderRadius: 19,
       justifyContent: 'center',
       alignItems: 'center',
     },
-    sendButtonDisabled: { opacity: 0.4 },
+    stopButton: {
+      width: 38,
+      height: 38,
+      borderRadius: 19,
+      backgroundColor: colors.text,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
     disclaimer: {
       fontSize: 11,
       color: colors.textDim,

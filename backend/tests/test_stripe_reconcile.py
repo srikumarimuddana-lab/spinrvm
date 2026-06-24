@@ -717,3 +717,71 @@ async def test_over_buffer_tip_capped_at_authorized_amount():
 
     audit_detail = db_mock.insert_one.call_args[0][1]["details"]
     assert all(d["type"] != "DB_PAID_AMOUNT_MISMATCH" for d in audit_detail["discrepancy_detail"])
+
+
+# ── Stuck-processing ride backstop (review Finding #2) ──────────────────────
+
+
+def _processing_ride(ride_id: str, *, minutes_ago: int, pi_id: str | None = "pi_x") -> dict:
+    ts = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
+    return {
+        "id": ride_id,
+        "payment_intent_id": pi_id,
+        "payment_status": "processing",
+        "status": "completed",
+        "updated_at": ts,
+        "completed_at": ts,
+    }
+
+
+@pytest.mark.asyncio
+async def test_stuck_processing_flags_only_aged_rows():
+    """Only rides stuck in 'processing' past the threshold are flagged; a fresh
+    (still-settling) row is left alone, and nothing is mutated."""
+    db_mock = AsyncMock()
+    db_mock.get_rows.return_value = [
+        _processing_ride("stuck", minutes_ago=60),  # well past the 15-min threshold
+        _processing_ride("fresh", minutes_ago=1),  # settlement may still be in flight
+    ]
+
+    with patch("utils.stripe_reconcile.db_supabase", db_mock):
+        from utils.stripe_reconcile import _reconcile_stuck_processing_rides
+
+        out = await _reconcile_stuck_processing_rides()
+
+    assert {d["ride_id"] for d in out} == {"stuck"}
+    assert out[0]["type"] == "RIDE_PAYMENT_STUCK_PROCESSING"
+    # Detection only — never writes/mutates a ride.
+    db_mock.update_one.assert_not_awaited()
+    db_mock.insert_one.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stuck_processing_surfaces_row_with_no_timestamp():
+    """A processing row with neither updated_at nor completed_at is surfaced
+    (better to over-report to ops than hide a potentially stranded charge)."""
+    db_mock = AsyncMock()
+    db_mock.get_rows.return_value = [
+        {"id": "no_ts", "payment_intent_id": None, "payment_status": "processing", "status": "completed"},
+    ]
+
+    with patch("utils.stripe_reconcile.db_supabase", db_mock):
+        from utils.stripe_reconcile import _reconcile_stuck_processing_rides
+
+        out = await _reconcile_stuck_processing_rides()
+
+    assert [d["ride_id"] for d in out] == ["no_ts"]
+
+
+@pytest.mark.asyncio
+async def test_stuck_processing_query_failure_returns_empty():
+    """A failed query is logged and yields no discrepancies (never raises)."""
+    db_mock = AsyncMock()
+    db_mock.get_rows.side_effect = RuntimeError("DB down")
+
+    with patch("utils.stripe_reconcile.db_supabase", db_mock):
+        from utils.stripe_reconcile import _reconcile_stuck_processing_rides
+
+        out = await _reconcile_stuck_processing_rides()
+
+    assert out == []

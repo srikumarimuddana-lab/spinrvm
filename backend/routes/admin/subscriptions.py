@@ -675,3 +675,107 @@ def _offer_totals(offers: List[Dict]) -> Dict:
         "acceptance_rate": round(accepted / total, 4) if total else 0.0,
         "avg_response_seconds": round(avg_response_s, 1) if avg_response_s is not None else None,
     }
+
+
+# ============================================================
+# Spinr Pass — per-payment invoice actions (download + resend)
+# ============================================================
+
+
+@router.get("/subscription/payments/{payment_id}/invoice.pdf")
+async def admin_download_subscription_invoice(
+    payment_id: str,
+    admin: dict = Depends(get_admin_user),
+):
+    """Download the Spinr Pass invoice PDF for a single subscription payment.
+
+    Identical document to the one emailed to the driver — assembled by the
+    shared builder so admin and driver see the same figures.
+    """
+    from fastapi import HTTPException
+    from fastapi.responses import Response as _Response
+
+    try:
+        from ...utils.subscription_invoice import build_subscription_invoice_pdf
+    except ImportError:
+        from utils.subscription_invoice import build_subscription_invoice_pdf  # type: ignore
+
+    payment = await db_supabase.find_one("subscription_payments", {"id": payment_id})
+    if not payment:
+        raise HTTPException(status_code=404, detail="Payment not found")
+
+    built = await build_subscription_invoice_pdf(payment)
+    if built is None:
+        raise HTTPException(status_code=404, detail="Invoice could not be generated")
+    pdf_bytes, filename = built
+
+    await log_admin_action(
+        admin,
+        "download_subscription_invoice",
+        "subscription_payment",
+        payment_id,
+        {"driver_id": payment.get("driver_id"), "amount": str(payment.get("amount"))},
+    )
+    return _Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/subscription/payments/{payment_id}/resend-invoice")
+async def admin_resend_subscription_invoice(
+    payment_id: str,
+    admin: dict = Depends(get_admin_user),
+):
+    """Email the Spinr Pass invoice to the driver's address on file.
+
+    Mirrors the driver-app self-resend, but admin-triggered and audit-logged.
+    """
+    from fastapi import HTTPException
+
+    try:
+        from ...utils.subscription_invoice import build_invoice_email_kwargs
+    except ImportError:
+        from utils.subscription_invoice import build_invoice_email_kwargs  # type: ignore
+    try:
+        from ..drivers import _send_subscription_invoice_email
+    except ImportError:
+        from routes.drivers import _send_subscription_invoice_email  # type: ignore
+
+    payment = await db_supabase.find_one("subscription_payments", {"id": payment_id})
+    if not payment:
+        raise HTTPException(status_code=404, detail="Payment not found")
+
+    kwargs = await build_invoice_email_kwargs(payment)
+    if kwargs is None:
+        raise HTTPException(status_code=404, detail="Invoice could not be generated")
+
+    # Per-payment cooldown: this endpoint emails a third party (the driver), so a
+    # stuck/looping admin action must not be able to email-bomb them. 60s window,
+    # cleared on delivery failure so a genuine retry is never blocked. Replay-safe
+    # across replicas via the shared Redis SET NX (in-memory fallback in dev).
+    try:
+        from ...utils.redis_client import redis_delete, redis_set_nx
+    except ImportError:
+        from utils.redis_client import redis_delete, redis_set_nx  # type: ignore
+    _cooldown_key = f"spinr:sub_invoice_resend:{payment_id}"
+    if not await redis_set_nx(_cooldown_key, "1", 60):
+        raise HTTPException(
+            status_code=429,
+            detail="Invoice was just resent — please wait a minute before retrying.",
+        )
+
+    sent = await _send_subscription_invoice_email(**kwargs)
+    if not sent:
+        await redis_delete(_cooldown_key)  # delivery failed → don't hold the cooldown against a retry
+    await log_admin_action(
+        admin,
+        "resend_subscription_invoice",
+        "subscription_payment",
+        payment_id,
+        {"driver_id": payment.get("driver_id"), "sent": bool(sent)},
+    )
+    if not sent:
+        raise HTTPException(status_code=502, detail="Invoice email could not be delivered")
+    return {"success": True}

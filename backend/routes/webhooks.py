@@ -1122,6 +1122,7 @@ async def stripe_webhook(request: Request):
                     tax_total=_wh_tax["tax_total"],
                     province=_wh_tax["province"],
                     stripe_invoice_id=invoice.get("id"),
+                    stripe_invoice_url=invoice.get("hosted_invoice_url"),
                 )
 
                 # Send invoice email for every recurring charge (subscription_create

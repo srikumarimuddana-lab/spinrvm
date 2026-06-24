@@ -57,6 +57,7 @@ def test_assembles_kwargs_with_tax_breakdown():
         "province": "SK",
         "billing_reason": "subscription_cycle",
         "created_at": "2026-06-01T12:00:00Z",
+        "stripe_invoice_url": "https://invoice.stripe.com/i/acct_x/test",
     }
     result, gen = _build(payment)
     assert result is not None
@@ -79,6 +80,7 @@ def test_assembles_kwargs_with_tax_breakdown():
     assert kw["total"] == Decimal("23.65")
     assert kw["province"] == "SK"
     assert kw["payment_date"] == "June 01, 2026"
+    assert kw["stripe_invoice_url"] == "https://invoice.stripe.com/i/acct_x/test"
     # Money must be Decimal, never float.
     assert all(
         isinstance(kw[k], Decimal) for k in ("subtotal", "gst_amount", "pst_amount", "hst_amount", "tax_total", "total")
@@ -102,6 +104,7 @@ def test_legacy_row_without_tax_falls_back_to_taxfree():
     assert kw["total"] == Decimal("15.00")
     assert kw["province"] == "SK"
     assert kw["plan_name"] == "Spinr Pass"  # default when missing
+    assert kw["stripe_invoice_url"] is None  # legacy row carries no URL
 
 
 def test_returns_none_when_driver_missing():

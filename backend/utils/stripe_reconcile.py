@@ -71,6 +71,9 @@ _WINDOW_DAYS = 1  # reconcile the previous calendar day
 # A ride should never sit in payment_status='processing' longer than a
 # settlement round-trip; past this it is treated as stranded and surfaced.
 _STUCK_PROCESSING_AFTER = timedelta(minutes=15)
+# App-setting flag (default OFF) gating the auto-heal of stuck-processing rides.
+# OFF → detection only; ON → mark-paid from Stripe truth (see _maybe_heal_*).
+_AUTO_HEAL_SETTING = "stripe_auto_heal_processing"
 
 
 def _pod_id() -> str:
@@ -267,6 +270,12 @@ async def _run_reconciliation_tick() -> None:
     stuck_processing = await _reconcile_stuck_processing_rides()
     discrepancies.extend(stuck_processing)
 
+    # ── 3e. Optional auto-heal (flag-gated, default OFF) ────────────────
+    # When stripe_auto_heal_processing is enabled, finalise the detected
+    # stuck rides from Stripe truth (mark-paid only, atomic, idempotent).
+    # Default OFF — ships dark; see _maybe_heal_stuck_processing.
+    heal_stats = await _maybe_heal_stuck_processing(stuck_processing, _stripe, settings)
+
     # ── 4. Write summary to audit_logs ──────────────────────────────────
     summary = {
         "date": yesterday.isoformat(),
@@ -274,6 +283,9 @@ async def _run_reconciliation_tick() -> None:
         "db_rides_checked": len(db_rides),
         "payouts_flagged": len(payout_discrepancies),
         "rides_stuck_processing": len(stuck_processing),
+        "auto_heal_enabled": heal_stats["enabled"],
+        "rides_healed": heal_stats["healed"],
+        "healed_ride_ids": heal_stats["healed_ride_ids"][:50],
         "discrepancies": len(discrepancies),
         "discrepancy_detail": discrepancies[:50],  # cap at 50 to avoid huge rows
     }
@@ -416,6 +428,141 @@ async def _reconcile_stuck_processing_rides() -> List[Dict[str, Any]]:
             extra={"domain": "payments"},
         )
     return discrepancies
+
+
+def _truthy(v: Any) -> bool:
+    """Interpret an app-setting flag that may be stored as bool / str / int."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v != 0
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "on")
+    return False
+
+
+def _expected_capture_cents(ride: Dict[str, Any]) -> int | None:
+    """Expected captured amount in cents (grand_total + tip, capped at the
+    pre-auth hold). Mirrors the paid-vs-Stripe amount check above. Returns None
+    when no total is recorded — the caller then declines to heal rather than
+    mark paid against an unverifiable amount."""
+    grand = ride.get("grand_total")
+    if grand is None:
+        grand = ride.get("total_fare")
+    if grand is None:
+        return None
+    expected = _q2(grand) + _q2(ride.get("tip_amount") or 0)
+    authorized = ride.get("authorized_amount")
+    if authorized is not None and _q2(authorized) < expected:
+        expected = _q2(authorized)
+    return int((expected * 100).to_integral_value())
+
+
+async def _heal_one_processing_ride(ride_id: str, stripe_mod: Any) -> bool:
+    """Atomically finalise ONE ride stranded in 'processing' iff Stripe confirms
+    the charge already succeeded for the expected amount. Returns True on heal.
+
+    Mark-paid + (idempotent, delta-based) tip credit only — never a re-charge
+    and never a duplicate ledger write. settle_card's capture-but-DB-write-
+    failed branch already wrote the financial_events row, and the driver-
+    earnings base is recorded at completion, so this only lands the mark-paid
+    the failed DB write missed. Safety rests on three guards:
+
+      * Stripe PI must be 'succeeded' with amount_received >= expected — a ride
+        whose charge failed / is requires_action / never reached Stripe is left
+        for manual review.
+      * The flip is an atomic claim filtering payment_status='processing'; a
+        zero-row result means process_payment (or another replica) already
+        finalised it — no double-write.
+      * _tip_ride_update applies the tip as a delta, so even a concurrent
+        process_payment cannot double-credit the driver.
+    """
+    ride = await db_supabase.get_ride(ride_id)
+    if not ride or ride.get("payment_status") != "processing":
+        return False
+    pi_id = ride.get("payment_intent_id")
+    if not pi_id:
+        return False  # no PaymentIntent to verify the charge against
+
+    try:
+        pi = stripe_mod.PaymentIntent.retrieve(pi_id)
+    except Exception:
+        logger.error(
+            "stripe_reconcile: heal PI retrieve failed ride=%s pi=%s",
+            ride_id,
+            pi_id,
+            exc_info=True,
+        )
+        return False
+
+    status = pi.get("status") if hasattr(pi, "get") else pi["status"]
+    if status != "succeeded":
+        return False  # no captured charge — never mark paid
+
+    amount_received = (pi.get("amount_received", 0) if hasattr(pi, "get") else pi["amount_received"]) or 0
+    expected_cents = _expected_capture_cents(ride)
+    if expected_cents is not None and amount_received < expected_cents:
+        logger.error(
+            "stripe_reconcile: heal SKIP amount short ride=%s pi=%s stripe_cents=%d expected_cents=%d",
+            ride_id,
+            pi_id,
+            amount_received,
+            expected_cents,
+        )
+        return False
+
+    try:
+        from ..services.payment_service import _tip_ride_update  # type: ignore
+    except ImportError:
+        from services.payment_service import _tip_ride_update  # type: ignore
+
+    tip = Decimal(str(ride.get("tip_amount") or 0))
+    claimed = await db_supabase.update_one(
+        "rides",
+        {"id": ride_id, "payment_status": "processing"},
+        {
+            "payment_status": "paid",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            **_tip_ride_update(ride, tip),
+        },
+    )
+    if not claimed:
+        return False  # another writer finalised it first — idempotent no-op
+    logger.warning(
+        "stripe_reconcile: HEALED stuck processing ride=%s pi=%s — marked paid from Stripe truth",
+        ride_id,
+        pi_id,
+        extra={"domain": "payments"},
+    )
+    return True
+
+
+async def _maybe_heal_stuck_processing(
+    stuck: List[Dict[str, Any]], stripe_mod: Any, settings: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Auto-heal detected stuck-processing rides — gated on the
+    ``stripe_auto_heal_processing`` app setting, which DEFAULTS OFF.
+
+    Shipped dark on purpose: the mark-paid path moves money (marks a ride paid
+    and credits the driver's tip), so it must be reviewed and validated in
+    staging before an operator enables it in production. With the flag off this
+    is a no-op and the rides remain detection-only.
+    """
+    enabled = _truthy(settings.get(_AUTO_HEAL_SETTING, False))
+    stats: Dict[str, Any] = {"enabled": enabled, "considered": len(stuck), "healed": 0, "healed_ride_ids": []}
+    if not enabled or not stuck:
+        return stats
+    for d in stuck:
+        ride_id = d.get("ride_id")
+        if not ride_id:
+            continue
+        try:
+            if await _heal_one_processing_ride(ride_id, stripe_mod):
+                stats["healed"] += 1
+                stats["healed_ride_ids"].append(ride_id)
+        except Exception:
+            logger.error("stripe_reconcile: heal raised for ride %s", ride_id, exc_info=True)
+    return stats
 
 
 def _is_older_than(created_at: str, cutoff: datetime) -> bool:

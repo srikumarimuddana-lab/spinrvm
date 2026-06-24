@@ -22,18 +22,44 @@ except ImportError:  # pragma: no cover
 pytestmark = pytest.mark.anyio
 
 
-async def test_resolve_service_area_targets_riders_via_rides():
+async def test_customers_filtered_by_service_area_via_rides():
     async def _get_rows(table, filters=None, **kw):
         if table == "rides":
             return [{"rider_id": "u1"}, {"rider_id": "u2"}, {"rider_id": "u1"}]  # dupe u1
         if table == "users":
             assert set(filters["id"]["$in"]) == {"u1", "u2"}
+            assert filters["is_rider"] is True  # service-area filter stays scoped to riders
             return [{"id": "u1", "email": "a@b.com"}, {"id": "u2", "email": "c@d.com"}]
         return []
 
     with patch("db_supabase.get_rows", AsyncMock(side_effect=_get_rows)):
-        rows = await m._resolve_recipients("service_area", [], "area-1", need_contact=True)
+        rows = await m._resolve_recipients("customers", [], "area-1", need_contact=True)
     assert {r["id"] for r in rows} == {"u1", "u2"}
+
+
+async def test_drivers_filtered_by_service_area_via_drivers_table():
+    async def _get_rows(table, filters=None, **kw):
+        if table == "drivers":
+            assert filters == {"service_area_id": "area-9"}
+            return [{"user_id": "d1"}, {"user_id": "d2"}]
+        if table == "users":
+            assert set(filters["id"]["$in"]) == {"d1", "d2"}
+            return [{"id": "d1"}, {"id": "d2"}]
+        return []
+
+    with patch("db_supabase.get_rows", AsyncMock(side_effect=_get_rows)):
+        rows = await m._resolve_recipients("drivers", [], "area-9", need_contact=False)
+    assert {r["id"] for r in rows} == {"d1", "d2"}
+
+
+async def test_customers_without_area_filter_targets_all_riders():
+    async def _get_rows(table, filters=None, **kw):
+        assert table == "users" and filters == {"is_rider": True}
+        return [{"id": "u1"}, {"id": "u2"}, {"id": "u3"}]
+
+    with patch("db_supabase.get_rows", AsyncMock(side_effect=_get_rows)):
+        rows = await m._resolve_recipients("customers", [], None, need_contact=False)
+    assert len(rows) == 3
 
 
 async def test_marketing_email_fanout_uses_marketing_sender():

@@ -82,7 +82,6 @@ const AUDIENCE_OPTIONS = [
     { value: "drivers", label: "Drivers", icon: Car },
     { value: "particular_customer", label: "Particular Customer", icon: User },
     { value: "particular_driver", label: "Particular Driver", icon: User },
-    { value: "service_area", label: "Service Area", icon: MapPin },
 ];
 
 const NOTIFICATION_TYPES = [
@@ -226,8 +225,7 @@ export default function CloudMessagingPage() {
     // Live audience preview — only meaningful for broadcast audiences (not the
     // particular_* selectors) and most useful when marketing (shows opt-in pool).
     useEffect(() => {
-        const isParticular = form.audience.startsWith("particular");
-        if (isParticular || (form.audience === "service_area" && !form.service_area_id)) {
+        if (form.audience.startsWith("particular")) {
             setPreview(null);
             return;
         }
@@ -302,7 +300,6 @@ export default function CloudMessagingPage() {
         if (!form.title.trim() || !form.description.trim()) { toast({ title: "Missing fields", description: "Please fill in title and description.", variant: "destructive" }); return; }
         const isParticular = form.audience === "particular_customer" || form.audience === "particular_driver";
         if (isParticular && form.particular_ids.length === 0) { toast({ title: "No recipients selected", description: "Please select at least one user/driver.", variant: "destructive" }); return; }
-        if (form.audience === "service_area" && !form.service_area_id) { toast({ title: "No service area", description: "Please pick a service area to target.", variant: "destructive" }); return; }
         if (form.is_scheduled && !form.scheduled_at) { toast({ title: "Missing schedule time", description: "Please select a date and time.", variant: "destructive" }); return; }
         const channels: string[] = [];
         if (form.send_push) channels.push("push");
@@ -321,7 +318,7 @@ export default function CloudMessagingPage() {
                 is_marketing: form.is_marketing,
             };
             if (isParticular) payload.particular_ids = form.particular_ids;
-            if (form.audience === "service_area") payload.service_area_id = form.service_area_id;
+            if ((form.audience === "customers" || form.audience === "drivers") && form.service_area_id) payload.service_area_id = form.service_area_id;
             if (form.is_scheduled && form.scheduled_at) {
                 payload.scheduled_at = new Date(form.scheduled_at).toISOString();
             }
@@ -512,17 +509,22 @@ export default function CloudMessagingPage() {
                                     </div>
                                 )}
 
-                                {/* Service-area picker */}
-                                {form.audience === "service_area" && (
+                                {/* Service-area filter (optional) — narrows customers/drivers */}
+                                {(form.audience === "customers" || form.audience === "drivers") && (
                                     <div className="space-y-2 pt-1 max-w-sm">
-                                        <Label className="text-sm font-medium">Service Area <span className="text-destructive">*</span></Label>
-                                        <Select value={form.service_area_id} onValueChange={(v) => setForm({ ...form, service_area_id: v })}>
-                                            <SelectTrigger><SelectValue placeholder="Select a service area" /></SelectTrigger>
+                                        <Label className="text-sm font-medium flex items-center gap-1.5"><MapPin className="h-3.5 w-3.5" /> Service Area <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                                        <Select value={form.service_area_id || "all"} onValueChange={(v) => setForm({ ...form, service_area_id: v === "all" ? "" : v })}>
+                                            <SelectTrigger><SelectValue /></SelectTrigger>
                                             <SelectContent>
+                                                <SelectItem value="all">All areas</SelectItem>
                                                 {serviceAreas.map((a) => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}
                                             </SelectContent>
                                         </Select>
-                                        <p className="text-xs text-muted-foreground">Targets riders with recent rides in this area.</p>
+                                        <p className="text-xs text-muted-foreground">
+                                            {form.audience === "customers"
+                                                ? "Limit to riders with recent rides in this area."
+                                                : "Limit to drivers assigned to this area."}
+                                        </p>
                                     </div>
                                 )}
 

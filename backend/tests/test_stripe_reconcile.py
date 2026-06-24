@@ -61,7 +61,7 @@ def _ride(
         "authorized_amount": authorized_amount,
         "status": "completed",
         "payment_status": "paid",
-        "completed_at": _ts_yesterday(),
+        "ride_completed_at": _ts_yesterday(),
     }
 
 
@@ -374,6 +374,36 @@ async def test_multiple_discrepancy_types_counted():
     assert types == {"DB_PAID_STRIPE_MISSING", "STRIPE_ORPHAN"}
 
 
+# ── Schema regression: rides has ride_completed_at, not completed_at ────────
+
+
+@pytest.mark.asyncio
+async def test_rides_query_selects_ride_completed_at_column():
+    """Regression: the rides table column is `ride_completed_at` — selecting the
+    nonexistent `completed_at` made PostgREST raise 42703 every nightly tick.
+    Assert the get_rows columns request the real column and never the bad one."""
+    db_mock = AsyncMock()
+    db_mock.get_rows.return_value = []
+    db_mock.insert_one.return_value = {"id": "log1"}
+    stripe_mock = _make_stripe_mock([])
+
+    with (
+        patch("utils.stripe_reconcile.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test"})),
+        patch("utils.stripe_reconcile.db_supabase", db_mock),
+        patch.dict(sys.modules, {"stripe": stripe_mock}),
+    ):
+        from utils.stripe_reconcile import _run_reconciliation_tick
+
+        await _run_reconciliation_tick()
+
+    # Find the rides query among get_rows calls and inspect its columns kwarg.
+    rides_calls = [c for c in db_mock.get_rows.await_args_list if c.args and c.args[0] == "rides"]
+    assert rides_calls, "expected a get_rows('rides', ...) call"
+    columns = rides_calls[0].kwargs.get("columns", "")
+    assert "ride_completed_at" in columns
+    assert "completed_at" not in columns.replace("ride_completed_at", "")
+
+
 # ── _in_window ─────────────────────────────────────────────────────────────
 
 
@@ -514,7 +544,7 @@ async def test_rides_outside_window_ignored():
         "fare": "15.00",
         "status": "completed",
         "payment_status": "paid",
-        "completed_at": two_days_ago,
+        "ride_completed_at": two_days_ago,
     }
     db_mock = AsyncMock()
     db_mock.get_rows.return_value = [ride]
@@ -547,7 +577,7 @@ async def test_ride_with_no_fare_skips_amount_check():
         "fare": None,
         "status": "completed",
         "payment_status": "paid",
-        "completed_at": _ts_yesterday(),
+        "ride_completed_at": _ts_yesterday(),
     }
     pi = _pi(pi_id="pi_nofar", status="succeeded", amount_received=999)
     db_mock = AsyncMock()

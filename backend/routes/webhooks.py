@@ -1505,7 +1505,11 @@ async def _handle_ses_notification(payload: dict) -> dict:
 
     ntype = inner.get("notificationType") or inner.get("eventType")
     message_id = (inner.get("mail") or {}).get("messageId")
+    # `suppressed` counts TRANSACTIONAL suppressions (the historical contract:
+    # addresses blocked from all mail). `marketing_suppressed` counts the
+    # marketing-only blocks, which fire far more eagerly.
     suppressed = 0
+    marketing_suppressed = 0
 
     if ntype == "Bounce":
         bounce = inner.get("bounce") or {}
@@ -1513,13 +1517,14 @@ async def _handle_ses_notification(payload: dict) -> dict:
         is_permanent = bounce.get("bounceType") == "Permanent"
         for r in bounce.get("bouncedRecipients") or []:
             addr = r.get("emailAddress")
-            # MARKETING: any bounce (transient or permanent) blocks marketing.
-            await _suppress_marketing_email(addr, reason="bounce", detail=subtype, message_id=message_id)
             # TRANSACTIONAL: only PERMANENT (hard) bounces suppress all mail;
             # transient bounces may recover, so receipts keep trying.
             if is_permanent:
                 await _suppress_address(addr, reason="bounce", detail=subtype, message_id=message_id)
-            suppressed += 1
+                suppressed += 1
+            # MARKETING: any bounce (transient OR permanent) blocks marketing.
+            await _suppress_marketing_email(addr, reason="bounce", detail=subtype, message_id=message_id)
+            marketing_suppressed += 1
     elif ntype == "Complaint":
         complaint = inner.get("complaint") or {}
         subtype = complaint.get("complaintFeedbackType")
@@ -1527,11 +1532,12 @@ async def _handle_ses_notification(payload: dict) -> dict:
             addr = r.get("emailAddress")
             # A complaint blocks BOTH transactional and marketing mail.
             await _suppress_address(addr, reason="complaint", detail=subtype, message_id=message_id)
-            await _suppress_marketing_email(addr, reason="complaint", detail=subtype, message_id=message_id)
             suppressed += 1
+            await _suppress_marketing_email(addr, reason="complaint", detail=subtype, message_id=message_id)
+            marketing_suppressed += 1
     # Delivery / other: acknowledged, no suppression.
 
-    return {"received": True, "type": ntype, "suppressed": suppressed}
+    return {"received": True, "type": ntype, "suppressed": suppressed, "marketing_suppressed": marketing_suppressed}
 
 
 @api_router.post("/ses")

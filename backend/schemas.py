@@ -153,6 +153,16 @@ class AppSettings(BaseModel):
     company_phone: str = ""
     company_email: str = ""
     company_website: str = ""
+    # Postal address parts for the CASL-required marketing footer (migration
+    # 192). Public info, not masked. company_address holds the street line;
+    # these complete it into a full, legally-valid mailing address.
+    company_city: str = ""
+    company_province: str = ""
+    company_postal_code: str = ""
+    # Verified SES sender for MARKETING email, kept separate from
+    # aws_ses_from_email so marketing complaints don't harm the transactional
+    # sender reputation. Falls back to aws_ses_from_email when blank.
+    marketing_from_email: str = ""
     # Admin-configurable URL of the alert tone the driver-app plays when a
     # new ride offer arrives. Null/empty → driver-app falls back to the
     # bundled placeholder mp3. Uploaded via the admin dashboard into

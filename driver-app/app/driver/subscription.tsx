@@ -3,6 +3,8 @@ import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
   ActivityIndicator, Platform, Linking, Alert,
 } from 'react-native';
+import * as ExpoLinking from 'expo-linking';
+import * as WebBrowser from 'expo-web-browser';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import api from '@shared/api/client';
@@ -35,10 +37,17 @@ interface Payment {
   id: string;
   plan_name: string;
   amount: string;
+  subtotal: string;
+  gst_amount: string;
+  pst_amount: string;
+  hst_amount: string;
+  province: string;
   currency: string;
   billing_reason: string | null;
   created_at: string;
 }
+
+const PAGE_SIZE = 10;
 
 export default function SubscriptionScreen() {
   const [plans, setPlans] = useState<Plan[]>([]);
@@ -48,6 +57,9 @@ export default function SubscriptionScreen() {
   const [loading, setLoading] = useState(true);
   const [subscribing, setSubscribing] = useState<string | null>(null);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [paymentsTotal, setPaymentsTotal] = useState(0);
+  const [paymentsOffset, setPaymentsOffset] = useState(0);
+  const [paymentsLoadingMore, setPaymentsLoadingMore] = useState(false);
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -95,24 +107,43 @@ export default function SubscriptionScreen() {
       const [plansRes, subRes, paymentsRes] = await Promise.all([
         api.get<{ plans?: Plan[]; free_mode?: boolean; message?: string } | Plan[]>('/drivers/subscription/plans'),
         api.get<any>('/drivers/subscription/current'),
-        api.get<{ payments: Payment[] }>('/drivers/subscription/payments?limit=10').catch(() => ({ data: { payments: [] } })),
+        api.get<{ payments: Payment[]; total: number }>(
+          `/drivers/subscription/payments?limit=${PAGE_SIZE}&offset=0`
+        ).catch(() => ({ data: { payments: [], total: 0 } })),
       ]);
       const data = plansRes.data;
-      // Backend returns {plans, free_mode, message} when Spinr Pass is off
       if (data && typeof data === 'object' && 'free_mode' in data) {
         const d = data as { plans?: Plan[]; free_mode?: boolean; message?: string };
         setPlans(d.plans || []);
         setFreeMode(d.free_mode || false);
         setFreeMessage(d.message || '');
       } else {
-        // Fallback for old response format (plain array)
         setPlans(Array.isArray(data) ? data : []);
         setFreeMode(false);
       }
       setCurrentSub(subRes.data);
-      setPayments(paymentsRes.data?.payments || []);
+      const firstPage = paymentsRes.data?.payments || [];
+      const total = paymentsRes.data?.total || 0;
+      setPayments(firstPage);
+      setPaymentsTotal(total);
+      setPaymentsOffset(firstPage.length);
     } catch (e) { console.log('Sub load error:', e); }
     finally { setLoading(false); }
+  };
+
+  const loadMorePayments = async () => {
+    if (paymentsLoadingMore || paymentsOffset >= paymentsTotal) return;
+    setPaymentsLoadingMore(true);
+    try {
+      const res = await api.get<{ payments: Payment[]; total: number }>(
+        `/drivers/subscription/payments?limit=${PAGE_SIZE}&offset=${paymentsOffset}`
+      );
+      const next = res.data?.payments || [];
+      setPayments(prev => [...prev, ...next]);
+      setPaymentsTotal(res.data?.total || paymentsTotal);
+      setPaymentsOffset(prev => prev + next.length);
+    } catch { /* silent — user can scroll again */ }
+    finally { setPaymentsLoadingMore(false); }
   };
 
   const handleSubscribe = async (plan: Plan) => {
@@ -140,41 +171,47 @@ export default function SubscriptionScreen() {
   const doSubscribe = async (plan: Plan) => {
     setSubscribing(plan.id);
     try {
-      const res = await api.post<{ checkout_url?: string; session_id?: string }>('/drivers/subscription/subscribe', { plan_id: plan.id });
+      // createURL generates the correct scheme for the current environment:
+      // 'spinr-driver://subscription/success' in production builds,
+      // 'exp://host:port/--/subscription/success' in Expo Go.
+      const successUrl = ExpoLinking.createURL('subscription/success');
+      const res = await api.post<{ checkout_url?: string; session_id?: string }>(
+        '/drivers/subscription/subscribe',
+        { plan_id: plan.id, success_url: successUrl },
+      );
 
       if (res.data?.checkout_url) {
-        // Stripe Checkout path — open the payment page in the browser.
-        // After payment, Stripe redirects to spinr-driver://subscription/success
-        // which brings the driver back to the app.
-        await Linking.openURL(res.data.checkout_url);
+        // openAuthSessionAsync opens an in-app browser (SFSafariViewController on
+        // iOS, Chrome Custom Tab on Android) that properly intercepts the redirect
+        // back to successUrl, unlike Linking.openURL which opens the external
+        // browser where custom-scheme redirects are unreliable.
+        const result = await WebBrowser.openAuthSessionAsync(
+          res.data.checkout_url,
+          successUrl,
+        );
 
-        // The user is now in the browser paying. When they come back
-        // (via deep-link), the app will call verify-session. For now
-        // we poll briefly to catch the webhook activation.
-        // G11: Retry verification 3 times over 30s instead of a single 5s
-        // attempt. Stripe webhooks can take 5-15s depending on network and
-        // event queue depth; a single 5s poll often missed the activation.
-        const sessionId = res.data.session_id;
-        if (sessionId) {
-          const retryDelays = [5000, 10000, 15000]; // 5s, 10s, 15s (cumulative ~30s)
-          for (const delay of retryDelays) {
-            await new Promise(r => setTimeout(r, delay));
+        if (result.type === 'success') {
+          const sessionId = result.url?.match(/session_id=([^&]+)/)?.[1];
+          if (sessionId) {
+            setLoading(true);
             try {
-              const verifyRes = await api.get<{ status?: string }>(`/drivers/subscription/verify-session?session_id=${sessionId}`);
+              const verifyRes = await api.get<{ status?: string }>(
+                `/drivers/subscription/verify-session?session_id=${sessionId}`,
+              );
               if (verifyRes.data?.status === 'active') {
                 showToast('success', 'Subscribed!', `You're now on the ${plan.name} plan. Go online and start earning!`);
-                loadData();
-                return;
+              } else {
+                showToast('info', 'Processing...', 'Your payment is being confirmed. This may take a moment.');
               }
-            } catch { /* keep retrying */ }
+            } catch {
+              showToast('info', 'Processing...', 'Your payment is being confirmed. This may take a moment.');
+            }
+            loadData();
           }
-          // All retries exhausted — still pending. The deep-link handler
-          // or next screen load will catch it.
-          showToast('info', 'Processing...', 'Your payment is being confirmed. This may take a moment.');
-          loadData();
         }
+        // result.type === 'cancel' means the driver closed the browser — no action needed.
       } else {
-        // Dev/test mode — subscription activated immediately
+        // Dev/test mode — subscription activated immediately (no Stripe checkout)
         showToast('success', 'Subscribed!', `You're now on the ${plan.name} plan. Go online and start earning!`);
         loadData();
       }
@@ -205,6 +242,20 @@ export default function SubscriptionScreen() {
     );
   };
 
+  const [resendingId, setResendingId] = useState<string | null>(null);
+
+  const resendInvoice = async (paymentId: string) => {
+    setResendingId(paymentId);
+    try {
+      await api.post(`/drivers/subscription/payments/${paymentId}/resend-invoice`);
+      showToast('success', 'Invoice Sent', 'Invoice emailed to your address on file.');
+    } catch (e: any) {
+      showToast('error', 'Error', e.response?.data?.detail || 'Failed to send invoice');
+    } finally {
+      setResendingId(null);
+    }
+  };
+
   const getDurationLabel = (days: number) => {
     if (days === 1) return 'Day';
     if (days === 7) return 'Week';
@@ -232,6 +283,12 @@ export default function SubscriptionScreen() {
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 40 }]}
         showsVerticalScrollIndicator={false}
+        onMomentumScrollEnd={({ nativeEvent: { layoutMeasurement, contentOffset, contentSize } }) => {
+          if (layoutMeasurement.height + contentOffset.y >= contentSize.height - 300) {
+            loadMorePayments();
+          }
+        }}
+        scrollEventThrottle={400}
       >
 
         {/* Current Subscription */}
@@ -283,8 +340,10 @@ export default function SubscriptionScreen() {
           return (
             <View key={plan.id} style={[styles.planCard, isCurrentPlan && styles.planCardActive]}>
               {isCurrentPlan && (
-                <View style={styles.currentTag}>
-                  <Text style={styles.currentTagText}>CURRENT</Text>
+                <View style={styles.currentTagRow}>
+                  <View style={styles.currentTag}>
+                    <Text style={styles.currentTagText}>CURRENT</Text>
+                  </View>
                 </View>
               )}
 
@@ -360,7 +419,9 @@ export default function SubscriptionScreen() {
         {payments.length > 0 && (
           <>
             <Text style={styles.sectionTitle}>Payment History</Text>
-            <Text style={styles.sectionSubtitle}>Your last 10 Spinr Pass charges</Text>
+            <Text style={styles.sectionSubtitle}>
+              {paymentsTotal > 0 ? `${paymentsTotal} charge${paymentsTotal === 1 ? '' : 's'} · tax included` : 'Spinr Pass charges'}
+            </Text>
             {payments.map((p) => (
               <View key={p.id} style={styles.paymentRow}>
                 <View style={styles.paymentIcon}>
@@ -373,12 +434,45 @@ export default function SubscriptionScreen() {
                     {'  ·  '}
                     {formatDate(p.created_at)}
                   </Text>
+                  {parseFloat(p.subtotal) > 0 && (
+                    <Text style={styles.paymentTax}>
+                      {`Subtotal $${parseFloat(p.subtotal).toFixed(2)}`}
+                      {parseFloat(p.gst_amount) > 0 ? `  ·  GST $${parseFloat(p.gst_amount).toFixed(2)}` : ''}
+                      {parseFloat(p.pst_amount) > 0 ? `  ·  PST $${parseFloat(p.pst_amount).toFixed(2)}` : ''}
+                      {parseFloat(p.hst_amount) > 0 ? `  ·  HST $${parseFloat(p.hst_amount).toFixed(2)}` : ''}
+                    </Text>
+                  )}
+                  <TouchableOpacity
+                    onPress={() => resendInvoice(p.id)}
+                    disabled={resendingId === p.id}
+                    style={styles.resendBtn}
+                  >
+                    {resendingId === p.id ? (
+                      <ActivityIndicator size="small" color={colors.primary} />
+                    ) : (
+                      <Text style={[styles.resendText, { color: colors.primary }]}>Send Invoice</Text>
+                    )}
+                  </TouchableOpacity>
                 </View>
-                <Text style={styles.paymentAmount}>
-                  ${parseFloat(p.amount).toFixed(2)} {p.currency}
-                </Text>
+                <View style={styles.paymentAmountCol}>
+                  <Text style={styles.paymentAmount}>
+                    ${parseFloat(p.amount).toFixed(2)}
+                  </Text>
+                  <Text style={styles.paymentCurrency}>{p.currency}</Text>
+                </View>
               </View>
             ))}
+            {paymentsOffset < paymentsTotal && (
+              <View style={styles.loadMoreRow}>
+                {paymentsLoadingMore ? (
+                  <ActivityIndicator size="small" color={colors.primary} />
+                ) : (
+                  <TouchableOpacity onPress={loadMorePayments}>
+                    <Text style={styles.loadMoreText}>Load more</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
           </>
         )}
 
@@ -425,8 +519,8 @@ function createStyles(colors: ThemeColors) {
       borderRadius: 18, padding: 20, borderWidth: 1.5, borderColor: 'transparent',
     },
     planCardActive: { borderColor: colors.primary, backgroundColor: colors.surfaceLight },
+    currentTagRow: { flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 8 },
     currentTag: {
-      position: 'absolute', top: 12, right: 12,
       backgroundColor: colors.primary, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6,
     },
     currentTagText: { fontSize: 9, fontWeight: '700', color: '#FFF', letterSpacing: 0.5 },
@@ -464,16 +558,23 @@ function createStyles(colors: ThemeColors) {
 
     // Payment history
     paymentRow: {
-      flexDirection: 'row', alignItems: 'center', marginHorizontal: 16, marginBottom: 8,
+      flexDirection: 'row', alignItems: 'flex-start', marginHorizontal: 16, marginBottom: 8,
       backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 14, gap: 12,
     },
     paymentIcon: {
       width: 40, height: 40, borderRadius: 12, backgroundColor: colors.surface,
-      justifyContent: 'center', alignItems: 'center',
+      justifyContent: 'center', alignItems: 'center', flexShrink: 0,
     },
     paymentInfo: { flex: 1 },
     paymentPlan: { fontSize: 14, fontWeight: '600', color: colors.text },
     paymentMeta: { fontSize: 12, color: colors.textDim, marginTop: 2 },
+    paymentTax: { fontSize: 11, color: colors.textDim, marginTop: 3, opacity: 0.8 },
+    resendBtn: { marginTop: 6, alignSelf: 'flex-start' },
+    resendText: { fontSize: 12, fontWeight: '600' },
+    paymentAmountCol: { alignItems: 'flex-end', flexShrink: 0 },
     paymentAmount: { fontSize: 15, fontWeight: '700', color: colors.text },
+    paymentCurrency: { fontSize: 10, color: colors.textDim, marginTop: 1 },
+    loadMoreRow: { alignItems: 'center', paddingVertical: 16 },
+    loadMoreText: { fontSize: 14, color: colors.primary, fontWeight: '600' },
   });
 }

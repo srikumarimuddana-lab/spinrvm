@@ -2147,6 +2147,35 @@ export const deleteSubscriptionPlan = (id: string) =>
 export const getDriverSubscriptions = (status?: string) =>
     request<any[]>(`/api/admin/driver-subscriptions${status ? `?status=${status}` : ''}`);
 
+export const getAdminSubscriptionPayments = (opts: {
+    limit?: number;
+    offset?: number;
+    driver_id?: string;
+    plan_id?: string;
+    billing_reason?: string;
+    start_date?: string;
+    end_date?: string;
+} = {}) => {
+    const sp = new URLSearchParams();
+    if (opts.limit) sp.set("limit", String(opts.limit));
+    if (opts.offset) sp.set("offset", String(opts.offset));
+    if (opts.driver_id) sp.set("driver_id", opts.driver_id);
+    if (opts.plan_id) sp.set("plan_id", opts.plan_id);
+    if (opts.billing_reason) sp.set("billing_reason", opts.billing_reason);
+    if (opts.start_date) sp.set("start_date", opts.start_date);
+    if (opts.end_date) sp.set("end_date", opts.end_date);
+    return request<any>(`/api/admin/subscription/payments?${sp.toString()}`);
+};
+
+export const updateSubscriptionTaxConfig = (
+    areaId: string,
+    config: { enabled: boolean; province: string; gst_rate: number; pst_rate: number; hst_rate: number },
+) =>
+    request<any>(`/api/admin/service-areas/${areaId}/subscription-tax`, {
+        method: "PUT",
+        body: JSON.stringify(config),
+    });
+
 /* ── Audit Logs ──────────────────────────── */
 export const getAuditLogs = (opts: {
     limit?: number;

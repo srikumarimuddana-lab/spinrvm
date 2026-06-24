@@ -5,7 +5,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 try:
     from ... import db_supabase
@@ -312,6 +312,189 @@ async def admin_get_subscription_stats(
             if not a.get("parent_service_area_id")
         ],
     }
+
+
+@router.get("/subscription/payments")
+async def admin_list_subscription_payments(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    driver_id: Optional[str] = Query(default=None),
+    plan_id: Optional[str] = Query(default=None),
+    billing_reason: Optional[str] = Query(default=None),
+    start_date: Optional[str] = Query(default=None),
+    end_date: Optional[str] = Query(default=None),
+    admin: dict = Depends(get_admin_user),
+):
+    """Paginated subscription payment history for admin panel.
+
+    Supports filtering by driver, plan, billing reason, and date range.
+    Returns tax breakdown (subtotal/GST/PST/HST) per row using stored columns
+    (migration 186) with a legacy back-compute fallback.
+    """
+    filters: Dict = {}
+    if driver_id:
+        filters["driver_id"] = driver_id
+    if plan_id:
+        filters["plan_id"] = plan_id
+    if billing_reason:
+        filters["billing_reason"] = billing_reason
+
+    def _parse_dt(s: str | None):
+        if not s:
+            return None
+        try:
+            return datetime.fromisoformat(s.replace("Z", "").replace("+00:00", ""))
+        except Exception:
+            return None
+
+    if start_date or end_date:
+        # When a date range is requested, fetch all matching non-date rows so the
+        # count and pagination are computed over the fully filtered set rather than
+        # a pre-paginated slice whose total would be wrong.
+        _all = (
+            await db_supabase.get_rows(
+                "subscription_payments",
+                filters,
+                order="created_at",
+                desc=True,
+                limit=10_000,
+                offset=0,
+            )
+            or []
+        )
+        _start = _parse_dt(start_date)
+        _end = _parse_dt(end_date)
+        filtered: list = []
+        for p in _all:
+            _pd = _parse_dt(p.get("created_at") or "")
+            if _pd is None:
+                continue
+            if _start and _pd < _start:
+                continue
+            if _end and _pd > _end:
+                continue
+            filtered.append(p)
+        total = len(filtered)
+        payments = filtered[offset : offset + limit]
+    else:
+        payments = (
+            await db_supabase.get_rows(
+                "subscription_payments",
+                filters,
+                order="created_at",
+                desc=True,
+                limit=limit,
+                offset=offset,
+            )
+            or []
+        )
+        total = await db_supabase.count_documents("subscription_payments", filters)
+
+    # Batch-fetch driver names.
+    d_ids = list({p["driver_id"] for p in payments if p.get("driver_id")})
+    _raw_d, _raw_u = await _batch_fetch_drivers_and_users([], d_ids)
+    _name_map: Dict[str, str] = {}
+    for did, d in _raw_d.items():
+        u = _raw_u.get(d.get("user_id")) if d.get("user_id") else None
+        _name_map[did] = _user_display_name(u) if u else did[:8]
+
+    def _q2(v) -> Decimal:
+        return Decimal(str(v or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def _row(p: dict) -> dict:
+        total_d = _q2(p.get("amount"))
+        if p.get("subtotal") is not None:
+            subtotal_d = _q2(p["subtotal"])
+            gst_d = _q2(p.get("gst_amount"))
+            pst_d = _q2(p.get("pst_amount"))
+            hst_d = _q2(p.get("hst_amount"))
+        else:
+            # Legacy rows written before migration 186 have no stored tax breakdown.
+            # Return zeroes rather than fabricating tax that was never collected.
+            subtotal_d = total_d
+            gst_d = pst_d = hst_d = Decimal("0")
+        _did = p.get("driver_id") or ""
+        return {
+            "id": p["id"],
+            "driver_id": _did,
+            "driver_name": _name_map.get(_did, _did[:8]),
+            "plan_id": p.get("plan_id"),
+            "plan_name": p.get("plan_name"),
+            "amount": float(total_d),
+            "subtotal": float(subtotal_d),
+            "gst_amount": float(gst_d),
+            "pst_amount": float(pst_d),
+            "hst_amount": float(hst_d),
+            "province": p.get("province") or "SK",
+            "currency": (p.get("currency") or "cad").upper(),
+            "billing_reason": p.get("billing_reason"),
+            "stripe_invoice_id": p.get("stripe_invoice_id"),
+            "created_at": p.get("created_at"),
+        }
+
+    return {
+        "payments": [_row(p) for p in payments],
+        "total": total,
+        "has_more": (offset + len(payments)) < total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+class SubscriptionTaxConfig(BaseModel):
+    enabled: bool = True
+    province: str = Field(default="SK", min_length=2, max_length=2, pattern=r"^[A-Z]{2}$")
+    gst_rate: float = Field(default=5.0, ge=0.0, le=50.0)
+    pst_rate: float = Field(default=6.0, ge=0.0, le=50.0)
+    hst_rate: float = Field(default=0.0, ge=0.0, le=50.0)
+
+
+@router.put("/service-areas/{area_id}/subscription-tax")
+async def update_subscription_tax_config(
+    area_id: str,
+    req: SubscriptionTaxConfig,
+    admin: dict = Depends(get_admin_user),
+):
+    """Update the Spinr Pass subscription tax configuration for a service area.
+
+    Tax rates are stored in the subscription_tax_config JSONB column added by
+    migration 185.  Changes apply to the next checkout in the area — existing
+    payments are not retroactively updated.
+    """
+    area = await db_supabase.find_one("service_areas", {"id": area_id})
+    if not area:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail="Service area not found")
+
+    tax_config = {
+        "enabled": req.enabled,
+        "province": req.province.upper(),
+        "gst_rate": float(Decimal(str(req.gst_rate)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+        "pst_rate": float(Decimal(str(req.pst_rate)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+        "hst_rate": float(Decimal(str(req.hst_rate)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+    }
+
+    await db_supabase.update_one(
+        "service_areas",
+        {"id": area_id},
+        {"$set": {"subscription_tax_config": tax_config}},
+    )
+    await log_admin_action(
+        admin,
+        "update_subscription_tax_config",
+        "service_area",
+        area_id,
+        tax_config,
+    )
+    logger.info(
+        "[ADMIN] subscription_tax_config updated for area=%s config=%s admin=%s",
+        area_id,
+        tax_config,
+        admin.get("id"),
+        extra={"domain": "payments"},
+    )
+    return {"success": True, "area_id": area_id, "subscription_tax_config": tax_config}
 
 
 # ============================================================

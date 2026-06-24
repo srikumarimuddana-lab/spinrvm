@@ -6131,6 +6131,53 @@ async def _compute_subscription_tax(driver_id: str, plan_price: Decimal) -> dict
     }
 
 
+@api_router.get("/subscription/checkout-return")
+async def subscription_checkout_return(session_id: str = "", to: str = ""):
+    """PUBLIC https bounce for the Stripe Checkout return → driver app.
+
+    Stripe Checkout requires an https success/cancel URL (it rejects custom app
+    schemes), but the driver app returns via a custom scheme that
+    WebBrowser.openAuthSessionAsync intercepts. Stripe redirects here over https;
+    this page immediately redirects the in-app browser to the app's custom scheme
+    (e.g. spinr-driver://subscription/success?session_id=...), handing control
+    back to the app. No auth — the OS browser opening this carries no JWT, and it
+    exposes nothing sensitive (the session_id is already the user's own).
+
+    `to` is strictly allowlisted to our app schemes so this can never be abused
+    as an open redirect, and every interpolated value is HTML/JS-escaped.
+    """
+    import html as _html
+    import json as _json
+    import re as _re
+
+    from fastapi.responses import HTMLResponse
+
+    _allowed_prefixes = ("spinr-driver://", "exp://")
+    _safe = bool(
+        to
+        and any(to.startswith(p) for p in _allowed_prefixes)
+        and _re.fullmatch(r"[A-Za-z0-9:/._%@!$&()*+,;=~-]+", to)
+    )
+    _target = to if _safe else "spinr-driver://subscription/success"
+    _sid = session_id if _re.fullmatch(r"[A-Za-z0-9_]+", session_id or "") else ""
+    _sep = "&" if "?" in _target else "?"
+    _dest = f"{_target}{_sep}session_id={_sid}" if _sid else _target
+
+    _dest_attr = _html.escape(_dest, quote=True)
+    _dest_js = _json.dumps(_dest)
+    _body = (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        f"<meta http-equiv='refresh' content='0;url={_dest_attr}'>"
+        "<title>Returning to Spinr…</title></head>"
+        "<body style='font-family:-apple-system,sans-serif;text-align:center;padding-top:48px;color:#222'>"
+        "<p>Returning to the Spinr Driver app…</p>"
+        f"<script>window.location.replace({_dest_js});</script>"
+        f"<p><a href='{_dest_attr}'>Tap here if you are not redirected</a></p>"
+        "</body></html>"
+    )
+    return HTMLResponse(content=_body)
+
+
 @api_router.post("/subscription/subscribe")
 async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_current_user)):
     """Subscribe driver to a plan.
@@ -6253,19 +6300,33 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
             # PaymentIntent and not flag it as a STRIPE_ORPHAN ride.
             "scope": "driver_subscription",
         }
-        # The client supplies success_url so the in-app browser (openAuthSessionAsync)
-        # can intercept the redirect back to the correct scheme for the current
-        # environment: spinr-driver:// in production builds, exp://... in Expo Go.
-        # https:// universal links are NOT in the allowlist — they require server-side
-        # AASA / assetlinks.json and are not reliable without that infrastructure.
+        # The client supplies its app-scheme return URL (spinr-driver:// in
+        # production builds, exp://... in Expo Go) that the in-app browser
+        # (openAuthSessionAsync) intercepts. Stripe Checkout, however, REQUIRES an
+        # https success/cancel URL and rejects custom app schemes — so we point
+        # Stripe at our https /subscription/checkout-return bounce, which then
+        # redirects the in-app browser back to the app scheme. This needs no
+        # AASA/assetlinks (the final hop is the custom scheme, handled by
+        # openAuthSessionAsync), only a valid https URL for Stripe.
         _RETURN_PREFIXES = ("spinr-driver://", "exp://")
         _client_return: str = data.get("success_url", "")
         if _client_return and any(_client_return.startswith(p) for p in _RETURN_PREFIXES):
-            _success_url = _client_return + "?session_id={CHECKOUT_SESSION_ID}"
-            _cancel_url = _client_return.replace("/success", "/cancel")
+            _app_success = _client_return
         else:
-            _success_url = "spinr-driver://subscription/success?session_id={CHECKOUT_SESSION_ID}"
-            _cancel_url = "spinr-driver://subscription/cancel"
+            _app_success = "spinr-driver://subscription/success"
+        _app_cancel = _app_success.replace("/success", "/cancel")
+
+        try:
+            from ..core.config import settings as _config
+        except ImportError:
+            from core.config import settings as _config  # type: ignore
+        from urllib.parse import quote as _quote
+
+        _bounce = f"{_config.PUBLIC_API_BASE_URL.rstrip('/')}/api/v1/drivers/subscription/checkout-return"
+        # {CHECKOUT_SESSION_ID} is a Stripe template placeholder substituted by
+        # Stripe at redirect time (success only).
+        _success_url = f"{_bounce}?to={_quote(_app_success, safe='')}&session_id={{CHECKOUT_SESSION_ID}}"
+        _cancel_url = f"{_bounce}?to={_quote(_app_cancel, safe='')}"
 
         if _stripe_secret and _price_id:
             # Guard against a Stripe Price that disagrees with the DB price the
@@ -6648,6 +6709,7 @@ async def _record_subscription_payment(
     stripe_invoice_id: str | None = None,
     stripe_session_id: str | None = None,
     stripe_payment_intent_id: str | None = None,
+    stripe_invoice_url: str | None = None,
 ) -> str | None:
     """Append a realized-payment row to the subscription_payments ledger.
 
@@ -6694,6 +6756,10 @@ async def _record_subscription_payment(
             row["tax_total"] = _q2(tax_total)
         if province:
             row["province"] = province
+        # Stripe receipt link (migration 188) — only present on recurring charges;
+        # written conditionally so dev/one-off rows omit the column cleanly.
+        if stripe_invoice_url:
+            row["stripe_invoice_url"] = stripe_invoice_url
         await db_supabase.insert_one("subscription_payments", row)
         return row_id
     except Exception as _ledger_err:

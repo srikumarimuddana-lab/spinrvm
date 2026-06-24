@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -22,8 +21,9 @@ import { Pagination } from "@/components/ui/pagination";
 import {
     CreditCard, Plus, Pencil, Trash2, RefreshCw, Users,
     DollarSign, TrendingUp, XCircle, CheckCircle, Clock,
-    Receipt, Settings2, ChevronLeft, ChevronRight,
+    Receipt, Settings2, ChevronLeft, ChevronRight, Download, Send,
 } from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import {
     getSubscriptionPlans,
@@ -33,6 +33,8 @@ import {
     getDriverSubscriptions,
     getSubscriptionStats,
     getAdminSubscriptionPayments,
+    downloadSubscriptionInvoice,
+    resendAdminSubscriptionInvoice,
     updateSubscriptionTaxConfig,
     getServiceAreas,
 } from "@/lib/api";
@@ -470,6 +472,7 @@ export default function SubscriptionsPage() {
     const [driverSubs, setDriverSubs] = useState<DriverSubscription[]>([]);
     const [stats, setStats] = useState<SubStats | null>(null);
     const [loading, setLoading] = useState(true);
+    const { toast } = useToast();
     const [statusFilter, setStatusFilter] = useState<string>("all");
     const [subPage, setSubPage] = useState(1);
 
@@ -478,6 +481,8 @@ export default function SubscriptionsPage() {
     const [txTotal, setTxTotal] = useState(0);
     const [txPage, setTxPage] = useState(1);
     const [txLoading, setTxLoading] = useState(false);
+    const [downloadingId, setDownloadingId] = useState<string | null>(null);
+    const [sendingId, setSendingId] = useState<string | null>(null);
     const TX_PAGE_SIZE = 50;
 
     // Tax config tab state
@@ -560,6 +565,31 @@ export default function SubscriptionsPage() {
     const handleSaveTaxConfig = async (areaId: string, config: TaxConfig) => {
         await updateSubscriptionTaxConfig(areaId, config);
         await load();
+    };
+
+    const handleDownloadInvoice = async (paymentId: string) => {
+        setDownloadingId(paymentId);
+        try {
+            const ok = await downloadSubscriptionInvoice(paymentId);
+            if (!ok) {
+                toast({ title: "Download failed", description: "Could not generate the invoice PDF.", variant: "destructive" });
+            }
+        } finally {
+            setDownloadingId(null);
+        }
+    };
+
+    const handleResendInvoice = async (paymentId: string) => {
+        setSendingId(paymentId);
+        try {
+            await resendAdminSubscriptionInvoice(paymentId);
+            toast({ title: "Invoice sent", description: "Emailed to the driver's address on file." });
+        } catch (e: unknown) {
+            const detail = e instanceof Error ? e.message : "Could not send the invoice email.";
+            toast({ title: "Send failed", description: detail, variant: "destructive" });
+        } finally {
+            setSendingId(null);
+        }
     };
 
     // Filtered + paginated driver subs
@@ -843,6 +873,7 @@ export default function SubscriptionsPage() {
                                             <TableHead className="text-right">PST</TableHead>
                                             <TableHead className="text-right">HST</TableHead>
                                             <TableHead className="text-right">Total</TableHead>
+                                            <TableHead className="text-right">Invoice</TableHead>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
@@ -878,6 +909,38 @@ export default function SubscriptionsPage() {
                                                 </TableCell>
                                                 <TableCell className="text-right text-xs font-semibold tabular-nums">
                                                     {formatCurrency(tx.amount)}
+                                                </TableCell>
+                                                <TableCell className="text-right">
+                                                    <div className="flex items-center justify-end gap-1">
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="sm"
+                                                            className="h-7 px-2"
+                                                            title="Download invoice PDF"
+                                                            disabled={downloadingId === tx.id}
+                                                            onClick={() => handleDownloadInvoice(tx.id)}
+                                                        >
+                                                            {downloadingId === tx.id ? (
+                                                                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                                                            ) : (
+                                                                <Download className="h-3.5 w-3.5" />
+                                                            )}
+                                                        </Button>
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="sm"
+                                                            className="h-7 px-2"
+                                                            title="Email invoice to driver"
+                                                            disabled={sendingId === tx.id}
+                                                            onClick={() => handleResendInvoice(tx.id)}
+                                                        >
+                                                            {sendingId === tx.id ? (
+                                                                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                                                            ) : (
+                                                                <Send className="h-3.5 w-3.5" />
+                                                            )}
+                                                        </Button>
+                                                    </div>
                                                 </TableCell>
                                             </TableRow>
                                         ))}

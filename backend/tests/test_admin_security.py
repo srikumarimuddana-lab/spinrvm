@@ -290,3 +290,48 @@ class TestExpiredTokenRejected:
         assert response.status_code == 200
         data = response.json()
         assert data.get("authenticated") is True, f"Expected authenticated=true, got: {data}"
+
+
+# ---------------------------------------------------------------------------
+# Test: 7 — Expired / tampered token is HARD-rejected (401) on a protected
+#           admin *resource* route, not merely softened on /session (A-P2-2).
+# ---------------------------------------------------------------------------
+
+
+class TestExpiredTokenRejectedOnResource:
+    """The soft GET /session endpoint returns authenticated=false for an
+    expired token; a real admin resource must instead reject with HTTP 401 so
+    an expired or tampered console token can never reach handler logic.
+
+    Targets GET /api/admin/drivers/stats — guarded by the router-level
+    ``Depends(get_admin_user)`` (routes/admin/__init__.py). Auth resolves (and
+    fails at JWT decode) before the handler runs, so no Supabase mock is
+    needed. Deliberately does NOT use the ``admin_override`` fixture — the real
+    ``get_admin_user`` must run.
+    """
+
+    RESOURCE_URL = "/api/admin/drivers/stats"
+
+    def test_expired_token_is_rejected_401(self, test_client):
+        from backend.core.config import settings
+
+        # modules=["drivers"] so expiry — not RBAC — is the only possible
+        # rejection reason (the decode raises before any module check anyway).
+        expired = _make_admin_token(expired=True, modules=["drivers"], secret=settings.JWT_SECRET)
+        resp = test_client.get(self.RESOURCE_URL, headers={"Authorization": f"Bearer {expired}"})
+        assert resp.status_code == 401, f"Expected 401 for expired admin token, got {resp.status_code}: {resp.text}"
+        # Envelope-agnostic: a plain HTTPException serialises to
+        # {"detail": ...} while the global handler may wrap it as
+        # {"error": {"message": ...}}; either way the reason mentions expiry.
+        assert "expire" in resp.text.lower()
+
+    def test_tampered_signature_is_rejected_401(self, test_client):
+        # Signed with a secret other than settings.JWT_SECRET → signature
+        # verification fails → InvalidTokenError → 401 (never 403/500).
+        forged = _make_admin_token(
+            expired=False,
+            modules=["drivers"],
+            secret="forged-secret-not-the-real-one-000",
+        )
+        resp = test_client.get(self.RESOURCE_URL, headers={"Authorization": f"Bearer {forged}"})
+        assert resp.status_code == 401, f"Expected 401 for tampered admin token, got {resp.status_code}: {resp.text}"

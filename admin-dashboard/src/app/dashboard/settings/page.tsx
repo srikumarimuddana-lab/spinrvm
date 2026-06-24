@@ -220,6 +220,24 @@ export default function SettingsPage() {
                                     blank if you only use one Stripe webhook endpoint.
                                 </p>
                             </div>
+                            <div className="flex items-center justify-between">
+                                <div className="space-y-0.5">
+                                    <Label htmlFor="stripe_auto_heal_processing">
+                                        Auto-heal stuck payments
+                                    </Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        When a ride is stranded in <code>processing</code> (Stripe
+                                        charged but the DB write failed), let the daily reconcile mark
+                                        it paid from Stripe — it never re-charges. Leave OFF until
+                                        validated in staging; enabling this moves money.
+                                    </p>
+                                </div>
+                                <Switch
+                                    id="stripe_auto_heal_processing"
+                                    checked={!!settings.stripe_auto_heal_processing}
+                                    onCheckedChange={(v) => update("stripe_auto_heal_processing", v)}
+                                />
+                            </div>
                         </CardContent>
                     </Card>
 

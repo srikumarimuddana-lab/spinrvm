@@ -20,7 +20,7 @@ router = APIRouter()
 
 
 _AUDIENCES = Literal[
-    "customers", "drivers", "particular_customer", "particular_driver", "all", "service_area"
+    "customers", "drivers", "particular_customer", "particular_driver", "all"
 ]
 
 
@@ -37,8 +37,9 @@ class CloudMessageRequest(BaseModel):
     # marketing senders (footer + unsubscribe / STOP) are used. When false it
     # is an operational/service notice (no consent gate — e.g. safety, outage).
     is_marketing: bool = False
-    # Required when audience == "service_area": target riders with recent rides
-    # in this service area.
+    # Optional service-area FILTER layered on the customers/drivers audience:
+    # customers → riders with recent rides in this area; drivers → drivers
+    # assigned to it. Ignored for particular_* / all. None = all areas.
     service_area_id: Optional[str] = None
 
 
@@ -46,9 +47,21 @@ def _target_app_for_audience(audience: str) -> str | None:
     """Map audience to the target_app param for send_push_notification."""
     if audience in ("drivers", "particular_driver"):
         return "driver"
-    if audience in ("customers", "particular_customer", "service_area"):
+    if audience in ("customers", "particular_customer"):
         return "rider"
     return None
+
+
+async def _rider_ids_in_area(service_area_id: str) -> list:
+    """Distinct rider ids with recent rides in a service area."""
+    rides = await db.get_rows("rides", {"service_area_id": service_area_id}, columns="rider_id", limit=50000)
+    return list({r.get("rider_id") for r in rides if r.get("rider_id")})
+
+
+async def _driver_user_ids_in_area(service_area_id: str) -> list:
+    """Distinct user ids of drivers assigned to a service area."""
+    drivers = await db.get_rows("drivers", {"service_area_id": service_area_id}, columns="user_id", limit=10000)
+    return list({d.get("user_id") for d in drivers if d.get("user_id")})
 
 
 async def _resolve_recipients(
@@ -58,11 +71,12 @@ async def _resolve_recipients(
     *,
     need_contact: bool,
 ) -> list:
-    """Resolve an audience to a list of recipient rows.
+    """Resolve an audience (optionally filtered by service area) to recipient rows.
 
     ``need_contact`` adds email+phone columns (required for the email/SMS
     channels); push only needs the id, so we avoid dragging contact PII when
-    it isn't used. service_area targets riders via their rides in that area.
+    it isn't used. ``service_area_id`` narrows the customers/drivers audience to
+    that area (riders via their rides, drivers via their assignment).
     """
     cols = "id,email,phone" if need_contact else "id"
     if audience in ("particular_customer", "particular_driver"):
@@ -72,36 +86,39 @@ async def _resolve_recipients(
             return await db.get_rows("users", {"id": {"$in": particular_ids}}, columns=cols, limit=10000)
         return [{"id": uid} for uid in particular_ids]
     if audience == "customers":
+        if service_area_id:
+            ids = await _rider_ids_in_area(service_area_id)
+            if not ids:
+                return []
+            return await db.get_rows("users", {"id": {"$in": ids}, "is_rider": True}, columns=cols, limit=10000)
         return await db.get_rows("users", {"is_rider": True}, columns=cols, limit=10000)
     if audience == "drivers":
+        if service_area_id:
+            ids = await _driver_user_ids_in_area(service_area_id)
+            if not ids:
+                return []
+            return await db.get_rows("users", {"id": {"$in": ids}}, columns=cols, limit=10000)
         return await db.get_rows("users", {"is_driver": True}, columns=cols, limit=10000)
     if audience == "all":
         return await db.get_rows("users", {}, columns=cols, limit=10000)
-    if audience == "service_area":
-        if not service_area_id:
-            return []
-        rides = await db.get_rows(
-            "rides", {"service_area_id": service_area_id}, columns="rider_id", limit=50000
-        )
-        ids = list({r.get("rider_id") for r in rides if r.get("rider_id")})
-        if not ids:
-            return []
-        return await db.get_rows("users", {"id": {"$in": ids}}, columns=cols, limit=10000)
     return []
 
 
-async def _count_audience(audience: str, particular_ids: list) -> int:
-    """Recipient count without materialising the list — used for scheduled
-    sends (the list is resolved at dispatch time)."""
+async def _count_audience(audience: str, particular_ids: list, service_area_id: Optional[str] = None) -> int:
+    """Recipient count without materialising contact PII — used for scheduled
+    sends. Honours the service-area filter for customers/drivers."""
     if audience in ("particular_customer", "particular_driver"):
         return len(particular_ids)
     if audience == "customers":
+        if service_area_id:
+            return len(await _resolve_recipients("customers", [], service_area_id, need_contact=False))
         return await db_supabase.count_documents("users", {"is_rider": True})
     if audience == "drivers":
+        if service_area_id:
+            return len(await _resolve_recipients("drivers", [], service_area_id, need_contact=False))
         return await db_supabase.count_documents("users", {"is_driver": True})
     if audience == "all":
         return await db_supabase.count_documents("users", {})
-    # service_area is resolved at dispatch; size is unknown until then.
     return 0
 
 
@@ -247,10 +264,8 @@ async def admin_send_cloud_message(
     particular_ids = payload.particular_ids or []
     scheduled_at = payload.scheduled_at
     is_marketing = payload.is_marketing
-    service_area_id = payload.service_area_id
-
-    if audience == "service_area" and not service_area_id:
-        raise HTTPException(status_code=422, detail="service_area_id is required for the service_area audience")
+    # Service-area filter only applies to the customers/drivers audiences.
+    service_area_id = payload.service_area_id if audience in ("customers", "drivers") else None
 
     is_scheduled = bool(scheduled_at)
     status = "scheduled" if is_scheduled else "sent"
@@ -266,7 +281,7 @@ async def admin_send_cloud_message(
         recipients = await _resolve_recipients(audience, particular_ids, service_area_id, need_contact=need_contact)
         total_recipients = len(recipients)
     else:
-        total_recipients = await _count_audience(audience, particular_ids)
+        total_recipients = await _count_audience(audience, particular_ids, service_area_id)
 
     doc = {
         "id": str(uuid.uuid4()),
@@ -319,17 +334,16 @@ async def admin_cloud_message_audience_preview(
     audience: _AUDIENCES = Query("customers"),
     service_area_id: Optional[str] = Query(None),
 ):
-    """Estimate reach before sending: the audience size plus, for marketing,
-    the number of users who have opted in on each channel.
+    """Estimate reach before sending: the audience size (honouring the optional
+    service-area filter) plus, for marketing, the number of users opted in on
+    each channel.
 
     The opt-in figures are the GLOBAL opted-in pool (not intersected with the
     audience) — a guidance number. Exact per-recipient consent filtering still
     happens at send time, so the delivered count can be lower.
     """
-    if audience == "service_area" and not service_area_id:
-        raise HTTPException(status_code=422, detail="service_area_id is required for the service_area audience")
-
-    recipients = await _resolve_recipients(audience, [], service_area_id, need_contact=False)
+    area = service_area_id if audience in ("customers", "drivers") else None
+    recipients = await _resolve_recipients(audience, [], area, need_contact=False)
     out: Dict[str, Any] = {"audience": audience, "audience_total": len(recipients)}
     try:
         out["email_opted_in"] = await db_supabase.count_documents("marketing_preferences", {"email_opt_in": True})

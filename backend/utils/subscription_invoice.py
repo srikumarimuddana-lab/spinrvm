@@ -94,6 +94,8 @@ async def _resolve_invoice_scalars(payment: dict) -> dict:
         "province": province,
         "payment_date": payment_date,
         "invoice_number": invoice_number_for(payment),
+        # Stripe receipt link (migration 188); None for legacy/dev/one-off rows.
+        "stripe_invoice_url": payment.get("stripe_invoice_url"),
     }
 
 
@@ -132,7 +134,7 @@ async def build_subscription_invoice_pdf(payment: dict) -> Optional[Tuple[bytes,
         tax_total=scalars["tax_total"],
         total=scalars["total"],
         province=scalars["province"],
-        stripe_invoice_url=None,
+        stripe_invoice_url=scalars["stripe_invoice_url"],
     )
     filename = f"SpinrPass_Invoice_{scalars['invoice_number']}.pdf"
     return pdf_bytes, filename

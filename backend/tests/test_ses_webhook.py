@@ -295,10 +295,13 @@ def test_webhook_idempotent_when_already_suppressed(test_client: TestClient):
         r = test_client.post(_SES_URL, json=payload)
 
     assert r.status_code == 200
-    assert inserts == []  # no duplicate insert
+    # Already transactionally suppressed → no duplicate email_suppressions insert.
+    assert [i for i in inserts if i[0] == "email_suppressions"] == []
 
 
 def test_webhook_transient_bounce_not_suppressed(test_client: TestClient):
+    """A transient bounce never blocks TRANSACTIONAL mail (it may recover) but
+    DOES block MARKETING (product rule: one bounce = no marketing ever)."""
     inserts: list = []
     payload = {"Type": "Notification", "Message": _bounce_message("t@example.com", bounce_type="Transient")}
 
@@ -310,8 +313,13 @@ def test_webhook_transient_bounce_not_suppressed(test_client: TestClient):
         r = test_client.post(_SES_URL, json=payload)
 
     assert r.status_code == 200
+    # Transactional: untouched.
     assert r.json()["suppressed"] == 0
-    assert inserts == []
+    assert [i for i in inserts if i[0] == "email_suppressions"] == []
+    # Marketing: suppressed on this single transient bounce.
+    assert r.json()["marketing_suppressed"] == 1
+    mkt = [i for i in inserts if i[0] == "marketing_suppressions"]
+    assert mkt and mkt[0][1]["target"] == "t@example.com" and mkt[0][1]["reason"] == "bounce"
 
 
 def test_webhook_rejects_unexpected_topic(test_client: TestClient):

@@ -73,6 +73,12 @@ _MAPS_KEY_CACHE_TTL = 60.0  # seconds
 # rider app computes ETA client-side via haversine, saving ~60 Maps API calls
 # per 15-minute ride. Do not add "in_progress" here without adjusting billing.
 _ETA_PICKUP_STATUSES = {"driver_assigned", "driver_accepted", "driver_arrived"}
+# Statuses for which the driver's live location is forwarded to the RIDER so the
+# car marker moves on their map. Starts at driver_accepted — once the offer is
+# accepted the rider is watching the driver approach (the "driver arriving"
+# screen). Excludes pre-acceptance states (searching / driver_assigned) so an
+# offered-but-not-yet-accepted driver's position is never leaked to the rider.
+_RIDER_LOCATION_STATUSES = {"driver_accepted", "driver_arrived", "in_progress"}
 
 # Note: WebSocket routes are usually attached directly to the app, but APIRouter supports them too.
 # However, the original server.py had it on @app.websocket.
@@ -703,12 +709,15 @@ async def websocket_endpoint(
                         "heading": data.get("heading"),
                     }
 
-                    # Forward to riders of in-flight rides only (exclude
-                    # driver_accepted: rider hasn't been told yet).
+                    # Forward to riders of confirmed rides (driver_accepted →
+                    # in_progress) so the car marker moves as the driver
+                    # approaches pickup and during the trip. Pre-acceptance
+                    # states (searching / driver_assigned) are skipped so an
+                    # un-accepted offer's driver location isn't leaked.
                     # Each ride gets a location_update optionally enriched with
                     # eta_seconds when the driver is still en-route to pickup.
                     for ride in active_rides:
-                        if ride.get("status") == "driver_accepted":
+                        if ride.get("status") not in _RIDER_LOCATION_STATUSES:
                             continue
 
                         ride_status = ride.get("status", "")
@@ -877,7 +886,7 @@ async def websocket_endpoint(
                                 "heading": last_pt.get("heading"),
                             }
                             for _batch_ride in _batch_active_rides:
-                                if _batch_ride.get("status") == "driver_accepted":
+                                if _batch_ride.get("status") not in _RIDER_LOCATION_STATUSES:
                                     continue
                                 _batch_rider_msg = _batch_loc_update.copy()
                                 _batch_ride_status = _batch_ride.get("status", "")

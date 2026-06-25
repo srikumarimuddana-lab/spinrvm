@@ -176,14 +176,14 @@ async def completed_today(driver_id: str, now: Optional[datetime] = None, tz: Tz
     db = _db()
     day_start, _ = quota_day_bounds_utc(now, tz=tz)
     try:
-        from ..schemas import RideStatus  # type: ignore
-    except ImportError:  # pragma: no cover
-        from schemas import RideStatus  # type: ignore
+        from ..models.ride_status import RideStatus  # type: ignore
+    except ImportError:  # pragma: no cover - top-level import path
+        from models.ride_status import RideStatus  # type: ignore
     return await db.count_documents(
         "rides",
         {
             "driver_id": driver_id,
-            "status": RideStatus.COMPLETED,
+            "status": RideStatus.COMPLETED.value,
             "ride_completed_at": {"$gte": day_start.isoformat()},
         },
     )
@@ -338,16 +338,16 @@ async def exhausted_driver_ids(
     db = _db()
     day_start, _ = quota_day_bounds_utc(now_dt, tz=tz)
     try:
-        from ..schemas import RideStatus  # type: ignore
-    except ImportError:  # pragma: no cover
-        from schemas import RideStatus  # type: ignore
+        from ..models.ride_status import RideStatus  # type: ignore
+    except ImportError:  # pragma: no cover - top-level import path
+        from models.ride_status import RideStatus  # type: ignore
 
     ids = list(finite.keys())
     rows = await db.get_rows(
         "rides",
         {
             "driver_id": {"$in": ids},
-            "status": RideStatus.COMPLETED,
+            "status": RideStatus.COMPLETED.value,
             "ride_completed_at": {"$gte": day_start.isoformat()},
         },
         columns="driver_id",

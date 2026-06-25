@@ -63,6 +63,31 @@ class TestQuotaDayBounds:
         aware = datetime(2026, 6, 25, 12, 0, tzinfo=timezone.utc)
         assert spinr_pass.quota_day_bounds_utc(naive) == spinr_pass.quota_day_bounds_utc(aware)
 
+    def test_edmonton_winter_resets_one_hour_after_regina(self):
+        # Jan: Edmonton is MST (UTC-7), Regina is UTC-6. Edmonton local midnight
+        # is 07:00Z; Regina local midnight is 06:00Z — an hour apart.
+        now = datetime(2026, 1, 15, 6, 30, tzinfo=timezone.utc)
+        _, regina_end = spinr_pass.quota_day_bounds_utc(now)
+        _, edm_end = spinr_pass.quota_day_bounds_utc(now, tz="America/Edmonton")
+        assert regina_end == datetime(2026, 1, 16, 6, 0, tzinfo=timezone.utc)
+        assert edm_end == datetime(2026, 1, 15, 7, 0, tzinfo=timezone.utc)
+
+    def test_edmonton_summer_equals_regina(self):
+        # Jul: Edmonton is MDT (UTC-6) == Regina, so boundaries coincide.
+        now = datetime(2026, 7, 15, 7, 0, tzinfo=timezone.utc)
+        assert spinr_pass.quota_day_bounds_utc(now, tz="America/Edmonton") == spinr_pass.quota_day_bounds_utc(now)
+
+    def test_unknown_tz_falls_back_to_regina(self):
+        now = datetime(2026, 1, 15, 6, 30, tzinfo=timezone.utc)
+        assert spinr_pass.quota_day_bounds_utc(now, tz="Mars/Phobos") == spinr_pass.quota_day_bounds_utc(now)
+
+    def test_tzinfo_arg_accepted(self):
+        now = datetime(2026, 6, 25, 12, 0, tzinfo=timezone.utc)
+        # A fixed-offset tzinfo is honored directly (no zoneinfo lookup).
+        edt = timezone(timedelta(hours=-4))
+        start, _ = spinr_pass.quota_day_bounds_utc(now, tz=edt)
+        assert start == datetime(2026, 6, 25, 4, 0, tzinfo=timezone.utc)
+
 
 class TestComputeQuota:
     def _now(self):
@@ -134,18 +159,32 @@ class TestHoursUntil:
 class _FakeDB:
     """Minimal async stand-in for the db_supabase module surface used here."""
 
-    def __init__(self, *, count=0, rides_rows=None):
+    def __init__(self, *, count=0, rides_rows=None, area=None):
         self._count = count
         self._rides_rows = rides_rows or []
+        self._area = area
         self.updated = []
         self.inserted = []
-        self.count_documents = AsyncMock(return_value=count)
+        self.count_filters = []
+        self.rides_filters = []
+        self.count_documents = AsyncMock(side_effect=self._count_documents)
         self.get_rows = AsyncMock(side_effect=self._get_rows)
+        self.find_one = AsyncMock(side_effect=self._find_one)
         self.update_one = AsyncMock(side_effect=self._update_one)
         self.insert_one = AsyncMock(side_effect=self._insert_one)
 
+    async def _count_documents(self, table, filt=None, **kw):
+        self.count_filters.append((table, filt))
+        return self._count
+
+    async def _find_one(self, table, filt=None):
+        if table == "service_areas":
+            return self._area
+        return None
+
     async def _get_rows(self, table, filt=None, columns=None, limit=None, **kw):
         if table == "rides":
+            self.rides_filters.append(filt)
             return self._rides_rows
         if table == "driver_subscriptions":
             return []
@@ -302,3 +341,48 @@ class TestAssertQuotaAvailable:
         patch_db(db)
         # Lookup failure must not block — returns None instead of raising.
         assert await spinr_pass.assert_quota_available("d1", sub={"id": "s1", "rides_per_day": 4}) is None
+
+
+@pytest.mark.anyio
+class TestAreaTimezone:
+    async def test_resolves_area_timezone(self, patch_db):
+        patch_db(_FakeDB(area={"id": "a1", "timezone": "America/Edmonton"}))
+        assert await spinr_pass.area_timezone("a1") == "America/Edmonton"
+
+    async def test_none_area_id_skips_lookup(self, patch_db):
+        db = patch_db(_FakeDB())
+        assert await spinr_pass.area_timezone(None) is None
+        db.find_one.assert_not_called()
+
+    async def test_missing_timezone_column_is_none(self, patch_db):
+        patch_db(_FakeDB(area={"id": "a1"}))
+        assert await spinr_pass.area_timezone("a1") is None
+
+    async def test_lookup_error_is_none(self, patch_db):
+        db = _FakeDB()
+        db.find_one = AsyncMock(side_effect=RuntimeError("down"))
+        patch_db(db)
+        assert await spinr_pass.area_timezone("a1") is None
+
+
+@pytest.mark.anyio
+class TestTimezonePassthrough:
+    async def test_completed_today_uses_tz_day_start(self, patch_db):
+        db = _FakeDB(count=0)
+        patch_db(db)
+        # Winter instant: Edmonton (MST) day starts at 07:00Z, Regina at 06:00Z.
+        now = datetime(2026, 1, 15, 6, 30, tzinfo=timezone.utc)
+        await spinr_pass.completed_today("d1", now=now, tz="America/Edmonton")
+        _, filt = db.count_filters[-1]
+        assert filt["ride_completed_at"]["$gte"] == datetime(2026, 1, 14, 7, 0, tzinfo=timezone.utc).isoformat()
+
+    async def test_quota_status_resolves_area_tz(self, patch_db):
+        # Edmonton area + 4-ride cap, 4 used → exhausted, reset at Edmonton
+        # midnight. Winter now=06:30Z is 23:30 MST, so ~30m to the 07:00Z reset.
+        db = _FakeDB(count=4, area={"id": "a1", "timezone": "America/Edmonton"})
+        patch_db(db)
+        now = datetime(2026, 1, 15, 6, 30, tzinfo=timezone.utc)
+        status = await spinr_pass.quota_status("d1", sub={"id": "s1", "rides_per_day": 4}, now=now, area_id="a1")
+        assert status["exhausted"] is True
+        assert status["quota_resets_at"] == datetime(2026, 1, 15, 7, 0, tzinfo=timezone.utc).isoformat()
+        assert status["hours_until_reset"] == 0.5

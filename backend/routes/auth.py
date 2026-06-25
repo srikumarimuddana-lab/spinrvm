@@ -388,7 +388,22 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
             if not _hmac.compare_digest(str(expected), str(actual)):
                 otp_record = None
     except Exception as e:
-        logger.error(f"Could not query OTP from DB: {e}", exc_info=True)
+        # C3: a DB read failure is NOT a wrong code. Surface 503 so the client
+        # retries — do NOT fall through to _record_otp_failure below, which
+        # would count a correct code as a failure and can trip the 5-strike
+        # 24h lockout, locking out a user who entered the right code during a
+        # DB blip. (CLAUDE.md: never swallow a DB error and continue.)
+        original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
+        logger.error(
+            f"verify_otp: OTP lookup failed for ***{phone[-4:]}: type={type(e).__name__} msg={e} original={original}",
+            exc_info=True,
+        )
+        raise SpinrException(
+            message="Service temporarily unavailable, please try again",
+            error_code=ErrorCode.DATABASE_ERROR,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_DATABASE,
+        ) from e
 
     if not otp_record:
         # Wrong code — record the failure (may trigger lockout)

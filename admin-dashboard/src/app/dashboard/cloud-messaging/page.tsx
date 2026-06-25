@@ -16,6 +16,7 @@ import { Switch } from "@/components/ui/switch";
 import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import {
     Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -295,6 +296,11 @@ export default function CloudMessagingPage() {
     const totalHistoryPages = Math.max(1, Math.ceil(filtered.length / PER_PAGE));
     const paginatedHistory = filtered.slice((historyPage - 1) * PER_PAGE, historyPage * PER_PAGE);
     useEffect(() => { setHistoryPage(1); }, [search, statusFilter, audienceFilter, dateFrom, dateTo]);
+
+    // Client-side sort — one per table, applied to the already-filtered/paged rows.
+    const { sorted: sortedScheduled, sort: schedSort, toggle: schedToggle } = useTableSort(scheduledMessages);
+    const { sorted: sortedHistory, sort: histSort, toggle: histToggle } = useTableSort(paginatedHistory);
+    const { sorted: sortedSuppressions, sort: suppSort, toggle: suppToggle } = useTableSort(suppressions);
 
     const handleSend = async () => {
         if (!form.title.trim() || !form.description.trim()) { toast({ title: "Missing fields", description: "Please fill in title and description.", variant: "destructive" }); return; }
@@ -670,10 +676,10 @@ export default function CloudMessagingPage() {
                         ) : (
                             <Table>
                                 <TableHeader><TableRow>
-                                    <TableHead>Title</TableHead><TableHead>Audience</TableHead><TableHead>Channels</TableHead><TableHead>Scheduled For</TableHead><TableHead>Recipients</TableHead><TableHead className="text-right">Actions</TableHead>
+                                    <SortableHead column="title" sort={schedSort} onSort={schedToggle}>Title</SortableHead><SortableHead column="audience" sort={schedSort} onSort={schedToggle}>Audience</SortableHead><SortableHead column="channels" sort={schedSort} onSort={schedToggle}>Channels</SortableHead><SortableHead column="scheduled_at" sort={schedSort} onSort={schedToggle}>Scheduled For</SortableHead><SortableHead column="total_recipients" sort={schedSort} onSort={schedToggle}>Recipients</SortableHead><TableHead className="text-right">Actions</TableHead>
                                 </TableRow></TableHeader>
                                 <TableBody>
-                                    {scheduledMessages.map((msg) => (
+                                    {sortedScheduled.map((msg) => (
                                         <TableRow key={msg.id}>
                                             <TableCell><p className="font-medium text-sm">{msg.title}</p><p className="text-xs text-muted-foreground truncate max-w-[250px]">{msg.description}</p></TableCell>
                                             <TableCell><span className="text-sm capitalize">{msg.audience.replace(/_/g, " ")}</span></TableCell>
@@ -726,12 +732,12 @@ export default function CloudMessagingPage() {
                             <div className="border rounded-lg">
                                 <Table>
                                     <TableHeader><TableRow>
-                                        <TableHead>Title</TableHead><TableHead>Type</TableHead><TableHead>Audience</TableHead><TableHead>Channels</TableHead><TableHead>Status</TableHead><TableHead>Recipients</TableHead><TableHead>OK</TableHead><TableHead>Fail</TableHead><TableHead>Date</TableHead><TableHead className="text-right">Actions</TableHead>
+                                        <SortableHead column="title" sort={histSort} onSort={histToggle}>Title</SortableHead><SortableHead column="type" sort={histSort} onSort={histToggle}>Type</SortableHead><SortableHead column="audience" sort={histSort} onSort={histToggle}>Audience</SortableHead><SortableHead column="channels" sort={histSort} onSort={histToggle}>Channels</SortableHead><SortableHead column="status" sort={histSort} onSort={histToggle}>Status</SortableHead><SortableHead column="total_recipients" sort={histSort} onSort={histToggle}>Recipients</SortableHead><SortableHead column="successful" sort={histSort} onSort={histToggle}>OK</SortableHead><SortableHead column="failed_count" sort={histSort} onSort={histToggle}>Fail</SortableHead><SortableHead column="sent_at" sort={histSort} onSort={histToggle}>Date</SortableHead><TableHead className="text-right">Actions</TableHead>
                                     </TableRow></TableHeader>
                                     <TableBody>
                                         {filtered.length === 0 ? (
                                             <TableRow><TableCell colSpan={10} className="text-center text-muted-foreground py-12">No messages found.</TableCell></TableRow>
-                                        ) : paginatedHistory.map((msg) => {
+                                        ) : sortedHistory.map((msg) => {
                                             const sc = STATUS_CONFIG[msg.status] || STATUS_CONFIG.pending;
                                             const SI = sc.icon;
                                             const typeCfg = NOTIFICATION_TYPES.find((t) => t.value === msg.type);
@@ -817,12 +823,12 @@ export default function CloudMessagingPage() {
                             <div className="border rounded-lg">
                                 <Table>
                                     <TableHeader><TableRow>
-                                        <TableHead>Channel</TableHead><TableHead>Target</TableHead><TableHead>Reason</TableHead><TableHead>Source</TableHead><TableHead>Added</TableHead><TableHead className="text-right">Actions</TableHead>
+                                        <SortableHead column="channel" sort={suppSort} onSort={suppToggle}>Channel</SortableHead><SortableHead column="target" sort={suppSort} onSort={suppToggle}>Target</SortableHead><SortableHead column="reason" sort={suppSort} onSort={suppToggle}>Reason</SortableHead><SortableHead column="source" sort={suppSort} onSort={suppToggle}>Source</SortableHead><SortableHead column="created_at" sort={suppSort} onSort={suppToggle}>Added</SortableHead><TableHead className="text-right">Actions</TableHead>
                                     </TableRow></TableHeader>
                                     <TableBody>
                                         {suppressions.length === 0 ? (
                                             <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-12">No suppressed contacts.</TableCell></TableRow>
-                                        ) : suppressions.map((s) => (
+                                        ) : sortedSuppressions.map((s) => (
                                             <TableRow key={s.id}>
                                                 <TableCell><Badge variant="outline" className="text-xs capitalize">{s.channel}</Badge></TableCell>
                                                 <TableCell className="font-mono text-xs">{s.target}</TableCell>

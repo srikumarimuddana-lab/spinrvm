@@ -314,6 +314,157 @@ async def get_analytics_overview(
     return result
 
 
+# ── Main dashboard overview (service-area + time pills) ─────────────
+
+
+def _dashboard_window(range_key: str) -> tuple:
+    """Return (start, end) datetimes for a dashboard time pill."""
+    now = datetime.now(timezone.utc)
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if range_key == "today":
+        return midnight, now
+    if range_key == "yesterday":
+        return midnight - timedelta(days=1), midnight
+    if range_key == "7d":
+        return now - timedelta(days=7), now
+    return now - timedelta(hours=24), now  # "24h" default
+
+
+_DASH_ACTIVE_STATUSES = ["searching", "driver_assigned", "driver_accepted", "driver_arrived", "in_progress"]
+_DASH_BREAKDOWN_STATUSES = ["searching", "in_progress", "completed", "cancelled", "scheduled"]
+
+
+@api_router.get("/dashboard")
+async def get_dashboard_overview(
+    range: str = Query("24h", pattern="^(today|yesterday|24h|7d)$"),
+    service_area_id: Optional[str] = Query(default=None),
+    admin: dict = Depends(get_admin_user),
+):
+    """Main-dashboard stat cards, filtered by service area + time window.
+
+    Everything is aggregated by the query at request time — no stored function /
+    extra schema, and no Python summing. Counts use PostgREST ``count="exact"``;
+    money uses PostgREST aggregate ``.sum()``. If aggregate functions are not
+    enabled on the project, the counts still render and money returns null.
+
+    Spinr takes 0% of ride fares, so `driver_earnings` is the fare drivers keep
+    and `platform_revenue` is Spinr Pass (+ corporate later) — never a ride cut.
+    """
+    import asyncio as _asyncio
+
+    try:
+        from ... import db_supabase as _dbs
+    except ImportError:
+        import db_supabase as _dbs  # type: ignore
+
+    start, end = _dashboard_window(range)
+    start_iso, end_iso = start.isoformat(), end.isoformat()
+    area = {"service_area_id": service_area_id} if service_area_id else {}
+
+    def _in_range(extra: Optional[dict] = None) -> dict:
+        f: dict = {"$and": [{"created_at": {"$gte": start_iso}}, {"created_at": {"$lte": end_iso}}]}
+        return {**extra, **f} if extra else f
+
+    _count = _dbs.count_documents
+
+    # ── Counts — aggregated in-query via PostgREST count="exact" ──────────
+    (
+        drivers_total,
+        drivers_online,
+        drivers_active,
+        drivers_new,
+        riders_total,
+        riders_new,
+        rides_total,
+        rides_active,
+        *bd_counts,
+    ) = await _asyncio.gather(
+        _count("drivers", area),
+        _count("drivers", {**area, "is_online": True}),
+        _count("drivers", {**area, "is_available": True}),
+        _count("drivers", _in_range(area)),
+        _count("users", {"role": "rider"}),
+        _count("users", _in_range({"role": "rider"})),
+        _count("rides", _in_range(area)),
+        _count("rides", {**area, "status": {"$in": _DASH_ACTIVE_STATUSES}}),
+        *[_count("rides", _in_range({**area, "status": s})) for s in _DASH_BREAKDOWN_STATUSES],
+    )
+    breakdown = {s: int(bd_counts[i] or 0) for i, s in enumerate(_DASH_BREAKDOWN_STATUSES)}
+
+    # ── Money — aggregated in-query via PostgREST .sum() (no function/Python) ─
+    money: dict = {
+        "ride_volume": None,
+        "driver_earnings": None,
+        "spinr_pass_earnings": None,
+        "platform_revenue": None,
+        "aggregates_enabled": True,
+    }
+
+    def _ride_money_query():
+        q = (
+            _dbs.supabase.table("rides")
+            .select("ride_volume:grand_total.sum(),driver_earnings:driver_earnings.sum()")
+            .eq("status", "completed")
+            .gte("created_at", start_iso)
+            .lt("created_at", end_iso)
+        )
+        if service_area_id:
+            q = q.eq("service_area_id", service_area_id)
+        return q.execute()
+
+    try:
+        _rm = await _dbs.run_sync(_ride_money_query)
+        _row = (getattr(_rm, "data", None) or [{}])[0]
+        money["ride_volume"] = round(float(_row.get("ride_volume") or 0), 2)
+        # 0% commission: when driver_earnings wasn't snapshotted, the fare IS the
+        # driver's earning, so fall back to ride_volume.
+        money["driver_earnings"] = round(float(_row.get("driver_earnings") or _row.get("ride_volume") or 0), 2)
+
+        # Spinr Pass — scope to the area's drivers when an area is selected.
+        area_driver_ids: Optional[list] = None
+        if service_area_id:
+            _ad = await _dbs.get_rows("drivers", area, columns="id", limit=10000)
+            area_driver_ids = [d["id"] for d in (_ad or []) if d.get("id")]
+
+        def _sub_money_query():
+            q = (
+                _dbs.supabase.table("subscription_payments")
+                .select("spinr_pass:amount.sum()")
+                .gte("created_at", start_iso)
+                .lt("created_at", end_iso)
+            )
+            if area_driver_ids is not None:
+                q = q.in_("driver_id", area_driver_ids or ["__none__"])
+            return q.execute()
+
+        _sm = await _dbs.run_sync(_sub_money_query)
+        _srow = (getattr(_sm, "data", None) or [{}])[0]
+        _pass = round(float(_srow.get("spinr_pass") or 0), 2)
+        money["spinr_pass_earnings"] = _pass
+        # Spinr takes 0% of rides — platform revenue is Spinr Pass (+ corporate later).
+        money["platform_revenue"] = _pass
+    except Exception as e:
+        # Most likely cause: PostgREST aggregate functions disabled on the project.
+        # Counts still render; surface the money cards as unavailable rather than 500.
+        logger.warning(f"dashboard money aggregation failed (aggregates enabled?): {e}")
+        money["aggregates_enabled"] = False
+
+    return {
+        "range": range,
+        "service_area_id": service_area_id,
+        "window": {"start": start_iso, "end": end_iso},
+        "drivers": {
+            "total": int(drivers_total or 0),
+            "online": int(drivers_online or 0),
+            "active": int(drivers_active or 0),
+            "new": int(drivers_new or 0),
+        },
+        "riders": {"total": int(riders_total or 0), "new": int(riders_new or 0)},
+        "rides": {"total": int(rides_total or 0), "active": int(rides_active or 0), "breakdown": breakdown},
+        "money": money,
+    }
+
+
 # ── Demand Forecasting ──────────────────────────────────────────────
 
 

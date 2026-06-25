@@ -53,6 +53,7 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import AllowanceDialog from "./allowance-dialog";
 import { useToast } from "@/components/ui/use-toast";
 import {
@@ -259,6 +260,11 @@ export default function CompanyMembersPage() {
         (r) => requestFilter === "all" || r.status === requestFilter
     );
 
+    const { sorted: sortedMembers, sort: memberSort, toggle: toggleMemberSort } =
+        useTableSort(filteredMembers);
+    const { sorted: sortedRequests, sort: requestSort, toggle: toggleRequestSort } =
+        useTableSort(filteredRequests);
+
     const pendingCount = requests.filter((r) => r.status === "pending").length;
 
     return (
@@ -355,10 +361,10 @@ export default function CompanyMembersPage() {
                     <Table>
                         <TableHeader>
                             <TableRow>
-                                <TableHead>Email / ID</TableHead>
-                                <TableHead>Role</TableHead>
-                                <TableHead>Status</TableHead>
-                                <TableHead>Joined</TableHead>
+                                <SortableHead column="invited_email" sort={memberSort} onSort={toggleMemberSort}>Email / ID</SortableHead>
+                                <SortableHead column="role" sort={memberSort} onSort={toggleMemberSort}>Role</SortableHead>
+                                <SortableHead column="status" sort={memberSort} onSort={toggleMemberSort}>Status</SortableHead>
+                                <SortableHead column="created_at" sort={memberSort} onSort={toggleMemberSort}>Joined</SortableHead>
                                 <TableHead className="text-right">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
@@ -376,7 +382,7 @@ export default function CompanyMembersPage() {
                                     </TableCell>
                                 </TableRow>
                             ) : (
-                                filteredMembers.map((m) => (
+                                sortedMembers.map((m) => (
                                     <TableRow key={m.id}>
                                         <TableCell className="font-mono text-xs">
                                             {m.invited_email ?? m.user_id ?? m.id}
@@ -480,16 +486,16 @@ export default function CompanyMembersPage() {
                         <Table>
                             <TableHeader>
                                 <TableRow>
-                                    <TableHead>Member</TableHead>
-                                    <TableHead>Amount</TableHead>
-                                    <TableHead>Reason</TableHead>
-                                    <TableHead>Status</TableHead>
-                                    <TableHead>Submitted</TableHead>
+                                    <SortableHead column="member_id" sort={requestSort} onSort={toggleRequestSort}>Member</SortableHead>
+                                    <SortableHead column="amount" sort={requestSort} onSort={toggleRequestSort}>Amount</SortableHead>
+                                    <SortableHead column="reason" sort={requestSort} onSort={toggleRequestSort}>Reason</SortableHead>
+                                    <SortableHead column="status" sort={requestSort} onSort={toggleRequestSort}>Status</SortableHead>
+                                    <SortableHead column="created_at" sort={requestSort} onSort={toggleRequestSort}>Submitted</SortableHead>
                                     <TableHead className="text-right">Actions</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {filteredRequests.map((r) => (
+                                {sortedRequests.map((r) => (
                                     <TableRow key={r.id}>
                                         <TableCell className="font-mono text-xs text-muted-foreground max-w-[14ch] truncate">
                                             {r.member_id}

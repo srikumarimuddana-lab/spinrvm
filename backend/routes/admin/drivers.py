@@ -125,6 +125,32 @@ class DriverNoteCreate(BaseModel):
 # ---------- Drivers list ----------
 
 
+def _subscription_summary(sub: Optional[Dict[str, Any]], now: datetime) -> tuple:
+    """Reduce a driver's latest driver_subscriptions row to a display summary.
+
+    Returns ``(status, plan_name, expires_at)`` where status is one of
+    ``"active"`` / ``"expired"`` / ``None``:
+      - a past ``expires_at`` reads as expired even if the expiry loop hasn't
+        flipped the row yet (so the admin sees reality, not stale state),
+      - ``cancelled`` (or no row) reads as None → "no subscription".
+    """
+    if not sub:
+        return None, None, None
+    plan = sub.get("plan_name")
+    expires = sub.get("expires_at")
+    raw = sub.get("status")
+    if raw == "cancelled":
+        return None, None, None
+    exp_dt = parse_iso_utc(expires) if expires else None
+    if exp_dt is not None and exp_dt <= now:
+        return "expired", plan, expires
+    if raw == "expired":
+        return "expired", plan, expires
+    if raw == "active":
+        return "active", plan, expires
+    return None, plan, expires
+
+
 @router.get("/drivers")
 async def admin_get_drivers(
     limit: int = 50,
@@ -232,9 +258,33 @@ async def admin_get_drivers(
         else []
     )
     users_map = {u["id"]: u for u in users_list if u.get("id")}
+
+    # Spinr Pass status — one batch query over this page's drivers. Most recent
+    # row per driver wins (global created_at DESC, first seen per driver_id).
+    driver_ids = [d.get("id") for d in deduped if d.get("id")]
+    subs_map: Dict[str, Dict[str, Any]] = {}
+    if driver_ids:
+        try:
+            _subs = await db_supabase.get_rows(
+                "driver_subscriptions",
+                {"driver_id": {"$in": driver_ids}},
+                columns="driver_id,plan_name,status,expires_at,created_at",
+                order="created_at",
+                desc=True,
+                limit=max(len(driver_ids) * 5, 100),
+            )
+            for s in _subs or []:
+                did = s.get("driver_id")
+                if did and did not in subs_map:
+                    subs_map[did] = s
+        except Exception as _sub_err:
+            logger.warning(f"admin_get_drivers: subscription enrichment failed: {_sub_err}")
+    _sub_now = datetime.now(timezone.utc)
+
     out = []
     for d in deduped:
         u = users_map.get(d.get("user_id"))
+        _sub_status, _sub_plan, _sub_expires = _subscription_summary(subs_map.get(d.get("id")), _sub_now)
         out.append(
             {
                 **d,
@@ -242,6 +292,9 @@ async def admin_get_drivers(
                 "email": u.get("email") if u else None,
                 "phone": u.get("phone") if u else d.get("phone"),
                 "profile_image_status": (u.get("profile_image_status") if u else None),
+                "subscription_status": _sub_status,
+                "subscription_plan": _sub_plan,
+                "subscription_expires_at": _sub_expires,
             }
         )
     return out

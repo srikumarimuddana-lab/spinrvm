@@ -2272,6 +2272,14 @@ export const getQuestParticipants = (questId: string) =>
 export const getAnalyticsOverview = (dateRange = "30d") =>
     request<any>(`/api/admin/analytics/overview?date_range=${dateRange}`);
 
+/** Main-dashboard stat cards aggregated by time window + optional service area. */
+export const getDashboardOverview = (opts: { range?: string; service_area_id?: string | null } = {}) => {
+    const sp = new URLSearchParams();
+    if (opts.range) sp.set("range", opts.range);
+    if (opts.service_area_id) sp.set("service_area_id", opts.service_area_id);
+    return request<any>(`/api/admin/analytics/dashboard?${sp.toString()}`);
+};
+
 export const getCancellationBreakdown = (dateRange = "30d", serviceAreaId?: string) =>
     request<any>(`/api/admin/analytics/cancellation-reasons?date_range=${dateRange}${serviceAreaId ? `&service_area_id=${serviceAreaId}` : ''}`);
 

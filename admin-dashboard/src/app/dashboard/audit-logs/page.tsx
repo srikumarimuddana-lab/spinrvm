@@ -9,7 +9,6 @@ import {
     Table,
     TableBody,
     TableCell,
-    TableHead,
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
@@ -21,6 +20,7 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { Pagination } from "@/components/ui/pagination";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import {
     Shield,
     Search,
@@ -69,6 +69,7 @@ export default function AuditLogsPage() {
     const [page, setPage] = useState(0);
     const [hasNextPage, setHasNextPage] = useState(false);
     const reqIdRef = useRef(0);
+    const { sorted, sort, toggle } = useTableSort(logs);
 
     const fetchLogs = async () => {
         setLoading(true);
@@ -233,15 +234,15 @@ export default function AuditLogsPage() {
                             <Table>
                                 <TableHeader>
                                     <TableRow>
-                                        <TableHead>Time</TableHead>
-                                        <TableHead>User</TableHead>
-                                        <TableHead>Action</TableHead>
-                                        <TableHead>Entity</TableHead>
-                                        <TableHead>Details</TableHead>
+                                        <SortableHead column="created_at" sort={sort} onSort={toggle}>Time</SortableHead>
+                                        <SortableHead column="user_email" sort={sort} onSort={toggle}>User</SortableHead>
+                                        <SortableHead column="action" sort={sort} onSort={toggle}>Action</SortableHead>
+                                        <SortableHead column="entity_type" sort={sort} onSort={toggle}>Entity</SortableHead>
+                                        <SortableHead column="details" sort={sort} onSort={toggle}>Details</SortableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {logs.map((log) => {
+                                    {sorted.map((log) => {
                                         const Icon = ENTITY_ICONS[log.entity_type] || Shield;
                                         const actionCfg = ACTION_CONFIG[log.action];
                                         return (

@@ -17,6 +17,7 @@ import {
 import {
     Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { FileCheck, Plus, Pencil, Trash2, RefreshCw, ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import {
@@ -369,6 +370,7 @@ function ReqTable({
     onEdit: (r: DocRequirement) => void;
     onDelete: (r: DocRequirement) => void;
 }) {
+    const { sorted, sort, toggle } = useTableSort(rows);
     if (!loading && rows.length === 0) {
         return <p className="text-sm text-muted-foreground py-4 text-center">No requirements configured.</p>;
     }
@@ -376,15 +378,15 @@ function ReqTable({
         <Table>
             <TableHeader>
                 <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Type Key</TableHead>
-                    <TableHead>Applies To</TableHead>
-                    <TableHead>Required</TableHead>
+                    <SortableHead column="name" sort={sort} onSort={toggle}>Name</SortableHead>
+                    <SortableHead column="document_type" sort={sort} onSort={toggle}>Type Key</SortableHead>
+                    <SortableHead column="applicable_to" sort={sort} onSort={toggle}>Applies To</SortableHead>
+                    <SortableHead column="is_required" sort={sort} onSort={toggle}>Required</SortableHead>
                     <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
             </TableHeader>
             <TableBody>
-                {rows.map((r) => (
+                {sorted.map((r) => (
                     <TableRow key={r.id}>
                         <TableCell className="font-medium">
                             <div>{r.name}</div>

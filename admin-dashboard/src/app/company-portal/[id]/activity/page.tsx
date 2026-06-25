@@ -12,12 +12,12 @@ import {
     Table,
     TableBody,
     TableCell,
-    TableHead,
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 
 function currentMonth(): string {
     const d = new Date();
@@ -67,6 +67,7 @@ export default function ActivityPage() {
     const filtered = memberFilter
         ? rows.filter((r) => r.member_id?.includes(memberFilter))
         : rows;
+    const { sorted, sort, toggle } = useTableSort(filtered);
 
     return (
         <div className="space-y-6">
@@ -107,13 +108,13 @@ export default function ActivityPage() {
                     <Table>
                         <TableHeader>
                             <TableRow>
-                                <TableHead>Date</TableHead>
-                                <TableHead>Member</TableHead>
-                                <TableHead>Source</TableHead>
-                                <TableHead>Allowance</TableHead>
-                                <TableHead>Master</TableHead>
-                                <TableHead>Policy</TableHead>
-                                <TableHead className="text-right">Total</TableHead>
+                                <SortableHead column="created_at" sort={sort} onSort={toggle}>Date</SortableHead>
+                                <SortableHead column="member_id" sort={sort} onSort={toggle}>Member</SortableHead>
+                                <SortableHead column="source_type" sort={sort} onSort={toggle}>Source</SortableHead>
+                                <SortableHead column="allowance_debit_amount" sort={sort} onSort={toggle}>Allowance</SortableHead>
+                                <SortableHead column="master_fallback_amount" sort={sort} onSort={toggle}>Master</SortableHead>
+                                <SortableHead column="policy_check_result" sort={sort} onSort={toggle}>Policy</SortableHead>
+                                <SortableHead column="allowance_debit_amount" sort={sort} onSort={toggle} align="right">Total</SortableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -131,7 +132,7 @@ export default function ActivityPage() {
                                     </TableCell>
                                 </TableRow>
                             )}
-                            {filtered.map((r) => (
+                            {sorted.map((r) => (
                                 <TableRow key={r.ride_id}>
                                     <TableCell className="text-xs text-muted-foreground">
                                         {r.created_at?.slice(0, 16).replace("T", " ")}

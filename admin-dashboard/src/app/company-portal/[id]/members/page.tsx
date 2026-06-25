@@ -30,6 +30,7 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { Mail, PauseCircle, PlayCircle, UserPlus } from "lucide-react";
 
 const STATUS_COLORS: Record<CorporateMemberStatus, string> = {
@@ -72,6 +73,7 @@ export default function MembersPage() {
     const filtered = members.filter(
         (m) => filter === "all" || m.status === filter
     );
+    const { sorted, sort, toggle } = useTableSort(filtered);
 
     const onInvite = async () => {
         if (!id || !inviteEmail.trim()) return;
@@ -183,9 +185,9 @@ export default function MembersPage() {
                     <Table>
                         <TableHeader>
                             <TableRow>
-                                <TableHead>Email</TableHead>
-                                <TableHead>Role</TableHead>
-                                <TableHead>Status</TableHead>
+                                <SortableHead column="invited_email" sort={sort} onSort={toggle}>Email</SortableHead>
+                                <SortableHead column="role" sort={sort} onSort={toggle}>Role</SortableHead>
+                                <SortableHead column="status" sort={sort} onSort={toggle}>Status</SortableHead>
                                 <TableHead className="text-right">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
@@ -204,7 +206,7 @@ export default function MembersPage() {
                                     </TableCell>
                                 </TableRow>
                             )}
-                            {filtered.map((m) => (
+                            {sorted.map((m) => (
                                 <TableRow key={m.id}>
                                     <TableCell className="flex items-center gap-2">
                                         <Mail className="h-3.5 w-3.5 text-muted-foreground" />

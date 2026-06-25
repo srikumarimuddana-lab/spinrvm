@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import {
     ArrowLeft,
     Building2,
@@ -48,6 +49,8 @@ export default function KybQueuePage() {
 
     const [rejectTarget, setRejectTarget] = useState<CorporateAccount | null>(null);
     const [rejectNote, setRejectNote] = useState("");
+
+    const { sorted, sort, toggle } = useTableSort(rows);
 
     const load = async () => {
         setLoading(true);
@@ -137,12 +140,12 @@ export default function KybQueuePage() {
                     <Table>
                         <TableHeader>
                             <TableRow>
-                                <TableHead>Company</TableHead>
-                                <TableHead>Business Number</TableHead>
-                                <TableHead>Region</TableHead>
-                                <TableHead>Tier</TableHead>
-                                <TableHead>Billing Email</TableHead>
-                                <TableHead>Document</TableHead>
+                                <SortableHead column="legal_name" sort={sort} onSort={toggle}>Company</SortableHead>
+                                <SortableHead column="business_number" sort={sort} onSort={toggle}>Business Number</SortableHead>
+                                <SortableHead column="tax_region" sort={sort} onSort={toggle}>Region</SortableHead>
+                                <SortableHead column="size_tier" sort={sort} onSort={toggle}>Tier</SortableHead>
+                                <SortableHead column="billing_email" sort={sort} onSort={toggle}>Billing Email</SortableHead>
+                                <SortableHead column="kyb_document_url" sort={sort} onSort={toggle}>Document</SortableHead>
                                 <TableHead className="text-right">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
@@ -165,7 +168,7 @@ export default function KybQueuePage() {
                                     </TableCell>
                                 </TableRow>
                             ) : (
-                                rows.map((c) => (
+                                sorted.map((c) => (
                                     <TableRow key={c.id}>
                                         <TableCell className="font-medium">
                                             <div className="flex items-center gap-2">

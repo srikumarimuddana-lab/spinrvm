@@ -1,0 +1,190 @@
+"""Live Ride Activity dispatch — Phase 1 (storage + log-only).
+
+After a driver accepts, the rider app registers a push token for the ride
+(``ride_live_activities``). On each ride-state transition the backend builds the
+shared *content-state* both surfaces render and would push an update per
+platform (iOS Live Activity via APNs, Android ongoing notification via FCM).
+
+Phase 1 sends **no** push: it looks up the registered tokens, builds the
+content-state, and logs the intended dispatch so the wiring can be verified
+end-to-end before the APNs ``.p8`` path lands in Phase 3. On a terminal event it
+marks the activity rows ended so a future replica stops dispatching.
+
+Privacy: a Live Activity renders on a **locked** phone, so the content-state is
+**area-only** — never an exact address, never coordinates, only a first name and
+a vehicle label. This is stricter than the in-app rider view by design. Nothing
+PII-bearing (full name, address, coordinates, push token) is ever logged.
+
+See docs/live-ride-activity-plan.md §2–§4. Best-effort like ``_push_in_background``:
+failures are logged (``error``) and never raised into the ride request path.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+from typing import Any, Optional
+
+try:
+    from .. import db_supabase
+except ImportError:  # pragma: no cover - top-level execution fallback
+    import db_supabase  # type: ignore
+
+logger = logging.getLogger(__name__)
+
+# Lifecycle events the ride transitions map to.
+EVENT_START = "start"
+EVENT_UPDATE = "update"
+EVENT_END = "end"
+
+_TERMINAL_STATUSES = frozenset({"completed", "cancelled"})
+
+
+def _area_label(address: Optional[str]) -> Optional[str]:
+    """Coarse area (city/locality) from a full address, for the lock-screen
+    content-state. Drops house number + street so the Live Activity never shows
+    an exact address on a locked phone.
+
+    "123 Main Street, Regina, SK, S4P 3A1" -> "Regina"
+    "Regina, SK"                            -> "Regina"
+
+    Best-effort heuristic: split on commas, discard any token containing a digit
+    (house numbers, postal codes), then take the token just before the province.
+    Phase 3 may swap in the service-area name. Returns None when nothing usable.
+    """
+    if not address:
+        return None
+    parts = [p.strip() for p in address.split(",") if p.strip()]
+    # Digit-bearing tokens are house-numbered streets / postal codes — drop them
+    # entirely so a street name never leaks to the lock screen.
+    cleaned = [p for p in parts if not any(ch.isdigit() for ch in p)]
+    if not cleaned:
+        return None
+    # cleaned is typically [street?, city, province]; the city is second-to-last.
+    return cleaned[-2] if len(cleaned) >= 2 else cleaned[-1]
+
+
+def _driver_attr(driver: Any, key: str) -> Any:
+    """Read a field from a driver that may be a dict or a DriverPublicView model."""
+    if driver is None:
+        return None
+    if isinstance(driver, dict):
+        return driver.get(key)
+    return getattr(driver, key, None)
+
+
+def _first_name(name: Optional[str]) -> Optional[str]:
+    """First name only — lock-screen minimisation (matches Uber/Lyft convention)."""
+    if not name:
+        return None
+    return name.strip().split(" ")[0] or None
+
+
+def _vehicle_label(driver: Any) -> Optional[str]:
+    """Human "Silver Honda Civic · ABC 1234" so the rider can spot the car."""
+    color = _driver_attr(driver, "vehicle_color")
+    make = _driver_attr(driver, "vehicle_make")
+    model = _driver_attr(driver, "vehicle_model")
+    plate = _driver_attr(driver, "license_plate")
+    desc = " ".join(str(p) for p in (color, make, model) if p).strip()
+    if plate:
+        return f"{desc} · {plate}".strip(" ·") or None
+    return desc or None
+
+
+def _headline(status: Optional[str], *, dropoff_area: Optional[str]) -> str:
+    if status == "driver_accepted":
+        return "Driver on the way"
+    if status == "driver_arrived":
+        return "Your driver has arrived"
+    if status == "in_progress":
+        return f"On your way to {dropoff_area}" if dropoff_area else "On your way"
+    if status == "completed":
+        return "Trip complete"
+    if status == "cancelled":
+        return "Ride cancelled"
+    return "Ride update"
+
+
+def build_content_state(
+    ride: dict,
+    *,
+    driver: Any = None,
+    eta_minutes: Optional[int] = None,
+) -> dict:
+    """The single struct both platforms render. Area-only, first-name-only — no
+    exact addresses, coordinates, or full names (lock-screen safe)."""
+    status = ride.get("status")
+    pickup_area = _area_label(ride.get("pickup_address"))
+    dropoff_area = _area_label(ride.get("dropoff_address"))
+    # Prefer an explicitly-passed driver; fall back to a joined DriverPublicView.
+    driver = driver if driver is not None else ride.get("driver")
+    return {
+        "status": status,
+        "headline": _headline(status, dropoff_area=dropoff_area),
+        "eta_minutes": eta_minutes,
+        "driver_name": _first_name(_driver_attr(driver, "name")),
+        "vehicle_label": _vehicle_label(driver),
+        "pickup_area": pickup_area,
+        "dropoff_area": dropoff_area,
+        "ride_code": ride.get("code"),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+async def _active_activities(ride_id: str) -> list[dict]:
+    """Registered, not-yet-ended live activities for a ride (one per platform)."""
+    rows = await db_supabase.get_rows("ride_live_activities", {"ride_id": ride_id})
+    return [r for r in (rows or []) if not r.get("ended_at")]
+
+
+async def send_live_activity_update(
+    ride: dict,
+    event: str,
+    *,
+    driver: Any = None,
+    eta_minutes: Optional[int] = None,
+) -> None:
+    """Build the content-state and dispatch a live-activity update per platform.
+
+    Phase 1: **log-only** — no push is sent. On a terminal event the activity
+    rows are marked ended. Best-effort: never raises into the ride request path
+    (mirrors ``routes.rides._push_in_background``).
+    """
+    try:
+        ride_id = ride.get("id")
+        if not ride_id:
+            return
+        activities = await _active_activities(ride_id)
+        if not activities:
+            # No rider registered a live activity for this ride — nothing to do.
+            return
+
+        content = build_content_state(ride, driver=driver, eta_minutes=eta_minutes)
+        for act in activities:
+            # PII-safe log only: no driver name, address, coordinates, or token.
+            logger.info(
+                "live_activity dispatch (phase1 log-only)",
+                extra={
+                    "event": event,
+                    "platform": act.get("platform"),
+                    "ride_id": ride_id,
+                    "ride_status": content["status"],
+                    "headline": content["headline"],
+                    "eta_minutes": content["eta_minutes"],
+                    "pickup_area": content["pickup_area"],
+                    "dropoff_area": content["dropoff_area"],
+                    "has_driver": content["driver_name"] is not None,
+                },
+            )
+
+        if event == EVENT_END or ride.get("status") in _TERMINAL_STATUSES:
+            now = datetime.now(timezone.utc).isoformat()
+            for act in activities:
+                await db_supabase.update_one(
+                    "ride_live_activities",
+                    {"id": act["id"]},
+                    {"ended_at": now, "updated_at": now},
+                )
+    except Exception:
+        logger.error("send_live_activity_update failed", exc_info=True)

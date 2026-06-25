@@ -1244,6 +1244,44 @@ class TestGetCurrentSubscription:
 
         assert result["has_subscription"] is False
 
+    def test_expired_pass_flips_to_expired(self):
+        # Regression: a lapsed pass whose row is still status='active' (the
+        # sweeper hasn't run yet) must report expired, not active. The old code
+        # stripped tzinfo off expires_at and compared naive-vs-aware, which
+        # raised TypeError for EVERY pass (timestamptz carries an offset); the
+        # bare except swallowed it, so this expired-flip branch was dead code
+        # and the driver saw a stale "active" pass with a quota.
+        from backend.routes import drivers as drv
+
+        sub = {
+            "id": "sub_old",
+            "driver_id": DRIVER_ID,
+            "status": "active",
+            "expires_at": "2020-01-01T00:00:00Z",  # in the past
+            "rides_per_day": 4,
+        }
+
+        def get_rows_side_effect(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "driver_subscriptions":
+                return [sub]
+            return []
+
+        update = AsyncMock(return_value=sub)
+        with (
+            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers.db_supabase.update_one", update),
+        ):
+            result = asyncio.run(drv.get_current_subscription(current_user={"id": USER_ID}))
+
+        assert result["has_subscription"] is False
+        assert result["expired"] is True
+        # The lapsed row must be flipped to 'expired' in the DB.
+        update.assert_awaited_once()
+        assert update.await_args.args[0] == "driver_subscriptions"
+        assert update.await_args.args[2] == {"status": "expired"}
+
 
 # ---------------------------------------------------------------------------
 # Stripe Connect onboarding — return URL + SIN collection regression

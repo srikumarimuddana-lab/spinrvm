@@ -838,6 +838,46 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
             )
             all_drivers = []  # fail closed; the no-drivers path below schedules a retry
 
+    # Daily Spinr Pass ride-allowance filter (all areas). Mirrors the gate in
+    # DispatchService.find_candidate_drivers, but on the LIVE dispatch path:
+    # drop finite-pass drivers who've used today's rides so they don't receive
+    # an offer they'd 403 on at accept (wasting a dispatch cycle + pinging a
+    # driver who can't take it). Fails OPEN — go-online/accept still gate, so a
+    # transient read error must not drop everyone like the subscription filter.
+    if all_drivers and ride.get("service_area_id"):
+        try:
+            try:
+                from ..utils.spinr_pass import area_timezone, exhausted_driver_ids
+            except ImportError:
+                from utils.spinr_pass import area_timezone, exhausted_driver_ids  # type: ignore
+
+            _q_ids = [d["id"] for d in all_drivers]
+            _q_subs = await db_supabase.get_rows(
+                "driver_subscriptions",
+                {"driver_id": {"$in": _q_ids}, "status": "active"},
+                columns="driver_id,expires_at,rides_per_day",
+                limit=len(_q_ids),
+            )
+            if _q_subs:
+                _q_tz = await area_timezone(ride["service_area_id"])
+                _q_exhausted = await exhausted_driver_ids(_q_subs, tz=_q_tz)
+                if _q_exhausted:
+                    _q_before = len(all_drivers)
+                    all_drivers = [d for d in all_drivers if d["id"] not in _q_exhausted]
+                    logger.info(
+                        "[DISPATCH] quota filter: area=%s kept %d/%d drivers (%d quota-exhausted)",
+                        ride["service_area_id"],
+                        len(all_drivers),
+                        _q_before,
+                        len(_q_exhausted),
+                    )
+        except Exception:
+            logger.error(
+                "[DISPATCH] quota filter failed for area=%s — dispatching unfiltered by quota",
+                ride.get("service_area_id"),
+                exc_info=True,
+            )
+
     # Pure filter+rank: drops orphan/no-location/low-rated drivers and
     # attaches per-driver distance. Pure function — no I/O.
     drivers_with_distance = filter_and_rank_drivers(ride, all_drivers, algorithm, min_rating, search_radius)
@@ -5635,6 +5675,7 @@ async def rider_complete_ride(
                     f"You're now offline — your allowance resets in about {_reset_h}h."
                 ),
                 data={"type": "quota_exhausted", "driver_id": str(driver_id)},
+                target_app="driver",
             )
         except Exception:
             logger.warning("rider_complete_ride: quota push failed for driver=%s", driver_id)

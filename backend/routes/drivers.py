@@ -4801,6 +4801,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                     f"You're now offline — your allowance resets in about {_reset_h}h."
                 ),
                 data={"type": "quota_exhausted", "driver_id": str(driver["id"])},
+                target_app="driver",
             )
         except Exception:
             logger.warning("complete_ride: quota push failed for driver=%s", driver["id"])
@@ -6157,8 +6158,14 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
         from utils.spinr_pass import area_timezone, completed_today, compute_quota, hours_until  # type: ignore
 
     # Same service-area timezone the enforcement gates use, so the countdown the
-    # driver sees matches when their rides actually reset.
-    _tz = await area_timezone(driver.get("service_area_id"))
+    # driver sees matches when their rides actually reset. This is display only,
+    # so a transient lookup error degrades to the Regina default rather than 500
+    # the screen (enforcement, which must be exact, lets the error propagate).
+    try:
+        _tz = await area_timezone(driver.get("service_area_id"))
+    except Exception:
+        logger.warning("get_current_subscription: area timezone lookup failed; using default", exc_info=True)
+        _tz = None
     today_rides = await completed_today(driver["id"], tz=_tz)
     quota = compute_quota(sub.get("rides_per_day", -1), today_rides, tz=_tz)
 

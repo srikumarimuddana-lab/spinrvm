@@ -149,20 +149,20 @@ def _db():
 
 
 async def area_timezone(area_id: Optional[str]) -> Optional[str]:
-    """IANA timezone name for a service area, or ``None`` if unset/unknown.
+    """IANA timezone name for a service area, or ``None`` if not configured.
 
-    Mirrors the area-tz-with-Regina-fallback pattern used by earnings, quests,
-    and onboarding reminders (``service_areas.timezone``, migration 105). Best
-    effort — a lookup failure returns ``None`` (callers default to Regina).
+    Mirrors the area-tz pattern used by earnings, quests, and onboarding
+    reminders (``service_areas.timezone``, migration 105). Returns ``None`` only
+    when the area genuinely has no timezone set — a *lookup failure* is allowed
+    to **propagate** so the calling quota helper's fail-open/fail-closed handling
+    decides what to do, rather than silently enforcing on the wrong (Regina)
+    calendar day. (Outside Regina, e.g. Edmonton in winter, the boundary differs
+    by an hour, so a wrong fallback near midnight could mis-gate a driver.)
     """
     if not area_id:
         return None
     db = _db()
-    try:
-        area = await db.find_one("service_areas", {"id": area_id})
-    except Exception:
-        logger.warning("area_timezone lookup failed for area=%s", area_id, exc_info=True)
-        return None
+    area = await db.find_one("service_areas", {"id": area_id})
     return (area or {}).get("timezone")
 
 
@@ -404,6 +404,12 @@ async def force_offline_if_exhausted(
                 "is_available": False,
                 "updated_at": iso,
                 "last_status_changed_at": iso,
+                # Stamp durable offline intent (migration 97). intent_online()
+                # reads went_online_at/went_offline_at ("more recent wins"), and
+                # the live dispatcher's presence filter uses it — without this the
+                # driver could still read as intent-online and keep getting
+                # offers. Matches update_driver_status's go-offline write.
+                "went_offline_at": iso,
             },
         )
     except Exception:

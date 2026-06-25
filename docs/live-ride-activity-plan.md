@@ -66,29 +66,52 @@ the two OS surfaces.
   ActivityKit push budget (APNs throttles frequent Live Activity updates).
 
 ## 5. iOS work (rider app — native)
-- **Widget Extension target** (SwiftUI) `LiveRideActivity`: `ActivityAttributes`
-  (static: ride_code, areas, driver_name, vehicle_label) + `ContentState`
-  (dynamic: status, headline, eta_minutes) + Lock Screen view + Dynamic Island
-  (compact/minimal/expanded) views.
-- **Expo config plugin** `plugins/withLiveActivity.ts` to add the widget target +
-  `NSSupportsLiveActivities = true` in Info.plist + entitlements. (Use
-  `@bacons/apple-targets` or a custom pbxproj plugin; **no first-party Expo
-  support**.)
-- **JS bridge / native module** to `start / update / end` and read
-  `Activity.pushToken`. Evaluate a community lib vs a small custom module for
-  **Expo 55 / RN 0.85** compatibility (likely custom).
-- **`services/liveActivity.ts`**: start on `driver_accepted` (ride-status screen
-  / WS event), capture token, POST to backend; end on terminal state.
+
+Use **`@bacons/apple-targets`** (`npm i @bacons/apple-targets`) for the Widget
+Extension target via Continuous Native Generation. It scaffolds + links the
+Apple target through prebuild; it does **NOT** provide an ActivityKit JS bridge —
+that is a separate custom module (see below).
+
+- **5a. Widget Extension target** via `@bacons/apple-targets`:
+  - `targets/LiveRideActivity/expo-target.config.js` → `{ type: "widget" }`
+    (this is the Widget Extension that hosts the Live Activity).
+  - `targets/LiveRideActivity/*.swift` — SwiftUI: `ActivityAttributes`
+    (static: ride_code, areas, driver_name, vehicle_label) + `ContentState`
+    (dynamic: status, headline, eta_minutes), the Lock Screen view, and the
+    Dynamic Island (compact / minimal / expanded) views.
+  - `targets/LiveRideActivity/Info.plist` — `NSSupportsLiveActivities = true`.
+  - App config: add the plugin to `app.config.ts` and set `ios.appleTeamId`.
+- **5b. ActivityKit JS↔native bridge** (NOT covered by the package): a small
+  **Expo native module** (Swift, Expo Modules API) exposing `start(attributes,
+  content) → pushToken`, `update(content)`, `end()`. Lives in the main app
+  target and shares the `ActivityAttributes`/`ContentState` types with the
+  widget. (No maintained community lib is assumed compatible with Expo 55 / RN
+  0.85 — treat as custom.)
+- **5c. `services/liveActivity.ts`** (JS): on `driver_accepted` (ride-status
+  screen / WS event) call `start(...)`, capture the push token, POST it to the
+  backend; `end()` on terminal state.
 
 ## 6. Android work (rider app — native)
-- Add **`@notifee/react-native`** to the rider app (driver app already uses it —
-  mirror its channel/config).
-- **`services/rideLiveNotification.ts`**: build an **ongoing** high-importance
-  notification (channel `ride-live`, not dismissible) with status + ETA + a
-  "View"/"Call" action; update in place by id; cancel on end. (Android 16:
-  optionally promote to a "Live Update".)
+Android has no ActivityKit equivalent; there is **no `@bacons/apple-targets`
+counterpart** — the "package" here is **notifee**, and the surface is a
+notification (no widget/target to scaffold). Two tiers:
+
+- **Baseline (all Android versions) — ongoing notification:** add
+  **`@notifee/react-native`** (driver app already uses it — mirror its
+  channel/config) and build an **ongoing**, high-importance notification
+  (channel `ride-live`, not dismissible) showing status + ETA + driver/vehicle +
+  a "View"/"Call" action; update **in place by id**; cancel on end. This is the
+  practical, ships-everywhere equivalent.
+- **Android 16+ (API 36) — Live Updates / Promoted Ongoing:** the OS now has a
+  purpose-built "Live Updates" template (`Notification.ProgressStyle` + the
+  promoted-ongoing flag) for ride/delivery tracking — a status-bar chip + a
+  prominent lock-screen card, the closest analog to an iOS Live Activity. Use it
+  **when available, with graceful fallback** to the ongoing notification below
+  16. notifee may not yet expose `ProgressStyle`/promoted-ongoing, so this tier
+  likely needs a **small custom native module / raw Notification builder**.
 - **FCM data handler** (foreground + background + killed): on a `live_activity`
-  data message, create/update the ongoing notification; on `end`, cancel.
+  data message, create/update the notification; on `end`, cancel. Drives both
+  tiers from the same backend push.
 
 ## 7. Build / deploy
 - **Both platforms need a fresh native build (EAS build), not OTA** — iOS adds a

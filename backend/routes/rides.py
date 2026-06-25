@@ -2357,15 +2357,21 @@ async def create_ride(
                 detail=(rider_row or {}).get("status_reason")
                 or "Your account is currently suspended. Please contact support.",
             )
-    # Corporate-billed rides carry a corporate_account_id (or are explicitly
-    # company_allowance) — their payment is the corporate account's concern, not
-    # a personal card on file, so the card checks below don't apply. A bare
-    # work_profile flag WITHOUT a corporate_account_id is NOT corporate (it never
-    # reclassifies to company_allowance), so it must not exempt these checks:
-    # exempting on work_profile alone let a caller create a card ride with no
-    # pinned card and fall back to the stored default (Codex P1).
-    _is_corporate_billed = bool(body.corporate_account_id) or (body.payment_method or "").lower() == "company_allowance"
-    if body.payment_method == "card" and not _is_corporate_billed:
+    # Only a ride that will ACTUALLY settle against a corporate account is exempt
+    # from the personal-card checks — i.e. company_allowance, or work_profile +
+    # corporate_account_id (which is reclassified to company_allowance below and
+    # routed to settle_corporate). A bare corporate_account_id with
+    # payment_method="card" and no work_profile is NOT corporate-billed: it
+    # settles through settle_card() against the rider's card, so it must still
+    # pin one. Keying the exemption on corporate_account_id alone (an earlier
+    # attempt) re-opened the stale-default-card charge for exactly that shape —
+    # use the canonical predicate instead.
+    _corporate_billed = _is_corporate_paid(
+        payment_method=body.payment_method,
+        work_profile=body.work_profile,
+        corporate_account_id=body.corporate_account_id,
+    )
+    if body.payment_method == "card" and not _corporate_billed:
         # Demo/local mode (Stripe intentionally unconfigured) has no real Stripe
         # customers or cards; card rides settle through charge_ride's
         # "unconfigured" path (marked paid, no charge). Only enforce the

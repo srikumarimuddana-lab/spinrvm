@@ -1164,10 +1164,11 @@ async def test_create_ride_work_profile_without_corporate_account_still_requires
 
 
 @pytest.mark.anyio
-async def test_create_ride_corporate_account_exempt_from_card_requirement():
-    """P2: a corporate-tagged ride (carries corporate_account_id) is exempt from
-    the personal-card requirement — it must not be blocked for lacking a
-    payment_method_id, so it reaches the later active-ride check (409 here)."""
+async def test_create_ride_corporate_work_profile_exempt_from_card_requirement():
+    """A genuinely corporate-billed ride (work_profile + corporate_account_id,
+    reclassified to company_allowance → settle_corporate) is exempt from the
+    personal-card requirement: no payment_method_id needed, so it reaches the
+    later active-ride check (409 here)."""
     from backend.routes.rides import create_ride
     from backend.schemas import CreateRideRequest
 
@@ -1181,7 +1182,8 @@ async def test_create_ride_corporate_account_exempt_from_card_requirement():
         dropoff_address="200 Broadway Ave",
         vehicle_type_id="vt-1",
         payment_method="card",
-        corporate_account_id="corp-1",  # corporate-tagged → exempt
+        corporate_account_id="corp-1",
+        work_profile=True,  # corporate-BILLED → exempt
     )
 
     with (
@@ -1201,6 +1203,49 @@ async def test_create_ride_corporate_account_exempt_from_card_requirement():
             await create_ride(request=req, body=body, current_user=_USER)
 
     assert getattr(exc.value, "status_code", None) == 409
+
+
+@pytest.mark.anyio
+async def test_create_ride_corporate_tag_without_work_profile_still_requires_card():
+    """A bare corporate_account_id with payment_method='card' and NO work_profile
+    is NOT corporate-billed — it settles via settle_card against the rider's card,
+    so it must still pin one. Exempting on the tag alone re-opened the
+    stale-default-card charge (money audit), so this must be rejected (400)."""
+    from fastapi import HTTPException
+
+    from backend.routes.rides import create_ride
+    from backend.schemas import CreateRideRequest
+
+    req = _starlette_request(method="POST", path="/rides")
+    body = CreateRideRequest(
+        pickup_lat=52.1,
+        pickup_lng=-106.6,
+        dropoff_lat=52.2,
+        dropoff_lng=-106.7,
+        pickup_address="100 Main St",
+        dropoff_address="200 Broadway Ave",
+        vehicle_type_id="vt-1",
+        payment_method="card",
+        corporate_account_id="corp-1",  # tag only, NOT corporate-billed
+    )
+
+    with (
+        patch("backend.routes.rides.validate_ride_location"),
+        patch("backend.routes.rides.db") as mock_db,
+        patch("backend.routes.rides.db_supabase") as mock_supabase,
+        patch(
+            "backend.routes.rides.get_app_settings",
+            AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
+        ),
+    ):
+        mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active", "stripe_customer_id": "cus_1"})
+        mock_supabase.find_one = AsyncMock(return_value=None)
+
+        with pytest.raises(HTTPException) as exc:
+            await create_ride(request=req, body=body, current_user=_USER)
+
+    assert exc.value.status_code == 400
+    assert "card" in str(exc.value.detail).lower()
 
 
 # ── match_driver_to_ride ───────────────────────────────────────────────────────

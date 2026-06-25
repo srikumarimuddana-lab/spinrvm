@@ -480,6 +480,25 @@ async def test_get_cards_no_stripe_key_returns_demo_card():
 
 
 @pytest.mark.anyio
+async def test_get_cards_no_stripe_key_in_production_returns_503():
+    """In production an empty Stripe key is a misconfiguration, not demo mode —
+    never serve the demo card to a real rider; surface 503 instead."""
+    from fastapi import HTTPException
+
+    from backend.routes.payments import get_cards
+
+    with (
+        patch("backend.routes.payments.get_app_settings", new_callable=AsyncMock, return_value=_settings(False)),
+        patch("backend.routes.payments.core_settings") as mock_core,
+    ):
+        mock_core.ENV = "production"
+        with pytest.raises(HTTPException) as exc:
+            await get_cards(current_user=_USER)
+
+    assert exc.value.status_code == 503
+
+
+@pytest.mark.anyio
 async def test_get_cards_with_stripe():
     from backend.routes.payments import get_cards
 

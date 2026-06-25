@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
-  ActivityIndicator, Platform, Linking, Alert,
+  ActivityIndicator, Platform, Alert,
 } from 'react-native';
 import * as ExpoLinking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
@@ -66,40 +66,14 @@ export default function SubscriptionScreen() {
 
   useEffect(() => { loadData(); }, []);
 
-  // Handle deep-link return from Stripe Checkout.
-  // URL format: spinr-driver://subscription/success?session_id=cs_xxx
-  useEffect(() => {
-    const handleUrl = async (event: { url: string }) => {
-      const url = event.url;
-      if (!url.includes('subscription/success')) return;
-
-      const match = url.match(/session_id=([^&]+)/);
-      if (!match) return;
-      const sessionId = match[1];
-
-      setLoading(true);
-      try {
-        const res = await api.get<{ status?: string }>(`/drivers/subscription/verify-session?session_id=${sessionId}`);
-        if (res.data?.status === 'active') {
-          showToast('success', 'Payment Successful!', 'Your Spinr Pass is now active. Go online and start earning!');
-        } else {
-          showToast('info', 'Processing...', 'Your payment is being confirmed. This may take a moment.');
-        }
-      } catch (e) {
-        console.log('[Subscription] verify-session error:', e);
-      }
-      loadData();
-    };
-
-    const sub = Linking.addEventListener('url', handleUrl);
-
-    // Also check if the app was opened via the URL (cold start)
-    Linking.getInitialURL().then((url) => {
-      if (url) handleUrl({ url });
-    });
-
-    return () => sub.remove();
-  }, []);
+  // The Stripe-checkout deep-link return (spinr-driver://subscription/success)
+  // is owned by the dedicated app/subscription/success.tsx landing screen,
+  // which verifies the session and routes back here with fresh data. The
+  // in-app-browser happy path is handled inline in doSubscribe() via
+  // WebBrowser.openAuthSessionAsync. A `Linking` listener here would be a third,
+  // overlapping path that double-verified and double-toasted on the Android
+  // Custom-Tab case where the OS dispatches the deep link to the app, so it was
+  // removed.
 
   const loadData = async () => {
     setLoading(true);

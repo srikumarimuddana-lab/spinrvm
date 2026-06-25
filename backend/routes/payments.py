@@ -539,11 +539,18 @@ async def get_cards(request: Request = None, current_user: dict = Depends(get_cu
     stripe_secret = settings.get("stripe_secret_key", "")
 
     if not stripe_secret:
-        # Demo mode (Stripe intentionally unconfigured for local/staging):
-        # return a single selectable demo card so the booking flow has a payment
-        # method to attach. Settlement then goes through charge_ride's
-        # "unconfigured" path, which marks the ride paid without a real charge.
-        # Not reachable in production — config fails fast on a missing Stripe key.
+        # The Stripe key lives in the app_settings DB table (not env), so startup
+        # cannot fail-fast on it. In production an empty key is a misconfiguration,
+        # NOT demo mode — never hand a real rider the demo card (a pm_demo_card
+        # would later fail at settlement once the key is restored). Surface 503 so
+        # the client retries and ops notice.
+        if core_settings.ENV.lower() == "production":
+            logger.error("get_cards: stripe_secret_key empty in production — refusing to serve demo card")
+            raise HTTPException(status_code=503, detail="Payments temporarily unavailable. Please try again.")
+        # Demo/local/staging mode (Stripe intentionally unconfigured): return a
+        # single selectable demo card so the booking flow has a payment method to
+        # attach. Settlement goes through charge_ride's "unconfigured" path, which
+        # marks the ride paid without a real charge.
         return [
             {
                 "id": "pm_demo_card",

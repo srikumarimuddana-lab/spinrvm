@@ -15,6 +15,7 @@ import { Pagination } from "@/components/ui/pagination";
 import { Flag, Search, Plus, Trash2, Eye, RefreshCw, EyeOff, Users, Car } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { useServiceAreas, ServiceAreaFilter, ServiceAreaSelect } from "../_components/service-area-select";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { useToast } from "@/components/ui/use-toast";
 import {
     AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -66,6 +67,7 @@ export default function FlagsTab() {
         const q = search.toLowerCase();
         return f.reason?.toLowerCase().includes(q) || f.description?.toLowerCase().includes(q) || f.target_id?.toLowerCase().includes(q);
     });
+    const { sorted, sort, toggle } = useTableSort(filtered);
     const areaName = (id: string) => areas.find((a) => a.id === id)?.name || "";
 
     const handleCreate = async () => {
@@ -96,8 +98,8 @@ export default function FlagsTab() {
             <Card><CardContent className="p-0">
                 {loading ? <div className="flex justify-center p-12"><div className="h-7 w-7 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>
                 : filtered.length === 0 ? <div className="text-center py-12 text-muted-foreground text-sm">No flags found.</div>
-                : <Table><TableHeader><TableRow><TableHead>Target</TableHead><TableHead>Reason</TableHead><TableHead>Area</TableHead><TableHead>Description</TableHead><TableHead>Status</TableHead><TableHead>Date</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
-                    <TableBody>{filtered.map((f) => (
+                : <Table><TableHeader><TableRow><SortableHead column="target_type" sort={sort} onSort={toggle}>Target</SortableHead><SortableHead column="reason" sort={sort} onSort={toggle}>Reason</SortableHead><SortableHead column="service_area_id" sort={sort} onSort={toggle}>Area</SortableHead><SortableHead column="description" sort={sort} onSort={toggle}>Description</SortableHead><SortableHead column="is_active" sort={sort} onSort={toggle}>Status</SortableHead><SortableHead column="created_at" sort={sort} onSort={toggle}>Date</SortableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
+                    <TableBody>{sorted.map((f) => (
                         <TableRow key={f.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelected(f)}>
                             <TableCell><div className="flex items-center gap-1.5">{f.target_type === "rider" ? <Users className="h-3.5 w-3.5 text-blue-500" /> : <Car className="h-3.5 w-3.5 text-emerald-500" />}<span className="text-sm capitalize">{f.target_type}</span></div></TableCell>
                             <TableCell><Badge variant="outline" className="text-[10px]">{f.reason?.replace(/_/g, " ") || "other"}</Badge></TableCell>

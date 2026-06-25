@@ -16,6 +16,7 @@ import {
 import {
     Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { HelpCircle, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { getFaqs, createFaq, updateFaq, deleteFaq } from "@/lib/api";
 
@@ -99,6 +100,8 @@ export default function FaqsPage() {
         const matchAudience = audienceFilter === "all" || f.audience === audienceFilter;
         return matchSearch && matchAudience;
     });
+
+    const { sorted, sort, toggle } = useTableSort(filtered);
 
     function openCreate() {
         setEditTarget(null);
@@ -206,10 +209,10 @@ export default function FaqsPage() {
                 <Table>
                     <TableHeader>
                         <TableRow className="bg-muted/40">
-                            <TableHead className="w-[40%]">Question</TableHead>
-                            <TableHead>Category</TableHead>
-                            <TableHead>Audience</TableHead>
-                            <TableHead>Status</TableHead>
+                            <SortableHead column="question" sort={sort} onSort={toggle} className="w-[40%]">Question</SortableHead>
+                            <SortableHead column="category" sort={sort} onSort={toggle}>Category</SortableHead>
+                            <SortableHead column="audience" sort={sort} onSort={toggle}>Audience</SortableHead>
+                            <SortableHead column="is_active" sort={sort} onSort={toggle}>Status</SortableHead>
                             <TableHead className="text-right">Actions</TableHead>
                         </TableRow>
                     </TableHeader>
@@ -227,7 +230,7 @@ export default function FaqsPage() {
                                 </TableCell>
                             </TableRow>
                         ) : (
-                            filtered.map((faq) => (
+                            sorted.map((faq) => (
                                 <TableRow key={faq.id}>
                                     <TableCell className="font-medium max-w-xs truncate" title={faq.question}>
                                         {faq.question}

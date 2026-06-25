@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { Download, Car, CreditCard, Users, TrendingUp, TrendingDown, DollarSign, UserPlus, Clock, MapPin, X, GitCompareArrows, Wallet, CheckCircle, AlertTriangle, Percent, Receipt, UserCheck, XCircle, Ticket, Zap, Landmark, Undo2, Filter, Hourglass, Activity, Gift, ArrowRight } from "lucide-react";
 import { getPayouts, getPayoutStats, getPayoutsOverview, retryPayout, bulkRetryPayouts, closePayoutPeriod, type PayoutsOverview } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
@@ -609,6 +610,10 @@ function PayoutsOpsQueues({ overview }: { overview: PayoutsOverview }) {
     const { failure_reasons, stuck_over_48h, blocked_drivers, top_drivers, at_risk_drivers } = overview;
     const hasAnyHealth = stuck_over_48h.count > 0 || blocked_drivers.count > 0 || failure_reasons.length > 0;
 
+    const { sorted: sortedFailureReasons, sort: frSort, toggle: frToggle } = useTableSort(failure_reasons);
+    const { sorted: sortedAtRisk, sort: arSort, toggle: arToggle } = useTableSort(at_risk_drivers);
+    const { sorted: sortedTopDrivers, sort: tdSort, toggle: tdToggle } = useTableSort(top_drivers);
+
     return (
         <div className="space-y-4">
             <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
@@ -684,13 +689,13 @@ function PayoutsOpsQueues({ overview }: { overview: PayoutsOverview }) {
                             <Table>
                                 <TableHeader>
                                     <TableRow>
-                                        <TableHead className="text-[11px] uppercase tracking-wide h-9">Reason</TableHead>
-                                        <TableHead className="text-[11px] uppercase tracking-wide h-9 text-right">Count</TableHead>
-                                        <TableHead className="text-[11px] uppercase tracking-wide h-9 text-right">Amount</TableHead>
+                                        <SortableHead column="reason" sort={frSort} onSort={frToggle} className="text-[11px] uppercase tracking-wide h-9">Reason</SortableHead>
+                                        <SortableHead column="count" sort={frSort} onSort={frToggle} align="right" className="text-[11px] uppercase tracking-wide h-9">Count</SortableHead>
+                                        <SortableHead column="amount" sort={frSort} onSort={frToggle} align="right" className="text-[11px] uppercase tracking-wide h-9">Amount</SortableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {failure_reasons.map((r) => (
+                                    {sortedFailureReasons.map((r) => (
                                         <TableRow key={r.reason}>
                                             <TableCell className="text-xs font-mono truncate max-w-[280px]" title={r.reason}>{r.reason}</TableCell>
                                             <TableCell className="text-xs text-right tabular-nums font-semibold">{r.count}</TableCell>
@@ -723,13 +728,13 @@ function PayoutsOpsQueues({ overview }: { overview: PayoutsOverview }) {
                             <Table>
                                 <TableHeader>
                                     <TableRow>
-                                        <TableHead className="text-[11px] uppercase tracking-wide h-9">Driver</TableHead>
-                                        <TableHead className="text-[11px] uppercase tracking-wide h-9 text-right">Failures</TableHead>
-                                        <TableHead className="text-[11px] uppercase tracking-wide h-9">Last reason</TableHead>
+                                        <SortableHead column="name" sort={arSort} onSort={arToggle} className="text-[11px] uppercase tracking-wide h-9">Driver</SortableHead>
+                                        <SortableHead column="failure_count" sort={arSort} onSort={arToggle} align="right" className="text-[11px] uppercase tracking-wide h-9">Failures</SortableHead>
+                                        <SortableHead column="last_reason" sort={arSort} onSort={arToggle} className="text-[11px] uppercase tracking-wide h-9">Last reason</SortableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {at_risk_drivers.map((d) => (
+                                    {sortedAtRisk.map((d) => (
                                         <TableRow key={d.driver_id}>
                                             <TableCell className="text-xs">
                                                 <a
@@ -774,13 +779,13 @@ function PayoutsOpsQueues({ overview }: { overview: PayoutsOverview }) {
                             <TableHeader>
                                 <TableRow>
                                     <TableHead className="text-[11px] uppercase tracking-wide h-9">#</TableHead>
-                                    <TableHead className="text-[11px] uppercase tracking-wide h-9">Driver</TableHead>
-                                    <TableHead className="text-[11px] uppercase tracking-wide h-9 text-right">Payouts</TableHead>
-                                    <TableHead className="text-[11px] uppercase tracking-wide h-9 text-right">Total</TableHead>
+                                    <SortableHead column="name" sort={tdSort} onSort={tdToggle} className="text-[11px] uppercase tracking-wide h-9">Driver</SortableHead>
+                                    <SortableHead column="payout_count" sort={tdSort} onSort={tdToggle} align="right" className="text-[11px] uppercase tracking-wide h-9">Payouts</SortableHead>
+                                    <SortableHead column="amount" sort={tdSort} onSort={tdToggle} align="right" className="text-[11px] uppercase tracking-wide h-9">Total</SortableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {top_drivers.map((d, i) => (
+                                {sortedTopDrivers.map((d, i) => (
                                     <TableRow key={d.driver_id}>
                                         <TableCell className="text-xs text-muted-foreground font-mono">{i + 1}</TableCell>
                                         <TableCell className="text-xs">
@@ -849,6 +854,9 @@ function PayoutsCompliance({ overview, onClosed }: { overview: PayoutsOverview; 
     };
 
     const totalBucketed = t4a_snapshot.drivers_with_earnings;
+
+    // Recent closures table — sort the already-sliced (latest 6) rows client-side.
+    const { sorted: sortedLocks, sort: lockSort, toggle: lockToggle } = useTableSort(period_locks.slice(0, 6));
 
     return (
         <div className="space-y-4">
@@ -973,13 +981,13 @@ function PayoutsCompliance({ overview, onClosed }: { overview: PayoutsOverview; 
                                 <Table>
                                     <TableHeader>
                                         <TableRow>
-                                            <TableHead className="text-[11px] uppercase tracking-wide h-9">Period</TableHead>
-                                            <TableHead className="text-[11px] uppercase tracking-wide h-9">Closed at</TableHead>
-                                            <TableHead className="text-[11px] uppercase tracking-wide h-9">By</TableHead>
+                                            <SortableHead column="period" sort={lockSort} onSort={lockToggle} className="text-[11px] uppercase tracking-wide h-9">Period</SortableHead>
+                                            <SortableHead column="closed_at" sort={lockSort} onSort={lockToggle} className="text-[11px] uppercase tracking-wide h-9">Closed at</SortableHead>
+                                            <SortableHead column="closed_by" sort={lockSort} onSort={lockToggle} className="text-[11px] uppercase tracking-wide h-9">By</SortableHead>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
-                                        {period_locks.slice(0, 6).map((lock) => (
+                                        {sortedLocks.map((lock) => (
                                             <TableRow key={`${lock.period}-${lock.closed_at}`}>
                                                 <TableCell className="text-xs font-medium">{fmtPeriodKey(lock.period)}</TableCell>
                                                 <TableCell className="text-xs text-muted-foreground">{formatDate(lock.closed_at)}</TableCell>
@@ -1071,6 +1079,9 @@ function RideEarningsTab() {
         { totalFare: 0, driverEarnings: 0, adminEarnings: 0, tips: 0 }
     );
 
+    // Client-side sort of the already date/area-filtered ride feed.
+    const { sorted: sortedRides, sort: ridesSort, toggle: ridesToggle } = useTableSort(rides);
+
     return (
         <div className="space-y-6">
             <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -1158,21 +1169,21 @@ function RideEarningsTab() {
                         <Table>
                             <TableHeader>
                                 <TableRow>
-                                    <TableHead className="text-[11px] uppercase tracking-wide">Completed</TableHead>
-                                    <TableHead className="text-[11px] uppercase tracking-wide">Ride</TableHead>
-                                    <TableHead className="text-[11px] uppercase tracking-wide">Driver</TableHead>
-                                    <TableHead className="text-[11px] uppercase tracking-wide">Rider</TableHead>
-                                    <TableHead className="text-[11px] uppercase tracking-wide text-right">Fare</TableHead>
-                                    <TableHead className="text-[11px] uppercase tracking-wide text-right">Driver</TableHead>
-                                    <TableHead className="text-[11px] uppercase tracking-wide text-right">Platform</TableHead>
-                                    <TableHead className="text-[11px] uppercase tracking-wide text-right">Tip</TableHead>
-                                    <TableHead className="text-[11px] uppercase tracking-wide">Stripe</TableHead>
+                                    <SortableHead column="completed_at" sort={ridesSort} onSort={ridesToggle} className="text-[11px] uppercase tracking-wide">Completed</SortableHead>
+                                    <SortableHead column="ride_code" sort={ridesSort} onSort={ridesToggle} className="text-[11px] uppercase tracking-wide">Ride</SortableHead>
+                                    <SortableHead column="driver_name" sort={ridesSort} onSort={ridesToggle} className="text-[11px] uppercase tracking-wide">Driver</SortableHead>
+                                    <SortableHead column="rider_name" sort={ridesSort} onSort={ridesToggle} className="text-[11px] uppercase tracking-wide">Rider</SortableHead>
+                                    <SortableHead column="total_fare" sort={ridesSort} onSort={ridesToggle} align="right" className="text-[11px] uppercase tracking-wide">Fare</SortableHead>
+                                    <SortableHead column="driver_earnings" sort={ridesSort} onSort={ridesToggle} align="right" className="text-[11px] uppercase tracking-wide">Driver</SortableHead>
+                                    <SortableHead column="admin_earnings" sort={ridesSort} onSort={ridesToggle} align="right" className="text-[11px] uppercase tracking-wide">Platform</SortableHead>
+                                    <SortableHead column="tip_amount" sort={ridesSort} onSort={ridesToggle} align="right" className="text-[11px] uppercase tracking-wide">Tip</SortableHead>
+                                    <SortableHead column="stripe_charge_id" sort={ridesSort} onSort={ridesToggle} className="text-[11px] uppercase tracking-wide">Stripe</SortableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {rides.length === 0 ? (
+                                {sortedRides.length === 0 ? (
                                     <TableRow><TableCell colSpan={9} className="text-center text-muted-foreground py-12">No rides in this date range.</TableCell></TableRow>
-                                ) : rides.map((r) => {
+                                ) : sortedRides.map((r) => {
                                     const code = r.ride_code ? r.ride_code.toLowerCase() : `#${r.ride_id.slice(0, 8)}`;
                                     return (
                                         <TableRow key={r.ride_id}>
@@ -1275,6 +1286,10 @@ function SpinrPassRevenueTab() {
     const planBreakdown = data?.plan_breakdown || [];
     const revenueChart = data?.charts?.daily_revenue || [];
     const subsChart = data?.charts?.daily_subscribers || [];
+
+    // Client-side sort for the plan-breakdown + transactions tables.
+    const { sorted: sortedPlanBreakdown, sort: planSort, toggle: planToggle } = useTableSort<any>(planBreakdown);
+    const { sorted: sortedTransactions, sort: txSort, toggle: txToggle } = useTableSort<any>(transactions);
 
     // Build merged comparison chart data
     const buildCompareChart = (key: "daily_revenue" | "daily_subscribers", valueKey: string) => {
@@ -1513,11 +1528,11 @@ function SpinrPassRevenueTab() {
                             <CardContent className="p-0">
                                 <Table>
                                     <TableHeader><TableRow>
-                                        <TableHead>Plan</TableHead><TableHead className="text-right">Subscribers</TableHead>
-                                        <TableHead className="text-right">Active</TableHead><TableHead className="text-right">Revenue</TableHead>
+                                        <SortableHead column="name" sort={planSort} onSort={planToggle}>Plan</SortableHead><SortableHead column="count" sort={planSort} onSort={planToggle} align="right">Subscribers</SortableHead>
+                                        <SortableHead column="active" sort={planSort} onSort={planToggle} align="right">Active</SortableHead><SortableHead column="revenue" sort={planSort} onSort={planToggle} align="right">Revenue</SortableHead>
                                     </TableRow></TableHeader>
                                     <TableBody>
-                                        {planBreakdown.map((p: any) => (
+                                        {sortedPlanBreakdown.map((p: any) => (
                                             <TableRow key={p.plan_id}>
                                                 <TableCell className="font-semibold">{p.name}</TableCell>
                                                 <TableCell className="text-right">{p.count}</TableCell>
@@ -1539,13 +1554,13 @@ function SpinrPassRevenueTab() {
                         <CardContent className="p-0">
                             <Table>
                                 <TableHeader><TableRow>
-                                    <TableHead>Driver</TableHead><TableHead>Plan</TableHead><TableHead>Amount</TableHead>
-                                    <TableHead>Status</TableHead><TableHead>Started</TableHead><TableHead>Expires</TableHead>
+                                    <SortableHead column="driver_name" sort={txSort} onSort={txToggle}>Driver</SortableHead><SortableHead column="plan_name" sort={txSort} onSort={txToggle}>Plan</SortableHead><SortableHead column="price" sort={txSort} onSort={txToggle}>Amount</SortableHead>
+                                    <SortableHead column="status" sort={txSort} onSort={txToggle}>Status</SortableHead><SortableHead column="started_at" sort={txSort} onSort={txToggle}>Started</SortableHead><SortableHead column="expires_at" sort={txSort} onSort={txToggle}>Expires</SortableHead>
                                 </TableRow></TableHeader>
                                 <TableBody>
-                                    {transactions.length === 0 ? (
+                                    {sortedTransactions.length === 0 ? (
                                         <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-12">No subscription transactions in this period.</TableCell></TableRow>
-                                    ) : transactions.map((t: any) => (
+                                    ) : sortedTransactions.map((t: any) => (
                                         <TableRow key={t.id}>
                                             <TableCell className="font-medium">{t.driver_name}</TableCell>
                                             <TableCell>{t.plan_name}</TableCell>
@@ -1694,6 +1709,9 @@ function PayoutsTab() {
 
     const filtered = statusFilter === "all" ? payouts : payouts.filter(p => p.status === statusFilter);
 
+    // Client-side sort of the already status-filtered payout list.
+    const { sorted: sortedFiltered, sort: payoutsSort, toggle: payoutsToggle } = useTableSort<any>(filtered);
+
     const statusBadge = (s: string) => {
         if (s === "completed") return "bg-emerald-500/15 text-emerald-600";
         if (s === "pending") return "bg-amber-500/15 text-amber-600";
@@ -1784,18 +1802,18 @@ function PayoutsTab() {
                     <Table>
                         <TableHeader>
                             <TableRow>
-                                <TableHead>Driver</TableHead>
-                                <TableHead>Amount</TableHead>
-                                <TableHead>Status</TableHead>
-                                <TableHead>Bank</TableHead>
-                                <TableHead>Requested</TableHead>
+                                <SortableHead column="driver_name" sort={payoutsSort} onSort={payoutsToggle}>Driver</SortableHead>
+                                <SortableHead column="amount" sort={payoutsSort} onSort={payoutsToggle}>Amount</SortableHead>
+                                <SortableHead column="status" sort={payoutsSort} onSort={payoutsToggle}>Status</SortableHead>
+                                <SortableHead column="bank_name" sort={payoutsSort} onSort={payoutsToggle}>Bank</SortableHead>
+                                <SortableHead column="created_at" sort={payoutsSort} onSort={payoutsToggle}>Requested</SortableHead>
                                 <TableHead className="text-right">Action</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
-                            {filtered.length === 0 ? (
+                            {sortedFiltered.length === 0 ? (
                                 <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">No payouts found</TableCell></TableRow>
-                            ) : filtered.map((p: any) => {
+                            ) : sortedFiltered.map((p: any) => {
                                 const isRetryable = p.status === "failed" || p.status === "cancelled";
                                 const isRetrying = retryingId === p.id;
                                 return (

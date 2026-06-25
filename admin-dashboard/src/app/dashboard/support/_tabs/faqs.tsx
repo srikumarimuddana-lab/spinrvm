@@ -12,6 +12,7 @@ import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { Search, Plus, Pencil, Trash2, RefreshCw } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { useToast } from "@/components/ui/use-toast";
@@ -58,6 +59,7 @@ export default function FaqsTab() {
         const q = search.toLowerCase();
         return i.question?.toLowerCase().includes(q) || i.answer?.toLowerCase().includes(q);
     });
+    const { sorted, sort, toggle } = useTableSort(filtered);
 
     const openCreate = () => { setEditing(null); setForm(EMPTY); setDialogOpen(true); };
     const openEdit = (item: any) => {
@@ -113,8 +115,8 @@ export default function FaqsTab() {
             <Card><CardContent className="p-0">
                 {loading ? <div className="flex justify-center p-12"><div className="h-7 w-7 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>
                 : filtered.length === 0 ? <div className="text-center py-12 text-muted-foreground text-sm">No FAQs found.</div>
-                : <Table><TableHeader><TableRow><TableHead>Question</TableHead><TableHead>Category</TableHead><TableHead>Audience</TableHead><TableHead>Status</TableHead><TableHead>Updated</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
-                    <TableBody>{filtered.map((item) => {
+                : <Table><TableHeader><TableRow><SortableHead column="question" sort={sort} onSort={toggle}>Question</SortableHead><SortableHead column="category" sort={sort} onSort={toggle}>Category</SortableHead><SortableHead column="audience" sort={sort} onSort={toggle}>Audience</SortableHead><SortableHead column="is_active" sort={sort} onSort={toggle}>Status</SortableHead><SortableHead column="updated_at" sort={sort} onSort={toggle}>Updated</SortableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
+                    <TableBody>{sorted.map((item) => {
                         const aud = item.audience || "both";
                         return (
                             <TableRow key={item.id}>

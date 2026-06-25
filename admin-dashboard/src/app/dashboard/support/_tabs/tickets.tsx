@@ -16,6 +16,7 @@ import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { Pagination } from "@/components/ui/pagination";
 import { MessageSquare, CheckCircle, Plus, Trash2, Pencil, Send, Search, RefreshCw, HelpCircle } from "lucide-react";
 import { useServiceAreas, ServiceAreaFilter, ServiceAreaSelect } from "../_components/service-area-select";
@@ -92,6 +93,7 @@ function TicketsList() {
         const q = search.toLowerCase();
         return t.subject?.toLowerCase().includes(q) || t.user_name?.toLowerCase().includes(q);
     });
+    const { sorted, sort, toggle } = useTableSort(filtered);
 
     const reset = () => { setForm({ subject: "", category: "general", priority: "medium", message: "", user_name: "", user_email: "", service_area_id: "" }); setEditing(null); };
 
@@ -126,8 +128,8 @@ function TicketsList() {
                 <Card><CardContent className="p-0">
                     {loading ? <div className="flex justify-center p-12"><div className="h-7 w-7 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>
                     : filtered.length === 0 ? <div className="text-center py-12 text-muted-foreground text-sm">No tickets found.</div>
-                    : <Table><TableHeader><TableRow><TableHead>Subject</TableHead><TableHead>Category</TableHead><TableHead>Area</TableHead><TableHead>Priority</TableHead><TableHead>Status</TableHead><TableHead>Date</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
-                        <TableBody>{filtered.map((t) => (
+                    : <Table><TableHeader><TableRow><SortableHead column="subject" sort={sort} onSort={toggle}>Subject</SortableHead><SortableHead column="category" sort={sort} onSort={toggle}>Category</SortableHead><SortableHead column="service_area_id" sort={sort} onSort={toggle}>Area</SortableHead><SortableHead column="priority" sort={sort} onSort={toggle}>Priority</SortableHead><SortableHead column="status" sort={sort} onSort={toggle}>Status</SortableHead><SortableHead column="created_at" sort={sort} onSort={toggle}>Date</SortableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
+                        <TableBody>{sorted.map((t) => (
                             <TableRow key={t.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelected(t)}>
                                 <TableCell className="font-medium max-w-[160px] truncate text-sm">{t.subject}</TableCell>
                                 <TableCell className="text-xs text-muted-foreground capitalize">{t.category || "general"}</TableCell>
@@ -228,14 +230,16 @@ function FaqsList() {
 
     const handleSave = async () => { try { if (editing) await updateFaq(editing.id, form); else await createFaq(form); setDialogOpen(false); setEditing(null); setForm({ question: "", answer: "", category: "" }); load(); } catch {} };
 
+    const { sorted, sort, toggle } = useTableSort(faqs);
+
     return (
         <div className="space-y-4">
             <div className="flex justify-end"><Button size="sm" onClick={() => { setEditing(null); setForm({ question: "", answer: "", category: "" }); setDialogOpen(true); }}><Plus className="mr-1.5 h-3.5 w-3.5" />Add FAQ</Button></div>
             <Card><CardContent className="p-0">
                 {loading ? <div className="flex justify-center p-12"><div className="h-7 w-7 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>
                 : faqs.length === 0 ? <div className="text-center py-12 text-muted-foreground text-sm">No FAQs yet.</div>
-                : <Table><TableHeader><TableRow><TableHead>Question</TableHead><TableHead>Category</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
-                    <TableBody>{faqs.map((f) => (
+                : <Table><TableHeader><TableRow><SortableHead column="question" sort={sort} onSort={toggle}>Question</SortableHead><SortableHead column="category" sort={sort} onSort={toggle}>Category</SortableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
+                    <TableBody>{sorted.map((f) => (
                         <TableRow key={f.id}><TableCell className="font-medium max-w-[280px] truncate text-sm">{f.question}</TableCell><TableCell className="text-xs text-muted-foreground">{f.category || "General"}</TableCell>
                             <TableCell className="text-right"><div className="flex justify-end gap-0.5">
                                 <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setEditing(f); setForm({ question: f.question || "", answer: f.answer || "", category: f.category || "" }); setDialogOpen(true); }}><Pencil className="h-3.5 w-3.5" /></Button>

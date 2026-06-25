@@ -34,7 +34,8 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
-import { Inbox, ChevronLeft, ChevronRight, RefreshCw, Search, ArrowUp, ArrowDown, Plus, X } from "lucide-react";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
+import { Inbox, ChevronLeft, ChevronRight, RefreshCw, Search, Plus, X } from "lucide-react";
 
 const STATUSES = ["All", "Open", "On Hold", "Escalated", "Closed"];
 const PRIORITIES = ["All", "Low", "Medium", "High", "Urgent"];
@@ -74,9 +75,12 @@ export default function TicketListPage() {
     const [channel, setChannel] = useState("All");
     const [assignee, setAssignee] = useState("all");
 
-    // Sorting + pagination.
-    const [sortField, setSortField] = useState("createdTime");
-    const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
+    // Server-side default sort order for the loaded page (newest first); column
+    // headers re-sort the loaded rows client-side via useTableSort.
+    const sortField = "createdTime";
+    const sortDir: "desc" | "asc" = "desc";
+
+    // Pagination.
     const [pageSize, setPageSize] = useState(25);
     const [page, setPage] = useState(0);
 
@@ -182,27 +186,10 @@ export default function TicketListPage() {
         });
     }, [tickets, fromDate, toDate]);
 
+    const { sorted, sort, toggle } = useTableSort(shown);
+
     const runSearch = () => { setPage(0); setSearchQ(refine.trim()); };
     const clearSearch = () => { setRefine(""); setSearchQ(""); setPage(0); };
-
-    const toggleSort = (field: string) => {
-        setPage(0);
-        if (sortField === field) {
-            setSortDir((d) => (d === "desc" ? "asc" : "desc"));
-        } else {
-            setSortField(field);
-            setSortDir("desc");
-        }
-    };
-
-    const SortHead = ({ field, label }: { field: string; label: string }) => (
-        <TableHead>
-            <button className="flex items-center gap-1 hover:text-foreground" onClick={() => toggleSort(field)}>
-                {label}
-                {sortField === field && (sortDir === "desc" ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3" />)}
-            </button>
-        </TableHead>
-    );
 
     if (!allowed) return null;
 
@@ -338,14 +325,14 @@ export default function TicketListPage() {
                 <Table>
                     <TableHeader>
                         <TableRow>
-                            <TableHead className="w-20">#</TableHead>
-                            <TableHead>Subject</TableHead>
-                            <TableHead>Requester</TableHead>
-                            <TableHead>Category</TableHead>
-                            <TableHead>Priority</TableHead>
-                            <TableHead>Assignee</TableHead>
-                            <SortHead field="createdTime" label="Created" />
-                            <TableHead>Status</TableHead>
+                            <SortableHead column="ticketNumber" sort={sort} onSort={toggle} className="w-20">#</SortableHead>
+                            <SortableHead column="subject" sort={sort} onSort={toggle}>Subject</SortableHead>
+                            <SortableHead column="contact.email" sort={sort} onSort={toggle}>Requester</SortableHead>
+                            <SortableHead column="category" sort={sort} onSort={toggle}>Category</SortableHead>
+                            <SortableHead column="priority" sort={sort} onSort={toggle}>Priority</SortableHead>
+                            <SortableHead column="assignee.firstName" sort={sort} onSort={toggle}>Assignee</SortableHead>
+                            <SortableHead column="createdTime" sort={sort} onSort={toggle}>Created</SortableHead>
+                            <SortableHead column="status" sort={sort} onSort={toggle}>Status</SortableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -355,7 +342,7 @@ export default function TicketListPage() {
                         {!loading && shown.length === 0 && (
                             <TableRow><TableCell colSpan={8} className="py-8 text-center text-muted-foreground">No tickets found.</TableCell></TableRow>
                         )}
-                        {!loading && shown.map((t) => (
+                        {!loading && sorted.map((t) => (
                             <TableRow key={t.id} className="cursor-pointer">
                                 <TableCell>
                                     <Link href={`/dashboard/support-tickets/tickets/${t.id}`} className="font-mono text-sm text-blue-600">

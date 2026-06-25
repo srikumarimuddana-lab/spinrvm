@@ -1285,18 +1285,29 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       } catch (err: any) {
         setIsOnline(!next);
 
-        // 402 = no subscription
-        if (err.response?.status === 402) {
+        const status = err.response?.status;
+        const detail = err.response?.data?.detail;
+        // ErrorCode.DRIVER_QUOTA_EXCEEDED (backend utils/error_handling.py)
+        const errCode = err.response?.data?.error?.code;
+
+        if (status === 402) {
+          // No / expired Spinr Pass while the area requires one. Toast on every
+          // attempt so the reason is unmissable, plus an alert with a Subscribe
+          // shortcut.
+          showToast('error', "Spinr Pass required", detail || "Activate your Spinr Pass to go online.");
           showAlert(
             "Spinr Pass Required",
-            err.response?.data?.detail || "You need an active subscription to go online.",
+            detail || "You need an active subscription to go online.",
             [
               { text: "Subscribe", onPress: () => router.push('/driver/subscription' as any) },
               { text: "Cancel", style: "cancel" },
             ]
           );
+        } else if (status === 403 && errCode === 5006) {
+          // Daily Spinr Pass ride allowance used up — resets at local midnight.
+          showToast('info', "Daily ride limit reached", detail || "You've used today's Spinr Pass rides. They reset at midnight.");
         } else {
-          showToast('error', "Cannot Go Online", err.response?.data?.detail || "Failed to update status. Please try again.");
+          showToast('error', "Cannot Go Online", detail || "Failed to update status. Please try again.");
         }
         return;
       }

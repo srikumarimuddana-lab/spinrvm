@@ -147,6 +147,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         '@react-native-firebase/messaging',
         '@react-native-firebase/crashlytics',
         '@react-native-firebase/app-check',
+        // Notifee renders the ongoing "live ride" notification (Android). Declares
+        // POST_NOTIFICATIONS for Android 13+; see plugins/withNotifeePermissions.js.
+        './plugins/withNotifeePermissions',
         // SDK 55 / RN 0.85.2 androidx.* deps require compileSdk 36 (build tools
         // 36.0.0 provisioned by EAS). LogRocket requires minSdkVersion 25.
         // Kotlin pinned to 2.2.21 — Option C strategy. See docs/android-build-strategy.md

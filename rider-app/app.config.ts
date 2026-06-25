@@ -159,7 +159,13 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 compileSdkVersion: 36,
                 targetSdkVersion: 35,
                 kotlinVersion: '2.2.21',
-            }
+            },
+            // SPIKE (Phase 0, live-ride-activity): Voltra Live Activities require
+            // iOS 16.4+. Raises the iOS compile floor for the Voltra target.
+            // Production decision pending — see docs/live-ride-activity-plan.md §0.
+            ios: {
+                deploymentTarget: '16.4',
+            },
         }],
         // Belt-and-suspenders: re-stamps android.compileSdkVersion=36 and
         // android.targetSdkVersion=36 into gradle.properties. EAS build #59fcaa6b
@@ -184,6 +190,19 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 organization: process.env.SENTRY_ORG,
                 project: process.env.SENTRY_PROJECT,
                 url: process.env.SENTRY_URL ?? 'https://sentry.io/',
+            },
+        ],
+        // SPIKE (Phase 0, live-ride-activity): Voltra iOS Live Activity plugin.
+        // groupIdentifier = App Group shared between the app and the Live Activity
+        // extension. enablePushNotifications is OFF for the spike (local
+        // start/update/end only — the backend APNs .p8 push path is Phase 3).
+        // Throwaway: remove with the spike if Voltra fails the Expo 55 / RN 0.85
+        // build+device gate. See docs/live-ride-activity-plan.md §0.
+        [
+            '@use-voltra/ios-client',
+            {
+                groupIdentifier: `group.${BUNDLE_ID}`,
+                enablePushNotifications: false,
             },
         ],
     ],

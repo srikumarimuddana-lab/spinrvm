@@ -37,6 +37,7 @@
     "@spinr/shared": "file:../shared",
     "@stripe/stripe-react-native": "0.63.0",
     "@supabase/supabase-js": "2.105.3",
+    "@use-voltra/ios-client": "^2.0.0",
     "ajv": "^8.20.0",
     "axios": "^1.15.2",
     "expo": "~55.0.26",

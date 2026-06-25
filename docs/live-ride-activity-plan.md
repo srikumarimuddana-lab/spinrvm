@@ -3,7 +3,8 @@
 Status: **PLAN — not yet implemented.** Scoped for scheduling.
 Stack (locked): **iOS = Voltra** (Live Activity as React components + ActivityKit
 push) · **Android = notifee** (ongoing / Live Update notification) · backend
-drives both off the ride state machine. Gated on a Phase 0 Voltra/Expo-55 spike.
+drives both off the ride state machine. Gated on a Phase 0 Voltra/Expo-55 spike
+(**in progress** — static compat ✅, build+device gate pending; see §0).
 
 ## 1. Goal
 After a driver **accepts** a ride, the rider gets a live, glanceable ride‑status
@@ -16,6 +17,54 @@ surface **outside the app**, updating as the driver approaches:
 
 Lifecycle: **start at `driver_accepted`**, update on each state change + a
 throttled ETA tick, **end at `completed` / `cancelled`**.
+
+## 0. Phase 0 status — Voltra compat spike (IN PROGRESS)
+
+**Branch:** `claude/spike-voltra-live-activity` (throwaway — do not merge until the
+gate passes). Scaffolds an iOS-only smoke test; the build + device run is the
+remaining gate.
+
+**Static compatibility — ✅ FAVORABLE (verified from npm):**
+- Package: **`@use-voltra/ios-client` v2.0.0** (Android: `@use-voltra/android-client`).
+- **New Architecture: supported.** Ships a `codegenConfig` (`type: "all"`) with a
+  Fabric component (`VoltraView` → `VoltraViewComponentView`) + TurboModule
+  (`NativeVoltra`) — a codegen module built *for* the New Arch, which the rider
+  app **requires** (`newArchEnabled: true` for reanimated 4). This was the single
+  biggest unknown and it clears.
+- **peerDependencies:** `expo: *`, `react: *`, `react-native: *` — no version
+  pins, so install isn't blocked on Expo 55 / RN 0.85.2.
+- Config plugins via `@use-voltra/expo-plugin`; `@expo/config-plugins ~10.1.2`
+  (current SDK 54/55 line). Rider app uses **CNG/prebuild** (no committed `ios/`),
+  so the plugin applies cleanly.
+- **iOS requirement: 16.4+** → spike sets `expo-build-properties.ios.deploymentTarget = '16.4'`.
+
+**Scaffolded on the branch (ready to build):**
+- `package.json` → `@use-voltra/ios-client ^2.0.0`.
+- `app.config.ts` → iOS `deploymentTarget '16.4'` + plugin
+  `['@use-voltra/ios-client', { groupIdentifier: 'group.com.spinr.user', enablePushNotifications: false }]`
+  (push OFF — local lifecycle only; APNs `.p8` push is Phase 3).
+- `app/spike-live-activity.tsx` (route) + `components/spike/VoltraSpike.tsx` —
+  `useLiveActivity` + `<Voltra.VStack>`/`<Voltra.Text>` Lock Screen UI with
+  Start / Update / End buttons.
+
+**Remaining gate (needs Mac + EAS + physical iOS 16.4+ device — cannot run here):**
+1. `cd rider-app && yarn install`
+2. `npx expo prebuild --platform ios --clean`
+3. EAS Dev Client build → install on a physical device (iOS 16.4+; Dynamic Island
+   needs iPhone 14 Pro+, Lock Screen works on any).
+4. Open `/spike-live-activity` → tap **Start** → confirm a Live Activity appears
+   on the Lock Screen / Dynamic Island → **Update** (ETA changes in place) →
+   **End** (clears).
+
+**Pass criteria:** prebuild succeeds, the EAS iOS build compiles with Voltra, and
+the activity starts/updates/ends on-device. **Fail → fallback:**
+`@kingstinct/react-native-activity-kit` (Nitro) or `@bacons/apple-targets` + a
+custom ActivityKit module (see §8).
+
+**Open production decisions (defer until the gate passes):** App Group
+provisioning for `group.com.spinr.user`; whether to raise the whole app's iOS
+floor to 16.4 vs. runtime-gating Live Activities below 16.4; `enablePushNotifications`
++ APNs `.p8` for the backend push path (Phase 3).
 
 ## 2. State → content mapping
 Source of truth is the existing ride state machine (`routes/rides.py`).

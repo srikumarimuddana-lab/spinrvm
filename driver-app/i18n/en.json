@@ -390,6 +390,7 @@
             "documents_pending": "Your documents are still under review. We'll notify you once approved.",
             "documents_rejected": "Some of your documents were rejected. Please review and resubmit.",
             "subscription_required": "Activate Spinr Pass to start accepting rides.",
+            "quota_exhausted": "You've used all of today's Spinr Pass rides. Your allowance resets at midnight — enjoy the rest of your day!",
             "not_available": "You aren't available to accept this ride right now.",
             "offline": "You are currently offline. Go online to receive ride offers."
         },

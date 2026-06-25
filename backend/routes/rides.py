@@ -2363,6 +2363,20 @@ async def create_ride(
                 status_code=400,
                 detail="No payment method on file. Please add a card first.",
             )
+        # Defense-in-depth (money): a card ride must name the exact card to
+        # charge. Without an explicit payment_method_id, settle_card() falls
+        # back to the Stripe customer's default_payment_method — which is how a
+        # stale/forgotten card (e.g. an old 4242 test card) ends up charged for
+        # a ride the rider never knowingly put on it. The rider app already
+        # guards this in the UI; this server check closes the same gap for any
+        # direct API caller or client-state race. The SCA two-step second leg is
+        # exempt: its hold (preauthorized_payment_intent_id) already pins a real
+        # card, and settlement captures that hold rather than the customer default.
+        if not body.payment_method_id and not body.preauthorized_payment_intent_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Select a payment card before booking.",
+            )
 
     active_statuses = list(RideStatus.active_statuses())
     existing_ride = (lambda _r: _r[0] if _r else None)(

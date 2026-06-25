@@ -1001,6 +1001,10 @@ async def test_create_ride_existing_active_ride():
         pickup_address="100 Main St",
         dropoff_address="200 Broadway Ave",
         vehicle_type_id="vt-1",
+        # A card ride must name an explicit card (server-side money guard); set
+        # one so this test reaches the active-ride 409 it is actually exercising
+        # rather than tripping the missing-card 400.
+        payment_method_id="pm_1",
     )
 
     with (
@@ -1017,6 +1021,51 @@ async def test_create_ride_existing_active_ride():
             await create_ride(request=req, body=body, current_user=_USER)
 
     assert exc.value.status_code == 409
+
+
+@pytest.mark.anyio
+async def test_create_ride_card_without_payment_method_id_rejected():
+    """A card ride with no explicit payment_method_id must be rejected (400).
+
+    Regression guard: settle_card() falls back to the Stripe customer's
+    default_payment_method when the ride has no payment_method_id, which is how
+    a stale card got charged for a ride the rider never selected it for. The
+    booking endpoint must reject the card ride up front instead.
+    """
+    from fastapi import HTTPException
+
+    from backend.routes.rides import create_ride
+    from backend.schemas import CreateRideRequest
+
+    req = _starlette_request(method="POST", path="/rides")
+
+    body = CreateRideRequest(
+        pickup_lat=52.1,
+        pickup_lng=-106.6,
+        dropoff_lat=52.2,
+        dropoff_lng=-106.7,
+        pickup_address="100 Main St",
+        dropoff_address="200 Broadway Ave",
+        vehicle_type_id="vt-1",
+        payment_method="card",
+        # payment_method_id intentionally omitted → defaults to None.
+    )
+
+    with (
+        patch("backend.routes.rides.validate_ride_location"),
+        patch("backend.routes.rides.db") as mock_db,
+        patch("backend.routes.rides.db_supabase") as mock_supabase,
+    ):
+        # Rider HAS a Stripe customer (so the existing stripe_customer_id check
+        # passes) but supplies no card to charge.
+        mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active", "stripe_customer_id": "cus_1"})
+        mock_supabase.find_one = AsyncMock(return_value=None)
+
+        with pytest.raises(HTTPException) as exc:
+            await create_ride(request=req, body=body, current_user=_USER)
+
+    assert exc.value.status_code == 400
+    assert "card" in str(exc.value.detail).lower()
 
 
 # ── match_driver_to_ride ───────────────────────────────────────────────────────

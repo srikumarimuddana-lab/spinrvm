@@ -274,7 +274,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           await get().setTokens(token, newRefresh, expires_in, csrf_token);
           return true;
         } catch (e: unknown) {
-          const status = isApiError(e) ? e.response?.status : undefined;
+          // The /auth/refresh path rejects with a raw fetch Response (HTTP
+          // status on `.status`); all other client errors throw SpinrApiError
+          // (status on both `.status` and `.response.status`). Read both shapes
+          // so a 401 is detected no matter which path rejected — otherwise the
+          // retry below never fires and a dead session never logs out.
+          const err = e as { status?: number; response?: { status?: number } };
+          const status = (typeof err?.status === 'number' ? err.status : undefined) ?? err?.response?.status;
           if (status !== 401) {
             // Network errors, timeouts, and 5xx are transient — keep the refresh
             // token so the next app launch / request can try again instead of
@@ -288,14 +294,17 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           // this is the foreground/background rotation race — retry once with
           // the fresher value rather than logging the user out.
           if (attempt === 0) {
-            let latest = await storage.getItem('refresh_token');
-            if (!latest || latest === candidate) {
-              // The winner may not have persisted its rotated token yet — give
-              // it a brief moment, then re-read once more.
-              await new Promise((r) => setTimeout(r, 200));
-              latest = await storage.getItem('refresh_token');
+            // The winner of the race may not have persisted its rotated token
+            // yet; poll storage a few times (immediate, then short backoffs)
+            // so we still recover on slower hardware instead of a single fixed
+            // wait. Retry the moment a fresher token appears.
+            let latest = candidate;
+            for (const waitMs of [0, 150, 300]) {
+              if (waitMs) await new Promise((r) => setTimeout(r, waitMs));
+              const v = await storage.getItem('refresh_token');
+              if (v && v !== candidate) { latest = v; break; }
             }
-            if (latest && latest !== candidate) {
+            if (latest !== candidate) {
               candidate = latest;
               continue;
             }

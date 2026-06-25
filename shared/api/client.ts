@@ -134,11 +134,19 @@ export function setSignOutCallback(fn: () => Promise<void>): void {
 // refresh attempt, a 401 from /auth/refresh must NOT trigger the hard
 // sign-out below — the auth layer decides whether to retry with a
 // fresher stored token (foreground/background refresh-token rotation race)
-// or actually tear down the session. refreshTokens sets this true for the
-// duration of that controlled attempt and resets it in a finally.
-let _suppressRefreshSignOut = false;
+// or actually tear down the session. refreshTokens acquires this for the
+// duration of that controlled attempt and releases it in a finally.
+//
+// Reference-counted, NOT a plain boolean: refreshTokens can be invoked
+// concurrently from paths that don't share the interceptor's _refreshPromise
+// dedup (e.g. a cold-start initialize() refresh racing a 401-triggered one).
+// With a boolean, the first caller's `finally` reset would drop suppression
+// while the second is still mid-retry. The counter keeps suppression active
+// until the LAST controlled caller releases it.
+let _suppressRefreshSignOutDepth = 0;
 export function setSuppressRefreshSignOut(v: boolean): void {
-  _suppressRefreshSignOut = v;
+  if (v) _suppressRefreshSignOutDepth++;
+  else _suppressRefreshSignOutDepth = Math.max(0, _suppressRefreshSignOutDepth - 1);
 }
 
 export function setRefreshCallback(fn: RefreshFn): void {
@@ -633,8 +641,14 @@ const handleApiError = async (response: Response, method: string, url: string, r
     // replaying that just-rotated token as a benign rotation race and returns
     // 401 WITHOUT revoking the session. Let authStore.refreshTokens re-read the
     // freshest stored token and retry before any sign-out — do NOT log out here.
-    if (_suppressRefreshSignOut) {
-      _refreshSubscribers = [];
+    //
+    // Do NOT touch _refreshSubscribers here. This 401 is the NESTED
+    // /auth/refresh call made from inside refreshTokens(); the OUTER refresh
+    // handler below flushes subscribers via _onRefreshed once refreshTokens
+    // resolves (with the new token on success, or '' on a dead session).
+    // Wiping the queue here would strand every request that piggy-backed on
+    // the in-flight refresh until its 15s request timeout.
+    if (_suppressRefreshSignOutDepth > 0) {
       return Promise.reject(response) as Promise<never>;
     }
     console.log('[API] Refresh token rejected (401) — signing out');

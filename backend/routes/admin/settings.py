@@ -64,6 +64,10 @@ _CREDENTIAL_FIELDS = frozenset(
         "ai_api_key_openai",
         "ai_api_key_gemini",
         "ai_api_key_openrouter",
+        # iOS Live Activity APNs private key (.p8 PEM). The key_id/team_id/
+        # bundle_id are identifiers left visible (same treatment as
+        # twilio_account_sid); only the PEM is the secret.
+        "apns_p8_key",
     }
 )
 
@@ -190,6 +194,13 @@ class SettingsUpdateRequest(BaseModel):
     ai_history_max_messages: Optional[int] = Field(default=None, ge=2, le=50)
     ai_escalation_creates_ticket: Optional[bool] = None
     ai_disclaimer: Optional[str] = Field(default=None, max_length=300)
+    # iOS Live Activity APNs (.p8 token auth). key_id/team_id/bundle_id are
+    # identifiers (visible); apns_p8_key is the secret (masked, in
+    # _CREDENTIAL_FIELDS). Feature ships dark until all four are set.
+    apns_key_id: Optional[str] = Field(default=None, max_length=20)
+    apns_team_id: Optional[str] = Field(default=None, max_length=20)
+    apns_bundle_id: Optional[str] = Field(default=None, max_length=200)
+    apns_p8_key: Optional[str] = None
 
 
 @router.get("/settings")

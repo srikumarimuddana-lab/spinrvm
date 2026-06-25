@@ -4184,7 +4184,11 @@ async def share_trip_with_contact(
         _push_in_background(
             contact_user["id"],
             f"{rider_name} is sharing their ride with you",
-            f"Track their live location: {ride.get('pickup_address', '')} → {ride.get('dropoff_address', '')}",
+            # PIPEDA (C5): no exact pickup/dropoff addresses in the push body —
+            # FCM is cleartext in the device tray and stored in Google/US infra.
+            # The contact taps through to live tracking via the share token; the
+            # body needs no address detail.
+            "Tap to follow their live trip location.",
             data={
                 "type": "trip_shared",
                 "share_token": share_token,

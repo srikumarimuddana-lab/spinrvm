@@ -28,7 +28,6 @@ _CSRF_EXEMPT_EXACT = frozenset(
         "/api/v1/auth/verify-otp",
         "/api/v1/auth/firebase",
         "/api/admin/auth/login",
-        "/api/v1/stripe/webhook",
         # Stripe embedded onboarding: the driver app's WebView posts here from
         # an in-page fetch, which carries an Origin header (so it's not caught
         # by the native-app no-Origin exemption) but no csrf_token cookie. Safe
@@ -37,7 +36,13 @@ _CSRF_EXEMPT_EXACT = frozenset(
         "/api/v1/drivers/stripe-account-session",
     }
 )
-_CSRF_EXEMPT_PREFIXES = ("/ws/",)
+# Inbound webhooks (Stripe, AWS SES/SNS) are server-to-server — they carry no
+# CSRF cookie and (Stripe/SNS) no Origin header, so CSRF can't apply. The
+# prefix covers /api/v1/webhooks/stripe, /api/v1/webhooks/ses, and any future
+# webhook without re-touching this list. Replaces the stale exact entry
+# "/api/v1/stripe/webhook", which never matched the real mount point
+# (routes/webhooks.py is mounted at /api/v1/webhooks/*).
+_CSRF_EXEMPT_PREFIXES = ("/ws/", "/api/v1/webhooks/")
 
 # ── Firebase App Check Middleware ─────────────────────────────────────
 # Enforcement is tied to ENV: on in production, off in development/staging.
@@ -74,6 +79,17 @@ _APP_CHECK_EXEMPT_PREFIXES = (
     "/openapi.json",
     "/health",
     "/api/admin/",
+    # Inbound webhooks (Stripe payments/refunds/disputes/subscriptions, AWS
+    # SES/SNS bounce+complaint). These are server-to-server callbacks from
+    # external systems that cannot attach a X-Firebase-AppCheck header, so
+    # under production enforcement they would 401 "App Check token required"
+    # before the handler runs — silently breaking payment confirmation, payout
+    # reconciliation, subscription renewals, and email-suppression handling.
+    # Each webhook authenticates itself instead: Stripe via signature
+    # verification (stripe-signature header) and SES via SNS signature
+    # verification (routes/webhooks.py). Path mounts at /api/v1/webhooks/*
+    # (routes/webhooks.py api_router prefix="/webhooks" under the /api/v1 mount).
+    "/api/v1/webhooks/",
     # Ride-offer fare banner: the OS (Notifee BigPicture) fetches this image
     # with no App Check header. It is authorised instead by a short-TTL,
     # ride+driver-bound HMAC token in the query string (routes/offer_card.py).
@@ -478,6 +494,31 @@ def _validate_production_config():
         errors.append(
             "RATE_LIMIT_REDIS_URL must start with redis:// or rediss:// "
             f"(got scheme from: {redis_url.split('://', 1)[0]}://…)."
+        )
+
+    # 4b. Auth-lockout / session-revocation Redis — utils/redis_client.py reads
+    #     REDIS_URL (a DIFFERENT variable than the rate limiter's
+    #     RATE_LIMIT_REDIS_URL above). OTP lockout, admin login + TOTP lockout,
+    #     break-glass counters, and the session-revocation fast-path all live
+    #     here. Without REDIS_URL they silently fall back to a per-process dict
+    #     that resets on restart and is NOT shared across replicas — so the
+    #     5-failures/hour OTP lockout and admin throttles become trivially
+    #     bypassable by waiting for a redeploy or hitting another machine.
+    #     Require it explicitly so a deploy can't pass this gate with only
+    #     RATE_LIMIT_REDIS_URL set while auth lockouts degrade unnoticed.
+    auth_redis_url = (settings.REDIS_URL or "").strip()
+    if not auth_redis_url:
+        errors.append(
+            "REDIS_URL is not set. Production auth-lockout state (OTP lockout, "
+            "admin login/TOTP throttle, break-glass counters, session "
+            "revocation) requires a shared Redis backend; without it these "
+            "counters live in a per-process dict that resets on restart and is "
+            "not shared across replicas. Set REDIS_URL=redis://… or rediss://…"
+        )
+    elif not (auth_redis_url.startswith("redis://") or auth_redis_url.startswith("rediss://")):
+        errors.append(
+            "REDIS_URL must start with redis:// or rediss:// "
+            f"(got scheme from: {auth_redis_url.split('://', 1)[0]}://…)."
         )
 
     # 5. Firebase service account — required for Firebase Auth verify

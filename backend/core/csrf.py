@@ -19,12 +19,16 @@ CSRF_EXEMPT_EXACT = frozenset(
         "/api/v1/auth/verify-otp",
         "/api/v1/auth/firebase",
         "/api/admin/auth/login",
-        # Stripe webhooks are server-to-server — no browser CSRF risk
-        "/api/v1/stripe/webhook",
     }
 )
 
-CSRF_EXEMPT_PREFIXES = ("/ws/",)
+# Inbound webhooks (Stripe, AWS SES/SNS) are server-to-server — no browser CSRF
+# risk. Covered by prefix so /api/v1/webhooks/stripe + /ses are both exempt.
+# NB: live CSRF enforcement uses core.middleware._CSRF_EXEMPT_* — this module's
+# copy is currently consumed only for the helper functions below, but is kept in
+# sync so it never becomes a stale trap (it previously listed the never-matched
+# path "/api/v1/stripe/webhook").
+CSRF_EXEMPT_PREFIXES = ("/ws/", "/api/v1/webhooks/")
 
 
 def generate_csrf_token() -> str:

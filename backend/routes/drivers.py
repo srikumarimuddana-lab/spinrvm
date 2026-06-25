@@ -57,6 +57,12 @@ try:
     from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
     from ..utils.insurance_periods import record_period_transition
+    from ..utils.live_activity import (
+        EVENT_END,
+        EVENT_START,
+        EVENT_UPDATE,
+        send_live_activity_update,
+    )
     from ..utils.metrics import inc as _metric_inc
     from ..utils.metrics import observe as _metric_observe
     from ..utils.money import dollars_to_cents, to_decimal
@@ -95,6 +101,12 @@ except ImportError:
     from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
     from utils.insurance_periods import record_period_transition  # type: ignore[assignment]
+    from utils.live_activity import (  # type: ignore
+        EVENT_END,
+        EVENT_START,
+        EVENT_UPDATE,
+        send_live_activity_update,
+    )
     from utils.metrics import inc as _metric_inc  # type: ignore
     from utils.metrics import observe as _metric_observe  # type: ignore
     from utils.money import dollars_to_cents, to_decimal
@@ -3480,7 +3492,7 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
             raise HTTPException(
                 status_code=503,
                 detail="Could not verify subscription for this area. Please try again.",
-            )
+            ) from None
 
     diag_logger.info(
         f"[ACCEPT] entry ride_id={ride_id} driver_id={driver.get('id')} "
@@ -3710,6 +3722,10 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
         )
     await manager.broadcast_ride_status(ride_id, RideStatus.DRIVER_ACCEPTED, rider_id=(ride or {}).get("rider_id"))
 
+    # Start the rider's live activity (no-op until the app registers its token).
+    if ride:
+        asyncio.create_task(send_live_activity_update(ride, EVENT_START))
+
     return {"success": True}
 
 
@@ -3887,6 +3903,9 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
         )
     await manager.broadcast_ride_status(ride_id, RideStatus.DRIVER_ARRIVED, rider_id=ride.get("rider_id"))
 
+    # Update the rider's live activity to "driver arrived".
+    asyncio.create_task(send_live_activity_update({**ride, "status": RideStatus.DRIVER_ARRIVED}, EVENT_UPDATE))
+
     return {"success": True}
 
 
@@ -3941,6 +3960,9 @@ async def verify_pickup_otp(
             )
         )
     await manager.broadcast_ride_status(ride_id, RideStatus.IN_PROGRESS, rider_id=ride.get("rider_id"))
+
+    # Update the rider's live activity to "trip in progress".
+    asyncio.create_task(send_live_activity_update({**ride, "status": RideStatus.IN_PROGRESS}, EVENT_UPDATE))
 
     return {"success": True}
 
@@ -4003,6 +4025,8 @@ async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user
             )
         )
     await manager.broadcast_ride_status(ride_id, RideStatus.IN_PROGRESS, rider_id=ride.get("rider_id"))
+    # Update the rider's live activity to "trip in progress" (dev/staging path).
+    asyncio.create_task(send_live_activity_update({**ride, "status": RideStatus.IN_PROGRESS}, EVENT_UPDATE))
     return {"success": True}
 
 
@@ -4691,6 +4715,10 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         rider_id=(completed_ride or {}).get("rider_id"),
         total_fare=total_fare,
     )
+    # End the rider's live activity on trip completion.
+    asyncio.create_task(
+        send_live_activity_update(completed_ride or {"id": ride_id, "status": RideStatus.COMPLETED}, EVENT_END)
+    )
     # Keep the specific ``ride_completed`` event on admin too for dashboards
     # that switch directly on the event name rather than status.
     try:
@@ -4835,6 +4863,8 @@ async def cancel_ride(
         rider_id=(ride or {}).get("rider_id"),
         reason="driver_cancelled",
     )
+    # End the rider's live activity on driver cancellation.
+    asyncio.create_task(send_live_activity_update(ride or {"id": ride_id, "status": RideStatus.CANCELLED}, EVENT_END))
     # Keep the specific ``ride_cancelled`` event on admin for dashboards
     # that switch on event name.
     try:
@@ -6742,10 +6772,11 @@ async def _record_subscription_payment(
             "stripe_payment_intent_id": stripe_payment_intent_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+
         # Tax columns (migration 186) — stored when computed at checkout.
-        _q2 = lambda v: (
-            str(Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)) if v is not None else None
-        )  # noqa: E731
+        def _q2(v):
+            return str(Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)) if v is not None else None
+
         if subtotal is not None:
             row["subtotal"] = _q2(subtotal)
         if gst_amount is not None:
@@ -7191,7 +7222,10 @@ async def get_subscription_payment_history(
         Prefers stored tax columns (migration 186). Falls back to back-computing
         GST+PST from the total for legacy rows written before migration 186.
         """
-        _q2 = lambda v: Decimal(str(v)).quantize(Decimal("0.01"))
+
+        def _q2(v):
+            return Decimal(str(v)).quantize(Decimal("0.01"))
+
         total_d = _q2(p.get("amount") or 0)
         if p.get("subtotal") is not None:
             subtotal_d = _q2(p["subtotal"])
@@ -7256,7 +7290,9 @@ async def resend_subscription_invoice(
     _dur_map = {1: "Daily", 7: "Weekly", 30: "Monthly", 365: "Annual"}
     _dur_label = _dur_map.get(_days, f"{_days}-day")
 
-    _q2 = lambda v: Decimal(str(v)).quantize(Decimal("0.01"))
+    def _q2(v):
+        return Decimal(str(v)).quantize(Decimal("0.01"))
+
     total_d = _q2(payment.get("amount") or 0)
     if payment.get("subtotal") is not None:
         subtotal_d = _q2(payment["subtotal"])

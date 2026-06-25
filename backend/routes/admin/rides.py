@@ -2499,22 +2499,92 @@ async def admin_export_drivers(
         else []
     )
     users_map = {u["id"]: u for u in users_list if u.get("id")}
+
+    # Friendly names for the vehicle-type and service-area id columns so the CSV
+    # is readable. Batch lookups (small tables) — no per-row query.
+    _vt_ids = list({d.get("vehicle_type_id") for d in drivers if d.get("vehicle_type_id")})
+    vt_map = (
+        {
+            v["id"]: (v.get("name") or v.get("display_name"))
+            for v in (
+                await db_supabase.get_rows("vehicle_types", {"id": {"$in": _vt_ids}}, limit=max(len(_vt_ids), 1)) or []
+            )
+            if v.get("id")
+        }
+        if _vt_ids
+        else {}
+    )
+    _sa_ids = list({d.get("service_area_id") for d in drivers if d.get("service_area_id")})
+    sa_map = (
+        {
+            s["id"]: s.get("name")
+            for s in (
+                await db_supabase.get_rows(
+                    "service_areas", {"id": {"$in": _sa_ids}}, columns="id,name", limit=max(len(_sa_ids), 1)
+                )
+                or []
+            )
+            if s.get("id")
+        }
+        if _sa_ids
+        else {}
+    )
+
+    # License number is encrypted PII (pgsodium vault). Per the admin's choice we
+    # export only a MASKED last-4 (e.g. ****1234) — the full number never leaves
+    # the server. Decrypt server-side (bounded by the run_sync thread pool), take
+    # last-4, discard the plaintext. _vault_decrypt returns the raw token on
+    # failure, so a result equal to the input means "unavailable" -> blank.
+    import asyncio as _asyncio  # noqa: PLC0415
+
+    try:
+        from ..drivers import _vault_decrypt  # type: ignore
+    except ImportError:
+        from routes.drivers import _vault_decrypt  # type: ignore
+
+    async def _license_last4(driver_row: dict):
+        tok = driver_row.get("license_number")
+        if not tok:
+            return None
+        try:
+            plain = await _vault_decrypt(str(tok), "license_export")
+        except Exception:
+            return None
+        if not plain or plain == str(tok):
+            return None
+        s = str(plain).strip()
+        return ("*" * max(len(s) - 4, 0)) + s[-4:] if len(s) > 4 else s
+
+    license_masked = await _asyncio.gather(*[_license_last4(d) for d in drivers], return_exceptions=True)
+    license_masked = [None if isinstance(m, BaseException) else m for m in license_masked]
+    _license_exported = sum(1 for m in license_masked if m)
+
     out = []
-    for d in drivers:
+    for i, d in enumerate(drivers):
         u = users_map.get(d.get("user_id"))
         out.append(
             {
                 "id": d.get("id"),
+                "driver_code": d.get("driver_code"),
                 "name": _user_display_name(u),
                 "email": u.get("email") if isinstance(u, dict) else None,
                 "phone": u.get("phone") if isinstance(u, dict) else d.get("phone"),
-                "vehicle_make": d.get("vehicle_make"),
-                "vehicle_model": d.get("vehicle_model"),
-                "license_plate": d.get("license_plate"),
+                "status": d.get("status"),
                 "is_verified": d.get("is_verified"),
                 "is_online": d.get("is_online"),
+                "is_available": d.get("is_available"),
+                "service_area": sa_map.get(d.get("service_area_id")) or d.get("service_area_id"),
+                "vehicle_make": d.get("vehicle_make"),
+                "vehicle_model": d.get("vehicle_model"),
+                "vehicle_year": d.get("vehicle_year"),
+                "vehicle_color": d.get("vehicle_color"),
+                "vehicle_type": vt_map.get(d.get("vehicle_type_id")) or d.get("vehicle_type_id"),
+                "license_plate": d.get("license_plate"),
+                "license_no": license_masked[i],
+                "acceptance_rate": d.get("acceptance_rate"),
                 "total_rides": d.get("total_rides"),
-                "created_at": d.get("created_at"),
+                "joined_at": d.get("created_at"),
+                "approved_at": d.get("verified_at"),
             }
         )
     await db_supabase.insert_one(
@@ -2526,7 +2596,7 @@ async def admin_export_drivers(
             "action": "export_drivers",
             "entity_type": "drivers",
             "entity_id": "export",
-            "details": {"row_count": len(out)},
+            "details": {"row_count": len(out), "license_last4_included": _license_exported},
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
     )

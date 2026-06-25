@@ -5469,6 +5469,21 @@ async def rider_complete_ride(
         driver_row = await db_supabase.get_driver_by_id(driver_id)
         driver_user_id = driver_row.get("user_id") if driver_row else None
 
+        # Daily Spinr Pass allowance: flip the driver offline now (DB-level) if
+        # this completion used their last ride for the day. Driver WS notice is
+        # sent at the end, after the ride_completed events.
+        try:
+            from ..utils.spinr_pass import force_offline_if_exhausted
+        except ImportError:
+            from utils.spinr_pass import force_offline_if_exhausted  # type: ignore
+        try:
+            _quota_offline = await force_offline_if_exhausted(driver_row or driver_id)
+        except Exception:
+            _quota_offline = None
+            logger.error("rider_complete_ride: quota offline check failed for driver=%s", driver_id, exc_info=True)
+    else:
+        _quota_offline = None
+
     # ── Record incentive claims (same logic as drivers.py complete_ride) ──
     _rider_incentive_total = Decimal("0")
     if driver_id:
@@ -5587,6 +5602,29 @@ async def rider_complete_ride(
             logger.error(
                 "rider_complete_ride: scheduling quest progress update failed for ride %s", ride_id, exc_info=True
             )
+
+    # Notify the driver (and admins) if this completion took them offline for
+    # the day. Reuses the existing 'auto_offline' client handler.
+    if _quota_offline and driver_user_id:
+        _reset_h = round(_quota_offline.get("hours_until_reset") or 0)
+        try:
+            await manager.send_personal_message(
+                {
+                    "type": "auto_offline",
+                    "reason": "quota_exhausted",
+                    "message": (
+                        f"You've used all {_quota_offline.get('rides_per_day')} Spinr Pass rides for "
+                        f"today. You're now offline — your allowance resets in about {_reset_h}h."
+                    ),
+                    "quota_resets_at": _quota_offline.get("quota_resets_at"),
+                },
+                f"driver_{driver_user_id}",
+            )
+            await manager.broadcast_to_admins(
+                {"type": "driver_status_changed", "driver_id": driver_id, "is_online": False}
+            )
+        except Exception:
+            logger.warning("rider_complete_ride: quota auto_offline notify failed for driver=%s", driver_id)
 
     return completed_ride or ride
 

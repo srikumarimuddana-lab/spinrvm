@@ -4708,6 +4708,21 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     # period 1 (still online, no ride). No ride_id on period 1.
     await record_period_transition(driver["id"], 1)
 
+    # Daily Spinr Pass allowance: if this completion used the driver's last ride
+    # for the day, flip them offline now (DB-level, so dispatch stops offering)
+    # until the allowance resets at the next local midnight. The driver WS
+    # notice is sent at the end, after the ride_completed events, so the app
+    # doesn't reset its completion UI prematurely.
+    try:
+        from ..utils.spinr_pass import force_offline_if_exhausted
+    except ImportError:
+        from utils.spinr_pass import force_offline_if_exhausted  # type: ignore
+    try:
+        _quota_offline = await force_offline_if_exhausted(driver)
+    except Exception:
+        _quota_offline = None
+        logger.error("complete_ride: quota offline check failed for driver=%s", driver["id"], exc_info=True)
+
     completed_ride = await db_supabase.get_ride(ride_id)
 
     if completed_ride and completed_ride.get("rider_id"):
@@ -4759,6 +4774,30 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         asyncio.create_task(update_quest_progress_on_ride_complete(driver["id"], completed_ride or ride))
     except Exception:
         logger.error("complete_ride: scheduling quest progress update failed for ride %s", ride_id, exc_info=True)
+
+    # Notify the driver (and admins) if this completion took them offline for
+    # the day. Sent last so the app handles ride_completed first. Reuses the
+    # existing 'auto_offline' client handler (stops offer sound, flips offline).
+    if _quota_offline and driver.get("user_id"):
+        _reset_h = round(_quota_offline.get("hours_until_reset") or 0)
+        try:
+            await manager.send_personal_message(
+                {
+                    "type": "auto_offline",
+                    "reason": "quota_exhausted",
+                    "message": (
+                        f"You've used all {_quota_offline.get('rides_per_day')} Spinr Pass rides for "
+                        f"today. You're now offline — your allowance resets in about {_reset_h}h."
+                    ),
+                    "quota_resets_at": _quota_offline.get("quota_resets_at"),
+                },
+                f"driver_{driver['user_id']}",
+            )
+            await manager.broadcast_to_admins(
+                {"type": "driver_status_changed", "driver_id": driver["id"], "is_online": False}
+            )
+        except Exception:
+            logger.warning("complete_ride: quota auto_offline notify failed for driver=%s", driver["id"])
 
     return serialize_doc(completed_ride)
 

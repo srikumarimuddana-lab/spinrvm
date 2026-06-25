@@ -20,6 +20,7 @@ are unit-testable without a DB; the async helpers do the counting.
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, Optional, Set, Tuple
 
@@ -229,3 +230,89 @@ def _as_int(v: Any) -> int:
         return int(v)
     except (TypeError, ValueError):
         return UNLIMITED
+
+
+async def force_offline_if_exhausted(
+    driver: Any,
+    sub: Optional[Dict[str, Any]] = None,
+    now: Optional[datetime] = None,
+) -> Optional[Dict[str, Any]]:
+    """Set the driver offline when today's pass allowance is now used up.
+
+    Call this right after a ride completes. ``driver`` may be the driver row
+    (dict with ``id``) or a bare driver id. Returns the quota status dict when
+    it forced the driver offline (so the caller — which owns the socket manager
+    — can notify the driver + admins), else ``None``.
+
+    Side effects (all best-effort, logged on failure): flip ``is_online`` /
+    ``is_available`` to False, append the SGI period-0 transition, clear Redis
+    presence, and write a ``driver_activity_log`` row. The append-only insurance
+    timeline is never mutated — only a new period row is added.
+    """
+    driver_id = driver.get("id") if isinstance(driver, dict) else driver
+    if not driver_id:
+        return None
+    status = await quota_status(driver_id, sub=sub, now=now)
+    if not status or not status.get("exhausted"):
+        return None
+
+    now = now or datetime.now(timezone.utc)
+    iso = now.isoformat()
+    db = _db()
+    try:
+        await db.update_one(
+            "drivers",
+            {"id": driver_id},
+            {
+                "is_online": False,
+                "is_available": False,
+                "updated_at": iso,
+                "last_status_changed_at": iso,
+            },
+        )
+    except Exception:
+        logger.error("force_offline_if_exhausted: failed to flip driver=%s offline", driver_id, exc_info=True)
+        return None
+
+    # SGI insurance period audit: online (P1) -> offline (P0). Append-only.
+    try:
+        try:
+            from .insurance_periods import record_period_transition  # type: ignore
+        except ImportError:
+            from utils.insurance_periods import record_period_transition  # type: ignore
+        await record_period_transition(driver_id, 0)
+    except Exception:
+        logger.error("force_offline_if_exhausted: period transition failed driver=%s", driver_id, exc_info=True)
+
+    try:
+        try:
+            from .driver_presence import clear_presence  # type: ignore
+        except ImportError:
+            from utils.driver_presence import clear_presence  # type: ignore
+        await clear_presence(driver_id)
+    except Exception:
+        logger.error("force_offline_if_exhausted: clear_presence failed driver=%s", driver_id, exc_info=True)
+
+    try:
+        await db.insert_one(
+            "driver_activity_log",
+            {
+                "id": str(uuid.uuid4()),
+                "driver_id": driver_id,
+                "event_type": "went_offline",
+                "title": "Went offline (daily ride limit reached)",
+                "description": "System set driver offline — used all Spinr Pass rides for the day.",
+                "metadata": {
+                    "reason": "quota_exhausted",
+                    "source": "ride_completion",
+                    "rides_per_day": status.get("rides_per_day"),
+                    "quota_resets_at": status.get("quota_resets_at"),
+                },
+                "actor": "system",
+                "created_at": iso,
+            },
+        )
+    except Exception:
+        logger.error("force_offline_if_exhausted: activity log failed driver=%s", driver_id, exc_info=True)
+
+    return status

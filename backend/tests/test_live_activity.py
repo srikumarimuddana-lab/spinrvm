@@ -25,6 +25,11 @@ try:
 except ImportError:  # pragma: no cover
     from routes import rides as rides_mod
 
+try:
+    from backend import features as features_mod
+except ImportError:  # pragma: no cover
+    import features as features_mod
+
 
 # --------------------------------------------------------------------------- #
 # content-state builder (pure)
@@ -123,51 +128,107 @@ def test_content_state_is_area_only_and_pii_safe():
 
 
 # --------------------------------------------------------------------------- #
-# log-only dispatch
+# dispatch (Android = FCM data, iOS = log-only)
 # --------------------------------------------------------------------------- #
+
+
+def _android_row():
+    return [{"id": "a1", "platform": "android", "ended_at": None, "rider_id": "rider-1"}]
+
+
+def test_fcm_data_stringifies_and_omits_none():
+    content = {
+        "status": "in_progress",
+        "headline": "On your way to Regina",
+        "eta_minutes": 7,
+        "driver_name": "Jordan",
+        "vehicle_label": None,  # omitted
+        "pickup_area": "Saskatoon",
+        "dropoff_area": "Regina",
+        "ride_code": "SPR-AB7QCD",
+    }
+    data = live_activity._fcm_data(content, live_activity.EVENT_UPDATE, "r1")
+    assert data["type"] == "live_activity"
+    assert data["event"] == "update"
+    assert data["ride_id"] == "r1"
+    assert data["eta_minutes"] == "7"  # stringified
+    assert "vehicle_label" not in data  # None omitted
+    assert all(isinstance(v, str) for v in data.values())  # FCM requires strings
 
 
 def test_dispatch_skips_when_no_activity_registered(monkeypatch):
     monkeypatch.setattr(live_activity.db_supabase, "get_rows", AsyncMock(return_value=[]))
     upd = AsyncMock()
+    send = AsyncMock()
     monkeypatch.setattr(live_activity.db_supabase, "update_one", upd)
+    monkeypatch.setattr(features_mod, "send_push_notification", send)
 
     asyncio.run(
         live_activity.send_live_activity_update({"id": "r1", "status": "in_progress"}, live_activity.EVENT_UPDATE)
     )
     upd.assert_not_awaited()
+    send.assert_not_awaited()
 
 
-def test_dispatch_end_marks_activity_ended(monkeypatch):
-    monkeypatch.setattr(
-        live_activity.db_supabase,
-        "get_rows",
-        AsyncMock(return_value=[{"id": "a1", "platform": "ios", "ended_at": None}]),
-    )
+def test_dispatch_android_update_sends_fcm_not_ended(monkeypatch):
+    monkeypatch.setattr(live_activity.db_supabase, "get_rows", AsyncMock(return_value=_android_row()))
     upd = AsyncMock()
+    send = AsyncMock()
     monkeypatch.setattr(live_activity.db_supabase, "update_one", upd)
-
-    asyncio.run(live_activity.send_live_activity_update({"id": "r1", "status": "completed"}, live_activity.EVENT_END))
-    upd.assert_awaited_once()
-    table, where, patch = upd.await_args.args
-    assert table == "ride_live_activities"
-    assert where == {"id": "a1"}
-    assert patch["ended_at"] is not None
-
-
-def test_dispatch_update_does_not_end(monkeypatch):
-    monkeypatch.setattr(
-        live_activity.db_supabase,
-        "get_rows",
-        AsyncMock(return_value=[{"id": "a1", "platform": "android", "ended_at": None}]),
-    )
-    upd = AsyncMock()
-    monkeypatch.setattr(live_activity.db_supabase, "update_one", upd)
+    monkeypatch.setattr(features_mod, "send_push_notification", send)
 
     asyncio.run(
         live_activity.send_live_activity_update({"id": "r1", "status": "driver_arrived"}, live_activity.EVENT_UPDATE)
     )
+    send.assert_awaited_once()
+    assert send.await_args.args[0] == "rider-1"  # rider id
+    assert send.await_args.kwargs["target_app"] == "rider"
+    data = send.await_args.kwargs["data"]
+    assert data["type"] == "live_activity" and data["event"] == "update" and data["ride_id"] == "r1"
+    upd.assert_not_awaited()  # an update never ends the activity
+
+
+def test_dispatch_android_end_sends_fcm_and_marks_ended(monkeypatch):
+    monkeypatch.setattr(live_activity.db_supabase, "get_rows", AsyncMock(return_value=_android_row()))
+    upd = AsyncMock()
+    send = AsyncMock()
+    monkeypatch.setattr(live_activity.db_supabase, "update_one", upd)
+    monkeypatch.setattr(features_mod, "send_push_notification", send)
+
+    asyncio.run(live_activity.send_live_activity_update({"id": "r1", "status": "completed"}, live_activity.EVENT_END))
+    send.assert_awaited_once()
+    assert send.await_args.kwargs["data"]["event"] == "end"
+    upd.assert_awaited_once()
+    assert upd.await_args.args[2]["ended_at"] is not None
+
+
+def test_dispatch_ios_is_log_only(monkeypatch):
+    monkeypatch.setattr(
+        live_activity.db_supabase,
+        "get_rows",
+        AsyncMock(return_value=[{"id": "a1", "platform": "ios", "ended_at": None, "rider_id": "rider-1"}]),
+    )
+    upd = AsyncMock()
+    send = AsyncMock()
+    monkeypatch.setattr(live_activity.db_supabase, "update_one", upd)
+    monkeypatch.setattr(features_mod, "send_push_notification", send)
+
+    asyncio.run(
+        live_activity.send_live_activity_update({"id": "r1", "status": "driver_arrived"}, live_activity.EVENT_UPDATE)
+    )
+    send.assert_not_awaited()  # iOS = log-only until Phase 3 (ActivityKit APNs)
     upd.assert_not_awaited()
+
+
+def test_dispatch_android_send_failure_is_swallowed_and_still_ends(monkeypatch):
+    monkeypatch.setattr(live_activity.db_supabase, "get_rows", AsyncMock(return_value=_android_row()))
+    upd = AsyncMock()
+    monkeypatch.setattr(live_activity.db_supabase, "update_one", upd)
+    monkeypatch.setattr(features_mod, "send_push_notification", AsyncMock(side_effect=RuntimeError("fcm down")))
+
+    # A send failure must not block the terminal mark-ended, nor raise.
+    asyncio.run(live_activity.send_live_activity_update({"id": "r1", "status": "completed"}, live_activity.EVENT_END))
+    upd.assert_awaited_once()
 
 
 def test_dispatch_swallows_db_error(monkeypatch):

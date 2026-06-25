@@ -70,7 +70,7 @@ async def test_get_or_create_creates_new_customer():
 
     with (
         patch("backend.routes.payments.db_supabase") as mock_db,
-        patch("backend.routes.payments.stripe.Customer.create", return_value=mock_customer),
+        patch("backend.routes.payments.stripe.Customer.create", return_value=mock_customer) as mock_create,
     ):
         mock_db.get_user_by_id = AsyncMock(side_effect=[new_user, refreshed])
         mock_db.update_one = AsyncMock()
@@ -78,6 +78,13 @@ async def test_get_or_create_creates_new_customer():
         result = await get_or_create_stripe_customer("usr-002", _SK)
 
     assert result == "cus_new"
+    # PIPEDA (C4): only metadata.user_id (+ idempotency key) may be sent to
+    # Stripe — never the rider's email or legal name (cross-border PII).
+    call_kwargs = mock_create.call_args.kwargs
+    assert "email" not in call_kwargs, "email must not be sent to Stripe"
+    assert "name" not in call_kwargs, "name must not be sent to Stripe"
+    assert call_kwargs["metadata"] == {"user_id": "usr-002"}
+    assert call_kwargs["idempotency_key"] == "cus-create-usr-002"
 
 
 @pytest.mark.anyio

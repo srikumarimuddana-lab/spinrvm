@@ -454,12 +454,17 @@ export default function DriversPage() {
         try {
             const res = await exportDrivers();
             exportToCsv("drivers", res.drivers, [
-                { key: "id", label: "ID" }, { key: "name", label: "Name" },
-                { key: "email", label: "Email" }, { key: "phone", label: "Phone" },
+                { key: "id", label: "ID" }, { key: "driver_code", label: "Driver Code" },
+                { key: "name", label: "Name" }, { key: "email", label: "Email" }, { key: "phone", label: "Phone" },
+                { key: "status", label: "Status" }, { key: "is_verified", label: "Verified" },
+                { key: "is_online", label: "Online" }, { key: "is_available", label: "Available" },
+                { key: "service_area", label: "Service Area" },
                 { key: "vehicle_make", label: "Vehicle Make" }, { key: "vehicle_model", label: "Vehicle Model" },
-                { key: "license_plate", label: "License Plate" }, { key: "is_verified", label: "Verified" },
-                { key: "is_online", label: "Online" }, { key: "total_rides", label: "Rides" },
-                { key: "created_at", label: "Joined" },
+                { key: "vehicle_year", label: "Vehicle Year" }, { key: "vehicle_color", label: "Vehicle Color" },
+                { key: "vehicle_type", label: "Vehicle Type" }, { key: "license_plate", label: "License Plate" },
+                { key: "license_no", label: "License No (last 4)" },
+                { key: "acceptance_rate", label: "Acceptance Rate" }, { key: "total_rides", label: "Rides" },
+                { key: "joined_at", label: "Joined" }, { key: "approved_at", label: "Approved As Driver" },
             ]);
             toast({ title: "Export complete", description: `${res.count ?? res.drivers?.length ?? 0} drivers exported.` });
         } catch (e: any) {

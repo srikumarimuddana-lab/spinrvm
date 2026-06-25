@@ -26,7 +26,9 @@ CREATE TABLE IF NOT EXISTS ride_live_activities (
     ride_id     UUID NOT NULL,
     rider_id    UUID NOT NULL,                          -- owning rider (rides.rider_id)
     platform    TEXT NOT NULL CHECK (platform IN ('ios', 'android')),
-    push_token  TEXT NOT NULL,                          -- ActivityKit token (iOS) / device token (Android)
+    -- ActivityKit token (iOS) / device token (Android). Real tokens are small
+    -- (APNs ≤100, FCM ≤256 chars); 512 bounds abuse. Mirrors the API max_length.
+    push_token  TEXT NOT NULL CHECK (char_length(push_token) <= 512),
     started_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     ended_at    TIMESTAMPTZ,                            -- set on terminal state (completed/cancelled)
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -58,7 +60,12 @@ CREATE POLICY ride_live_activities_service_update
 CREATE POLICY ride_live_activities_service_delete
     ON ride_live_activities FOR DELETE TO service_role USING (true);
 
--- Rider may read only their own live-activity rows (anon/authenticated key).
+-- Rider may read only their own live-activity rows. `authenticated` = any
+-- Supabase JWT user (riders AND drivers); the USING clause confines results to
+-- auth.uid() = rider_id, so a driver (or any other rider) reading directly via
+-- the Supabase client gets zero cross-rider rows. The anon role has no policy,
+-- so unauthenticated reads return nothing. No write policy for non-service roles
+-- → the frontend can never write a push token directly.
 -- Direct uuid comparison (both sides uuid) so the planner can use the rider_id predicate.
 CREATE POLICY ride_live_activities_rider_select
     ON ride_live_activities FOR SELECT TO authenticated

@@ -40,28 +40,110 @@ EVENT_END = "end"
 _TERMINAL_STATUSES = frozenset({"completed", "cancelled"})
 
 
+# A trailing province token to drop so "Regina, SK" -> "Regina".
+_PROVINCE_TOKENS = frozenset(
+    {
+        "ab",
+        "bc",
+        "mb",
+        "nb",
+        "nl",
+        "ns",
+        "nt",
+        "nu",
+        "on",
+        "pe",
+        "qc",
+        "sk",
+        "yt",
+        "alberta",
+        "british columbia",
+        "manitoba",
+        "new brunswick",
+        "newfoundland and labrador",
+        "nova scotia",
+        "northwest territories",
+        "nunavut",
+        "ontario",
+        "prince edward island",
+        "quebec",
+        "saskatchewan",
+        "yukon",
+    }
+)
+# Unambiguous street-suffix words. A token containing one is a street, never an
+# area. Deliberately excludes place-ambiguous words (bay, green, point, ridge,
+# row, grove, cove, square, …) that also occur in city names (e.g. "Thunder
+# Bay") — we'd rather drop a token to None than risk surfacing a street.
+_STREET_WORDS = frozenset(
+    {
+        "street",
+        "st",
+        "avenue",
+        "ave",
+        "drive",
+        "dr",
+        "lane",
+        "ln",
+        "road",
+        "rd",
+        "boulevard",
+        "blvd",
+        "crescent",
+        "cres",
+        "court",
+        "ct",
+        "place",
+        "pl",
+        "way",
+        "terrace",
+        "terr",
+        "parkway",
+        "pkwy",
+        "highway",
+        "hwy",
+        "close",
+        "alley",
+        "trail",
+        "wynd",
+        "circle",
+        "cir",
+    }
+)
+
+
+def _is_street(token: str) -> bool:
+    return any(w in _STREET_WORDS for w in token.lower().replace(".", "").split())
+
+
 def _area_label(address: Optional[str]) -> Optional[str]:
     """Coarse area (city/locality) from a full address, for the lock-screen
-    content-state. Drops house number + street so the Live Activity never shows
-    an exact address on a locked phone.
+    content-state. Strips house number, street, province, and postal code so the
+    Live Activity never shows an exact address on a locked phone — and so the
+    only location detail logged is a city, not a street.
 
-    "123 Main Street, Regina, SK, S4P 3A1" -> "Regina"
-    "Regina, SK"                            -> "Regina"
+    "1742 Main Street, Regina, SK, S4P 3A1" -> "Regina"
+    "Oak Lane, Regina"                       -> "Regina"
+    "Regina, SK"                             -> "Regina"
 
-    Best-effort heuristic: split on commas, discard any token containing a digit
-    (house numbers, postal codes), then take the token just before the province.
-    Phase 3 may swap in the service-area name. Returns None when nothing usable.
+    Heuristic, biased to return None over leaking a street: split on commas, drop
+    digit-bearing tokens (house numbers, postal codes), drop a trailing province,
+    drop any street-named token; the last token left is the city. Phase 3 may
+    swap in the booking's service-area name. Returns None when nothing usable.
     """
     if not address:
         return None
     parts = [p.strip() for p in address.split(",") if p.strip()]
-    # Digit-bearing tokens are house-numbered streets / postal codes — drop them
-    # entirely so a street name never leaks to the lock screen.
+    # Digit-bearing tokens are house-numbered streets / postal codes — drop them.
     cleaned = [p for p in parts if not any(ch.isdigit() for ch in p)]
+    # Drop a single trailing province token.
+    if len(cleaned) >= 2 and cleaned[-1].lower() in _PROVINCE_TOKENS:
+        cleaned = cleaned[:-1]
+    # Drop street-named tokens so a street can never surface as the area.
+    cleaned = [p for p in cleaned if not _is_street(p)]
     if not cleaned:
         return None
-    # cleaned is typically [street?, city, province]; the city is second-to-last.
-    return cleaned[-2] if len(cleaned) >= 2 else cleaned[-1]
+    return cleaned[-1]
 
 
 def _driver_attr(driver: Any, key: str) -> Any:
@@ -133,8 +215,12 @@ def build_content_state(
 
 
 async def _active_activities(ride_id: str) -> list[dict]:
-    """Registered, not-yet-ended live activities for a ride (one per platform)."""
-    rows = await db_supabase.get_rows("ride_live_activities", {"ride_id": ride_id})
+    """Registered, not-yet-ended live activities for a ride (one per platform).
+
+    Selects only id/platform/ended_at — the push_token is never fetched into
+    memory in Phase 1 (log-only). Phase 3 dispatch must select it explicitly.
+    """
+    rows = await db_supabase.get_rows("ride_live_activities", {"ride_id": ride_id}, columns="id,platform,ended_at")
     return [r for r in (rows or []) if not r.get("ended_at")]
 
 

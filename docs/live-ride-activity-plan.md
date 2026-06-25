@@ -1,9 +1,25 @@
 # Live Ride Activity — Implementation Plan (rider app)
 
-Status: **PLAN — not yet implemented.** Scoped for scheduling.
+Status: **Phase 1 + 2 merged to main; Phase 3 (iOS Voltra) backend done + rider
+scaffolded.** Phase 1 = storage + register endpoint + state-machine hooks.
+Phase 2 = Android notifee via data-only FCM. Phase 3 = iOS Voltra Live Activity:
+backend ActivityKit APNs push (utils/apns_client.py, pre-rendered templates) is
+implemented + tested; the rider Voltra surface (component, service, _layout
+wiring, config) is scaffolded and needs build-time finalization against the
+installed Voltra types + an EAS build + iOS-device test. Ships **dark** until the
+admin sets the `apns_*` keys and `voltra_templates.json` is generated.
 Stack (locked): **iOS = Voltra** (Live Activity as React components + ActivityKit
 push) · **Android = notifee** (ongoing / Live Update notification) · backend
-drives both off the ride state machine. Gated on a Phase 0 Voltra/Expo-55 spike.
+drives both off the ride state machine.
+
+Phase 3 push rendering (decided): Voltra's pushed content-state is a JS-rendered
+`uiJsonData` blob, so the Python backend cannot render it. **Option C** — a
+build-time Node script (`rider-app/scripts/render-voltra-templates.mjs`) renders
+the activity component over a (status × eta-bucket) grid into
+`backend/utils/voltra_templates.json`, which `apns_client.py` indexes and pushes.
+Locked/killed content is generic-per-status; rich per-ride content shows on-device
+(autoUpdate) while the app is alive. The `_render_ui_json` seam swaps to a Node
+sidecar if template fidelity is insufficient.
 
 ## 1. Goal
 After a driver **accepts** a ride, the rider gets a live, glanceable ride‑status

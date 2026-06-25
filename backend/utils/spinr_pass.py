@@ -71,7 +71,10 @@ def compute_quota(rides_per_day: Any, used_today: Any, now: Optional[datetime] =
         rpd = int(rides_per_day)
     except (TypeError, ValueError):
         rpd = UNLIMITED
-    unlimited = rpd == UNLIMITED
+    # Any negative cap means "no daily limit" (-1 is the canonical sentinel, but
+    # a misconfigured -2/-5 must not read as 0-remaining and block everyone).
+    # 0 is a real cap (no rides) and stays exhausted.
+    unlimited = rpd < 0
     used = max(0, int(used_today or 0))
     remaining = None if unlimited else max(0, rpd - used)
     exhausted = (not unlimited) and remaining == 0
@@ -156,6 +159,12 @@ async def quota_status(
         sub = await active_subscription(driver_id)
     if not sub:
         return None
+    # An active row past its expiry is moot for quota — the expiry gates (go
+    # online / accept / sweeper) own that case. Treating it as "no quota" avoids
+    # a misleading "rides used up" message when the real reason is expiry.
+    exp = parse_iso_utc(sub.get("expires_at")) if sub.get("expires_at") else None
+    if exp is not None and exp <= (now or datetime.now(timezone.utc)):
+        return None
     used = await completed_today(driver_id, now)
     status = compute_quota(sub.get("rides_per_day", UNLIMITED), used, now)
     status["subscription_id"] = sub.get("id")
@@ -180,27 +189,91 @@ async def is_quota_exhausted(
     return bool(status and status.get("exhausted"))
 
 
+async def assert_quota_available(
+    driver_id: str,
+    sub: Optional[Dict[str, Any]] = None,
+    now: Optional[datetime] = None,
+) -> Optional[Dict[str, Any]]:
+    """Raise if the driver's finite Spinr Pass allowance is used up for the day.
+
+    The single enforcement entry point for go-online and accept-ride. No-op
+    (returns the quota status or ``None``) when there's no active finite pass,
+    the pass is unlimited, or rides remain. Raises ``SpinrException`` (403,
+    ``DRIVER_QUOTA_EXCEEDED``) when exhausted.
+
+    Fails **open**: a lookup error (e.g. ``driver_subscriptions`` absent
+    pre-launch) returns ``None`` rather than blocking — the subscription-present
+    and expiry gates are the hard gates; quota is an additional limit and the
+    completion force-offline still backstops it.
+    """
+    try:
+        status = await quota_status(driver_id, sub=sub, now=now)
+    except Exception:
+        logger.error("assert_quota_available lookup failed for driver=%s", driver_id, exc_info=True)
+        return None
+    if not status or not status.get("exhausted"):
+        return status
+
+    try:
+        from .error_handling import ErrorCode, SpinrException  # type: ignore
+    except ImportError:  # pragma: no cover - top-level import path
+        from utils.error_handling import ErrorCode, SpinrException  # type: ignore
+    try:
+        from .error_keys import ErrorKeys  # type: ignore
+    except ImportError:  # pragma: no cover
+        from utils.error_keys import ErrorKeys  # type: ignore
+
+    reset_h = round(status.get("hours_until_reset") or 0)
+    raise SpinrException(
+        message=(
+            f"You've used all {status['rides_per_day']} of today's Spinr Pass rides. "
+            f"Your allowance resets in about {reset_h}h. "
+            "Enjoy the rest of your day — you can go online again then."
+        ),
+        error_code=ErrorCode.DRIVER_QUOTA_EXCEEDED,
+        status_code=403,
+        message_key=ErrorKeys.DRIVER_QUOTA_EXHAUSTED,
+        action_hint="Resets at midnight",
+        details={
+            "rides_per_day": status["rides_per_day"],
+            "used_today": status["used_today"],
+            "quota_resets_at": status["quota_resets_at"],
+            "hours_until_reset": status["hours_until_reset"],
+        },
+    )
+
+
 async def exhausted_driver_ids(
     subs: Iterable[Dict[str, Any]],
     now: Optional[datetime] = None,
 ) -> Set[str]:
     """Batch: of the given active subs, which drivers are out of rides today.
 
-    ``subs`` rows must include ``driver_id`` and ``rides_per_day``. Unlimited
-    plans (``rides_per_day == -1``) are skipped. Uses a single batched
-    ``rides`` read (no N+1) to tally today's completions across all finite-quota
-    drivers, then compares each driver's count to their own allowance.
+    ``subs`` rows must include ``driver_id`` and ``rides_per_day`` (and may
+    include ``expires_at``). Self-contained: skips unlimited plans (any negative
+    ``rides_per_day``) and lapsed passes, so callers can pass raw active-sub
+    rows. Uses a single batched ``rides`` read (no N+1) to tally today's
+    completions across all finite-quota drivers, then compares each driver's
+    count to their own allowance.
     """
-    finite = {
-        s["driver_id"]: int(s.get("rides_per_day", UNLIMITED))
-        for s in subs
-        if s.get("driver_id") is not None and _as_int(s.get("rides_per_day", UNLIMITED)) != UNLIMITED
-    }
+    now_dt = now or datetime.now(timezone.utc)
+    finite: Dict[str, int] = {}
+    for s in subs:
+        did = s.get("driver_id")
+        if did is None:
+            continue
+        cap = _as_int(s.get("rides_per_day", UNLIMITED))
+        if cap < 0:
+            continue  # unlimited (any negative sentinel)
+        exp = parse_iso_utc(s.get("expires_at")) if s.get("expires_at") else None
+        if exp is not None and exp <= now_dt:
+            continue  # lapsed pass — quota is moot
+        finite[did] = cap
     if not finite:
         return set()
 
     db = _db()
-    day_start, _ = quota_day_bounds_utc(now)
+    day_start, _ = quota_day_bounds_utc(now_dt)
     try:
         from ..schemas import RideStatus  # type: ignore
     except ImportError:  # pragma: no cover

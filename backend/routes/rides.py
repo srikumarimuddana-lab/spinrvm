@@ -4461,33 +4461,30 @@ async def cancel_ride_rider(
             if payment_method == "wallet":
                 rider_wallet = await db_supabase.find_one("wallets", {"user_id": current_user["id"]})
                 if rider_wallet:
-                    old_balance = _round(_d(rider_wallet.get("balance", 0)))
-                    new_balance = max(_round(old_balance - total_cancel_fee), Decimal("0"))
-                    actual_charge = _round(old_balance - new_balance)
-                    if actual_charge > 0:
-                        await db_supabase.update_one(
-                            "wallets",
-                            {"id": rider_wallet["id"]},
-                            {
-                                "balance": _f(new_balance),
-                                "updated_at": datetime.now(timezone.utc).isoformat(),
-                            },
-                        )
-                        await db_supabase.insert_one(
-                            "wallet_transactions",
-                            {
-                                "id": str(uuid.uuid4()),
-                                "wallet_id": rider_wallet["id"],
-                                "user_id": current_user["id"],
-                                "type": "cancellation_fee",
-                                "amount": -_f(actual_charge),
-                                "balance_after": _f(new_balance),
-                                "reference_id": ride_id,
-                                "description": f"Cancellation fee for ride {ride_id[:8]}",
-                                "metadata": {"ride_id": ride_id},
-                                "created_at": datetime.now(timezone.utc).isoformat(),
-                            },
-                        )
+                    # Atomic + idempotent: locks the wallet row, debits up to the
+                    # available balance, and writes the ledger row in ONE DB
+                    # transaction (migration 188's wallet_debit_cancellation_fee).
+                    # Replaces a read-compute-write across two PostgREST calls
+                    # that (a) could lose a concurrent write (cancel racing a
+                    # top-up / double-tapped cancel) and (b) could debit the
+                    # balance while the ledger insert failed. Pass the amount as
+                    # a string so NUMERIC keeps exact decimal precision.
+                    debit_rows = await db_supabase.rpc(
+                        "wallet_debit_cancellation_fee",
+                        {
+                            "p_wallet_id": rider_wallet["id"],
+                            "p_user_id": current_user["id"],
+                            "p_ride_id": ride_id,
+                            "p_amount": str(total_cancel_fee),
+                        },
+                    )
+                    debited = (debit_rows or [{}])[0] if debit_rows is not None else {}
+                    logger.info(
+                        "[CANCEL] wallet cancellation fee for ride %s: charged=%s new_balance=%s",
+                        ride_id,
+                        debited.get("actual_charge"),
+                        debited.get("new_balance"),
+                    )
 
         if driver_id and charged_driver > 0:
             await pay_driver_cancellation_fee(

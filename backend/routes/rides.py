@@ -2357,7 +2357,15 @@ async def create_ride(
                 detail=(rider_row or {}).get("status_reason")
                 or "Your account is currently suspended. Please contact support.",
             )
-    if body.payment_method == "card" and not body.work_profile:
+    # Corporate-billed rides carry a corporate_account_id (or are explicitly
+    # company_allowance) — their payment is the corporate account's concern, not
+    # a personal card on file, so the card checks below don't apply. A bare
+    # work_profile flag WITHOUT a corporate_account_id is NOT corporate (it never
+    # reclassifies to company_allowance), so it must not exempt these checks:
+    # exempting on work_profile alone let a caller create a card ride with no
+    # pinned card and fall back to the stored default (Codex P1).
+    _is_corporate_billed = bool(body.corporate_account_id) or (body.payment_method or "").lower() == "company_allowance"
+    if body.payment_method == "card" and not _is_corporate_billed:
         # Demo/local mode (Stripe intentionally unconfigured) has no real Stripe
         # customers or cards; card rides settle through charge_ride's
         # "unconfigured" path (marked paid, no charge). Only enforce the

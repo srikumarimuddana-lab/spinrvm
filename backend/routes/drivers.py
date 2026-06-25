@@ -3494,6 +3494,19 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
                 detail="Could not verify subscription for this area. Please try again.",
             ) from None
 
+    # Daily ride-allowance gate — independent of area. Whenever the accepting
+    # driver holds a finite Spinr Pass that's used up for the local calendar
+    # day, block the accept (403) until it resets at midnight. No-op for
+    # unlimited / no pass / rides-remaining; fails open on lookup error so a
+    # transient fault never strands an otherwise-eligible driver.
+    try:
+        from ..utils.spinr_pass import assert_quota_available
+    except ImportError:
+        from utils.spinr_pass import assert_quota_available  # type: ignore
+    # Quota day anchored on the driver's home service-area timezone (Regina
+    # fallback), matching go-online and the /subscription/current display.
+    await assert_quota_available(driver["id"], area_id=driver.get("service_area_id"))
+
     diag_logger.info(
         f"[ACCEPT] entry ride_id={ride_id} driver_id={driver.get('id')} "
         f"pre_status={ride.get('status')} pre_driver_id={ride.get('driver_id')}"
@@ -4688,6 +4701,21 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     # period 1 (still online, no ride). No ride_id on period 1.
     await record_period_transition(driver["id"], 1)
 
+    # Daily Spinr Pass allowance: if this completion used the driver's last ride
+    # for the day, flip them offline now (DB-level, so dispatch stops offering)
+    # until the allowance resets at the next local midnight. The driver WS
+    # notice is sent at the end, after the ride_completed events, so the app
+    # doesn't reset its completion UI prematurely.
+    try:
+        from ..utils.spinr_pass import force_offline_if_exhausted
+    except ImportError:
+        from utils.spinr_pass import force_offline_if_exhausted  # type: ignore
+    try:
+        _quota_offline = await force_offline_if_exhausted(driver)
+    except Exception:
+        _quota_offline = None
+        logger.error("complete_ride: quota offline check failed for driver=%s", driver["id"], exc_info=True)
+
     completed_ride = await db_supabase.get_ride(ride_id)
 
     if completed_ride and completed_ride.get("rider_id"):
@@ -4739,6 +4767,44 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         asyncio.create_task(update_quest_progress_on_ride_complete(driver["id"], completed_ride or ride))
     except Exception:
         logger.error("complete_ride: scheduling quest progress update failed for ride %s", ride_id, exc_info=True)
+
+    # Notify the driver (and admins) if this completion took them offline for
+    # the day. Sent last so the app handles ride_completed first. Reuses the
+    # existing 'auto_offline' client handler (stops offer sound, flips offline).
+    if _quota_offline and driver.get("user_id"):
+        _reset_h = round(_quota_offline.get("hours_until_reset") or 0)
+        try:
+            await manager.send_personal_message(
+                {
+                    "type": "auto_offline",
+                    "reason": "quota_exhausted",
+                    "message": (
+                        f"You've used all {_quota_offline.get('rides_per_day')} Spinr Pass rides for "
+                        f"today. You're now offline — your allowance resets in about {_reset_h}h."
+                    ),
+                    "quota_resets_at": _quota_offline.get("quota_resets_at"),
+                },
+                f"driver_{driver['user_id']}",
+            )
+            await manager.broadcast_to_admins(
+                {"type": "driver_status_changed", "driver_id": driver["id"], "is_online": False}
+            )
+        except Exception:
+            logger.warning("complete_ride: quota auto_offline notify failed for driver=%s", driver["id"])
+        # Push so the driver sees it even with the app backgrounded.
+        try:
+            await send_push_notification(
+                driver["user_id"],
+                "Daily ride limit reached",
+                (
+                    f"You've used all {_quota_offline.get('rides_per_day')} Spinr Pass rides for today. "
+                    f"You're now offline — your allowance resets in about {_reset_h}h."
+                ),
+                data={"type": "quota_exhausted", "driver_id": str(driver["id"])},
+                target_app="driver",
+            )
+        except Exception:
+            logger.warning("complete_ride: quota push failed for driver=%s", driver["id"])
 
     return serialize_doc(completed_ride)
 
@@ -5852,6 +5918,21 @@ async def update_driver_status(
                         detail="Could not verify subscription plan restrictions. Please try again.",
                     ) from e
 
+        # Daily ride-allowance gate — applies to ANY driver holding a finite
+        # Spinr Pass, not only in pass-required areas. Once the pass's rides for
+        # the local calendar day are used up the driver stays offline until the
+        # next midnight, so they can't toggle back online and pull more offers.
+        # assert_quota_available fetches the active pass itself, is a no-op for
+        # unlimited / no-pass / rides-remaining, and fails open so a missing
+        # table (pre-launch) never wrongly blocks a driver in a non-gated area.
+        try:
+            from ..utils.spinr_pass import assert_quota_available
+        except ImportError:
+            from utils.spinr_pass import assert_quota_available  # type: ignore
+        # Anchor the quota day on the driver's service-area timezone (Regina
+        # fallback) so the reset matches their local calendar day under DST.
+        await assert_quota_available(driver_id, area_id=driver.get("service_area_id"))
+
     logger.info(
         f"[GO-ONLINE] handler CALL update_one driver_id={driver_id} "
         f"requested_is_online={is_online} "
@@ -6068,26 +6149,37 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
                 exc_info=True,
             )
 
-    # Get today's ride count
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    today_rides = await db_supabase.count_documents(
-        "rides",
-        {
-            "driver_id": driver["id"],
-            "status": RideStatus.COMPLETED,
-            "ride_completed_at": {"$gte": today_start.isoformat()},
-        },
-    )
+    # Quota state for the current calendar day (America/Regina). The same
+    # window powers go-online / dispatch / accept enforcement, so the numbers
+    # the driver sees here match the ones enforced on the rides.
+    try:
+        from ..utils.spinr_pass import area_timezone, completed_today, compute_quota, hours_until
+    except ImportError:
+        from utils.spinr_pass import area_timezone, completed_today, compute_quota, hours_until  # type: ignore
 
-    rides_per_day = sub.get("rides_per_day", -1)
-    rides_remaining = "unlimited" if rides_per_day == -1 else max(0, rides_per_day - today_rides)
+    # Same service-area timezone the enforcement gates use, so the countdown the
+    # driver sees matches when their rides actually reset. This is display only,
+    # so a transient lookup error degrades to the Regina default rather than 500
+    # the screen (enforcement, which must be exact, lets the error propagate).
+    try:
+        _tz = await area_timezone(driver.get("service_area_id"))
+    except Exception:
+        logger.warning("get_current_subscription: area timezone lookup failed; using default", exc_info=True)
+        _tz = None
+    today_rides = await completed_today(driver["id"], tz=_tz)
+    quota = compute_quota(sub.get("rides_per_day", -1), today_rides, tz=_tz)
 
     return {
         "has_subscription": True,
         "subscription": sub,
         "today_rides": today_rides,
-        "rides_remaining": rides_remaining,
-        "can_accept_rides": rides_per_day == -1 or today_rides < rides_per_day,
+        "rides_remaining": quota["rides_remaining"],
+        "can_accept_rides": quota["can_accept_rides"],
+        # Quota refills (rides reset) at the next local midnight.
+        "quota_resets_at": quota["quota_resets_at"],
+        "hours_until_reset": quota["hours_until_reset"],
+        # Pass itself ends (must renew) at expires_at.
+        "hours_until_expiry": hours_until(sub.get("expires_at")),
     }
 
 

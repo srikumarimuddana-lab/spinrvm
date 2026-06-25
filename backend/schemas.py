@@ -203,6 +203,15 @@ class AppSettings(BaseModel):
     ai_escalation_creates_ticket: bool = False
     # Shown under the chat input in both apps; also returned by /ai/config.
     ai_disclaimer: str = "AI answers can be inaccurate. For emergencies, call 911 or use the SOS button."
+    # ── iOS Live Activity APNs (Phase 3, .p8 token auth) ─────────────────
+    # Direct ActivityKit push (FCM can't carry the liveactivity push type). The
+    # feature ships dark until all four are set. apns_p8_key is the secret (masked
+    # like the Stripe/Twilio keys); the other three are public identifiers. See
+    # utils/apns_client.py.
+    apns_key_id: str = ""  # 10-char Key ID (from AuthKey_XXXXXXXXXX.p8)
+    apns_team_id: str = ""  # 10-char Apple Team ID
+    apns_bundle_id: str = ""  # rider bundle id; topic = this + ".push-type.liveactivity"
+    apns_p8_key: str = ""  # full PEM of the .p8 private key (multi-line)
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

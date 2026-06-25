@@ -32,6 +32,7 @@ import { useRideStore } from '../store/rideStore';
 import { useWorkProfileStore } from '../store/workProfileStore';
 import { useRiderSocket } from '../hooks/useRiderSocket';
 import * as rideLive from '../services/rideLiveNotification';
+import * as rideVoltra from '../services/rideVoltraLiveActivity';
 import BrandSplash from '../components/BrandSplash';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
@@ -402,6 +403,67 @@ function RootLayout() {
     maybeRegister(useRideStore.getState().currentRide);
     const unsub = useRideStore.subscribe((s) => maybeRegister(s.currentRide));
     return () => unsub();
+  }, [isAuthInitialized, authToken]);
+
+  // iOS Live Activity (Voltra): start the activity once a driver accepts, capture
+  // the ActivityKit push token and register it (so the backend can update/end the
+  // activity via APNs while backgrounded/killed), and end on a terminal state.
+  // Foreground updates re-render on-device (Voltra); killed-state via APNs.
+  useEffect(() => {
+    if (Platform.OS !== 'ios' || !isAuthInitialized || !authToken) return;
+    const POST_ACCEPT = new Set(['driver_accepted', 'driver_arrived', 'in_progress']);
+    const TERMINAL = new Set(['completed', 'cancelled']);
+    let startedRideId: string | null = null;
+
+    const buildContent = (ride: any): rideVoltra.VoltraContent => {
+      const st = useRideStore.getState();
+      const d = st.currentDriver as any;
+      const etaSec = st.driverEtaSeconds;
+      const status = (ride?.status as string) || '';
+      const headlineMap: Record<string, string> = {
+        driver_accepted: 'Driver on the way',
+        driver_arrived: 'Your driver has arrived',
+        in_progress: 'On your way',
+      };
+      return {
+        status,
+        headline: headlineMap[status] ?? 'Ride update',
+        etaMinutes: etaSec ? Math.ceil(etaSec / 60) : null,
+        driverName: d?.name ? String(d.name).split(' ')[0] : null,
+        vehicleLabel: d
+          ? [d.vehicle_color, d.vehicle_make, d.vehicle_model].filter(Boolean).join(' ') || null
+          : null,
+        dropoffArea: null, // area-only; exact address never on the lock screen
+        rideCode: ride?.code ?? null,
+      };
+    };
+
+    const sub = rideVoltra.onTokenReceived((pushToken) => {
+      const ride = useRideStore.getState().currentRide;
+      if (ride?.id) {
+        api
+          .post(`/rides/${ride.id}/live-activity/register`, { platform: 'ios', push_token: pushToken })
+          .catch((e) => console.log('[Voltra] live-activity register failed:', e));
+      }
+    });
+
+    const onRide = (ride: any) => {
+      const status = ride?.status as string | undefined;
+      if (ride?.id && status && POST_ACCEPT.has(status) && startedRideId !== ride.id) {
+        startedRideId = ride.id;
+        rideVoltra.startActivity(buildContent(ride));
+      } else if (status && TERMINAL.has(status)) {
+        rideVoltra.endActivity();
+        startedRideId = null;
+      }
+    };
+
+    onRide(useRideStore.getState().currentRide);
+    const unsub = useRideStore.subscribe((s) => onRide(s.currentRide));
+    return () => {
+      sub();
+      unsub();
+    };
   }, [isAuthInitialized, authToken]);
 
   // Foreground FCM message handler

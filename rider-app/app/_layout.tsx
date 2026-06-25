@@ -31,6 +31,7 @@ import { useVehicleTypesSync } from '@shared/store/vehicleTypeStore';
 import { useRideStore } from '../store/rideStore';
 import { useWorkProfileStore } from '../store/workProfileStore';
 import { useRiderSocket } from '../hooks/useRiderSocket';
+import * as rideLive from '../services/rideLiveNotification';
 import BrandSplash from '../components/BrandSplash';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
@@ -145,7 +146,14 @@ if (Notifications) {
 }
 
 setBackgroundMessageHandler(async (remoteMessage: any) => {
-  console.log('[Push] Rider background FCM:', remoteMessage?.data?.type || remoteMessage?.notification?.title);
+  const data = remoteMessage?.data;
+  console.log('[Push] Rider background FCM:', data?.type || remoteMessage?.notification?.title);
+  // Backend-driven ongoing "live ride" notification. This handler runs headless
+  // (app backgrounded/killed), so Notifee renders/updates/cancels the notification
+  // here from the data-only message — the only path that works when JS is asleep.
+  if (data?.type === 'live_activity') {
+    await rideLive.handleFcmData(data);
+  }
 });
 
 
@@ -363,6 +371,39 @@ function RootLayout() {
     };
   }, [isAuthInitialized, authToken]);
 
+  // Live-activity registration (Android): once a driver has accepted, register
+  // this device so the backend can update/cancel the ongoing "live ride"
+  // notification via data-only FCM even while the app is backgrounded/killed.
+  // The local foreground driver (useRideStatusNotification) shows it immediately;
+  // this just enables the backend-driven updates. Registered once per ride.
+  useEffect(() => {
+    if (Platform.OS !== 'android' || !isAuthInitialized || !authToken) return;
+    const POST_ACCEPT = new Set(['driver_accepted', 'driver_arrived', 'in_progress']);
+    let lastRegisteredRideId: string | null = null;
+
+    const maybeRegister = async (ride: any) => {
+      const status = ride?.status as string | undefined;
+      if (!ride?.id || !status || !POST_ACCEPT.has(status)) return;
+      if (lastRegisteredRideId === ride.id) return;
+      lastRegisteredRideId = ride.id;
+      try {
+        const token = await requestPushPermissionAndGetToken();
+        if (!token) return;
+        await api.post(`/rides/${ride.id}/live-activity/register`, {
+          platform: Platform.OS, // 'android'
+          push_token: token,
+        });
+        console.log('[RideLive] live-activity registered for ride', ride.id);
+      } catch (e) {
+        console.log('[RideLive] live-activity register failed:', e);
+      }
+    };
+
+    maybeRegister(useRideStore.getState().currentRide);
+    const unsub = useRideStore.subscribe((s) => maybeRegister(s.currentRide));
+    return () => unsub();
+  }, [isAuthInitialized, authToken]);
+
   // Foreground FCM message handler
   useEffect(() => {
     if (!isAuthInitialized) return;
@@ -388,6 +429,12 @@ function RootLayout() {
             trigger: null,
           }).catch(() => {});
         }
+        return;
+      }
+
+      // Live ride-activity update (data-only): refresh the ongoing notification.
+      if (remoteMessage?.data?.type === 'live_activity') {
+        rideLive.handleFcmData(remoteMessage.data).catch(() => {});
         return;
       }
 

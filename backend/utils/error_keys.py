@@ -24,6 +24,7 @@ class ErrorKeys:
     DRIVER_DOCUMENTS_PENDING: Final[str] = "errors.driver.documents_pending"
     DRIVER_DOCUMENTS_REJECTED: Final[str] = "errors.driver.documents_rejected"
     DRIVER_SUBSCRIPTION_REQUIRED: Final[str] = "errors.driver.subscription_required"
+    DRIVER_QUOTA_EXHAUSTED: Final[str] = "errors.driver.quota_exhausted"
     DRIVER_NOT_AVAILABLE: Final[str] = "errors.driver.not_available"
     DRIVER_OFFLINE: Final[str] = "errors.driver.offline"
 

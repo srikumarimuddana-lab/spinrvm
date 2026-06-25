@@ -28,6 +28,7 @@ try:
     from ..utils.datetime_utils import parse_iso_utc
     from ..utils.driver_presence import present_driver_ids
     from ..utils.metrics import inc as _metric_inc
+    from ..utils.spinr_pass import exhausted_driver_ids
 except ImportError:  # pragma: no cover - allow direct module imports in tests
     from geo_utils import calculate_distance
     from settings_loader import get_app_settings
@@ -35,6 +36,7 @@ except ImportError:  # pragma: no cover - allow direct module imports in tests
     from utils.datetime_utils import parse_iso_utc  # type: ignore
     from utils.driver_presence import present_driver_ids
     from utils.metrics import inc as _metric_inc  # type: ignore
+    from utils.spinr_pass import exhausted_driver_ids  # type: ignore
 
 
 # Valid algorithm values. ``nearest`` is the production default.
@@ -331,23 +333,44 @@ class DispatchService:
                     active_subs = await self.db.get_rows(
                         "driver_subscriptions",
                         {"driver_id": {"$in": candidate_ids}, "status": "active"},
-                        columns="driver_id,expires_at",
+                        columns="driver_id,expires_at,rides_per_day",
                         limit=len(candidate_ids),
                     )
                     _now = datetime.now(timezone.utc)
                     subscribed_ids = set()
+                    _valid_subs = []
                     for _s in active_subs or []:
                         if _s.get("expires_at"):
                             _exp = parse_iso_utc(_s["expires_at"])
                             if _exp is not None and _exp <= _now:
                                 continue  # expired
                         subscribed_ids.add(_s["driver_id"])
+                        _valid_subs.append(_s)
                     rows = [d for d in rows if d["id"] in subscribed_ids]
+
+                    # Daily ride-allowance filter: drop drivers who have already
+                    # used today's Spinr Pass rides so they stop receiving offers
+                    # until the allowance resets at the next local midnight. One
+                    # batched rides read — no per-driver query.
+                    try:
+                        _exhausted = await exhausted_driver_ids(_valid_subs, now=_now)
+                    except Exception:
+                        # Fail open on the quota filter: go-online + accept still
+                        # gate, so a transient read error must not drop everyone.
+                        _exhausted = set()
+                        logger.error(
+                            "Quota filter failed for area=%s — dispatching unfiltered by quota",
+                            ride.get("service_area_id"),
+                            exc_info=True,
+                        )
+                    if _exhausted:
+                        rows = [d for d in rows if d["id"] not in _exhausted]
                     logger.info(
-                        "Subscription filter: area=%s kept %d/%d drivers",
+                        "Subscription filter: area=%s kept %d/%d drivers (%d quota-exhausted)",
                         ride["service_area_id"],
                         len(rows),
                         len(candidate_ids),
+                        len(_exhausted),
                     )
             except Exception:
                 # Fail open: a DB error here must not block dispatch entirely.

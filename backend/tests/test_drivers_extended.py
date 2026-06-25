@@ -270,6 +270,26 @@ class TestGetDriverBalance:
         assert result["pending_payouts"] == "5.00"
         assert result["total_paid_out"] == "40.00"  # 30 + 10 sent (not pending)
 
+    def test_db_error_raises_503_not_zeroed_balance(self):
+        # Regression: a DB error fetching rides/payouts must surface as 503, not
+        # be masked as a $0.00 balance (which looks to the driver like their
+        # money vanished and triggers false payout escalations).
+        from fastapi import HTTPException
+
+        from backend.routes import drivers as drv
+
+        def get_rows_mock(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                raise RuntimeError("supabase H2 GOAWAY")
+            return []
+
+        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
+        assert exc.value.status_code == 503
+
     def test_returns_zeros_when_driver_not_found(self):
         from fastapi import HTTPException
 
@@ -1243,6 +1263,44 @@ class TestGetCurrentSubscription:
             result = asyncio.run(drv.get_current_subscription(current_user={"id": USER_ID}))
 
         assert result["has_subscription"] is False
+
+    def test_expired_pass_flips_to_expired(self):
+        # Regression: a lapsed pass whose row is still status='active' (the
+        # sweeper hasn't run yet) must report expired, not active. The old code
+        # stripped tzinfo off expires_at and compared naive-vs-aware, which
+        # raised TypeError for EVERY pass (timestamptz carries an offset); the
+        # bare except swallowed it, so this expired-flip branch was dead code
+        # and the driver saw a stale "active" pass with a quota.
+        from backend.routes import drivers as drv
+
+        sub = {
+            "id": "sub_old",
+            "driver_id": DRIVER_ID,
+            "status": "active",
+            "expires_at": "2020-01-01T00:00:00Z",  # in the past
+            "rides_per_day": 4,
+        }
+
+        def get_rows_side_effect(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "driver_subscriptions":
+                return [sub]
+            return []
+
+        update = AsyncMock(return_value=sub)
+        with (
+            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers.db_supabase.update_one", update),
+        ):
+            result = asyncio.run(drv.get_current_subscription(current_user={"id": USER_ID}))
+
+        assert result["has_subscription"] is False
+        assert result["expired"] is True
+        # The lapsed row must be flipped to 'expired' in the DB.
+        update.assert_awaited_once()
+        assert update.await_args.args[0] == "driver_subscriptions"
+        assert update.await_args.args[2] == {"status": "expired"}
 
 
 # ---------------------------------------------------------------------------

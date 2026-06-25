@@ -3480,7 +3480,7 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
             raise HTTPException(
                 status_code=503,
                 detail="Could not verify subscription for this area. Please try again.",
-            )
+            ) from None
 
     diag_logger.info(
         f"[ACCEPT] entry ride_id={ride_id} driver_id={driver.get('id')} "
@@ -6742,10 +6742,11 @@ async def _record_subscription_payment(
             "stripe_payment_intent_id": stripe_payment_intent_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+
         # Tax columns (migration 186) — stored when computed at checkout.
-        _q2 = lambda v: (
-            str(Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)) if v is not None else None
-        )  # noqa: E731
+        def _q2(v):
+            return str(Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)) if v is not None else None
+
         if subtotal is not None:
             row["subtotal"] = _q2(subtotal)
         if gst_amount is not None:
@@ -7191,7 +7192,10 @@ async def get_subscription_payment_history(
         Prefers stored tax columns (migration 186). Falls back to back-computing
         GST+PST from the total for legacy rows written before migration 186.
         """
-        _q2 = lambda v: Decimal(str(v)).quantize(Decimal("0.01"))
+
+        def _q2(v):
+            return Decimal(str(v)).quantize(Decimal("0.01"))
+
         total_d = _q2(p.get("amount") or 0)
         if p.get("subtotal") is not None:
             subtotal_d = _q2(p["subtotal"])
@@ -7256,7 +7260,9 @@ async def resend_subscription_invoice(
     _dur_map = {1: "Daily", 7: "Weekly", 30: "Monthly", 365: "Annual"}
     _dur_label = _dur_map.get(_days, f"{_days}-day")
 
-    _q2 = lambda v: Decimal(str(v)).quantize(Decimal("0.01"))
+    def _q2(v):
+        return Decimal(str(v)).quantize(Decimal("0.01"))
+
     total_d = _q2(payment.get("amount") or 0)
     if payment.get("subtotal") is not None:
         subtotal_d = _q2(payment["subtotal"])

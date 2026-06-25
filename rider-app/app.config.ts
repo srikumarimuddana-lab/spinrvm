@@ -162,7 +162,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 compileSdkVersion: 36,
                 targetSdkVersion: 35,
                 kotlinVersion: '2.2.21',
-            }
+            },
+            // Voltra Live Activities require iOS 16.4+ (the activity APIs).
+            ios: {
+                deploymentTarget: '16.4',
+            },
         }],
         // Belt-and-suspenders: re-stamps android.compileSdkVersion=36 and
         // android.targetSdkVersion=36 into gradle.properties. EAS build #59fcaa6b
@@ -187,6 +191,17 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 organization: process.env.SENTRY_ORG,
                 project: process.env.SENTRY_PROJECT,
                 url: process.env.SENTRY_URL ?? 'https://sentry.io/',
+            },
+        ],
+        // iOS Live Activity (Voltra). enablePushNotifications: true (Phase 3 —
+        // was false in the Phase 0 spike) so the backend can push ActivityKit
+        // updates to the activity while the app is backgrounded/killed.
+        // groupIdentifier = App Group shared with the activity extension.
+        [
+            '@use-voltra/ios-client',
+            {
+                groupIdentifier: `group.${BUNDLE_ID}`,
+                enablePushNotifications: true,
             },
         ],
     ],

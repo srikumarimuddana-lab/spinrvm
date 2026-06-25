@@ -513,7 +513,9 @@ function RideCompletedScreenContent() {
                   ? 'Spinr Wallet'
                   : currentRide?.payment_method === 'company_allowance'
                     ? 'Company Account'
-                    : `•••• ${currentRide?.card_last4 || '4242'}`}
+                    : currentRide?.card_last4
+                    ? `•••• ${currentRide.card_last4}`
+                    : 'Card'}
               </Text>
               {alreadyPaid && (
                 <View style={styles.paidChip}>

@@ -844,6 +844,15 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
     # an offer they'd 403 on at accept (wasting a dispatch cycle + pinging a
     # driver who can't take it). Fails OPEN — go-online/accept still gate, so a
     # transient read error must not drop everyone like the subscription filter.
+    #
+    # Timezone anchor: this filter uses the RIDE's service-area timezone for the
+    # calendar-day window, whereas the per-driver gates (go-online, accept,
+    # force-offline, /subscription/current) use the DRIVER's home service area.
+    # These coincide in a single-timezone deployment (SK today). Across a tz
+    # boundary they can differ by ≤1h only in the window between the two local
+    # midnights; both paths fail open, so the worst case is one extra/fewer offer
+    # near that boundary — never an overcharge or a stranded driver. If Spinr
+    # launches in a second timezone, unify on the driver's home area here.
     if all_drivers and ride.get("service_area_id"):
         try:
             try:
@@ -5517,7 +5526,12 @@ async def rider_complete_ride(
         except ImportError:
             from utils.spinr_pass import force_offline_if_exhausted  # type: ignore
         try:
-            _quota_offline = await force_offline_if_exhausted(driver_row or driver_id)
+            # Pass the home service area explicitly so the quota day is anchored
+            # on the driver's local timezone even if driver_row is unexpectedly
+            # missing (force_offline only auto-resolves it from a dict driver).
+            _quota_offline = await force_offline_if_exhausted(
+                driver_row or driver_id, area_id=(driver_row or {}).get("service_area_id")
+            )
         except Exception:
             _quota_offline = None
             logger.error("rider_complete_ride: quota offline check failed for driver=%s", driver_id, exc_info=True)

@@ -74,6 +74,11 @@ def quota_day_bounds_utc(now: Optional[datetime] = None, tz: TzArg = None) -> Tu
     midnight (the moment the allowance refills). ``tz`` selects the locale
     (defaults to America/Regina); DST transitions are handled by zoneinfo, so
     both bounds land on true local midnight even when the day isn't 24h long.
+
+    Note: ``replace(hour=0, ...)`` assumes local midnight is a real, unambiguous
+    wall-clock time. True for every Canadian zone (DST flips at 02:00). If the
+    service-area set ever includes a locale that transitions at midnight,
+    revisit this with a fold-aware construction.
     """
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:

@@ -1315,10 +1315,11 @@ async def _deliver_push_now(
         return False
 
     is_dispatch = (data or {}).get("type") == "new_ride_assignment"
+    is_live_activity = (data or {}).get("type") == "live_activity"
     # Live-activity updates are also data-only so the rider app's Notifee handler
     # renders/updates the ongoing notification itself (a system banner would
     # duplicate it and could not be made ongoing/updated-in-place).
-    is_data_only = is_dispatch or (data or {}).get("type") == "live_activity"
+    is_data_only = is_dispatch or is_live_activity
 
     # Rider app creates "ride-updates"; driver app creates "ride-offers".
     # Android silently drops notifications to channels that don't exist on
@@ -1342,6 +1343,26 @@ async def _deliver_push_now(
         # it. mutable_content (set below) is what lets the NSE run. Harmless when
         # no NSE is installed — iOS just ignores the image.
         _apns_image = (data or {}).get("offer_card_url") if is_dispatch else None
+        if is_dispatch:
+            # Dispatch offer rides on a time-sensitive alert payload (custom sound
+            # + category for the Accept/Decline actions). Without this aps block,
+            # iOS shows nothing for an otherwise data-only dispatch message.
+            _apns_payload = messaging.APNSPayload(
+                aps=messaging.Aps(
+                    alert=messaging.ApsAlert(title=title, body=body),
+                    sound="ride_offer.caf",
+                    category="ride-offer",
+                    content_available=True,
+                    mutable_content=True,
+                ),
+            )
+        elif is_live_activity:
+            # Live-activity FCM is Android-only (iOS uses the direct ActivityKit
+            # APNs path). If it ever reaches an iOS token it must be a silent
+            # background push, not a malformed alert (Apple rate-limits those).
+            _apns_payload = messaging.APNSPayload(aps=messaging.Aps(content_available=True))
+        else:
+            _apns_payload = None
         message = messaging.Message(
             notification=None if is_data_only else messaging.Notification(title=title, body=body),
             data=data or {},
@@ -1349,25 +1370,11 @@ async def _deliver_push_now(
             android=android_cfg,
             apns=messaging.APNSConfig(
                 headers={
-                    "apns-priority": "10",
-                    "apns-push-type": "alert",
+                    "apns-priority": "5" if is_live_activity else "10",
+                    "apns-push-type": "background" if is_live_activity else "alert",
                 },
                 fcm_options=messaging.APNSFCMOptions(image=_apns_image) if _apns_image else None,
-                # iOS has no full-screen intent — a dispatch offer rides on a
-                # time-sensitive alert payload (custom sound + category for the
-                # Accept/Decline actions). Without this aps block, iOS shows
-                # nothing for an otherwise data-only dispatch message.
-                payload=messaging.APNSPayload(
-                    aps=messaging.Aps(
-                        alert=messaging.ApsAlert(title=title, body=body),
-                        sound="ride_offer.caf" if is_dispatch else "default",
-                        category="ride-offer" if is_dispatch else None,
-                        content_available=True,
-                        mutable_content=True,
-                    ),
-                )
-                if is_dispatch
-                else None,
+                payload=_apns_payload,
             ),
         )
         response = await asyncio.to_thread(messaging.send, message)

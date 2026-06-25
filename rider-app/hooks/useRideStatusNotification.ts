@@ -1,36 +1,24 @@
 /**
  * useRideStatusNotification
  *
- * Maintains a persistent Android notification showing the current ride
- * status while the app is backgrounded — the same pattern used by Uber,
- * Lyft, and delivery apps.
+ * Keeps the rider's ongoing Android notification in sync with the current ride
+ * while the app's JS is alive (foreground / backgrounded-but-not-killed) — the
+ * same pattern used by Uber, Lyft, and delivery apps.
  *
- * Behaviour:
- *  - Posts a sticky notification to the `ride-status-live` channel when
- *    a ride becomes active (searching → … → in_progress).
- *  - Replaces the existing notification in-place as status changes so
- *    only one notification is ever shown.
- *  - Dismisses it automatically when the ride completes or is cancelled.
- *  - iOS + Expo Go: no-op (Expo Go removed push-token APIs in SDK 53;
- *    iOS shows status differently via Live Activities, not implemented here).
+ * Rendering moved from expo-notifications to Notifee (services/rideLiveNotification).
+ * The backend's data-only `live_activity` FCM drives the SAME notification id
+ * when the app is backgrounded/killed (app/_layout FCM handler), so there is
+ * never a duplicate. This hook is the foreground driver and builds the richer
+ * content (ETA, plate, pickup PIN) from local store state.
  *
- * Notification channel: `ride-status-live` — LOW importance so updating
- * the status text doesn't re-ring the phone. The high-importance
- * `ride-updates` channel already handles the individual sound alerts
- * (driver accepted, driver arrived, etc.).
+ * Android-only; Notifee no-ops on iOS / Expo Go / web. iOS uses native Live
+ * Activities (Phase 3), not this.
  */
 
 import { useEffect, useRef } from 'react';
 import { Platform } from 'react-native';
+import * as rideLive from '../services/rideLiveNotification';
 import { useRideStore } from '../store/rideStore';
-
-let Notifications: any = null;
-try {
-  Notifications = require('expo-notifications');
-} catch {}
-
-const NOTIF_ID = 'spinr_ride_status_live';
-export const RIDE_STATUS_CHANNEL = 'ride-status-live';
 
 const ACTIVE_STATUSES = new Set([
   'searching', 'driver_assigned', 'driver_accepted', 'driver_arrived', 'in_progress',
@@ -95,30 +83,17 @@ export function useRideStatusNotification() {
   const isPostedRef = useRef(false);
 
   useEffect(() => {
-    if (!Notifications || Platform.OS !== 'android') return;
+    if (Platform.OS !== 'android') return;
 
     const status = currentRide?.status as string | undefined;
 
     if (status && ACTIVE_STATUSES.has(status)) {
       const { title, body } = buildContent(status, currentRide, currentDriver, driverEtaSeconds);
-      Notifications.scheduleNotificationAsync({
-        identifier: NOTIF_ID,
-        content: {
-          title,
-          body,
-          data: { rideId: currentRide!.id, type: 'ride_status_live' },
-          sound: false,
-          sticky: true,
-          autoDismiss: false,
-          channelId: RIDE_STATUS_CHANNEL,
-          priority: Notifications.AndroidNotificationPriority.LOW,
-        },
-        trigger: null,
-      })
+      rideLive.showOrUpdate({ title, body, rideId: currentRide!.id })
         .then(() => { isPostedRef.current = true; })
         .catch((e: any) => console.warn('[RideNotif] Failed to post status notification:', e));
     } else if (isPostedRef.current) {
-      Notifications.dismissNotificationAsync(NOTIF_ID).catch(() => {});
+      rideLive.cancel().catch(() => {});
       isPostedRef.current = false;
     }
   }, [currentRide?.status, currentRide?.id, currentDriver?.name, driverEtaSeconds]);

@@ -415,6 +415,46 @@ class TestStripeWebhookPaymentIntentSucceeded:
             except Exception:
                 pass  # import path variations; the important thing is the branches are hit
 
+    def test_wallet_topup_credits_idempotently_on_reference_id(self):
+        """C6: a wallet_topup event must credit via wallet_apply_credit keyed on
+        the Stripe payment_intent id (reference_id), so a retried webhook can't
+        double-credit. The old path did a separate, unguarded increment+insert."""
+        from backend.routes import webhooks as wh
+
+        event_obj, _ = self._make_event(
+            {
+                "scope": "wallet_topup",
+                "wallet_id": "wallet_1",
+                "user_id": "user_1",
+                "amount_cad": "50.00",
+            }
+        )
+
+        import stripe
+
+        mock_credit = AsyncMock(
+            return_value={"transaction_id": "txn_1", "balance_after": "50.00", "deduped": False}
+        )
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.db_supabase.wallet_apply_credit", mock_credit),
+            patch("backend.routes.webhooks.send_push_notification", AsyncMock()),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._mock_req()))
+
+        assert result.get("scope") == "wallet_topup"
+        # Routed through the idempotent RPC, keyed on the Stripe PI id — never a
+        # separate unguarded increment + insert.
+        mock_credit.assert_awaited_once()
+        kwargs = mock_credit.await_args.kwargs
+        assert kwargs["reference_id"] == "pi_test"
+        assert kwargs["type_"] == "top_up"
+        assert kwargs["wallet_id"] == "wallet_1"
+
     def test_no_ride_id_still_succeeds(self):
         from backend.routes import webhooks as wh
 

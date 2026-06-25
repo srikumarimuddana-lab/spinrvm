@@ -781,7 +781,7 @@ async def settle_card(
 # ── Receipt ──────────────────────────────────────────────────────────
 
 
-async def send_ride_receipt(ride: dict, rider_id: str, tip_amount: Decimal, recipient_email: str = None) -> bool:
+async def send_ride_receipt(ride: dict, rider_id: str, tip_amount: Decimal, recipient_email: Optional[str] = None) -> bool:
     """Send receipt email. Returns True if email was sent.
 
     ``recipient_email`` overrides the destination address (admin can send the

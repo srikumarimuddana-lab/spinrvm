@@ -122,9 +122,13 @@ async def get_or_create_stripe_customer(user_id: str, stripe_secret: str):
     stripe_customer_id = user.get("stripe_customer_id")
 
     if not stripe_customer_id:
+        # PIPEDA (C4): do NOT send the rider's email or legal name to Stripe (a
+        # US processor). Neither is required to create a customer — only
+        # metadata.user_id is needed to correlate the Stripe customer back to
+        # our user. Avoiding the transfer keeps PII inside the Canadian region;
+        # contact details can be attached later only if a specific Stripe flow
+        # (e.g. a dispute) actually requires them.
         customer = stripe.Customer.create(
-            email=user.get("email"),
-            name=f"{user.get('first_name', '')} {user.get('last_name', '')}".strip(),
             metadata={"user_id": user_id},
             api_key=stripe_secret,
             idempotency_key=f"cus-create-{user_id}",

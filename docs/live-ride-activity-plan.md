@@ -1,6 +1,9 @@
 # Live Ride Activity — Implementation Plan (rider app)
 
 Status: **PLAN — not yet implemented.** Scoped for scheduling.
+Stack (locked): **iOS = Voltra** (Live Activity as React components + ActivityKit
+push) · **Android = notifee** (ongoing / Live Update notification) · backend
+drives both off the ride state machine. Gated on a Phase 0 Voltra/Expo-55 spike.
 
 ## 1. Goal
 After a driver **accepts** a ride, the rider gets a live, glanceable ride‑status
@@ -65,31 +68,31 @@ the two OS surfaces.
   ~20–30 s while en route) to push an ETA refresh; **rate-limit** to respect the
   ActivityKit push budget (APNs throttles frequent Live Activity updates).
 
-## 5. iOS work (rider app — native)
+## 5. iOS work (rider app — native) — **Voltra** (locked)
 
-Use **`@bacons/apple-targets`** (`npm i @bacons/apple-targets`) for the Widget
-Extension target via Continuous Native Generation. It scaffolds + links the
-Apple target through prebuild; it does **NOT** provide an ActivityKit JS bridge —
-that is a separate custom module (see below).
+Use **Voltra** (`callstackincubator/voltra`, MIT, Callstack-maintained). It
+builds the Live Activity + Dynamic Island UI as **React components — no Swift**,
+exposes a JS lifecycle hook, and handles **ActivityKit push tokens**. Chosen
+over `@bacons/apple-targets` (needs Swift + a custom ActivityKit bridge) and the
+**deprecated** `software-mansion-labs/expo-live-activity` (fixed layout). Needs a
+config plugin + prebuild + Dev Client (**not Expo Go**).
 
-- **5a. Widget Extension target** via `@bacons/apple-targets`:
-  - `targets/LiveRideActivity/expo-target.config.js` → `{ type: "widget" }`
-    (this is the Widget Extension that hosts the Live Activity).
-  - `targets/LiveRideActivity/*.swift` — SwiftUI: `ActivityAttributes`
-    (static: ride_code, areas, driver_name, vehicle_label) + `ContentState`
-    (dynamic: status, headline, eta_minutes), the Lock Screen view, and the
-    Dynamic Island (compact / minimal / expanded) views.
-  - `targets/LiveRideActivity/Info.plist` — `NSSupportsLiveActivities = true`.
-  - App config: add the plugin to `app.config.ts` and set `ios.appleTeamId`.
-- **5b. ActivityKit JS↔native bridge** (NOT covered by the package): a small
-  **Expo native module** (Swift, Expo Modules API) exposing `start(attributes,
-  content) → pushToken`, `update(content)`, `end()`. Lives in the main app
-  target and shares the `ActivityAttributes`/`ContentState` types with the
-  widget. (No maintained community lib is assumed compatible with Expo 55 / RN
-  0.85 — treat as custom.)
-- **5c. `services/liveActivity.ts`** (JS): on `driver_accepted` (ride-status
-  screen / WS event) call `start(...)`, capture the push token, POST it to the
-  backend; `end()` on terminal state.
+- **5a. Activity UI** — author the Lock Screen + Dynamic Island
+  (compact / minimal / expanded) layouts as Voltra React components
+  (`<Voltra.VStack>`, `<Voltra.Text>`, RN styling): status, ETA, driver/vehicle.
+  Fully custom; no SwiftUI, no separate widget-target scaffolding.
+- **5b. Lifecycle** — `useLiveActivity()` → `{ start, update, end }`. On
+  `driver_accepted` (ride-status screen / WS event) call `start(...)`, capture
+  the **ActivityKit push token**, and POST it to the backend; `update(...)` on
+  local WS events; `end()` on terminal state. (The backend also drives updates
+  via ActivityKit push while the app is backgrounded/locked — see §4.)
+- **5c. Config** — add the Voltra config plugin to `app.config.ts`, then
+  `npx expo prebuild --clean` and build a Dev Client / EAS build.
+- ⚠️ **Compat check is the FIRST task** — Voltra documents no Expo SDK / RN
+  range, so **verify it builds + runs on Expo 55 / RN 0.85** in a throwaway Dev
+  Client before committing. If incompatible, fall back to
+  `@kingstinct/react-native-activity-kit` (Nitro) or `@bacons/apple-targets` + a
+  custom ActivityKit module.
 
 ## 6. Android work (rider app — native)
 Android has no ActivityKit equivalent; there is **no `@bacons/apple-targets`
@@ -114,27 +117,34 @@ notification (no widget/target to scaffold). Two tiers:
   tiers from the same backend push.
 
 ## 7. Build / deploy
-- **Both platforms need a fresh native build (EAS build), not OTA** — iOS adds a
-  widget target + entitlements; Android adds notifee.
-- Add the config plugins to `rider-app/app.config.ts`.
-- Provision an **APNs `.p8` auth key** for ActivityKit pushes (separate concern
-  from FCM); store as a backend secret; configure the liveactivity topic.
+- **Both platforms need a fresh native build (EAS build / Dev Client), not OTA**
+  — iOS adds the Voltra Live Activity (prebuild); Android adds notifee.
+- Add the **Voltra** + **notifee** config plugins to `rider-app/app.config.ts`,
+  then `npx expo prebuild --clean`.
+- Provision an **APNs `.p8` auth key** for ActivityKit pushes (separate from
+  FCM); store as a backend secret; configure the liveactivity topic. (Voltra
+  surfaces the activity push token on the client; the backend still sends the
+  updates.)
 - **Device testing required** — Live Activity push doesn't work in the simulator;
   Dynamic Island needs iPhone 14 Pro+ (Lock Screen activity works on others).
 
 ## 8. Phasing
-- **Phase 0 (shared):** content-state schema + `ride_live_activities` table +
-  register endpoint + state-machine hooks (log-only, no push yet).
-- **Phase 1 (Android):** notifee ongoing notification + FCM update path. Ships
+- **Phase 0 (spike — gate):** prove **Voltra builds + runs a trivial Live
+  Activity on Expo 55 / RN 0.85** in a throwaway Dev Client. Everything else
+  depends on this; fall back to `@kingstinct/react-native-activity-kit` or
+  `@bacons/apple-targets` + a custom module if it fails.
+- **Phase 1 (shared backend):** content-state schema + `ride_live_activities`
+  table + register endpoint + state-machine hooks (log-only, no push yet).
+- **Phase 2 (Android):** notifee ongoing notification + FCM update path. Ships
   value first, lower lift.
-- **Phase 2 (iOS):** Widget Extension + config plugin + JS bridge + APNs
-  ActivityKit push (the heavy part).
-- **Phase 3:** throttled ETA/location updates + polish (driver photo, map
+- **Phase 3 (iOS):** Voltra Live Activity UI (React components) +
+  `useLiveActivity` wiring + the backend APNs ActivityKit push path.
+- **Phase 4:** throttled ETA/location updates + polish (driver photo, map
   snapshot, actions), metrics.
 
 ## 9. Risks / unknowns
-- Expo 55 / RN 0.85 compatibility of Live Activity libs → likely a **custom
-  native module**.
+- **Voltra ↔ Expo 55 / RN 0.85 compatibility is unverified** (no documented
+  range) — the Phase 0 spike must confirm it before any further iOS work.
 - ActivityKit needs a **new direct-APNs path** (token `.p8`); existing pushes go
   via FCM.
 - **APNs update budget** — must throttle ETA updates or pushes get dropped.
@@ -155,9 +165,11 @@ notification (no widget/target to scaffold). Two tiers:
 - `backend/utils/apns_client.py` (token-based APNs HTTP/2 for `liveactivity`)
 
 **Rider app**
-- `rider-app/ios/LiveRideActivity/*` (SwiftUI widget)
-- `rider-app/plugins/withLiveActivity.ts` (+ `app.config.ts` wiring, Info.plist)
-- `rider-app/modules/live-activity/*` (JS↔native bridge) or community lib
-- `rider-app/services/liveActivity.ts` (start/update/end + token register)
-- `rider-app/services/rideLiveNotification.ts` (Android ongoing) + notifee dep
+- `rider-app/components/liveActivity/*` — Voltra React components (Lock Screen +
+  Dynamic Island layouts)
+- `rider-app/services/liveActivity.ts` — `useLiveActivity` start/update/end +
+  push-token register (iOS)
+- `rider-app/app.config.ts` — Voltra + notifee config plugins
+- `rider-app/services/rideLiveNotification.ts` — Android notifee ongoing
+  notification + notifee dep
 - rider-app FCM handler updates (background/killed)

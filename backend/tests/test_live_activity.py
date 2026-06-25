@@ -30,6 +30,11 @@ try:
 except ImportError:  # pragma: no cover
     import features as features_mod
 
+try:
+    from backend.utils import apns_client as apns_mod
+except ImportError:  # pragma: no cover
+    from utils import apns_client as apns_mod
+
 
 # --------------------------------------------------------------------------- #
 # content-state builder (pure)
@@ -202,22 +207,40 @@ def test_dispatch_android_end_sends_fcm_and_marks_ended(monkeypatch):
     assert upd.await_args.args[2]["ended_at"] is not None
 
 
-def test_dispatch_ios_is_log_only(monkeypatch):
-    monkeypatch.setattr(
-        live_activity.db_supabase,
-        "get_rows",
-        AsyncMock(return_value=[{"id": "a1", "platform": "ios", "ended_at": None, "rider_id": "rider-1"}]),
-    )
+def _ios_row():
+    return [{"id": "a1", "platform": "ios", "ended_at": None, "rider_id": "rider-1", "push_token": "APNSTOK"}]
+
+
+def test_dispatch_ios_sends_apns_not_fcm(monkeypatch):
+    monkeypatch.setattr(live_activity.db_supabase, "get_rows", AsyncMock(return_value=_ios_row()))
     upd = AsyncMock()
-    send = AsyncMock()
+    fcm = AsyncMock()
+    apns = AsyncMock(return_value=(True, False))
     monkeypatch.setattr(live_activity.db_supabase, "update_one", upd)
-    monkeypatch.setattr(features_mod, "send_push_notification", send)
+    monkeypatch.setattr(features_mod, "send_push_notification", fcm)
+    monkeypatch.setattr(apns_mod, "send_apns_live_activity", apns)
 
     asyncio.run(
         live_activity.send_live_activity_update({"id": "r1", "status": "driver_arrived"}, live_activity.EVENT_UPDATE)
     )
-    send.assert_not_awaited()  # iOS = log-only until Phase 3 (ActivityKit APNs)
-    upd.assert_not_awaited()
+    apns.assert_awaited_once()
+    assert apns.await_args.args[0] == "APNSTOK"  # the ActivityKit token
+    fcm.assert_not_awaited()  # iOS does NOT ride the FCM path
+    upd.assert_not_awaited()  # an update never ends the activity
+
+
+def test_dispatch_ios_dead_token_ends_row(monkeypatch):
+    monkeypatch.setattr(live_activity.db_supabase, "get_rows", AsyncMock(return_value=_ios_row()))
+    upd = AsyncMock()
+    monkeypatch.setattr(live_activity.db_supabase, "update_one", upd)
+    # APNs reports the token dead (410 / BadDeviceToken) → row must be ended.
+    monkeypatch.setattr(apns_mod, "send_apns_live_activity", AsyncMock(return_value=(False, True)))
+
+    asyncio.run(
+        live_activity.send_live_activity_update({"id": "r1", "status": "driver_arrived"}, live_activity.EVENT_UPDATE)
+    )
+    upd.assert_awaited_once()
+    assert upd.await_args.args[2]["ended_at"] is not None
 
 
 def test_dispatch_android_send_failure_is_swallowed_and_still_ends(monkeypatch):

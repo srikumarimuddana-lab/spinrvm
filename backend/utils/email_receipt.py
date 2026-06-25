@@ -301,14 +301,18 @@ def _receipt_total(ride: dict, tip: float = 0) -> Decimal:
     return _q(fare + fees + tax + tip_d)
 
 
-async def send_receipt_email(ride: dict, rider: dict, driver: dict = None, tip: float = 0):
+async def send_receipt_email(ride: dict, rider: dict, driver: dict = None, tip: float = 0, recipient_email: str = None):
     """Send an HTML receipt email: AWS SES primary, Resend guardrail.
 
     Delegates to utils.email_provider.send_transactional_email, which tries
     AWS SES first and falls back to Resend when SES is unconfigured or fails.
     Returns True if either provider accepted the message, False otherwise.
+
+    ``recipient_email`` overrides the destination address (admin "send to a
+    different email"). When omitted, the receipt goes to the rider on file.
+    The receipt body still reflects the rider — only the To: address changes.
     """
-    email = rider.get("email", "")
+    email = (recipient_email or rider.get("email") or "").strip()
     if not email:
         logger.warning(f"No email for rider {rider.get('id')} — skipping receipt")
         return False

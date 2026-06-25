@@ -734,7 +734,7 @@ function createStyles(colors: ThemeColors, isDark: boolean) {
             color: colors.textDim,
         },
         acceptBtn: {
-            flex: 2,
+            flex: 1,
             height: 54,
             borderRadius: 14,
             overflow: 'hidden',

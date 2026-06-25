@@ -6128,26 +6128,36 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
     if not sub:
         return {"has_subscription": False, "subscription": None}
 
-    # Check if expired
+    # Check if expired. parse_iso_utc always returns a UTC-aware datetime (or
+    # None if unparseable), so the comparison below is aware-vs-aware. The old
+    # code stripped tzinfo off `exp` and then compared it against an aware
+    # `datetime.now(timezone.utc)`, which raised TypeError for EVERY pass (the
+    # Postgres timestamptz always carries an offset). That exception was caught
+    # and logged as a warning, so this whole expired-flip branch was dead code
+    # and a lapsed-but-still-`active` row displayed as active with a quota.
     if sub.get("expires_at"):
-        from datetime import datetime
-
         try:
-            exp = datetime.fromisoformat(str(sub["expires_at"]).replace("Z", "+00:00"))
-            if exp.tzinfo:
-                exp = exp.replace(tzinfo=None)
-            if exp < datetime.now(timezone.utc):
-                await db_supabase.update_one("driver_subscriptions", {"id": sub["id"]}, {"status": "expired"})
-                return {
-                    "has_subscription": False,
-                    "subscription": None,
-                    "expired": True,
-                }
-        except Exception:  # noqa: S110
-            logger.warning(
-                "get_current_subscription: failed to check/update subscription expiry",
-                exc_info=True,
+            from ..utils.datetime_utils import parse_iso_utc  # type: ignore
+        except ImportError:
+            from utils.datetime_utils import parse_iso_utc  # type: ignore
+
+        exp = parse_iso_utc(sub["expires_at"])
+        if exp is None:
+            # Unparseable expiry is a data-integrity problem, not something to
+            # paper over by showing the pass as active — surface it loudly. The
+            # go-online gate and the expiry sweeper still enforce independently.
+            logger.error(
+                "get_current_subscription: unparseable expires_at on active pass",
+                extra={"subscription_id": sub.get("id")},
             )
+            raise HTTPException(status_code=503, detail="Subscription state unavailable")
+        if exp < datetime.now(timezone.utc):
+            await db_supabase.update_one("driver_subscriptions", {"id": sub["id"]}, {"status": "expired"})
+            return {
+                "has_subscription": False,
+                "subscription": None,
+                "expired": True,
+            }
 
     # Quota state for the current calendar day (America/Regina). The same
     # window powers go-online / dispatch / accept enforcement, so the numbers

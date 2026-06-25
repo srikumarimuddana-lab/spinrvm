@@ -1019,9 +1019,12 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
             Decimal("0"),
         )
     except Exception as e:
+        # A transient DB error here must NOT be masked as a $0 balance — a
+        # driver seeing their earnings drop to zero looks like money vanished
+        # and triggers false support/payout escalations. Surface 503 so the
+        # client retries (per CLAUDE.md: never log-and-continue on a DB read).
         logger.error(f"Error fetching balance: {e}", exc_info=True)
-        total_earnings = total_tips = pending_payouts = total_payouts = Decimal("0")
-        total_rides = 0
+        raise HTTPException(status_code=503, detail="Balance temporarily unavailable") from e
 
     # Quest + driver-referral bonuses are payable earnings (driver_bonuses
     # ledger) — they fold into payable_balance and pay out via the normal Stripe
@@ -1180,14 +1183,11 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
             "total_duration_minutes": sum(r.get("duration_minutes", 0) or 0 for r in rides),
         }
     except Exception as e:
-        logger.error(f"Error fetching earnings: {e}")
-        stats = {
-            "total_earnings": 0,
-            "total_tips": 0,
-            "total_rides": 0,
-            "total_distance_km": 0,
-            "total_duration_minutes": 0,
-        }
+        # Don't mask a DB failure as an all-zero earnings summary — surface 503
+        # so the dashboard retries instead of telling the driver they earned
+        # nothing this period.
+        logger.error(f"Error fetching earnings: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail="Earnings temporarily unavailable") from e
 
     # Quest + referral bonuses earned in this period (driver_bonuses ledger).
     # Isolated so a bonus-fetch error never zeroes ride earnings. Distinct from
@@ -1275,8 +1275,10 @@ async def get_driver_daily_earnings(days: int = Query(7), current_user: dict = D
 
         results = [{"date": date, **data} for date, data in sorted(daily_data.items())]
     except Exception as e:
-        logger.error(f"Error fetching daily earnings: {e}")
-        results = []
+        # An empty chart reads as "no rides this period" — surface the DB error
+        # as 503 instead of fabricating an empty result.
+        logger.error(f"Error fetching daily earnings: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail="Daily earnings temporarily unavailable") from e
 
     return results
 

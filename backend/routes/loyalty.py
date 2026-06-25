@@ -110,15 +110,15 @@ async def get_loyalty_history(
             order="created_at",
         )
     except Exception as e:
-        logger.error(f"Failed to fetch loyalty history: {e}")
-        txns = []
+        # Returning [] on a DB error tells the rider they have no history —
+        # surface 503 so the client retries instead.
+        logger.error(f"Failed to fetch loyalty history: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail="Loyalty history temporarily unavailable") from e
     return txns
 
 
 @api_router.post("/earn")
-async def earn_points_for_ride(
-    ride_id: str = Query(...), current_user: dict = Depends(get_current_user)
-):
+async def earn_points_for_ride(ride_id: str = Query(...), current_user: dict = Depends(get_current_user)):
     """Award loyalty points for a completed ride. Called after ride completion."""
     ride = await db.find_one("rides", {"id": ride_id})
     if not ride:
@@ -194,22 +194,16 @@ class RedeemRequest(BaseModel):
 
 
 @api_router.post("/redeem")
-async def redeem_points(
-    req: RedeemRequest, current_user: dict = Depends(get_current_user)
-):
+async def redeem_points(req: RedeemRequest, current_user: dict = Depends(get_current_user)):
     """Redeem loyalty points for wallet credit."""
     if req.points < REDEMPTION_RATE:
-        raise HTTPException(
-            status_code=400, detail=f"Minimum redemption is {REDEMPTION_RATE} points"
-        )
+        raise HTTPException(status_code=400, detail=f"Minimum redemption is {REDEMPTION_RATE} points")
 
     account = await _get_or_create_account(current_user["id"])
     if account.get("points", 0) < req.points:
         raise HTTPException(status_code=400, detail="Insufficient points")
 
-    credit_amount = (Decimal(req.points) / Decimal(REDEMPTION_RATE)).quantize(
-        Decimal("0.01"), rounding=ROUND_HALF_UP
-    )
+    credit_amount = (Decimal(req.points) / Decimal(REDEMPTION_RATE)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     # Step 1: Credit the wallet first. If this fails the rider keeps their points.
     from .wallet import _money_str, _record_transaction, get_or_create_wallet
@@ -240,16 +234,12 @@ async def redeem_points(
             },
         )
     except Exception as deduct_err:
-        logger.error(
-            f"Loyalty redeem points deduction failed, reversing wallet credit: {deduct_err}"
-        )
+        logger.error(f"Loyalty redeem points deduction failed, reversing wallet credit: {deduct_err}")
         try:
             await wallet_increment_balance(wallet["id"], -credit_amount)
         except Exception as reverse_err:
             logger.error(f"Loyalty redeem wallet reversal also failed: {reverse_err}")
-        raise HTTPException(
-            status_code=503, detail="Redemption failed — please retry"
-        ) from deduct_err
+        raise HTTPException(status_code=503, detail="Redemption failed — please retry") from deduct_err
 
     await db.insert_one(
         "loyalty_transactions",

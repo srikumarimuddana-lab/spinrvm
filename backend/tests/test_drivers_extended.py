@@ -270,6 +270,26 @@ class TestGetDriverBalance:
         assert result["pending_payouts"] == "5.00"
         assert result["total_paid_out"] == "40.00"  # 30 + 10 sent (not pending)
 
+    def test_db_error_raises_503_not_zeroed_balance(self):
+        # Regression: a DB error fetching rides/payouts must surface as 503, not
+        # be masked as a $0.00 balance (which looks to the driver like their
+        # money vanished and triggers false payout escalations).
+        from fastapi import HTTPException
+
+        from backend.routes import drivers as drv
+
+        def get_rows_mock(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                raise RuntimeError("supabase H2 GOAWAY")
+            return []
+
+        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
+        assert exc.value.status_code == 503
+
     def test_returns_zeros_when_driver_not_found(self):
         from fastapi import HTTPException
 

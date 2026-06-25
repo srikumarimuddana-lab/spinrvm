@@ -48,6 +48,46 @@ async def wallet_increment_balance(wallet_id: str, amount: "Decimal") -> "Decima
     return await run_sync(_fn)
 
 
+async def wallet_apply_credit(
+    *,
+    wallet_id: str,
+    user_id: str,
+    type_: str,
+    amount: "Decimal",
+    reference_id: Optional[str],
+    description: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Idempotently credit a consumer wallet via the wallet_apply_credit RPC (C6).
+
+    Atomic: locks the wallet row, dedups on (wallet_id, reference_id, type) so a
+    Stripe webhook retried after a crash cannot double-credit, then writes the
+    balance and the ledger row together. Returns the RPC row
+    ``{"transaction_id", "balance_after", "deduped"}``.
+    """
+    if not supabase:
+        raise DatabaseError(details={"original": "supabase not initialised"})
+
+    params = {
+        "p_wallet_id": wallet_id,
+        "p_user_id": user_id,
+        "p_type": type_,
+        "p_amount": str(amount),
+        "p_reference_id": reference_id,
+        "p_description": description,
+        "p_metadata": metadata or {},
+    }
+
+    def _fn():
+        res = supabase.rpc("wallet_apply_credit", params).execute()
+        data = getattr(res, "data", None) or []
+        if not data:
+            raise DatabaseError(details={"original": "wallet_apply_credit: no row returned"})
+        return data[0]
+
+    return await run_sync(_fn)
+
+
 async def wallet_pay_for_ride(
     wallet_id: str,
     ride_id: str,

@@ -299,6 +299,8 @@ class TestForceOfflineIfExhausted:
         _, _, updates = drivers_updates[0]
         assert updates["is_online"] is False
         assert updates["is_available"] is False
+        # Durable offline intent stamped so intent_online() reads offline.
+        assert updates["went_offline_at"] == updates["updated_at"]
 
     async def test_noop_when_not_exhausted(self, patch_db):
         db = _FakeDB(count=1)
@@ -358,11 +360,23 @@ class TestAreaTimezone:
         patch_db(_FakeDB(area={"id": "a1"}))
         assert await spinr_pass.area_timezone("a1") is None
 
-    async def test_lookup_error_is_none(self, patch_db):
+    async def test_lookup_error_propagates(self, patch_db):
+        # A DB error must NOT silently fall back to Regina — it propagates so the
+        # caller's fail-open/closed handling decides (enforcing on the wrong tz
+        # could mis-gate a driver near their local midnight).
         db = _FakeDB()
         db.find_one = AsyncMock(side_effect=RuntimeError("down"))
         patch_db(db)
-        assert await spinr_pass.area_timezone("a1") is None
+        with pytest.raises(RuntimeError):
+            await spinr_pass.area_timezone("a1")
+
+    async def test_quota_status_fails_open_on_tz_error(self, patch_db):
+        # quota_status propagates the tz error; assert_quota_available swallows it.
+        db = _FakeDB(count=4, area=None)
+        db.find_one = AsyncMock(side_effect=RuntimeError("down"))
+        patch_db(db)
+        result = await spinr_pass.assert_quota_available("d1", sub={"id": "s1", "rides_per_day": 4}, area_id="a1")
+        assert result is None  # fail open, no raise
 
 
 @pytest.mark.anyio

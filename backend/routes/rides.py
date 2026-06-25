@@ -112,6 +112,11 @@ try:
     from ..utils.datetime_utils import parse_iso_utc
     from ..utils.earnings_snapshot import build_earnings_snapshot
     from ..utils.insurance_periods import record_period_transition
+    from ..utils.live_activity import (
+        EVENT_END,
+        EVENT_UPDATE,
+        send_live_activity_update,
+    )
     from ..utils.metrics import inc as _metric_inc
     from ..utils.metrics import observe as _metric_observe
     from ..utils.metrics import timed as _metric_timed
@@ -120,6 +125,11 @@ except ImportError:
     from utils.datetime_utils import parse_iso_utc
     from utils.earnings_snapshot import build_earnings_snapshot  # noqa: F401
     from utils.insurance_periods import record_period_transition  # type: ignore[assignment]
+    from utils.live_activity import (  # type: ignore
+        EVENT_END,
+        EVENT_UPDATE,
+        send_live_activity_update,
+    )
     from utils.metrics import inc as _metric_inc  # type: ignore
     from utils.metrics import observe as _metric_observe  # type: ignore
     from utils.metrics import timed as _metric_timed  # type: ignore
@@ -4370,6 +4380,68 @@ async def rate_driver(
     return {"success": True}
 
 
+class LiveActivityRegisterRequest(BaseModel):
+    """Rider app registers its live-activity push token for a ride."""
+
+    platform: str = Field(..., pattern="^(ios|android)$")
+    push_token: str = Field(..., min_length=1, max_length=4096)
+
+
+@api_router.post("/{ride_id}/live-activity/register")
+@ride_action_limit
+async def register_live_activity(
+    ride_id: str,
+    body: LiveActivityRegisterRequest,
+    request: Request = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """Store the rider app's live-activity push token for a ride.
+
+    Called when the rider app starts a Live Activity (iOS) / ongoing
+    notification (Android) at ``driver_accepted``. The backend reads this token
+    on each ride-state transition to push an update (Phase 3 — Phase 1 only
+    logs). Upsert: one token per ``(ride_id, platform)``; re-registration
+    (reinstall / new activity) replaces it and clears any prior ``ended_at``.
+    """
+    ride = await db_supabase.get_ride(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get("rider_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    now = datetime.now(timezone.utc).isoformat()
+    existing = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows(
+            "ride_live_activities",
+            {"ride_id": ride_id, "platform": body.platform},
+            limit=1,
+        )
+    )
+    if existing:
+        await db_supabase.update_one(
+            "ride_live_activities",
+            {"id": existing["id"]},
+            {"push_token": body.push_token, "ended_at": None, "updated_at": now},
+        )
+        activity_id = existing["id"]
+    else:
+        activity_id = str(uuid.uuid4())
+        await db_supabase.insert_one(
+            "ride_live_activities",
+            {
+                "id": activity_id,
+                "ride_id": ride_id,
+                "rider_id": current_user["id"],
+                "platform": body.platform,
+                "push_token": body.push_token,
+                "started_at": now,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+    return {"success": True, "activity_id": activity_id}
+
+
 @api_router.post("/{ride_id}/cancel")
 @cancel_ride_limit
 async def cancel_ride_rider(
@@ -4642,6 +4714,8 @@ async def cancel_ride_rider(
         rider_id=current_user["id"],
         reason="rider_cancelled",
     )
+    # End the rider's live activity (Lock Screen / ongoing notification).
+    asyncio.create_task(send_live_activity_update({"id": ride_id, "status": RideStatus.CANCELLED}, EVENT_END))
     try:
         await manager.broadcast_to_admins({"type": "ride_cancelled", "ride_id": ride_id, "reason": "rider_cancelled"})
     except Exception as _exc:  # pragma: no cover - best effort
@@ -5336,6 +5410,8 @@ async def rider_start_ride(
             )
         )
     await manager.broadcast_ride_status(ride_id, RideStatus.IN_PROGRESS, rider_id=rider_id)
+    # Update the rider's live activity to the in-progress state.
+    asyncio.create_task(send_live_activity_update({**ride, "status": RideStatus.IN_PROGRESS}, EVENT_UPDATE))
     return {"success": True}
 
 
@@ -5473,6 +5549,10 @@ async def rider_complete_ride(
         rider_id=current_user["id"],
         driver_user_id=driver_user_id,
         total_fare=total_fare,
+    )
+    # End the rider's live activity on trip completion.
+    asyncio.create_task(
+        send_live_activity_update(completed_ride or {"id": ride_id, "status": RideStatus.COMPLETED}, EVENT_END)
     )
     try:
         await manager.broadcast_to_admins(

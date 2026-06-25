@@ -229,7 +229,29 @@ async def _verify_admin_payload(payload: dict) -> "dict | None":
             _jti_revoked = None
         if _jti_revoked:
             raise HTTPException(status_code=401, detail="ERR_TOKEN_REVOKED")
-    if user_id != "admin-001":
+    if payload.get("break_glass") is True or user_id == "break-glass":
+        # Break-glass emergency super-admin token (C7). There is no admin_staff
+        # row, so the staff-active / token_version / idle checks below cannot
+        # apply. Gate it instead on a Redis ALLOWLIST registered at mint
+        # (admin:breakglass:{jti}, TTL = token lifetime): present = live,
+        # absent / expired / deleted = revoked. FAIL CLOSED for this god-mode
+        # token if the allowlist is unreadable — unlike the best-effort denylist
+        # above, an unverifiable break-glass token must never be honoured. (The
+        # denylist check above still runs, so /admin/auth/logout also kills it;
+        # deleting the allowlist key revokes it directly.)
+        if not jti:
+            raise HTTPException(status_code=401, detail="ERR_TOKEN_REVOKED")
+        try:
+            _bg_active = await redis_get(f"admin:breakglass:{jti}")
+        except Exception as _bg_err:
+            logger.error(
+                "[auth] break-glass allowlist unreachable (Redis down) — failing "
+                f"CLOSED for jti={jti}: {_bg_err}"
+            )
+            raise HTTPException(status_code=401, detail="ERR_TOKEN_REVOKED") from _bg_err
+        if not _bg_active:
+            raise HTTPException(status_code=401, detail="ERR_TOKEN_REVOKED")
+    elif user_id != "admin-001":
         staff_rows = await db_supabase.get_rows("admin_staff", {"id": user_id}, limit=1)
         staff = staff_rows[0] if staff_rows else None
         if not staff or not staff.get("is_active", True):

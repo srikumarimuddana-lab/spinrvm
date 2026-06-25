@@ -974,6 +974,11 @@ async def test_create_ride_card_no_stripe_customer():
         patch("backend.routes.rides.validate_ride_location"),
         patch("backend.routes.rides.db") as mock_db,
         patch("backend.routes.rides.db_supabase") as mock_supabase,
+        # Stripe configured → card-on-file requirement is enforced.
+        patch(
+            "backend.routes.rides.get_app_settings",
+            AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
+        ),
     ):
         mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active", "stripe_customer_id": None})
         mock_supabase.find_one = AsyncMock(return_value=None)
@@ -1055,6 +1060,11 @@ async def test_create_ride_card_without_payment_method_id_rejected():
         patch("backend.routes.rides.validate_ride_location"),
         patch("backend.routes.rides.db") as mock_db,
         patch("backend.routes.rides.db_supabase") as mock_supabase,
+        # Stripe configured → the card-on-file requirement is enforced.
+        patch(
+            "backend.routes.rides.get_app_settings",
+            AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
+        ),
     ):
         # Rider HAS a Stripe customer (so the existing stripe_customer_id check
         # passes) but supplies no card to charge.
@@ -1066,6 +1076,48 @@ async def test_create_ride_card_without_payment_method_id_rejected():
 
     assert exc.value.status_code == 400
     assert "card" in str(exc.value.detail).lower()
+
+
+@pytest.mark.anyio
+async def test_create_ride_card_demo_mode_skips_card_requirement():
+    """In demo mode (Stripe unconfigured) a card ride must NOT be blocked for
+    lacking a card — settlement uses the unconfigured path (paid, no charge), so
+    requiring a card on file would make local/staging card bookings impossible.
+
+    An active ride is staged so we expect to reach the 409, proving the card
+    requirement did not short-circuit with a 400 first.
+    """
+    from backend.routes.rides import create_ride
+    from backend.schemas import CreateRideRequest
+
+    req = _starlette_request(method="POST", path="/rides")
+    body = CreateRideRequest(
+        pickup_lat=52.1,
+        pickup_lng=-106.6,
+        dropoff_lat=52.2,
+        dropoff_lng=-106.7,
+        pickup_address="100 Main St",
+        dropoff_address="200 Broadway Ave",
+        vehicle_type_id="vt-1",
+        payment_method="card",
+        # No card, no stripe_customer_id — but Stripe is unconfigured.
+    )
+
+    with (
+        patch("backend.routes.rides.validate_ride_location"),
+        patch("backend.routes.rides.db") as mock_db,
+        patch("backend.routes.rides.db_supabase") as mock_supabase,
+        # Stripe NOT configured → demo mode, card requirement is skipped.
+        patch("backend.routes.rides.get_app_settings", AsyncMock(return_value={})),
+    ):
+        mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
+        mock_supabase.find_one = AsyncMock(return_value=None)
+        mock_supabase.get_rows = AsyncMock(return_value=[_ride(status="searching")])
+
+        with pytest.raises(Exception) as exc:
+            await create_ride(request=req, body=body, current_user=_USER)
+
+    assert getattr(exc.value, "status_code", None) == 409
 
 
 # ── match_driver_to_ride ───────────────────────────────────────────────────────
@@ -2144,6 +2196,11 @@ async def test_create_ride_no_stripe_customer():
         patch("backend.routes.rides.validate_ride_location"),
         patch("backend.routes.rides.db_supabase") as mock_db,
         patch("backend.routes.rides.db") as mock_ddb,
+        # Stripe configured → card-on-file requirement is enforced.
+        patch(
+            "backend.routes.rides.get_app_settings",
+            AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
+        ),
     ):
         mock_db.find_one = AsyncMock(return_value=None)
         mock_ddb.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})

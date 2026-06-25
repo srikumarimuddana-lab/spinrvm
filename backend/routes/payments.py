@@ -539,8 +539,21 @@ async def get_cards(request: Request = None, current_user: dict = Depends(get_cu
     stripe_secret = settings.get("stripe_secret_key", "")
 
     if not stripe_secret:
-        # Demo mode — return empty
-        return []
+        # Demo mode (Stripe intentionally unconfigured for local/staging):
+        # return a single selectable demo card so the booking flow has a payment
+        # method to attach. Settlement then goes through charge_ride's
+        # "unconfigured" path, which marks the ride paid without a real charge.
+        # Not reachable in production — config fails fast on a missing Stripe key.
+        return [
+            {
+                "id": "pm_demo_card",
+                "brand": "Demo",
+                "last4": "0000",
+                "exp_month": 12,
+                "exp_year": 2099,
+                "is_default": True,
+            }
+        ]
 
     try:
         customer_id = await get_or_create_stripe_customer(current_user["id"], stripe_secret)

@@ -3483,26 +3483,6 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
                         message_key=ErrorKeys.DRIVER_SUBSCRIPTION_REQUIRED,
                         action_hint="Subscribe to Spinr Pass",
                     )
-                # Daily ride-allowance gate: a valid pass with 0 rides left today
-                # cannot accept more until the allowance resets at local midnight.
-                try:
-                    from ..utils.spinr_pass import completed_today, compute_quota
-                except ImportError:
-                    from utils.spinr_pass import completed_today, compute_quota  # type: ignore
-
-                _accept_used = await completed_today(driver["id"])
-                _accept_quota = compute_quota(_active_sub.get("rides_per_day", -1), _accept_used)
-                if _accept_quota["exhausted"]:
-                    raise SpinrException(
-                        message=(
-                            f"You've used all {_accept_quota['rides_per_day']} of today's Spinr Pass "
-                            f"rides. Your allowance resets in about {round(_accept_quota['hours_until_reset'])}h."
-                        ),
-                        error_code=ErrorCode.DRIVER_QUOTA_EXCEEDED,
-                        status_code=403,
-                        message_key=ErrorKeys.DRIVER_QUOTA_EXHAUSTED,
-                        action_hint="Resets at midnight",
-                    )
         except SpinrException:
             raise
         except Exception:
@@ -3513,6 +3493,17 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
                 status_code=503,
                 detail="Could not verify subscription for this area. Please try again.",
             ) from None
+
+    # Daily ride-allowance gate — independent of area. Whenever the accepting
+    # driver holds a finite Spinr Pass that's used up for the local calendar
+    # day, block the accept (403) until it resets at midnight. No-op for
+    # unlimited / no pass / rides-remaining; fails open on lookup error so a
+    # transient fault never strands an otherwise-eligible driver.
+    try:
+        from ..utils.spinr_pass import assert_quota_available
+    except ImportError:
+        from utils.spinr_pass import assert_quota_available  # type: ignore
+    await assert_quota_available(driver["id"])
 
     diag_logger.info(
         f"[ACCEPT] entry ride_id={ride_id} driver_id={driver.get('id')} "
@@ -5924,36 +5915,18 @@ async def update_driver_status(
                         detail="Could not verify subscription plan restrictions. Please try again.",
                     ) from e
 
-            # Daily ride-allowance gate. A driver who has already used today's
-            # Spinr Pass rides stays offline until the allowance resets at the
-            # next local midnight (America/Regina). This mirrors the dispatch
-            # candidate filter and the accept-ride gate so a quota-exhausted
-            # driver can't go back online and pull more offers.
-            try:
-                from ..utils.spinr_pass import completed_today, compute_quota
-            except ImportError:
-                from utils.spinr_pass import completed_today, compute_quota  # type: ignore
-
-            _used_today = await completed_today(driver_id)
-            _quota = compute_quota(sub.get("rides_per_day", -1), _used_today)
-            if _quota["exhausted"]:
-                raise SpinrException(
-                    message=(
-                        f"You've used all {_quota['rides_per_day']} of today's Spinr Pass rides. "
-                        f"Your allowance resets in about {round(_quota['hours_until_reset'])}h. "
-                        "Enjoy the rest of your day — you can go online again then."
-                    ),
-                    error_code=ErrorCode.DRIVER_QUOTA_EXCEEDED,
-                    status_code=403,
-                    message_key=ErrorKeys.DRIVER_QUOTA_EXHAUSTED,
-                    action_hint="Resets at midnight",
-                    details={
-                        "rides_per_day": _quota["rides_per_day"],
-                        "used_today": _quota["used_today"],
-                        "quota_resets_at": _quota["quota_resets_at"],
-                        "hours_until_reset": _quota["hours_until_reset"],
-                    },
-                )
+        # Daily ride-allowance gate — applies to ANY driver holding a finite
+        # Spinr Pass, not only in pass-required areas. Once the pass's rides for
+        # the local calendar day are used up the driver stays offline until the
+        # next midnight, so they can't toggle back online and pull more offers.
+        # assert_quota_available fetches the active pass itself, is a no-op for
+        # unlimited / no-pass / rides-remaining, and fails open so a missing
+        # table (pre-launch) never wrongly blocks a driver in a non-gated area.
+        try:
+            from ..utils.spinr_pass import assert_quota_available
+        except ImportError:
+            from utils.spinr_pass import assert_quota_available  # type: ignore
+        await assert_quota_available(driver_id)
 
     logger.info(
         f"[GO-ONLINE] handler CALL update_one driver_id={driver_id} "

@@ -4798,6 +4798,19 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             )
         except Exception:
             logger.warning("complete_ride: quota auto_offline notify failed for driver=%s", driver["id"])
+        # Push so the driver sees it even with the app backgrounded.
+        try:
+            await send_push_notification(
+                driver["user_id"],
+                "Daily ride limit reached",
+                (
+                    f"You've used all {_quota_offline.get('rides_per_day')} Spinr Pass rides for today. "
+                    f"You're now offline — your allowance resets in about {_reset_h}h."
+                ),
+                data={"type": "quota_exhausted", "driver_id": str(driver["id"])},
+            )
+        except Exception:
+            logger.warning("complete_ride: quota push failed for driver=%s", driver["id"])
 
     return serialize_doc(completed_ride)
 

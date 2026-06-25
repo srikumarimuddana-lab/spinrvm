@@ -1315,6 +1315,10 @@ async def _deliver_push_now(
         return False
 
     is_dispatch = (data or {}).get("type") == "new_ride_assignment"
+    # Live-activity updates are also data-only so the rider app's Notifee handler
+    # renders/updates the ongoing notification itself (a system banner would
+    # duplicate it and could not be made ongoing/updated-in-place).
+    is_data_only = is_dispatch or (data or {}).get("type") == "live_activity"
 
     # Rider app creates "ride-updates"; driver app creates "ride-offers".
     # Android silently drops notifications to channels that don't exist on
@@ -1328,7 +1332,7 @@ async def _deliver_push_now(
         android_cfg = messaging.AndroidConfig(
             priority="high",
             notification=None
-            if is_dispatch
+            if is_data_only
             else messaging.AndroidNotification(
                 channel_id=android_channel,
             ),
@@ -1339,7 +1343,7 @@ async def _deliver_push_now(
         # no NSE is installed — iOS just ignores the image.
         _apns_image = (data or {}).get("offer_card_url") if is_dispatch else None
         message = messaging.Message(
-            notification=None if is_dispatch else messaging.Notification(title=title, body=body),
+            notification=None if is_data_only else messaging.Notification(title=title, body=body),
             data=data or {},
             token=token,
             android=android_cfg,

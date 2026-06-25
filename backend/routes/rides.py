@@ -4385,8 +4385,11 @@ class LiveActivityRegisterRequest(BaseModel):
 
     platform: str = Field(..., pattern="^(ios|android)$")
     # Real tokens are small (APNs ≤100, FCM ≤256 chars); 512 is generous headroom
-    # and bounds abuse. Mirrored by a CHECK on the column (migration 195).
-    push_token: str = Field(..., min_length=1, max_length=512)
+    # and bounds abuse. Mirrored by a CHECK on the column (migration 195). The
+    # charset accepts iOS ActivityKit hex AND Android FCM (base64url + ':') while
+    # blocking path/structural chars (the iOS token is later interpolated into the
+    # APNs URL path — apns_client also re-validates).
+    push_token: str = Field(..., min_length=1, max_length=512, pattern=r"^[A-Za-z0-9_.:-]+$")
 
 
 @api_router.post("/{ride_id}/live-activity/register")

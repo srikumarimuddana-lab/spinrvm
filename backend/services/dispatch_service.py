@@ -360,7 +360,9 @@ class DispatchService:
                 # finite pass. Backstops force-offline-on-complete (in case that
                 # write failed) and covers voluntary passes in non-required areas.
                 try:
-                    _exhausted = await exhausted_driver_ids(_valid_subs, now=_now)
+                    # Anchor the quota day on this ride's service-area timezone
+                    # (Regina fallback) so the reset matches the local day.
+                    _exhausted = await exhausted_driver_ids(_valid_subs, now=_now, tz=(_area or {}).get("timezone"))
                 except Exception:
                     # Fail open on the quota filter: go-online + accept still
                     # gate, so a transient read error must not drop everyone.

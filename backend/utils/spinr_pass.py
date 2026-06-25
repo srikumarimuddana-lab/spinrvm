@@ -34,39 +34,71 @@ try:
 
     REGINA_TZ: Any = ZoneInfo("America/Regina")
 except Exception:  # pragma: no cover - zoneinfo/tzdata unavailable
+    ZoneInfo = None  # type: ignore[assignment]
     REGINA_TZ = timezone(timedelta(hours=-6))  # SK fixed offset, no DST
 
 logger = logging.getLogger(__name__)
 
 UNLIMITED = -1
 
+# A timezone is either an IANA name (e.g. "America/Edmonton") resolved from the
+# service area, a tzinfo, or None → America/Regina (Spinr's SK home). Resolving
+# per service area keeps the quota "calendar day" correct under DST (Alberta is
+# Mountain Time with DST; Saskatchewan is UTC-6 year-round).
+TzArg = Optional[Any]
 
-def quota_day_bounds_utc(now: Optional[datetime] = None) -> Tuple[datetime, datetime]:
-    """``[start, end)`` UTC datetimes for the Regina calendar day of ``now``.
+
+def _coerce_tz(tz: TzArg):
+    """Return a tzinfo for ``tz`` (IANA name / tzinfo / None), Regina as default.
+
+    Falls back to Regina on an unknown name or when zoneinfo is unavailable, so
+    a misconfigured ``service_areas.timezone`` never breaks the day boundary.
+    """
+    if tz is None:
+        return REGINA_TZ
+    if isinstance(tz, str):
+        if not tz or ZoneInfo is None:
+            return REGINA_TZ
+        try:
+            return ZoneInfo(tz)
+        except Exception:
+            logger.warning("Unknown service-area timezone %r — falling back to Regina", tz)
+            return REGINA_TZ
+    return tz  # already a tzinfo
+
+
+def quota_day_bounds_utc(now: Optional[datetime] = None, tz: TzArg = None) -> Tuple[datetime, datetime]:
+    """``[start, end)`` UTC datetimes for the local calendar day of ``now``.
 
     ``start`` is the most recent local midnight; ``end`` is the next local
-    midnight (the moment the allowance refills).
+    midnight (the moment the allowance refills). ``tz`` selects the locale
+    (defaults to America/Regina); DST transitions are handled by zoneinfo, so
+    both bounds land on true local midnight even when the day isn't 24h long.
     """
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
-    local = now.astimezone(REGINA_TZ)
+    zone = _coerce_tz(tz)
+    local = now.astimezone(zone)
     start_local = local.replace(hour=0, minute=0, second=0, microsecond=0)
     end_local = start_local + timedelta(days=1)
     return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
 
 
-def compute_quota(rides_per_day: Any, used_today: Any, now: Optional[datetime] = None) -> Dict[str, Any]:
+def compute_quota(
+    rides_per_day: Any, used_today: Any, now: Optional[datetime] = None, tz: TzArg = None
+) -> Dict[str, Any]:
     """Derive quota state from a plan's ``rides_per_day`` and today's usage.
 
     Returns a dict with the remaining count, whether the allowance is
     exhausted, and the countdown to the next reset. ``rides_remaining`` is the
     string ``"unlimited"`` for unlimited plans (matches the API/UI contract).
+    ``tz`` selects the local calendar day (defaults to Regina).
     """
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
-    _, day_end = quota_day_bounds_utc(now)
+    _, day_end = quota_day_bounds_utc(now, tz=tz)
     try:
         rpd = int(rides_per_day)
     except (TypeError, ValueError):
@@ -116,10 +148,28 @@ def _db():
     return db_supabase
 
 
-async def completed_today(driver_id: str, now: Optional[datetime] = None) -> int:
-    """Count a driver's rides completed within the current quota day."""
+async def area_timezone(area_id: Optional[str]) -> Optional[str]:
+    """IANA timezone name for a service area, or ``None`` if unset/unknown.
+
+    Mirrors the area-tz-with-Regina-fallback pattern used by earnings, quests,
+    and onboarding reminders (``service_areas.timezone``, migration 105). Best
+    effort — a lookup failure returns ``None`` (callers default to Regina).
+    """
+    if not area_id:
+        return None
     db = _db()
-    day_start, _ = quota_day_bounds_utc(now)
+    try:
+        area = await db.find_one("service_areas", {"id": area_id})
+    except Exception:
+        logger.warning("area_timezone lookup failed for area=%s", area_id, exc_info=True)
+        return None
+    return (area or {}).get("timezone")
+
+
+async def completed_today(driver_id: str, now: Optional[datetime] = None, tz: TzArg = None) -> int:
+    """Count a driver's rides completed within the current quota day (``tz``)."""
+    db = _db()
+    day_start, _ = quota_day_bounds_utc(now, tz=tz)
     try:
         from ..schemas import RideStatus  # type: ignore
     except ImportError:  # pragma: no cover
@@ -149,11 +199,13 @@ async def quota_status(
     driver_id: str,
     sub: Optional[Dict[str, Any]] = None,
     now: Optional[datetime] = None,
+    area_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Full quota state for a driver, or ``None`` when there's no active pass.
 
     Pass ``sub`` to reuse an already-fetched active subscription row and avoid a
-    second lookup at call sites that have it in hand.
+    second lookup at call sites that have it in hand. ``area_id`` (the driver's
+    service area) selects the calendar-day timezone — Regina when omitted.
     """
     if sub is None:
         sub = await active_subscription(driver_id)
@@ -165,8 +217,9 @@ async def quota_status(
     exp = parse_iso_utc(sub.get("expires_at")) if sub.get("expires_at") else None
     if exp is not None and exp <= (now or datetime.now(timezone.utc)):
         return None
-    used = await completed_today(driver_id, now)
-    status = compute_quota(sub.get("rides_per_day", UNLIMITED), used, now)
+    tz = await area_timezone(area_id) if area_id else None
+    used = await completed_today(driver_id, now, tz=tz)
+    status = compute_quota(sub.get("rides_per_day", UNLIMITED), used, now, tz=tz)
     status["subscription_id"] = sub.get("id")
     return status
 
@@ -175,6 +228,7 @@ async def is_quota_exhausted(
     driver_id: str,
     sub: Optional[Dict[str, Any]] = None,
     now: Optional[datetime] = None,
+    area_id: Optional[str] = None,
 ) -> bool:
     """True only when the driver has an active finite pass with 0 rides left.
 
@@ -182,7 +236,7 @@ async def is_quota_exhausted(
     driver because of a transient read failure — the other gates still apply).
     """
     try:
-        status = await quota_status(driver_id, sub=sub, now=now)
+        status = await quota_status(driver_id, sub=sub, now=now, area_id=area_id)
     except Exception:
         logger.error("is_quota_exhausted lookup failed for driver=%s", driver_id, exc_info=True)
         return False
@@ -193,13 +247,15 @@ async def assert_quota_available(
     driver_id: str,
     sub: Optional[Dict[str, Any]] = None,
     now: Optional[datetime] = None,
+    area_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Raise if the driver's finite Spinr Pass allowance is used up for the day.
 
     The single enforcement entry point for go-online and accept-ride. No-op
     (returns the quota status or ``None``) when there's no active finite pass,
     the pass is unlimited, or rides remain. Raises ``SpinrException`` (403,
-    ``DRIVER_QUOTA_EXCEEDED``) when exhausted.
+    ``DRIVER_QUOTA_EXCEEDED``) when exhausted. ``area_id`` (the driver's service
+    area) selects the calendar-day timezone — Regina when omitted.
 
     Fails **open**: a lookup error (e.g. ``driver_subscriptions`` absent
     pre-launch) returns ``None`` rather than blocking — the subscription-present
@@ -207,7 +263,7 @@ async def assert_quota_available(
     completion force-offline still backstops it.
     """
     try:
-        status = await quota_status(driver_id, sub=sub, now=now)
+        status = await quota_status(driver_id, sub=sub, now=now, area_id=area_id)
     except Exception:
         logger.error("assert_quota_available lookup failed for driver=%s", driver_id, exc_info=True)
         return None
@@ -246,6 +302,7 @@ async def assert_quota_available(
 async def exhausted_driver_ids(
     subs: Iterable[Dict[str, Any]],
     now: Optional[datetime] = None,
+    tz: TzArg = None,
 ) -> Set[str]:
     """Batch: of the given active subs, which drivers are out of rides today.
 
@@ -254,7 +311,8 @@ async def exhausted_driver_ids(
     ``rides_per_day``) and lapsed passes, so callers can pass raw active-sub
     rows. Uses a single batched ``rides`` read (no N+1) to tally today's
     completions across all finite-quota drivers, then compares each driver's
-    count to their own allowance.
+    count to their own allowance. ``tz`` selects the calendar-day window — pass
+    the ride's service-area timezone (Regina when omitted).
     """
     now_dt = now or datetime.now(timezone.utc)
     finite: Dict[str, int] = {}
@@ -273,7 +331,7 @@ async def exhausted_driver_ids(
         return set()
 
     db = _db()
-    day_start, _ = quota_day_bounds_utc(now_dt)
+    day_start, _ = quota_day_bounds_utc(now_dt, tz=tz)
     try:
         from ..schemas import RideStatus  # type: ignore
     except ImportError:  # pragma: no cover
@@ -309,13 +367,16 @@ async def force_offline_if_exhausted(
     driver: Any,
     sub: Optional[Dict[str, Any]] = None,
     now: Optional[datetime] = None,
+    area_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Set the driver offline when today's pass allowance is now used up.
 
     Call this right after a ride completes. ``driver`` may be the driver row
     (dict with ``id``) or a bare driver id. Returns the quota status dict when
     it forced the driver offline (so the caller — which owns the socket manager
-    — can notify the driver + admins), else ``None``.
+    — can notify the driver + admins), else ``None``. The calendar-day timezone
+    is taken from ``area_id`` (or the driver row's ``service_area_id``), Regina
+    when neither is available.
 
     Side effects (all best-effort, logged on failure): flip ``is_online`` /
     ``is_available`` to False, append the SGI period-0 transition, clear Redis
@@ -325,7 +386,9 @@ async def force_offline_if_exhausted(
     driver_id = driver.get("id") if isinstance(driver, dict) else driver
     if not driver_id:
         return None
-    status = await quota_status(driver_id, sub=sub, now=now)
+    if area_id is None and isinstance(driver, dict):
+        area_id = driver.get("service_area_id")
+    status = await quota_status(driver_id, sub=sub, now=now, area_id=area_id)
     if not status or not status.get("exhausted"):
         return None
 

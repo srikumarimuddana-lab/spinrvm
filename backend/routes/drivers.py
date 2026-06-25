@@ -3503,7 +3503,9 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
         from ..utils.spinr_pass import assert_quota_available
     except ImportError:
         from utils.spinr_pass import assert_quota_available  # type: ignore
-    await assert_quota_available(driver["id"])
+    # Quota day anchored on the driver's home service-area timezone (Regina
+    # fallback), matching go-online and the /subscription/current display.
+    await assert_quota_available(driver["id"], area_id=driver.get("service_area_id"))
 
     diag_logger.info(
         f"[ACCEPT] entry ride_id={ride_id} driver_id={driver.get('id')} "
@@ -5926,7 +5928,9 @@ async def update_driver_status(
             from ..utils.spinr_pass import assert_quota_available
         except ImportError:
             from utils.spinr_pass import assert_quota_available  # type: ignore
-        await assert_quota_available(driver_id)
+        # Anchor the quota day on the driver's service-area timezone (Regina
+        # fallback) so the reset matches their local calendar day under DST.
+        await assert_quota_available(driver_id, area_id=driver.get("service_area_id"))
 
     logger.info(
         f"[GO-ONLINE] handler CALL update_one driver_id={driver_id} "
@@ -6148,12 +6152,15 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
     # window powers go-online / dispatch / accept enforcement, so the numbers
     # the driver sees here match the ones enforced on the rides.
     try:
-        from ..utils.spinr_pass import completed_today, compute_quota, hours_until
+        from ..utils.spinr_pass import area_timezone, completed_today, compute_quota, hours_until
     except ImportError:
-        from utils.spinr_pass import completed_today, compute_quota, hours_until  # type: ignore
+        from utils.spinr_pass import area_timezone, completed_today, compute_quota, hours_until  # type: ignore
 
-    today_rides = await completed_today(driver["id"])
-    quota = compute_quota(sub.get("rides_per_day", -1), today_rides)
+    # Same service-area timezone the enforcement gates use, so the countdown the
+    # driver sees matches when their rides actually reset.
+    _tz = await area_timezone(driver.get("service_area_id"))
+    today_rides = await completed_today(driver["id"], tz=_tz)
+    quota = compute_quota(sub.get("rides_per_day", -1), today_rides, tz=_tz)
 
     return {
         "has_subscription": True,

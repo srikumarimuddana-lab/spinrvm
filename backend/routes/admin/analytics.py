@@ -391,63 +391,27 @@ async def get_dashboard_overview(
     )
     breakdown = {s: int(bd_counts[i] or 0) for i, s in enumerate(_DASH_BREAKDOWN_STATUSES)}
 
-    # ── Money — aggregated in-query via PostgREST .sum() (no function/Python) ─
-    money: dict = {
-        "ride_volume": None,
-        "driver_earnings": None,
-        "spinr_pass_earnings": None,
-        "platform_revenue": None,
-        "aggregates_enabled": True,
-    }
-
-    def _ride_money_query():
-        q = (
-            _dbs.supabase.table("rides")
-            .select("ride_volume:grand_total.sum(),driver_earnings:driver_earnings.sum()")
-            .eq("status", "completed")
-            .gte("created_at", start_iso)
-            .lt("created_at", end_iso)
-        )
-        if service_area_id:
-            q = q.eq("service_area_id", service_area_id)
-        return q.execute()
-
+    # ── Money — summed IN POSTGRES via admin_dashboard_money (migration 194) ──
+    # PostgREST aggregate functions are disabled on this project, so the sums run
+    # in-DB in one round-trip (mirrors admin_analytics_overview). The counts above
+    # use count="exact", which is unaffected. On RPC failure the counts still
+    # render and money returns null (cards show "—") rather than 500.
+    money: dict
     try:
-        _rm = await _dbs.run_sync(_ride_money_query)
-        _row = (getattr(_rm, "data", None) or [{}])[0]
-        money["ride_volume"] = round(float(_row.get("ride_volume") or 0), 2)
-        # 0% commission: when driver_earnings wasn't snapshotted, the fare IS the
-        # driver's earning, so fall back to ride_volume.
-        money["driver_earnings"] = round(float(_row.get("driver_earnings") or _row.get("ride_volume") or 0), 2)
-
-        # Spinr Pass — scope to the area's drivers when an area is selected.
-        area_driver_ids: Optional[list] = None
-        if service_area_id:
-            _ad = await _dbs.get_rows("drivers", area, columns="id", limit=10000)
-            area_driver_ids = [d["id"] for d in (_ad or []) if d.get("id")]
-
-        def _sub_money_query():
-            q = (
-                _dbs.supabase.table("subscription_payments")
-                .select("spinr_pass:amount.sum()")
-                .gte("created_at", start_iso)
-                .lt("created_at", end_iso)
-            )
-            if area_driver_ids is not None:
-                q = q.in_("driver_id", area_driver_ids or ["__none__"])
-            return q.execute()
-
-        _sm = await _dbs.run_sync(_sub_money_query)
-        _srow = (getattr(_sm, "data", None) or [{}])[0]
-        _pass = round(float(_srow.get("spinr_pass") or 0), 2)
-        money["spinr_pass_earnings"] = _pass
-        # Spinr takes 0% of rides — platform revenue is Spinr Pass (+ corporate later).
-        money["platform_revenue"] = _pass
+        _m = await db.rpc(
+            "admin_dashboard_money",
+            {"p_start": start_iso, "p_end": end_iso, "p_service_area_id": service_area_id},
+        )
+        _m = _m[0] if isinstance(_m, list) and _m else _m
+        money = _m if isinstance(_m, dict) else {}
     except Exception as e:
-        # Most likely cause: PostgREST aggregate functions disabled on the project.
-        # Counts still render; surface the money cards as unavailable rather than 500.
-        logger.warning(f"dashboard money aggregation failed (aggregates enabled?): {e}")
-        money["aggregates_enabled"] = False
+        logger.error(f"admin_dashboard_money RPC failed: {e}", exc_info=True)
+        money = {
+            "ride_volume": None,
+            "driver_earnings": None,
+            "spinr_pass_earnings": None,
+            "platform_revenue": None,
+        }
 
     return {
         "range": range,

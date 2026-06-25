@@ -130,6 +130,17 @@ export function setSignOutCallback(fn: () => Promise<void>): void {
   _signOutCallback = fn;
 }
 
+// While the auth layer (authStore.refreshTokens) runs its OWN controlled
+// refresh attempt, a 401 from /auth/refresh must NOT trigger the hard
+// sign-out below — the auth layer decides whether to retry with a
+// fresher stored token (foreground/background refresh-token rotation race)
+// or actually tear down the session. refreshTokens sets this true for the
+// duration of that controlled attempt and resets it in a finally.
+let _suppressRefreshSignOut = false;
+export function setSuppressRefreshSignOut(v: boolean): void {
+  _suppressRefreshSignOut = v;
+}
+
 export function setRefreshCallback(fn: RefreshFn): void {
   _refreshCallback = fn;
 }
@@ -616,6 +627,16 @@ const handleApiError = async (response: Response, method: string, url: string, r
   // expired or revoked. Sign the user out immediately to clear invalid state
   // rather than letting every queued request spin and eventually time-out.
   if (response.status === 401 && url.includes('/auth/refresh')) {
+    // Controlled retry in progress: the refresh token the foreground sent may
+    // simply have been rotated forward by the driver app's background location
+    // task (both share the SecureStore `refresh_token`). The backend treats
+    // replaying that just-rotated token as a benign rotation race and returns
+    // 401 WITHOUT revoking the session. Let authStore.refreshTokens re-read the
+    // freshest stored token and retry before any sign-out — do NOT log out here.
+    if (_suppressRefreshSignOut) {
+      _refreshSubscribers = [];
+      return Promise.reject(response) as Promise<never>;
+    }
     console.log('[API] Refresh token rejected (401) — signing out');
     if (_signOutCallback) {
       await _signOutCallback().catch(() => {});

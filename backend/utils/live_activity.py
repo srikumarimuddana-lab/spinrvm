@@ -217,13 +217,15 @@ def build_content_state(
 async def _active_activities(ride_id: str) -> list[dict]:
     """Registered, not-yet-ended live activities for a ride (one per platform).
 
-    Selects id/platform/ended_at/rider_id — never the push_token. Android
-    dispatch reuses the user's FCM token via send_push_notification(rider_id),
-    so the stored token is not needed here; iOS (Phase 3) will select it
-    explicitly when it sends the ActivityKit APNs push.
+    Selects id/platform/ended_at/rider_id/push_token. Android dispatch reuses
+    the user's FCM token via send_push_notification(rider_id) and ignores the
+    stored token; iOS reads push_token here for the ActivityKit APNs push. The
+    token is used only to send — never logged.
     """
     rows = await db_supabase.get_rows(
-        "ride_live_activities", {"ride_id": ride_id}, columns="id,platform,ended_at,rider_id"
+        "ride_live_activities",
+        {"ride_id": ride_id},
+        columns="id,platform,ended_at,rider_id,push_token",
     )
     return [r for r in (rows or []) if not r.get("ended_at")]
 
@@ -274,6 +276,43 @@ async def _send_android(rider_id: Optional[str], content: dict, fcm_data: dict) 
         logger.error("live_activity android FCM send failed", exc_info=True)
 
 
+def _live_metric(event: str, outcome: str) -> None:
+    """Best-effort counter; a metrics hiccup must never break dispatch."""
+    try:
+        try:
+            from .metrics import inc as _inc
+        except ImportError:  # pragma: no cover - top-level execution fallback
+            from utils.metrics import inc as _inc  # type: ignore
+        _inc("spinr_rides_live_activity_apns_sent_total", labels={"event": event, "outcome": outcome})
+    except Exception:
+        logger.debug("live_activity metric emit failed", exc_info=True)
+
+
+async def _send_ios(act: dict, content: dict, event: str) -> None:
+    """ActivityKit APNs push (.p8 token auth, HTTP/2) so the rider's Voltra Live
+    Activity updates/ends while the app is backgrounded/killed. On a dead token
+    (APNs 410 / BadDeviceToken) the activity row is ended so no replica retries
+    it. Best-effort — never raises."""
+    push_token = act.get("push_token")
+    if not push_token:
+        return
+    try:
+        try:
+            from .apns_client import send_apns_live_activity
+        except ImportError:  # pragma: no cover - top-level execution fallback
+            from utils.apns_client import send_apns_live_activity  # type: ignore
+
+        ok, dead = await send_apns_live_activity(push_token, content, event)
+        _live_metric(event, "success" if ok else "failed")
+        if dead and act.get("id"):
+            now = datetime.now(timezone.utc).isoformat()
+            await db_supabase.update_one(
+                "ride_live_activities", {"id": act["id"]}, {"ended_at": now, "updated_at": now}
+            )
+    except Exception:
+        logger.error("live_activity ios APNs send failed", exc_info=True)
+
+
 async def send_live_activity_update(
     ride: dict,
     event: str,
@@ -284,9 +323,11 @@ async def send_live_activity_update(
     """Build the content-state and dispatch a live-activity update per platform.
 
     Android (Phase 2): a data-only FCM message drives the Notifee ongoing
-    notification. iOS: log-only until the Phase 3 ActivityKit APNs path. On a
-    terminal event the activity rows are marked ended. Best-effort: never raises
-    into the ride request path (mirrors ``routes.rides._push_in_background``).
+    notification. iOS (Phase 3): a direct ActivityKit APNs push drives the Voltra
+    Live Activity. On a terminal event the activity rows are marked ended. The
+    end push is sent BEFORE the rows are marked ended (the dispatch loop runs
+    first). Best-effort: never raises into the ride request path (mirrors
+    ``routes.rides._push_in_background``).
     """
     try:
         ride_id = ride.get("id")
@@ -318,7 +359,8 @@ async def send_live_activity_update(
             )
             if platform == "android":
                 await _send_android(act.get("rider_id"), content, fcm_data)
-            # iOS Live Activity push is the Phase 3 APNs path — log-only for now.
+            elif platform == "ios":
+                await _send_ios(act, content, event)
 
         if event == EVENT_END or ride.get("status") in _TERMINAL_STATUSES:
             now = datetime.now(timezone.utc).isoformat()

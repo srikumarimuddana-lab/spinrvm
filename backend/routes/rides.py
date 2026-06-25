@@ -2406,12 +2406,48 @@ async def create_ride(
                 detail=(rider_row or {}).get("status_reason")
                 or "Your account is currently suspended. Please contact support.",
             )
-    if body.payment_method == "card" and not body.work_profile:
-        if not rider_row or not rider_row.get("stripe_customer_id"):
-            raise HTTPException(
-                status_code=400,
-                detail="No payment method on file. Please add a card first.",
-            )
+    # Only a ride that will ACTUALLY settle against a corporate account is exempt
+    # from the personal-card checks — i.e. company_allowance, or work_profile +
+    # corporate_account_id (which is reclassified to company_allowance below and
+    # routed to settle_corporate). A bare corporate_account_id with
+    # payment_method="card" and no work_profile is NOT corporate-billed: it
+    # settles through settle_card() against the rider's card, so it must still
+    # pin one. Keying the exemption on corporate_account_id alone (an earlier
+    # attempt) re-opened the stale-default-card charge for exactly that shape —
+    # use the canonical predicate instead.
+    _corporate_billed = _is_corporate_paid(
+        payment_method=body.payment_method,
+        work_profile=body.work_profile,
+        corporate_account_id=body.corporate_account_id,
+    )
+    if body.payment_method == "card" and not _corporate_billed:
+        # Demo/local mode (Stripe intentionally unconfigured) has no real Stripe
+        # customers or cards; card rides settle through charge_ride's
+        # "unconfigured" path (marked paid, no charge). Only enforce the
+        # card-on-file requirements when Stripe is actually configured —
+        # otherwise demo/staging could never book a card ride.
+        _stripe_configured = bool((await get_app_settings()).get("stripe_secret_key"))
+        if _stripe_configured:
+            if not rider_row or not rider_row.get("stripe_customer_id"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="No payment method on file. Please add a card first.",
+                )
+            # Defense-in-depth (money): a card ride must name the exact card to
+            # charge. Without an explicit payment_method_id, settle_card() falls
+            # back to the Stripe customer's default_payment_method — which is how
+            # a stale/forgotten card (e.g. an old 4242 test card) ends up charged
+            # for a ride the rider never knowingly put on it. The rider app
+            # already guards this in the UI; this server check closes the same
+            # gap for any direct API caller or client-state race. The SCA
+            # two-step second leg is exempt: its hold
+            # (preauthorized_payment_intent_id) already pins a real card, and
+            # settlement captures that hold rather than the customer default.
+            if not body.payment_method_id and not body.preauthorized_payment_intent_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Select a payment card before booking.",
+                )
 
     active_statuses = list(RideStatus.active_statuses())
     existing_ride = (lambda _r: _r[0] if _r else None)(

@@ -31,7 +31,7 @@ export default function ReportSafetyScreen() {
 
         setSubmitting(true);
         try {
-            await api.post('/support/tickets/safety-report', { description: issue });
+            await api.post('/tickets/safety-report', { description: issue });
             showToast('Report Submitted', 'Your safety report has been submitted. Our trust and safety team will review it immediately.', 'success');
             router.back();
         } catch (e) {

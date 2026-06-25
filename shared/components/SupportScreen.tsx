@@ -179,7 +179,7 @@ export default function SupportScreen({
     }
     setSubmitting(true);
     try {
-      await api.post('/support/tickets', {
+      await api.post('/tickets', {
         subject: initialCategory === 'payment_failed' ? 'Payment Issue' : 'App Support Request',
         message: issue,
         category: initialCategory,

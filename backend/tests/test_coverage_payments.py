@@ -465,13 +465,37 @@ async def test_get_payment_methods_returns_list():
 
 
 @pytest.mark.anyio
-async def test_get_cards_no_stripe_key_returns_empty():
+async def test_get_cards_no_stripe_key_returns_demo_card():
+    """Demo mode (no Stripe secret) returns a single selectable demo card so the
+    booking flow has a payment method to attach (settlement uses the unconfigured
+    path that marks the ride paid without a real charge)."""
     from backend.routes.payments import get_cards
 
     with patch("backend.routes.payments.get_app_settings", new_callable=AsyncMock, return_value=_settings(False)):
         result = await get_cards(current_user=_USER)
 
-    assert result == []
+    assert isinstance(result, list) and len(result) == 1
+    assert result[0]["id"] == "pm_demo_card"
+    assert result[0]["is_default"] is True
+
+
+@pytest.mark.anyio
+async def test_get_cards_no_stripe_key_in_production_returns_503():
+    """In production an empty Stripe key is a misconfiguration, not demo mode —
+    never serve the demo card to a real rider; surface 503 instead."""
+    from fastapi import HTTPException
+
+    from backend.routes.payments import get_cards
+
+    with (
+        patch("backend.routes.payments.get_app_settings", new_callable=AsyncMock, return_value=_settings(False)),
+        patch("backend.routes.payments.core_settings") as mock_core,
+    ):
+        mock_core.ENV = "production"
+        with pytest.raises(HTTPException) as exc:
+            await get_cards(current_user=_USER)
+
+    assert exc.value.status_code == 503
 
 
 @pytest.mark.anyio

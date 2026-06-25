@@ -307,6 +307,25 @@ function RideOptionsScreenContent() {
   const handleBookRide = async () => {
     if (isBooking || isLoading) return;
     if (!selectedVehicle || !selectedEstimate) return;
+    // Payment guard: a card ride must have an actual card selected. Without
+    // this the rider could book on the implicit Stripe default (e.g. a stale
+    // test card) — booking now requires an explicit card, wallet, or company
+    // account. Corporate/wallet methods don't need a saved card.
+    if (selectedPayment === 'card' && !selectedCardId && !(useCorporate && selectedCorporateId)) {
+      setConfirmSheet({
+        visible: true,
+        title: 'Add a payment method',
+        message: savedCards.length === 0
+          ? 'You don’t have a card on file. Add a payment method to book this ride.'
+          : 'Please select a card to pay for this ride.',
+        variant: 'warning',
+        buttons: [
+          { text: 'Add / select card', onPress: () => setShowPaymentSheet(true) },
+          { text: 'Cancel', style: 'cancel' },
+        ],
+      });
+      return;
+    }
     if (scheduledTime) {
       const minTime = new Date(Date.now() + 15 * 60000);
       if (scheduledTime < minTime) {

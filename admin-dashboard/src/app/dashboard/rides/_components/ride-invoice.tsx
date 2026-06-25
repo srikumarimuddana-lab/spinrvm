@@ -29,10 +29,16 @@ const num = (n: any): number => {
 // Spinr brand red (#ee2b2b) as an RGB triple for jsPDF fills/text.
 const BRAND: [number, number, number] = [238, 43, 43];
 
+// Pragmatic email check — mirrors the backend send-receipt validation so the
+// admin gets immediate feedback before the request round-trips.
+const EMAIL_RE = /^[^@\s\x00]+@[^@\s\x00]+\.[^@\s\x00]+$/;
+
 export default function RideInvoice({ rideId, status, paymentStatus }: Props) {
     const { toast } = useToast();
     const [sending, setSending] = useState(false);
     const [downloading, setDownloading] = useState(false);
+    const [showEmailInput, setShowEmailInput] = useState(false);
+    const [customEmail, setCustomEmail] = useState("");
 
     if (status !== "completed") return null;
 
@@ -42,6 +48,11 @@ export default function RideInvoice({ rideId, status, paymentStatus }: Props) {
     const isUnpaid = !!paymentStatus && !["paid", "waived_admin"].includes(paymentStatus);
 
     const handleSend = async () => {
+        const overrideEmail = customEmail.trim();
+        if (overrideEmail && !EMAIL_RE.test(overrideEmail)) {
+            toast({ title: "Invalid email", description: "Enter a valid email address.", variant: "destructive" });
+            return;
+        }
         setSending(true);
         try {
             if (isUnpaid) {
@@ -53,8 +64,15 @@ export default function RideInvoice({ rideId, status, paymentStatus }: Props) {
                         : "Stripe emailed the rider a pay link.",
                 });
             } else {
-                await sendRideInvoice(rideId);
-                toast({ title: "Invoice sent", description: "Receipt sent to rider's email." });
+                await sendRideInvoice(rideId, overrideEmail || undefined);
+                toast({
+                    title: "Invoice sent",
+                    description: overrideEmail
+                        ? `Receipt sent to ${overrideEmail}.`
+                        : "Receipt sent to rider's email.",
+                });
+                setShowEmailInput(false);
+                setCustomEmail("");
             }
         } catch {
             toast({
@@ -441,17 +459,46 @@ export default function RideInvoice({ rideId, status, paymentStatus }: Props) {
     };
 
     return (
-        <div className="flex items-center gap-2">
-            {/* Rendered inside the Payment card (light surface) — filled primary
-             *  for the main action, outline for the secondary download. */}
-            <button onClick={handleSend} disabled={sending}
-                className="flex items-center gap-1.5 text-xs font-semibold bg-primary text-primary-foreground hover:bg-primary/90 px-3 py-1.5 rounded-lg shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-                <Send className="h-3.5 w-3.5" /> {sending ? "Sending..." : isUnpaid ? "Send Payable Invoice" : "Send Invoice"}
-            </button>
-            <button onClick={handleDownload} disabled={downloading}
-                className="flex items-center gap-1.5 text-xs font-semibold border border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-400 dark:hover:bg-emerald-900/20 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-                <Download className="h-3.5 w-3.5" /> {downloading ? "Generating..." : "Download PDF"}
-            </button>
+        <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+                {/* Rendered inside the Payment card (light surface) — filled primary
+                 *  for the main action, outline for the secondary download. */}
+                <button onClick={handleSend} disabled={sending}
+                    className="flex items-center gap-1.5 text-xs font-semibold bg-primary text-primary-foreground hover:bg-primary/90 px-3 py-1.5 rounded-lg shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                    <Send className="h-3.5 w-3.5" /> {sending ? "Sending..." : isUnpaid ? "Send Payable Invoice" : "Send Invoice"}
+                </button>
+                <button onClick={handleDownload} disabled={downloading}
+                    className="flex items-center gap-1.5 text-xs font-semibold border border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-400 dark:hover:bg-emerald-900/20 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                    <Download className="h-3.5 w-3.5" /> {downloading ? "Generating..." : "Download PDF"}
+                </button>
+            </div>
+            {/* "Send to a different email" only applies to the receipt path. The
+             *  payable Stripe invoice is emailed by Stripe to the rider's
+             *  customer address and can't be re-targeted here. */}
+            {!isUnpaid && (
+                showEmailInput ? (
+                    <div className="flex items-center gap-2">
+                        <input
+                            type="email"
+                            value={customEmail}
+                            onChange={(e) => setCustomEmail(e.target.value)}
+                            placeholder="name@example.com"
+                            className="flex-1 text-xs px-2 py-1.5 rounded-lg border border-input bg-background"
+                        />
+                        <button
+                            onClick={() => { setShowEmailInput(false); setCustomEmail(""); }}
+                            className="text-xs font-medium text-muted-foreground hover:text-foreground px-2 py-1.5">
+                            Cancel
+                        </button>
+                    </div>
+                ) : (
+                    <button
+                        onClick={() => setShowEmailInput(true)}
+                        className="self-start text-xs font-medium text-primary hover:underline">
+                        Send to a different email
+                    </button>
+                )
+            )}
         </div>
     );
 }

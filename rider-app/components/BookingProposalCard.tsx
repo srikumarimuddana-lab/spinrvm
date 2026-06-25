@@ -84,6 +84,17 @@ export default function BookingProposalCard({ proposal }: Props) {
 
   const handleConfirm = useCallback(async () => {
     if (!estimate || bookedRef.current) return;
+    // Card rides need an explicit card selection that can't be made from chat,
+    // and the backend rejects a card ride with no pinned card. Hand off to the
+    // standard booking screen (the quote is already loaded into the store) so
+    // the rider can pick a card and book there. Wallet proposals book inline.
+    if (paymentMethod === 'card') {
+      selectVehicle(estimate.vehicle_type as never);
+      applyPromo(proposedPromo);
+      setScheduledTime(scheduledDate);
+      router.push('/ride-options' as never);
+      return;
+    }
     setPhase('booking');
     try {
       selectVehicle(estimate.vehicle_type as never);

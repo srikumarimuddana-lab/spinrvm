@@ -99,6 +99,20 @@ class TestComputeQuota:
         assert q["unlimited"] is True
         assert q["exhausted"] is False
 
+    def test_negative_other_than_minus_one_is_unlimited(self):
+        # A misconfigured -2/-5 must read as "no limit", never 0-remaining.
+        q = spinr_pass.compute_quota(-2, 50, self._now())
+        assert q["unlimited"] is True
+        assert q["exhausted"] is False
+        assert q["rides_remaining"] == "unlimited"
+
+    def test_zero_cap_is_exhausted(self):
+        # 0 is a real cap (no rides), distinct from unlimited.
+        q = spinr_pass.compute_quota(0, 0, self._now())
+        assert q["unlimited"] is False
+        assert q["exhausted"] is True
+        assert q["rides_remaining"] == 0
+
 
 class TestHoursUntil:
     def test_none(self):
@@ -175,6 +189,21 @@ class TestExhaustedDriverIds:
         assert result == set()
         db.get_rows.assert_not_called()
 
+    async def test_skips_expired_and_negative_caps(self, patch_db):
+        now = datetime(2026, 6, 25, 12, 0, tzinfo=timezone.utc)
+        past = (now - timedelta(hours=1)).isoformat()
+        future = (now + timedelta(days=2)).isoformat()
+        # d1 finite+valid+over cap, d2 finite but expired (skip), d3 cap -2 (unlimited).
+        rides = [{"driver_id": "d1"}, {"driver_id": "d1"}, {"driver_id": "d2"}, {"driver_id": "d2"}]
+        patch_db(_FakeDB(rides_rows=rides))
+        subs = [
+            {"driver_id": "d1", "rides_per_day": 2, "expires_at": future},
+            {"driver_id": "d2", "rides_per_day": 2, "expires_at": past},
+            {"driver_id": "d3", "rides_per_day": -2},
+        ]
+        result = await spinr_pass.exhausted_driver_ids(subs, now=now)
+        assert result == {"d1"}
+
 
 @pytest.mark.anyio
 class TestQuotaStatusAndExhaustion:
@@ -183,6 +212,15 @@ class TestQuotaStatusAndExhaustion:
         db.get_rows = AsyncMock(return_value=[])  # no active sub
         patch_db(db)
         assert await spinr_pass.quota_status("d1") is None
+
+    async def test_quota_status_ignores_expired_active_sub(self, patch_db):
+        now = datetime(2026, 6, 25, 12, 0, tzinfo=timezone.utc)
+        past = (now - timedelta(hours=1)).isoformat()
+        db = _FakeDB(count=4)
+        sub = {"id": "s1", "rides_per_day": 4, "expires_at": past}
+        patch_db(db)
+        # Pass lapsed → quota is moot (expiry gates own it), not "rides used up".
+        assert await spinr_pass.quota_status("d1", sub=sub, now=now) is None
 
     async def test_is_quota_exhausted_true(self, patch_db):
         db = _FakeDB(count=4)
@@ -230,3 +268,37 @@ class TestForceOfflineIfExhausted:
         status = await spinr_pass.force_offline_if_exhausted({"id": "d1", "user_id": "u1"}, sub=sub)
         assert status is None
         assert [u for u in db.updated if u[0] == "drivers"] == []
+
+
+@pytest.mark.anyio
+class TestAssertQuotaAvailable:
+    async def test_raises_403_when_exhausted(self, patch_db):
+        db = _FakeDB(count=4)
+        patch_db(db)
+        with pytest.raises(Exception) as exc_info:
+            await spinr_pass.assert_quota_available("d1", sub={"id": "s1", "rides_per_day": 4})
+        assert getattr(exc_info.value, "status_code", None) == 403
+
+    async def test_noop_returns_status_when_remaining(self, patch_db):
+        db = _FakeDB(count=1)
+        patch_db(db)
+        status = await spinr_pass.assert_quota_available("d1", sub={"id": "s1", "rides_per_day": 4})
+        assert status is not None
+        assert status["exhausted"] is False
+
+    async def test_unlimited_is_noop(self, patch_db):
+        db = _FakeDB(count=99)
+        patch_db(db)
+        status = await spinr_pass.assert_quota_available("d1", sub={"id": "s1", "rides_per_day": -1})
+        assert status is not None
+        assert status["unlimited"] is True
+
+    async def test_fails_open_on_lookup_error(self, patch_db):
+        async def _boom(*a, **k):
+            raise RuntimeError("db down")
+
+        db = _FakeDB()
+        db.count_documents = AsyncMock(side_effect=_boom)
+        patch_db(db)
+        # Lookup failure must not block — returns None instead of raising.
+        assert await spinr_pass.assert_quota_available("d1", sub={"id": "s1", "rides_per_day": 4}) is None

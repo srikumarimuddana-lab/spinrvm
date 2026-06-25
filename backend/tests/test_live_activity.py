@@ -39,6 +39,22 @@ def test_area_label_strips_house_number_and_street():
     assert live_activity._area_label("   ") is None
 
 
+def test_area_label_never_leaks_a_street():
+    # Regression (security audit): an address WITHOUT a province token must still
+    # never surface the street as the "area".
+    assert live_activity._area_label("Oak Lane, Regina") == "Regina"
+    assert live_activity._area_label("123 Elm Drive, Saskatoon") == "Saskatoon"
+    # Street-only (no locality) → None, not the street.
+    assert live_activity._area_label("Oak Lane") is None
+    assert live_activity._area_label("1742 Main Street") is None
+
+
+def test_area_label_keeps_multiword_cities():
+    # Place-ambiguous words (Bay, Jaw…) are NOT treated as streets.
+    assert live_activity._area_label("Thunder Bay, ON") == "Thunder Bay"
+    assert live_activity._area_label("Moose Jaw, SK") == "Moose Jaw"
+
+
 def test_first_name_only():
     assert live_activity._first_name("Jordan Smith") == "Jordan"
     assert live_activity._first_name("Jordan") == "Jordan"

@@ -4384,7 +4384,9 @@ class LiveActivityRegisterRequest(BaseModel):
     """Rider app registers its live-activity push token for a ride."""
 
     platform: str = Field(..., pattern="^(ios|android)$")
-    push_token: str = Field(..., min_length=1, max_length=4096)
+    # Real tokens are small (APNs ≤100, FCM ≤256 chars); 512 is generous headroom
+    # and bounds abuse. Mirrored by a CHECK on the column (migration 195).
+    push_token: str = Field(..., min_length=1, max_length=512)
 
 
 @api_router.post("/{ride_id}/live-activity/register")

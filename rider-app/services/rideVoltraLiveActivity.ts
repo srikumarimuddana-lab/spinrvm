@@ -64,8 +64,8 @@ export async function endActivity(): Promise<void> {
     if (!available()) return;
     try {
         await voltra.endLiveActivity?.({ activityName: ACTIVITY_NAME });
-    } catch {
-        /* swallow */
+    } catch (e) {
+        console.warn('[Voltra] endActivity failed:', e);
     }
 }
 

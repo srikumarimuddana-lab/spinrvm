@@ -129,6 +129,14 @@ def test_send_success_headers_topic_body(monkeypatch):
     assert kwargs["json"]["aps"]["content-state"] == {"uiJsonData": "BLOB"}
 
 
+def test_send_rejects_path_chars_in_token(monkeypatch):
+    client = _patch(monkeypatch, responses=[_resp(200)])
+    # A token with path/structural chars must never reach the APNs URL path.
+    ok, dead = asyncio.run(apns_client.send_apns_live_activity("../../evil", _CONTENT, "update", use_sandbox=True))
+    assert (ok, dead) == (False, False)
+    client.post.assert_not_awaited()
+
+
 def test_send_410_marks_dead(monkeypatch):
     _patch(monkeypatch, responses=[_resp(410, "Unregistered")])
     ok, dead = asyncio.run(apns_client.send_apns_live_activity("tok", _CONTENT, "update", use_sandbox=True))

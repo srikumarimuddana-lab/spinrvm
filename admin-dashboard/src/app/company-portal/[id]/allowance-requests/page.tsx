@@ -26,6 +26,7 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { Check, X } from "lucide-react";
 
 type Filter = AllowanceRequestRow["status"] | "all";
@@ -46,6 +47,8 @@ export default function AllowanceRequestsPage() {
     const [note, setNote] = useState("");
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
+
+    const { sorted, sort, toggle } = useTableSort(rows);
 
     const load = useCallback(async () => {
         if (!id) return;
@@ -111,10 +114,10 @@ export default function AllowanceRequestsPage() {
                     <Table>
                         <TableHeader>
                             <TableRow>
-                                <TableHead>Amount</TableHead>
-                                <TableHead>Reason</TableHead>
-                                <TableHead>Status</TableHead>
-                                <TableHead>Requested</TableHead>
+                                <SortableHead column="amount" sort={sort} onSort={toggle}>Amount</SortableHead>
+                                <SortableHead column="reason" sort={sort} onSort={toggle}>Reason</SortableHead>
+                                <SortableHead column="status" sort={sort} onSort={toggle}>Status</SortableHead>
+                                <SortableHead column="created_at" sort={sort} onSort={toggle}>Requested</SortableHead>
                                 <TableHead className="text-right">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
@@ -133,7 +136,7 @@ export default function AllowanceRequestsPage() {
                                     </TableCell>
                                 </TableRow>
                             )}
-                            {rows.map((r) => (
+                            {sorted.map((r) => (
                                 <TableRow key={r.id}>
                                     <TableCell className="font-medium">
                                         {r.amount.toLocaleString("en-CA", {

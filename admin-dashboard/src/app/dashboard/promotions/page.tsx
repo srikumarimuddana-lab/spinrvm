@@ -11,6 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import {
     Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -335,6 +336,10 @@ export default function PromotionsPage() {
         });
     }, [usage, usageSearch, usageTypeFilter, promoIdTypeMap]);
 
+    // Client-side sorting for the loaded page of each table.
+    const { sorted: sortedPromos, sort: promoSort, toggle: togglePromoSort } = useTableSort(filtered);
+    const { sorted: sortedUsage, sort: usageSort, toggle: toggleUsageSort } = useTableSort(filteredUsage);
+
     // Chart data filtered by chartFilter
     const chartData = useMemo(() => {
         if (!stats?.daily_usage) return [];
@@ -569,13 +574,17 @@ export default function PromotionsPage() {
                         <div className="border rounded-lg">
                             <Table>
                                 <TableHeader><TableRow>
-                                    <TableHead>Code</TableHead><TableHead>Discount</TableHead><TableHead>Uses</TableHead>
-                                    {promoTab === "expired" && <TableHead>Type</TableHead>}
+                                    <SortableHead column="code" sort={promoSort} onSort={togglePromoSort}>Code</SortableHead>
+                                    <SortableHead column="discount_value" sort={promoSort} onSort={togglePromoSort}>Discount</SortableHead>
+                                    <SortableHead column="uses" sort={promoSort} onSort={togglePromoSort}>Uses</SortableHead>
+                                    {promoTab === "expired" && <SortableHead column="promo_type" sort={promoSort} onSort={togglePromoSort}>Type</SortableHead>}
                                     {(promoTab === "private" || promoTab === "expired") && <TableHead>Assigned To</TableHead>}
-                                    <TableHead>Expiry</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Actions</TableHead>
+                                    <SortableHead column="expiry_date" sort={promoSort} onSort={togglePromoSort}>Expiry</SortableHead>
+                                    <SortableHead column="is_active" sort={promoSort} onSort={togglePromoSort}>Status</SortableHead>
+                                    <TableHead className="text-right">Actions</TableHead>
                                 </TableRow></TableHeader>
                                 <TableBody>
-                                    {filtered.map((p) => {
+                                    {sortedPromos.map((p) => {
                                         const status = getPromoStatus(p);
                                         const sc = STATUS_CONFIG[status] || STATUS_CONFIG.inactive;
                                         return (
@@ -706,10 +715,15 @@ export default function PromotionsPage() {
                         <div className="border rounded-lg">
                             <Table>
                                 <TableHeader><TableRow>
-                                    <TableHead>Date</TableHead><TableHead>User</TableHead><TableHead>Code</TableHead><TableHead>Type</TableHead><TableHead>Booking</TableHead><TableHead>Discount Applied</TableHead>
+                                    <SortableHead column="created_at" sort={usageSort} onSort={toggleUsageSort}>Date</SortableHead>
+                                    <SortableHead column="user_name" sort={usageSort} onSort={toggleUsageSort}>User</SortableHead>
+                                    <SortableHead column="code" sort={usageSort} onSort={toggleUsageSort}>Code</SortableHead>
+                                    <TableHead>Type</TableHead>
+                                    <SortableHead column="ride_id" sort={usageSort} onSort={toggleUsageSort}>Booking</SortableHead>
+                                    <SortableHead column="discount_applied" sort={usageSort} onSort={toggleUsageSort}>Discount Applied</SortableHead>
                                 </TableRow></TableHeader>
                                 <TableBody>
-                                    {filteredUsage.map((u) => {
+                                    {sortedUsage.map((u) => {
                                         const pType = promoIdTypeMap[u.promo_id] || "discount";
                                         return (
                                             <TableRow key={u.id}>

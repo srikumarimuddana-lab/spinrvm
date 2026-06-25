@@ -28,7 +28,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Table, TableBody, TableCell, TableHeader, TableRow } from "@/components/ui/table";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { Pagination } from "@/components/ui/pagination";
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -229,6 +230,8 @@ export default function SafetyPage() {
         return c;
     }, [items]);
 
+    const { sorted, sort, toggle } = useTableSort(items);
+
     if (!allowed) return null;
 
     return (
@@ -316,17 +319,17 @@ export default function SafetyPage() {
                     <Table>
                         <TableHeader>
                             <TableRow className="bg-muted/30 hover:bg-muted/30">
-                                <TableHead className="h-9 text-[11px] uppercase tracking-wider">Reported</TableHead>
-                                <TableHead className="h-9 text-[11px] uppercase tracking-wider">Severity</TableHead>
-                                <TableHead className="h-9 text-[11px] uppercase tracking-wider">Category</TableHead>
-                                <TableHead className="h-9 text-[11px] uppercase tracking-wider">Reporter</TableHead>
-                                <TableHead className="h-9 text-[11px] uppercase tracking-wider">Ride</TableHead>
-                                <TableHead className="h-9 text-[11px] uppercase tracking-wider">Status</TableHead>
-                                <TableHead className="h-9 text-[11px] uppercase tracking-wider">Assigned</TableHead>
+                                <SortableHead column="reported_at" sort={sort} onSort={toggle} className="h-9 text-[11px] uppercase tracking-wider">Reported</SortableHead>
+                                <SortableHead column="severity" sort={sort} onSort={toggle} className="h-9 text-[11px] uppercase tracking-wider">Severity</SortableHead>
+                                <SortableHead column="category" sort={sort} onSort={toggle} className="h-9 text-[11px] uppercase tracking-wider">Category</SortableHead>
+                                <SortableHead column="reporter_name" sort={sort} onSort={toggle} className="h-9 text-[11px] uppercase tracking-wider">Reporter</SortableHead>
+                                <SortableHead column="ride_id" sort={sort} onSort={toggle} className="h-9 text-[11px] uppercase tracking-wider">Ride</SortableHead>
+                                <SortableHead column="status" sort={sort} onSort={toggle} className="h-9 text-[11px] uppercase tracking-wider">Status</SortableHead>
+                                <SortableHead column="assigned_to_admin_id" sort={sort} onSort={toggle} className="h-9 text-[11px] uppercase tracking-wider">Assigned</SortableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
-                            {items.map((it) => {
+                            {sorted.map((it) => {
                                 const st = statusTone(it.status);
                                 const sv = severityTone(it.severity);
                                 return (

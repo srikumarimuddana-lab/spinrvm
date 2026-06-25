@@ -18,6 +18,7 @@ import {
     Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Pagination } from "@/components/ui/pagination";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import {
     CreditCard, Plus, Pencil, Trash2, RefreshCw, Users,
     DollarSign, TrendingUp, XCircle, CheckCircle, Clock,
@@ -598,6 +599,12 @@ export default function SubscriptionsPage() {
         : driverSubs.filter((s) => s.status === statusFilter);
     const pagedSubs = filteredSubs.slice((subPage - 1) * PAGE_SIZE, subPage * PAGE_SIZE);
 
+    // Client-side sort state (one per table)
+    const { sorted: sortedPlans, sort: plansSort, toggle: plansToggle } = useTableSort(plans);
+    const { sorted: sortedSubs, sort: subsSort, toggle: subsToggle } = useTableSort(pagedSubs);
+    const { sorted: sortedTransactions, sort: txSort, toggle: txToggle } = useTableSort(transactions);
+    const { sorted: sortedAreas, sort: areasSort, toggle: areasToggle } = useTableSort(serviceAreas);
+
     const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
         { id: "plans", label: "Plans", icon: <Users className="h-4 w-4" /> },
         { id: "drivers", label: "Driver Subscriptions", icon: <CreditCard className="h-4 w-4" /> },
@@ -717,17 +724,17 @@ export default function SubscriptionsPage() {
                             <Table>
                                 <TableHeader>
                                     <TableRow>
-                                        <TableHead>Name</TableHead>
-                                        <TableHead>Price (pre-tax)</TableHead>
-                                        <TableHead>Duration</TableHead>
-                                        <TableHead>Rides/Day</TableHead>
-                                        <TableHead>Subscribers</TableHead>
-                                        <TableHead>Status</TableHead>
+                                        <SortableHead column="name" sort={plansSort} onSort={plansToggle}>Name</SortableHead>
+                                        <SortableHead column="price" sort={plansSort} onSort={plansToggle}>Price (pre-tax)</SortableHead>
+                                        <SortableHead column="duration_days" sort={plansSort} onSort={plansToggle}>Duration</SortableHead>
+                                        <SortableHead column="rides_per_day" sort={plansSort} onSort={plansToggle}>Rides/Day</SortableHead>
+                                        <SortableHead column="subscriber_count" sort={plansSort} onSort={plansToggle}>Subscribers</SortableHead>
+                                        <SortableHead column="is_active" sort={plansSort} onSort={plansToggle}>Status</SortableHead>
                                         <TableHead className="text-right">Actions</TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {plans.map((plan) => (
+                                    {sortedPlans.map((plan) => (
                                         <TableRow key={plan.id}>
                                             <TableCell className="font-medium">
                                                 <div>{plan.name}</div>
@@ -793,16 +800,16 @@ export default function SubscriptionsPage() {
                                 <Table>
                                     <TableHeader>
                                         <TableRow>
-                                            <TableHead>Driver</TableHead>
-                                            <TableHead>Plan</TableHead>
-                                            <TableHead>Price</TableHead>
-                                            <TableHead>Status</TableHead>
-                                            <TableHead>Started</TableHead>
-                                            <TableHead>Expires</TableHead>
+                                            <SortableHead column="driver_name" sort={subsSort} onSort={subsToggle}>Driver</SortableHead>
+                                            <SortableHead column="plan_name" sort={subsSort} onSort={subsToggle}>Plan</SortableHead>
+                                            <SortableHead column="price" sort={subsSort} onSort={subsToggle}>Price</SortableHead>
+                                            <SortableHead column="status" sort={subsSort} onSort={subsToggle}>Status</SortableHead>
+                                            <SortableHead column="started_at" sort={subsSort} onSort={subsToggle}>Started</SortableHead>
+                                            <SortableHead column="expires_at" sort={subsSort} onSort={subsToggle}>Expires</SortableHead>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
-                                        {pagedSubs.map((sub) => {
+                                        {sortedSubs.map((sub) => {
                                             const sc = STATUS_CONFIG[sub.status] ?? { label: sub.status, variant: "secondary" as const };
                                             return (
                                                 <TableRow key={sub.id}>
@@ -864,20 +871,20 @@ export default function SubscriptionsPage() {
                                 <Table>
                                     <TableHeader>
                                         <TableRow>
-                                            <TableHead>Date</TableHead>
-                                            <TableHead>Driver</TableHead>
-                                            <TableHead>Plan</TableHead>
-                                            <TableHead>Type</TableHead>
-                                            <TableHead className="text-right">Subtotal</TableHead>
-                                            <TableHead className="text-right">GST</TableHead>
-                                            <TableHead className="text-right">PST</TableHead>
-                                            <TableHead className="text-right">HST</TableHead>
-                                            <TableHead className="text-right">Total</TableHead>
+                                            <SortableHead column="created_at" sort={txSort} onSort={txToggle}>Date</SortableHead>
+                                            <SortableHead column="driver_name" sort={txSort} onSort={txToggle}>Driver</SortableHead>
+                                            <SortableHead column="plan_name" sort={txSort} onSort={txToggle}>Plan</SortableHead>
+                                            <SortableHead column="billing_reason" sort={txSort} onSort={txToggle}>Type</SortableHead>
+                                            <SortableHead column="subtotal" sort={txSort} onSort={txToggle} align="right">Subtotal</SortableHead>
+                                            <SortableHead column="gst_amount" sort={txSort} onSort={txToggle} align="right">GST</SortableHead>
+                                            <SortableHead column="pst_amount" sort={txSort} onSort={txToggle} align="right">PST</SortableHead>
+                                            <SortableHead column="hst_amount" sort={txSort} onSort={txToggle} align="right">HST</SortableHead>
+                                            <SortableHead column="amount" sort={txSort} onSort={txToggle} align="right">Total</SortableHead>
                                             <TableHead className="text-right">Invoice</TableHead>
                                         </TableRow>
                                     </TableHeader>
                                     <TableBody>
-                                        {transactions.map((tx) => (
+                                        {sortedTransactions.map((tx) => (
                                             <TableRow key={tx.id}>
                                                 <TableCell className="text-xs whitespace-nowrap">
                                                     {tx.created_at ? formatDate(tx.created_at) : "—"}
@@ -998,17 +1005,17 @@ export default function SubscriptionsPage() {
                             <Table>
                                 <TableHeader>
                                     <TableRow>
-                                        <TableHead>Service Area</TableHead>
-                                        <TableHead>Province</TableHead>
-                                        <TableHead>Tax enabled</TableHead>
-                                        <TableHead className="text-right">GST</TableHead>
-                                        <TableHead className="text-right">PST</TableHead>
-                                        <TableHead className="text-right">HST</TableHead>
+                                        <SortableHead column="name" sort={areasSort} onSort={areasToggle}>Service Area</SortableHead>
+                                        <SortableHead column="subscription_tax_config.province" sort={areasSort} onSort={areasToggle}>Province</SortableHead>
+                                        <SortableHead column="subscription_tax_config.enabled" sort={areasSort} onSort={areasToggle}>Tax enabled</SortableHead>
+                                        <SortableHead column="subscription_tax_config.gst_rate" sort={areasSort} onSort={areasToggle} align="right">GST</SortableHead>
+                                        <SortableHead column="subscription_tax_config.pst_rate" sort={areasSort} onSort={areasToggle} align="right">PST</SortableHead>
+                                        <SortableHead column="subscription_tax_config.hst_rate" sort={areasSort} onSort={areasToggle} align="right">HST</SortableHead>
                                         <TableHead className="text-right">Actions</TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {serviceAreas.map((area) => {
+                                    {sortedAreas.map((area) => {
                                         const cfg = area.subscription_tax_config ?? {
                                             enabled: true,
                                             province: "SK",

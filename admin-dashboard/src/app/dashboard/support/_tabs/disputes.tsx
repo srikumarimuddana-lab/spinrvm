@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { HelpCircle, Search, CheckCircle, XCircle, Clock, Plus, Pencil, Trash2, RefreshCw, Eye } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { getDisputes, createDispute, updateDispute, resolveDispute, deleteDispute } from "@/lib/api";
@@ -59,6 +60,7 @@ export default function DisputesTab() {
         const ma = areaFilter === "all" || d.service_area_id === areaFilter;
         return ms && ma && (statusFilter === "all" || d.status === statusFilter || (statusFilter === "pending" && d.status === "open"));
     });
+    const { sorted, sort, toggle } = useTableSort(filtered);
 
     const reset = () => { setForm({ ride_id: "", user_name: "", user_type: "rider", reason: "fare", description: "", refund_amount: "", service_area_id: "" }); setEditing(null); };
     const areaName = (id: string) => areas.find((a) => a.id === id)?.name || "";
@@ -106,8 +108,8 @@ export default function DisputesTab() {
             <Card><CardContent className="p-0">
                 {loading ? <div className="flex justify-center p-12"><div className="h-7 w-7 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>
                 : filtered.length === 0 ? <div className="text-center py-12 text-muted-foreground text-sm">No disputes found.</div>
-                : <Table><TableHeader><TableRow><TableHead>User</TableHead><TableHead>Type</TableHead><TableHead>Area</TableHead><TableHead>Description</TableHead><TableHead>Status</TableHead><TableHead>Date</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
-                    <TableBody>{filtered.map((d) => {
+                : <Table><TableHeader><TableRow><SortableHead column="user_name" sort={sort} onSort={toggle}>User</SortableHead><SortableHead column="dispute_type" sort={sort} onSort={toggle}>Type</SortableHead><SortableHead column="service_area_id" sort={sort} onSort={toggle}>Area</SortableHead><SortableHead column="description" sort={sort} onSort={toggle}>Description</SortableHead><SortableHead column="status" sort={sort} onSort={toggle}>Status</SortableHead><SortableHead column="created_at" sort={sort} onSort={toggle}>Date</SortableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
+                    <TableBody>{sorted.map((d) => {
                         const sc = S_CFG[d.status] || S_CFG.pending; const SI = sc.i;
                         return (
                             <TableRow key={d.id} className="cursor-pointer hover:bg-muted/50" onClick={() => { setSelected(d); setResolution(""); }}>

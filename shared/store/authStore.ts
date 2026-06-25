@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
-import api, { setCsrfToken, setInMemoryToken, setRefreshCallback } from '../api/client';
+import api, { setCsrfToken, setInMemoryToken, setRefreshCallback, setSuppressRefreshSignOut } from '../api/client';
 import { appCache, CACHE_KEYS } from '../cache';
 
 // Last-known profile is cached with a long TTL so the driver/rider still sees
@@ -249,26 +249,67 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   refreshTokens: async (): Promise<boolean> => {
-    const storedRefresh = get().refreshToken ?? await storage.getItem('refresh_token');
-    if (!storedRefresh) return false;
+    // Prefer the freshest persisted refresh token over the in-memory copy.
+    // On the driver app a headless background location task rotates the shared
+    // SecureStore `refresh_token` independently of this foreground context;
+    // reading storage first lets the foreground pick up a rotation the
+    // background already performed instead of replaying a stale in-memory
+    // token (which the backend then 401s as a benign rotation race).
+    let candidate = (await storage.getItem('refresh_token')) ?? get().refreshToken ?? null;
+    if (!candidate) return false;
+
+    // Own the sign-out decision: a 401 from /auth/refresh during this attempt
+    // must not auto-sign-out at the interceptor (see setSuppressRefreshSignOut)
+    // until we've checked for a fresher rotated-forward token below.
+    setSuppressRefreshSignOut(true);
     try {
-      const res = await api.post('/auth/refresh', { refresh_token: storedRefresh });
-      const { token, refresh_token: newRefresh, expires_in, csrf_token } = res.data as RefreshTokenResponse;
-      await get().setTokens(token, newRefresh, expires_in, csrf_token);
-      return true;
-    } catch (e: unknown) {
-      // Only wipe the session when the server explicitly rejects the refresh
-      // token (401). Network errors, timeouts, and 5xx are transient — keeping
-      // the refresh token lets the next app launch / request try again instead
-      // of forcing the user back to the OTP screen on a flaky connection.
-      const status = isApiError(e) ? e.response?.status : undefined;
-      if (status === 401) {
-        console.log('[Auth] Refresh token rejected (401) — logging out');
-        await get().logout();
-      } else {
-        console.log('[Auth] Token refresh failed transiently, keeping session:', status ?? (isApiError(e) ? e.message : String(e)));
+      // Up to 2 attempts: the first uses the freshest token we have; on a 401
+      // we re-read storage and, if another context rotated the token forward in
+      // the meantime, retry once with that value. A short wait covers the
+      // simultaneous-refresh window where the winner hasn't persisted yet.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const res = await api.post('/auth/refresh', { refresh_token: candidate });
+          const { token, refresh_token: newRefresh, expires_in, csrf_token } = res.data as RefreshTokenResponse;
+          await get().setTokens(token, newRefresh, expires_in, csrf_token);
+          return true;
+        } catch (e: unknown) {
+          const status = isApiError(e) ? e.response?.status : undefined;
+          if (status !== 401) {
+            // Network errors, timeouts, and 5xx are transient — keep the refresh
+            // token so the next app launch / request can try again instead of
+            // forcing the user back to the OTP screen on a flaky connection.
+            console.log('[Auth] Token refresh failed transiently, keeping session:', status ?? (isApiError(e) ? e.message : String(e)));
+            return false;
+          }
+          // 401: the token we sent was rejected. Before tearing down the
+          // session, check whether another context (the background task) has
+          // rotated the shared refresh token forward in secure storage. If so,
+          // this is the foreground/background rotation race — retry once with
+          // the fresher value rather than logging the user out.
+          if (attempt === 0) {
+            let latest = await storage.getItem('refresh_token');
+            if (!latest || latest === candidate) {
+              // The winner may not have persisted its rotated token yet — give
+              // it a brief moment, then re-read once more.
+              await new Promise((r) => setTimeout(r, 200));
+              latest = await storage.getItem('refresh_token');
+            }
+            if (latest && latest !== candidate) {
+              candidate = latest;
+              continue;
+            }
+          }
+          // Genuinely rejected (token unchanged, or the retry also failed):
+          // the session is dead — revoked, expired, or post-cascade. Clear it.
+          console.log('[Auth] Refresh token rejected (401) — logging out');
+          await get().logout();
+          return false;
+        }
       }
       return false;
+    } finally {
+      setSuppressRefreshSignOut(false);
     }
   },
 

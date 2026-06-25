@@ -781,8 +781,12 @@ async def settle_card(
 # ── Receipt ──────────────────────────────────────────────────────────
 
 
-async def send_ride_receipt(ride: dict, rider_id: str, tip_amount: Decimal) -> bool:
-    """Send receipt email. Returns True if email was sent."""
+async def send_ride_receipt(ride: dict, rider_id: str, tip_amount: Decimal, recipient_email: Optional[str] = None) -> bool:
+    """Send receipt email. Returns True if email was sent.
+
+    ``recipient_email`` overrides the destination address (admin can send the
+    invoice to a different email). When omitted, it goes to the rider on file.
+    """
     rider = await db_supabase.get_user_by_id(rider_id)
     driver_info = None
     if ride.get("driver_id"):
@@ -801,7 +805,7 @@ async def send_ride_receipt(ride: dict, rider_id: str, tip_amount: Decimal) -> b
     try:
         from utils.email_receipt import send_receipt_email
 
-        return await send_receipt_email(ride, rider or {}, driver_info, _f(tip_amount))
+        return await send_receipt_email(ride, rider or {}, driver_info, _f(tip_amount), recipient_email=recipient_email)
     except Exception as e:
         logger.error(f"Receipt email error: {e}", exc_info=True)
         return False

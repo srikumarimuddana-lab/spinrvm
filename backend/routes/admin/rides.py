@@ -1403,27 +1403,52 @@ async def admin_get_ride_invoice(ride_id: str):
     return invoice_data
 
 
+class SendReceiptRequest(BaseModel):
+    # Optional override so an admin can email the receipt to a different
+    # address (e.g. a corporate billing inbox) than the rider on file.
+    # Validated with a pragmatic email pattern — avoids the email-validator
+    # dependency EmailStr requires.
+    email: Optional[str] = Field(
+        default=None,
+        max_length=254,
+        # Exclude null byte explicitly (\x00 is neither @ nor \s, so the naive
+        # class would accept it and pass a malformed address to the MTA).
+        pattern=r"^[^@\s\x00]+@[^@\s\x00]+\.[^@\s\x00]+$",
+    )
+
+
 @router.post("/rides/{ride_id}/send-receipt")
+@limiter.limit("10/minute")
 async def admin_send_ride_receipt(
+    request: Request,
     ride_id: str,
+    body: Optional[SendReceiptRequest] = None,
     admin_user: dict = Depends(get_admin_user),
 ):
-    """Re-send the ride receipt email to the rider (admin "Send Invoice").
+    """Re-send the ride receipt email (admin "Send Invoice").
 
     This only emails the receipt — it never charges or re-settles the ride
     (that is the rider-owned /process-payment endpoint, which an admin token
     is not authorized to call). Delivery goes through email_provider
     (AWS SES primary, Resend guardrail).
+
+    An optional ``email`` in the body overrides the destination address; when
+    omitted the receipt goes to the rider's email on file.
     """
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
+    override_email = (body.email if body else None) or None
+
     rider_id = ride.get("rider_id")
     rider = await db_supabase.get_user_by_id(rider_id) if rider_id else None
-    if not rider or not rider.get("email"):
-        # No address on file — surface clearly instead of a silent failure.
-        raise HTTPException(status_code=422, detail="Rider has no email address on file")
+    if not override_email and (not rider or not rider.get("email")):
+        # No destination at all — surface clearly instead of a silent failure.
+        raise HTTPException(
+            status_code=422,
+            detail="Rider has no email address on file. Provide an email to send the receipt to.",
+        )
 
     try:
         from ...services.payment_service import send_ride_receipt
@@ -1431,14 +1456,19 @@ async def admin_send_ride_receipt(
         from services.payment_service import send_ride_receipt  # type: ignore
 
     tip_amount = Decimal(str(ride.get("tip_amount") or 0))
-    sent = await send_ride_receipt(ride, rider_id, tip_amount)
+    sent = await send_ride_receipt(ride, rider_id, tip_amount, recipient_email=override_email)
 
+    # Forensic traceability for the "send to a different email" capability:
+    # record the override DOMAIN only — enough to investigate exfiltration abuse
+    # (e.g. a rogue operator routing receipts to a personal/competitor domain)
+    # without persisting the rider's full address (PII).
+    override_domain = override_email.rsplit("@", 1)[-1] if override_email else None
     await log_admin_action(
         admin_user,
         "send_ride_receipt",
         "ride",
         ride_id,
-        {"sent": bool(sent)},
+        {"sent": bool(sent), "custom_email": bool(override_email), "override_domain": override_domain},
     )
 
     if not sent:

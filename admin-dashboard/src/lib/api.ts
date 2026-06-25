@@ -443,9 +443,12 @@ export const resolveLostItem = (itemId: string, data: { status: string; admin_no
         method: "PUT",
         body: JSON.stringify(data),
     });
-export const sendRideInvoice = (rideId: string) =>
+export const sendRideInvoice = (rideId: string, email?: string) =>
     request<any>(`/api/admin/rides/${rideId}/send-receipt`, {
         method: "POST",
+        // Optional override address — when omitted the backend emails the
+        // rider on file.
+        body: email ? JSON.stringify({ email }) : undefined,
     });
 // Payable Stripe Invoice for a stuck unpaid ride — Stripe emails the rider a
 // hosted pay page; invoice.paid settles the ride. Returns { invoice_url }.

@@ -648,6 +648,12 @@ export const useRideStore = create<RideState>((set, get) => ({
         // create_ride returned requires_action. Backend verifies + attaches it.
         preauthorized_payment_intent_id: preauthorizedPaymentIntentId ?? null,
         corporate_account_id: corporateAccountId || null,
+        // A corporate booking must be flagged work_profile so the backend
+        // reclassifies it to company_allowance and settles against the COMPANY
+        // (settle_corporate) instead of silently charging the rider's personal
+        // card. Without this flag the ride stays payment_method='card' and bills
+        // the rider — corporate billing never reaches the company account.
+        work_profile: corporateAccountId ? true : null,
         estimate_token: selectedEstimate?.estimate_token,
         requires_wav: requiresWav,
         quiet_mode: quietMode,

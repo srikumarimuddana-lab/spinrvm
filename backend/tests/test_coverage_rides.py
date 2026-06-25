@@ -974,6 +974,11 @@ async def test_create_ride_card_no_stripe_customer():
         patch("backend.routes.rides.validate_ride_location"),
         patch("backend.routes.rides.db") as mock_db,
         patch("backend.routes.rides.db_supabase") as mock_supabase,
+        # Stripe configured → card-on-file requirement is enforced.
+        patch(
+            "backend.routes.rides.get_app_settings",
+            AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
+        ),
     ):
         mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active", "stripe_customer_id": None})
         mock_supabase.find_one = AsyncMock(return_value=None)
@@ -1001,6 +1006,10 @@ async def test_create_ride_existing_active_ride():
         pickup_address="100 Main St",
         dropoff_address="200 Broadway Ave",
         vehicle_type_id="vt-1",
+        # A card ride must name an explicit card (server-side money guard); set
+        # one so this test reaches the active-ride 409 it is actually exercising
+        # rather than tripping the missing-card 400.
+        payment_method_id="pm_1",
     )
 
     with (
@@ -1017,6 +1026,226 @@ async def test_create_ride_existing_active_ride():
             await create_ride(request=req, body=body, current_user=_USER)
 
     assert exc.value.status_code == 409
+
+
+@pytest.mark.anyio
+async def test_create_ride_card_without_payment_method_id_rejected():
+    """A card ride with no explicit payment_method_id must be rejected (400).
+
+    Regression guard: settle_card() falls back to the Stripe customer's
+    default_payment_method when the ride has no payment_method_id, which is how
+    a stale card got charged for a ride the rider never selected it for. The
+    booking endpoint must reject the card ride up front instead.
+    """
+    from fastapi import HTTPException
+
+    from backend.routes.rides import create_ride
+    from backend.schemas import CreateRideRequest
+
+    req = _starlette_request(method="POST", path="/rides")
+
+    body = CreateRideRequest(
+        pickup_lat=52.1,
+        pickup_lng=-106.6,
+        dropoff_lat=52.2,
+        dropoff_lng=-106.7,
+        pickup_address="100 Main St",
+        dropoff_address="200 Broadway Ave",
+        vehicle_type_id="vt-1",
+        payment_method="card",
+        # payment_method_id intentionally omitted → defaults to None.
+    )
+
+    with (
+        patch("backend.routes.rides.validate_ride_location"),
+        patch("backend.routes.rides.db") as mock_db,
+        patch("backend.routes.rides.db_supabase") as mock_supabase,
+        # Stripe configured → the card-on-file requirement is enforced.
+        patch(
+            "backend.routes.rides.get_app_settings",
+            AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
+        ),
+    ):
+        # Rider HAS a Stripe customer (so the existing stripe_customer_id check
+        # passes) but supplies no card to charge.
+        mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active", "stripe_customer_id": "cus_1"})
+        mock_supabase.find_one = AsyncMock(return_value=None)
+
+        with pytest.raises(HTTPException) as exc:
+            await create_ride(request=req, body=body, current_user=_USER)
+
+    assert exc.value.status_code == 400
+    assert "card" in str(exc.value.detail).lower()
+
+
+@pytest.mark.anyio
+async def test_create_ride_card_demo_mode_skips_card_requirement():
+    """In demo mode (Stripe unconfigured) a card ride must NOT be blocked for
+    lacking a card — settlement uses the unconfigured path (paid, no charge), so
+    requiring a card on file would make local/staging card bookings impossible.
+
+    An active ride is staged so we expect to reach the 409, proving the card
+    requirement did not short-circuit with a 400 first.
+    """
+    from backend.routes.rides import create_ride
+    from backend.schemas import CreateRideRequest
+
+    req = _starlette_request(method="POST", path="/rides")
+    body = CreateRideRequest(
+        pickup_lat=52.1,
+        pickup_lng=-106.6,
+        dropoff_lat=52.2,
+        dropoff_lng=-106.7,
+        pickup_address="100 Main St",
+        dropoff_address="200 Broadway Ave",
+        vehicle_type_id="vt-1",
+        payment_method="card",
+        # No card, no stripe_customer_id — but Stripe is unconfigured.
+    )
+
+    with (
+        patch("backend.routes.rides.validate_ride_location"),
+        patch("backend.routes.rides.db") as mock_db,
+        patch("backend.routes.rides.db_supabase") as mock_supabase,
+        # Stripe NOT configured → demo mode, card requirement is skipped.
+        patch("backend.routes.rides.get_app_settings", AsyncMock(return_value={})),
+    ):
+        mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
+        mock_supabase.find_one = AsyncMock(return_value=None)
+        mock_supabase.get_rows = AsyncMock(return_value=[_ride(status="searching")])
+
+        with pytest.raises(Exception) as exc:
+            await create_ride(request=req, body=body, current_user=_USER)
+
+    assert getattr(exc.value, "status_code", None) == 409
+
+
+@pytest.mark.anyio
+async def test_create_ride_work_profile_without_corporate_account_still_requires_card():
+    """P1: a bare work_profile flag (no corporate_account_id) must NOT exempt the
+    card requirement — otherwise the ride is never reclassified to corporate and
+    settles on the stored default card (the stale-card path this guard closes).
+    """
+    from fastapi import HTTPException
+
+    from backend.routes.rides import create_ride
+    from backend.schemas import CreateRideRequest
+
+    req = _starlette_request(method="POST", path="/rides")
+    body = CreateRideRequest(
+        pickup_lat=52.1,
+        pickup_lng=-106.6,
+        dropoff_lat=52.2,
+        dropoff_lng=-106.7,
+        pickup_address="100 Main St",
+        dropoff_address="200 Broadway Ave",
+        vehicle_type_id="vt-1",
+        payment_method="card",
+        work_profile=True,  # but no corporate_account_id → NOT corporate
+    )
+
+    with (
+        patch("backend.routes.rides.validate_ride_location"),
+        patch("backend.routes.rides.db") as mock_db,
+        patch("backend.routes.rides.db_supabase") as mock_supabase,
+        patch(
+            "backend.routes.rides.get_app_settings",
+            AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
+        ),
+    ):
+        mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active", "stripe_customer_id": "cus_1"})
+        mock_supabase.find_one = AsyncMock(return_value=None)
+
+        with pytest.raises(HTTPException) as exc:
+            await create_ride(request=req, body=body, current_user=_USER)
+
+    assert exc.value.status_code == 400
+    assert "card" in str(exc.value.detail).lower()
+
+
+@pytest.mark.anyio
+async def test_create_ride_corporate_work_profile_exempt_from_card_requirement():
+    """A genuinely corporate-billed ride (work_profile + corporate_account_id,
+    reclassified to company_allowance → settle_corporate) is exempt from the
+    personal-card requirement: no payment_method_id needed, so it reaches the
+    later active-ride check (409 here)."""
+    from backend.routes.rides import create_ride
+    from backend.schemas import CreateRideRequest
+
+    req = _starlette_request(method="POST", path="/rides")
+    body = CreateRideRequest(
+        pickup_lat=52.1,
+        pickup_lng=-106.6,
+        dropoff_lat=52.2,
+        dropoff_lng=-106.7,
+        pickup_address="100 Main St",
+        dropoff_address="200 Broadway Ave",
+        vehicle_type_id="vt-1",
+        payment_method="card",
+        corporate_account_id="corp-1",
+        work_profile=True,  # corporate-BILLED → exempt
+    )
+
+    with (
+        patch("backend.routes.rides.validate_ride_location"),
+        patch("backend.routes.rides.db") as mock_db,
+        patch("backend.routes.rides.db_supabase") as mock_supabase,
+        patch(
+            "backend.routes.rides.get_app_settings",
+            AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
+        ),
+    ):
+        mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active", "stripe_customer_id": "cus_1"})
+        mock_supabase.find_one = AsyncMock(return_value=None)
+        mock_supabase.get_rows = AsyncMock(return_value=[_ride(status="searching")])
+
+        with pytest.raises(Exception) as exc:
+            await create_ride(request=req, body=body, current_user=_USER)
+
+    assert getattr(exc.value, "status_code", None) == 409
+
+
+@pytest.mark.anyio
+async def test_create_ride_corporate_tag_without_work_profile_still_requires_card():
+    """A bare corporate_account_id with payment_method='card' and NO work_profile
+    is NOT corporate-billed — it settles via settle_card against the rider's card,
+    so it must still pin one. Exempting on the tag alone re-opened the
+    stale-default-card charge (money audit), so this must be rejected (400)."""
+    from fastapi import HTTPException
+
+    from backend.routes.rides import create_ride
+    from backend.schemas import CreateRideRequest
+
+    req = _starlette_request(method="POST", path="/rides")
+    body = CreateRideRequest(
+        pickup_lat=52.1,
+        pickup_lng=-106.6,
+        dropoff_lat=52.2,
+        dropoff_lng=-106.7,
+        pickup_address="100 Main St",
+        dropoff_address="200 Broadway Ave",
+        vehicle_type_id="vt-1",
+        payment_method="card",
+        corporate_account_id="corp-1",  # tag only, NOT corporate-billed
+    )
+
+    with (
+        patch("backend.routes.rides.validate_ride_location"),
+        patch("backend.routes.rides.db") as mock_db,
+        patch("backend.routes.rides.db_supabase") as mock_supabase,
+        patch(
+            "backend.routes.rides.get_app_settings",
+            AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
+        ),
+    ):
+        mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active", "stripe_customer_id": "cus_1"})
+        mock_supabase.find_one = AsyncMock(return_value=None)
+
+        with pytest.raises(HTTPException) as exc:
+            await create_ride(request=req, body=body, current_user=_USER)
+
+    assert exc.value.status_code == 400
+    assert "card" in str(exc.value.detail).lower()
 
 
 # ── match_driver_to_ride ───────────────────────────────────────────────────────
@@ -2095,6 +2324,11 @@ async def test_create_ride_no_stripe_customer():
         patch("backend.routes.rides.validate_ride_location"),
         patch("backend.routes.rides.db_supabase") as mock_db,
         patch("backend.routes.rides.db") as mock_ddb,
+        # Stripe configured → card-on-file requirement is enforced.
+        patch(
+            "backend.routes.rides.get_app_settings",
+            AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
+        ),
     ):
         mock_db.find_one = AsyncMock(return_value=None)
         mock_ddb.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})

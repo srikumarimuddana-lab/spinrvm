@@ -150,7 +150,7 @@ export default function SubscriptionScreen() {
     if (currentSub?.has_subscription) {
       Alert.alert(
         'Switch Plan?',
-        `You currently have "${currentSub.subscription.plan_name}". Switch to "${plan.name}" for $${plan.price.toFixed(2)}?`,
+        `You currently have "${currentSub.subscription.plan_name}". Switch to "${plan.name}" for $${plan.price.toFixed(2)}?${quotaDisclaimer(plan)}`,
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Switch', style: 'destructive', onPress: () => doSubscribe(plan) },
@@ -159,7 +159,7 @@ export default function SubscriptionScreen() {
     } else {
       Alert.alert(
         'Subscribe',
-        `Subscribe to "${plan.name}" for $${plan.price.toFixed(2)}/${getDurationLabel(plan.duration_days).toLowerCase()}?`,
+        `Subscribe to "${plan.name}" for $${plan.price.toFixed(2)}/${getDurationLabel(plan.duration_days).toLowerCase()}?${quotaDisclaimer(plan)}`,
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Subscribe', style: 'destructive', onPress: () => doSubscribe(plan) },
@@ -264,6 +264,38 @@ export default function SubscriptionScreen() {
     return `${days} days`;
   };
 
+  // Daily allowance reset is always < 24h away → show hours (or minutes when close).
+  const formatResetCountdown = (hours?: number): string | null => {
+    if (typeof hours !== 'number') return null;
+    if (hours < 1) {
+      const mins = Math.max(1, Math.round(hours * 60));
+      return `${mins}m`;
+    }
+    return `${Math.round(hours)}h`;
+  };
+
+  // Pass expiry can be days away → roll up to days past 24h.
+  const formatExpiryCountdown = (hours?: number): string | null => {
+    if (typeof hours !== 'number') return null;
+    if (hours < 1) return 'under 1h';
+    if (hours < 24) return `${Math.round(hours)}h`;
+    const days = Math.round(hours / 24);
+    return `${days} day${days === 1 ? '' : 's'}`;
+  };
+
+  // Shown before subscribing to a multi-day pass so the driver understands the
+  // allowance is per CALENDAR DAY (resets at midnight, no roll-over) — not the
+  // whole period's rides up front. Mirrors how quota-based plans disclose limits.
+  const quotaDisclaimer = (plan: Plan): string => {
+    if (plan.rides_per_day === -1 || plan.duration_days <= 1) return '';
+    const label = getDurationLabel(plan.duration_days).toLowerCase();
+    return (
+      `\n\nHeads up: this ${label} pass gives you ${plan.rides_per_day} rides per ` +
+      `calendar day — your allowance resets at midnight and unused rides don't ` +
+      `carry over to the next day.`
+    );
+  };
+
   const formatDate = (d: string) => {
     try { return new Date(d).toLocaleDateString('en-CA', { month: 'short', day: 'numeric', year: 'numeric' }); }
     catch { return d; }
@@ -319,6 +351,28 @@ export default function SubscriptionScreen() {
                 <Text style={styles.statLabel}>Expires</Text>
               </View>
             </View>
+
+            {/* Hours-left countdowns: daily allowance reset + pass expiry */}
+            {(formatResetCountdown(currentSub.hours_until_reset) || formatExpiryCountdown(currentSub.hours_until_expiry)) && (
+              <View style={styles.countdownRow}>
+                {currentSub.rides_remaining !== 'unlimited' && formatResetCountdown(currentSub.hours_until_reset) && (
+                  <View style={styles.countdownItem}>
+                    <Ionicons name="refresh" size={14} color="rgba(255,255,255,0.85)" />
+                    <Text style={styles.countdownText}>
+                      Rides reset in {formatResetCountdown(currentSub.hours_until_reset)}
+                    </Text>
+                  </View>
+                )}
+                {formatExpiryCountdown(currentSub.hours_until_expiry) && (
+                  <View style={styles.countdownItem}>
+                    <Ionicons name="time-outline" size={14} color="rgba(255,255,255,0.85)" />
+                    <Text style={styles.countdownText}>
+                      Pass ends in {formatExpiryCountdown(currentSub.hours_until_expiry)}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            )}
 
             <TouchableOpacity style={styles.cancelLink} onPress={handleCancel}>
               <Text style={styles.cancelLinkText}>Cancel subscription</Text>
@@ -506,6 +560,15 @@ function createStyles(colors: ThemeColors) {
     statValue: { fontSize: 18, fontWeight: '800', color: '#FFF' },
     statLabel: { fontSize: 10, color: 'rgba(255,255,255,0.7)', marginTop: 2 },
     statDivider: { width: 1, backgroundColor: 'rgba(255,255,255,0.2)' },
+    countdownRow: {
+      flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8,
+      marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.2)', width: '100%',
+    },
+    countdownItem: {
+      flexDirection: 'row', alignItems: 'center', gap: 5,
+      backgroundColor: 'rgba(255,255,255,0.15)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10,
+    },
+    countdownText: { fontSize: 12, fontWeight: '600', color: '#FFF' },
     cancelLink: { marginTop: 14 },
     cancelLinkText: { fontSize: 13, color: 'rgba(255,255,255,0.6)' },
 

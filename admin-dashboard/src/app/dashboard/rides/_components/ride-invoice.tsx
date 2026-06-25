@@ -31,7 +31,7 @@ const BRAND: [number, number, number] = [238, 43, 43];
 
 // Pragmatic email check — mirrors the backend send-receipt validation so the
 // admin gets immediate feedback before the request round-trips.
-const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+const EMAIL_RE = /^[^@\s\x00]+@[^@\s\x00]+\.[^@\s\x00]+$/;
 
 export default function RideInvoice({ rideId, status, paymentStatus }: Props) {
     const { toast } = useToast();

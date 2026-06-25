@@ -26,7 +26,7 @@ floats and risk a 1¢ mismatch on the rendered total.
 
 import logging
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 try:
     from .datetime_utils import parse_iso_utc
@@ -301,7 +301,9 @@ def _receipt_total(ride: dict, tip: float = 0) -> Decimal:
     return _q(fare + fees + tax + tip_d)
 
 
-async def send_receipt_email(ride: dict, rider: dict, driver: dict = None, tip: float = 0, recipient_email: str = None):
+async def send_receipt_email(
+    ride: dict, rider: dict, driver: dict = None, tip: float = 0, recipient_email: Optional[str] = None
+):
     """Send an HTML receipt email: AWS SES primary, Resend guardrail.
 
     Delegates to utils.email_provider.send_transactional_email, which tries

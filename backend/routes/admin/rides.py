@@ -1411,12 +1411,16 @@ class SendReceiptRequest(BaseModel):
     email: Optional[str] = Field(
         default=None,
         max_length=254,
-        pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+        # Exclude null byte explicitly (\x00 is neither @ nor \s, so the naive
+        # class would accept it and pass a malformed address to the MTA).
+        pattern=r"^[^@\s\x00]+@[^@\s\x00]+\.[^@\s\x00]+$",
     )
 
 
 @router.post("/rides/{ride_id}/send-receipt")
+@limiter.limit("10/minute")
 async def admin_send_ride_receipt(
+    request: Request,
     ride_id: str,
     body: Optional[SendReceiptRequest] = None,
     admin_user: dict = Depends(get_admin_user),
@@ -1454,13 +1458,17 @@ async def admin_send_ride_receipt(
     tip_amount = Decimal(str(ride.get("tip_amount") or 0))
     sent = await send_ride_receipt(ride, rider_id, tip_amount, recipient_email=override_email)
 
+    # Forensic traceability for the "send to a different email" capability:
+    # record the override DOMAIN only — enough to investigate exfiltration abuse
+    # (e.g. a rogue operator routing receipts to a personal/competitor domain)
+    # without persisting the rider's full address (PII).
+    override_domain = override_email.rsplit("@", 1)[-1] if override_email else None
     await log_admin_action(
         admin_user,
         "send_ride_receipt",
         "ride",
         ride_id,
-        # Log only that an override was used, never the address itself (PII).
-        {"sent": bool(sent), "custom_email": bool(override_email)},
+        {"sent": bool(sent), "custom_email": bool(override_email), "override_domain": override_domain},
     )
 
     if not sent:

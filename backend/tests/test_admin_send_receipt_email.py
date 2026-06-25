@@ -78,3 +78,23 @@ async def test_receipt_no_destination_returns_false():
         ok = await send_receipt_email(_RIDE, rider_no_email, None, 0.0)
     assert ok is False
     assert captured == {}
+
+
+def test_send_receipt_request_email_validation():
+    """The override-email field rejects malformed / injection-y addresses."""
+    import pytest as _pytest
+    from pydantic import ValidationError
+
+    try:
+        from routes.admin.rides import SendReceiptRequest
+    except ImportError:
+        from backend.routes.admin.rides import SendReceiptRequest  # type: ignore[no-redef]
+
+    # Valid addresses (incl. the no-override None case) are accepted.
+    assert SendReceiptRequest().email is None
+    assert SendReceiptRequest(email="billing@corp.example").email == "billing@corp.example"
+
+    # Malformed / injection vectors are rejected at the model boundary.
+    for bad in ["not-an-email", "a@b", "a@b.c\x00", "a@b.c\nbcc:x@y.z", "@b.c", "a@.c"]:
+        with _pytest.raises(ValidationError):
+            SendReceiptRequest(email=bad)

@@ -318,9 +318,13 @@ class DispatchService:
             # dev); treat all DB-online drivers as present (fail-open for
             # presence) but still apply the subscription filter below.
 
-        # Subscription guard: if the ride's service area requires a Spinr Pass,
-        # filter out drivers who don't have an active subscription.
-        # One area lookup + one batch IN-query — no N+1 per driver.
+        # Spinr Pass guards. Two filters share one batched pass lookup:
+        #   1. Subscription requirement — only in pass-required areas, drop
+        #      drivers without an active pass.
+        #   2. Daily ride allowance — in ANY area, drop finite-pass drivers who
+        #      have used today's rides (resets at the next local midnight).
+        # One area lookup + one batch IN-query — no N+1 per driver. In free areas
+        # with no subscribers the pass query returns empty and both filters no-op.
         if rows and ride.get("service_area_id"):
             try:
                 _area = await self.db.find_one("service_areas", {"id": ride["service_area_id"]})
@@ -328,55 +332,61 @@ class DispatchService:
                 if not _svc_sub_required and _area and _area.get("parent_service_area_id"):
                     _parent = await self.db.find_one("service_areas", {"id": _area["parent_service_area_id"]})
                     _svc_sub_required = bool(_parent and _parent.get("subscription_required"))
+
+                candidate_ids = [d["id"] for d in rows]
+                active_subs = await self.db.get_rows(
+                    "driver_subscriptions",
+                    {"driver_id": {"$in": candidate_ids}, "status": "active"},
+                    columns="driver_id,expires_at,rides_per_day",
+                    limit=len(candidate_ids),
+                )
+                _now = datetime.now(timezone.utc)
+                subscribed_ids = set()
+                _valid_subs = []
+                for _s in active_subs or []:
+                    if _s.get("expires_at"):
+                        _exp = parse_iso_utc(_s["expires_at"])
+                        if _exp is not None and _exp <= _now:
+                            continue  # expired
+                    subscribed_ids.add(_s["driver_id"])
+                    _valid_subs.append(_s)
+
+                # (1) Required-area subscription gate.
                 if _svc_sub_required:
-                    candidate_ids = [d["id"] for d in rows]
-                    active_subs = await self.db.get_rows(
-                        "driver_subscriptions",
-                        {"driver_id": {"$in": candidate_ids}, "status": "active"},
-                        columns="driver_id,expires_at,rides_per_day",
-                        limit=len(candidate_ids),
-                    )
-                    _now = datetime.now(timezone.utc)
-                    subscribed_ids = set()
-                    _valid_subs = []
-                    for _s in active_subs or []:
-                        if _s.get("expires_at"):
-                            _exp = parse_iso_utc(_s["expires_at"])
-                            if _exp is not None and _exp <= _now:
-                                continue  # expired
-                        subscribed_ids.add(_s["driver_id"])
-                        _valid_subs.append(_s)
                     rows = [d for d in rows if d["id"] in subscribed_ids]
 
-                    # Daily ride-allowance filter: drop drivers who have already
-                    # used today's Spinr Pass rides so they stop receiving offers
-                    # until the allowance resets at the next local midnight. One
-                    # batched rides read — no per-driver query.
-                    try:
-                        _exhausted = await exhausted_driver_ids(_valid_subs, now=_now)
-                    except Exception:
-                        # Fail open on the quota filter: go-online + accept still
-                        # gate, so a transient read error must not drop everyone.
-                        _exhausted = set()
-                        logger.error(
-                            "Quota filter failed for area=%s — dispatching unfiltered by quota",
-                            ride.get("service_area_id"),
-                            exc_info=True,
-                        )
-                    if _exhausted:
-                        rows = [d for d in rows if d["id"] not in _exhausted]
+                # (2) Daily ride-allowance filter (all areas). Self-contained —
+                # skips unlimited + lapsed passes, empty when nobody holds a
+                # finite pass. Backstops force-offline-on-complete (in case that
+                # write failed) and covers voluntary passes in non-required areas.
+                try:
+                    _exhausted = await exhausted_driver_ids(_valid_subs, now=_now)
+                except Exception:
+                    # Fail open on the quota filter: go-online + accept still
+                    # gate, so a transient read error must not drop everyone.
+                    _exhausted = set()
+                    logger.error(
+                        "Quota filter failed for area=%s — dispatching unfiltered by quota",
+                        ride.get("service_area_id"),
+                        exc_info=True,
+                    )
+                if _exhausted:
+                    rows = [d for d in rows if d["id"] not in _exhausted]
+
+                if _svc_sub_required or _exhausted:
                     logger.info(
-                        "Subscription filter: area=%s kept %d/%d drivers (%d quota-exhausted)",
+                        "Pass filter: area=%s required=%s kept %d/%d drivers (%d quota-exhausted)",
                         ride["service_area_id"],
+                        _svc_sub_required,
                         len(rows),
                         len(candidate_ids),
                         len(_exhausted),
                     )
             except Exception:
                 # Fail open: a DB error here must not block dispatch entirely.
-                # The go-online check is the primary enforcement gate.
+                # The go-online + accept checks are the primary enforcement gates.
                 logger.error(
-                    "Subscription filter failed for area=%s — dispatching unfiltered",
+                    "Pass filter failed for area=%s — dispatching unfiltered",
                     ride.get("service_area_id"),
                     exc_info=True,
                 )

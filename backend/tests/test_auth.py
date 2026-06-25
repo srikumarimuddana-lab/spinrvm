@@ -190,6 +190,30 @@ class TestGetCurrentUser:
             assert user["id"] == "user_123"
             assert user["phone"] == "+1234567890"
 
+    async def test_get_current_user_raises_503_not_phantom_user_on_missing_row(self, mock_credentials):
+        """C2: a valid JWT whose user row is missing (a transient Supabase
+        replica miss returns None rather than raising) must fail closed with
+        503 — NOT silently create a phantom rider account. User creation
+        belongs only in /auth/verify-otp and /auth/firebase."""
+        from backend.dependencies import get_current_user
+        from backend.utils.error_handling import ServiceUnavailableException
+
+        create_user_mock = AsyncMock()
+        with (
+            patch("backend.dependencies.firebase_auth.verify_id_token", side_effect=ValueError("not firebase")),
+            patch("backend.dependencies.verify_jwt_token") as mock_verify,
+            patch("backend.dependencies.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
+            patch("backend.dependencies.db_supabase.create_user", create_user_mock),
+            patch("backend.dependencies.redis_get", AsyncMock(return_value=None)),
+        ):
+            mock_verify.return_value = {"user_id": "user_123", "phone": "+1234567890"}
+
+            with pytest.raises(ServiceUnavailableException) as exc_info:
+                await get_current_user(mock_credentials)
+
+        assert exc_info.value.status_code == 503
+        create_user_mock.assert_not_awaited()
+
     async def test_get_current_user_invalid_token(self, mock_credentials):
         """Test get_current_user with invalid token."""
         from fastapi import HTTPException

@@ -5,10 +5,10 @@ After a driver accepts, the rider app registers a push token for the ride
 shared *content-state* both surfaces render and would push an update per
 platform (iOS Live Activity via APNs, Android ongoing notification via FCM).
 
-Phase 1 sends **no** push: it looks up the registered tokens, builds the
-content-state, and logs the intended dispatch so the wiring can be verified
-end-to-end before the APNs ``.p8`` path lands in Phase 3. On a terminal event it
-marks the activity rows ended so a future replica stops dispatching.
+Android (Phase 2) dispatches a **data-only FCM** message so the rider app's
+Notifee handler builds/updates/cancels an ongoing notification. iOS stays
+log-only until the Phase 3 ActivityKit APNs (``.p8``) path. On a terminal event
+it marks the activity rows ended so a future replica stops dispatching.
 
 Privacy: a Live Activity renders on a **locked** phone, so the content-state is
 **area-only** — never an exact address, never coordinates, only a first name and
@@ -217,11 +217,61 @@ def build_content_state(
 async def _active_activities(ride_id: str) -> list[dict]:
     """Registered, not-yet-ended live activities for a ride (one per platform).
 
-    Selects only id/platform/ended_at — the push_token is never fetched into
-    memory in Phase 1 (log-only). Phase 3 dispatch must select it explicitly.
+    Selects id/platform/ended_at/rider_id — never the push_token. Android
+    dispatch reuses the user's FCM token via send_push_notification(rider_id),
+    so the stored token is not needed here; iOS (Phase 3) will select it
+    explicitly when it sends the ActivityKit APNs push.
     """
-    rows = await db_supabase.get_rows("ride_live_activities", {"ride_id": ride_id}, columns="id,platform,ended_at")
+    rows = await db_supabase.get_rows(
+        "ride_live_activities", {"ride_id": ride_id}, columns="id,platform,ended_at,rider_id"
+    )
     return [r for r in (rows or []) if not r.get("ended_at")]
+
+
+def _fcm_data(content: dict, event: str, ride_id: str) -> dict:
+    """Flatten the content-state into an FCM data payload (all string values,
+    None fields omitted). The rider app's Notifee handler renders/updates the
+    ongoing notification from this; ``event`` is start/update/end."""
+    data = {"type": "live_activity", "event": event, "ride_id": str(ride_id)}
+    for key in (
+        "status",
+        "headline",
+        "eta_minutes",
+        "driver_name",
+        "vehicle_label",
+        "pickup_area",
+        "dropoff_area",
+        "ride_code",
+    ):
+        val = content.get(key)
+        if val is not None:
+            data[key] = str(val)
+    return data
+
+
+async def _send_android(rider_id: Optional[str], content: dict, fcm_data: dict) -> None:
+    """Data-only FCM to the rider so the Notifee handler builds/updates/cancels
+    the ongoing notification. Self-contained best-effort — never raises."""
+    if not rider_id:
+        return
+    try:
+        try:
+            from ..features import send_push_notification
+        except ImportError:  # pragma: no cover - top-level execution fallback
+            from features import send_push_notification  # type: ignore
+
+        # features.py treats type=='live_activity' as data-only, so title/body
+        # are ignored by FCM — Notifee renders the notification from the data.
+        await send_push_notification(
+            rider_id,
+            content["headline"],
+            content.get("dropoff_area") or "",
+            data=fcm_data,
+            priority="normal",
+            target_app="rider",
+        )
+    except Exception:
+        logger.error("live_activity android FCM send failed", exc_info=True)
 
 
 async def send_live_activity_update(
@@ -233,9 +283,10 @@ async def send_live_activity_update(
 ) -> None:
     """Build the content-state and dispatch a live-activity update per platform.
 
-    Phase 1: **log-only** — no push is sent. On a terminal event the activity
-    rows are marked ended. Best-effort: never raises into the ride request path
-    (mirrors ``routes.rides._push_in_background``).
+    Android (Phase 2): a data-only FCM message drives the Notifee ongoing
+    notification. iOS: log-only until the Phase 3 ActivityKit APNs path. On a
+    terminal event the activity rows are marked ended. Best-effort: never raises
+    into the ride request path (mirrors ``routes.rides._push_in_background``).
     """
     try:
         ride_id = ride.get("id")
@@ -247,13 +298,15 @@ async def send_live_activity_update(
             return
 
         content = build_content_state(ride, driver=driver, eta_minutes=eta_minutes)
+        fcm_data = _fcm_data(content, event, ride_id)
         for act in activities:
-            # PII-safe log only: no driver name, address, coordinates, or token.
+            platform = act.get("platform")
+            # PII-safe log: no driver name, address, coordinates, or token.
             logger.info(
-                "live_activity dispatch (phase1 log-only)",
+                "live_activity dispatch",
                 extra={
                     "event": event,
-                    "platform": act.get("platform"),
+                    "platform": platform,
                     "ride_id": ride_id,
                     "ride_status": content["status"],
                     "headline": content["headline"],
@@ -263,6 +316,9 @@ async def send_live_activity_update(
                     "has_driver": content["driver_name"] is not None,
                 },
             )
+            if platform == "android":
+                await _send_android(act.get("rider_id"), content, fcm_data)
+            # iOS Live Activity push is the Phase 3 APNs path — log-only for now.
 
         if event == EVENT_END or ride.get("status") in _TERMINAL_STATUSES:
             now = datetime.now(timezone.utc).isoformat()

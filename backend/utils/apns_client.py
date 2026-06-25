@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from typing import Optional, Tuple
 
@@ -57,6 +58,7 @@ _client: Optional["httpx.AsyncClient"] = None
 _TEMPLATES_PATH = os.path.join(os.path.dirname(__file__), "voltra_templates.json")
 _templates: Optional[dict] = None
 _config_warned = False
+_pem_warned = False
 
 
 # --------------------------------------------------------------------------- #
@@ -70,7 +72,7 @@ async def _load_apns_config() -> Optional[dict]:
     Normalises the PEM's line endings and validates it looks like a private key
     so a mis-pasted .p8 fails loudly once, not per-push.
     """
-    global _config_warned
+    global _config_warned, _pem_warned
     try:
         s = await get_app_settings()
     except Exception:
@@ -86,7 +88,9 @@ async def _load_apns_config() -> Optional[dict]:
             _config_warned = True
         return None
     if "BEGIN PRIVATE KEY" not in p8:
-        logger.error("apns: .p8 key malformed — re-paste in admin → Settings")
+        if not _pem_warned:
+            logger.error("apns: .p8 key malformed — re-paste in admin → Settings")
+            _pem_warned = True
         return None
     return {"key_id": key_id, "team_id": team_id, "bundle_id": bundle_id, "p8": p8}
 
@@ -203,6 +207,12 @@ async def send_apns_live_activity(
     if httpx is None or jwt is None:
         return False, False
     if not push_token:
+        return False, False
+    # The token is interpolated into the APNs URL path, so reject anything with
+    # path/structural characters before it gets there (defense-in-depth; real
+    # ActivityKit tokens are hex). Never log the token itself.
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,512}", push_token):
+        logger.warning("apns: rejected malformed push token")
         return False, False
     cfg = await _load_apns_config()
     if not cfg:

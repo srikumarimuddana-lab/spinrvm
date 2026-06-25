@@ -334,6 +334,12 @@ def test_register_upserts_when_existing(rider_client, monkeypatch):
     assert patch["ended_at"] is None
 
 
+def test_register_rejects_path_chars_in_token(rider_client, monkeypatch):
+    monkeypatch.setattr(rides_mod.db_supabase, "get_ride", AsyncMock(return_value={"id": "r1", "rider_id": "rider-1"}))
+    resp = rider_client.post(_URL, json={"platform": "ios", "push_token": "ab/../cd"})
+    assert resp.status_code == 422
+
+
 def test_register_rejects_unknown_platform(rider_client, monkeypatch):
     monkeypatch.setattr(rides_mod.db_supabase, "get_ride", AsyncMock(return_value={"id": "r1", "rider_id": "rider-1"}))
     resp = rider_client.post(_URL, json={"platform": "windows", "push_token": "x"})

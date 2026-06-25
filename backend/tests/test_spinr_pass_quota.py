@@ -11,7 +11,6 @@ Supabase is needed.
 
 import os
 import sys
-import types
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
@@ -22,19 +21,13 @@ _backend = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _backend not in sys.path:
     sys.path.insert(0, _backend)
 
-# In a bare unit env ``schemas`` pulls pydantic; only stub it when the real
-# module can't import, so we never shadow the real schemas in CI.
-try:  # pragma: no cover - import-path guard
-    import schemas  # noqa: F401
-except Exception:  # pragma: no cover
-    _schemas = types.ModuleType("schemas")
-
-    class _RideStatus:
-        COMPLETED = "completed"
-
-    _schemas.RideStatus = _RideStatus
-    sys.modules["schemas"] = _schemas
-
+# RideStatus lives in ``models.ride_status`` (a plain str-Enum, no pydantic),
+# NOT in ``schemas``. spinr_pass once imported it from ``schemas``, which raised
+# ``ImportError`` in production and made /subscription/current crash — the app
+# then showed "No plans available" to drivers who *were* subscribed. This file
+# previously stubbed ``schemas.RideStatus`` to mask that, so the bug shipped
+# green. We import the real enum here instead, so the import path is exercised.
+from models.ride_status import RideStatus  # noqa: E402
 from utils import spinr_pass  # noqa: E402
 
 # America/Regina is UTC-6 year-round (no DST).
@@ -389,6 +382,11 @@ class TestTimezonePassthrough:
         await spinr_pass.completed_today("d1", now=now, tz="America/Edmonton")
         _, filt = db.count_filters[-1]
         assert filt["ride_completed_at"]["$gte"] == datetime(2026, 1, 14, 7, 0, tzinfo=timezone.utc).isoformat()
+        # Regression: the status filter must be the plain "completed" string.
+        # A broken `from schemas import RideStatus` used to crash this call,
+        # which surfaced to drivers as "No plans available" despite an active pass.
+        assert filt["status"] == "completed"
+        assert filt["status"] == RideStatus.COMPLETED.value
 
     async def test_quota_status_resolves_area_tz(self, patch_db):
         # Edmonton area + 4-ride cap, 4 used → exhausted, reset at Edmonton

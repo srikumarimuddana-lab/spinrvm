@@ -85,11 +85,17 @@ import { useAuthStore } from '../../../shared/store/authStore';
 const mockPost = apiClient.post as jest.Mock;
 const mockSetSuppress = setSuppressRefreshSignOut as jest.Mock;
 
+// SpinrApiError-shaped rejection (status on `.response.status` AND `.status`).
 const make401 = () => {
   const err: any = new Error('refresh token rejected');
   err.response = { status: 401, data: { detail: 'invalid' } };
   return err;
 };
+
+// The REAL shape the client rejects with on the /auth/refresh path: a raw
+// fetch Response (HTTP status on `.status`, NO `.response` wrapper). This is
+// what production sends to refreshTokens' catch — the retry must detect it.
+const make401RawResponse = () => ({ status: 401, ok: false });
 
 beforeEach(() => {
   Object.keys(mockSecureStoreBacking).forEach((k) => delete mockSecureStoreBacking[k]);
@@ -138,6 +144,55 @@ describe('authStore.refreshTokens — rotation-race recovery', () => {
     // reset afterwards.
     expect(mockSetSuppress).toHaveBeenCalledWith(true);
     expect(mockSetSuppress).toHaveBeenLastCalledWith(false);
+  });
+
+  it('detects a 401 rejected as a raw fetch Response (status on .status) and retries', async () => {
+    // Pins the production shape: handleApiError rejects the /auth/refresh 401
+    // with the raw Response, whose status is on `.status` (not `.response.status`).
+    // If refreshTokens only read `.response.status` the retry branch would never
+    // fire — the bug this test guards against.
+    mockSecureStoreBacking['refresh_token'] = 'stale-shared';
+
+    let posts = 0;
+    mockPost.mockImplementation((url: string, body: { refresh_token: string }) => {
+      if (url !== '/auth/refresh') throw new Error(`unexpected POST ${url}`);
+      posts += 1;
+      if (body.refresh_token === 'stale-shared') {
+        // First attempt: reject with the RAW Response shape and have the other
+        // context land its rotated token in storage right after.
+        mockSecureStoreBacking['refresh_token'] = 'rotated-forward';
+        return Promise.reject(make401RawResponse());
+      }
+      if (body.refresh_token === 'rotated-forward') {
+        return Promise.resolve({
+          data: { token: 'access-new', refresh_token: 'refresh-final', expires_in: 900 },
+          status: 200,
+        });
+      }
+      return Promise.reject(make401RawResponse());
+    });
+
+    const ok = await useAuthStore.getState().refreshTokens();
+
+    expect(ok).toBe(true);
+    expect(posts).toBe(2);
+    expect(useAuthStore.getState().token).toBe('access-new');
+  });
+
+  it('logs out on a raw-Response 401 when the token is genuinely dead', async () => {
+    useAuthStore.setState({ refreshToken: 'dead', token: 'old-access' });
+    mockSecureStoreBacking['refresh_token'] = 'dead';
+
+    mockPost.mockImplementation((url: string) => {
+      if (url !== '/auth/refresh') throw new Error(`unexpected POST ${url}`);
+      return Promise.reject(make401RawResponse());
+    });
+
+    const ok = await useAuthStore.getState().refreshTokens();
+
+    expect(ok).toBe(false);
+    expect(useAuthStore.getState().token).toBeNull();
+    expect(mockSecureStoreBacking['refresh_token']).toBeUndefined();
   });
 
   it('recovers when the fresher token appears only on the second storage read', async () => {

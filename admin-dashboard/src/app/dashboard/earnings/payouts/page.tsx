@@ -18,6 +18,7 @@ import {
     Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { Pagination } from "@/components/ui/pagination";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import {
     Wallet, CheckCircle, Clock, AlertTriangle, RefreshCw,
     RotateCcw, ArrowLeft, ExternalLink, Search,
@@ -197,7 +198,8 @@ export default function PayoutsPage() {
         return true;
     });
 
-    const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+    const { sorted, sort, toggle } = useTableSort(filtered);
+    const paged = sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
     const failedCount = payouts.filter((p) => p.status === "failed").length;
 
     return (
@@ -346,12 +348,12 @@ export default function PayoutsPage() {
                     <Table>
                         <TableHeader>
                             <TableRow>
-                                <TableHead>Driver</TableHead>
-                                <TableHead>Amount</TableHead>
-                                <TableHead>Status</TableHead>
-                                <TableHead>Bank</TableHead>
-                                <TableHead>Stripe Transfer</TableHead>
-                                <TableHead>Requested</TableHead>
+                                <SortableHead column="driver_name" sort={sort} onSort={toggle}>Driver</SortableHead>
+                                <SortableHead column="amount" sort={sort} onSort={toggle} align="right">Amount</SortableHead>
+                                <SortableHead column="status" sort={sort} onSort={toggle}>Status</SortableHead>
+                                <SortableHead column="bank_name" sort={sort} onSort={toggle}>Bank</SortableHead>
+                                <SortableHead column="stripe_transfer_id" sort={sort} onSort={toggle}>Stripe Transfer</SortableHead>
+                                <SortableHead column="created_at" sort={sort} onSort={toggle}>Requested</SortableHead>
                                 <TableHead className="text-right">Actions</TableHead>
                             </TableRow>
                         </TableHeader>

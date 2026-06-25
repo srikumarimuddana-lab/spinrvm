@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -86,6 +87,11 @@ export default function AnalyticsPage() {
     value: r.count,
     color: REASON_COLORS[r.reason] || "#9CA3AF",
   }));
+
+  const { sorted: sortedReasons, sort: reasonSort, toggle: toggleReason } =
+    useTableSort<any>(cancellations?.reasons || []);
+  const { sorted: sortedDrivers, sort: driverSort, toggle: toggleDriver } =
+    useTableSort<any>(driverRates?.drivers || []);
 
   return (
     <div className="space-y-6">
@@ -265,13 +271,13 @@ export default function AnalyticsPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Reason</TableHead>
-                    <TableHead>Count</TableHead>
-                    <TableHead>Percentage</TableHead>
+                    <SortableHead column="reason" sort={reasonSort} onSort={toggleReason}>Reason</SortableHead>
+                    <SortableHead column="count" sort={reasonSort} onSort={toggleReason} align="right">Count</SortableHead>
+                    <SortableHead column="pct" sort={reasonSort} onSort={toggleReason} align="right">Percentage</SortableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {(cancellations?.reasons || []).map((r: any) => (
+                  {sortedReasons.map((r: any) => (
                     <TableRow key={r.reason}>
                       <TableCell className="flex items-center gap-2">
                         <div
@@ -333,16 +339,16 @@ export default function AnalyticsPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>#</TableHead>
-                    <TableHead>Driver</TableHead>
-                    <TableHead>Acceptance Rate</TableHead>
-                    <TableHead>Total Rides</TableHead>
-                    <TableHead>Completed</TableHead>
-                    <TableHead>Rating</TableHead>
-                    <TableHead>Status</TableHead>
+                    <SortableHead column="name" sort={driverSort} onSort={toggleDriver}>Driver</SortableHead>
+                    <SortableHead column="acceptance_rate" sort={driverSort} onSort={toggleDriver}>Acceptance Rate</SortableHead>
+                    <SortableHead column="total_rides" sort={driverSort} onSort={toggleDriver} align="right">Total Rides</SortableHead>
+                    <SortableHead column="completed" sort={driverSort} onSort={toggleDriver} align="right">Completed</SortableHead>
+                    <SortableHead column="rating" sort={driverSort} onSort={toggleDriver} align="right">Rating</SortableHead>
+                    <SortableHead column="is_online" sort={driverSort} onSort={toggleDriver}>Status</SortableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {(driverRates?.drivers || []).map((d: any, i: number) => (
+                  {sortedDrivers.map((d: any, i: number) => (
                     <TableRow key={d.driver_id}>
                       <TableCell className="text-muted-foreground">{i + 1}</TableCell>
                       <TableCell className="font-medium">{d.name || 'Unknown'}</TableCell>

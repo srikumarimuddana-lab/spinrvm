@@ -13,6 +13,7 @@ import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Shield, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, EyeOff, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2, RefreshCw } from "lucide-react";
 import { maskEmail, maskPhone, maskPlate } from "@/lib/pii";
 import { DocumentReviewer } from "./_components/document-reviewer";
@@ -465,6 +466,10 @@ export default function DriversPage() {
             toast({ title: "Export failed", description: e?.message, variant: "destructive" });
         }
     };
+
+    // Client-side sort for the subscription-payments table (separate sort
+    // state from the main drivers list above, which uses its own sort logic).
+    const { sorted: sortedSubPayments, sort: subPaymentsSort, toggle: toggleSubPaymentsSort } = useTableSort(driverSubPayments);
 
     const selectedAreaName = serviceAreaId ? serviceAreas.find(a => a.id === serviceAreaId)?.name || "Selected Area" : "All Areas";
     const activeDocs = driverDocs.filter(d => d.status !== "superseded");
@@ -1251,18 +1256,18 @@ export default function DriversPage() {
                                         <Table>
                                             <TableHeader>
                                                 <TableRow>
-                                                    <TableHead>Date</TableHead>
-                                                    <TableHead>Plan</TableHead>
-                                                    <TableHead>Type</TableHead>
-                                                    <TableHead className="text-right">Subtotal</TableHead>
-                                                    <TableHead className="text-right">GST</TableHead>
-                                                    <TableHead className="text-right">PST</TableHead>
-                                                    <TableHead className="text-right">HST</TableHead>
-                                                    <TableHead className="text-right">Total</TableHead>
+                                                    <SortableHead column="created_at" sort={subPaymentsSort} onSort={toggleSubPaymentsSort}>Date</SortableHead>
+                                                    <SortableHead column="plan_name" sort={subPaymentsSort} onSort={toggleSubPaymentsSort}>Plan</SortableHead>
+                                                    <SortableHead column="billing_reason" sort={subPaymentsSort} onSort={toggleSubPaymentsSort}>Type</SortableHead>
+                                                    <SortableHead column="subtotal" sort={subPaymentsSort} onSort={toggleSubPaymentsSort} align="right">Subtotal</SortableHead>
+                                                    <SortableHead column="gst_amount" sort={subPaymentsSort} onSort={toggleSubPaymentsSort} align="right">GST</SortableHead>
+                                                    <SortableHead column="pst_amount" sort={subPaymentsSort} onSort={toggleSubPaymentsSort} align="right">PST</SortableHead>
+                                                    <SortableHead column="hst_amount" sort={subPaymentsSort} onSort={toggleSubPaymentsSort} align="right">HST</SortableHead>
+                                                    <SortableHead column="amount" sort={subPaymentsSort} onSort={toggleSubPaymentsSort} align="right">Total</SortableHead>
                                                 </TableRow>
                                             </TableHeader>
                                             <TableBody>
-                                                {driverSubPayments.map((p) => (
+                                                {sortedSubPayments.map((p) => (
                                                     <TableRow key={p.id}>
                                                         <TableCell className="text-xs whitespace-nowrap">
                                                             {p.created_at ? new Date(p.created_at).toLocaleDateString("en-CA", { year: "numeric", month: "short", day: "numeric" }) : "—"}
@@ -1531,6 +1536,11 @@ function DriverPayoutsTab({ data, loading, driverName, retryingPayoutId, onRetry
         } catch { return iso; }
     };
     const fmtMoney = (n: number) => formatCurrency(n);
+
+    // Client-side sort for the payout-history table. Called before the early
+    // returns so the hook order stays stable; reads payouts off the nullable
+    // data and falls back to an empty list when not yet loaded.
+    const { sorted: sortedPayouts, sort: payoutsSort, toggle: togglePayoutsSort } = useTableSort(data?.payouts ?? []);
 
     if (loading && !data) return (
         <div className="space-y-4 animate-pulse">
@@ -1811,11 +1821,11 @@ function DriverPayoutsTab({ data, loading, driverName, retryingPayoutId, onRetry
                 <Table>
                     <TableHeader>
                         <TableRow className="bg-muted/30 hover:bg-muted/30">
-                            <TableHead className="h-9 text-[11px] uppercase tracking-wider">Date</TableHead>
-                            <TableHead className="h-9 text-[11px] uppercase tracking-wider text-right">Amount</TableHead>
-                            <TableHead className="h-9 text-[11px] uppercase tracking-wider">Status</TableHead>
-                            <TableHead className="h-9 text-[11px] uppercase tracking-wider">Destination</TableHead>
-                            <TableHead className="h-9 text-[11px] uppercase tracking-wider">Stripe Ref</TableHead>
+                            <SortableHead column="processed_at" sort={payoutsSort} onSort={togglePayoutsSort} className="h-9 text-[11px] uppercase tracking-wider">Date</SortableHead>
+                            <SortableHead column="amount" sort={payoutsSort} onSort={togglePayoutsSort} align="right" className="h-9 text-[11px] uppercase tracking-wider">Amount</SortableHead>
+                            <SortableHead column="status" sort={payoutsSort} onSort={togglePayoutsSort} className="h-9 text-[11px] uppercase tracking-wider">Status</SortableHead>
+                            <SortableHead column="bank_name" sort={payoutsSort} onSort={togglePayoutsSort} className="h-9 text-[11px] uppercase tracking-wider">Destination</SortableHead>
+                            <SortableHead column="stripe_payout_id" sort={payoutsSort} onSort={togglePayoutsSort} className="h-9 text-[11px] uppercase tracking-wider">Stripe Ref</SortableHead>
                             <TableHead className="h-9 text-[11px] uppercase tracking-wider text-right">Action</TableHead>
                         </TableRow>
                     </TableHeader>
@@ -1827,7 +1837,7 @@ function DriverPayoutsTab({ data, loading, driverName, retryingPayoutId, onRetry
                                     <p className="text-xs mt-1">When {driverName} requests a withdrawal it will appear here.</p>
                                 </TableCell>
                             </TableRow>
-                        ) : payouts.map((p) => {
+                        ) : sortedPayouts.map((p) => {
                             const style = PAYOUT_STATUS_STYLE[p.status] ?? { bg: "bg-muted/30", text: "text-muted-foreground", label: p.status };
                             const isRetrying = retryingPayoutId === p.id;
                             return (

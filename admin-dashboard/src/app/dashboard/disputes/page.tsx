@@ -16,6 +16,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Pagination } from "@/components/ui/pagination";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import {
   AlertTriangle, RefreshCw, CheckCircle, XCircle, Clock, DollarSign,
   User,
@@ -154,6 +155,8 @@ export default function DisputesPage() {
     }
   };
 
+  const { sorted: sortedDisputes, sort, toggle } = useTableSort(disputes);
+
   if (!allowed) return null;
 
   return (
@@ -216,19 +219,19 @@ export default function DisputesPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Rider</TableHead>
-                    <TableHead>Reason</TableHead>
-                    <TableHead>Fare</TableHead>
-                    <TableHead>Requested</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Filed</TableHead>
+                    <SortableHead column="user_name" sort={sort} onSort={toggle}>Rider</SortableHead>
+                    <SortableHead column="reason" sort={sort} onSort={toggle}>Reason</SortableHead>
+                    <SortableHead column="original_fare" sort={sort} onSort={toggle}>Fare</SortableHead>
+                    <SortableHead column="requested_amount" sort={sort} onSort={toggle}>Requested</SortableHead>
+                    <SortableHead column="status" sort={sort} onSort={toggle}>Status</SortableHead>
+                    <SortableHead column="created_at" sort={sort} onSort={toggle}>Filed</SortableHead>
                     <TableHead>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {disputes.length === 0 ? (
+                  {sortedDisputes.length === 0 ? (
                     <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">No disputes found</TableCell></TableRow>
-                  ) : disputes.map((d: any) => (
+                  ) : sortedDisputes.map((d: any) => (
                     <TableRow key={d.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelected(d)}>
                       <TableCell>
                         <div className="flex items-center gap-2">

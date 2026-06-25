@@ -21,6 +21,7 @@ import {
   RefreshCw, ChevronDown, ChevronUp, BarChart3,
 } from "lucide-react";
 import { getQuests, createQuest, updateQuest, getQuestParticipants, getServiceAreas } from "@/lib/api";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 
 // datetime-local inputs hold a *local* wall-clock string. Format a Date into
 // that shape in LOCAL time — using toISOString() here would stuff a UTC clock
@@ -107,6 +108,9 @@ export default function QuestsPage() {
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [participantsLoading, setParticipantsLoading] = useState(false);
   const [serviceAreas, setServiceAreas] = useState<{ id: string; name: string }[]>([]);
+
+  const { sorted: sortedQuests, sort: questSort, toggle: toggleQuestSort } = useTableSort(quests);
+  const { sorted: sortedParticipants, sort: participantSort, toggle: toggleParticipantSort } = useTableSort(participants);
 
   // Form state
   const [form, setForm] = useState({
@@ -290,18 +294,18 @@ export default function QuestsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Quest</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Target</TableHead>
-                  <TableHead>Reward</TableHead>
-                  <TableHead>Duration</TableHead>
-                  <TableHead>Participants</TableHead>
-                  <TableHead>Status</TableHead>
+                  <SortableHead column="title" sort={questSort} onSort={toggleQuestSort}>Quest</SortableHead>
+                  <SortableHead column="type" sort={questSort} onSort={toggleQuestSort}>Type</SortableHead>
+                  <SortableHead column="target_value" sort={questSort} onSort={toggleQuestSort} align="right">Target</SortableHead>
+                  <SortableHead column="reward_amount" sort={questSort} onSort={toggleQuestSort} align="right">Reward</SortableHead>
+                  <SortableHead column="start_date" sort={questSort} onSort={toggleQuestSort}>Duration</SortableHead>
+                  <SortableHead column="stats.total_participants" sort={questSort} onSort={toggleQuestSort} align="right">Participants</SortableHead>
+                  <SortableHead column="is_active" sort={questSort} onSort={toggleQuestSort}>Status</SortableHead>
                   <TableHead>Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {quests.map((quest) => (
+                {sortedQuests.map((quest) => (
                   <>
                     <TableRow key={quest.id} className="cursor-pointer hover:bg-muted/50" onClick={() => handleExpandQuest(quest.id)}>
                       <TableCell>
@@ -382,14 +386,14 @@ export default function QuestsPage() {
                               <Table>
                                 <TableHeader>
                                   <TableRow>
-                                    <TableHead>Driver</TableHead>
-                                    <TableHead>Progress</TableHead>
-                                    <TableHead>Status</TableHead>
-                                    <TableHead>Started</TableHead>
+                                    <SortableHead column="driver_name" sort={participantSort} onSort={toggleParticipantSort}>Driver</SortableHead>
+                                    <SortableHead column="progress_pct" sort={participantSort} onSort={toggleParticipantSort} align="right">Progress</SortableHead>
+                                    <SortableHead column="status" sort={participantSort} onSort={toggleParticipantSort}>Status</SortableHead>
+                                    <SortableHead column="started_at" sort={participantSort} onSort={toggleParticipantSort}>Started</SortableHead>
                                   </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                  {participants.map((p) => (
+                                  {sortedParticipants.map((p) => (
                                     <TableRow key={p.progress_id}>
                                       <TableCell className="font-medium">{p.driver_name}</TableCell>
                                       <TableCell>

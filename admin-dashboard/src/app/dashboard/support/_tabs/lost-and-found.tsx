@@ -11,6 +11,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { Pagination } from "@/components/ui/pagination";
 import { Search, CheckCircle, Plus, Pencil, Trash2, RefreshCw } from "lucide-react";
 import { formatDate } from "@/lib/utils";
@@ -73,6 +74,7 @@ export default function LostAndFoundTab() {
         if (!search) return true;
         return i.item_description?.toLowerCase().includes(search.toLowerCase());
     });
+    const { sorted, sort, toggle } = useTableSort(filtered);
     const areaName = (id: string) => areas.find((a) => a.id === id)?.name || "";
 
     const handleCreate = async () => {
@@ -122,8 +124,8 @@ export default function LostAndFoundTab() {
             <Card><CardContent className="p-0">
                 {loading ? <div className="flex justify-center p-12"><div className="h-7 w-7 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>
                 : filtered.length === 0 ? <div className="text-center py-12 text-muted-foreground text-sm">No items found.</div>
-                : <Table><TableHeader><TableRow><TableHead>Item</TableHead><TableHead>Ride</TableHead><TableHead>Area</TableHead><TableHead>Status</TableHead><TableHead>Date</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
-                    <TableBody>{filtered.map((item) => (
+                : <Table><TableHeader><TableRow><SortableHead column="item_description" sort={sort} onSort={toggle}>Item</SortableHead><SortableHead column="ride_id" sort={sort} onSort={toggle}>Ride</SortableHead><SortableHead column="service_area_id" sort={sort} onSort={toggle}>Area</SortableHead><SortableHead column="status" sort={sort} onSort={toggle}>Status</SortableHead><SortableHead column="created_at" sort={sort} onSort={toggle}>Date</SortableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
+                    <TableBody>{sorted.map((item) => (
                         <TableRow key={item.id}>
                             <TableCell className="font-medium max-w-[220px] truncate text-sm">{item.item_description}</TableCell>
                             <TableCell className="font-mono text-xs text-muted-foreground">{item.ride_id?.slice(0, 8) || "—"}</TableCell>

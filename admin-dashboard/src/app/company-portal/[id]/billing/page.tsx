@@ -17,12 +17,12 @@ import {
     Table,
     TableBody,
     TableCell,
-    TableHead,
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
 import { Download } from "lucide-react";
 import { sanitizeCsvCell } from "@/lib/export-csv";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 
 function monthOptions(): string[] {
     const out: string[] = [];
@@ -120,6 +120,9 @@ export default function BillingPage() {
         URL.revokeObjectURL(url);
     };
 
+    const byMember = useTableSort(summary?.by_member ?? []);
+    const ledger = useTableSort(txns?.transactions ?? []);
+
     return (
         <div className="space-y-6">
             <header className="flex flex-wrap items-center justify-between gap-2">
@@ -181,11 +184,11 @@ export default function BillingPage() {
                     <Table>
                         <TableHeader>
                             <TableRow>
-                                <TableHead>Member</TableHead>
-                                <TableHead>Rides</TableHead>
-                                <TableHead>Allowance</TableHead>
-                                <TableHead>Master</TableHead>
-                                <TableHead className="text-right">Total</TableHead>
+                                <SortableHead column="member_id" sort={byMember.sort} onSort={byMember.toggle}>Member</SortableHead>
+                                <SortableHead column="ride_count" sort={byMember.sort} onSort={byMember.toggle}>Rides</SortableHead>
+                                <SortableHead column="allowance_total" sort={byMember.sort} onSort={byMember.toggle}>Allowance</SortableHead>
+                                <SortableHead column="master_total" sort={byMember.sort} onSort={byMember.toggle}>Master</SortableHead>
+                                <SortableHead column="total" sort={byMember.sort} onSort={byMember.toggle} align="right">Total</SortableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -203,7 +206,7 @@ export default function BillingPage() {
                                     </TableCell>
                                 </TableRow>
                             )}
-                            {summary?.by_member?.map((m) => (
+                            {byMember.sorted.map((m) => (
                                 <TableRow key={m.member_id}>
                                     <TableCell className="font-mono text-xs">
                                         {m.member_id}
@@ -227,10 +230,10 @@ export default function BillingPage() {
                     <Table>
                         <TableHeader>
                             <TableRow>
-                                <TableHead>Date</TableHead>
-                                <TableHead>Type</TableHead>
-                                <TableHead>Notes</TableHead>
-                                <TableHead className="text-right">Amount</TableHead>
+                                <SortableHead column="created_at" sort={ledger.sort} onSort={ledger.toggle}>Date</SortableHead>
+                                <SortableHead column="type" sort={ledger.sort} onSort={ledger.toggle}>Type</SortableHead>
+                                <SortableHead column="notes" sort={ledger.sort} onSort={ledger.toggle}>Notes</SortableHead>
+                                <SortableHead column="amount" sort={ledger.sort} onSort={ledger.toggle} align="right">Amount</SortableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -248,7 +251,7 @@ export default function BillingPage() {
                                     </TableCell>
                                 </TableRow>
                             )}
-                            {txns?.transactions.map((t) => (
+                            {ledger.sorted.map((t) => (
                                 <TableRow key={t.id}>
                                     <TableCell className="text-xs text-muted-foreground">
                                         {t.created_at?.slice(0, 10)}

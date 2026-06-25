@@ -39,6 +39,7 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { Pagination } from "@/components/ui/pagination";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { Users, Search, Mail, Phone, Calendar, Car, ShieldCheck, Download, RefreshCw, Ban, CheckCircle, AlertTriangle, Wallet, Plus, Minus, Eye, EyeOff, CreditCard, MapPin, Gift } from "lucide-react";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatDate } from "@/lib/utils";
@@ -241,6 +242,8 @@ export default function UsersPage() {
             ? (stats && (stats.total_users - (stats.total_drivers || 0)))
             : stats?.total_users;
 
+    const { sorted: sortedUsers, sort: usersSort, toggle: usersToggle } = useTableSort(users);
+
     if (!allowed) return null;
 
     return (
@@ -384,11 +387,11 @@ export default function UsersPage() {
                             <Table>
                                 <TableHeader>
                                     <TableRow>
-                                        <TableHead>Name</TableHead>
-                                        <TableHead>Contact</TableHead>
-                                        <TableHead>Role</TableHead>
-                                        <TableHead>Status</TableHead>
-                                        <TableHead>Joined</TableHead>
+                                        <SortableHead column="name" sort={usersSort} onSort={usersToggle}>Name</SortableHead>
+                                        <SortableHead column="email" sort={usersSort} onSort={usersToggle}>Contact</SortableHead>
+                                        <SortableHead column="role" sort={usersSort} onSort={usersToggle}>Role</SortableHead>
+                                        <SortableHead column="status" sort={usersSort} onSort={usersToggle}>Status</SortableHead>
+                                        <SortableHead column="created_at" sort={usersSort} onSort={usersToggle}>Joined</SortableHead>
                                         <TableHead className="text-right">Actions</TableHead>
                                     </TableRow>
                                 </TableHeader>
@@ -400,7 +403,7 @@ export default function UsersPage() {
                                             </TableCell>
                                         </TableRow>
                                     ) : (
-                                        users.map((user) => (
+                                        sortedUsers.map((user) => (
                                             <TableRow key={user.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelectedUser(user)}>
                                                 <TableCell>
                                                     <div>

@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+  Table, TableBody, TableCell, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -14,8 +14,9 @@ import {
 } from "recharts";
 import {
   CheckCircle, XCircle, Clock, RefreshCw, Send, Search, ChevronLeft, ChevronRight,
-  ArrowUp, ArrowDown, X, BarChart3, MapPin,
+  X, BarChart3, MapPin,
 } from "lucide-react";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { getDriverOfferStats, getDriverOfferTrends, getServiceAreas } from "@/lib/api";
 
 const DATE_RANGES = [
@@ -51,8 +52,6 @@ export default function DriverOffersPage() {
   const [areas, setAreas] = useState<any[]>([]);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
-  const [sortKey, setSortKey] = useState<SortKey>("offered");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [selected, setSelected] = useState<{ id: string; name: string } | null>(null);
 
   const [data, setData] = useState<any>(null);
@@ -96,26 +95,16 @@ export default function DriverOffersPage() {
     { label: "Ignored", value: totals.ignored ?? 0, Icon: Clock, cls: "text-amber-600" },
   ];
 
-  const sorted = useMemo(() => {
+  const filtered = useMemo(() => {
     const rows: any[] = Array.isArray(data?.drivers) ? [...data.drivers] : [];
     const q = search.trim().toLowerCase();
-    const filtered = q ? rows.filter((d) => (d.name || "").toLowerCase().includes(q) || (d.driver_id || "").toLowerCase().includes(q)) : rows;
-    filtered.sort((a, b) => {
-      let av = a[sortKey]; let bv = b[sortKey];
-      if (sortKey === "name") { av = (av || "").toLowerCase(); bv = (bv || "").toLowerCase(); return sortDir === "asc" ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av)); }
-      av = av ?? 0; bv = bv ?? 0;
-      return sortDir === "asc" ? av - bv : bv - av;
-    });
-    return filtered;
-  }, [data, search, sortKey, sortDir]);
+    return q ? rows.filter((d) => (d.name || "").toLowerCase().includes(q) || (d.driver_id || "").toLowerCase().includes(q)) : rows;
+  }, [data, search]);
+
+  const { sorted, sort, toggle } = useTableSort(filtered, { key: "offered", dir: "desc" });
 
   const pageCount = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
   const pageRows = sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-
-  const toggleSort = (k: SortKey) => {
-    if (sortKey === k) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    else { setSortKey(k); setSortDir(k === "name" ? "asc" : "desc"); }
-  };
 
   return (
     <div className="space-y-6">
@@ -226,16 +215,15 @@ export default function DriverOffersPage() {
                 <TableHeader>
                   <TableRow>
                     {COLUMNS.map((c) => (
-                      <TableHead
+                      <SortableHead
                         key={c.key}
-                        onClick={() => toggleSort(c.key)}
-                        className={`cursor-pointer select-none ${c.numeric ? "text-right" : ""} ${sortKey === c.key ? "text-primary font-bold" : ""}`}
+                        column={c.key}
+                        sort={sort}
+                        onSort={toggle}
+                        align={c.numeric ? "right" : "left"}
                       >
-                        <span className={`inline-flex items-center gap-1 ${c.numeric ? "justify-end" : ""}`}>
-                          {c.label}
-                          {sortKey === c.key && (sortDir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)}
-                        </span>
-                      </TableHead>
+                        {c.label}
+                      </SortableHead>
                     ))}
                   </TableRow>
                 </TableHeader>

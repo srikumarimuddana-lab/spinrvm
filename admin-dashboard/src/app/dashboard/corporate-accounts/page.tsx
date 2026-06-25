@@ -51,6 +51,7 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { Building2, Plus, Pencil, Trash2, Search, Mail, Phone, RefreshCw, ShieldCheck } from "lucide-react";
+import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useToast } from "@/components/ui/use-toast";
 
@@ -198,6 +199,8 @@ export default function CorporateAccountsPage() {
         }
     };
 
+    const { sorted, sort, toggle } = useTableSort(accounts);
+
     if (!allowed) return null;
 
     return (
@@ -256,11 +259,11 @@ export default function CorporateAccountsPage() {
                     <Table>
                         <TableHeader>
                             <TableRow>
-                                <TableHead>Company Name</TableHead>
-                                <TableHead>Contact Person</TableHead>
-                                <TableHead>Contact Info</TableHead>
-                                <TableHead>Credit Limit</TableHead>
-                                <TableHead>Status</TableHead>
+                                <SortableHead column="name" sort={sort} onSort={toggle}>Company Name</SortableHead>
+                                <SortableHead column="contact_name" sort={sort} onSort={toggle}>Contact Person</SortableHead>
+                                <SortableHead column="contact_email" sort={sort} onSort={toggle}>Contact Info</SortableHead>
+                                <SortableHead column="credit_limit" sort={sort} onSort={toggle} align="right">Credit Limit</SortableHead>
+                                <SortableHead column="is_active" sort={sort} onSort={toggle}>Status</SortableHead>
                                 <TableHead className="text-right">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
@@ -280,7 +283,7 @@ export default function CorporateAccountsPage() {
                                     </TableCell>
                                 </TableRow>
                             ) : (
-                                accounts.map((account) => (
+                                sorted.map((account) => (
                                     <TableRow key={account.id}>
                                         <TableCell className="font-medium">
                                             <div className="flex items-center gap-2">

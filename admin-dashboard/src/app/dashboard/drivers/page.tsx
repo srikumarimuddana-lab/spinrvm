@@ -769,6 +769,7 @@ export default function DriversPage() {
                                                     )}
                                                 </Badge>
                                                 {selected.subscription_status === "active" && <Badge className="bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400"><CreditCard className="h-3 w-3" /> Spinr Pass</Badge>}
+                                                {selected.subscription_status === "expired" && <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"><CreditCard className="h-3 w-3" /> Pass Expired</Badge>}
                                             </div>
                                         </div>
                                     </div>
@@ -987,27 +988,52 @@ export default function DriversPage() {
                                         )}
                                     </DetailSection>
                                     <DetailSection title="Spinr Pass" icon={CreditCard}>
-                                        {selected.subscription_status === "active" ? (
-                                            <div className="flex items-center gap-3">
-                                                <div className="w-9 h-9 rounded-xl bg-violet-100 dark:bg-violet-900/30 flex items-center justify-center shrink-0">
-                                                    <CreditCard className="h-4 w-4 text-violet-600 dark:text-violet-400" />
+                                        {(() => {
+                                            const ss = selected.subscription_status;
+                                            const plan = selected.subscription_plan;
+                                            const exp = selected.subscription_expires_at;
+                                            const expLabel = exp ? new Date(exp).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : null;
+                                            if (ss === "active") {
+                                                return (
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="w-9 h-9 rounded-xl bg-violet-100 dark:bg-violet-900/30 flex items-center justify-center shrink-0">
+                                                            <CreditCard className="h-4 w-4 text-violet-600 dark:text-violet-400" />
+                                                        </div>
+                                                        <div className="flex-1 min-w-0">
+                                                            <p className="text-sm font-semibold text-violet-700 dark:text-violet-300">{plan || "Active Plan"}</p>
+                                                            <p className="text-xs text-violet-600/70 dark:text-violet-400/70 mt-0.5">{expLabel ? `Renews / expires ${expLabel}` : "Subscription active"}</p>
+                                                        </div>
+                                                        <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 text-[10px] font-bold uppercase tracking-wide shrink-0">
+                                                            Active
+                                                        </span>
+                                                    </div>
+                                                );
+                                            }
+                                            if (ss === "expired") {
+                                                return (
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="w-9 h-9 rounded-xl bg-red-100 dark:bg-red-900/30 flex items-center justify-center shrink-0">
+                                                            <CreditCard className="h-4 w-4 text-red-600 dark:text-red-400" />
+                                                        </div>
+                                                        <div className="flex-1 min-w-0">
+                                                            <p className="text-sm font-semibold text-red-700 dark:text-red-400">{plan || "Spinr Pass"}</p>
+                                                            <p className="text-xs text-red-600/80 dark:text-red-400/80 mt-0.5">{expLabel ? `Expired ${expLabel}` : "Subscription expired"}</p>
+                                                        </div>
+                                                        <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 text-[10px] font-bold uppercase tracking-wide shrink-0">
+                                                            Expired
+                                                        </span>
+                                                    </div>
+                                                );
+                                            }
+                                            return (
+                                                <div className="flex items-center gap-3">
+                                                    <div className="w-9 h-9 rounded-xl bg-muted flex items-center justify-center shrink-0">
+                                                        <CreditCard className="h-4 w-4 text-muted-foreground" />
+                                                    </div>
+                                                    <p className="text-sm text-muted-foreground">No subscription</p>
                                                 </div>
-                                                <div className="flex-1 min-w-0">
-                                                    <p className="text-sm font-semibold text-violet-700 dark:text-violet-300">{selected.subscription_plan || "Active Plan"}</p>
-                                                    <p className="text-xs text-violet-600/70 dark:text-violet-400/70 mt-0.5">Subscription active</p>
-                                                </div>
-                                                <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 text-[10px] font-bold uppercase tracking-wide shrink-0">
-                                                    Active
-                                                </span>
-                                            </div>
-                                        ) : (
-                                            <div className="flex items-center gap-3">
-                                                <div className="w-9 h-9 rounded-xl bg-muted flex items-center justify-center shrink-0">
-                                                    <CreditCard className="h-4 w-4 text-muted-foreground" />
-                                                </div>
-                                                <p className="text-sm text-muted-foreground">No active subscription</p>
-                                            </div>
-                                        )}
+                                            );
+                                        })()}
                                     </DetailSection>
                                     <div className="grid grid-cols-2 gap-2.5">
                                         <DetailField icon={CalendarRange} label="Joined" value={fmtDate(selected.created_at)} />

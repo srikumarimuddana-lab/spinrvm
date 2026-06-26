@@ -63,11 +63,6 @@ class Settings(BaseSettings):
     # Refresh-token TTL in days (30 days "remember this device").
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
-    # Referral reward payouts (rider + driver). The payout loop moves real
-    # wallet money, so it is OFF by default — enable only after verifying the
-    # reward terms and the loop behaviour in staging.
-    REFERRAL_PAYOUTS_ENABLED: bool = False
-
     # ──── Cookie Settings ────
     # HTTP-only cookie flags for secure token storage (P3 HttpOnly migration)
     COOKIE_SECURE: bool = True  # HTTPS only in production

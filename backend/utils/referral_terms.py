@@ -172,9 +172,9 @@ async def paid_referral_earnings(referrer_user_id: str, kind: str) -> Optional[D
     recomputed from today's area terms, so a referrer's historical earned total
     can't change retroactively when an admin edits an area's reward/threshold or
     the user moves service areas. Returns None — not 0 — when there are no paid
-    rows so callers fall back to the pre-payout estimate (the payout loop is off
-    by default; until it runs there are no paid rows and the estimate is the only
-    available signal).
+    rows so callers fall back to the pre-payout estimate (until the payout loop
+    pays this referrer there are no paid rows and the estimate is the only
+    available signal; the loop runs every 5 min).
     """
     rows = await db_supabase.get_rows(
         "referral_payouts",

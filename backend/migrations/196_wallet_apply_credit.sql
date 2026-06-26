@@ -105,7 +105,18 @@ $$;
 -- Backend-only: this is a SECURITY DEFINER money function and Supabase exposes
 -- every public function at /rest/v1/rpc/. Without this REVOKE, any authenticated
 -- (or anon) client could call it directly with an arbitrary wallet_id/amount and
--- self-credit, bypassing all application-layer auth. Mirrors migration 111's
--- hardening of wallet_pay_for_ride.
+-- self-credit, bypassing all application-layer auth. Mirrors migration 194
+-- (revoke PUBLIC, then grant service_role back).
 REVOKE EXECUTE ON FUNCTION wallet_apply_credit(UUID, UUID, TEXT, NUMERIC, TEXT, TEXT, JSONB)
     FROM PUBLIC, anon, authenticated;
+
+-- Revoking PUBLIC also strips service_role's inherited EXECUTE: the migration
+-- runner connects as `postgres` (the function owner), and service_role is
+-- neither the owner nor a superuser, so it held EXECUTE only via the PUBLIC
+-- grant. Grant it back so the backend's service-role key can still call the RPC
+-- from the wallet_topup webhook — otherwise the call fails with "permission
+-- denied for function wallet_apply_credit" and the top-up never credits.
+-- (Migration 111 does not need this because it revokes only anon/authenticated,
+-- leaving the PUBLIC grant intact.)
+GRANT EXECUTE ON FUNCTION wallet_apply_credit(UUID, UUID, TEXT, NUMERIC, TEXT, TEXT, JSONB)
+    TO service_role;

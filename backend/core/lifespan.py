@@ -206,8 +206,8 @@ async def lifespan(app: FastAPI):
 
     # Referral reward payouts — pays referrer/referee rewards once a referee
     # hits the ride threshold. Idempotent via referral_payouts UNIQUE claim.
-    # No-ops unless settings.REFERRAL_PAYOUTS_ENABLED (OFF by default — it moves
-    # real wallet money, enable only after staging verification).
+    # Reward amounts are admin-controlled per service area; a per-area reward of
+    # 0 means that side is simply not paid (no global on/off switch).
     try:
         from utils.referral_payout import referral_payout_loop
 

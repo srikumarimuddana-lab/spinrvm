@@ -12,7 +12,9 @@ If the deadline passes before the threshold is met, the referral is recorded as
 their rides promptly.
 
 Money safety:
-  - OFF by default (settings.REFERRAL_PAYOUTS_ENABLED) — enable after staging.
+  - Reward amounts are admin-controlled per service area (see referral_terms).
+    A per-area reward of 0 means that side is not paid — there is no global
+    on/off flag; "don't pay" is expressed by setting the amount to 0.
   - Idempotent: a payout is claimed by INSERTing a referral_payouts row whose
     UNIQUE(referee_user_id) makes a duplicate/concurrent claim fail, so each
     referral is paid at most once even across replicas and retries.
@@ -31,7 +33,6 @@ from decimal import ROUND_HALF_UP, Decimal
 
 try:
     from .. import db_supabase  # type: ignore
-    from ..core.config import settings  # type: ignore
     from ..utils.error_handling import DuplicateRecordError  # type: ignore
     from ..utils.referral_terms import (  # type: ignore
         area_id_for_rider,
@@ -39,7 +40,6 @@ try:
     )
 except ImportError:
     import db_supabase  # type: ignore
-    from core.config import settings  # type: ignore
     from utils.error_handling import DuplicateRecordError  # type: ignore
     from utils.referral_terms import (  # type: ignore
         area_id_for_rider,
@@ -77,9 +77,6 @@ async def referral_payout_loop() -> None:
 
 
 async def _tick() -> None:
-    if not settings.REFERRAL_PAYOUTS_ENABLED:
-        return
-
     # Reclaim crash-stranded claims: a row stuck 'processing' past the grace
     # window means a replica died between claiming and finalising. We can't tell
     # whether the credit landed, so mark it 'failed' for manual review rather
@@ -205,6 +202,14 @@ async def _process_one(referee: dict, code: str) -> None:
     referee_reward = _d(t["referee"])
     now_iso = datetime.now(timezone.utc).isoformat()
 
+    # Admin set BOTH sides to 0 for this area → there is nothing to pay. Don't
+    # burn the UNIQUE(referee_user_id) claim on a $0 row: leaving the referee
+    # unclaimed means that if an admin later raises the area's reward above 0,
+    # this referral becomes payable again on a future tick. (A one-sided 0 still
+    # claims-and-pays the non-zero side below.)
+    if referrer_reward <= 0 and referee_reward <= 0:
+        return
+
     # Atomic claim: the UNIQUE(referee_user_id) means only one replica/tick wins
     # this INSERT; a duplicate raises and we skip (already being handled).
     try:
@@ -231,10 +236,11 @@ async def _process_one(referee: dict, code: str) -> None:
     # the outer handler in _tick, which logs it as an error rather than silently
     # treating it as 'already claimed'.
 
-    # Credit the referrer, then the referee (when their reward > 0). _credit
-    # routes DRIVER rewards to the payable driver_bonuses ledger (append-only
-    # insert) and RIDER rewards to the wallet (self-atomic: reverses its own
-    # increment if the ledger write fails, so money is never left unrecorded).
+    # Credit each side only when its admin-configured reward is > 0 (a per-area
+    # reward of 0 means "don't pay this side"). _credit routes DRIVER rewards to
+    # the payable driver_bonuses ledger (append-only insert) and RIDER rewards to
+    # the wallet (self-atomic: reverses its own increment if the ledger write
+    # fails, so money is never left unrecorded).
     # On ANY credit failure we mark the claim
     # 'failed' and stop: we deliberately do NOT delete/retry, because the claim
     # row staying in place is exactly what prevents a re-claim and a double
@@ -251,8 +257,9 @@ async def _process_one(referee: dict, code: str) -> None:
     referrer_paid = False
     referee_paid = False
     try:
-        await _credit(referrer_user_id, referrer_reward, kind, referee_id, "referral_reward", meta)
-        referrer_paid = True
+        if referrer_reward > 0:
+            await _credit(referrer_user_id, referrer_reward, kind, referee_id, "referral_reward", meta)
+            referrer_paid = True
         if referee_reward > 0:
             await _credit(referee_id, referee_reward, kind, referee_id, "referral_bonus", meta)
             referee_paid = True

@@ -521,8 +521,9 @@ async def _rider_referral_summary(user: dict, *, include_referees: bool) -> dict
     total = len(referred)
     # Earned total: prefer the snapshotted sum of PAID payouts so it never changes
     # retroactively when area terms or the rider's area change; fall back to the
-    # estimate (current reward × qualified) until any payout has actually been paid
-    # (the payout loop is off by default, so this is the current behaviour).
+    # estimate (current reward × qualified) until the payout loop has actually
+    # paid this referrer (the loop runs every 5 min, so the snapshot wins shortly
+    # after a referee qualifies).
     paid = await paid_referral_earnings(user["id"], "rider")
     earnings = paid if paid is not None else (referrer_reward * qualified)
     summary = {

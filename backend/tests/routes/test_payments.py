@@ -91,7 +91,18 @@ async def test_confirm_payment_race_guard_returns_409():
 
     from backend.routes.payments import ConfirmPaymentRequest, confirm_payment
 
-    with patch("backend.routes.payments.db_supabase") as mock_db:
+    # A real (non-mock) pi_* confirm now passes the processor-availability gate
+    # (C1) before the claim, so the Stripe secret must be present or the gate
+    # 503s before we ever reach the race-guard claim. Patch it so this test
+    # actually exercises the 409 claim-loss path.
+    with (
+        patch("backend.routes.payments.db_supabase") as mock_db,
+        patch(
+            "backend.routes.payments.get_app_settings",
+            new_callable=AsyncMock,
+            return_value={"stripe_secret_key": "sk_test"},
+        ),
+    ):
         mock_db.get_ride = AsyncMock(return_value=_RIDE_OWNED)
         mock_db.claim_ride_payment_processing = AsyncMock(return_value=False)
 

@@ -182,3 +182,38 @@ class TestVerifyOtpLockoutHelpers:
             with pytest.raises(HTTPException) as excinfo:
                 asyncio.run(auth._check_otp_lockout(PHONE))
         assert excinfo.value.status_code == 429
+
+
+class TestVerifyOtpDbErrorIsNotAWrongCode:
+    """C3: if get_otp_record_by_phone raises (a DB blip), verify_otp must
+    surface 503 and must NOT count it as a wrong code. Otherwise a user who
+    entered the CORRECT code takes a failure strike and can be locked out for
+    24h (5 strikes/hour) for a fault that was entirely server-side."""
+
+    def test_otp_db_error_raises_503_and_does_not_record_failure(self):
+        from backend.routes.auth import verify_otp
+        from backend.schemas import VerifyOTPRequest
+        from backend.utils.error_handling import SpinrException
+
+        body = VerifyOTPRequest(phone=PHONE, code="1234")
+        request = MagicMock()
+        request.client = MagicMock(host="127.0.0.1")
+        response = MagicMock()
+
+        record_failure = AsyncMock()
+        with (
+            # Lockout pre-check is unrelated to this path — stub it to a no-op.
+            patch("backend.routes.auth._check_otp_lockout", AsyncMock(return_value=None)),
+            patch("backend.routes.auth._record_otp_failure", record_failure),
+            patch(
+                "backend.routes.auth.db_supabase.get_otp_record_by_phone",
+                AsyncMock(side_effect=RuntimeError("DB down")),
+            ),
+        ):
+            inner = _resolve_inner(verify_otp)
+            with pytest.raises(SpinrException) as excinfo:
+                asyncio.run(inner(request, response, body))
+
+        assert excinfo.value.status_code == 503
+        # The correct-code-during-a-DB-blip user must NOT be penalised.
+        record_failure.assert_not_called()

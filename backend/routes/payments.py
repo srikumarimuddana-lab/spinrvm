@@ -122,9 +122,13 @@ async def get_or_create_stripe_customer(user_id: str, stripe_secret: str):
     stripe_customer_id = user.get("stripe_customer_id")
 
     if not stripe_customer_id:
+        # PIPEDA (C4): do NOT send the rider's email or legal name to Stripe (a
+        # US processor). Neither is required to create a customer — only
+        # metadata.user_id is needed to correlate the Stripe customer back to
+        # our user. Avoiding the transfer keeps PII inside the Canadian region;
+        # contact details can be attached later only if a specific Stripe flow
+        # (e.g. a dispute) actually requires them.
         customer = stripe.Customer.create(
-            email=user.get("email"),
-            name=f"{user.get('first_name', '')} {user.get('last_name', '')}".strip(),
             metadata={"user_id": user_id},
             api_key=stripe_secret,
             idempotency_key=f"cus-create-{user_id}",
@@ -332,6 +336,12 @@ async def confirm_payment(
             detail="Mock payments are not supported in production",
         )
 
+    is_mock = bool(payment_intent_id and payment_intent_id.startswith("pi_mock_"))
+    # Bound unconditionally so the Stripe call below never references an unbound
+    # name; the real value is assigned in the non-mock processor gate, which 503s
+    # if it is still empty (so this default never reaches stripe.PaymentIntent).
+    stripe_secret = ""
+
     if ride_id:
         ride = await db_supabase.get_ride(ride_id)
         if not ride:
@@ -353,12 +363,28 @@ async def confirm_payment(
             )
             return {"status": "already_processed", "payment_status": payment_status}
 
+    # Processor-availability gate (C1): a non-mock confirm with no Stripe secret
+    # must NOT settle a ride. The key can be transiently empty during rotation;
+    # returning a success shape would mark a ride paid with no real charge.
+    # Placed AFTER ownership/idempotency (a non-owner still gets 403) but BEFORE
+    # the claim, so a transiently-empty key can't strand the ride in
+    # payment_status='processing'. Mirrors create_payment_intent's 503.
+    if not is_mock:
+        settings = await get_app_settings()
+        stripe_secret = settings.get("stripe_secret_key", "")
+        if not stripe_secret:
+            raise HTTPException(
+                status_code=503,
+                detail="Payment processing is not configured. Please contact support.",
+            )
+
+    if ride_id:
         claimed = await db_supabase.claim_ride_payment_processing(ride_id)
         if not claimed:
             raise HTTPException(status_code=409, detail="payment_already_processing")
 
     # Mock-payment shortcut (non-production only; production rejected above).
-    if payment_intent_id and payment_intent_id.startswith("pi_mock_"):
+    if is_mock:
         if ride_id:
             _ride = await db_supabase.get_ride(ride_id)
             if not _ride or _ride.get("rider_id") != current_user["id"]:
@@ -372,80 +398,77 @@ async def confirm_payment(
             )
         return {"status": "succeeded", "mock": True}
 
-    settings = await get_app_settings()
-    stripe_secret = settings.get("stripe_secret_key", "")
+    # Non-mock path: stripe_secret is guaranteed non-empty (gated above), so we
+    # never reach the old success-shaped fallback — a missing processor already
+    # raised 503 before the claim.
+    try:
+        intent = stripe.PaymentIntent.retrieve(payment_intent_id, api_key=stripe_secret)
 
-    if stripe_secret:
-        try:
-            intent = stripe.PaymentIntent.retrieve(payment_intent_id, api_key=stripe_secret)
+        if intent.metadata.get("user_id") != str(current_user["id"]):
+            raise HTTPException(status_code=403, detail="Not authorized to confirm this payment")
 
-            if intent.metadata.get("user_id") != str(current_user["id"]):
-                raise HTTPException(status_code=403, detail="Not authorized to confirm this payment")
-
-            if ride_id:
-                _ride = await db_supabase.get_ride(ride_id)
-                if not _ride or _ride.get("rider_id") != current_user["id"]:
-                    raise HTTPException(
-                        status_code=403,
-                        detail="Not authorized to confirm payment for this ride",
-                    )
-
-                # SECURITY (C1): ownership alone is insufficient — a rider owns
-                # many PaymentIntents. Bind the PI to THIS ride and verify it
-                # actually covers the owed total, or a rider could confirm a
-                # cheap / other-ride intent against an expensive ride and underpay.
-                pi_ride_id = (intent.metadata or {}).get("ride_id")
-                if pi_ride_id and pi_ride_id != ride_id:
-                    logger.error(
-                        "[confirm][security] PI %s metadata ride_id=%s != ride %s",
-                        payment_intent_id,
-                        pi_ride_id,
-                        ride_id,
-                    )
-                    raise HTTPException(status_code=403, detail="Payment does not match this ride")
-
-                # Only a genuinely succeeded charge can mark a ride paid, and only
-                # when the captured amount covers the authoritative owed total
-                # (grand_total). amount_received is 0 until the PI succeeds.
-                if intent.status == "succeeded":
-                    _grand = _ride.get("grand_total")
-                    if _grand is None:
-                        _grand = _ride.get("total_fare", 0)
-                    owed_cents = int((_q2(_grand) * 100).to_integral_value())
-                    received = int(getattr(intent, "amount_received", 0) or 0)
-                    if received < owed_cents:
-                        logger.error(
-                            "[confirm][security] underpay ride=%s pi=%s received=%d owed=%d",
-                            ride_id,
-                            payment_intent_id,
-                            received,
-                            owed_cents,
-                        )
-                        raise HTTPException(
-                            status_code=402,
-                            detail={
-                                "code": "AMOUNT_MISMATCH",
-                                "message": "Payment amount does not cover the fare.",
-                            },
-                        )
-
-                await db_supabase.update_ride(
-                    ride_id,
-                    {
-                        "payment_status": intent.status,
-                        "payment_intent_id": payment_intent_id,
-                    },
+        if ride_id:
+            _ride = await db_supabase.get_ride(ride_id)
+            if not _ride or _ride.get("rider_id") != current_user["id"]:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Not authorized to confirm payment for this ride",
                 )
 
-            return {"status": intent.status, "mock": False}
-        except HTTPException:
-            # Ownership 403s above must reach the client, not become a 500.
-            raise
-        except Exception as e:
-            logger.error(f"Stripe error: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
+            # SECURITY (C1): ownership alone is insufficient — a rider owns
+            # many PaymentIntents. Bind the PI to THIS ride and verify it
+            # actually covers the owed total, or a rider could confirm a
+            # cheap / other-ride intent against an expensive ride and underpay.
+            pi_ride_id = (intent.metadata or {}).get("ride_id")
+            if pi_ride_id and pi_ride_id != ride_id:
+                logger.error(
+                    "[confirm][security] PI %s metadata ride_id=%s != ride %s",
+                    payment_intent_id,
+                    pi_ride_id,
+                    ride_id,
+                )
+                raise HTTPException(status_code=403, detail="Payment does not match this ride")
 
-    return {"status": "unknown", "mock": True}
+            # Only a genuinely succeeded charge can mark a ride paid, and only
+            # when the captured amount covers the authoritative owed total
+            # (grand_total). amount_received is 0 until the PI succeeds.
+            if intent.status == "succeeded":
+                _grand = _ride.get("grand_total")
+                if _grand is None:
+                    _grand = _ride.get("total_fare", 0)
+                owed_cents = int((_q2(_grand) * 100).to_integral_value())
+                received = int(getattr(intent, "amount_received", 0) or 0)
+                if received < owed_cents:
+                    logger.error(
+                        "[confirm][security] underpay ride=%s pi=%s received=%d owed=%d",
+                        ride_id,
+                        payment_intent_id,
+                        received,
+                        owed_cents,
+                    )
+                    raise HTTPException(
+                        status_code=402,
+                        detail={
+                            "code": "AMOUNT_MISMATCH",
+                            "message": "Payment amount does not cover the fare.",
+                        },
+                    )
+
+            await db_supabase.update_ride(
+                ride_id,
+                {
+                    "payment_status": intent.status,
+                    "payment_intent_id": payment_intent_id,
+                },
+            )
+
+        return {"status": intent.status, "mock": False}
+    except HTTPException:
+        # Ownership 403s above must reach the client, not become a 500.
+        raise
+    except Exception as e:
+        logger.error(f"Stripe error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 
 @api_router.post("/setup-intent")

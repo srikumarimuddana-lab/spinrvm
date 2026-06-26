@@ -70,7 +70,7 @@ async def test_get_or_create_creates_new_customer():
 
     with (
         patch("backend.routes.payments.db_supabase") as mock_db,
-        patch("backend.routes.payments.stripe.Customer.create", return_value=mock_customer),
+        patch("backend.routes.payments.stripe.Customer.create", return_value=mock_customer) as mock_create,
     ):
         mock_db.get_user_by_id = AsyncMock(side_effect=[new_user, refreshed])
         mock_db.update_one = AsyncMock()
@@ -78,6 +78,13 @@ async def test_get_or_create_creates_new_customer():
         result = await get_or_create_stripe_customer("usr-002", _SK)
 
     assert result == "cus_new"
+    # PIPEDA (C4): only metadata.user_id (+ idempotency key) may be sent to
+    # Stripe — never the rider's email or legal name (cross-border PII).
+    call_kwargs = mock_create.call_args.kwargs
+    assert "email" not in call_kwargs, "email must not be sent to Stripe"
+    assert "name" not in call_kwargs, "name must not be sent to Stripe"
+    assert call_kwargs["metadata"] == {"user_id": "usr-002"}
+    assert call_kwargs["idempotency_key"] == "cus-create-usr-002"
 
 
 @pytest.mark.anyio
@@ -306,15 +313,48 @@ async def test_confirm_payment_mock_no_ride_id():
 
 @pytest.mark.anyio
 async def test_confirm_payment_no_stripe_key():
+    """C1: a non-mock confirm with no Stripe secret must raise 503, not return a
+    success-shaped {"status": "unknown", "mock": True} that marks a ride paid with
+    no real charge (mirrors create_payment_intent)."""
+    from fastapi import HTTPException
+
     from backend.routes.payments import ConfirmPaymentRequest, confirm_payment
 
     with patch("backend.routes.payments.get_app_settings", new_callable=AsyncMock, return_value=_settings(False)):
-        result = await confirm_payment(
-            body=ConfirmPaymentRequest(**{"payment_intent_id": "pi_real_001"}),
-            current_user=_USER,
+        with pytest.raises(HTTPException) as exc:
+            await confirm_payment(
+                body=ConfirmPaymentRequest(**{"payment_intent_id": "pi_real_001"}),
+                current_user=_USER,
+            )
+    assert exc.value.status_code == 503
+
+
+@pytest.mark.anyio
+async def test_confirm_payment_no_stripe_key_does_not_claim_ride():
+    """C1 regression: when the processor is absent, the ride must NOT be claimed
+    (left in payment_status='processing'). The 503 fires before the claim, so the
+    rider can retry once the key is restored instead of being stranded."""
+    from fastapi import HTTPException
+
+    from backend.routes.payments import ConfirmPaymentRequest, confirm_payment
+
+    with (
+        patch("backend.routes.payments.get_app_settings", new_callable=AsyncMock, return_value=_settings(False)),
+        patch("backend.routes.payments.db_supabase") as mock_db,
+    ):
+        mock_db.get_ride = AsyncMock(
+            return_value={"id": "ride-1", "rider_id": _USER["id"], "payment_status": "pending"}
         )
-    assert result["status"] == "unknown"
-    assert result["mock"] is True
+        mock_db.claim_ride_payment_processing = AsyncMock(return_value=True)
+        mock_db.update_ride = AsyncMock()
+        with pytest.raises(HTTPException) as exc:
+            await confirm_payment(
+                body=ConfirmPaymentRequest(**{"payment_intent_id": "pi_real_001", "ride_id": "ride-1"}),
+                current_user=_USER,
+            )
+    assert exc.value.status_code == 503
+    mock_db.claim_ride_payment_processing.assert_not_awaited()
+    mock_db.update_ride.assert_not_awaited()
 
 
 @pytest.mark.anyio

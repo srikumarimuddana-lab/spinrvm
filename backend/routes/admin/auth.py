@@ -1209,9 +1209,15 @@ async def break_glass_access(request: Request, body: BreakGlassRequest):
             redis_expire,
             redis_get,
             redis_incr,
+            redis_set,
         )  # noqa: PLC0415
     except ImportError:
-        from ..utils.redis_client import redis_expire, redis_get, redis_incr  # type: ignore[no-redef]
+        from ..utils.redis_client import (  # type: ignore[no-redef]
+            redis_expire,
+            redis_get,
+            redis_incr,
+            redis_set,
+        )
 
     # Fail CLOSED: an unreadable counter on a super-admin-minting endpoint
     # must block, not allow — an attacker who can degrade Redis must not gain
@@ -1256,6 +1262,7 @@ async def break_glass_access(request: Request, body: BreakGlassRequest):
     # 5. Mint a short-lived super_admin token (1 hour, no refresh)
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(hours=_BG_TOKEN_TTL_HOURS)
+    bg_jti = secrets.token_hex(16)
     bg_token = jwt.encode(
         {
             "user_id": "break-glass",
@@ -1265,7 +1272,7 @@ async def break_glass_access(request: Request, body: BreakGlassRequest):
             "phone": "",
             "aud": JWT_AUD_ADMIN,
             "token_version": 0,
-            "jti": secrets.token_hex(16),
+            "jti": bg_jti,
             "iat": now,
             "exp": expires_at,
             "break_glass": True,
@@ -1273,6 +1280,20 @@ async def break_glass_access(request: Request, body: BreakGlassRequest):
         settings.JWT_SECRET,
         algorithm=settings.ALGORITHM,
     )
+
+    # 5b. Register the JTI in a Redis ALLOWLIST so the token is revocable (C7).
+    # _verify_admin_payload requires admin:breakglass:{jti} to be present on every
+    # request and FAILS CLOSED if it is missing, so a leaked token is killed by
+    # deleting this key (or via /admin/auth/logout, which denylists the jti). The
+    # TTL matches the token lifetime so the key self-prunes. Fail closed here: if
+    # we cannot register, the token would never authenticate, so surface 503
+    # rather than handing back a dead token (matches the rate-limit posture above).
+    bg_ttl_seconds = int(_BG_TOKEN_TTL_HOURS * 3600)
+    try:
+        await redis_set(f"admin:breakglass:{bg_jti}", "1", ttl=bg_ttl_seconds)
+    except Exception as e:
+        logger.error("break_glass: allowlist registration failed (Redis down) — failing closed: %s", e)
+        raise HTTPException(status_code=503, detail="Break-glass temporarily unavailable") from e
 
     # 6. Mandatory audit log — this MUST land; if it fails, still return the token
     #    (operator is in an emergency) but log loudly so the gap is visible.
@@ -1283,6 +1304,9 @@ async def break_glass_access(request: Request, body: BreakGlassRequest):
         "justification": justification,
         "token_expires_at": expires_at.isoformat(),
         "daily_use_count": daily_use_count,
+        # JTI recorded so an operator can revoke this exact token
+        # (DEL admin:breakglass:{jti}) without rotating JWT_SECRET.
+        "jti": bg_jti,
     }
     try:
         await db_supabase.insert_one(
@@ -1312,6 +1336,9 @@ async def break_glass_access(request: Request, body: BreakGlassRequest):
         "role": "super_admin",
         "expires_at": expires_at.isoformat(),
         "ttl_hours": _BG_TOKEN_TTL_HOURS,
+        # Surfaced so an operator can revoke this exact session
+        # (DEL admin:breakglass:{jti}) without rotating JWT_SECRET.
+        "jti": bg_jti,
         "warning": "This token is time-limited and every use is audited. Use only in genuine emergencies.",
     }
 

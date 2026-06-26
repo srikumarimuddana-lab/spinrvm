@@ -229,7 +229,29 @@ async def _verify_admin_payload(payload: dict) -> "dict | None":
             _jti_revoked = None
         if _jti_revoked:
             raise HTTPException(status_code=401, detail="ERR_TOKEN_REVOKED")
-    if user_id != "admin-001":
+    if payload.get("break_glass") is True or user_id == "break-glass":
+        # Break-glass emergency super-admin token (C7). There is no admin_staff
+        # row, so the staff-active / token_version / idle checks below cannot
+        # apply. Gate it instead on a Redis ALLOWLIST registered at mint
+        # (admin:breakglass:{jti}, TTL = token lifetime): present = live,
+        # absent / expired / deleted = revoked. FAIL CLOSED for this god-mode
+        # token if the allowlist is unreadable — unlike the best-effort denylist
+        # above, an unverifiable break-glass token must never be honoured. (The
+        # denylist check above still runs, so /admin/auth/logout also kills it;
+        # deleting the allowlist key revokes it directly.)
+        if not jti:
+            raise HTTPException(status_code=401, detail="ERR_TOKEN_REVOKED")
+        try:
+            _bg_active = await redis_get(f"admin:breakglass:{jti}")
+        except Exception as _bg_err:
+            logger.error(
+                "[auth] break-glass allowlist unreachable (Redis down) — failing "
+                f"CLOSED for jti={jti}: {_bg_err}"
+            )
+            raise HTTPException(status_code=401, detail="ERR_TOKEN_REVOKED") from _bg_err
+        if not _bg_active:
+            raise HTTPException(status_code=401, detail="ERR_TOKEN_REVOKED")
+    elif user_id != "admin-001":
         staff_rows = await db_supabase.get_rows("admin_staff", {"id": user_id}, limit=1)
         staff = staff_rows[0] if staff_rows else None
         if not staff or not staff.get("is_active", True):
@@ -303,17 +325,21 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                 phone = payload.get("phone_number")
                 if phone:
                     user = await db_supabase.get_user_by_phone(phone)
-                # If still not found, create a new user record tied to Firebase UID
+                # Do NOT auto-create here (C2). A valid Firebase token whose
+                # user row is missing is almost always a transient Supabase
+                # replica miss — get_user_by_id / get_user_by_phone return None
+                # rather than raising. Forging a row forks a phantom account
+                # with a fresh identity and silently masks the outage. New
+                # Firebase users are created only by the /auth/firebase endpoint.
+                # Fail closed with 503 so the client retries. (CLAUDE.md: never
+                # fall through to "create new user" on a None lookup.)
                 if not user:
-                    new_user = {
-                        "id": uid,
-                        "phone": phone or "",
-                        "role": "rider",  # Always default — never trust token claims
-                        "created_at": datetime.now(timezone.utc),
-                        "profile_complete": False,
-                    }
-                    await db_supabase.create_user(new_user)
-                    user = new_user
+                    logger.error(
+                        "get_current_user(firebase): no user row for uid=%s — "
+                        "refusing to auto-create (likely transient DB miss)",
+                        uid,
+                    )
+                    raise ServiceUnavailableException("user lookup")
 
             # R-P1-13: Apply the same revocation intent as the JWT path so that
             # /auth/logout-all also invalidates Firebase-authenticated sessions.
@@ -404,29 +430,20 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         # A forged JWT with "role": "super_admin" must not grant escalated access.
 
     if not user:
-        # User not in DB yet — create with default rider role.
-        # Never trust the JWT role claim for auto-created users.
-        user = {
-            "id": payload["user_id"],
-            "phone": payload.get("phone", ""),
-            "role": "rider",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "profile_complete": False,
-        }
-        try:
-            await db_supabase.create_user(user)
-            logger.info(f"Created new user {user['id']} from JWT")
-        except (DatabaseError, ServiceUnavailableException):
-            # Same rule as the lookup above — surface DB outages as a
-            # clean 503 rather than returning a user dict whose backing
-            # row doesn't exist. That used to cause cascading 401/500s
-            # on every subsequent authenticated call in the session.
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error inserting user into DB: {e}", exc_info=True)
-            raise DatabaseError(details={"original": str(e)}) from e
-        user["is_driver"] = False
-        return user
+        # Do NOT auto-create here (C2). A valid JWT means this user was already
+        # created at /auth/verify-otp or /auth/firebase. A missing row now is
+        # NOT "new user" — it's a transient Supabase replica miss
+        # (get_user_by_id returns None rather than raising). Auto-creating forks
+        # a phantom account with a fresh identity and silently masks the outage,
+        # which previously produced duplicate accounts. Fail closed with 503 so
+        # the client retries; user creation belongs only in the auth endpoints.
+        # (CLAUDE.md: never fall through to "create new user" on a None lookup.)
+        logger.error(
+            "get_current_user(jwt): valid JWT but no user row for %s — "
+            "refusing to auto-create (likely transient DB miss)",
+            payload["user_id"],
+        )
+        raise ServiceUnavailableException("user lookup")
 
     try:
         # Cached driver-by-user lookup (30s). Same reason as the Firebase

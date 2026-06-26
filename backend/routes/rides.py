@@ -94,6 +94,7 @@ except ImportError:
     from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
     from utils.maps_eta import batch_get_etas
+    from utils.pii import first_name_only
     from utils.rate_limiter import (
         api_rate_limit,
         cancel_ride_limit,

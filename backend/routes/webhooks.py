@@ -474,39 +474,36 @@ async def stripe_webhook(request: Request):
 
         if meta.get("scope") == "wallet_topup":
             try:
-                from ..db_supabase import wallet_increment_balance  # type: ignore
+                from ..db_supabase import wallet_apply_credit  # type: ignore
             except ImportError:
-                from db_supabase import wallet_increment_balance  # type: ignore
+                from db_supabase import wallet_apply_credit  # type: ignore
 
             wallet_id = meta.get("wallet_id")
             user_id = meta.get("user_id")
             amount_cad_str = meta.get("amount_cad", "0")
             amount = Decimal(amount_cad_str).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-            new_balance = await wallet_increment_balance(wallet_id, amount)
 
-            try:
-                from ..db import db  # type: ignore
-            except ImportError:
-                from db import db  # type: ignore
-
-            await db.insert_one(
-                "wallet_transactions",
-                {
-                    "id": str(__import__("uuid").uuid4()),
-                    "wallet_id": wallet_id,
-                    "user_id": user_id,
-                    "type": "top_up",
-                    "amount": str(amount),
-                    "balance_after": str(new_balance),
-                    "reference_id": data_object["id"],
-                    "description": f"Wallet top-up ${amount}",
-                    "metadata": {"stripe_payment_intent_id": data_object["id"]},
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                },
+            # C6: credit the balance AND write the ledger row atomically and
+            # idempotently, keyed on the Stripe payment_intent id. The old path
+            # incremented the balance and inserted the ledger row separately with
+            # no dedup, so a crash before mark_stripe_event_processed (below) plus
+            # a Stripe retry double-credited the wallet. wallet_apply_credit dedups
+            # on (wallet_id, reference_id, type) inside the wallet row lock, so the
+            # retry is a no-op that returns the original balance.
+            credit = await wallet_apply_credit(
+                wallet_id=wallet_id,
+                user_id=user_id,
+                type_="top_up",
+                amount=amount,
+                reference_id=data_object["id"],
+                description=f"Wallet top-up ${amount}",
+                metadata={"stripe_payment_intent_id": data_object["id"]},
             )
+            new_balance = credit.get("balance_after")
 
             logger.info(
-                f"Wallet top-up confirmed: wallet={wallet_id} amount={amount} new_balance={new_balance}",
+                f"Wallet top-up confirmed: wallet={wallet_id} amount={amount} "
+                f"new_balance={new_balance} deduped={credit.get('deduped')}",
                 extra={"domain": "payments", "event_id": event_id},
             )
             await mark_stripe_event_processed(event_id)

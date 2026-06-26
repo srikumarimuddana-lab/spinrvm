@@ -191,3 +191,75 @@ async def test_get_current_user_rejects_blacklisted_jti():
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.detail == "ERR_TOKEN_REVOKED"
+
+
+# ---------------------------------------------------------------------------
+# C7 — break-glass super-admin token allowlist (register on mint, revocable)
+# ---------------------------------------------------------------------------
+
+
+def _bg_payload():
+    return {
+        "user_id": "break-glass",
+        "email": "break-glass@spinr.ca",
+        "role": "super_admin",
+        "aud": _deps_module.JWT_AUD_ADMIN,
+        "modules": ["dispatch", "payments"],
+        "token_version": 0,
+        "jti": "bg-jti-123",
+        "break_glass": True,
+    }
+
+
+@_skip_no_deps
+@pytest.mark.anyio
+async def test_break_glass_authenticates_when_allowlisted_without_staff_row():
+    """C7: a break-glass token (no admin_staff row) authenticates when its JTI is
+    present in the Redis allowlist, and never falls through to the staff lookup."""
+
+    async def _redis(key):
+        # Not denylisted; IS allowlisted.
+        return "1" if key == "admin:breakglass:bg-jti-123" else None
+
+    get_rows = AsyncMock()
+    with (
+        patch("backend.dependencies.redis_get", AsyncMock(side_effect=_redis)),
+        patch("backend.dependencies.db_supabase.get_rows", get_rows),
+    ):
+        result = await _deps_module._verify_admin_payload(_bg_payload())
+
+    assert result is not None
+    assert result["id"] == "break-glass"
+    assert result["role"] == "super_admin"
+    # The staff-active / token_version / idle path must be skipped entirely.
+    get_rows.assert_not_awaited()
+
+
+@_skip_no_deps
+@pytest.mark.anyio
+async def test_break_glass_rejected_when_not_allowlisted():
+    """C7: deleting (or never registering / letting expire) the allowlist key
+    revokes the break-glass token — verification returns 401."""
+    from fastapi import HTTPException
+
+    with patch("backend.dependencies.redis_get", AsyncMock(return_value=None)):
+        with pytest.raises(HTTPException) as exc_info:
+            await _deps_module._verify_admin_payload(_bg_payload())
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "ERR_TOKEN_REVOKED"
+
+
+@_skip_no_deps
+@pytest.mark.anyio
+async def test_break_glass_fails_closed_when_redis_unavailable():
+    """C7: unlike the best-effort denylist (fail open), a god-mode break-glass
+    token must FAIL CLOSED when the allowlist cannot be read."""
+    from fastapi import HTTPException
+
+    with patch("backend.dependencies.redis_get", AsyncMock(side_effect=RuntimeError("redis down"))):
+        with pytest.raises(HTTPException) as exc_info:
+            await _deps_module._verify_admin_payload(_bg_payload())
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "ERR_TOKEN_REVOKED"

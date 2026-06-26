@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 try:
-    from backend.utils.pii import redact_email, redact_phone
+    from backend.utils.pii import first_name_only, redact_email, redact_phone
 except ImportError:
     from utils.pii import redact_email, redact_phone  # type: ignore
 
@@ -67,3 +67,35 @@ def test_redact_email_never_leaks_local_beyond_first_char():
     assert "secretive" not in masked
     assert "username" not in masked
     assert masked.startswith("s***@")
+
+
+# ── first_name_only (C5: rider name in driver-visible / push payloads) ──────────
+
+
+def test_first_name_only_drops_surname():
+    """C5: a driver-visible name must be the first name only — never the legal
+    surname (which previously rode in WS + cleartext FCM payloads)."""
+    user = {"first_name": "Alice", "last_name": "Smith"}
+    assert first_name_only(user) == "Alice"
+
+
+def test_first_name_only_never_contains_surname_even_with_messy_data():
+    user = {"first_name": "  Alice  ", "last_name": "Smith"}
+    out = first_name_only(user)
+    assert out == "Alice"
+    assert "Smith" not in out
+
+
+@pytest.mark.parametrize(
+    "user",
+    [None, {}, {"first_name": ""}, {"first_name": "   "}, {"last_name": "Smith"}],
+)
+def test_first_name_only_falls_back_when_no_first_name(user):
+    # No usable first name → the caller's generic fallback, never the surname.
+    assert first_name_only(user, "Your rider") == "Your rider"
+    # And a lone surname is never surfaced.
+    assert first_name_only(user, "Your rider") != "Smith"
+
+
+def test_first_name_only_default_fallback_is_empty():
+    assert first_name_only(None) == ""

@@ -26,3 +26,16 @@ def redact_email(email: str | None) -> str:
     if not local:
         return f"***@{domain}"
     return f"{local[0]}***@{domain}"
+
+
+def first_name_only(user: dict | None, fallback: str = "") -> str:
+    """Driver-/contact-safe display name: the user's FIRST name only, never the
+    legal surname (PIPEDA, C5).
+
+    Full legal names must not reach driver-visible WebSocket payloads, and no
+    name at all may ride in an FCM/push payload (cleartext in the device tray,
+    stored in Google/US infra with no Canadian-residency guarantee). Returns
+    ``fallback`` when no first name is set.
+    """
+    first = ((user or {}).get("first_name") or "").strip()
+    return first or fallback

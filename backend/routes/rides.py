@@ -50,6 +50,7 @@ try:
     from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
     from ..utils.maps_eta import batch_get_etas
+    from ..utils.pii import first_name_only
     from ..utils.rate_limiter import (
         api_rate_limit,
         cancel_ride_limit,
@@ -93,6 +94,7 @@ except ImportError:
     from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
     from utils.maps_eta import batch_get_etas
+    from utils.pii import first_name_only
     from utils.rate_limiter import (
         api_rate_limit,
         cancel_ride_limit,
@@ -1159,11 +1161,10 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
         _fetch_service_area_polygon(),
     )
 
-    rider_display_name = None
-    if rider_user:
-        first = rider_user.get("first_name") or ""
-        last = rider_user.get("last_name") or ""
-        rider_display_name = (first + " " + last).strip() or rider_user.get("name") or None
+    # PIPEDA (C5): the driver sees the rider's FIRST name only (never the legal
+    # surname), and only via the WebSocket payload below — rider_name is
+    # stripped from the FCM data payload further down.
+    rider_display_name = first_name_only(rider_user) or None
 
     _surge_mult = float(ride.get("surge_multiplier") or 1.0)
     from datetime import timedelta as _td
@@ -1253,11 +1254,20 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
                 # enforces a 4 KB data-message limit and detailed polygons/
                 # polylines can easily blow it. Drivers receive these via the
                 # WebSocket message (dispatch_payload) which has no size cap.
-                _FCM_SPATIAL_EXCLUDE = {"service_area_polygon", "planned_route_polyline", "rider_profile_image"}
+                # PIPEDA (C5): rider_name is excluded too — no rider name may
+                # ride in an FCM data payload (cleartext in the device tray,
+                # Google/US infra). The driver gets the first name via the WS
+                # message (dispatch_payload) only.
+                _FCM_EXCLUDE = {
+                    "service_area_polygon",
+                    "planned_route_polyline",
+                    "rider_profile_image",
+                    "rider_name",
+                }
                 fcm_data = {
                     k: json.dumps(v) if isinstance(v, (dict, list)) else str(v) if v is not None else ""
                     for k, v in dispatch_payload.items()
-                    if k not in _FCM_SPATIAL_EXCLUDE
+                    if k not in _FCM_EXCLUDE
                 }
                 fcm_data["deeplink"] = "/driver/"
                 fcm_data["booking_id"] = str(ride_id)
@@ -3862,7 +3872,8 @@ async def add_tip(
 
     if driver_user_id:
         rider = await db_supabase.get_user_by_id(ride["rider_id"]) or {}
-        rider_name = (rider.get("first_name") or "Your rider").strip() or "Your rider"
+        # PIPEDA (C5): first name only to the driver (WS); never the surname.
+        rider_name = first_name_only(rider, "Your rider")
         payload = {
             "type": "tip_received",
             "ride_id": str(ride_id),
@@ -3877,7 +3888,8 @@ async def add_tip(
         _push_in_background(
             driver_user_id,
             "You got a tip! 💸",
-            f"{rider_name} tipped you ${tip_amount:.2f}",
+            # PIPEDA (C5): no rider name in the push body (cleartext to Google).
+            f"You received a ${tip_amount:.2f} tip",
             data={
                 "type": "tip_received",
                 "ride_id": str(ride_id),
@@ -4252,11 +4264,17 @@ async def share_trip_with_contact(
     contact_user = await db.find_one("users", {"phone": body.contact_phone})
     if contact_user:
         rider = await db.find_one("users", {"id": current_user["id"]})
-        rider_name = f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip() if rider else "Someone"
+        # PIPEDA (C5): the rider's FIRST name only to their chosen contact —
+        # never the legal surname in a cleartext push title.
+        rider_name = first_name_only(rider, "Someone")
         _push_in_background(
             contact_user["id"],
             f"{rider_name} is sharing their ride with you",
-            f"Track their live location: {ride.get('pickup_address', '')} → {ride.get('dropoff_address', '')}",
+            # PIPEDA (C5): no exact pickup/dropoff addresses in the push body —
+            # FCM is cleartext in the device tray and stored in Google/US infra.
+            # The contact taps through to live tracking via the share token; the
+            # body needs no address detail.
+            "Tap to follow their live trip location.",
             data={
                 "type": "trip_shared",
                 "share_token": share_token,

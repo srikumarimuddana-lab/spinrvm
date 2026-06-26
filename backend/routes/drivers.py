@@ -5261,8 +5261,9 @@ async def get_driver_referral_info(current_user: dict = Depends(get_current_user
 
     # Earned total: prefer the snapshotted sum of PAID payouts so it never changes
     # retroactively when area terms or the driver's area change; fall back to the
-    # estimate (reward × qualified) until a payout has actually been paid (the
-    # payout loop is off by default, so this preserves current behaviour).
+    # estimate (reward × qualified) until the payout loop has actually paid this
+    # driver (the loop runs every 5 min, so the snapshot wins shortly after a
+    # referee qualifies).
     paid = await paid_referral_earnings(current_user["id"], "driver")
     referral_earnings = paid if paid is not None else (reward_amount * qualified_referrals)
 

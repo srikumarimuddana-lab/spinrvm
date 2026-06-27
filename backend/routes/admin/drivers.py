@@ -1862,9 +1862,15 @@ async def admin_get_referral_analytics(
     processing = sum(1 for p in in_window if p.get("status") == "processing")
     failed = sum(1 for p in in_window if p.get("status") == "failed")
 
-    total_paid = Decimal("0")
+    # Break the paid total into the referrer vs referee sides so the admin can
+    # show ACTUAL referee-side payouts distinctly from the per-area config reward
+    # (service-areas page shows the configured $, not what's actually been paid).
+    referrer_paid = Decimal("0")
+    referee_paid = Decimal("0")
     for p in paid_rows:
-        total_paid += _d(p.get("referrer_reward")) + _d(p.get("referee_reward"))
+        referrer_paid += _d(p.get("referrer_reward"))
+        referee_paid += _d(p.get("referee_reward"))
+    total_paid = referrer_paid + referee_paid
     avg_paid = (total_paid / redeemed) if redeemed else Decimal("0")
 
     # Daily redemption trend keyed by paid_at (rows that actually paid).
@@ -1923,6 +1929,8 @@ async def admin_get_referral_analytics(
             "failed": failed,
             "redemption_rate": redemption_rate,
             "total_paid": _m(total_paid),
+            "referrer_paid": _m(referrer_paid),
+            "referee_paid": _m(referee_paid),
             "avg_paid": _m(avg_paid),
         },
         "trend": trend,

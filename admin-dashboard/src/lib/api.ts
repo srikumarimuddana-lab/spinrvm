@@ -604,6 +604,7 @@ export interface DriverReferralSummary {
     reward_amount: number;
     rides_required: number;
     referees: DriverReferee[];
+    referred_by?: { name: string; code: string } | null;
 }
 export const getDriverReferrals = (id: string) =>
     request<DriverReferralSummary>(`/api/admin/drivers/${id}/referrals`);

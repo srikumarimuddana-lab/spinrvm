@@ -13,6 +13,7 @@ try:
     from ...features import send_push_notification
     from ...utils.audit_logger import log_admin_action
     from ...utils.datetime_utils import parse_iso_utc
+    from ...utils.referral_payout import ReferralClaimNotFound, recredit_failed_claim
     from ...utils.referral_terms import paid_referral_earnings, resolve_referral_terms
 except ImportError:
     import db_supabase
@@ -20,6 +21,7 @@ except ImportError:
     from features import send_push_notification
     from utils.audit_logger import log_admin_action  # noqa: F401
     from utils.datetime_utils import parse_iso_utc
+    from utils.referral_payout import ReferralClaimNotFound, recredit_failed_claim  # type: ignore
     from utils.referral_terms import paid_referral_earnings, resolve_referral_terms  # type: ignore
 
 db = db_supabase  # legacy alias
@@ -2003,36 +2005,33 @@ async def admin_get_failed_referral_claims(
 
 @router.post("/referrals/failed-claims/{referee_user_id}/requeue")
 async def admin_requeue_failed_referral(referee_user_id: str, admin: dict = Depends(get_admin_user)):
-    """Re-queue a FAILED referral claim: delete the row so the payout loop
-    re-creates + re-credits it on the next tick (~5 min). The loop dedups by
-    referee EXISTENCE in referral_payouts (any status), so deletion is the
-    re-queue mechanism.
+    """Re-credit a FAILED referral claim, SIDE-AWARE.
 
-    SAFE for the constraint-bug (migrations 198/199) backlog: those credits were
-    reversed, so the claim netted zero and re-crediting is correct. Do NOT use on
-    a claim whose logs show 'ledger write AND its reversal failed' — that already
-    credited the money and re-queuing would DOUBLE-credit. One claim at a time so
-    ops reviews each; audit-logged.
+    Credits ONLY the side(s) not already paid — read from referrer_credited_at /
+    referee_credited_at on the row — using the amounts snapshotted at claim time.
+    This is the safe fix for the migration-198/199 constraint backlog: when the
+    referrer's 'referral_reward' landed but the referee's 'referral_bonus' was
+    rejected, the referrer is left untouched and only the referee is paid. The old
+    behaviour deleted the row and let the loop re-pay BOTH sides, double-crediting
+    an already-paid referrer. Synchronous (no 5-min wait), atomic (claims the row
+    failed -> processing), one claim at a time, audit-logged.
+
+    Do NOT use on a claim whose logs show 'ledger write AND its reversal failed' —
+    that already moved money while its credited-at stayed NULL, so it looks owed and
+    would double-credit. Those need manual reconciliation.
     """
-    existing = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows(
-            "referral_payouts",
-            {"referee_user_id": referee_user_id, "status": "failed"},
-            limit=1,
-        )
-    )
-    if not existing:
-        raise HTTPException(status_code=404, detail="No failed claim for this referee")
-    # Atomic guard: only delete while still 'failed' (never a paid/processing row).
-    await db_supabase.delete_one("referral_payouts", {"id": existing["id"], "status": "failed"})
+    try:
+        result = await recredit_failed_claim(referee_user_id)
+    except ReferralClaimNotFound:
+        raise HTTPException(status_code=404, detail="No failed claim for this referee") from None
     await log_admin_action(
         admin,
         "referral_claim_requeued",
         "referral_payouts",
-        existing["id"],
-        {"referee_user_id": referee_user_id, "kind": existing.get("kind")},
+        result["id"],
+        {"referee_user_id": referee_user_id, "kind": result.get("kind"), "credited": result.get("credited")},
     )
-    return {"success": True, "requeued": referee_user_id}
+    return {"success": True, "requeued": referee_user_id, "credited": result.get("credited", [])}
 
 
 @router.get("/referrals/pairs")

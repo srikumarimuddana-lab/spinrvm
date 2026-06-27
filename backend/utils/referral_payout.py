@@ -326,6 +326,107 @@ def _credit_marks(status: str, referrer_paid: bool, referee_paid: bool) -> dict:
     return marks
 
 
+class ReferralClaimNotFound(Exception):
+    """No 'failed' referral_payouts claim exists for the given referee (or it was
+    concurrently taken). Callers map this to a 404 / skip."""
+
+
+def _merge_marks(row: dict, status: str, referrer_paid_now: bool, referee_paid_now: bool) -> dict:
+    """Build the referral_payouts update for a RE-credit pass. Unlike _credit_marks
+    (which stamps from scratch), this preserves any credited-at timestamp already on
+    the row — it never overwrites a prior credit's time — and only stamps a side that
+    was credited in THIS pass."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    marks: dict = {"status": status}
+    if status == "paid":
+        marks["paid_at"] = now_iso
+    if referrer_paid_now and not row.get("referrer_credited_at"):
+        marks["referrer_credited_at"] = now_iso
+    if referee_paid_now and not row.get("referee_credited_at"):
+        marks["referee_credited_at"] = now_iso
+    return marks
+
+
+async def recredit_failed_claim(referee_user_id: str) -> dict:
+    """Re-credit ONLY the not-yet-credited side(s) of a FAILED referral claim and
+    finalise it 'paid'. Side-aware via referrer_credited_at / referee_credited_at,
+    so a referrer who was already paid (only the referee credit had failed — e.g.
+    the pre-migration-199 'referral_bonus' constraint bug, where the referrer's
+    'referral_reward' lands but the referee's 'referral_bonus' is rejected) is
+    NEVER double-paid. The old delete-and-let-the-loop-re-pay path re-credited BOTH.
+
+    Credits the amounts SNAPSHOTTED on the claim row, so a later admin change to the
+    area's rewards can't retro-alter this payout, and a deadline that has since
+    passed can't strand a referee who legitimately qualified at claim time.
+
+    Atomic: claims the row failed -> processing first; a concurrent re-credit (or a
+    double-click) that already took it raises ReferralClaimNotFound. On a credit
+    failure the row is returned to 'failed' (recording whatever DID land this pass)
+    and the error re-raised — the same no-double-credit contract as the payout loop.
+
+    Returns {id, referee_user_id, kind, credited: [...], status}.
+    Raises ReferralClaimNotFound when there is no failed claim to re-credit.
+
+    Do NOT call this for a claim whose logs show "ledger write AND its reversal
+    failed" — that row already moved money while its credited-at stayed NULL, so it
+    looks owed and would double-credit. Those need manual reconciliation.
+    """
+    row = await db_supabase.find_one("referral_payouts", {"referee_user_id": referee_user_id, "status": "failed"})
+    if not row:
+        raise ReferralClaimNotFound(referee_user_id)
+
+    # Atomic claim: only one caller can move this row failed -> processing.
+    claimed = await db_supabase.update_one(
+        "referral_payouts",
+        {"id": row["id"], "status": "failed"},
+        {"$set": {"status": "processing"}},
+    )
+    if not claimed:
+        raise ReferralClaimNotFound(referee_user_id)
+
+    kind = row.get("kind") or "rider"
+    referrer_user_id = row.get("referrer_user_id")
+    referrer_reward = _d(row.get("referrer_reward"))
+    referee_reward = _d(row.get("referee_reward"))
+
+    # A side is owed only if its snapshotted reward is > 0 AND it was not already
+    # credited on the original (partial) attempt.
+    referrer_owed = referrer_reward > 0 and not row.get("referrer_credited_at")
+    referee_owed = referee_reward > 0 and not row.get("referee_credited_at")
+
+    meta = {"kind": kind, "referee_id": referee_user_id, "referrer_user_id": referrer_user_id, "requeued": True}
+    referrer_paid_now = False
+    referee_paid_now = False
+    try:
+        if referrer_owed and referrer_user_id:
+            await _credit(referrer_user_id, referrer_reward, kind, referee_user_id, "referral_reward", meta)
+            referrer_paid_now = True
+        if referee_owed:
+            await _credit(referee_user_id, referee_reward, kind, referee_user_id, "referral_bonus", meta)
+            referee_paid_now = True
+    except Exception:
+        logger.error(
+            "referral_payout: re-credit failed — returning claim to 'failed' for manual reconciliation",
+            exc_info=True,
+            extra={**meta, "referrer_paid_now": referrer_paid_now, "referee_paid_now": referee_paid_now},
+        )
+        await db_supabase.update_one(
+            "referral_payouts",
+            {"id": row["id"]},
+            {"$set": _merge_marks(row, "failed", referrer_paid_now, referee_paid_now)},
+        )
+        raise
+
+    await db_supabase.update_one(
+        "referral_payouts",
+        {"id": row["id"]},
+        {"$set": _merge_marks(row, "paid", referrer_paid_now, referee_paid_now)},
+    )
+    credited = [s for s, ok in (("referrer", referrer_paid_now), ("referee", referee_paid_now)) if ok]
+    logger.info("referral_payout: re-credited failed referral claim", extra={**meta, "credited": credited})
+    return {"id": row["id"], "referee_user_id": referee_user_id, "kind": kind, "credited": credited, "status": "paid"}
+
+
 async def _credit(user_id: str, amount: Decimal, kind: str, reference_id: str, txn_type: str, metadata: dict) -> None:
     """Credit a referral reward. Decimal-only.
 

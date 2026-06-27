@@ -639,6 +639,8 @@ export interface ReferralAnalytics {
         failed: number;
         redemption_rate: number | null;
         total_paid: string;
+        referrer_paid: string;
+        referee_paid: string;
         avg_paid: string;
     };
     trend: { date: string; redeemed: number; paid: string }[];

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { getReferralAnalytics, getServiceAreas, type ReferralAnalytics as Data } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatCurrency } from "@/lib/utils";
@@ -45,10 +45,7 @@ export default function ReferralAnalytics({ source }: { source: "driver" | "ride
 
     const f = data?.funnel;
     const areaFiltered = !!serviceAreaId;
-    const ratePct = useMemo(
-        () => (f?.redemption_rate != null ? `${Math.round(f.redemption_rate * 100)}%` : "—"),
-        [f?.redemption_rate],
-    );
+    const ratePct = f?.redemption_rate != null ? `${Math.round(f.redemption_rate * 100)}%` : "—";
 
     return (
         <div className="space-y-5">
@@ -98,6 +95,10 @@ export default function ReferralAnalytics({ source }: { source: "driver" | "ride
                         <Stat icon={Clock} label="In progress" accent="text-blue-600 dark:text-blue-400" value={f.processing.toLocaleString()} />
                         <Stat icon={XCircle} label="Failed" accent="text-red-600 dark:text-red-400" value={f.failed.toLocaleString()} />
                         <Stat icon={DollarSign} label="Total paid out" accent="text-emerald-600 dark:text-emerald-400" value={formatCurrency(Number(f.total_paid))} />
+                        <Stat icon={DollarSign} label="Referrer paid" accent="text-emerald-600 dark:text-emerald-400" value={formatCurrency(Number(f.referrer_paid ?? 0))}
+                            hint="Actual paid to referrers" />
+                        <Stat icon={DollarSign} label="Referee paid" accent="text-emerald-600 dark:text-emerald-400" value={formatCurrency(Number(f.referee_paid ?? 0))}
+                            hint="Actual paid to referees (not the configured reward)" />
                         <Stat icon={DollarSign} label="Avg per redemption" accent="text-emerald-600 dark:text-emerald-400" value={formatCurrency(Number(f.avg_paid))} />
                     </div>
 

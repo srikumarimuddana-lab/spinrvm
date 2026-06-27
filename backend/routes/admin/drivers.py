@@ -2010,6 +2010,41 @@ async def admin_requeue_failed_referral(referee_user_id: str, admin: dict = Depe
     return {"success": True, "requeued": referee_user_id}
 
 
+@router.get("/referrals/pairs")
+async def admin_get_referral_pairs(
+    source: str = Query("driver", pattern="^(rider|driver)$"),
+    limit: int = Query(100, ge=1, le=500),
+    admin: dict = Depends(get_admin_user),
+):
+    """Referrer→referee pairs from the referral_payouts ledger (who referred whom)
+    with names, status, and amounts — so the admin sees the relationships, not
+    just aggregate leaderboard counts."""
+    rows = await db_supabase.get_rows(
+        "referral_payouts",
+        {"kind": source},
+        columns="id,referrer_user_id,referee_user_id,status,referrer_reward,referee_reward,created_at",
+        order="created_at",
+        desc=True,
+        limit=limit,
+    )
+    pairs: list[dict] = []
+    for r in rows or []:
+        referrer = await db_supabase.get_user_by_id(r["referrer_user_id"]) if r.get("referrer_user_id") else None
+        referee = await db_supabase.get_user_by_id(r["referee_user_id"]) if r.get("referee_user_id") else None
+        pairs.append(
+            {
+                "id": r.get("id"),
+                "referrer_name": _user_display_name(referrer),
+                "referee_name": _user_display_name(referee),
+                "status": r.get("status"),
+                "referrer_reward": r.get("referrer_reward"),
+                "referee_reward": r.get("referee_reward"),
+                "created_at": r.get("created_at"),
+            }
+        )
+    return {"pairs": pairs, "total": len(pairs)}
+
+
 @router.get("/drivers/{driver_id}/payouts-summary")
 async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50, ge=1, le=200)):
     """Comprehensive payout view for the driver slideout's Payouts tab.

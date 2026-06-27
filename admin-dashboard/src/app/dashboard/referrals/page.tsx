@@ -4,6 +4,7 @@ import { useState } from "react";
 import ReferralLeaderboard from "@/components/referral-leaderboard";
 import ReferralAnalytics from "@/components/referral-analytics";
 import ReferralSpendSummary from "@/components/referral-spend-summary";
+import ReferralPairs from "@/components/referral-pairs";
 import { useRequireModule } from "@/hooks/useRequireModule";
 
 export default function ReferralsPage() {
@@ -34,6 +35,7 @@ export default function ReferralsPage() {
 
             <ReferralAnalytics source={source} />
             <ReferralLeaderboard limit={50} source={source} />
+            <ReferralPairs source={source} />
         </div>
     );
 }

@@ -63,6 +63,8 @@ export default function ActivityView() {
   const totalIncentives = parseMoney(earnings?.total_incentives);
   // Quest + referral rewards (driver_bonuses) — distinct from per-ride incentives.
   const totalBonuses = parseMoney(earnings?.total_bonuses);
+  // Referral-only slice, shown as its own line; the remainder is quest bonuses.
+  const totalReferralBonuses = parseMoney(earnings?.total_referral_bonuses);
   const totalTax = parseMoney(earnings?.total_tax);
   const fareEarnings = Math.max(totalEarnings - totalTips - totalIncentives - totalBonuses - totalTax, 0);
   const periodRideTotal = period === 'all' ? historyTotal : Number(earnings?.total_rides ?? 0);
@@ -271,8 +273,15 @@ export default function ActivityView() {
               <View style={styles.breakdownItem}>
                 <Ionicons name="flash" size={18} color="#8b5cf6" />
                 <Text style={styles.label}>Bonus</Text>
-                {/* Per-ride incentives + quest/referral rewards, combined. */}
-                <Text style={[styles.value, { color: '#8b5cf6' }]}>${toMoney(totalIncentives + totalBonuses)}</Text>
+                {/* Per-ride incentives + quest rewards (referral shown separately). */}
+                <Text style={[styles.value, { color: '#8b5cf6' }]}>${toMoney(totalIncentives + (totalBonuses - totalReferralBonuses))}</Text>
+              </View>
+              <View style={styles.divider} />
+              <View style={styles.breakdownItem}>
+                <Ionicons name="people-outline" size={18} color="#10b981" />
+                <Text style={styles.label}>Referral</Text>
+                {/* Referral rewards paid into payable_balance (kind='referral'). */}
+                <Text style={[styles.value, { color: '#10b981' }]}>${toMoney(totalReferralBonuses)}</Text>
               </View>
               <View style={styles.divider} />
               <View style={styles.breakdownItem}>

@@ -193,3 +193,21 @@ class TestPaidReferralEarnings:
         with _patch_rows(side_effect=RuntimeError("db down")):
             with pytest.raises(RuntimeError):
                 asyncio.run(referral_terms.paid_referral_earnings("u1", "rider"))
+
+
+class TestPaidRefereeEarnings:
+    def test_none_when_no_paid_rows(self):
+        # Not referred / not yet paid → None (caller shows 0).
+        with _patch_rows([]):
+            out = asyncio.run(referral_terms.paid_referee_earnings("u1", "rider"))
+        assert out is None
+
+    def test_sums_referee_rewards_as_decimal(self):
+        rows = [
+            {"referee_reward": 5},  # int from DB
+            {"referee_reward": "2.50"},  # numeric-as-string from DB
+            {"referee_reward": None},  # defensive: NULL coerces to 0
+        ]
+        with _patch_rows(rows):
+            out = asyncio.run(referral_terms.paid_referee_earnings("u1", "rider"))
+        assert out == Decimal("7.50")

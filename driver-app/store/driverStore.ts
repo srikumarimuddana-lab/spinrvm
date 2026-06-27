@@ -161,6 +161,7 @@ export interface EarningsSummary {
     total_earnings: string; // MoneyString
     total_tips: string; // MoneyString
     total_incentives: string; // MoneyString
+    total_bonuses: string; // MoneyString — quest + driver-referral bonuses (from driver_bonuses)
     total_cancel_fees: string; // MoneyString
     total_tax: string; // MoneyString
     total_rides: number;

@@ -25,6 +25,9 @@ interface ReferralInfo {
     pending_referrals?: number;
     referral_earnings: string | number;
     reward_amount?: string | number;
+    referrer_reward?: string | number;
+    referee_reward?: string | number;
+    referred_by?: { name: string; code: string } | null;
     rides_required?: number;
     referral_link: string;
     terms: string;
@@ -163,6 +166,12 @@ export default function ReferralScreen() {
                     </TouchableOpacity>
                 </LinearGradient>
 
+                {referralInfo?.referred_by ? (
+                    <Text style={styles.referredByText}>
+                        Referred by {referralInfo.referred_by.name} ({referralInfo.referred_by.code})
+                    </Text>
+                ) : null}
+
                 {/* Stats Section */}
                 <View style={styles.statsRow}>
                     <View style={styles.statCard}>
@@ -176,6 +185,24 @@ export default function ReferralScreen() {
                     <View style={styles.statCard}>
                         <Text style={styles.statValue}>${parseFloat(String(referralInfo?.referral_earnings ?? 0)).toFixed(2)}</Text>
                         <Text style={styles.statLabel}>Earned</Text>
+                    </View>
+                </View>
+
+                {/* Reward amounts — who earns what ($0 = that party earns nothing) */}
+                <View style={styles.statsRow}>
+                    <View style={styles.statCard}>
+                        <Text style={styles.statValue}>
+                            ${parseFloat(String(referralInfo?.referrer_reward ?? referralInfo?.reward_amount ?? 0)).toFixed(2)}
+                        </Text>
+                        <Text style={styles.statLabel}>You earn / referral</Text>
+                    </View>
+                    <View style={styles.statCard}>
+                        <Text style={styles.statValue}>
+                            ${parseFloat(String(referralInfo?.referee_reward ?? 0)).toFixed(2)}
+                        </Text>
+                        <Text style={styles.statLabel}>
+                            {parseFloat(String(referralInfo?.referee_reward ?? 0)) > 0 ? 'New driver earns' : 'No signup bonus'}
+                        </Text>
                     </View>
                 </View>
 
@@ -379,6 +406,12 @@ function createStyles(colors: ThemeColors) {
         fontSize: 12,
         color: colors.textDim,
         marginTop: 4,
+    },
+    referredByText: {
+        fontSize: 13,
+        color: colors.textDim,
+        textAlign: 'center',
+        marginTop: 12,
     },
     section: {
         marginTop: 24,

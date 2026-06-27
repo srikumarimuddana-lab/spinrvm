@@ -662,6 +662,31 @@ export const getReferralAnalytics = (params: {
     return request<ReferralAnalytics>(`/api/admin/referrals/analytics${qs ? `?${qs}` : ""}`);
 };
 
+export interface FailedReferralClaim {
+    id: string;
+    referee_user_id: string;
+    kind: string;
+    referrer_name: string;
+    referee_name: string;
+    referrer_reward: string;
+    referee_reward: string;
+    created_at: string;
+}
+export const getFailedReferralClaims = (params: { source?: "driver" | "rider"; limit?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (params.source) q.set("source", params.source);
+    if (params.limit) q.set("limit", String(params.limit));
+    const qs = q.toString();
+    return request<{ claims: FailedReferralClaim[]; total: number }>(
+        `/api/admin/referrals/failed-claims${qs ? `?${qs}` : ""}`,
+    );
+};
+export const requeueFailedReferral = (refereeUserId: string) =>
+    request<{ success: boolean; requeued: string }>(
+        `/api/admin/referrals/failed-claims/${encodeURIComponent(refereeUserId)}/requeue`,
+        { method: "POST" },
+    );
+
 export interface DriverPayoutSummary {
     summary: {
         lifetime_earnings: number;

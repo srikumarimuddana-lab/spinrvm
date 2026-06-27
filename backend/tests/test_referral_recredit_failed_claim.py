@@ -153,3 +153,81 @@ def test_credit_failure_returns_claim_to_failed_and_reraises(monkeypatch):
     # Last update_one returns the row to 'failed' (not left 'processing').
     last_update = update.await_args_list[-1].args[2]["$set"]
     assert last_update["status"] == "failed"
+
+
+def test_null_referrer_with_reward_owed_raises_not_silent_paid(monkeypatch):
+    # Finding #1: referrer anonymised (referrer_user_id NULL) but reward still owed
+    # → must surface loudly and stay 'failed', never silently mark 'paid' (which
+    # would lose the referrer reward forever).
+    row = {
+        "id": "c6",
+        "kind": "rider",
+        "referrer_user_id": None,
+        "referee_user_id": "u_new",
+        "referrer_reward": "5.00",
+        "referee_reward": "0",
+        "referrer_credited_at": None,
+        "referee_credited_at": None,
+    }
+    monkeypatch.setattr(referral_payout.db_supabase, "find_one", AsyncMock(return_value=row))
+    update = AsyncMock(return_value={"id": "c6"})
+    monkeypatch.setattr(referral_payout.db_supabase, "update_one", update)
+    credit = AsyncMock()
+    monkeypatch.setattr(referral_payout, "_credit", credit)
+
+    with pytest.raises(RuntimeError):
+        _run(referral_payout.recredit_failed_claim("u_new"))
+
+    credit.assert_not_awaited()  # never tried to credit a null user
+    statuses = [c.args[2]["$set"].get("status") for c in update.await_args_list if "status" in c.args[2]["$set"]]
+    assert "failed" in statuses  # returned to 'failed'
+    assert "paid" not in statuses  # NEVER marked terminal 'paid'
+
+
+def test_claim_refreshes_created_at(monkeypatch):
+    # Finding #3: the failed->processing claim must refresh created_at so the loop's
+    # stale-'processing' sweep grants a fresh grace window instead of reclaiming a
+    # days-old backlog row mid-credit.
+    row = {
+        "id": "c7",
+        "kind": "rider",
+        "referrer_user_id": "u_ref",
+        "referee_user_id": "u_new",
+        "referrer_reward": "5.00",
+        "referee_reward": "5.00",
+        "referrer_credited_at": None,
+        "referee_credited_at": None,
+    }
+    _setup(monkeypatch, row)
+    update = referral_payout.db_supabase.update_one  # the AsyncMock from _setup
+
+    _run(referral_payout.recredit_failed_claim("u_new"))
+
+    claim_set = update.await_args_list[0].args[2]["$set"]
+    assert claim_set["status"] == "processing"
+    assert "created_at" in claim_set
+
+
+def test_credited_at_persisted_before_final_paid(monkeypatch):
+    # Findings #2/#3: each credited_at is written immediately after its credit,
+    # BEFORE the final status='paid' — so money-moved is durable even if finalize
+    # never runs, and a later reset to 'failed' can't re-pay the side.
+    row = {
+        "id": "c8",
+        "kind": "rider",
+        "referrer_user_id": "u_ref",
+        "referee_user_id": "u_new",
+        "referrer_reward": "5.00",
+        "referee_reward": "5.00",
+        "referrer_credited_at": None,
+        "referee_credited_at": None,
+    }
+    _setup(monkeypatch, row)
+    update = referral_payout.db_supabase.update_one
+
+    _run(referral_payout.recredit_failed_claim("u_new"))
+
+    sets = [c.args[2]["$set"] for c in update.await_args_list]
+    idx_ref_credit = next(i for i, s in enumerate(sets) if "referrer_credited_at" in s)
+    idx_paid = next(i for i, s in enumerate(sets) if s.get("status") == "paid")
+    assert idx_ref_credit < idx_paid

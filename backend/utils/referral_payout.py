@@ -331,22 +331,6 @@ class ReferralClaimNotFound(Exception):
     concurrently taken). Callers map this to a 404 / skip."""
 
 
-def _merge_marks(row: dict, status: str, referrer_paid_now: bool, referee_paid_now: bool) -> dict:
-    """Build the referral_payouts update for a RE-credit pass. Unlike _credit_marks
-    (which stamps from scratch), this preserves any credited-at timestamp already on
-    the row — it never overwrites a prior credit's time — and only stamps a side that
-    was credited in THIS pass."""
-    now_iso = datetime.now(timezone.utc).isoformat()
-    marks: dict = {"status": status}
-    if status == "paid":
-        marks["paid_at"] = now_iso
-    if referrer_paid_now and not row.get("referrer_credited_at"):
-        marks["referrer_credited_at"] = now_iso
-    if referee_paid_now and not row.get("referee_credited_at"):
-        marks["referee_credited_at"] = now_iso
-    return marks
-
-
 async def recredit_failed_claim(referee_user_id: str) -> dict:
     """Re-credit ONLY the not-yet-credited side(s) of a FAILED referral claim and
     finalise it 'paid'. Side-aware via referrer_credited_at / referee_credited_at,
@@ -359,10 +343,17 @@ async def recredit_failed_claim(referee_user_id: str) -> dict:
     area's rewards can't retro-alter this payout, and a deadline that has since
     passed can't strand a referee who legitimately qualified at claim time.
 
+    No-double-credit is enforced by writing each side's credited_at to the DB
+    IMMEDIATELY after its credit lands (not just at the end): once money has moved,
+    the mark is durable, so even if a later step (or the loop's stale-'processing'
+    sweep) resets the row to 'failed', a subsequent re-credit correctly skips the
+    already-paid side. The claim also refreshes created_at so the sweep grants this
+    requeue a fresh 15-min grace window instead of reclaiming a days-old backlog row
+    mid-credit.
+
     Atomic: claims the row failed -> processing first; a concurrent re-credit (or a
     double-click) that already took it raises ReferralClaimNotFound. On a credit
-    failure the row is returned to 'failed' (recording whatever DID land this pass)
-    and the error re-raised — the same no-double-credit contract as the payout loop.
+    failure the row is returned to 'failed' and the error re-raised.
 
     Returns {id, referee_user_id, kind, credited: [...], status}.
     Raises ReferralClaimNotFound when there is no failed claim to re-credit.
@@ -375,11 +366,17 @@ async def recredit_failed_claim(referee_user_id: str) -> dict:
     if not row:
         raise ReferralClaimNotFound(referee_user_id)
 
-    # Atomic claim: only one caller can move this row failed -> processing.
+    now_iso = datetime.now(timezone.utc).isoformat()
+    # Atomic claim: only one caller can move this row failed -> processing. Refresh
+    # created_at too: the loop's stale-claim sweep reclaims 'processing' rows whose
+    # created_at is older than 15 min, and a backlog 'failed' row's created_at is
+    # days old — without this refresh the sweep would flip the row back to 'failed'
+    # mid-credit, and a later re-credit could double-pay. The refresh gives the
+    # requeue a fresh grace window.
     claimed = await db_supabase.update_one(
         "referral_payouts",
         {"id": row["id"], "status": "failed"},
-        {"$set": {"status": "processing"}},
+        {"$set": {"status": "processing", "created_at": now_iso}},
     )
     if not claimed:
         raise ReferralClaimNotFound(referee_user_id)
@@ -394,33 +391,47 @@ async def recredit_failed_claim(referee_user_id: str) -> dict:
     referrer_owed = referrer_reward > 0 and not row.get("referrer_credited_at")
     referee_owed = referee_reward > 0 and not row.get("referee_credited_at")
 
+    # Owed money but no one to pay it to: the referrer's user row was anonymised
+    # (PIPEDA right-to-delete → referrer_user_id SET NULL per migration 171) while
+    # the reward stayed owed. NEVER fall through to the 'paid' write — that would
+    # silently lose the reward. Surface loudly and leave the row 'failed' for manual
+    # reconciliation (CLAUDE.md: don't silently swallow payment errors).
+    if referrer_owed and not referrer_user_id:
+        await db_supabase.update_one("referral_payouts", {"id": row["id"]}, {"$set": {"status": "failed"}})
+        raise RuntimeError(
+            f"referral re-credit: claim {row['id']} owes the referrer (reward {referrer_reward}) but "
+            "referrer_user_id is NULL (anonymised?) — manual reconciliation required"
+        )
+
     meta = {"kind": kind, "referee_id": referee_user_id, "referrer_user_id": referrer_user_id, "requeued": True}
     referrer_paid_now = False
     referee_paid_now = False
     try:
-        if referrer_owed and referrer_user_id:
+        if referrer_owed:
             await _credit(referrer_user_id, referrer_reward, kind, referee_user_id, "referral_reward", meta)
             referrer_paid_now = True
+            # Persist the mark the instant the money moves, before the next credit
+            # or any crash/sweep — so a later reset to 'failed' can never re-pay it.
+            await db_supabase.update_one(
+                "referral_payouts", {"id": row["id"]}, {"$set": {"referrer_credited_at": now_iso}}
+            )
         if referee_owed:
             await _credit(referee_user_id, referee_reward, kind, referee_user_id, "referral_bonus", meta)
             referee_paid_now = True
+            await db_supabase.update_one(
+                "referral_payouts", {"id": row["id"]}, {"$set": {"referee_credited_at": now_iso}}
+            )
     except Exception:
         logger.error(
             "referral_payout: re-credit failed — returning claim to 'failed' for manual reconciliation",
             exc_info=True,
             extra={**meta, "referrer_paid_now": referrer_paid_now, "referee_paid_now": referee_paid_now},
         )
-        await db_supabase.update_one(
-            "referral_payouts",
-            {"id": row["id"]},
-            {"$set": _merge_marks(row, "failed", referrer_paid_now, referee_paid_now)},
-        )
+        await db_supabase.update_one("referral_payouts", {"id": row["id"]}, {"$set": {"status": "failed"}})
         raise
 
     await db_supabase.update_one(
-        "referral_payouts",
-        {"id": row["id"]},
-        {"$set": _merge_marks(row, "paid", referrer_paid_now, referee_paid_now)},
+        "referral_payouts", {"id": row["id"]}, {"$set": {"status": "paid", "paid_at": now_iso}}
     )
     credited = [s for s, ok in (("referrer", referrer_paid_now), ("referee", referee_paid_now)) if ok]
     logger.info("referral_payout: re-credited failed referral claim", extra={**meta, "credited": credited})

@@ -190,6 +190,30 @@ async def paid_referral_earnings(referrer_user_id: str, kind: str) -> Optional[D
     return total
 
 
+async def paid_referee_earnings(referee_user_id: str, kind: str) -> Optional[Decimal]:
+    """Sum of ``referee_reward`` across PAID ``referral_payouts`` where this user
+    was the REFEREE (signed up with someone's code), or None when no paid row.
+
+    The mirror of ``paid_referral_earnings`` for the referee side — a user is
+    referred at most once, so this is 0 or a single snapshotted reward, but the
+    sum keeps the shape identical and future-proof. Used to surface the referee's
+    own signup bonus in the rider "Refer & Earn" screen (it otherwise only shows
+    referrer earnings).
+    """
+    rows = await db_supabase.get_rows(
+        "referral_payouts",
+        {"referee_user_id": referee_user_id, "kind": kind, "status": "paid"},
+        columns="referee_reward",
+        limit=10000,
+    )
+    if not rows:
+        return None
+    total = Decimal("0")
+    for r in rows:
+        total += _money(r.get("referee_reward"))
+    return total
+
+
 async def area_id_for_rider(rider_user_id: str, since_iso: Optional[str] = None) -> Optional[str]:
     """The rider's service area, derived from their most recent COMPLETED ride.
 

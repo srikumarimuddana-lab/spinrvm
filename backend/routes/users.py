@@ -7,6 +7,7 @@ try:
     from ..utils.audit_logger import log_admin_action  # type: ignore
     from ..utils.referral_terms import (  # type: ignore
         area_id_for_rider,
+        paid_referee_earnings,
         paid_referral_earnings,
         resolve_referral_terms,
     )
@@ -17,6 +18,7 @@ except ImportError:
     from utils.audit_logger import log_admin_action  # type: ignore  # noqa: F811
     from utils.referral_terms import (  # type: ignore  # noqa: F811
         area_id_for_rider,
+        paid_referee_earnings,
         paid_referral_earnings,
         resolve_referral_terms,
     )
@@ -526,6 +528,12 @@ async def _rider_referral_summary(user: dict, *, include_referees: bool) -> dict
     # after a referee qualifies).
     paid = await paid_referral_earnings(user["id"], "rider")
     earnings = paid if paid is not None else (referrer_reward * qualified)
+    # The viewer's OWN signup bonus — what they earned as a REFEREE (referred by
+    # someone). Actual paid amount only (a user is referred at most once; there's
+    # no meaningful pre-payout estimate for a past signup), 0 when not referred /
+    # not yet paid. Surfaced so the "Refer & Earn" screen shows the referee's $5,
+    # which previously only appeared as a raw wallet transaction.
+    referee_earned = await paid_referee_earnings(user["id"], "rider") or Decimal("0")
     summary = {
         "referral_code": code,
         "referral_link": f"https://spinr.app/r/{code}",
@@ -534,6 +542,7 @@ async def _rider_referral_summary(user: dict, *, include_referees: bool) -> dict
         "pending_referrals": total - qualified,
         # Money serialised as 2-dp strings (house convention; clients parseFloat).
         "referral_earnings": str(earnings),
+        "referee_earnings": str(referee_earned),
         "referrer_reward": str(referrer_reward),
         "referee_reward": str(referee_reward),
         "rides_required": rides_required,

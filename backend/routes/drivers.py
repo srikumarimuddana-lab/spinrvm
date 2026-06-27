@@ -6337,6 +6337,17 @@ async def subscription_checkout_return(session_id: str = "", to: str = ""):
     _sid = session_id if _re.fullmatch(r"[A-Za-z0-9_]+", session_id or "") else ""
     _sep = "&" if "?" in _target else "?"
     _dest = f"{_target}{_sep}session_id={_sid}" if _sid else _target
+    # Observability: confirms Stripe actually reached the bounce (if this never
+    # logs after a payment, the problem is upstream — PUBLIC_API_BASE_URL / Stripe
+    # can't reach this host). No PII: scheme + flags only, not the session id.
+    logger.info(
+        "subscription checkout-return bounce hit -> 302",
+        extra={
+            "scheme": _target.split("://", 1)[0],
+            "allowlisted_to": _safe,
+            "has_session_id": bool(_sid),
+        },
+    )
     return RedirectResponse(url=_dest, status_code=302)
 
 

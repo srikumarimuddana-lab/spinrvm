@@ -1634,6 +1634,30 @@ async def _driver_referral_summary(driver: dict, *, include_referees: bool) -> d
     # area terms change); estimate fallback until a payout has been paid.
     paid = await paid_referral_earnings(driver["user_id"], "driver") if driver.get("user_id") else None
     earnings = paid if paid is not None else (qualified * reward_amount)
+
+    # Who referred THIS driver (inbound) — resolve users.referred_by (= the
+    # referrer's driver id for driver referrals) to a name + code. None when this
+    # driver wasn't referred (or was referred via a rider code → not a driver row).
+    referred_by = None
+    me = (
+        (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows("users", {"id": driver.get("user_id")}, columns="referred_by", limit=1)
+        )
+        if driver.get("user_id")
+        else None
+    )
+    ref_drv_id = (me or {}).get("referred_by")
+    if ref_drv_id:
+        ref_drv = await db_supabase.get_driver_by_id(ref_drv_id)
+        if ref_drv:
+            ref_user = await db_supabase.get_user_by_id(ref_drv.get("user_id")) if ref_drv.get("user_id") else None
+            referred_by = {
+                "name": f"{(ref_user or {}).get('first_name', '')} {(ref_user or {}).get('last_name', '')}".strip()
+                or ref_drv.get("name")
+                or "Driver",
+                "code": _driver_referral_code(ref_drv),
+            }
+
     summary = {
         "referral_code": code,
         "total_referrals": total,
@@ -1642,6 +1666,7 @@ async def _driver_referral_summary(driver: dict, *, include_referees: bool) -> d
         "referral_earnings": earnings,
         "reward_amount": reward_amount,
         "rides_required": rides_required,
+        "referred_by": referred_by,
     }
     if include_referees:
         summary["referees"] = referees

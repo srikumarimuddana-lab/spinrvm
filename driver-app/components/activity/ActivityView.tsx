@@ -62,7 +62,7 @@ export default function ActivityView() {
   const totalTips = parseMoney(earnings?.total_tips);
   const totalIncentives = parseMoney(earnings?.total_incentives);
   // Quest + referral rewards (driver_bonuses) — distinct from per-ride incentives.
-  const totalBonuses = parseMoney((earnings as any)?.total_bonuses);
+  const totalBonuses = parseMoney(earnings?.total_bonuses);
   const totalTax = parseMoney(earnings?.total_tax);
   const fareEarnings = Math.max(totalEarnings - totalTips - totalIncentives - totalBonuses - totalTax, 0);
   const periodRideTotal = period === 'all' ? historyTotal : Number(earnings?.total_rides ?? 0);

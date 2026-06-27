@@ -1948,6 +1948,11 @@ function DriverReferralsTab({ data, loading, fmtDate }: {
             <p className="text-xs text-muted-foreground">
                 Code <span className="font-mono font-semibold">{data.referral_code}</span> · reward {formatCurrency(data.reward_amount)} once a referee completes {data.rides_required} rides.
             </p>
+            {data.referred_by ? (
+                <p className="text-xs text-muted-foreground">
+                    Referred by <span className="font-semibold text-foreground">{data.referred_by.name}</span> ({data.referred_by.code})
+                </p>
+            ) : null}
 
             {/* Referee list */}
             {referees.length === 0 ? (

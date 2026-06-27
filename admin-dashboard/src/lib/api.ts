@@ -604,6 +604,7 @@ export interface DriverReferralSummary {
     reward_amount: number;
     rides_required: number;
     referees: DriverReferee[];
+    referred_by?: { name: string; code: string } | null;
 }
 export const getDriverReferrals = (id: string) =>
     request<DriverReferralSummary>(`/api/admin/drivers/${id}/referrals`);
@@ -686,6 +687,25 @@ export const requeueFailedReferral = (refereeUserId: string) =>
         `/api/admin/referrals/failed-claims/${encodeURIComponent(refereeUserId)}/requeue`,
         { method: "POST" },
     );
+
+export interface ReferralPair {
+    id: string;
+    referrer_name: string;
+    referee_name: string;
+    status: string;
+    referrer_reward: string;
+    referee_reward: string;
+    created_at: string;
+}
+export const getReferralPairs = (params: { source?: "driver" | "rider"; limit?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (params.source) q.set("source", params.source);
+    if (params.limit) q.set("limit", String(params.limit));
+    const qs = q.toString();
+    return request<{ pairs: ReferralPair[]; total: number }>(
+        `/api/admin/referrals/pairs${qs ? `?${qs}` : ""}`,
+    );
+};
 
 export interface DriverPayoutSummary {
     summary: {

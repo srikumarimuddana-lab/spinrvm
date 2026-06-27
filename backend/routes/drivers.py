@@ -1032,9 +1032,16 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
     # error (e.g. migration not yet applied) never zeroes the driver's ride
     # earnings/balance.
     total_bonuses = Decimal("0")
+    total_referral_bonuses = Decimal("0")
     try:
         bonus_rows = await db_supabase.get_rows("driver_bonuses", {"driver_id": driver["id"]}, limit=10000)
         total_bonuses = sum((_d(b.get("amount") or 0) for b in bonus_rows), Decimal("0"))
+        # Referral-only slice so the activity/payout view shows it distinctly from
+        # quest bonuses (both live in driver_bonuses; `kind` tells them apart).
+        total_referral_bonuses = sum(
+            (_d(b.get("amount") or 0) for b in bonus_rows if b.get("kind") == "referral"),
+            Decimal("0"),
+        )
     except Exception as e:
         logger.error(f"Error fetching driver bonuses for balance: {e}", exc_info=True)
 
@@ -1045,6 +1052,7 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         "pending_payouts": _money_str(pending_payouts),
         "total_paid_out": _money_str(total_payouts - pending_payouts),
         "total_bonuses": _money_str(total_bonuses),
+        "total_referral_bonuses": _money_str(total_referral_bonuses),
         "has_bank_account": bool(driver.get("bank_account")),
         "stripe_account_onboarded": bool(driver.get("stripe_account_onboarded", False)),
         "stripe_id_number_provided": bool(driver.get("stripe_id_number_provided", False)),
@@ -5267,6 +5275,25 @@ async def get_driver_referral_info(current_user: dict = Depends(get_current_user
     paid = await paid_referral_earnings(current_user["id"], "driver")
     referral_earnings = paid if paid is not None else (reward_amount * qualified_referrals)
 
+    # Who referred THIS driver (inbound). users.referred_by holds the referrer's
+    # DRIVER id for driver referrals; resolve to a name + code. None if this
+    # driver wasn't referred (or was referred via a rider code → not a driver row).
+    me = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("users", {"id": current_user["id"]}, columns="referred_by", limit=1)
+    )
+    referred_by = None
+    ref_drv_id = (me or {}).get("referred_by")
+    if ref_drv_id:
+        ref_drv = await db_supabase.get_driver_by_id(ref_drv_id)
+        if ref_drv:
+            ref_user = await db_supabase.get_user_by_id(ref_drv.get("user_id")) if ref_drv.get("user_id") else None
+            referred_by = {
+                "name": f"{(ref_user or {}).get('first_name', '')} {(ref_user or {}).get('last_name', '')}".strip()
+                or ref_drv.get("name")
+                or "Driver",
+                "code": _driver_referral_codes(ref_drv)[0],
+            }
+
     return {
         "referral_code": referral_code,
         "referral_link": f"https://spinr.app/join/{referral_code}",
@@ -5276,6 +5303,11 @@ async def get_driver_referral_info(current_user: dict = Depends(get_current_user
         # Money serialised as 2-dp strings (house convention; clients parseFloat).
         "referral_earnings": _money_str(referral_earnings),
         "reward_amount": _money_str(reward_amount),
+        # Both sides' reward amounts so the app shows who earns what. referee=0 for
+        # drivers (no signup bonus) → app renders "$0 = that party earns nothing".
+        "referrer_reward": _money_str(reward_amount),
+        "referee_reward": _money_str(terms["referee"]),
+        "referred_by": referred_by,
         "rides_required": rides_required,
         # Admin-authored per-area T&C wins; otherwise generate the default
         # sentence from this area's reward numbers.

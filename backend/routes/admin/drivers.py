@@ -1664,58 +1664,63 @@ async def admin_get_referral_leaderboard(
 ):
     """Fleet-wide top referrers, with fleet totals.
 
-    Tallies users by their `referred_by` (the referrer's driver id) in memory —
-    fine for the Saskatchewan-first fleet; would move to a SQL rollup/RPC if the
-    user table grows large. Earnings/qualified counts are computed only for the
-    top `limit` referrers to bound the per-referee ride scans.
+    Driven by the referral_payouts ledger (kind='driver') keyed on
+    referrer_user_id — the same source of truth as /referrals/analytics. The old
+    version tallied users.referred_by → the referrer's DRIVER id and did
+    `if not drv: continue`, so a referrer whose driver row was deleted/soft-deleted
+    silently vanished from the board (the reported "driver referrers missing in
+    admin" bug). The ledger holds the USER id, so the referrer always resolves and
+    earnings are the actual snapshotted paid amounts. This counts ledger claims
+    (qualified / in-pipeline referrals), not every raw signup — the signup funnel
+    lives in /referrals/analytics.
     """
     rides_required, reward_amount = _referral_terms()
 
-    users = await db_supabase.get_rows("users", {}, columns="id,referred_by,referral_code_used", limit=5000)
-    by_referrer: dict[str, list[str]] = {}
-    for u in users:
-        rid = u.get("referred_by")
-        code = u.get("referral_code_used")
-        # Only DRIVER referrals here — rider referrals (RIDE-prefixed codes) also
-        # populate referred_by (with a user id) and would otherwise inflate the
-        # fleet totals and crowd out real driver referrers in the top-N slice.
-        if rid and code and not str(code).upper().startswith("RIDE"):
-            by_referrer.setdefault(rid, []).append(u["id"])
+    def _money(x) -> Decimal:
+        try:
+            return Decimal(str(x))
+        except (InvalidOperation, TypeError, ValueError):
+            return Decimal("0")
 
-    fleet_total_referrals = sum(len(v) for v in by_referrer.values())
-    top = sorted(by_referrer.items(), key=lambda kv: len(kv[1]), reverse=True)[:limit]
+    claims = await db_supabase.get_rows(
+        "referral_payouts",
+        {"kind": "driver"},
+        columns="referrer_user_id,referrer_reward,status",
+        limit=20000,
+    )
+    by_referrer: dict[str, dict] = {}
+    for c in claims:
+        ruid = c.get("referrer_user_id")
+        if not ruid:
+            continue
+        agg = by_referrer.setdefault(ruid, {"total": 0, "qualified": 0, "earnings": Decimal("0")})
+        agg["total"] += 1
+        if c.get("status") == "paid":
+            agg["qualified"] += 1
+            agg["earnings"] += _money(c.get("referrer_reward"))
+
+    fleet_total_referrals = sum(a["total"] for a in by_referrer.values())
+    top = sorted(by_referrer.items(), key=lambda kv: kv[1]["total"], reverse=True)[:limit]
 
     leaders: list[dict] = []
-    fleet_qualified = 0
-    for ref_driver_id, referee_user_ids in top:
-        drv = await db_supabase.get_driver_by_id(ref_driver_id)
-        if not drv:
-            continue
-        ref_user = await db_supabase.get_user_by_id(drv.get("user_id")) if drv.get("user_id") else None
+    for ref_user_id, agg in top:
+        ref_user = await db_supabase.get_user_by_id(ref_user_id)
+        drv = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows("drivers", {"user_id": ref_user_id}, limit=1)
+        )
         name = (
             f"{(ref_user or {}).get('first_name', '')} {(ref_user or {}).get('last_name', '')}".strip()
-            or drv.get("name")
+            or (drv or {}).get("name")
             or "Driver"
         )
-        qualified = 0
-        for uid in referee_user_ids:
-            rdrv = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": uid}, limit=1))
-            if rdrv:
-                completed = await db_supabase.count_documents("rides", {"driver_id": rdrv["id"], "status": "completed"})
-                if completed >= rides_required:
-                    qualified += 1
-        fleet_qualified += qualified
-        # Snapshotted PAID earnings when available; estimate fallback otherwise.
-        paid = await paid_referral_earnings(drv["user_id"], "driver") if drv.get("user_id") else None
-        leader_earnings = paid if paid is not None else (qualified * reward_amount)
         leaders.append(
             {
-                "driver_id": ref_driver_id,
-                "driver_code": _driver_referral_code(drv),
+                "driver_id": (drv or {}).get("id"),
+                "driver_code": _driver_referral_code(drv) if drv else None,
                 "name": name,
-                "total_referrals": len(referee_user_ids),
-                "qualified_referrals": qualified,
-                "referral_earnings": leader_earnings,
+                "total_referrals": agg["total"],
+                "qualified_referrals": agg["qualified"],
+                "referral_earnings": agg["earnings"],
             }
         )
 

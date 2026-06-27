@@ -6315,13 +6315,19 @@ async def subscription_checkout_return(session_id: str = "", to: str = ""):
     exposes nothing sensitive (the session_id is already the user's own).
 
     `to` is strictly allowlisted to our app schemes so this can never be abused
-    as an open redirect, and every interpolated value is HTML/JS-escaped.
+    as an open redirect.
+
+    Returns a server-side **302** to the app scheme, NOT an HTML meta/JS redirect.
+    WebBrowser.openAuthSessionAsync (ASWebAuthenticationSession on iOS, Chrome
+    Custom Tab on Android) reliably intercepts a server redirect to the callback
+    scheme; a JS/meta redirect to a custom scheme is BLOCKED by Chrome Custom Tabs
+    without a user gesture, which left the driver stranded in the browser after
+    paying (they had to tap the manual fallback link). See the openAuthSessionAsync
+    call in driver-app/app/driver/subscription.tsx.
     """
-    import html as _html
-    import json as _json
     import re as _re
 
-    from fastapi.responses import HTMLResponse
+    from fastapi.responses import RedirectResponse
 
     _allowed_prefixes = ("spinr-driver://", "exp://")
     _safe = bool(
@@ -6331,20 +6337,7 @@ async def subscription_checkout_return(session_id: str = "", to: str = ""):
     _sid = session_id if _re.fullmatch(r"[A-Za-z0-9_]+", session_id or "") else ""
     _sep = "&" if "?" in _target else "?"
     _dest = f"{_target}{_sep}session_id={_sid}" if _sid else _target
-
-    _dest_attr = _html.escape(_dest, quote=True)
-    _dest_js = _json.dumps(_dest)
-    _body = (
-        "<!doctype html><html><head><meta charset='utf-8'>"
-        f"<meta http-equiv='refresh' content='0;url={_dest_attr}'>"
-        "<title>Returning to Spinr…</title></head>"
-        "<body style='font-family:-apple-system,sans-serif;text-align:center;padding-top:48px;color:#222'>"
-        "<p>Returning to the Spinr Driver app…</p>"
-        f"<script>window.location.replace({_dest_js});</script>"
-        f"<p><a href='{_dest_attr}'>Tap here if you are not redirected</a></p>"
-        "</body></html>"
-    )
-    return HTMLResponse(content=_body)
+    return RedirectResponse(url=_dest, status_code=302)
 
 
 @api_router.post("/subscription/subscribe")

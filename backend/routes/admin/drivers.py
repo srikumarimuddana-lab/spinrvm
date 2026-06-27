@@ -1939,6 +1939,77 @@ async def admin_get_referral_analytics(
     }
 
 
+@router.get("/referrals/failed-claims")
+async def admin_get_failed_referral_claims(
+    source: str = Query("rider", pattern="^(rider|driver)$"),
+    limit: int = Query(100, ge=1, le=500),
+    admin: dict = Depends(get_admin_user),
+):
+    """Failed referral_payouts claims (e.g. the pre-198 constraint-bug backlog)
+    with referrer/referee names + amounts, so ops can see WHICH claims failed and
+    re-queue them via POST .../requeue instead of running raw SQL."""
+    rows = await db_supabase.get_rows(
+        "referral_payouts",
+        {"status": "failed", "kind": source},
+        columns="id,referrer_user_id,referee_user_id,kind,referrer_reward,referee_reward,created_at",
+        order="created_at",
+        desc=True,
+        limit=limit,
+    )
+    claims: list[dict] = []
+    # Small per-row name lookups, bounded by `limit` — fine for the current fleet.
+    for r in rows or []:
+        referrer = await db_supabase.get_user_by_id(r["referrer_user_id"]) if r.get("referrer_user_id") else None
+        referee = await db_supabase.get_user_by_id(r["referee_user_id"]) if r.get("referee_user_id") else None
+        claims.append(
+            {
+                "id": r.get("id"),
+                "referee_user_id": r.get("referee_user_id"),
+                "kind": r.get("kind"),
+                "referrer_name": _user_display_name(referrer),
+                "referee_name": _user_display_name(referee),
+                "referrer_reward": r.get("referrer_reward"),
+                "referee_reward": r.get("referee_reward"),
+                "created_at": r.get("created_at"),
+            }
+        )
+    return {"claims": claims, "total": len(claims)}
+
+
+@router.post("/referrals/failed-claims/{referee_user_id}/requeue")
+async def admin_requeue_failed_referral(referee_user_id: str, admin: dict = Depends(get_admin_user)):
+    """Re-queue a FAILED referral claim: delete the row so the payout loop
+    re-creates + re-credits it on the next tick (~5 min). The loop dedups by
+    referee EXISTENCE in referral_payouts (any status), so deletion is the
+    re-queue mechanism.
+
+    SAFE for the constraint-bug (migrations 198/199) backlog: those credits were
+    reversed, so the claim netted zero and re-crediting is correct. Do NOT use on
+    a claim whose logs show 'ledger write AND its reversal failed' — that already
+    credited the money and re-queuing would DOUBLE-credit. One claim at a time so
+    ops reviews each; audit-logged.
+    """
+    existing = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows(
+            "referral_payouts",
+            {"referee_user_id": referee_user_id, "status": "failed"},
+            limit=1,
+        )
+    )
+    if not existing:
+        raise HTTPException(status_code=404, detail="No failed claim for this referee")
+    # Atomic guard: only delete while still 'failed' (never a paid/processing row).
+    await db_supabase.delete_one("referral_payouts", {"id": existing["id"], "status": "failed"})
+    await log_admin_action(
+        admin,
+        "referral_claim_requeued",
+        "referral_payouts",
+        existing["id"],
+        {"referee_user_id": referee_user_id, "kind": existing.get("kind")},
+    )
+    return {"success": True, "requeued": referee_user_id}
+
+
 @router.get("/drivers/{driver_id}/payouts-summary")
 async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50, ge=1, le=200)):
     """Comprehensive payout view for the driver slideout's Payouts tab.

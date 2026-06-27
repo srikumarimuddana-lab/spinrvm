@@ -1,13 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getReferralAnalytics, getServiceAreas, type ReferralAnalytics as Data } from "@/lib/api";
+import {
+    getReferralAnalytics, getFailedReferralClaims, requeueFailedReferral, getServiceAreas,
+    type ReferralAnalytics as Data, type FailedReferralClaim,
+} from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatCurrency } from "@/lib/utils";
 import {
     LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
 } from "recharts";
-import { Users, CheckCircle2, Clock, XCircle, DollarSign, Percent, Gift, TrendingUp } from "lucide-react";
+import { Users, CheckCircle2, Clock, XCircle, DollarSign, Percent, Gift, TrendingUp, RefreshCw } from "lucide-react";
 
 /**
  * Referral analytics hub — redemption funnel, amounts paid, and a daily
@@ -42,6 +45,26 @@ export default function ReferralAnalytics({ source }: { source: "driver" | "ride
             .finally(() => { if (!cancelled) setLoading(false); });
         return () => { cancelled = true; };
     }, [source, serviceAreaId, start, end]);
+
+    // Failed referral claims (e.g. the pre-198 constraint-bug backlog) — review + re-queue.
+    const [failed, setFailed] = useState<FailedReferralClaim[]>([]);
+    const [requeuing, setRequeuing] = useState<string | null>(null);
+    useEffect(() => {
+        let cancelled = false;
+        getFailedReferralClaims({ source, limit: 200 })
+            .then((d) => { if (!cancelled) setFailed(d?.claims ?? []); })
+            .catch(() => { if (!cancelled) setFailed([]); });
+        return () => { cancelled = true; };
+    }, [source]);
+    const requeue = async (refereeUserId: string) => {
+        setRequeuing(refereeUserId);
+        try {
+            await requeueFailedReferral(refereeUserId);
+            setFailed((prev) => prev.filter((c) => c.referee_user_id !== refereeUserId));
+        } finally {
+            setRequeuing(null);
+        }
+    };
 
     const f = data?.funnel;
     const areaFiltered = !!serviceAreaId;
@@ -130,6 +153,43 @@ export default function ReferralAnalytics({ source }: { source: "driver" | "ride
                             )}
                         </CardContent>
                     </Card>
+
+                    {/* Failed claims — review + re-queue (e.g. the pre-198 backlog) */}
+                    {failed.length > 0 && (
+                        <Card className="border-border/50">
+                            <CardContent className="p-4">
+                                <div className="flex items-center gap-2 mb-1">
+                                    <XCircle className="h-4 w-4 text-red-500" />
+                                    <h3 className="text-sm font-semibold">Failed claims ({failed.length})</h3>
+                                </div>
+                                <p className="text-[11px] text-muted-foreground mb-3">
+                                    Re-queue replays a claim on the next payout tick (~5 min). Safe for the
+                                    constraint-bug backlog (the credit was reversed); do not re-queue a claim
+                                    whose logs show a failed reversal — it would double-credit.
+                                </p>
+                                <div className="space-y-2">
+                                    {failed.map((c) => (
+                                        <div key={c.id} className="flex items-center justify-between gap-3 rounded-md border border-border/50 p-2 text-sm">
+                                            <div className="min-w-0">
+                                                <div className="truncate font-medium">{c.referrer_name} → {c.referee_name}</div>
+                                                <div className="text-[11px] text-muted-foreground">
+                                                    {c.kind} · referrer ${c.referrer_reward} / referee ${c.referee_reward} · {String(c.created_at).slice(0, 10)}
+                                                </div>
+                                            </div>
+                                            <button
+                                                onClick={() => requeue(c.referee_user_id)}
+                                                disabled={requeuing === c.referee_user_id}
+                                                className="shrink-0 inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs font-medium hover:bg-muted disabled:opacity-50"
+                                            >
+                                                <RefreshCw className={`h-3 w-3 ${requeuing === c.referee_user_id ? "animate-spin" : ""}`} />
+                                                Re-queue
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </CardContent>
+                        </Card>
+                    )}
                 </>
             )}
         </div>

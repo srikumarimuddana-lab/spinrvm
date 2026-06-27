@@ -687,6 +687,25 @@ export const requeueFailedReferral = (refereeUserId: string) =>
         { method: "POST" },
     );
 
+export interface ReferralPair {
+    id: string;
+    referrer_name: string;
+    referee_name: string;
+    status: string;
+    referrer_reward: string;
+    referee_reward: string;
+    created_at: string;
+}
+export const getReferralPairs = (params: { source?: "driver" | "rider"; limit?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (params.source) q.set("source", params.source);
+    if (params.limit) q.set("limit", String(params.limit));
+    const qs = q.toString();
+    return request<{ pairs: ReferralPair[]; total: number }>(
+        `/api/admin/referrals/pairs${qs ? `?${qs}` : ""}`,
+    );
+};
+
 export interface DriverPayoutSummary {
     summary: {
         lifetime_earnings: number;

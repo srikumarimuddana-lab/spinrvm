@@ -3,6 +3,7 @@
 import { useState } from "react";
 import ReferralLeaderboard from "@/components/referral-leaderboard";
 import ReferralAnalytics from "@/components/referral-analytics";
+import ReferralSpendSummary from "@/components/referral-spend-summary";
 import { useRequireModule } from "@/hooks/useRequireModule";
 
 export default function ReferralsPage() {
@@ -16,6 +17,9 @@ export default function ReferralsPage() {
                 <h1 className="text-3xl font-bold tracking-tight">Referrals</h1>
                 <p className="text-muted-foreground mt-1">Referral program — redemption funnel, payouts, trends, and top referrers</p>
             </div>
+
+            {/* Combined rider+driver spend at a glance (independent of the source toggle). */}
+            <ReferralSpendSummary />
 
             <div className="flex gap-1 bg-muted rounded-xl p-1 w-fit">
                 <button onClick={() => setSource("driver")}

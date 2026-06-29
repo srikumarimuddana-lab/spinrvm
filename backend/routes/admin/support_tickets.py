@@ -46,6 +46,7 @@ router = APIRouter(prefix="/support-tickets", tags=["Admin Support Tickets"])
 
 _CONFIG_TABLE = "zoho_desk_config"
 _CONFIG_ID = "default"
+_MIRROR_TABLE = "zoho_desk_tickets"
 
 
 def _err(e: ZohoDeskError) -> HTTPException:
@@ -662,11 +663,17 @@ async def get_ticket_service_area(
 ):
     """Current service-area assignment for a ticket. When unassigned, attempts
     an auto-assign from the contact's ride history; if none is found, returns
-    ``needs_assignment=True`` so the UI highlights it (assignment is optional)."""
-    try:
-        ticket = await zoho.get_ticket(ticket_id)
-    except ZohoDeskError as e:
-        raise _err(e) from e
+    ``needs_assignment=True`` so the UI highlights it (assignment is optional).
+
+    Resolves from the local mirror (the contact email is all that's needed) so a
+    ticket view spends no Zoho API credit; falls back to a live fetch only when
+    the ticket isn't mirrored yet (pre-backfill)."""
+    ticket = await db_supabase.find_one(_MIRROR_TABLE, {"zoho_id": ticket_id})
+    if not ticket:
+        try:
+            ticket = await zoho.get_ticket(ticket_id)
+        except ZohoDeskError as e:
+            raise _err(e) from e
     return await ticket_area.assignment_view(ticket_id, ticket or {})
 
 

@@ -61,8 +61,13 @@ def test_service_areas_list(client, _set_admin, monkeypatch):
     assert resp.json()["data"][0]["name"] == "Regina"
 
 
-def test_get_ticket_service_area(client, _set_admin, monkeypatch):
-    monkeypatch.setattr(m.zoho, "get_ticket", AsyncMock(return_value={"id": "T1", "contact": {"email": "a@b.com"}}))
+def test_get_ticket_service_area_uses_mirror_no_zoho_call(client, _set_admin, monkeypatch):
+    # Mirrored ticket -> resolve from the DB, spend no Zoho API credit.
+    monkeypatch.setattr(
+        m.db_supabase, "find_one", AsyncMock(return_value={"zoho_id": "T1", "contact_email": "a@b.com"})
+    )
+    get_ticket = AsyncMock()
+    monkeypatch.setattr(m.zoho, "get_ticket", get_ticket)
     monkeypatch.setattr(
         m.ticket_area,
         "assignment_view",
@@ -71,6 +76,22 @@ def test_get_ticket_service_area(client, _set_admin, monkeypatch):
     resp = client.get("/api/admin/support-tickets/tickets/T1/service-area")
     assert resp.status_code == 200
     assert resp.json()["needs_assignment"] is True
+    get_ticket.assert_not_called()
+
+
+def test_get_ticket_service_area_falls_back_to_live_when_unmirrored(client, _set_admin, monkeypatch):
+    # Not mirrored yet -> one live Zoho fetch so pre-backfill still works.
+    monkeypatch.setattr(m.db_supabase, "find_one", AsyncMock(return_value=None))
+    get_ticket = AsyncMock(return_value={"id": "T1", "contact": {"email": "a@b.com"}})
+    monkeypatch.setattr(m.zoho, "get_ticket", get_ticket)
+    monkeypatch.setattr(
+        m.ticket_area,
+        "assignment_view",
+        AsyncMock(return_value={"service_area_id": None, "needs_assignment": True, "suggested": None}),
+    )
+    resp = client.get("/api/admin/support-tickets/tickets/T1/service-area")
+    assert resp.status_code == 200
+    get_ticket.assert_called_once()
 
 
 def test_put_service_area_valid(client, _set_admin, monkeypatch):

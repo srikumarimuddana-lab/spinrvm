@@ -6477,7 +6477,9 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
     try:
         _sub_tz = await area_timezone(driver.get("service_area_id"))
     except Exception:
-        logger.warning("[SUBSCRIBE] area timezone lookup failed; using default for expiry", exc_info=True)
+        # Payment-path DB read — surface at error (we still fall back to Regina
+        # so the purchase isn't blocked, but the failure must not be hidden).
+        logger.error("[SUBSCRIBE] area timezone lookup failed; using default for expiry", exc_info=True)
         _sub_tz = None
     expires = compute_pass_expiry(plan.get("duration_days", 30), now=now, tz=_sub_tz)
     plan_price = Decimal(str(plan.get("price", 0) or 0))
@@ -7230,8 +7232,14 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
     plan = await db.find_one("subscription_plans", {"id": plan_id}) if plan_id else None
     now = datetime.now(timezone.utc)
     # Fetch the driver once here so the expiry below can be anchored to their
-    # location timezone (reused for the activation push further down).
-    _drv = await db.find_one("drivers", {"id": driver_id}) if driver_id else None
+    # location timezone (reused for the activation push further down). This runs
+    # before the atomic claim, so a DB error must NOT abort activation — the
+    # driver already paid. Degrade to no row (→ Regina expiry, no push) and log.
+    try:
+        _drv = await db.find_one("drivers", {"id": driver_id}) if driver_id else None
+    except Exception:
+        logger.error("[SUBSCRIBE] driver lookup failed during activation; continuing", exc_info=True)
+        _drv = None
     try:
         from ..utils.spinr_pass import area_timezone, compute_pass_expiry, pass_duration_label
     except ImportError:
@@ -7239,17 +7247,20 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
     try:
         _act_tz = await area_timezone((_drv or {}).get("service_area_id"))
     except Exception:
-        logger.warning("[SUBSCRIBE] activation tz lookup failed; using default for expiry", exc_info=True)
+        # Payment-path DB read — surface at error; expiry falls back to Regina.
+        logger.error("[SUBSCRIBE] activation tz lookup failed; using default for expiry", exc_info=True)
         _act_tz = None
     activate_updates = {
         "status": "active",
         "payment_status": "paid",
         "started_at": now.isoformat(),
     }
-    if plan and plan.get("duration_days"):
+    if plan:
         # Multi-day pass → local midnight ending its Nth day; 1-day → 24h by hour.
+        # Pairs with started_at above (missing duration_days → 30-day fallback) so
+        # the row's lifetime is always self-consistent.
         activate_updates["expires_at"] = compute_pass_expiry(
-            plan["duration_days"], now=now, tz=_act_tz
+            plan.get("duration_days"), now=now, tz=_act_tz
         ).isoformat()
 
     # Atomic claim: flip pending→active filtering on status='pending'. Only the

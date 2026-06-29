@@ -202,7 +202,7 @@ function PlanModal({ open, plan, onClose, onSave }: PlanModalProps) {
                                 id="plan-name"
                                 value={form.name}
                                 onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                                placeholder="e.g. Pro Monthly"
+                                placeholder="e.g. Pro 30-Day Pass"
                             />
                         </div>
                         <div className="space-y-1">
@@ -226,11 +226,11 @@ function PlanModal({ open, plan, onClose, onSave }: PlanModalProps) {
                                     <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="1">Daily (1 day)</SelectItem>
-                                    <SelectItem value="7">Weekly (7 days)</SelectItem>
-                                    <SelectItem value="30">Monthly (30 days)</SelectItem>
-                                    <SelectItem value="90">Quarterly (90 days)</SelectItem>
-                                    <SelectItem value="365">Annual (365 days)</SelectItem>
+                                    <SelectItem value="1">1-day pass (24 hrs)</SelectItem>
+                                    <SelectItem value="7">7-day pass</SelectItem>
+                                    <SelectItem value="30">30-day pass</SelectItem>
+                                    <SelectItem value="90">90-day pass</SelectItem>
+                                    <SelectItem value="365">365-day pass</SelectItem>
                                 </SelectContent>
                             </Select>
                         </div>

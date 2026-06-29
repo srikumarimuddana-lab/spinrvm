@@ -130,3 +130,57 @@ async def test_assignment_view_highlights_when_no_match(monkeypatch):
     assert view["needs_assignment"] is True
     assert view["suggested"] is None
     assert view.get("service_area_id") is None
+
+
+async def test_assignment_view_returns_existing_without_resolving(monkeypatch):
+    # Already-assigned ticket: short-circuit, never recompute a suggestion.
+    _patch(monkeypatch, update_returns={"zoho_id": "T3", "service_area_id": "sa_x", "service_area_source": "manual"},
+           area={"id": "sa_x", "name": "Existing"})
+    resolve_called = {"n": 0}
+
+    async def _never(_ticket):
+        resolve_called["n"] += 1
+        return None
+
+    monkeypatch.setattr(tsa, "resolve_suggested_area", _never)
+    view = await tsa.assignment_view("T3", {"contact": {"email": "x@x.com"}})
+    assert view["needs_assignment"] is False
+    assert view["service_area_id"] == "sa_x"
+    assert view["suggested"] is None
+    assert resolve_called["n"] == 0
+
+
+async def test_get_ticket_area_missing_row_returns_empty(monkeypatch):
+    _patch(monkeypatch, update_returns=None)
+    assert await tsa.get_ticket_area("nope") == {}
+
+
+async def test_set_ticket_area_assign_then_clear(monkeypatch):
+    row = {"zoho_id": "T4", "service_area_id": None}
+    calls = []
+
+    async def _find_one(table, filters=None):
+        if table == "service_areas":
+            return {"id": "sa_regina", "name": "Regina"}
+        if table == "zoho_desk_tickets":
+            return row
+        return None
+
+    async def _update_one(table, filters, updates, upsert=False):
+        calls.append({"updates": updates, "upsert": upsert})
+        row.update(updates)
+
+    monkeypatch.setattr(tsa.db_supabase, "find_one", AsyncMock(side_effect=_find_one))
+    monkeypatch.setattr(tsa.db_supabase, "update_one", AsyncMock(side_effect=_update_one))
+
+    assigned = await tsa.set_ticket_area("T4", "sa_regina", source="manual", assigned_by="admin_1", upsert=True)
+    assert assigned["service_area_id"] == "sa_regina"
+    assert assigned["service_area_source"] == "manual"
+    assert assigned["service_area_assigned_by"] == "admin_1"
+    assert calls[0]["upsert"] is True
+
+    cleared = await tsa.set_ticket_area("T4", None, source="manual", assigned_by="admin_1")
+    # Clearing nulls every field (source/assigned_at/by), not just the id.
+    assert cleared.get("service_area_id") is None
+    assert calls[1]["updates"]["service_area_source"] is None
+    assert calls[1]["updates"]["service_area_assigned_by"] is None

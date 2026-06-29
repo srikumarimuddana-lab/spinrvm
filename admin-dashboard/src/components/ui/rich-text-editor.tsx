@@ -8,8 +8,11 @@ import { Bold, Italic, Underline, List, ListOrdered, Link as LinkIcon } from "lu
  * that emits HTML. Used for ticket replies so agents can send formatted email
  * (bold, lists, links, line breaks) instead of a single collapsed line.
  *
- * Uncontrolled internally to keep the caret stable; the parent resets it by
- * passing value="" (e.g. after sending).
+ * Uncontrolled while the user types (keeps the caret stable); external value
+ * changes are synced in only when the editor is NOT focused — covers parent
+ * resets (value="" after sending) and programmatic inserts (e.g. an AI-drafted
+ * reply). Writing innerHTML mid-typing would reset the caret, so we skip it
+ * while focused (during typing value already mirrors innerHTML via onInput).
  */
 export function RichTextEditor({
     value,
@@ -26,10 +29,14 @@ export function RichTextEditor({
 }) {
     const ref = useRef<HTMLDivElement>(null);
 
-    // Reset the editor body when the parent clears the value (post-send).
+    // Sync an external value into the uncontrolled editor when it diverges and
+    // the user isn't actively typing — covers parent clears (value="") and
+    // programmatic inserts (AI draft). Skipped while focused to protect the caret.
     useEffect(() => {
-        if (ref.current && !value && ref.current.innerHTML !== "") {
-            ref.current.innerHTML = "";
+        const el = ref.current;
+        if (!el) return;
+        if (document.activeElement !== el && el.innerHTML !== (value || "")) {
+            el.innerHTML = value || "";
         }
     }, [value]);
 

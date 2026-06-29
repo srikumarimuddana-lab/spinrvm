@@ -100,7 +100,7 @@ pytokens==0.4.1           # via black
 pytz==2026.2        # via -r requirements.in
 pyyaml==6.0.3             # via -r requirements.in, uvicorn
 realtime==2.29.0          # via -r requirements.in, supabase
-redis==7.4.0              # via -r requirements.in
+redis==8.0.1              # via -r requirements.in
 requests==2.33.1          # via -r requirements.in, cachecontrol, google-api-core, google-cloud-storage, pyiceberg, staticmap, stripe, twilio
 rich==14.3.4              # via -r requirements.in, pyiceberg, typer
 s3transfer==0.17.0        # via boto3

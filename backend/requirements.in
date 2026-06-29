@@ -1,4 +1,4 @@
-redis[asyncio]>=5.0.0
+redis[asyncio]>=8.0.1
 
 # Server and framework
 fastapi>=0.115.0
@@ -115,7 +115,7 @@ pytest-timeout>=0.4.0
 # Development tools — ruff supersedes both black and flake8; those are removed.
 
 # Redis (optional — transparent in-process fallback when REDIS_URL unset)
-redis[asyncio]>=5.0.0
+redis[asyncio]>=8.0.1
 
 # Additional dependencies
 certifi>=2026.2.25

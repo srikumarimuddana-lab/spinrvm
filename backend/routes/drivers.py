@@ -2945,12 +2945,41 @@ async def export_earnings(year: int = Query(None), current_user: dict = Depends(
     return {"data": csv_data, "filename": filename}
 
 
-# Fields stripped from the account / driver_profile sections of a data export.
-# password_hash is a credential; the fcm_token_* columns are device push tokens
-# (a device credential, useless to the data subject); token_version is an
-# internal refresh-token-invalidation counter. None belong in a DSAR dump.
-_EXPORT_REDACT_FIELDS = frozenset(
-    {"password_hash", "fcm_token", "fcm_token_rider", "fcm_token_driver", "token_version"}
+# Account (users) fields omitted from a data export: credentials and internal
+# session/auth state that are not "personal data about the subject".
+#  - password_hash: credential
+#  - fcm_token*: device push credentials (impersonation risk if intercepted)
+#  - token_version / current_session_id / sessions_invalid_before: auth/session
+#    revocation state, useless to the subject and a replay-window roadmap
+#  - stripe_customer_id: operational Stripe identifier
+_EXPORT_REDACT_ACCOUNT = frozenset(
+    {
+        "password_hash",
+        "fcm_token",
+        "fcm_token_rider",
+        "fcm_token_driver",
+        "token_version",
+        "current_session_id",
+        "sessions_invalid_before",
+        "stripe_customer_id",
+    }
+)
+
+# Driver-profile (drivers) fields omitted from a data export:
+#  - password_hash / fcm_token: credentials
+#  - stripe_account_id / bank_account: financial credentials (already excluded
+#    from normal self-responses via _STRIP_FROM_SELF_RESPONSE)
+#  - lat / lng / location_geog: transient last-known GPS, not stored profile data
+_EXPORT_REDACT_DRIVER = frozenset(
+    {
+        "password_hash",
+        "fcm_token",
+        "stripe_account_id",
+        "bank_account",
+        "lat",
+        "lng",
+        "location_geog",
+    }
 )
 
 
@@ -2999,7 +3028,9 @@ def _object_to_csv(obj: dict) -> str:
 def _build_export_readme(payload: dict, generated_on: str) -> str:
     """Human-readable index of what's in the export archive."""
     account = payload.get("account", {}) or {}
-    name = account.get("name") or account.get("full_name") or account.get("first_name") or "Driver"
+    raw_name = account.get("name") or account.get("full_name") or account.get("first_name") or "Driver"
+    # Strip control characters so a name with newlines can't corrupt the README.
+    name = " ".join(str(raw_name).split()) or "Driver"
     return (
         "Spinr — Personal Data Export\n"
         "============================\n\n"
@@ -3178,8 +3209,11 @@ async def export_driver_data(
     driver does not wait.
     """
     user_id = current_user["id"]
-    email = current_user.get("email") or current_user.get("phone", "")
-    if not email:
+    # Export is delivered by email only — require a real address. Falling back
+    # to the phone number (the old behaviour) would pass a raw phone number to
+    # the email provider, which both fails to send and risks logging the number.
+    email = (current_user.get("email") or "").strip()
+    if "@" not in email:
         raise HTTPException(status_code=400, detail="No email address on file to send the export to.")
 
     background_tasks.add_task(_build_and_email_data_export, user_id, email)
@@ -3234,8 +3268,8 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
 
         export_payload = {
             "export_generated_at": datetime.now(timezone.utc).isoformat() + "Z",
-            "account": {k: v for k, v in user.items() if k not in _EXPORT_REDACT_FIELDS},
-            "driver_profile": {k: v for k, v in driver.items() if k not in _EXPORT_REDACT_FIELDS},
+            "account": {k: v for k, v in user.items() if k not in _EXPORT_REDACT_ACCOUNT},
+            "driver_profile": {k: v for k, v in driver.items() if k not in _EXPORT_REDACT_DRIVER},
             "rides": rides,
             "payouts": payouts,
             "documents": [{k: v for k, v in doc.items() if k != "document_url"} for doc in documents],
@@ -3255,6 +3289,11 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
         try:
             expires_human = (now + timedelta(seconds=_EXPORT_LINK_TTL_SECONDS)).strftime("%B %d, %Y")
             download_url = await _upload_export_zip(user_id, zip_bytes, _EXPORT_LINK_TTL_SECONDS)
+            # The URL is interpolated into an HTML href — refuse anything that
+            # isn't a plain https URL so a malformed value can't break out of
+            # the attribute. (Triggers the attachment fallback below.)
+            if not download_url.startswith("https://"):
+                raise ValueError(f"unexpected signed URL scheme: {download_url[:30]!r}")
             await send_email(
                 to=email,
                 subject=subject,
@@ -3304,7 +3343,16 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
         )
 
     except Exception as exc:
-        logger.error("Data export failed for user %s: %s", user_id, exc)
+        # Surface the full traceback and, for DatabaseError, the original DB
+        # error (str(exc) alone yields only "Database operation failed").
+        original = exc.details.get("original") if hasattr(exc, "details") and isinstance(exc.details, dict) else None
+        logger.error(
+            "Data export failed for user %s: %s%s",
+            user_id,
+            exc,
+            f" — {original}" if original else "",
+            exc_info=True,
+        )
 
 
 # ==========================================

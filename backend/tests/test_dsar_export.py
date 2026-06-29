@@ -151,6 +151,42 @@ class TestDsarExportBundle:
         assert "id" in rides_csv and "status" in rides_csv, "rides.csv must have a header row"
         assert "r1" in rides_csv and "completed" in rides_csv, "rides.csv must contain the ride row"
 
+    async def test_rides_strip_rider_third_party_pii_but_keep_addresses(self):
+        files, box = await _run_export(
+            {
+                "drivers": [{"id": "d1", "user_id": "u1"}],
+                "users": [{"id": "u1"}],
+                "rides": [
+                    {
+                        "id": "r1",
+                        "driver_id": "d1",
+                        "status": "completed",
+                        "rider_id": "RIDER_X",
+                        "pickup_lat": 52.13,
+                        "pickup_lng": -106.66,
+                        "dropoff_lat": 52.15,
+                        "dropoff_lng": -106.65,
+                        "route_polyline": "ENCODED_ROUTE",
+                        "pickup_address": "123 Main St",
+                        "dropoff_address": "456 Elm Ave",
+                        "total_fare": 15.0,
+                    }
+                ],
+                "driver_payouts": [],
+                "driver_documents": [],
+                "notification_preferences": [],
+            }
+        )
+        ride = json.loads(files["raw_data.json"])["rides"][0]
+        for field in ("rider_id", "pickup_lat", "pickup_lng", "dropoff_lat", "dropoff_lng", "route_polyline"):
+            assert field not in ride, f"{field} (rider third-party PII) must be stripped from rides"
+        for secret in ("RIDER_X", "ENCODED_ROUTE", "52.13", "-106.66"):
+            assert secret not in files["rides.csv"], f"{secret} must not appear in rides.csv"
+        # The driver's own trip record (addresses, fare, status) is retained.
+        assert ride.get("pickup_address") == "123 Main St"
+        assert ride.get("dropoff_address") == "456 Elm Ave"
+        assert "123 Main St" in files["rides.csv"]
+
     async def test_password_hash_stripped_everywhere(self):
         files, box = await _run_export(
             {

@@ -260,6 +260,10 @@ admin_mass_notify_limit = default_limiter.limit("3/minute")
 # Admin staff deletion — one-way destructive action, extra caution (F-36)
 admin_staff_delete_limit = default_limiter.limit("5/minute")
 
+# Admin AI reply-suggestion (Help Desk) — each call hits a paid LLM with a
+# third-party quota; cap per-IP to stop budget/quota exhaustion by an agent.
+admin_ai_suggest_limit = default_limiter.limit("20/minute")
+
 
 # ============================================================================
 # Rate Limit Exceeded Handler

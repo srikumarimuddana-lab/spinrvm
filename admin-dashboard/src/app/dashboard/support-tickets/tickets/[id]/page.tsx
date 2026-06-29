@@ -12,6 +12,12 @@ import {
     commentDeskTicket,
     updateDeskTicket,
     updateDeskTicketTags,
+    getDeskServiceAreas,
+    getDeskTicketServiceArea,
+    setDeskTicketServiceArea,
+    aiSuggestDeskReply,
+    type DeskServiceArea,
+    type DeskTicketServiceArea,
 } from "@/lib/api";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -32,7 +38,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { Input } from "@/components/ui/input";
 import {
     ArrowLeft, Send, StickyNote, User, Mail, ExternalLink, Clock, CheckCircle2, Timer,
-    ChevronDown, ChevronUp, Tag, Plus, X, Save,
+    ChevronDown, ChevronUp, Tag, Plus, X, Save, MapPin, Sparkles, AlertTriangle,
 } from "lucide-react";
 
 const STATUSES = ["Open", "On Hold", "Escalated", "Closed"];
@@ -89,6 +95,18 @@ function toText(html: string): string {
     return el.textContent || el.innerText || "";
 }
 
+/** Convert the AI's plain-text draft into simple HTML for the rich editor:
+ *  escape, blank lines -> paragraphs, single newlines -> <br>. */
+function textToHtml(text: string): string {
+    const esc = (s: string) =>
+        s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return (text || "")
+        .trim()
+        .split(/\n{2,}/)
+        .map((p) => `<p>${esc(p).replace(/\n/g, "<br>")}</p>`)
+        .join("");
+}
+
 export default function TicketDetailPage() {
     const { allowed } = useRequireModule("support_tickets");
     const params = useParams();
@@ -105,6 +123,13 @@ export default function TicketDetailPage() {
     const [note, setNote] = useState("");
     const [sending, setSending] = useState(false);
     const [savingField, setSavingField] = useState(false);
+    const [suggesting, setSuggesting] = useState(false);
+
+    // Service area (Spinr-local; auto-derived from the contact's ride history
+    // when possible, else highlighted for an optional manual assignment).
+    const [areas, setAreas] = useState<DeskServiceArea[]>([]);
+    const [areaInfo, setAreaInfo] = useState<DeskTicketServiceArea | null>(null);
+    const [savingArea, setSavingArea] = useState(false);
 
     // Editable classification fields (seeded from the ticket on load).
     const [category, setCategory] = useState("");
@@ -163,7 +188,43 @@ export default function TicketDetailPage() {
     useEffect(() => {
         if (!allowed) return;
         getDeskAgents().then((r) => setAgents(r.data || [])).catch(() => {});
+        getDeskServiceAreas().then((r) => setAreas(r.data || [])).catch(() => {});
     }, [allowed]);
+
+    // Resolve/auto-assign the ticket's service area once, on mount. The endpoint
+    // is keyed by id (it fetches the ticket itself), so it must NOT depend on the
+    // `ticket` object — otherwise every unrelated save (status/priority/tags)
+    // replaces `ticket`'s identity and re-fires this fetch + its auto-assign write.
+    useEffect(() => {
+        if (!allowed || !id) return;
+        getDeskTicketServiceArea(id).then(setAreaInfo).catch(() => setAreaInfo(null));
+    }, [allowed, id]);
+
+    const assignArea = async (service_area_id: string | null) => {
+        setSavingArea(true);
+        try {
+            const next = await setDeskTicketServiceArea(id, service_area_id);
+            setAreaInfo(next);
+            toast({ title: service_area_id ? "Service area assigned" : "Service area cleared" });
+        } catch (e: any) {
+            toast({ title: "Assign failed", description: e?.message, variant: "destructive" });
+        } finally {
+            setSavingArea(false);
+        }
+    };
+
+    const suggestAI = async () => {
+        setSuggesting(true);
+        try {
+            const { reply: draft } = await aiSuggestDeskReply(id);
+            setReply(textToHtml(draft));
+            toast({ title: "Draft ready", description: "Review and edit before sending." });
+        } catch (e: any) {
+            toast({ title: "Couldn't draft a reply", description: e?.message, variant: "destructive" });
+        } finally {
+            setSuggesting(false);
+        }
+    };
 
     const patch = async (fields: Record<string, string>, label: string) => {
         setSavingField(true);
@@ -342,16 +403,31 @@ export default function TicketDetailPage() {
                         </Card>
 
                         <Card>
-                            <CardHeader><CardTitle className="text-base">Reply to requester</CardTitle></CardHeader>
+                            <CardHeader className="flex flex-row items-center justify-between">
+                                <CardTitle className="text-base">Reply to requester</CardTitle>
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={suggestAI}
+                                    disabled={suggesting || sending}
+                                    title="Draft a reply with the AI assistant — you review and edit before sending"
+                                >
+                                    <Sparkles className="mr-2 h-4 w-4" />
+                                    {suggesting ? "Drafting…" : "Suggest with AI"}
+                                </Button>
+                            </CardHeader>
                             <CardContent className="space-y-2">
                                 <RichTextEditor
                                     value={reply}
                                     onChange={setReply}
                                     placeholder="Type your reply… (bold, lists, links supported)"
-                                    disabled={sending}
+                                    disabled={sending || suggesting}
                                 />
+                                <p className="text-[11px] text-muted-foreground">
+                                    AI drafts are suggestions — review for accuracy before sending. Nothing is sent until you click Send reply.
+                                </p>
                                 <div className="flex justify-end">
-                                    <Button onClick={sendReply} disabled={sending || !toText(reply).trim()}>
+                                    <Button onClick={sendReply} disabled={sending || suggesting || !toText(reply).trim()}>
                                         <Send className="mr-2 h-4 w-4" /> Send reply
                                     </Button>
                                 </div>
@@ -382,6 +458,61 @@ export default function TicketDetailPage() {
                                 <p className="flex items-center gap-2 text-muted-foreground"><Mail className="h-4 w-4" />
                                     {ticket.contact?.email || ticket.email || "—"}
                                 </p>
+                            </CardContent>
+                        </Card>
+
+                        <Card className={areaInfo?.needs_assignment ? "border-amber-400 bg-amber-50/50 dark:bg-amber-950/20" : undefined}>
+                            <CardHeader>
+                                <CardTitle className="flex items-center gap-2 text-base">
+                                    <MapPin className="h-4 w-4" /> Service area
+                                    {areaInfo?.service_area_source === "auto" && (
+                                        <Badge variant="secondary" className="text-[10px]">auto</Badge>
+                                    )}
+                                </CardTitle>
+                            </CardHeader>
+                            <CardContent className="space-y-2">
+                                {areaInfo?.needs_assignment && (
+                                    <p className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+                                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                                        No service area on file for this requester — assign one (optional, helps routing & reporting).
+                                    </p>
+                                )}
+                                {areaInfo?.suggested && !areaInfo?.service_area_id && (
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="w-full justify-start"
+                                        disabled={savingArea}
+                                        onClick={() => assignArea(areaInfo.suggested!.service_area_id)}
+                                    >
+                                        <Plus className="mr-2 h-4 w-4" />
+                                        Apply suggested: {areaInfo.suggested.service_area_name || areaInfo.suggested.service_area_id}
+                                    </Button>
+                                )}
+                                <Select
+                                    value={areaInfo?.service_area_id || undefined}
+                                    onValueChange={(v) => assignArea(v)}
+                                    disabled={savingArea}
+                                >
+                                    <SelectTrigger><SelectValue placeholder="Assign a service area" /></SelectTrigger>
+                                    <SelectContent>
+                                        {areas.map((a) => (
+                                            <SelectItem key={a.id} value={a.id}>
+                                                {a.name || a.city || a.id}
+                                                {a.province ? ` · ${a.province}` : ""}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                                {areaInfo?.service_area_id && (
+                                    <button
+                                        onClick={() => assignArea(null)}
+                                        disabled={savingArea}
+                                        className="text-xs text-muted-foreground hover:underline"
+                                    >
+                                        Clear assignment
+                                    </button>
+                                )}
                             </CardContent>
                         </Card>
 

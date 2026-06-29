@@ -6199,21 +6199,21 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
     # the driver sees here match the ones enforced on the rides.
     try:
         from ..utils.spinr_pass import (
+            _pass_is_hourly,
             area_timezone,
             completed_today,
             compute_quota,
             hours_until,
             quota_window_for_sub,
-            _pass_is_hourly,
         )
     except ImportError:
         from utils.spinr_pass import (  # type: ignore
+            _pass_is_hourly,
             area_timezone,
             completed_today,
             compute_quota,
             hours_until,
             quota_window_for_sub,
-            _pass_is_hourly,
         )
 
     # Same service-area timezone the enforcement gates use, so the countdown the

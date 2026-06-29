@@ -314,6 +314,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to import retention purge loop: {e}", exc_info=True)
 
+    # Data-export object purge — hourly deletion of DSAR export ZIPs from the
+    # private data-exports Storage bucket after their 7-day signed-link TTL
+    # lapses (PIPEDA data minimization). Idempotent per object; replay-safe.
+    try:
+        from utils.data_export_purge import data_export_purge_loop
+
+        _spawn("data_export_purge (1h)", data_export_purge_loop)
+    except Exception as e:
+        logger.error(f"Failed to import data export purge loop: {e}", exc_info=True)
+
     # Daily Stripe ↔ DB ↔ wallet reconciliation — 20-2 (PCI-DSS, SOC2 CC9.1,
     # CRA). Polls every 60 s, runs the actual reconciliation once per day at
     # 02:00 UTC. Alerts finance on discrepancies > $0.01.
@@ -403,6 +413,7 @@ async def lifespan(app: FastAPI):
             "corporate_low_balance (1h)",
             "allowance_reset (1h)",
             "retention_purge (24h)",
+            "data_export_purge (1h)",
             "stripe_reconcile (24h)",
             "t4a_annual_job (yearly Feb 28)",
             "stuck_ride_sweeper (60s)",

@@ -147,9 +147,20 @@ def quota_window_for_sub(
     return quota_day_bounds_utc(now, tz=tz)
 
 
-def compute_pass_expiry(
-    duration_days: Any, now: Optional[datetime] = None, tz: TzArg = None
-) -> datetime:
+def pass_duration_label(duration_days: Any) -> str:
+    """Day-based label for a pass length — never "monthly"/"weekly"/"annual".
+
+    e.g. ``1`` → ``"1-day"``, ``30`` → ``"30-day"``. Single source of truth for
+    invoice emails, PDFs and copy so every surface names a pass by its length in
+    days. Missing/garbage falls back to the standard 30-day pass.
+    """
+    days = _as_int(duration_days)
+    if days < 1:
+        days = 30
+    return f"{days}-day"
+
+
+def compute_pass_expiry(duration_days: Any, now: Optional[datetime] = None, tz: TzArg = None) -> datetime:
     """UTC expiry for an N-day pass, anchored to the driver's local day.
 
     A **1-day pass** expires exactly 24h from ``now`` ("by hours",
@@ -175,9 +186,7 @@ def compute_pass_expiry(
     start_local = now.astimezone(zone).replace(hour=0, minute=0, second=0, microsecond=0)
     # Add N days in local wall-clock, then re-pin to midnight so a DST shift in
     # the window can't drag the expiry an hour off the local day boundary.
-    expiry_local = (start_local + timedelta(days=days)).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
+    expiry_local = (start_local + timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0)
     return expiry_local.astimezone(timezone.utc)
 
 
@@ -348,9 +357,7 @@ async def quota_status(
     window = quota_window_for_sub(sub, now=now, tz=tz)
     hourly = _pass_is_hourly(sub)
     used = await completed_today(driver_id, now, tz=tz, window_start=window[0])
-    status = compute_quota(
-        sub.get("rides_per_day", UNLIMITED), used, now, tz=tz, window=window, hourly=hourly
-    )
+    status = compute_quota(sub.get("rides_per_day", UNLIMITED), used, now, tz=tz, window=window, hourly=hourly)
     status["subscription_id"] = sub.get("id")
     return status
 

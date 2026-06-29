@@ -7233,9 +7233,9 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
     # location timezone (reused for the activation push further down).
     _drv = await db.find_one("drivers", {"id": driver_id}) if driver_id else None
     try:
-        from ..utils.spinr_pass import area_timezone, compute_pass_expiry
+        from ..utils.spinr_pass import area_timezone, compute_pass_expiry, pass_duration_label
     except ImportError:
-        from utils.spinr_pass import area_timezone, compute_pass_expiry  # type: ignore
+        from utils.spinr_pass import area_timezone, compute_pass_expiry, pass_duration_label  # type: ignore
     try:
         _act_tz = await area_timezone((_drv or {}).get("service_area_id"))
     except Exception:
@@ -7357,9 +7357,7 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
         # their invoice email from the invoice.paid webhook (which has the
         # authoritative Stripe invoice URL and amount for every charge).
         if plan and _is_one_off:
-            _days = plan.get("duration_days", 30)
-            _dur_map = {1: "Daily", 7: "Weekly", 30: "Monthly", 365: "Annual"}
-            _dur_label = _dur_map.get(_days, f"{_days}-day")
+            _dur_label = pass_duration_label(plan.get("duration_days", 30))
             await _send_subscription_invoice_email(
                 driver_id=driver_id,
                 plan_name=plan.get("name", "Spinr Pass"),
@@ -7477,9 +7475,11 @@ async def resend_subscription_invoice(
     plan = None
     if payment.get("plan_id"):
         plan = await db_supabase.find_one("subscription_plans", {"id": payment["plan_id"]})
-    _days = (plan or {}).get("duration_days", 30)
-    _dur_map = {1: "Daily", 7: "Weekly", 30: "Monthly", 365: "Annual"}
-    _dur_label = _dur_map.get(_days, f"{_days}-day")
+    try:
+        from ..utils.spinr_pass import pass_duration_label
+    except ImportError:
+        from utils.spinr_pass import pass_duration_label  # type: ignore
+    _dur_label = pass_duration_label((plan or {}).get("duration_days", 30))
 
     def _q2(v):
         return Decimal(str(v)).quantize(Decimal("0.01"))

@@ -1,12 +1,22 @@
 """Spinr Pass daily ride-quota helpers.
 
-A driver subscription ("Spinr Pass") grants a per-**calendar-day** ride
-allowance (``rides_per_day``; ``-1`` == unlimited). The *pass* itself may last
-1 / 7 / 30 / 365 days (``duration_days``), but the ride allowance is always
-counted per calendar day and unused rides do **not** roll over — a monthly pass
-with ``rides_per_day = 4`` gives 4 rides today, 4 tomorrow, and so on.
+A driver subscription ("Spinr Pass") is sold as an *N-day pass* (``duration_days``
+— a 1-day / 7-day / 30-day / 365-day pass; we never call the 30-day pass
+"monthly"). It grants a ride allowance (``rides_per_day``; ``-1`` == unlimited).
 
-The allowance resets at midnight in the driver's local calendar day. We use
+For every multi-day pass the allowance is counted per **calendar day** and
+unused rides do **not** roll over — a 30-day pass with ``rides_per_day = 4``
+gives 4 rides today, 4 tomorrow, and so on, whether the driver bought it in the
+morning or the evening (that first day's rides still expire at the upcoming
+midnight). The pass itself ends on its Nth day.
+
+The **1-day pass is the exception**: its whole lifetime is 24 hours, so its
+allowance is counted across that single ``started_at``..``expires_at`` window
+(expiry "by hours", not a midnight reset) — buy a 4-ride 1-day pass in the
+evening and you get 4 rides over the next 24 hours, not 4 before midnight and 4
+after. See ``quota_window_for_sub`` / ``_pass_is_hourly``.
+
+The multi-day allowance resets at midnight in the driver's local calendar day. We use
 America/Regina because Spinr is Saskatchewan-first and SK is UTC-6 year-round
 (no DST), so "calendar day" is unambiguous and stable. Every enforcement gate
 (go-online, dispatch candidate filter, accept-ride, force-offline on
@@ -90,20 +100,78 @@ def quota_day_bounds_utc(now: Optional[datetime] = None, tz: TzArg = None) -> Tu
     return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
 
 
-def compute_quota(
-    rides_per_day: Any, used_today: Any, now: Optional[datetime] = None, tz: TzArg = None
-) -> Dict[str, Any]:
-    """Derive quota state from a plan's ``rides_per_day`` and today's usage.
+# A pass whose entire lifetime is ~24h is the "1-day pass": its ride allowance
+# is counted across that single window (expiry by hours) rather than refilling
+# at midnight. We detect it from the row's own lifetime (started_at..expires_at)
+# because driver_subscriptions stores no duration_days; ~25h of slack cleanly
+# separates a 24h pass from the next tier (the 7-day pass = 168h).
+HOURLY_PASS_MAX_LIFETIME = timedelta(days=1, hours=1)
 
-    Returns a dict with the remaining count, whether the allowance is
-    exhausted, and the countdown to the next reset. ``rides_remaining`` is the
-    string ``"unlimited"`` for unlimited plans (matches the API/UI contract).
-    ``tz`` selects the local calendar day (defaults to Regina).
+
+def _pass_is_hourly(sub: Optional[Dict[str, Any]]) -> bool:
+    """True when this pass's whole lifetime is ~24h (the "1-day pass").
+
+    Such a pass enforces its allowance over the full pass window
+    (``started_at``..``expires_at``) rather than per calendar day, so a driver
+    who buys it in the evening gets exactly ``rides_per_day`` rides across 24
+    hours — not that many before midnight and the same again after.
+    """
+    if not sub:
+        return False
+    start = parse_iso_utc(sub.get("started_at")) if sub.get("started_at") else None
+    end = parse_iso_utc(sub.get("expires_at")) if sub.get("expires_at") else None
+    if start is None or end is None:
+        return False
+    return timedelta(0) < (end - start) <= HOURLY_PASS_MAX_LIFETIME
+
+
+def quota_window_for_sub(
+    sub: Optional[Dict[str, Any]], now: Optional[datetime] = None, tz: TzArg = None
+) -> Tuple[datetime, datetime]:
+    """``[start, end)`` UTC quota window for ``sub``.
+
+    1-day pass (lifetime ≤ ~24h) → the pass's own window
+    (``started_at``..``expires_at``): the allowance counts across the whole 24h
+    and never refills. Any longer pass → the local calendar day (``tz``-aware,
+    refills at midnight). Falls back to the calendar day when the row lacks the
+    timestamps needed for the pass window.
     """
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
-    _, day_end = quota_day_bounds_utc(now, tz=tz)
+    if _pass_is_hourly(sub):
+        start = parse_iso_utc(sub.get("started_at"))
+        end = parse_iso_utc(sub.get("expires_at"))
+        if start is not None and end is not None:
+            return start, end
+    return quota_day_bounds_utc(now, tz=tz)
+
+
+def compute_quota(
+    rides_per_day: Any,
+    used_today: Any,
+    now: Optional[datetime] = None,
+    tz: TzArg = None,
+    window: Optional[Tuple[datetime, datetime]] = None,
+    hourly: bool = False,
+) -> Dict[str, Any]:
+    """Derive quota state from a plan's ``rides_per_day`` and usage so far.
+
+    Returns a dict with the remaining count, whether the allowance is
+    exhausted, and the countdown to the window's end. ``rides_remaining`` is the
+    string ``"unlimited"`` for unlimited plans (matches the API/UI contract).
+    ``window`` overrides the counting window — pass a 1-day pass's
+    ``started_at``..``expires_at`` here; omit it for the local calendar day
+    (``tz`` selects the locale, defaults to Regina). ``hourly`` flags a 1-day
+    pass so callers can word "ends in Xh" vs "resets at midnight" correctly.
+    """
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    if window is not None:
+        _, day_end = window
+    else:
+        _, day_end = quota_day_bounds_utc(now, tz=tz)
     try:
         rpd = int(rides_per_day)
     except (TypeError, ValueError):
@@ -123,6 +191,10 @@ def compute_quota(
         "rides_remaining": "unlimited" if unlimited else remaining,
         "can_accept_rides": unlimited or used < rpd,
         "exhausted": exhausted,
+        # For a multi-day pass this is the next local midnight (the allowance
+        # refills). For a 1-day pass it's the pass's own expiry — the allowance
+        # never refills, so the "reset" countdown doubles as the pass end.
+        "hourly": bool(hourly),
         "quota_resets_at": day_end.isoformat(),
         "seconds_until_reset": secs,
         "hours_until_reset": round(secs / 3600, 1),
@@ -171,10 +243,23 @@ async def area_timezone(area_id: Optional[str]) -> Optional[str]:
     return (area or {}).get("timezone")
 
 
-async def completed_today(driver_id: str, now: Optional[datetime] = None, tz: TzArg = None) -> int:
-    """Count a driver's rides completed within the current quota day (``tz``)."""
+async def completed_today(
+    driver_id: str,
+    now: Optional[datetime] = None,
+    tz: TzArg = None,
+    window_start: Optional[datetime] = None,
+) -> int:
+    """Count a driver's rides completed within the current quota window.
+
+    Defaults to the local calendar day (``tz``); pass ``window_start`` to count
+    from an explicit window opening — e.g. a 1-day pass's ``started_at`` — so
+    the 24h pass window is measured instead of the midnight-to-midnight day.
+    """
     db = _db()
-    day_start, _ = quota_day_bounds_utc(now, tz=tz)
+    if window_start is not None:
+        day_start = window_start
+    else:
+        day_start, _ = quota_day_bounds_utc(now, tz=tz)
     try:
         from ..models.ride_status import RideStatus  # type: ignore
     except ImportError:  # pragma: no cover - top-level import path
@@ -223,8 +308,15 @@ async def quota_status(
     if exp is not None and exp <= (now or datetime.now(timezone.utc)):
         return None
     tz = await area_timezone(area_id) if area_id else None
-    used = await completed_today(driver_id, now, tz=tz)
-    status = compute_quota(sub.get("rides_per_day", UNLIMITED), used, now, tz=tz)
+    # A 1-day pass counts its allowance across its own 24h window; every longer
+    # pass counts per local calendar day. Read the same window for both the
+    # count and the countdown so what's enforced matches what's displayed.
+    window = quota_window_for_sub(sub, now=now, tz=tz)
+    hourly = _pass_is_hourly(sub)
+    used = await completed_today(driver_id, now, tz=tz, window_start=window[0])
+    status = compute_quota(
+        sub.get("rides_per_day", UNLIMITED), used, now, tz=tz, window=window, hourly=hourly
+    )
     status["subscription_id"] = sub.get("id")
     return status
 
@@ -285,16 +377,26 @@ async def assert_quota_available(
         from utils.error_keys import ErrorKeys  # type: ignore
 
     reset_h = round(status.get("hours_until_reset") or 0)
-    raise SpinrException(
-        message=(
+    if status.get("hourly"):
+        # 1-day pass: allowance spans the pass's 24h, doesn't refill at midnight.
+        message = (
+            f"You've used all {status['rides_per_day']} rides on your 1-day Spinr Pass. "
+            f"This pass covers {status['rides_per_day']} rides over 24 hours and ends in about {reset_h}h."
+        )
+        action_hint = "1-day pass limit reached"
+    else:
+        message = (
             f"You've used all {status['rides_per_day']} of today's Spinr Pass rides. "
             f"Your allowance resets in about {reset_h}h. "
             "Enjoy the rest of your day — you can go online again then."
-        ),
+        )
+        action_hint = "Resets at midnight"
+    raise SpinrException(
+        message=message,
         error_code=ErrorCode.DRIVER_QUOTA_EXCEEDED,
         status_code=403,
         message_key=ErrorKeys.DRIVER_QUOTA_EXHAUSTED,
-        action_hint="Resets at midnight",
+        action_hint=action_hint,
         details={
             "rides_per_day": status["rides_per_day"],
             "used_today": status["used_today"],
@@ -311,16 +413,20 @@ async def exhausted_driver_ids(
 ) -> Set[str]:
     """Batch: of the given active subs, which drivers are out of rides today.
 
-    ``subs`` rows must include ``driver_id`` and ``rides_per_day`` (and may
-    include ``expires_at``). Self-contained: skips unlimited plans (any negative
-    ``rides_per_day``) and lapsed passes, so callers can pass raw active-sub
-    rows. Uses a single batched ``rides`` read (no N+1) to tally today's
-    completions across all finite-quota drivers, then compares each driver's
-    count to their own allowance. ``tz`` selects the calendar-day window — pass
-    the ride's service-area timezone (Regina when omitted).
+    ``subs`` rows must include ``driver_id`` and ``rides_per_day``, and should
+    include ``started_at`` + ``expires_at`` so 1-day passes are measured over
+    their 24h window (a row missing those falls back to the calendar day).
+    Self-contained: skips unlimited plans (any negative ``rides_per_day``) and
+    lapsed passes, so callers can pass raw active-sub rows. Uses a single
+    batched ``rides`` read (no N+1) from the earliest window opening, then tallies
+    each driver's completions against their *own* window — so a 1-day-pass driver
+    (24h window) and a 30-day-pass driver (calendar day) are each measured
+    correctly. ``tz`` selects the calendar-day window — pass the ride's
+    service-area timezone (Regina when omitted).
     """
     now_dt = now or datetime.now(timezone.utc)
-    finite: Dict[str, int] = {}
+    # driver_id -> (cap, window_start) for finite, unlapsed passes
+    finite: Dict[str, Tuple[int, datetime]] = {}
     for s in subs:
         did = s.get("driver_id")
         if did is None:
@@ -331,12 +437,16 @@ async def exhausted_driver_ids(
         exp = parse_iso_utc(s.get("expires_at")) if s.get("expires_at") else None
         if exp is not None and exp <= now_dt:
             continue  # lapsed pass — quota is moot
-        finite[did] = cap
+        w_start, _ = quota_window_for_sub(s, now=now_dt, tz=tz)
+        finite[did] = (cap, w_start)
     if not finite:
         return set()
 
     db = _db()
-    day_start, _ = quota_day_bounds_utc(now_dt, tz=tz)
+    # One read from the earliest window opening across all drivers; bucket each
+    # ride against that driver's own window so mixed 24h / calendar-day passes
+    # are counted correctly without an N+1.
+    earliest = min(ws for _, ws in finite.values())
     try:
         from ..models.ride_status import RideStatus  # type: ignore
     except ImportError:  # pragma: no cover - top-level import path
@@ -348,17 +458,23 @@ async def exhausted_driver_ids(
         {
             "driver_id": {"$in": ids},
             "status": RideStatus.COMPLETED.value,
-            "ride_completed_at": {"$gte": day_start.isoformat()},
+            "ride_completed_at": {"$gte": earliest.isoformat()},
         },
-        columns="driver_id",
+        columns="driver_id,ride_completed_at",
         limit=10000,
     )
     counts: Dict[str, int] = {}
     for r in rows or []:
         did = r.get("driver_id")
-        if did is not None:
+        if did not in finite:  # also covers did is None
+            continue
+        w_start = finite[did][1]
+        completed = parse_iso_utc(r.get("ride_completed_at")) if r.get("ride_completed_at") else None
+        # Only count rides inside this driver's own window. (Missing/unparseable
+        # timestamps are excluded rather than over-counting toward exhaustion.)
+        if completed is not None and completed >= w_start:
             counts[did] = counts.get(did, 0) + 1
-    return {did for did, cap in finite.items() if counts.get(did, 0) >= cap}
+    return {did for did, (cap, _ws) in finite.items() if counts.get(did, 0) >= cap}
 
 
 def _as_int(v: Any) -> int:

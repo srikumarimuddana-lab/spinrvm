@@ -337,7 +337,7 @@ class DispatchService:
                 active_subs = await self.db.get_rows(
                     "driver_subscriptions",
                     {"driver_id": {"$in": candidate_ids}, "status": "active"},
-                    columns="driver_id,expires_at,rides_per_day",
+                    columns="driver_id,started_at,expires_at,rides_per_day",
                     limit=len(candidate_ids),
                 )
                 _now = datetime.now(timezone.utc)

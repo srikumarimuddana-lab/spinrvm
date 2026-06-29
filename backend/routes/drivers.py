@@ -6198,9 +6198,23 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
     # window powers go-online / dispatch / accept enforcement, so the numbers
     # the driver sees here match the ones enforced on the rides.
     try:
-        from ..utils.spinr_pass import area_timezone, completed_today, compute_quota, hours_until
+        from ..utils.spinr_pass import (
+            area_timezone,
+            completed_today,
+            compute_quota,
+            hours_until,
+            quota_window_for_sub,
+            _pass_is_hourly,
+        )
     except ImportError:
-        from utils.spinr_pass import area_timezone, completed_today, compute_quota, hours_until  # type: ignore
+        from utils.spinr_pass import (  # type: ignore
+            area_timezone,
+            completed_today,
+            compute_quota,
+            hours_until,
+            quota_window_for_sub,
+            _pass_is_hourly,
+        )
 
     # Same service-area timezone the enforcement gates use, so the countdown the
     # driver sees matches when their rides actually reset. This is display only,
@@ -6211,8 +6225,15 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
     except Exception:
         logger.warning("get_current_subscription: area timezone lookup failed; using default", exc_info=True)
         _tz = None
-    today_rides = await completed_today(driver["id"], tz=_tz)
-    quota = compute_quota(sub.get("rides_per_day", -1), today_rides, tz=_tz)
+    # 1-day pass → count across its own 24h window; longer pass → calendar day.
+    # Read the same window for the count and the countdown so the numbers shown
+    # here match exactly what's enforced on go-online / accept.
+    _window = quota_window_for_sub(sub, tz=_tz)
+    _hourly = _pass_is_hourly(sub)
+    today_rides = await completed_today(driver["id"], tz=_tz, window_start=_window[0])
+    quota = compute_quota(
+        sub.get("rides_per_day", -1), today_rides, tz=_tz, window=_window, hourly=_hourly
+    )
 
     return {
         "has_subscription": True,
@@ -6220,9 +6241,12 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
         "today_rides": today_rides,
         "rides_remaining": quota["rides_remaining"],
         "can_accept_rides": quota["can_accept_rides"],
-        # Quota refills (rides reset) at the next local midnight.
+        # Multi-day pass: refills at the next local midnight. 1-day pass: this
+        # is the pass's own expiry (the allowance never refills mid-pass).
         "quota_resets_at": quota["quota_resets_at"],
         "hours_until_reset": quota["hours_until_reset"],
+        # True for a 1-day pass so the app can word "ends in Xh" not "resets".
+        "hourly_pass": quota["hourly"],
         # Pass itself ends (must renew) at expires_at.
         "hours_until_expiry": hours_until(sub.get("expires_at")),
     }

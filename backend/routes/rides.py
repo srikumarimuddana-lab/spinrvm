@@ -866,7 +866,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
             _q_subs = await db_supabase.get_rows(
                 "driver_subscriptions",
                 {"driver_id": {"$in": _q_ids}, "status": "active"},
-                columns="driver_id,expires_at,rides_per_day",
+                columns="driver_id,started_at,expires_at,rides_per_day",
                 limit=len(_q_ids),
             )
             if _q_subs:

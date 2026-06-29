@@ -149,7 +149,7 @@ export default function SettingsScreen() {
     const handleDeleteAccount = () => {
         Alert.alert(
             'Delete Account',
-            'Your account will be scheduled for deletion with a 30-day recovery window.\n\nYou can reactivate by contacting support within 30 days; after that, all your data, earnings history, and ride records are permanently deleted.',
+            'Your account will be scheduled for deletion with a 30-day recovery window.\n\nYou can reactivate any time within 30 days by signing in again; after that, all your data, earnings history, and ride records are permanently deleted.',
             [
                 { text: 'Cancel', style: 'cancel' },
                 { text: 'Yes, Continue', style: 'destructive', onPress: () => { setDeleteInput(''); setShowDeleteStep2(true); } },

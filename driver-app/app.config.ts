@@ -1,18 +1,26 @@
 import { ExpoConfig, ConfigContext } from 'expo/config';
 
-const APP_NAME = 'Spinr Driver';
-const BUNDLE_ID = 'com.spinr.driver'; // driver-only ID — rider app uses com.spinr.user (no clash)
-const SCHEME = 'spinr-driver';
+// ─────────────────────────────────────────────────────────────────────────────
+// Static identity fields (name, slug, version, icon, scheme, orientation,
+// userInterfaceStyle, splash, ios.bundleIdentifier, android.package, web,
+// extra.eas.projectId) now live in the static `app.json`. Expo Launch's
+// in-browser wizard rewrites those fields and refuses to run against a purely
+// dynamic config ("requires a static app manifest"). They arrive here as
+// `config` (the parsed app.json) and pass through untouched via `...config`.
+//
+// This file keeps ONLY:
+//   1. Hand-managed build/native settings + their rationale comments
+//      (newArch, runtimeVersion, privacy manifests, plugins, build-properties).
+//   2. Values that depend on process.env (Google Maps key, backend URL, Sentry) —
+//      these can never live in static JSON.
+// Do NOT re-add name / slug / version / bundleIdentifier / package here — doing
+// so would override (clobber) whatever Launch writes into app.json.
+// driver-only IDs: bundle com.spinr.driver, scheme spinr-driver (rider app uses
+// com.spinr.user / spinr-user — no clash).
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default ({ config }: ConfigContext): ExpoConfig => ({
     ...config,
-    name: APP_NAME,
-    slug: 'spinrdriver',
-    version: '1.0.0',
-    orientation: 'portrait',
-    icon: './assets/images/icon.png',
-    scheme: SCHEME,
-    userInterfaceStyle: 'automatic',
     // @ts-expect-error newArchEnabled is valid Expo config but not yet typed in ExpoConfig
     newArchEnabled: true, // REQUIRED: react-native-reanimated 4 / react-native-worklets only run on the New Architecture (old arch crashed on first animated screen)
     updates: {
@@ -23,15 +31,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // shipping native changes that break JS-bundle compatibility. Pre-launch
     // with no production users, OTA compatibility risk is zero.
     runtimeVersion: '2.3.0', // bump from 2.2.0: adds react-native-webview (a new native module) for Stripe embedded onboarding + the Android CAMERA permission — old binaries lack both, so this JS must not reach them via OTA
-    splash: {
-        image: './assets/images/splash-blank.png',
-        resizeMode: 'contain',
-        backgroundColor: '#FFFFFF',
-    },
     ios: ({
-        supportsTablet: true,
+        ...config.ios,
         minimumOsVersion: '16.0', // SDK 55 minimum; was 13.0 on SDK 54 (now in ExpoConfig types)
-        bundleIdentifier: BUNDLE_ID,
         googleServicesFile: './GoogleService-Info.plist',
         config: {
             googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY
@@ -149,11 +151,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         },
     } as any),
     android: {
+        ...config.android,
         adaptiveIcon: {
             foregroundImage: './assets/images/adaptive-icon.png',
             backgroundColor: '#FFFFFF'
         },
-        package: BUNDLE_ID,
         // CAMERA is needed for in-WebView getUserMedia — Stripe's embedded
         // identity onboarding (stripe-onboarding.tsx) captures the driver's
         // government ID live in the page. (The native expo-image-picker
@@ -179,11 +181,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 category: ['BROWSABLE', 'DEFAULT'],
             },
         ],
-    },
-    web: {
-        bundler: 'metro',
-        output: 'single',
-        favicon: './assets/images/favicon.png'
     },
     plugins: [
         './plugins/withGradleWrapper',
@@ -281,9 +278,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         typedRoutes: true
     },
     extra: {
-        eas: {
-            projectId: "1ed02cf4-97cb-4678-b5a2-0881f89abaa8"
-        },
+        ...config.extra,
         EXPO_PUBLIC_BACKEND_URL: process.env.EXPO_PUBLIC_BACKEND_URL,
         backendUrl: process.env.EXPO_PUBLIC_BACKEND_URL,
     }

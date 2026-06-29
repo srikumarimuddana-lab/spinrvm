@@ -1,0 +1,33 @@
+{
+  "expo": {
+    "name": "Spinr Driver",
+    "slug": "spinrdriver",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "spinr-driver",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/images/splash-blank.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FFFFFF"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.spinr.driver"
+    },
+    "android": {
+      "package": "com.spinr.driver"
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "1ed02cf4-97cb-4678-b5a2-0881f89abaa8"
+      }
+    }
+  }
+}

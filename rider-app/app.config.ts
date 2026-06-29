@@ -1,18 +1,30 @@
 import { ExpoConfig, ConfigContext } from 'expo/config';
 
-const APP_NAME = 'Spinr';
-const BUNDLE_ID = 'com.spinr.user'; // rider-only ID — driver app uses com.spinr.driver (no clash)
-const SCHEME = 'spinr-user';
+// rider-only ID — driver app uses com.spinr.driver (no clash).
+// Keep in sync with `ios.bundleIdentifier` / `android.package` in app.json:
+// the App Group below is derived from it. If Expo Launch rewrites the bundle id
+// in app.json, update this constant too.
+const BUNDLE_ID = 'com.spinr.user';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Static identity fields (name, slug, version, icon, scheme, orientation,
+// userInterfaceStyle, splash, ios.bundleIdentifier, android.package, web,
+// extra.eas.projectId) now live in the static `app.json`. Expo Launch's
+// in-browser wizard rewrites those fields and refuses to run against a purely
+// dynamic config ("requires a static app manifest"). They arrive here as
+// `config` (the parsed app.json) and pass through untouched via `...config`.
+//
+// This file keeps ONLY:
+//   1. Hand-managed build/native settings + their rationale comments
+//      (newArch, runtimeVersion, privacy manifests, plugins, build-properties).
+//   2. Values that depend on process.env (Google Maps key, backend URL, Sentry) —
+//      these can never live in static JSON.
+// Do NOT re-add name / slug / version / bundleIdentifier / package here — doing
+// so would override (clobber) whatever Launch writes into app.json.
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default ({ config }: ConfigContext): ExpoConfig => ({
     ...config,
-    name: APP_NAME,
-    slug: 'spinr-rider',
-    version: '1.0.0',
-    orientation: 'portrait',
-    icon: './assets/images/icon.png',
-    scheme: SCHEME,
-    userInterfaceStyle: 'automatic',
     newArchEnabled: true, // REQUIRED: react-native-reanimated 4 / react-native-worklets only run on the New Architecture (old arch crashed on first animated screen)
     updates: {
         url: 'https://u.expo.dev/8f1e4f60-720e-46b0-9b71-33c13d3af043',
@@ -22,16 +34,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // shipping native changes that break JS-bundle compatibility. Pre-launch
     // with no production users, OTA compatibility risk is zero.
     runtimeVersion: '2.0.0', // bumped from 1.0.0: New Architecture is a native/JS-bundle break — old-arch installs must not pull this OTA
-    splash: {
-        image: './assets/images/splash-blank.png',
-        resizeMode: 'contain',
-        backgroundColor: '#FFFFFF',
-    },
     ios: {
-        supportsTablet: true,
+        ...config.ios,
         // @ts-expect-error minimumOsVersion is valid Expo config but not yet in SDK 54 type defs
         minimumOsVersion: '16.0', // SDK 55 minimum; was 13.0 on SDK 54
-        bundleIdentifier: BUNDLE_ID,
         googleServicesFile: './GoogleService-Info.plist',
         config: {
             googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY
@@ -86,6 +92,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         },
     },
     android: {
+        ...config.android,
         adaptiveIcon: {
             foregroundImage: './assets/images/adaptive-icon.png',
             backgroundColor: '#FFFFFF'
@@ -98,7 +105,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // once a native rebuild ships. Note: this is a native AndroidManifest
         // setting — it does NOT take effect over OTA, only in a new build.
         softwareKeyboardLayoutMode: 'resize',
-        package: BUNDLE_ID,
         googleServicesFile: './google-services.json',
         config: {
             googleMaps: {
@@ -118,11 +124,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 category: ['BROWSABLE', 'DEFAULT'],
             },
         ],
-    },
-    web: {
-        bundler: 'metro',
-        output: 'single',
-        favicon: './assets/images/favicon.png'
     },
     plugins: [
         './plugins/withGradleWrapper',
@@ -209,9 +210,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         typedRoutes: false
     },
     extra: {
-        eas: {
-            projectId: "8f1e4f60-720e-46b0-9b71-33c13d3af043"
-        },
+        ...config.extra,
         EXPO_PUBLIC_BACKEND_URL: process.env.EXPO_PUBLIC_BACKEND_URL,
         backendUrl: process.env.EXPO_PUBLIC_BACKEND_URL,
         googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY

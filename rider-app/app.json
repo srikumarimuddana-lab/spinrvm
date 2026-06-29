@@ -1,0 +1,33 @@
+{
+  "expo": {
+    "name": "Spinr",
+    "slug": "spinr-rider",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "spinr-user",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/images/splash-blank.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FFFFFF"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.spinr.user"
+    },
+    "android": {
+      "package": "com.spinr.user"
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "8f1e4f60-720e-46b0-9b71-33c13d3af043"
+      }
+    }
+  }
+}

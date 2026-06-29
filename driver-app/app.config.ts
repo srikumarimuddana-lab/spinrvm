@@ -52,6 +52,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 'Spinr Driver uses your camera to scan and upload your driver license, vehicle insurance, and vehicle registration documents, and to verify your identity for payouts.',
             NSPhotoLibraryUsageDescription:
                 'Spinr Driver accesses your photo library so you can upload existing photos of your driver license, vehicle insurance, and vehicle registration.',
+            // Lets Linking.canOpenURL() detect whether Google Maps / Waze are
+            // installed before deep-linking turn-by-turn navigation (Settings →
+            // Navigation). Without these whitelisted, canOpenURL always returns
+            // false on iOS and we'd never open the driver's chosen app.
+            LSApplicationQueriesSchemes: ['comgooglemaps', 'waze'],
         },
         // Required by Apple for any app using required-reason APIs (enforced from May 2024).
         // Missing this causes App Store / TestFlight rejection at upload time.

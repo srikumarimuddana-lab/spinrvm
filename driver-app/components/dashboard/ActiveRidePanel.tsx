@@ -314,33 +314,47 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
     return m > 0 ? `${m}m ${sec.toString().padStart(2, '0')}s` : `${sec}s`;
   };
 
-  const openMapsNavigation = (lat: number, lng: number, _label: string) => {
+  const openMapsNavigation = async (lat: number, lng: number, _label: string) => {
     // The Google Maps web URL is the universal fallback — it works on every
     // device whether or not a native app is installed. On devices WITH the
-    // app it auto-redirects; without it (or in Expo Go) it opens the browser
-    // which still provides turn-by-turn. The old `google.navigation:` scheme
-    // crashes with "No Activity found to handle Intent" when absent.
+    // Google Maps app it auto-redirects; without it (or in Expo Go) it opens
+    // the browser which still provides turn-by-turn.
     const googleWebUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
     const appleUrl = `http://maps.apple.com/?daddr=${lat},${lng}&dirflg=d`;
+    // If the chosen app isn't installed, fall back to the phone's built-in
+    // maps (Apple Maps on iOS, Google Maps web on Android) — always present
+    // and always gives driving directions.
+    const defaultUrl = Platform.OS === 'ios' ? appleUrl : googleWebUrl;
 
-    // Honour the driver's saved choice (Settings → Navigation). For the
-    // dedicated apps, try the deep link first and fall back to the web URL
-    // when the app isn't installed (openURL rejects on an unhandled scheme).
+    // Try a dedicated app's deep link, falling back when it isn't installed.
+    // canOpenURL is the reliable cross-platform check: on iOS the `waze` and
+    // `comgooglemaps` schemes are whitelisted in app.config's
+    // LSApplicationQueriesSchemes, so canOpenURL returns false (not a system
+    // error) when the app is absent; on Android it reflects installed intents.
+    const openWithFallback = async (appUrl: string) => {
+      try {
+        if (await Linking.canOpenURL(appUrl)) {
+          await Linking.openURL(appUrl);
+          return;
+        }
+      } catch {
+        // canOpenURL/openURL threw — fall through to the default maps app.
+      }
+      Linking.openURL(defaultUrl).catch(() => Linking.openURL(googleWebUrl));
+    };
+
+    // Honour the driver's saved choice (Settings → Navigation).
     if (navApp === 'waze') {
-      const wazeApp = `waze://?ll=${lat},${lng}&navigate=yes`;
-      const wazeWeb = `https://waze.com/ul?ll=${lat},${lng}&navigate=yes`;
-      Linking.openURL(wazeApp).catch(() => Linking.openURL(wazeWeb).catch(() => Linking.openURL(googleWebUrl)));
+      await openWithFallback(`waze://?ll=${lat},${lng}&navigate=yes`);
       return;
     }
     if (navApp === 'google') {
-      const googleApp = `comgooglemaps://?daddr=${lat},${lng}&directionsmode=driving`;
-      Linking.openURL(googleApp).catch(() => Linking.openURL(googleWebUrl));
+      await openWithFallback(`comgooglemaps://?daddr=${lat},${lng}&directionsmode=driving`);
       return;
     }
 
     // 'default' — use the platform's native maps app.
-    const url = Platform.OS === 'ios' ? appleUrl : googleWebUrl;
-    Linking.openURL(url).catch(() => Linking.openURL(googleWebUrl));
+    Linking.openURL(defaultUrl).catch(() => Linking.openURL(googleWebUrl));
   };
 
   const showConfirm = (

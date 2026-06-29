@@ -47,7 +47,7 @@ def test_assembles_kwargs_with_tax_breakdown():
         "id": "pay_abcdef12",
         "driver_id": "drv_1",
         "plan_id": "plan_1",
-        "plan_name": "Spinr Pass Monthly",
+        "plan_name": "Spinr Pass 30-Day",
         "amount": "23.65",
         "subtotal": "20.00",
         "gst_amount": "1.00",
@@ -70,8 +70,8 @@ def test_assembles_kwargs_with_tax_breakdown():
     assert kw["invoice_number"] == "SPX-PAY_ABCD"
     assert kw["driver_name"] == "Jordan Lee"
     assert kw["driver_email"] == "jordan@example.com"
-    assert kw["plan_name"] == "Spinr Pass Monthly"
-    assert kw["duration_label"] == "Monthly"
+    assert kw["plan_name"] == "Spinr Pass 30-Day"
+    assert kw["duration_label"] == "30-day"
     assert kw["billing_reason"] == "subscription_cycle"
     assert kw["subtotal"] == Decimal("20.00")
     assert kw["gst_amount"] == Decimal("1.00")

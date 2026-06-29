@@ -1095,9 +1095,11 @@ async def stripe_webhook(request: Request):
                 _inv_plan = None
                 if row.get("plan_id"):
                     _inv_plan = await db_supabase.find_one("subscription_plans", {"id": row["plan_id"]})
-                _inv_days = (_inv_plan or {}).get("duration_days", 30)
-                _dur_map = {1: "Daily", 7: "Weekly", 30: "Monthly", 365: "Annual"}
-                _inv_dur = _dur_map.get(_inv_days, f"{_inv_days}-day")
+                try:
+                    from ..utils.spinr_pass import pass_duration_label
+                except ImportError:
+                    from utils.spinr_pass import pass_duration_label  # type: ignore
+                _inv_dur = pass_duration_label((_inv_plan or {}).get("duration_days", 30))
                 _inv_date = datetime.now(timezone.utc).strftime("%B %d, %Y")
 
                 # Compute tax breakdown from the driver's service-area config.

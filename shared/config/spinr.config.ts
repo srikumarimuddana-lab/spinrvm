@@ -15,23 +15,23 @@ import Constants from 'expo-constants';
 const PRODUCTION_BACKEND_URL = 'https://api-spinr.spinr.ca';
 
 const getBackendUrl = () => {
-  const getEnvVar = (key: string): string | undefined => {
-    try {
-      return process.env[key];
-    } catch {
-      return undefined;
-    }
-  };
+  // IMPORTANT: read EXPO_PUBLIC_* vars via STATIC member access only.
+  // babel-preset-expo inlines these at bundle time by find-and-replacing the
+  // literal `process.env.EXPO_PUBLIC_NAME` expression. A dynamic/computed read
+  // (`process.env[key]`) is NOT inlined and resolves to `undefined` in
+  // production/standalone builds — which silently dropped the configured
+  // EXPO_PUBLIC_BACKEND_URL and fell through to the hardcoded production URL.
+  // Keep these references static so the value the user sets is honoured.
 
   // 1. Prefer explicit env var — set EXPO_PUBLIC_BACKEND_URL in your .env file
-  const backendUrl = getEnvVar('EXPO_PUBLIC_BACKEND_URL');
+  const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL;
   if (backendUrl) {
     console.log('[SpinrConfig] Backend URL from env:', backendUrl);
     return backendUrl;
   }
 
   // 2. Generic API URL fallback
-  const apiUrl = getEnvVar('EXPO_PUBLIC_API_URL');
+  const apiUrl = process.env.EXPO_PUBLIC_API_URL;
   if (apiUrl) {
     console.log('[SpinrConfig] Backend URL from EXPO_PUBLIC_API_URL:', apiUrl);
     return apiUrl;

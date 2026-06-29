@@ -18,25 +18,27 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 try:
     from ... import db_supabase
-    from ...dependencies import get_admin_user, require_module
+    from ...dependencies import require_module
     from ...services import zoho_desk_db
     from ...services import zoho_desk_service as zoho
     from ...services import zoho_ticket_service_area as ticket_area
     from ...services.zoho_desk_service import ZohoDeskError
     from ...utils.audit_logger import log_admin_action
+    from ...utils.rate_limiter import admin_ai_suggest_limit
 except ImportError:  # pragma: no cover - direct module import in tests
     import db_supabase
-    from dependencies import get_admin_user, require_module
+    from dependencies import require_module
     from services import zoho_desk_db
     from services import zoho_desk_service as zoho
     from services import zoho_ticket_service_area as ticket_area
     from services.zoho_desk_service import ZohoDeskError
     from utils.audit_logger import log_admin_action
+    from utils.rate_limiter import admin_ai_suggest_limit
 
 logger = logging.getLogger(__name__)
 
@@ -122,13 +124,13 @@ def _config_status(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @router.get("/config")
-async def get_config(admin: dict = Depends(get_admin_user)):
+async def get_config(admin: dict = Depends(require_module("support_tickets"))):
     cfg = await db_supabase.find_one(_CONFIG_TABLE, {"id": _CONFIG_ID}) or {}
     return _config_status(cfg)
 
 
 @router.put("/config")
-async def update_config(payload: ZohoConfigUpdate, admin: dict = Depends(get_admin_user)):
+async def update_config(payload: ZohoConfigUpdate, admin: dict = Depends(require_module("support_tickets"))):
     fields = payload.model_dump(exclude_unset=True)
     if not fields:
         raise HTTPException(status_code=400, detail="No fields supplied")
@@ -176,7 +178,7 @@ async def trigger_sync(admin: dict = Depends(require_module("support_tickets")))
 
 
 @router.post("/config/test")
-async def test_connection(admin: dict = Depends(get_admin_user)):
+async def test_connection(admin: dict = Depends(require_module("support_tickets"))):
     """Verify the stored credentials by making a lightweight Zoho call."""
     try:
         depts = await zoho.list_departments()
@@ -706,8 +708,9 @@ _AI_ERROR_STATUS = {"ai_disabled": 409, "ai_misconfigured": 502, "provider_error
 
 
 @router.post("/tickets/{ticket_id}/ai-suggest-reply")
+@admin_ai_suggest_limit
 async def ai_suggest_reply(
-    ticket_id: str, admin: dict = Depends(require_module("support_tickets"))
+    request: Request, ticket_id: str, admin: dict = Depends(require_module("support_tickets"))
 ):
     """Draft a reply using the AI assistant. Returns the suggestion only — the
     agent reviews/edits and sends it via the normal /reply endpoint. Nothing is

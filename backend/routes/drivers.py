@@ -2965,6 +2965,28 @@ _EXPORT_REDACT_ACCOUNT = frozenset(
     }
 )
 
+# Per-ride fields omitted from a data export: these describe the RIDER, not the
+# driver (the data subject). Raw pickup/dropoff coordinates, the route polyline,
+# and rider_id are third-party PII (PIPEDA s.4.5). The human-readable
+# pickup/dropoff addresses are kept — they are the driver's own trip record.
+_EXPORT_REDACT_RIDE = frozenset(
+    {
+        "rider_id",
+        "pickup_lat",
+        "pickup_lng",
+        "pickup_nav_lat",
+        "pickup_nav_lng",
+        "dropoff_lat",
+        "dropoff_lng",
+        "dropoff_nav_lat",
+        "dropoff_nav_lng",
+        "route_polyline",
+        "phase_polylines",
+        "polyline",
+    }
+)
+
+
 # Driver-profile (drivers) fields omitted from a data export:
 #  - password_hash / fcm_token: credentials
 #  - stripe_account_id / bank_account: financial credentials (already excluded
@@ -3270,7 +3292,7 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
             "export_generated_at": datetime.now(timezone.utc).isoformat() + "Z",
             "account": {k: v for k, v in user.items() if k not in _EXPORT_REDACT_ACCOUNT},
             "driver_profile": {k: v for k, v in driver.items() if k not in _EXPORT_REDACT_DRIVER},
-            "rides": rides,
+            "rides": [{k: v for k, v in r.items() if k not in _EXPORT_REDACT_RIDE} for r in rides],
             "payouts": payouts,
             "documents": [{k: v for k, v in doc.items() if k != "document_url"} for doc in documents],
             "notification_preferences": notification_prefs,

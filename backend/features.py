@@ -1491,13 +1491,28 @@ async def send_push_notification(
     return False
 
 
-async def send_email(*, to: str, subject: str, body: str) -> bool:
-    """Send a plain-text email: AWS SES primary, Resend guardrail.
+async def send_email(
+    *,
+    to: str,
+    subject: str,
+    body: str,
+    html: Optional[str] = None,
+    attachments: Optional[list] = None,
+    email_type: str = "transactional",
+    recipient_user_id: Optional[str] = None,
+    log_id: str = "-",
+) -> bool:
+    """Send an email: AWS SES primary, Resend guardrail.
 
     Delegates to utils.email_provider.send_transactional_email, which tries
     AWS SES first and falls back to Resend when SES is unconfigured or fails.
     In dev/test (neither provider configured) the message is log-only.
     Returns True if either provider accepted the message, False otherwise.
+
+    ``html`` adds a rich alternative part; ``attachments`` is a list of
+    ``{"filename", "content" (bytes), "mime"}`` dicts (e.g. a data-export ZIP).
+    ``email_type``/``recipient_user_id``/``log_id`` flow into email_send_log
+    for PIPEDA-safe auditing (never the recipient address).
     """
     if not to:
         return False
@@ -1507,7 +1522,16 @@ async def send_email(*, to: str, subject: str, body: str) -> bool:
     except ImportError:
         from utils.email_provider import send_transactional_email  # type: ignore
 
-    return await send_transactional_email(to=to, subject=subject, text=body)
+    return await send_transactional_email(
+        to=to,
+        subject=subject,
+        text=body,
+        html=html,
+        attachments=attachments,
+        email_type=email_type,
+        recipient_user_id=recipient_user_id,
+        log_id=log_id,
+    )
 
 
 async def notify_safety_team(incident: dict) -> dict:

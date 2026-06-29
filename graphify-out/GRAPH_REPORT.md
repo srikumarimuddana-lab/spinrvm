@@ -1,16 +1,16 @@
 # Graph Report - spinrvm  (2026-06-29)
 
 ## Corpus Check
-- 1775 files · ~2,749,153 words
+- 1775 files · ~2,749,614 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 20699 nodes · 37038 edges · 1098 communities (984 shown, 114 thin omitted)
+- 20702 nodes · 37040 edges · 1107 communities (982 shown, 125 thin omitted)
 - Extraction: 93% EXTRACTED · 7% INFERRED · 0% AMBIGUOUS · INFERRED: 2442 edges (avg confidence: 0.58)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `960114f4`
+- Built from commit: `81da4c12`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -1001,6 +1001,7 @@
 - [[_COMMUNITY_Community 1013|Community 1013]]
 - [[_COMMUNITY_Community 1016|Community 1016]]
 - [[_COMMUNITY_Community 1018|Community 1018]]
+- [[_COMMUNITY_Community 1024|Community 1024]]
 - [[_COMMUNITY_Community 1026|Community 1026]]
 - [[_COMMUNITY_Community 1028|Community 1028]]
 - [[_COMMUNITY_Community 1029|Community 1029]]
@@ -1045,6 +1046,13 @@
 - [[_COMMUNITY_Community 1084|Community 1084]]
 - [[_COMMUNITY_Community 1085|Community 1085]]
 - [[_COMMUNITY_Community 1086|Community 1086]]
+- [[_COMMUNITY_Community 1087|Community 1087]]
+- [[_COMMUNITY_Community 1088|Community 1088]]
+- [[_COMMUNITY_Community 1089|Community 1089]]
+- [[_COMMUNITY_Community 1091|Community 1091]]
+- [[_COMMUNITY_Community 1092|Community 1092]]
+- [[_COMMUNITY_Community 1093|Community 1093]]
+- [[_COMMUNITY_Community 1094|Community 1094]]
 
 ## God Nodes (most connected - your core abstractions)
 1. `Communities` - 722 edges
@@ -1072,11 +1080,10 @@
 
 ## Import Cycles
 - 1-file cycle: `backend/routes/ai.py -> backend/routes/ai.py`
-- 1-file cycle: `backend/routes/admin/documents.py -> backend/routes/admin/documents.py`
 - 1-file cycle: `backend/dependencies/__init__.py -> backend/dependencies/__init__.py`
 - 1-file cycle: `frontend/metro.config.js -> frontend/metro.config.js`
 
-## Communities (1098 total, 114 thin omitted)
+## Communities (1107 total, 125 thin omitted)
 
 ### Community 0 - "Community 0"
 Cohesion: 0.00
@@ -1084,31 +1091,31 @@ Nodes (722): Communities, Community 0 - "Community 0", Community 100 - "Communit
 
 ### Community 1 - "Community 1"
 Cohesion: 0.01
-Nodes (309): LiveRideMap, CITY_PRESETS, DURATION_OPTIONS, GeneralTabForm(), GeofenceMap, getAreaCenter(), getAreaPolygon(), INCENTIVE_TYPES (+301 more)
+Nodes (310): LiveRideMap, CITY_PRESETS, DURATION_OPTIONS, GeneralTabForm(), GeofenceMap, getAreaCenter(), getAreaPolygon(), INCENTIVE_TYPES (+302 more)
 
 ### Community 2 - "Community 2"
-Cohesion: 0.05
-Nodes (153): POLICY_RESULT_COLORS, Filter, STATUS_COLORS, AllowanceDraft, AllowancesPage(), emptyDraft(), Filter, STATUS_COLORS (+145 more)
+Cohesion: 0.06
+Nodes (94): Filter, STATUS_COLORS, AUDIENCE_OPTIONS, CloudMessage, emptyStats, MessageStats, NOTIFICATION_TYPES, STATUS_CONFIG (+86 more)
 
 ### Community 3 - "Community 3"
 Cohesion: 0.02
-Nodes (112): CATEGORY_ICONS, CATEGORY_ORDER, FaqItem, FaqScreen(), CATEGORY_ICONS, AWAITING_RESPONSE, Category, CATEGORY_LABELS (+104 more)
+Nodes (107): CATEGORY_ICONS, CATEGORY_ORDER, FaqItem, FaqScreen(), CATEGORY_ICONS, DriverLostAndFoundScreen(), LostFoundCase, STATUS_COLORS (+99 more)
 
 ### Community 4 - "Community 4"
 Cohesion: 0.02
-Nodes (218): accept_ride(), attest_nonce(), cancel_ride(), check_expiring_subscriptions(), clear_destination_mode(), complete_ride(), create_driver(), _d() (+210 more)
+Nodes (191): Send a push notification to a user.      Routes automatically: Expo push tokens, Send a plain-text email: AWS SES primary, Resend guardrail.      Delegates to ut, send_email(), send_push_notification(), Update driver.acceptance_rate using exponentially weighted moving average., update_acceptance_rate(), admin_cancel_ride(), Admin force-cancels an in-flight ride from the live monitoring page.      Termin (+183 more)
 
 ### Community 5 - "Community 5"
-Cohesion: 0.04
-Nodes (128): Supabase database access layer.  Shared infrastructure (run_sync, circuit breake, create_user(), delete_otp_record(), get_otp_record(), get_otp_record_by_phone(), get_user_by_id(), get_user_by_phone(), insert_otp_record() (+120 more)
+Cohesion: 0.03
+Nodes (166): Supabase database access layer.  Shared infrastructure (run_sync, circuit breake, delete_otp_record(), verify_otp_record(), _driver_by_user_cache_key(), _driver_cache_key(), invalidate_driver_cache(), _metric_prefix_for_key(), Run a synchronous Supabase call in a thread and retry on transient     HTTP/2 co (+158 more)
 
 ### Community 6 - "Community 6"
 Cohesion: 0.03
-Nodes (145): add_stop(), Add a stop to an existing ride., add_stop_mid_trip(), cancel_scheduled_ride(), get_chat_status(), get_ride_receipt(), get_scheduled_rides(), get_share_trip_link() (+137 more)
+Nodes (135): add_stop_mid_trip(), cancel_scheduled_ride(), get_chat_status(), get_ride_receipt(), get_scheduled_rides(), get_share_trip_link(), get_shared_contacts(), process_payment() (+127 more)
 
 ### Community 7 - "Community 7"
 Cohesion: 0.02
-Nodes (212): _account_inaccessible(), True when the account has requested deletion (grace window) or been purged., point_in_polygon(), _consume_retry_token(), Reserve one retry from the global per-second budget., Update driver.acceptance_rate using exponentially weighted moving average., update_acceptance_rate(), _record_login_failure() (+204 more)
+Nodes (157): notify_safety_team(), Fan out a safety_incidents row to the configured alert channels.      Three side, _consume_retry_token(), Reserve one retry from the global per-second budget., admin_login(), admin_logout(), admin_logout_all(), admin_mfa_challenge() (+149 more)
 
 ### Community 8 - "Community 8"
 Cohesion: 0.21
@@ -1116,39 +1123,39 @@ Nodes (7): _extract_signed_url(), Any, Pull the URL out of supabase-py's create_
 
 ### Community 9 - "Community 9"
 Cohesion: 0.01
-Nodes (238): get_admin_user(), Require the caller to be an authenticated admin., admin_create_document_requirement(), admin_delete_document_requirement(), admin_get_document_requirements(), admin_review_driver_document(), admin_update_document_requirement(), DocumentRequirementCreateRequest (+230 more)
+Nodes (264): get_admin_user(), Require the caller to be an authenticated admin., Return a FastAPI dependency that enforces module-level RBAC.      Usage::, require_module(), admin_create_document_requirement(), admin_delete_document_requirement(), admin_get_document_requirements(), admin_review_driver_document() (+256 more)
 
 ### Community 10 - "Community 10"
-Cohesion: 0.03
-Nodes (58): AreaStat, ChartData, tooltipStyle, DriverStatsCards(), DriverStatsData, DriverReferralsTab(), COMPARE_COLORS, fmtMoney() (+50 more)
+Cohesion: 0.04
+Nodes (59): CATEGORIES, Props, RideComplaintForm(), PHASE_COLORS, Props, RideDetailModal(), RideRouteMap, STATUS_META (+51 more)
 
 ### Community 11 - "Community 11"
 Cohesion: 0.04
-Nodes (47): AddressesScreen(), AutocompletePrediction, geocodeAddress(), SavedAddress, EmergencyContact, EmergencyContactsScreen(), RELATIONSHIPS, unstable_settings (+39 more)
+Nodes (54): AddressesScreen(), AutocompletePrediction, geocodeAddress(), SavedAddress, EmergencyContact, EmergencyContactsScreen(), RELATIONSHIPS, unstable_settings (+46 more)
 
 ### Community 12 - "Community 12"
-Cohesion: 0.03
-Nodes (98): admin_close_ticket(), admin_get_faqs(), admin_get_tickets(), admin_send_notification(), assign_driver_area(), calculate_airport_fee(), calculate_all_fees(), cancel_scheduled_ride() (+90 more)
+Cohesion: 0.13
+Nodes (21): _deliver_push_now(), _is_expo_token(), Return True if the token is an Expo push token (not a native FCM token)., Send a push notification via Expo's push API (for Expo-managed tokens)., Attempt a single, immediate push delivery. Returns True on success.      Routes, _send_expo_push(), _claim_row(), _delete_row() (+13 more)
 
 ### Community 13 - "Community 13"
 Cohesion: 0.03
-Nodes (83): Index(), log, DriverRootLayoutInner(), RootLayout(), usePushNotificationRouter(), BrandSplash(), LOGO, LOGO_HEIGHT (+75 more)
+Nodes (78): Index(), log, DriverRootLayoutInner(), RootLayout(), usePushNotificationRouter(), BrandSplash(), LOGO, LOGO_HEIGHT (+70 more)
 
 ### Community 14 - "Community 14"
-Cohesion: 0.03
-Nodes (75): _audience_for(), Any, Optional /mcp streamable-HTTP mount — the same tool registry over MCP.  External, Run the streamable-HTTP session manager (called from core/lifespan)., _send_json(), start_mcp(), stop_mcp(), cleanup_database() (+67 more)
+Cohesion: 0.10
+Nodes (22): AIAuthError, Any, Request-scoped auth context for AI tool execution.  The in-process chat path pas, Raised when a tool executes without an authenticated user in context., require_ai_user(), _audience_for(), Any, Optional /mcp streamable-HTTP mount — the same tool registry over MCP.  External (+14 more)
 
 ### Community 15 - "Community 15"
-Cohesion: 0.03
-Nodes (36): _driver(), Extended unit tests for routes/drivers.py.  Covers functions not exercised by te, IDOR regression: a driver must not be able to write a rating onto a         ride, POST /stripe-sync does a live Account.retrieve + mirror on return from     hoste, Payout is blocked until BOTH the GST/HST BN and the SIN are on file., payable_balance must subtract EVERY payout except reversed/failed —         not, A single tower-handoff teleport must not inflate actual_distance_km.          Re, Heavy geometry → ride_routes (upsert); rides keeps only scalars. (+28 more)
+Cohesion: 0.02
+Nodes (34): _driver(), Extended unit tests for routes/drivers.py.  Covers functions not exercised by te, IDOR regression: a driver must not be able to write a rating onto a         ride, POST /stripe-sync does a live Account.retrieve + mirror on return from     hoste, Payout is blocked until BOTH the GST/HST BN and the SIN are on file., payable_balance must subtract EVERY payout except reversed/failed —         not, A single tower-handoff teleport must not inflate actual_distance_km.          Re, Heavy geometry → ride_routes (upsert); rides keeps only scalars. (+26 more)
 
 ### Community 16 - "Community 16"
-Cohesion: 0.06
-Nodes (46): add_tip(), _build_fare_breakdown(), cancel_ride_rider(), compute_ride_estimates(), _d(), email_ride_receipt(), _f(), _money_str() (+38 more)
+Cohesion: 0.07
+Nodes (40): _build_fare_breakdown(), compute_ride_estimates(), _d(), _f(), get_rider_stats(), _money_str(), Decimal, rate_driver() (+32 more)
 
 ### Community 17 - "Community 17"
-Cohesion: 0.05
-Nodes (34): BecomeDriverScreen(), DocState, Requirement, STEPS, DocumentsScreen(), DriverDocument, EXT_TO_MIME, Requirement (+26 more)
+Cohesion: 0.07
+Nodes (22): BecomeDriverScreen(), DocState, Requirement, STEPS, DocumentsScreen(), DriverDocument, EXT_TO_MIME, Requirement (+14 more)
 
 ### Community 18 - "Community 18"
 Cohesion: 0.33
@@ -1160,31 +1167,31 @@ Nodes (22): _patch_settings(), _patch_stripe(), Unit tests for the buffered pre-
 
 ### Community 20 - "Community 20"
 Cohesion: 0.05
-Nodes (59): Persist the Stripe customer id for a corporate account., update_corporate_stripe_customer_id(), CorporateAccountBase, CorporateAccountCreate, CorporateAccountResponse, CorporateAccountUpdate, create_corporate_account(), get_corporate_accounts() (+51 more)
+Nodes (69): get_corporate_wallet_by_company(), Return the master wallet row for a company, or None., admin_view_kyb_document(), change_company_status(), CorporateAccountBase, CorporateAccountCreate, CorporateAccountResponse, CorporateAccountUpdate (+61 more)
 
 ### Community 21 - "Community 21"
 Cohesion: 0.04
-Nodes (36): tKey(), isStructured(), MaybeStructured, ShowAlertOptions, showErrorAlert(), mockGet, mockPost, mockSecureStoreBacking (+28 more)
+Nodes (37): AWAITING_RESPONSE, Category, CATEGORY_LABELS, CLOSED, DriverLostAndFoundChatScreen(), LostFoundCase, Message, VALID_CATEGORIES (+29 more)
 
 ### Community 22 - "Community 22"
 Cohesion: 0.06
-Nodes (80): get_public_settings(), Extended unit tests for utility modules.  Covers:   - utils/surge_engine.py  (30, Test error paths in verify_estimate_token that are not covered by existing tests, # NOTE: test_debug_env_returns_masked_values removed — the /debug-env endpoint, TestAuditLogger, TestCalculateSurgeForArea, TestCoercePolyline, TestCryptoUtils (+72 more)
+Nodes (86): get_public_settings(), Extended unit tests for utility modules.  Covers:   - utils/surge_engine.py  (30, Test error paths in verify_estimate_token that are not covered by existing tests, # NOTE: test_debug_env_returns_masked_values removed — the /debug-env endpoint, The receipt snapshot must draw the travelled trip leg only — never the     navig, TestAuditLogger, TestCalculateSurgeForArea, TestCoercePolyline (+78 more)
 
 ### Community 23 - "Community 23"
-Cohesion: 0.08
-Nodes (20): invite(), AllowanceCreate, MemberInvite, Monthly allowance reset tick tests (Task 9)., test_reset_runs_for_stale_allowances(), test_reset_skips_rollover_flag(), Schema tests for Plan 3 (members, allowances, requests, domains)., test_allowance_create_fixed_recurring_rejects_inverted_period() (+12 more)
+Cohesion: 0.05
+Nodes (49): create_user(), get_otp_record(), get_otp_record_by_phone(), get_user_by_id(), get_user_by_phone(), insert_otp_record(), Any, Auth / user / OTP repository — user lookups, creation, OTP CRUD.  Extracted from (+41 more)
 
 ### Community 24 - "Community 24"
 Cohesion: 0.04
-Nodes (39): ConfirmPickupScreen(), DriverArrivedScreenContent(), DriverArrivingScreenContent(), renderGradientPolyline(), TrackBaseUrlContext, RideInProgressScreenContent(), SavedCard, ALLOWED_TRACKING_HOSTS (+31 more)
+Nodes (43): renderWithSafeArea(), renderWithSafeArea(), DriverArrivedScreenContent(), DriverArrivingScreenContent(), renderGradientPolyline(), TrackBaseUrlContext, RideInProgressScreenContent(), SavedCard (+35 more)
 
 ### Community 25 - "Community 25"
-Cohesion: 0.04
-Nodes (36): _make_request(), Request, Tests for error handling utilities (tasks 10-3 through 10-6)., TestDatabaseErrorClass, TestDuplicateRecordErrorClass, TestRunSyncErrorWrapping, TestSpinrExceptionHandlerError, TestSupabaseClientTimeout (+28 more)
+Cohesion: 0.06
+Nodes (29): _make_request(), Request, Tests for error handling utilities (tasks 10-3 through 10-6)., TestDatabaseErrorClass, TestDuplicateRecordErrorClass, TestRunSyncErrorWrapping, TestSpinrExceptionHandlerError, TestSupabaseClientTimeout (+21 more)
 
 ### Community 26 - "Community 26"
 Cohesion: 0.03
-Nodes (64): ChatDriverScreen(), Message, OtpScreen(), CorporateAccount, SavedCard, fmt(), RideCompletedScreenContent(), toNum() (+56 more)
+Nodes (57): mockApi, AccessibilityScreen(), ChatDriverScreen(), Message, ConfirmPickupScreen(), RootLayoutInner(), OtpScreen(), CorporateAccount (+49 more)
 
 ### Community 27 - "Community 27"
 Cohesion: 0.05
@@ -1192,67 +1199,67 @@ Nodes (37): AgentMessage, BaseAgent, Any, Path, Convert knowledge entry to dicti
 
 ### Community 28 - "Community 28"
 Cohesion: 0.04
-Nodes (57): ChatBubble, COLUMNS, DATE_RANGES, SortKey, formatCurrency(), formatDate(), Payout, PayoutDetailPage() (+49 more)
+Nodes (116): ActivityPage(), currentMonth(), POLICY_RESULT_COLORS, AllowanceDraft, AllowancesPage(), emptyDraft(), Filter, STATUS_COLORS (+108 more)
 
 ### Community 29 - "Community 29"
-Cohesion: 0.02
-Nodes (139): get_offer_analytics(), Offer acceptance rates, avg response time, and offer counts grouped by service a, _activate_subscription(), _attempt_transfer_reversal(), _cancel_stripe_subscription(), cancel_subscription(), _compute_subscription_tax(), get_driver_config() (+131 more)
+Cohesion: 0.04
+Nodes (39): get_offer_analytics(), _offer_totals(), _parse_ts(), datetime, Offer acceptance rates, avg response time, and offer counts grouped by service a, _cancel_stripe_subscription(), cancel_subscription(), get_subscription_payment_history() (+31 more)
 
 ### Community 30 - "Community 30"
 Cohesion: 0.03
 Nodes (70): dependencies, ajv, axios, expo, expo-application, expo-asset, expo-audio, expo-blur (+62 more)
 
 ### Community 31 - "Community 31"
-Cohesion: 0.04
-Nodes (69): DATE_RANGE_PRESETS, HeatMap, DriverPanel(), DriverPanelProps, fmtDateTime(), IncidentDetailDrawer(), relativeTime(), ROLE_OPTIONS (+61 more)
+Cohesion: 0.03
+Nodes (75): DriverPanel(), DriverPanelProps, fmtDateTime(), IncidentDetailDrawer(), relativeTime(), ROLE_OPTIONS, SEVERITY_OPTIONS, severityTone() (+67 more)
 
 ### Community 32 - "Community 32"
 Cohesion: 0.12
-Nodes (20): DriverActionRequest, DriverNoteCreate, DriverSearchRequest, DriverVerifyRequest, _fake_request(), Extended unit tests for routes/admin/rides.py and routes/admin/drivers.py.  rout, Minimal FastAPI Request stub for endpoints decorated with @limiter.limit., TestAdminAddDriverNote (+12 more)
+Nodes (24): DriverActionRequest, DriverNoteCreate, DriverSearchRequest, DriverVerifyRequest, _fake_request(), Extended unit tests for routes/admin/rides.py and routes/admin/drivers.py.  rout, Minimal FastAPI Request stub for endpoints decorated with @limiter.limit., TestAdminAddDriverNote (+16 more)
 
 ### Community 33 - "Community 33"
-Cohesion: 0.06
-Nodes (46): Resolve caller → company admin/member role. Mount as FastAPI dependency.  `/comp, require_company_admin(), require_company_member(), delete_allowed_domain(), get_corporate_member_by_id(), list_active_memberships_for_user(), update_corporate_member(), add_domain() (+38 more)
+Cohesion: 0.04
+Nodes (65): Resolve caller → company admin/member role. Mount as FastAPI dependency.  `/comp, require_company_admin(), require_company_member(), get_corporate_member_by_id(), list_active_memberships_for_user(), list_company_ride_payment_sources(), Return ride_payment_sources rows for a company, newest first.      Each row is t, update_corporate_member() (+57 more)
 
 ### Community 34 - "Community 34"
 Cohesion: 0.05
 Nodes (33): AgentTask, Create task from dictionary., Task structure for agent execution., Convert task to dictionary., OrchestratorAgent, Any, Register a specialized agent with the orchestrator.                  Args:, Register multiple agents at once.                  Args:             agents: Lis (+25 more)
 
 ### Community 35 - "Community 35"
-Cohesion: 0.03
-Nodes (81): ActivityPage(), currentMonth(), AllowanceRequestsPage(), MembersPage(), CompanyPortalRootLayout(), AiConsolePage(), AnalyticsPage(), AuditLogsPage() (+73 more)
+Cohesion: 0.02
+Nodes (136): AllowanceRequestsPage(), MembersPage(), CompanyPortalRootLayout(), AiConsolePage(), AnalyticsPage(), AuditLogsPage(), CloudMessagingPage(), CompanyMembersPage() (+128 more)
 
 ### Community 36 - "Community 36"
-Cohesion: 0.10
-Nodes (23): _capture(), _over_daily_cap(), Any, Exception, Provider-agnostic chat-turn orchestrator.  run_chat_turn() is an async generator, Sentry capture with the conventional tags; never raises., Per-user daily message cap via Redis INCR. Fails OPEN with a loud log     (mirro, run_chat_turn() (+15 more)
+Cohesion: 0.04
+Nodes (72): _capture(), _over_daily_cap(), Any, Exception, Provider-agnostic chat-turn orchestrator.  run_chat_turn() is an async generator, Sentry capture with the conventional tags; never raises., Per-user daily message cap via Redis INCR. Fails OPEN with a loud log     (mirro, run_chat_turn() (+64 more)
 
 ### Community 37 - "Community 37"
-Cohesion: 0.03
-Nodes (72): admin_get_surge_status(), Get current surge status for all active service areas., Unit tests for backend/utils/surge_engine.py  Coverage: - ratio_to_multiplier: a, get_service_area_polygon returns None → supply is 0., DB exception in _count_supply_in_area → returns 0 (does not propagate)., Drivers not in present_driver_ids set are excluded from supply count., presence_driver_ids failure → warning logged, DB drivers used as-is (safe fallba, demand=0, supply=5 → ratio=0 → multiplier=1.0. (+64 more)
+Cohesion: 0.10
+Nodes (14): ratio < 0.5 → 1.0× (no surge)., ratio == 0.5 falls into [0.5, 0.8) → 1.25×., ratio == 0.8 falls into [0.8, 1.2) → 1.5×., ratio == 1.2 falls into [1.2, 2.0) → 1.75×., ratio == 2.0 falls into [2.0, 3.0) → 2.0×., ratio == 3.0 hits the hard cap → 2.5× (SURGE_CAP)., test_ratio_at_cap_threshold_returns_surge_cap(), test_ratio_at_first_threshold_returns_second_tier() (+6 more)
 
 ### Community 38 - "Community 38"
 Cohesion: 0.02
-Nodes (180): AuthResponse, clear_csrf_cookie(), generate_csrf_token(), Response, Generate a cryptographically secure 32-byte URL-safe CSRF token., Set the double-submit CSRF cookie on a response.      Intentionally NOT HttpOnly, Remove the CSRF cookie (call on logout)., set_csrf_cookie() (+172 more)
+Nodes (189): add_stop(), AddStopRequest, admin_close_ticket(), admin_create_faq(), admin_get_faqs(), admin_get_tickets(), admin_reply_ticket(), admin_send_notification() (+181 more)
 
 ### Community 39 - "Community 39"
 Cohesion: 0.03
 Nodes (64): dependencies, ajv, axios, expo, expo-blur, expo-build-properties, expo-clipboard, expo-constants (+56 more)
 
 ### Community 40 - "Community 40"
-Cohesion: 0.17
-Nodes (13): get_notifications(), get_preferences(), PreferencesUpdate, Get user's notifications (paginated)., Get user's notification preferences., Update notification preferences., update_preferences(), _notif() (+5 more)
+Cohesion: 0.14
+Nodes (15): get_notifications(), mark_all_read(), mark_as_read(), Save FCM push token for this user/device.      Writes to two places:      * `pus, Get user's notifications (paginated)., Mark a single notification as read., Mark all notifications as read for the current user., register_push_token() (+7 more)
 
 ### Community 41 - "Community 41"
-Cohesion: 0.05
-Nodes (73): _rows_from_res(), accept_member_invite(), add_allowed_domain(), create_kyb_upload_url(), ensure_corporate_wallet(), find_companies_by_email_domain(), get_all_corporate_accounts(), get_allowance_request_by_id() (+65 more)
+Cohesion: 0.70
+Nodes (4): _fake_resp(), test_list_companies_by_status_filter(), test_record_kyb_decision(), test_update_company_status()
 
 ### Community 42 - "Community 42"
-Cohesion: 0.03
-Nodes (91): Send a push notification to a user.      Routes automatically: Expo push tokens, send_push_notification(), admin_create_faq(), admin_get_notifications(), admin_send_notification(), admin_update_faq(), FaqCreateRequest, FaqUpdateRequest (+83 more)
+Cohesion: 0.05
+Nodes (57): Auto-cancel a ride if it's still ``searching`` after ``timeout_seconds``.      M, ride_search_timeout(), Auto-reactivation loop for expired temporary rider suspensions., test_reactivate_tick_flips_expired_suspension(), test_reactivate_tick_skips_audit_when_update_lost_race(), driver_claim_reaper_loop(), _pod_id(), Orphaned driver-claim reaper (C3).  Dispatch claims a driver (is_available=false (+49 more)
 
 ### Community 43 - "Community 43"
-Cohesion: 0.04
-Nodes (47): mockPost, mockRemoveItem, mockSetItem, AiAssistantScreen(), createStyles(), QUICK_PROMPTS, RideStatusBanner(), AccountScreen() (+39 more)
+Cohesion: 0.05
+Nodes (46): AiAssistantScreen(), createStyles(), QUICK_PROMPTS, RideStatusBanner(), AccountScreen(), BookingErrorDescriptor, displayFare(), EstimateLike (+38 more)
 
 ### Community 44 - "Community 44"
 Cohesion: 0.06
@@ -1268,47 +1275,47 @@ Nodes (29): _patch_settings(), _patch_stripe(), Unit tests for backend/utils/str
 
 ### Community 47 - "Community 47"
 Cohesion: 0.04
-Nodes (38): ChatScreen(), QUICK_MESSAGES, CATEGORIES, CATEGORY_ICONS, ReportSafetyScreen(), SafetyCategory, ActivityView(), parseMoney() (+30 more)
+Nodes (35): ChatScreen(), QUICK_MESSAGES, PayoutHistoryScreen(), ActivityView(), parseMoney(), Period, StatusFilter, styles (+27 more)
 
 ### Community 48 - "Community 48"
 Cohesion: 0.05
 Nodes (35): ACTION_ITEMS B1: no analytics interface accepts raw GPS coordinates.  Pins the g, _service(), TestTrackDriverOnlineGeohashOnly, AmplitudeService, AnalyticsService, get_analytics(), init_analytics(), MixpanelService (+27 more)
 
 ### Community 49 - "Community 49"
-Cohesion: 0.14
-Nodes (31): _patches(), _pt(), Unit tests for background/REST breadcrumb persistence (trip-distance capture)., A batch spanning pickup→trip bills navigation points as navigation, not trip., _ride(), test_active_ride_can_be_reused_without_lookup(), test_batch_capped_to_max(), test_discards_other_ride_and_stale_points() (+23 more)
+Cohesion: 0.09
+Nodes (44): Any, rank_by_eta_with_acceptance(), DispatchService — driver-matching logic separated from the HTTP layer.  Extracts, Return ``(algorithm, min_rating, search_radius_km,         max_offers, use_eta)`, Online + available + verified + *present* drivers for this ride.          is_ver, Sort drivers by effective_eta = eta_seconds / acceptance_rate.      Returns [(dr, For destination-mode drivers, gate offers so we only forward rides     whose dro, _ride_brings_driver_closer_to_destination() (+36 more)
 
 ### Community 50 - "Community 50"
 Cohesion: 0.06
-Nodes (55): admin_login(), admin_logout(), admin_logout_all(), admin_mfa_challenge(), admin_mfa_confirm(), admin_mfa_disable(), admin_mfa_enroll(), admin_mfa_status() (+47 more)
+Nodes (69): _activate_subscription(), get_current_subscription(), Get driver's active subscription., Activate a pending subscription after payment confirmation.      Called by both, _confirm_sns_subscription(), _handle_ses_notification(), _handle_sms_keyword(), _invoice_period_end_iso() (+61 more)
 
 ### Community 51 - "Community 51"
 Cohesion: 0.04
-Nodes (45): DriverDashboard(), AlertButton, AlertDialog(), AlertState, showAlert(), useAlertStore, { width }, CAR_IMAGES (+37 more)
+Nodes (43): DriverDashboard(), AlertButton, AlertDialog(), AlertState, showAlert(), useAlertStore, { width }, CAR_IMAGES (+35 more)
 
 ### Community 52 - "Community 52"
 Cohesion: 0.03
 Nodes (63): Checklist, P2 — Rider App Medium Priority: Fix Before Public Launch, ✅ R-P2-10 · Corporate Ride Flow Has No UI Entry Point, ✅ R-P2-11 · Legal/ToS Not Presented During Onboarding, ✅ R-P2-12 · become-driver.tsx — Incomplete Handoff Description (Pre-P1-11), ✅ R-P2-13 · Access Token Persisted to SecureStore — Memory-Only Pattern Not Followed, ✅ R-P2-14 · EAS Test/Preview Builds Point to Production Backend, ✅ R-P2-15 · TruffleHog CI Scans Only Last Commit with --only-verified (+55 more)
 
 ### Community 53 - "Community 53"
-Cohesion: 0.11
-Nodes (19): calculate_distance(), multi_leg_distance(), Any, Total distance (km) of the route pickup → stops → dropoff.      Sums the haversi, arrive_at_pickup(), Any, Return ``(algorithm, min_rating, search_radius_km,         max_offers, use_eta)`, For destination-mode drivers, gate offers so we only forward rides     whose dro (+11 more)
+Cohesion: 0.06
+Nodes (43): TestGetRideEtaSeconds, batch_get_etas(), get_cached_ride_eta(), get_ride_eta_seconds(), _last_eta_loc_key(), _osrm_eta_seconds(), Road-network ETA helper (OSRM-first, Google Distance Matrix fallback).  Computes, Last computed ETA if the driver hasn't moved past the gate, else None.      Scop (+35 more)
 
 ### Community 54 - "Community 54"
 Cohesion: 0.04
 Nodes (47): dependencies, axios, expo, expo-blur, expo-clipboard, expo-constants, expo-document-picker, expo-font (+39 more)
 
 ### Community 55 - "Community 55"
-Cohesion: 0.05
-Nodes (41): PrivacySettingsScreen(), SettingsScreen(), SettingToggle(), ActivityScreen(), FilterType, Period, RideHistory, RiderStats (+33 more)
+Cohesion: 0.07
+Nodes (35): tKey(), isStructured(), MaybeStructured, ShowAlertOptions, showErrorAlert(), PrivacySettingsScreen(), SettingsScreen(), SettingToggle() (+27 more)
 
 ### Community 56 - "Community 56"
-Cohesion: 0.07
-Nodes (38): AcceptInviteBody, auto_match(), _compute_remaining(), do_accept_invite(), do_join_domain(), _ensure_member(), JoinDomainBody, my_balance() (+30 more)
+Cohesion: 0.09
+Nodes (39): get_corporate_account_by_id(), Get a corporate account by ID.      Args:         validated_id: Validated corpor, AcceptInviteBody, auto_match(), _compute_remaining(), do_accept_invite(), do_join_domain(), _ensure_member() (+31 more)
 
 ### Community 57 - "Community 57"
 Cohesion: 0.04
-Nodes (27): _apply_filters(), _build_or_clause(), _build_or_clause_term(), _escape_like(), _postgrest_pattern(), Escape PostgREST wildcard characters in user input., r"""Escape SQL LIKE/ILIKE wildcards in user input (C6).      Without this, a use, Return the .value of Enum instances so PostgREST sees plain strings. (+19 more)
+Nodes (24): _apply_filters(), _build_or_clause(), _build_or_clause_term(), _escape_like(), _postgrest_pattern(), Escape PostgREST wildcard characters in user input., r"""Escape SQL LIKE/ILIKE wildcards in user input (C6).      Without this, a use, Convert one {col: predicate} pair into a PostgREST or_() leaf term. (+16 more)
 
 ### Community 59 - "Community 59"
 Cohesion: 0.28
@@ -1323,20 +1330,20 @@ Cohesion: 0.05
 Nodes (8): error_response(), InvalidOTPException, OTPExpiredException, Any, OTP code has expired., Create a standardized error response dictionary., Create a standardized success response dictionary., success_response()
 
 ### Community 62 - "Community 62"
-Cohesion: 0.05
-Nodes (49): _app_with_mocked_auth(), _make_ride(), charge_ride returns succeeded → process_payment returns 200., charge_ride returns declined → process_payment returns 402., charge_ride returns failed (ops error) → process_payment returns 402 payment_err, Return a TestClient-ready FastAPI app with auth bypassed.      The rides router, HTTP surface tests for process_payment — verifies that charge_ride     outcomes, Ensure routes.rides is loaded into sys.modules before patching.          conftes (+41 more)
+Cohesion: 0.07
+Nodes (40): _completed_ride(), _install_common_patches(), _last_payment_status_write(), Integration tests for the card branch of backend/routes/rides.py::process_paymen, Off-session 3DS path: mark ride failed and raise 402 so the rider         is pro, Ops-level failure (api_connection_error, invalid_request,         rate_limit) —, In dev/test with no stripe_secret_key, charge_ride returns         unconfigured., If payment_status is already 'paid' on the row, short-circuit         before cha (+32 more)
 
 ### Community 63 - "Community 63"
-Cohesion: 0.04
-Nodes (50): admin_close_ticket(), admin_create_complaint(), admin_create_dispute(), admin_create_ticket(), admin_deactivate_flag(), admin_delete_flag(), admin_delete_ticket(), admin_flag_ride_participant() (+42 more)
+Cohesion: 0.05
+Nodes (48): admin_close_ticket(), admin_create_complaint(), admin_create_dispute(), admin_create_ticket(), admin_deactivate_flag(), admin_delete_flag(), admin_delete_ticket(), admin_flag_ride_participant() (+40 more)
 
 ### Community 64 - "Community 64"
-Cohesion: 0.12
-Nodes (14): _cap_result(), Any, Tool registry for the AI assistant — single source of truth.  Two consumers: 1., Cap the MODEL-facing portion of a result. ``_client_action`` is popped     by th, Provider-ready tool definitions, sorted by name (deterministic for     prompt ca, tool_defs_for(), _db(), Wallet / promo / pricing / saved-places tools.  Pins: read-only wallet access (a (+6 more)
+Cohesion: 0.16
+Nodes (8): _db(), Wallet / promo / pricing / saved-places tools.  Pins: read-only wallet access (a, test_account_tools_registered_for_riders(), TestFareRates, TestPromos, TestSavedPlaces, TestServiceInfo, TestWallet
 
 ### Community 65 - "Community 65"
-Cohesion: 0.06
-Nodes (24): _driver_row(), A driver must not be able to nuke a trip that's already rolling —         that's, After ~5 min of searching with no match, the backend auto-cancels     the ride,, If a driver was matched/accepted before the timer fired, the         timeout mus, Direct handler tests — bypass FastAPI middleware so we can pin the     actual gu, Active-ride guard: second create for the same rider → 409., Idempotency-Key guard: replay returns the original ride., A double-tap on "Confirm" must NOT create two rides.      Two mechanisms cover t (+16 more)
+Cohesion: 0.05
+Nodes (37): _driver_row(), _patch_settings(), _patch_stripe_confirm(), P0 ship-blocker tests — pins the five highest-priority end-to-end paths called o, A driver must not be able to nuke a trip that's already rolling —         that's, After ~5 min of searching with no match, the backend auto-cancels     the ride,, If a driver was matched/accepted before the timer fired, the         timeout mus, Direct handler tests — bypass FastAPI middleware so we can pin the     actual gu (+29 more)
 
 ### Community 66 - "Community 66"
 Cohesion: 0.12
@@ -1347,20 +1354,20 @@ Cohesion: 0.06
 Nodes (24): _is_valid_review_otp(), Hash ADMIN_PASSWORD with bcrypt at startup (A-P3-1).          The plaintext env, Refuse to start in production with weak placeholder values, short         secret, Parse REVIEW_LOGIN_ACCOUNTS into {phone: fixed_otp}.          Only entries whose, Surface a misconfigured REVIEW_LOGIN_ACCOUNTS at startup.          We do not rai, Settings, Regression tests for backend P1 auth-hardening items.  B-P1-1: FIREBASE_DRIVER_A, 32-char JWT_SECRET + both Firebase IDs → no exception. (+16 more)
 
 ### Community 68 - "Community 68"
-Cohesion: 0.07
-Nodes (42): admin_get_rider_referral_leaderboard(), Fleet-wide top RIDER referrers (riders referring riders). Same response     shap, _anonymise_rides(), delete_account(), delete_account_pipeda(), delete_emergency_contact(), _fmt_money(), get_emergency_contacts() (+34 more)
+Cohesion: 0.06
+Nodes (50): admin_get_driver_referrals(), admin_get_rider_referral_leaderboard(), _driver_referral_summary(), Compute a referrer's referral stats (and optionally the referee list)., Referees a specific driver brought in, with per-referee reward progress., Fleet-wide top RIDER referrers (riders referring riders). Same response     shap, add_emergency_contact(), _anonymise_rides() (+42 more)
 
 ### Community 69 - "Community 69"
-Cohesion: 0.10
-Nodes (19): _send_sms_one(), SMS Service for Spinr Supports Twilio for production SMS delivery with console f, Send an SMS message.      When Twilio credentials are provided: sends real SMS v, Send an OTP code via SMS., send_otp_sms(), send_sms(), Unit tests for SMS service functionality. Tests cover OTP SMS sending, general S, The project-wide autouse fixture in conftest.py stubs     ``backend.sms_service. (+11 more)
+Cohesion: 0.06
+Nodes (23): Unit tests for SMS service functionality. Tests cover OTP SMS sending, general S, Tests for Twilio integration., Test Twilio client initialization., Test Twilio message creation parameters., Tests for SMS input validation., Test validating valid phone numbers., Test validating invalid phone numbers., Test SMS message length validation. (+15 more)
 
 ### Community 70 - "Community 70"
-Cohesion: 0.10
-Nodes (41): create_setup_intent(), delete_card(), get_cards(), get_or_create_stripe_customer(), get_payment_methods(), Request, Create a SetupIntent to save a new payment method, Get saved payment methods for the user (+33 more)
+Cohesion: 0.09
+Nodes (47): create_setup_intent(), delete_card(), get_cards(), get_or_create_stripe_customer(), get_payment_methods(), Request, Create a SetupIntent to save a new payment method, Get saved payment methods for the user (+39 more)
 
 ### Community 71 - "Community 71"
 Cohesion: 0.04
-Nodes (64): { height }, LOCATION_CONFIGS, LocationStatus, RECONNECT_DELAYS, useDriverDashboard(), UseDriverDashboardReturn, _createBundledPlayer(), _getOrCreatePlayer() (+56 more)
+Nodes (64): { height }, LOCATION_CONFIGS, LocationStatus, RECONNECT_DELAYS, UseDriverDashboardReturn, _createBundledPlayer(), _getOrCreatePlayer(), RideOfferSoundControls (+56 more)
 
 ### Community 72 - "Community 72"
 Cohesion: 0.07
@@ -1383,20 +1390,20 @@ Cohesion: 0.05
 Nodes (29): _make_admin_token(), A-P3-8: Security tests for admin auth and RBAC scenarios.  Covers six critical s, A deactivated staff member cannot log in even with correct password., staff.is_active=False → 403 even when password matches., Non-super_admin tokens cannot mutate staff rows., Override get_admin_user with a support-role token., Override get_admin_user with a super_admin token., A support-role actor gets 403 on POST /staff. (+21 more)
 
 ### Community 78 - "Community 78"
-Cohesion: 0.07
-Nodes (33): ChatDriverScreen(), Message, styles, DriverArrivedScreen(), styles, { width }, PAYMENT_METHODS, PaymentConfirmScreen() (+25 more)
+Cohesion: 0.06
+Nodes (36): ChatDriverScreen(), Message, styles, DriverArrivedScreen(), styles, { width }, DriverArrivingScreen(), styles (+28 more)
 
 ### Community 79 - "Community 79"
 Cohesion: 0.08
 Nodes (26): _is_corporate_paid(), True when the ride will be settled against a corporate account.      Surge does, _patch_create_ride_deps(), _patch_estimate_deps(), Surge-bypass guarantees for corporate-paid rides.  CLAUDE.md, Surge pricing rule, Fare row with a non-trivial surge so personal vs corporate diverge., Common patches for /rides/estimate — supplies the surged fare list.      The est, Sanity check — without corporate context, surge of 1.5 is honoured. (+18 more)
 
 ### Community 80 - "Community 80"
-Cohesion: 0.09
-Nodes (13): AiAuroraBackground(), BlobSpec, styles, { width: SCREEN_W, height: SCREEN_H }, ChatMessage, CompanyInfo, Faq, IoniconName (+5 more)
+Cohesion: 0.05
+Nodes (26): mockPost, mockRemoveItem, mockSetItem, PLACE_TYPES, SavedPlacesScreen(), SearchDestinationScreen(), PlaceBias, PlaceDetails (+18 more)
 
 ### Community 81 - "Community 81"
-Cohesion: 0.07
-Nodes (38): admin_airport_zones_diagnostic(), admin_create_area_fee(), admin_create_service_area(), admin_delete_service_area(), admin_get_area_fees(), admin_get_area_tax(), admin_get_service_areas(), admin_get_vehicle_pricing() (+30 more)
+Cohesion: 0.03
+Nodes (111): calculate_distance(), get_service_area_polygon(), multi_leg_distance(), point_in_polygon(), Any, Total distance (km) of the route pickup → stops → dropoff.      Sums the haversi, Return polygon as list of {lat, lng} from a service area row.     Supports both, admin_airport_zones_diagnostic() (+103 more)
 
 ### Community 82 - "Community 82"
 Cohesion: 0.12
@@ -1407,8 +1414,8 @@ Cohesion: 0.08
 Nodes (44): _make_stripe_mock(), _pi(), Stripe list() raises → DB get_rows never called., DB get_rows raises → function returns before writing audit_logs., DB ride has PI id but PI absent in Stripe → DB_PAID_STRIPE_MISSING discrepancy., PI exists but status is 'requires_action' → DB_PAID_STRIPE_MISMATCH., Stripe amount_received (cents) != DB fare × 100 → DB_PAID_AMOUNT_MISMATCH., Stripe amount_received exactly matches DB fare → no DB_PAID_AMOUNT_MISMATCH. (+36 more)
 
 ### Community 84 - "Community 84"
-Cohesion: 0.07
-Nodes (31): FLAG_REASONS, Props, RideFlagForm(), metadata, AnalyticsWrapper(), AuthInitializer(), PUBLIC_PREFIXES, ThemeProvider() (+23 more)
+Cohesion: 0.06
+Nodes (39): AuthResponse, clear_csrf_cookie(), generate_csrf_token(), Response, Generate a cryptographically secure 32-byte URL-safe CSRF token., Set the double-submit CSRF cookie on a response.      Intentionally NOT HttpOnly, Remove the CSRF cookie (call on logout)., set_csrf_cookie() (+31 more)
 
 ### Community 85 - "Community 85"
 Cohesion: 0.07
@@ -1443,8 +1450,8 @@ Cohesion: 0.06
 Nodes (19): Tests that admin_router routes require authentication.  The router-level `Depend, A-P3-2: 5 failed logins → 423 account locked for 24 hours., A-P3-5: Only super_admin may create / update staff., A-P2-2: requests from staff idle > 30 min are rejected with 401., A-P3-1: ADMIN_PASSWORD must be compared via bcrypt, not plaintext., Verify admin routes reject unauthenticated requests., Use the TestClient from conftest., GET /api/admin/settings without token → 401 or 403. (+11 more)
 
 ### Community 93 - "Community 93"
-Cohesion: 0.06
-Nodes (22): _make_stripe_event(), Tests for routes/webhooks.py and routes/main.py.  webhooks.py is at 15.9% — the, customer.subscription.deleted now matches our row by     stripe_subscription_id, invoice.paid must not resurrect a cancelled subscription (P2 follow-up)., Dual-secret verification: the Connected-accounts endpoint signs with     its own, payout.paid / payout.failed reconcile the payouts row to the true     bank-settl, When update_ride returns None (ride not found), handler raises 500 so Stripe ret, TestAllowedStripeEvents (+14 more)
+Cohesion: 0.07
+Nodes (18): _make_stripe_event(), Tests for routes/webhooks.py and routes/main.py.  webhooks.py is at 15.9% — the, customer.subscription.deleted now matches our row by     stripe_subscription_id, Dual-secret verification: the Connected-accounts endpoint signs with     its own, When update_ride returns None (ride not found), handler raises 500 so Stripe ret, TestAllowedStripeEvents, TestStripeWebhookCheckoutNotPaid, TestStripeWebhookClaimException (+10 more)
 
 ### Community 94 - "Community 94"
 Cohesion: 0.05
@@ -1459,12 +1466,12 @@ Cohesion: 0.30
 Nodes (3): filter_and_rank_drivers(), Pure function: filter a candidate pool and attach per-driver distance.      Retu, TestFilterAndRankDrivers
 
 ### Community 97 - "Community 97"
-Cohesion: 0.09
-Nodes (10): _driver(), IDOR regression: a user who is neither the rider nor the assigned         driver, The assigned driver (matched via the drivers lookup) is authorized., _ride(), TestCancelScheduledRide, TestGetChatStatus, TestGetRideMessages, TestGetRideReceipt (+2 more)
+Cohesion: 0.08
+Nodes (18): add_tip(), TipRequest, test_add_tip_duplicate(), test_add_tip_not_completed(), test_add_tip_ride_not_found(), test_add_tip_success(), test_add_tip_wrong_rider(), _driver() (+10 more)
 
 ### Community 98 - "Community 98"
-Cohesion: 0.09
-Nodes (27): _make_driver(), _make_ride(), Tests for utils/t4a_annual_job.py — P4-7 CRA T4A annual issuance loop.  Covers:, No drivers above threshold — no pushes, audit still written., Drivers missing user_id are skipped silently., Push failure for one driver doesn't abort the rest., Does nothing on a day that is not last-day-of-February., Does nothing when it is last-day-of-Feb but hour < 08:00 UTC. (+19 more)
+Cohesion: 0.08
+Nodes (34): _make_driver(), _make_ride(), Tests for utils/t4a_annual_job.py — P4-7 CRA T4A annual issuance loop.  Covers:, No drivers above threshold — no pushes, audit still written., Drivers missing user_id are skipped silently., Push failure for one driver doesn't abort the rest., Does nothing on a day that is not last-day-of-February., Does nothing when it is last-day-of-Feb but hour < 08:00 UTC. (+26 more)
 
 ### Community 99 - "Community 99"
 Cohesion: 0.07
@@ -1472,7 +1479,7 @@ Nodes (24): Unit tests for the admin WebSocket-health primitives.  Covers the tw
 
 ### Community 100 - "Community 100"
 Cohesion: 0.09
-Nodes (11): patch_external_dependencies(), Tests for validators.sanitize_string() — pure unit tests, no DB/external deps., Override the conftest autouse fixture — these tests need no mocking., TestBasicSanitization, TestHTMLStripping, TestMaxLength, TestNoneAndEmpty, TestRealWorldInputs (+3 more)
+Nodes (13): patch_external_dependencies(), Tests for validators.sanitize_string() — pure unit tests, no DB/external deps., Override the conftest autouse fixture — these tests need no mocking., TestBasicSanitization, TestHTMLStripping, TestMaxLength, TestNoneAndEmpty, TestRealWorldInputs (+5 more)
 
 ### Community 101 - "Community 101"
 Cohesion: 0.06
@@ -1483,8 +1490,8 @@ Cohesion: 0.06
 Nodes (30): Admin Dashboard, Agent Framework (`agents/`), Architecture, Backend (Python/FastAPI), Background Loop Recipe, Batch size rule, Codex-Adjacent Directories, Commands (+22 more)
 
 ### Community 103 - "Community 103"
-Cohesion: 0.25
-Nodes (9): AI assistant package (rider/driver AI mode).  Modules: - pii: PII scrubbing appl, escalate_to_support(), get_company_info(), Any, FAQ, company-info and escalation tools for the AI assistant.  Available to both, Compact 'User:/Assistant:' transcript of the current conversation for     the su, _recent_transcript(), search_faqs() (+1 more)
+Cohesion: 0.12
+Nodes (18): AI assistant package (rider/driver AI mode).  Modules: - pii: PII scrubbing appl, _cap_result(), Any, Tool registry for the AI assistant — single source of truth.  Two consumers: 1., Cap the MODEL-facing portion of a result. ``_client_action`` is popped     by th, Provider-ready tool definitions, sorted by name (deterministic for     prompt ca, escalate_to_support(), get_company_info() (+10 more)
 
 ### Community 104 - "Community 104"
 Cohesion: 0.05
@@ -1499,8 +1506,8 @@ Cohesion: 0.11
 Nodes (20): _make_area(), _make_driver(), _make_ride(), _make_sub(), Tests for per-service-area Spinr Pass subscription enforcement.  Covers three gu, Replays the subscription-check logic from update_driver_status., Replicate the subscription enforcement block from update_driver_status         u, Global require_driver_subscription=True enforces even if area flag is False. (+12 more)
 
 ### Community 107 - "Community 107"
-Cohesion: 0.11
-Nodes (16): TestValidateMonetaryAmount, datetime, Decimal, pydantic_coordinates_validator(), pydantic_phone_validator(), Input validation utilities for Spinr API.  This module provides comprehensive va, Validate monetary amount.      Args:         amount: Amount to validate, Validate UUID format.      Args:         uuid_value: UUID string to validate (+8 more)
+Cohesion: 0.05
+Nodes (29): CorporateAccountBase, TestBusinessNumber, TestDomain, TestTaxRegion, TestValidateEmail, TestValidateMonetaryAmount, datetime, Decimal (+21 more)
 
 ### Community 108 - "Community 108"
 Cohesion: 0.05
@@ -1511,12 +1518,12 @@ Cohesion: 0.09
 Nodes (19): CSRFMiddleware, Double-submit cookie CSRF protection for state-changing requests.      Only enfo, client(), _make_app(), FastAPI, TestClient, Unit tests for the CSRF double-submit cookie middleware (backend/core/csrf.py an, Requests without an Origin header (server-to-server, curl, mobile) skip CSRF. (+11 more)
 
 ### Community 110 - "Community 110"
-Cohesion: 0.04
-Nodes (32): generate_otp(), Generate a cryptographically secure numeric OTP.      Uses `secrets.choice` (not, mock_settings(), Unit tests for authentication and security modules. Tests cover JWT token handli, Test verifying an invalid JWT token., Test verifying an expired JWT token raises HTTPException 401., Test verifying token with wrong secret raises HTTPException 401., Tests for admin user verification. (+24 more)
+Cohesion: 0.02
+Nodes (87): init_firebase(), Initialize Firebase Admin SDK, _account_inaccessible(), create_jwt_token(), create_refresh_token(), _enforce_account_active(), generate_otp(), get_current_user() (+79 more)
 
 ### Community 111 - "Community 111"
-Cohesion: 0.06
-Nodes (44): _dashboard_window(), _fetch_rows_in_chunks(), get_analytics_overview(), get_cancellation_breakdown(), get_dashboard_overview(), get_demand_forecast(), get_demand_forecast_summary(), get_driver_acceptance_rates() (+36 more)
+Cohesion: 0.08
+Nodes (34): _dashboard_window(), _fetch_rows_in_chunks(), get_analytics_overview(), get_cancellation_breakdown(), get_dashboard_overview(), get_demand_forecast(), get_demand_forecast_summary(), get_driver_acceptance_rates() (+26 more)
 
 ### Community 112 - "Community 112"
 Cohesion: 0.06
@@ -1535,12 +1542,12 @@ Cohesion: 0.06
 Nodes (33): 1. Adopt the dead-code responsive layer (1 day), 2. Build `<FormScreen>` and migrate 8 screens (2 hours), 3. Strip diagnostic console.logs (15 minutes), 4. Tokenize semantic colors (4 hours), 5. Coordinate parallel-session work (process), Accessibility Audit, B-1 — Keyboard occlusion on auth flow, B-2 — Frozen `Dimensions.get('window')` (+25 more)
 
 ### Community 116 - "Community 116"
-Cohesion: 0.27
-Nodes (10): get_email_deliverability(), migrate_profile_images(), Backfill: move existing base64 profile photos to object storage.      New upload, Transactional-email health from email_send_log + email_suppressions.      PIPEDA, Unit tests for the admin email-deliverability monitoring endpoint., test_deliverability_aggregates_and_omits_pii(), test_deliverability_days_clamped(), test_deliverability_empty_window() (+2 more)
+Cohesion: 0.10
+Nodes (16): _call_send_otp(), Regression tests for /auth/send-otp shadowing bug.  Context ------- routes/auth., get_app_settings returns a dict WITH twilio creds — the code must         still, get_app_settings throws — the endpoint should NOT crash on         settings.get(, Sanity check that the E.164 phone the user provided flows through —         only, Regression for the NameError production saw:         NameError: name '_check_otp, If Redis is down the endpoint must fail closed (503) rather than         letting, C3: if get_otp_record_by_phone raises (a DB blip), verify_otp must     surface 5 (+8 more)
 
 ### Community 117 - "Community 117"
-Cohesion: 0.08
-Nodes (20): get_ride(), Fetch details of a specific ride, Store the rider app's live-activity push token for a ride.      Called when the, Driver avatar shown to RIDERS, gated on moderation status.      Driver photos up, register_live_activity(), _rider_visible_photo(), get_ride should attach driver info and compute offer expiry for driver_assigned, get_ride computes free_cancel_seconds_remaining when driver has accepted. (+12 more)
+Cohesion: 0.03
+Nodes (79): _actual_duration_minutes(), cancel_ride_rider(), create_demo_drivers(), _decode_polyline(), _dispatch_retry(), email_ride_receipt(), estimate_ride(), _fetch_directions_polyline() (+71 more)
 
 ### Community 118 - "Community 118"
 Cohesion: 0.06
@@ -1591,8 +1598,8 @@ Cohesion: 0.13
 Nodes (13): _app_with_handler(), _isolate_module_imports(), B-P2-1 — pin the error-response sanitisation contract.  Three concerns covered:, Build a stripped FastAPI app + the four exception handlers +     RequestIDMiddle, Pin the full response shape via TestClient so a future change     to JSONRespons, ERR_* sentinels are vetted by the route author and let         mobile clients br, The sanitiser fires on >=500 only. 4xx messages are user-         facing UX ("Ca, The whole point of B-P2-1's request-id consolidation:         client-quoted ids (+5 more)
 
 ### Community 130 - "Community 130"
-Cohesion: 0.12
-Nodes (26): _active_activities(), _area_label(), build_content_state(), _driver_attr(), _fcm_data(), _first_name(), _headline(), _is_street() (+18 more)
+Cohesion: 0.13
+Nodes (22): _active_activities(), _area_label(), build_content_state(), _driver_attr(), _fcm_data(), _first_name(), _headline(), _is_street() (+14 more)
 
 ### Community 131 - "Community 131"
 Cohesion: 0.12
@@ -1623,12 +1630,12 @@ Cohesion: 0.10
 Nodes (12): make_mock_db(), Integration tests for the in-app wallet endpoints.  Routes under test (backend/r, POST /api/v1/wallet/top-up, POST /api/v1/wallet/pay, GET /api/v1/wallet/transactions, POST /api/v1/wallet/transfer, Build a mock db using the flat Supabase-style interface wallet routes use., TestGetTransactions (+4 more)
 
 ### Community 138 - "Community 138"
-Cohesion: 0.14
-Nodes (10): invoice.paid / invoice.payment_failed / customer.subscription.updated     reconc, invoice.paid carrying metadata.ride_id settles a stuck ride paid via the     adm, Codex round-5 (81SX): a paid ride invoice whose metadata.ride_id was         str, Codex round-4 (P2): a ride already 'refunded' (by charge.refunded) is         te, A ride mid in-app charge (payment_status='processing') must NOT also be, Codex P2: under the pinned API version (2025-04-30.basil) the         top-level, Codex round-3 (#4): if the PI can't be resolved (no payload field and         th, Codex P1: an invoice.paid whose ride_id no longer resolves must NOT be         a (+2 more)
+Cohesion: 0.17
+Nodes (8): invoice.paid carrying metadata.ride_id settles a stuck ride paid via the     adm, Codex round-5 (81SX): a paid ride invoice whose metadata.ride_id was         str, Codex round-4 (P2): a ride already 'refunded' (by charge.refunded) is         te, A ride mid in-app charge (payment_status='processing') must NOT also be, Codex P2: under the pinned API version (2025-04-30.basil) the         top-level, Codex round-3 (#4): if the PI can't be resolved (no payload field and         th, Codex P1: an invoice.paid whose ride_id no longer resolves must NOT be         a, TestRideInvoicePaid
 
 ### Community 139 - "Community 139"
-Cohesion: 0.38
-Nodes (5): _decode_like_endpoint(), MFA challenge token hardening — audience pin + no error-detail oracle.  Pins:, Mirror the exact decode performed by admin_mfa_challenge., test_minted_challenge_token_round_trips(), test_wrong_or_missing_audience_rejected()
+Cohesion: 0.13
+Nodes (10): FareService, Pricing logic that depends on the database.      Routes should instantiate this, Service layer for Spinr backend.  Services contain business logic separated from, _make_db(), Tests for FareService.  These tests exercise the pure helpers directly and the c, Build a mock db that supports the flat Supabase-style interface FareService uses, TestFareService, TestFd (+2 more)
 
 ### Community 140 - "Community 140"
 Cohesion: 0.07
@@ -1643,16 +1650,16 @@ Cohesion: 0.16
 Nodes (23): cancel_fare_split(), create_fare_split(), CreateFareSplitRequest, _d(), get_fare_split(), get_fare_split_for_ride(), _money_str(), pay_split_share() (+15 more)
 
 ### Community 143 - "Community 143"
-Cohesion: 0.31
-Nodes (7): Pay for a ride using wallet balance., wallet_pay(), WalletPayRequest, Pins wallet_pay: balance deduction, guards, and state updates.      Code under t, Client cannot pay more than the server-stored fare (fare-inflation guard)., TestWalletPay, _wallet()
+Cohesion: 0.11
+Nodes (15): DriverTopBar(), DriverTopBarProps, styles, DriverData, Earnings, IdlePanel(), IdlePanelProps, IncentiveItem (+7 more)
 
 ### Community 144 - "Community 144"
 Cohesion: 0.09
 Nodes (13): _apply_history_filter(), _FakeQuery, _FakeResult, _FakeSupabase, Regression tests for B-P1-7: ride history DB-side status filter.  Background ---, Mirror of the visible history predicate pushed into the DB query., Ride cancelled before any driver matched — not shown in history., test_cancelled_with_driver_is_included() (+5 more)
 
 ### Community 145 - "Community 145"
-Cohesion: 0.07
-Nodes (34): _AUDIENCES, admin_add_marketing_suppression(), admin_cloud_message_audience_preview(), admin_delete_cloud_message(), admin_delete_marketing_suppression(), admin_get_cloud_message_stats(), admin_get_cloud_messages(), admin_list_marketing_suppressions() (+26 more)
+Cohesion: 0.05
+Nodes (54): _AUDIENCES, admin_add_marketing_suppression(), admin_cloud_message_audience_preview(), admin_delete_cloud_message(), admin_delete_marketing_suppression(), admin_get_cloud_message_stats(), admin_get_cloud_messages(), admin_list_marketing_suppressions() (+46 more)
 
 ### Community 146 - "Community 146"
 Cohesion: 0.14
@@ -1683,8 +1690,8 @@ Cohesion: 0.08
 Nodes (15): money(), num(), QUEST_META, QuestsScreen(), arrayFromApi(), asRecord(), MyQuestProgress, Quest (+7 more)
 
 ### Community 153 - "Community 153"
-Cohesion: 0.11
-Nodes (16): PII scrubbing for AI assistant traffic (PIPEDA / DV-16).  Applied to every user-, Replace high-risk identifiers with redaction tokens., scrub_pii(), ChatRequest, EscalateRequest, support.py — AI-powered support chat endpoint using Gemini 1.5 Flash.  POST /sup, Send a message to the Gemini AI support bot and receive a reply.      The user m, Escalate a support chat to a human by opening a Zoho Desk ticket.      Returns t (+8 more)
+Cohesion: 0.06
+Nodes (36): PII scrubbing for AI assistant traffic (PIPEDA / DV-16).  Applied to every user-, Replace high-risk identifiers with redaction tokens., scrub_pii(), ChatRequest, EscalateRequest, support.py — AI-powered support chat endpoint using Gemini 1.5 Flash.  POST /sup, Send a message to the Gemini AI support bot and receive a reply.      The user m, Escalate a support chat to a human by opening a Zoho Desk ticket.      Returns t (+28 more)
 
 ### Community 154 - "Community 154"
 Cohesion: 0.18
@@ -1695,8 +1702,8 @@ Cohesion: 0.08
 Nodes (25): 1. **Cline as the Human Interface**, 1. Orchestrator Agent (`orchestrator`), 2. Knowledge Base Agent (`knowledge_base`), 2. **Usage Methods**, 3. **Cline Workflow Example**, 3. Code Review Agent (`code_reviewer`), 4. **Knowledge Persistence**, 4. Testing Agent (`tester`) (+17 more)
 
 ### Community 156 - "Community 156"
-Cohesion: 0.11
-Nodes (35): evaluate_policy(), evaluate_policy_for_ride(), PolicyResult, datetime, Decimal, Policy evaluation for corporate ride bookings (v1 stub).  Public API:   evaluate, Evaluate v1 corporate policy rules against a ride context.      Returns ``{"pass, Structured result from evaluate_policy / evaluate_policy_for_ride.      Attribut (+27 more)
+Cohesion: 0.17
+Nodes (28): evaluate_policy(), Evaluate v1 corporate policy rules against a ride context.      Returns ``{"pass, _fail(), _ok(), Unit tests for corporate_policy_service.evaluate_policy.  Pure-function tests —, test_allowed_source_allowance_only_blocks_empty_allowance(), test_allowed_source_allowance_only_blocks_zero_amount(), test_allowed_source_allowance_only_passes_with_balance() (+20 more)
 
 ### Community 157 - "Community 157"
 Cohesion: 0.11
@@ -1715,16 +1722,16 @@ Cohesion: 0.07
 Nodes (29): 10. Email receipts (`utils/email_receipt.py`), 11. Cloudinary (`utils/cloudinary.py`), 12. Admin surface, 13. Schemas (`schemas.py` extracts), 14. Common tasks, 1. Domain overview, 2. Rider wallet, 3. Payments (Stripe) (+21 more)
 
 ### Community 161 - "Community 161"
-Cohesion: 0.15
-Nodes (22): Safety-incident reporting endpoint.  Drivers and riders submit safety/abuse repo, Record a safety incident submitted by a driver or rider., SafetyLocation, SafetyReportRequest, SafetyRideContext, submit_safety_report(), create_support_ticket(), create_ticket_for_complaint() (+14 more)
+Cohesion: 0.20
+Nodes (18): create_support_ticket(), create_ticket_for_complaint(), create_ticket_for_dispute(), create_ticket_for_flag(), create_ticket_for_lost_and_found(), create_ticket_for_safety(), _enabled(), _link_ticket() (+10 more)
 
 ### Community 162 - "Community 162"
 Cohesion: 0.07
 Nodes (28): 10. Maintenance, 1.1 Stack, 1.2 Builds, 1.3 Test accounts, 1.4 Environment, 1. Prerequisites, 2.1 Rider app — iOS, 2. Boot + auth (per app, per platform) (+20 more)
 
 ### Community 163 - "Community 163"
-Cohesion: 0.10
-Nodes (22): uploadFile(), BecomeDriverScreen(), DocState, Requirement, STEPS, styles, Index(), styles (+14 more)
+Cohesion: 0.12
+Nodes (18): uploadFile(), BecomeDriverScreen(), DocState, Requirement, STEPS, styles, Index(), styles (+10 more)
 
 ### Community 164 - "Community 164"
 Cohesion: 0.12
@@ -1740,7 +1747,7 @@ Nodes (12): _make_admin(), A-P2-8: RBAC matrix tests — verify require_module()
 
 ### Community 167 - "Community 167"
 Cohesion: 0.06
-Nodes (47): _actual_duration_minutes(), create_ride(), get_active_ride(), get_ride_history(), Get rider's current active/pending ride (if any). Used on app launch to resume., Get rider's past rides for the activity tab with cursor-based pagination.      P, Derive the actual trip-in-progress duration in whole minutes.      Preferred sou, CreateRideRequest (+39 more)
+Nodes (49): generate_pickup_otp(), Generate a 4-digit OTP for ride pickup verification., create_ride(), CreateRideRequest, Any, datetime, A card ride with no explicit payment_method_id must be rejected (400).      Regr, In demo mode (Stripe unconfigured) a card ride must NOT be blocked for     lacki (+41 more)
 
 ### Community 168 - "Community 168"
 Cohesion: 0.10
@@ -1751,16 +1758,16 @@ Cohesion: 0.06
 Nodes (50): admin_create_requirement(), admin_delete_requirement(), admin_get_driver_documents(), admin_get_requirements(), admin_review_document(), admin_update_requirement(), CreateRequirementRequest, delete_driver_document() (+42 more)
 
 ### Community 170 - "Community 170"
-Cohesion: 0.05
-Nodes (59): KPI: spinr_payment_settlement_total{method,outcome} + duration histogram.      O, _record_settlement_metrics(), metrics(), _metrics_token(), _Request, _Response, Bearer token required to scrape /metrics, from METRICS_AUTH_TOKEN env.      Empt, TestMetrics (+51 more)
+Cohesion: 0.08
+Nodes (41): KPI: spinr_payment_settlement_total{method,outcome} + duration histogram.      O, _record_settlement_metrics(), allowance_reset_loop(), Monthly allowance reset — rolls fixed_recurring periods forward and zeroes `used, _record_heartbeat(), corporate_autotopup_loop(), Auto-top-up scheduled task for corporate wallets.  Runs every 10 minutes (wired, Background loop — one tick every 10 minutes. (+33 more)
 
 ### Community 171 - "Community 171"
 Cohesion: 0.13
 Nodes (25): _make_async_client_mock(), _make_mock_response(), _no_suppression_or_log(), Unit tests for send_ride_receipt_email.  Covers: - Early return when resend_api_, When resend_api_key is absent, return without making any HTTP call., GST (5%) and grand_total in the POST body must use correct Decimal arithmetic., When surge_multiplier=1.0 the receipt body must NOT contain 'Surge'., When surge_multiplier=1.5 the receipt body MUST contain 'Surge'. (+17 more)
 
 ### Community 172 - "Community 172"
-Cohesion: 0.12
-Nodes (20): Canonical ride status enum.  Encodes the state machine documented in CLAUDE.md., admin_promo_preview(), AdminPromoPreviewRequest, Validate a promo code on behalf of a rider without recording it.      Used by th, apply_promo_for_admin(), compute_promo_discount(), get_available_promos(), list_available_promos() (+12 more)
+Cohesion: 0.10
+Nodes (19): Unit tests for backend/utils/surge_engine.py  Coverage: - ratio_to_multiplier: a, get_service_area_polygon returns None → supply is 0., DB exception in _count_supply_in_area → returns 0 (does not propagate)., Drivers not in present_driver_ids set are excluded from supply count., presence_driver_ids failure → warning logged, DB drivers used as-is (safe fallba, The auto engine caps at 2.5, but a manual override (set by an admin directly, get_surge_status reports EFFECTIVE surge.      A parked multiplier on a surge-di, SURGE_CAP constant must be 2.5 — regulatory ceiling for auto mode. (+11 more)
 
 ### Community 173 - "Community 173"
 Cohesion: 0.13
@@ -1787,8 +1794,8 @@ Cohesion: 0.08
 Nodes (21): FakeReconcilerDB, patched(), Tests for utils/stale_intent_reconciler.py.  The reconciler must only flip inten, No trustworthy presence → err on not flipping anyone., present_driver_ids_checked returning reachable=False (Redis configured     but d, A WS pong refreshes Redis presence without touching drivers.updated_at,     so t, A settings outage must not silently apply the 4h default over an     operator-ra, Skipped (present) drivers filling the first page must not shadow     absent driv (+13 more)
 
 ### Community 179 - "Community 179"
-Cohesion: 0.11
-Nodes (10): _driver(), Regression: `email` lives on `users`, not `drivers`. Writing it to         `driv, first_name/last_name are mirrored on both tables; the legacy         `drivers.na, An orphaned driver (no user_id) must still be editable for fields         mirror, Ordering guard: the canonical users row is written before the         drivers mi, TestAdminGetDrivers, TestAdminGetRideDetails, TestAdminUpdateDriver (+2 more)
+Cohesion: 0.13
+Nodes (7): _driver(), Regression: `email` lives on `users`, not `drivers`. Writing it to         `driv, first_name/last_name are mirrored on both tables; the legacy         `drivers.na, An orphaned driver (no user_id) must still be editable for fields         mirror, Ordering guard: the canonical users row is written before the         drivers mi, TestAdminUpdateDriver, _user()
 
 ### Community 180 - "Community 180"
 Cohesion: 0.08
@@ -1803,8 +1810,8 @@ Cohesion: 0.07
 Nodes (26): 10. Acceptance criteria, 1. Problem, 2. Good news — we are NOT starting from scratch, 3.1 Backend, 3.2 Rider-app, 3.3 Stripe publishable key delivery to client, 3. Gap — the narrow thing we actually need to build, 4. Out of scope (explicitly NOT this ticket) (+18 more)
 
 ### Community 183 - "Community 183"
-Cohesion: 0.08
-Nodes (21): API_URL, client, getAuthHeader(), getStoredToken(), styles, OtpScreen(), storage, styles (+13 more)
+Cohesion: 0.10
+Nodes (17): API_URL, client, getAuthHeader(), getStoredToken(), styles, OtpScreen(), storage, styles (+9 more)
 
 ### Community 184 - "Community 184"
 Cohesion: 0.08
@@ -1815,8 +1822,8 @@ Cohesion: 0.17
 Nodes (15): ToolCall, GeminiAdapter, OpenAIAdapter, _AsyncIter, _fake_genai(), _fake_openai(), _gm_chunk(), _gm_part() (+7 more)
 
 ### Community 186 - "Community 186"
-Cohesion: 0.13
-Nodes (18): admin_cancel_ride(), AdminCancelRideRequest, Admin force-cancels an in-flight ride from the live monitoring page.      Termin, _driver_row(), Regression tests for the driver-accept → rider-sees-update handoff.  User report, Accepting a ride must open insurance Period 2 (en route to pickup —         TNC, Broadcast/searching accept must claim with an UNCONDITIONAL atomic         filte, When the atomic guard returns None (ride already taken by concurrent request), (+10 more)
+Cohesion: 0.14
+Nodes (16): AdminCancelRideRequest, _driver_row(), Regression tests for the driver-accept → rider-sees-update handoff.  User report, Accepting a ride must open insurance Period 2 (en route to pickup —         TNC, Broadcast/searching accept must claim with an UNCONDITIONAL atomic         filte, When the atomic guard returns None (ride already taken by concurrent request),, The rider app's polling fallback calls GET /rides/{id} every 15 s.     Once acce, Admin force-cancel from the live monitoring page. Previously the     'Cancel Rid (+8 more)
 
 ### Community 187 - "Community 187"
 Cohesion: 0.11
@@ -1835,8 +1842,8 @@ Cohesion: 0.14
 Nodes (17): _completed_ride(), _driver(), _rating_req(), E2E — Driver-rating regression suite (B-P0-1).  The first-rating crash was cause, Rolling average must compute correctly as more ratings accumulate., (old_avg * old_count + new_rating) / new_count., Tip is added to driver_earnings and tip_amount on the ride row., Edge cases that should not crash or charge incorrectly. (+9 more)
 
 ### Community 191 - "Community 191"
-Cohesion: 0.20
-Nodes (27): _async_client_mock(), _boto3_mock(), _mock_resp(), Unit tests for utils.email_provider.send_transactional_email.  Provider strategy, PIPEDA: SES MessageRejected echoes the recipient — it must not hit logs., Stub the suppression lookup + send-log write for every test.      email_provider, Return a fake boto3 module-level client() factory and the SES client., _settings() (+19 more)
+Cohesion: 0.23
+Nodes (25): _async_client_mock(), _boto3_mock(), _mock_resp(), Unit tests for utils.email_provider.send_transactional_email.  Provider strategy, PIPEDA: SES MessageRejected echoes the recipient — it must not hit logs., Return a fake boto3 module-level client() factory and the SES client., _settings(), test_empty_body_returns_false_without_loading_settings() (+17 more)
 
 ### Community 192 - "Community 192"
 Cohesion: 0.09
@@ -1847,8 +1854,8 @@ Cohesion: 0.10
 Nodes (14): P2-17: Scheduled rides + DST (R3, E14)  Implemented endpoints:   GET  /rides/sch, Pins cancel_scheduled_ride: owner guard, status update, guards.      Code under, Ride lookup includes rider_id + is_scheduled filter;         wrong owner or non-, E14 — scheduled ride times and DST boundary handling., A ride stored with an explicit UTC ISO timestamp is retrieved as-is.         No, Booking a ride for a local time that doesn't exist (DST gap) must         raise, A time that's valid in the given timezone passes the DST guard., Minimal cursor stub — mirrors the pattern used in other P2 tests. (+6 more)
 
 ### Community 194 - "Community 194"
-Cohesion: 0.10
-Nodes (31): Auto-top-up scheduled tick for corporate wallets., Two replica instances processing the same wallet simultaneously must     produce, test_concurrent_replicas_use_same_stripe_idempotency_key(), test_no_op_when_stripe_secret_missing(), test_skips_when_company_not_active(), test_skips_when_daily_cap_reached(), test_triggers_charge_when_balance_below_threshold(), _autotopup_wallet() (+23 more)
+Cohesion: 0.09
+Nodes (34): Auto-top-up scheduled tick for corporate wallets., Two replica instances processing the same wallet simultaneously must     produce, test_concurrent_replicas_use_same_stripe_idempotency_key(), test_no_op_when_stripe_secret_missing(), test_skips_when_company_not_active(), test_skips_when_daily_cap_reached(), test_triggers_charge_when_balance_below_threshold(), _autotopup_wallet() (+26 more)
 
 ### Community 195 - "Community 195"
 Cohesion: 0.08
@@ -1863,16 +1870,16 @@ Cohesion: 0.08
 Nodes (25): Auth (D02), Backend API — Production-Readiness Audit Plan v1, Backend-Specific Risk Checklist, Branch Strategy, Compliance (D12), Done-sentinel, Mandatory rules, Output Schema (REQUIRED) (+17 more)
 
 ### Community 198 - "Community 198"
-Cohesion: 0.10
-Nodes (22): add_card(), Add a saved card. Requires client-side tokenization.      Contract:       - Body, _mock_request(), First card on file becomes the default automatically., CardError is surfaced as PaymentMethodInvalidException (400)., Invalid JSON body returns 400., test_add_card_generic_stripe_error_returns_500(), test_add_card_invalid_json() (+14 more)
+Cohesion: 0.13
+Nodes (16): add_card(), Add a saved card. Requires client-side tokenization.      Contract:       - Body, Invalid JSON body returns 400., test_add_card_invalid_json(), _mock_request(), Tests for the PCI-DSS perimeter on POST /payments/cards.  Pins the C-PAY-01 fix:, Demo mode (no stripe_secret_key) still requires payment_method_id., Demo mode is not a bypass — raw card fields are refused everywhere. (+8 more)
 
 ### Community 199 - "Community 199"
-Cohesion: 0.20
-Nodes (23): _best_promo_for(), _candidates_from_results(), find_place(), get_fare_quote(), get_rider_location(), _looks_like_street_address(), _lookup_place_candidates(), _maps_get() (+15 more)
+Cohesion: 0.10
+Nodes (39): _best_promo_for(), _candidates_from_results(), find_place(), get_fare_quote(), get_rider_location(), _looks_like_street_address(), _lookup_place_candidates(), _maps_get() (+31 more)
 
 ### Community 200 - "Community 200"
 Cohesion: 0.09
-Nodes (25): LogoutRequest, _bg_payload(), Regression tests for A-P1-7: admin access-token JTI blacklisting.  Background --, admin_logout with a valid Bearer token must write admin:revoked:{jti}     to Red, get_current_user must raise 401 ERR_TOKEN_REVOKED when the token's JTI     is pr, C7: a break-glass token (no admin_staff row) authenticates when its JTI is     p, C7: deleting (or never registering / letting expire) the allowlist key     revok, C7: unlike the best-effort denylist (fail open), a god-mode break-glass     toke (+17 more)
+Nodes (24): _bg_payload(), Regression tests for A-P1-7: admin access-token JTI blacklisting.  Background --, admin_logout with a valid Bearer token must write admin:revoked:{jti}     to Red, get_current_user must raise 401 ERR_TOKEN_REVOKED when the token's JTI     is pr, C7: a break-glass token (no admin_staff row) authenticates when its JTI is     p, C7: deleting (or never registering / letting expire) the allowlist key     revok, C7: unlike the best-effort denylist (fail open), a god-mode break-glass     toke, Pre-fix tokens without jti must not be blocked (backwards compat). (+16 more)
 
 ### Community 201 - "Community 201"
 Cohesion: 0.08
@@ -1895,12 +1902,12 @@ Cohesion: 0.08
 Nodes (24): B1 · Backend / Dispatch (DV-1 to DV-4) — P1 Technical Debt, B2 · Notifications / Rate Limiter (DV-5 to DV-6) — P3 / P2 Ops, B3 · Secrets / Retention / Notifications (DV-7 to DV-9) — P2 Compliance / Ops, B4 · Auth / Frontend Layout Drift / Product-Decision Drift (DV-10 to DV-15) — Documentation Sync, B5 · Compliance Follow-Ups (DV-16 to DV-17) — P2 Legal / Compliance, Driver App — New Issues Surfaced During Verification (2026-04-23), DV-10 · Firebase Token Does Not Enforce App Audience (Driver vs Rider), DV-11 · Stale Remediation Text — Panel Components Moved to `components/dashboard/` (+16 more)
 
 ### Community 206 - "Community 206"
-Cohesion: 0.09
-Nodes (16): execute_tool(), Run one tool call. Returns (result, ok).      ``audience`` is decided by the cal, _db(), Ride read tools: user scoping, field whitelisting, registry wiring.  The load-be, Patch the db_supabase module the handlers call., TestActiveRide, TestOwnership, TestReceipt (+8 more)
+Cohesion: 0.10
+Nodes (13): execute_tool(), Run one tool call. Returns (result, ok).      ``audience`` is decided by the cal, _db(), Ride read tools: user scoping, field whitelisting, registry wiring.  The load-be, Patch the db_supabase module the handlers call., TestActiveRide, TestOwnership, TestReceipt (+5 more)
 
 ### Community 207 - "Community 207"
-Cohesion: 0.26
-Nodes (16): create_payment_sheet(), PaymentSheetRequest, Request body for POST /payments/payment-sheet., Return the three secrets needed to initialise Stripe PaymentSheet.      The mobi, ride_id branch sets idempotency key as ps-{ride_id}-{user_id}-{amount_cents}., No ride_id and no client key → time-bucket fallback key., test_payment_sheet_generic_error_returns_500(), test_payment_sheet_ride_idempotency_key() (+8 more)
+Cohesion: 0.18
+Nodes (22): create_payment_sheet(), PaymentSheetRequest, Request body for POST /payments/payment-sheet., Return the three secrets needed to initialise Stripe PaymentSheet.      The mobi, ride_id branch sets idempotency key as ps-{ride_id}-{user_id}-{amount_cents}., No ride_id and no client key → time-bucket fallback key., test_payment_sheet_generic_error_returns_500(), test_payment_sheet_ride_idempotency_key() (+14 more)
 
 ### Community 208 - "Community 208"
 Cohesion: 0.21
@@ -1955,8 +1962,8 @@ Cohesion: 0.08
 Nodes (23): 1. Provision, 1. Provision + extensions, 2. Schema + data (everything except encrypted PII), 2. Schema + RPCs + PII key, 3. Re-encrypt PII across projects (the landmine), 3. Storage buckets, 4. App settings, 4. Storage objects (+15 more)
 
 ### Community 221 - "Community 221"
-Cohesion: 0.05
-Nodes (75): admin_places_autocomplete(), admin_places_details(), Request, Proxy Google Places API (New) Autocomplete to avoid exposing key to browser., Proxy Google Places API (New) Place Details to get lat/lng.      Pass the same s, _ensure_budget(), _haversine_m(), _maps_key() (+67 more)
+Cohesion: 0.11
+Nodes (34): admin_places_autocomplete(), admin_places_details(), admin_send_ride_receipt(), Request, Re-send the ride receipt email (admin "Send Invoice").      This only emails the, Proxy Google Places API (New) Autocomplete to avoid exposing key to browser., Proxy Google Places API (New) Place Details to get lat/lng.      Pass the same s, _ensure_budget() (+26 more)
 
 ### Community 222 - "Community 222"
 Cohesion: 0.08
@@ -1995,8 +2002,8 @@ Cohesion: 0.08
 Nodes (23): DIMENSION 09 — Test Coverage, DIMENSION 10 — Error Handling & Resilience, DIMENSION 11 — Security Headers & CORS, DIMENSION 12 — Compliance: PII, PCI-DSS & PIPEDA, Files to read, Files to read, Files to read, Files to read (+15 more)
 
 ### Community 231 - "Community 231"
-Cohesion: 0.14
-Nodes (20): _loguru_sentry_sink(), Tests for the Sentry before_send/before_breadcrumb PII scrubber (C1)., test_scrub_breadcrumb_redacts_message(), test_scrub_event_is_lossless_on_clean_and_malformed_events(), test_scrub_event_redacts_email_and_coords_in_exception_value(), test_scrub_event_redacts_logentry_message(), test_scrub_event_redacts_phone_in_message(), test_scrub_event_stamps_surface_tag_without_overwriting() (+12 more)
+Cohesion: 0.10
+Nodes (16): Areas with surge_source='manual' are never updated., Areas with parent_service_area_id set are sub-areas (airports) and skipped., When new multiplier differs from stored, update_one IS called., The service_areas read filters surge_enabled=True in the DB.      Disabled areas, Areas without surge_enabled are never auto-activated, even under load., Every processed area gets a surge_pricing history row inserted., recalculate_all_surges() DOES process areas with surge_source == 'auto'     (or, test_recalculate_filters_surge_enabled_in_db_query() (+8 more)
 
 ### Community 232 - "Community 232"
 Cohesion: 0.15
@@ -2007,8 +2014,8 @@ Cohesion: 0.20
 Nodes (20): _apply(), apply_adjustment(), apply_refund(), apply_topup(), _money_str(), Any, Decimal, Money movements for corporate wallets.  All deltas (top-ups, ride debits, adjust (+12 more)
 
 ### Community 234 - "Community 234"
-Cohesion: 0.06
-Nodes (41): build_default_fares(), build_fare_breakdown_lines(), calculate_fare(), _d(), _f(), FareBreakdown, FareService, _fd() (+33 more)
+Cohesion: 0.15
+Nodes (25): build_fare_breakdown_lines(), calculate_fare(), _d(), _f(), FareBreakdown, _fd(), merge_fare_configs_with_vehicle_types(), merge_vehicle_pricing_with_vehicle_types() (+17 more)
 
 ### Community 235 - "Community 235"
 Cohesion: 0.13
@@ -2020,19 +2027,19 @@ Nodes (23): Checklist, P2-10 · Corporate Account — Wallet Creation Failure No
 
 ### Community 237 - "Community 237"
 Cohesion: 0.12
-Nodes (12): POST /admin/rides/{id}/send-invoice — Codex P2 guards., A refunded ride is terminal — re-invoicing would re-collect a refund., When the atomic CAS claim loses (another request is mid-creation),         the e, Codex P2 (62i9): a fresh `pending:` claim 409s (concurrent creation),         bu, Codex P2 (round-3): a payable Stripe invoice bills the rider's personal, Codex P1 (round-3): an open authorized/fare_only hold is still         captureab, Codex round-3 (#2): if finalize fails after the real id was persisted,         t, Codex round-5 (81Sc): if the persisted invoice was deleted in Stripe,         re (+4 more)
+Nodes (11): POST /admin/rides/{id}/send-invoice — Codex P2 guards., A refunded ride is terminal — re-invoicing would re-collect a refund., When the atomic CAS claim loses (another request is mid-creation),         the e, Codex P2 (62i9): a fresh `pending:` claim 409s (concurrent creation),         bu, Codex P2 (round-3): a payable Stripe invoice bills the rider's personal, Codex P1 (round-3): an open authorized/fare_only hold is still         captureab, Codex round-3 (#2): if finalize fails after the real id was persisted,         t, Codex round-5 (81Sc): if the persisted invoice was deleted in Stripe,         re (+3 more)
 
 ### Community 238 - "Community 238"
 Cohesion: 0.09
 Nodes (21): Regression tests for B-P0-2: process_payment 409 after complete_ride — state str, process_payment guard: 409 when ride status is not completed., process_payment guard passes when ride status is exactly 'completed'., cancel_ride must reject when ride status is 'in_progress'., complete_ride must not set payment_status to any value — it leaves it untouched., trip_in_progress' is a GPS phase name — it must never appear as a ride status., Cancellation must be blocked when ride status is 'in_progress' (the real string), Regression: the old guard used 'trip_in_progress' and silently let cancels throu (+13 more)
 
 ### Community 239 - "Community 239"
-Cohesion: 0.12
-Nodes (18): create_staff(), delete_staff(), get_staff(), list_staff(), Request, Response, List staff members with offset/limit pagination.      Returns a flat array (back, Create a new staff member with role-based module access.      Only super_admin c (+10 more)
+Cohesion: 0.10
+Nodes (21): ROLE_PRESETS, create_staff(), delete_staff(), get_staff(), list_modules(), list_staff(), Request, Response (+13 more)
 
 ### Community 240 - "Community 240"
-Cohesion: 0.19
-Nodes (14): _driver(), _patches(), Tests for the orphaned driver-claim reaper (C3).  A driver claimed by dispatch (, Within the threshold (sub-second claim→insert window) → never touched., TestReapTick, driver_claim_reaper_loop(), _has_active_ride(), _has_pending_offer() (+6 more)
+Cohesion: 0.28
+Nodes (9): _driver(), _patches(), Tests for the orphaned driver-claim reaper (C3).  A driver claimed by dispatch (, Within the threshold (sub-second claim→insert window) → never touched., TestReapTick, _has_active_ride(), _has_pending_offer(), Find and release drivers whose dispatch claim never produced an offer. (+1 more)
 
 ### Community 241 - "Community 241"
 Cohesion: 0.16
@@ -2063,8 +2070,8 @@ Cohesion: 0.12
 Nodes (14): CloudinaryService, get_cloudinary_service(), init_cloudinary(), Any, Cloudinary Integration for Spinr Provides image upload, transformation, and mana, Generate a transformed image URL.          Args:             public_id: Public I, Service for Cloudinary image management., Delete an image from Cloudinary.          Args:             public_id: Public ID (+6 more)
 
 ### Community 248 - "Community 248"
-Cohesion: 0.13
-Nodes (21): Tests for the Redis connectivity diagnostic (Upstash debugging helper)., An Upstash REST URL (https) can't do pub/sub — flag it without a socket., Two labels pointing at the same URL should be marked as shared, not     dialed t, test_diagnose_dedupes_shared_url(), test_masked_endpoint_excludes_credentials(), test_plaintext_redis_warns_about_tls(), test_rest_url_rejected_before_dialing(), test_unset_url_reported_as_unset() (+13 more)
+Cohesion: 0.14
+Nodes (19): Tests for the Redis connectivity diagnostic (Upstash debugging helper)., An Upstash REST URL (https) can't do pub/sub — flag it without a socket., Two labels pointing at the same URL should be marked as shared, not     dialed t, test_diagnose_dedupes_shared_url(), test_masked_endpoint_excludes_credentials(), test_plaintext_redis_warns_about_tls(), test_rest_url_rejected_before_dialing(), test_unset_url_reported_as_unset() (+11 more)
 
 ### Community 249 - "Community 249"
 Cohesion: 0.09
@@ -2143,8 +2150,8 @@ Cohesion: 0.17
 Nodes (19): build_invoice_email_kwargs(), build_subscription_invoice_pdf(), invoice_number_for(), _d(), _fmt(), generate_subscription_invoice_pdf(), Any, Decimal (+11 more)
 
 ### Community 268 - "Community 268"
-Cohesion: 0.15
-Nodes (30): _extract_invoice_payment_intent(), _handle_ride_invoice_paid(), Resolve the PaymentIntent id for a paid invoice across Stripe API versions., Settle a ride paid via an admin-sent payable Stripe Invoice.      Mirrors settle, _d(), _f(), _money_str(), PaymentResult (+22 more)
+Cohesion: 0.22
+Nodes (24): _extract_invoice_payment_intent(), _handle_ride_invoice_paid(), Resolve the PaymentIntent id for a paid invoice across Stripe API versions., Settle a ride paid via an admin-sent payable Stripe Invoice.      Mirrors settle, _d(), _f(), _money_str(), Decimal (+16 more)
 
 ### Community 269 - "Community 269"
 Cohesion: 0.10
@@ -2163,8 +2170,8 @@ Cohesion: 0.10
 Nodes (19): compilerOptions, paths, strict, exclude, extends, include, @/*, expo-constants (+11 more)
 
 ### Community 273 - "Community 273"
-Cohesion: 0.09
-Nodes (32): get_corporate_account_by_id(), get_corporate_wallet_by_company(), mark_low_balance_notified(), Return the master wallet row for a company, or None., Patch one or more configuration columns on a corporate_wallets row., Get a corporate account by ID.      Args:         validated_id: Validated corpor, update_corporate_wallet_config(), admin_view_kyb_document() (+24 more)
+Cohesion: 0.36
+Nodes (7): Low-balance email notification tick., test_rate_limited_within_12h(), test_resends_after_rate_limit_elapsed(), test_sends_email_when_below_threshold_and_autotopup_off(), test_skips_when_company_missing_billing_email(), _notify_one(), run_low_balance_tick()
 
 ### Community 274 - "Community 274"
 Cohesion: 0.10
@@ -2199,8 +2206,8 @@ Cohesion: 0.07
 Nodes (26): A1. Per-module test-coverage floors for money paths, A2. Post-deploy smoke test in CI, A3. PIPEDA breach record register, B1. `track_driver_online` accepts raw GPS for third-party analytics, B2. Disputes store full legal names + RLS too broad + rounding, B3. Driver location-update hot path (perf + Maps spend), B4. WS per-user rate limit is per-replica only, C1. Failover drill — Railway ↔ Fly (+18 more)
 
 ### Community 282 - "Community 282"
-Cohesion: 0.27
-Nodes (6): _calculate_tier(), earn_points_for_ride(), Award loyalty points for a completed ride. Called after ride completion., _loyalty_account(), Pins earn_points_for_ride: points calculation, tier upgrade, dedup.      Code un, TestLoyaltyEarn
+Cohesion: 0.13
+Nodes (10): TestMetrics, _escape_label_value(), _format_le(), iter_counters(), Return a shallow copy of current counters + gauges + histograms for exposition., Render all counters + gauges in Prometheus text exposition format., Render bucket bounds the Prometheus way: integral values without .0., Yield (name, bucket) for internal inspection (tests, debug endpoints). (+2 more)
 
 ### Community 283 - "Community 283"
 Cohesion: 0.10
@@ -2211,8 +2218,8 @@ Cohesion: 0.17
 Nodes (6): _frames_gen(), _patches(), Super-admin AI console: role gating, impersonation plumbing, auditing.  Pins the, TestChatAsUser, TestReads, TestRoleGate
 
 ### Community 285 - "Community 285"
-Cohesion: 0.14
-Nodes (14): docRequiresExpiry(), DocRow, DocumentReviewer(), DocumentReviewerProps, isPdf(), REQUIRES_EXPIRY_KEYWORDS, statusTone(), TEMPLATES (+6 more)
+Cohesion: 0.60
+Nodes (4): formatHours(), QueueStats(), QueueStatsProps, ApprovalQueueResponse
 
 ### Community 286 - "Community 286"
 Cohesion: 0.11
@@ -2259,8 +2266,8 @@ Cohesion: 0.10
 Nodes (19): Adding a new 429 source (NOT slowapi-mediated), Adding a new rate-limited endpoint, Backend, Client, Endpoint inventory, Headers (every 429 response), JSON body (slowapi-handled 429s only), Limitations & Known Debt (+11 more)
 
 ### Community 297 - "Community 297"
-Cohesion: 0.18
-Nodes (11): Sum the numeric `amount` of every fare_breakdown line.      This IS the rider's, _sum_fare_breakdown(), _dec(), _expected_total(), Decimal, Receipt invariant tests — line items always sum to grand_total.  ``grand_total``, Reference implementation: exact Decimal sum of rendered amounts, clamped at 0., Property: for random line lists, grand_total == exact sum of items. (+3 more)
+Cohesion: 0.14
+Nodes (11): TOP_UP_AMOUNTS, TXN_COLORS, TXN_ICONS, WalletScreen(), mockApi, useWalletStore, WalletInfo, WalletState (+3 more)
 
 ### Community 298 - "Community 298"
 Cohesion: 0.11
@@ -2271,8 +2278,8 @@ Cohesion: 0.10
 Nodes (19): 1. Overview, 2. Test Architecture, 3.1 `test_auth.py` - Authentication & Authorization, 3.2 `test_rides.py` - Ride Lifecycle, 3.3 `test_drivers.py` - Driver Management, 3.4 `test_db.py` - Database Layer, 3.5 `test_features.py` - Platform Features, 3.6 `test_documents.py` - Document Verification (+11 more)
 
 ### Community 300 - "Community 300"
-Cohesion: 0.08
-Nodes (31): add_marketing_suppression(), get_preferences(), is_eligible(), is_marketing_suppressed(), normalize_target(), Any, Marketing consent + suppression service (CASL).  Single source of truth for "may, Idempotently add a (channel, target) to the marketing suppression list.      Ret (+23 more)
+Cohesion: 0.15
+Nodes (15): _build_mime(), _is_suppressed(), _load_settings(), _log_send(), Any, Unified transactional-email sender for Spinr.  Provider strategy ---------------, Build the MIME message SES SendRawEmail expects.      The body is multipart/alte, Attempt delivery via AWS SES.      Returns the SES MessageId (possibly "") on su (+7 more)
 
 ### Community 301 - "Community 301"
 Cohesion: 0.11
@@ -2319,8 +2326,8 @@ Cohesion: 0.11
 Nodes (18): 1. Symptoms, 2. Triage Checklist (do these in order, stop when you find the cause), 3.1 Check health endpoint, 3.2 Check Supabase connectivity, 3.3 Check Redis connectivity, 3.4 View live application logs, 3.5 Check recent deploys, 3.6 Check Sentry for error spike (+10 more)
 
 ### Community 312 - "Community 312"
-Cohesion: 0.21
-Nodes (16): BookingErrorDescriptor, displayFare(), EstimateLike, mapBookingError(), paymentMethodForProposal(), pickEstimate(), postBookingRoute(), promoForProposal() (+8 more)
+Cohesion: 0.12
+Nodes (13): DeleteModalProps, DriverSubscription, EMPTY_PLAN, PlanModalProps, ServiceArea, STATUS_CONFIG, SubscriptionPayment, SubscriptionPlan (+5 more)
 
 ### Community 313 - "Community 313"
 Cohesion: 0.19
@@ -2363,8 +2370,8 @@ Cohesion: 0.19
 Nodes (13): BASE_DRIVER_ARRIVED_RIDE, BASE_SEARCHING_RIDE, MOCK_ESTIMATES, MOCK_RIDE, MOCK_USER, mockBackend(), PAYMENT_RESPONSES, PaymentResponseKey (+5 more)
 
 ### Community 323 - "Community 323"
-Cohesion: 0.29
-Nodes (11): _available_discount(), _build_app(), _db_patches(), _promo(), Decimal, FastAPI, Advertised vs charged promo discount parity.  GET /promo/available advertises a, Parity: the /available amount must equal the validate/apply amount. (+3 more)
+Cohesion: 0.05
+Nodes (49): _calculate_tier(), earn_points_for_ride(), get_loyalty_history(), get_loyalty_status(), _get_or_create_account(), Rider loyalty / rewards program — earn points per ride, unlock tiers, redeem rew, Get loyalty points transaction history., Award loyalty points for a completed ride. Called after ride completion. (+41 more)
 
 ### Community 324 - "Community 324"
 Cohesion: 0.22
@@ -2383,8 +2390,8 @@ Cohesion: 0.14
 Nodes (17): _make_driver(), _make_ride(), Unit tests for vehicle-type cascade logic in dispatch (rides.py).  The cascade f, Areas with empty vehicle_cascade_map never trigger cascade., A cascade rule for 'standard' does not fire when the ride requests 'suv'., A single 'from' type can cascade to multiple 'to' types., When exact-type drivers exist, cascade must not be attempted., Child area with empty cascade map inherits parent's rules. (+9 more)
 
 ### Community 328 - "Community 328"
-Cohesion: 0.13
-Nodes (13): DAY_LABEL, DAYS, Draft, PAYMENT_LABELS, PolicyPage(), policyToDraft(), Day, DAY_LABELS (+5 more)
+Cohesion: 0.12
+Nodes (16): devDependencies, @babel/core, babel-plugin-module-resolver, cross-env, eslint, eslint-config-expo, jest, jest-expo (+8 more)
 
 ### Community 329 - "Community 329"
 Cohesion: 0.06
@@ -2467,8 +2474,8 @@ Cohesion: 0.19
 Nodes (9): _driver_row(), P1-10: Driver offline mid-trip (E5)  When a driver toggles offline via PUT /driv, A driver with no active ride can go offline freely., A completed ride must not block the driver from going offline., Going online must never be blocked by the active-ride check —         the guard, A driver can only toggle their own status — not another driver's., Pins that going offline is blocked when the driver has an active ride.      Code, _ride() (+1 more)
 
 ### Community 349 - "Community 349"
-Cohesion: 0.14
-Nodes (11): _driver_row(), A pure rider (no driver row) gets 404 — no driver record found., A real driver accepting a ride from a different rider must succeed         (up t, GET /drivers/earnings must always return the authenticated driver's own     earn, A caller with a valid token but no driver row gets 404, not another         driv, The rides fetched for earnings are filtered by the driver's own id,         not, A user who has a driver record must not be allowed to accept a ride     they cre, The dual-role user is their own rider — must get 403. (+3 more)
+Cohesion: 0.18
+Nodes (11): admin_create_faq(), admin_get_notifications(), admin_send_notification(), admin_update_faq(), FaqCreateRequest, FaqUpdateRequest, NotificationRequest, Request (+3 more)
 
 ### Community 350 - "Community 350"
 Cohesion: 0.12
@@ -2591,8 +2598,8 @@ Cohesion: 0.12
 Nodes (15): File Map, Live Monitoring Page Implementation Plan, Post-Implementation: Add Google Maps API Key, Task 10: Frontend — Monitoring Map (Google Maps), Task 11: Frontend — Page Shell, Task 12: Frontend — Sidebar Entry, Task 1: Backend — Monitoring REST Endpoints, Task 2: Backend — Register Router + WebSocket Admin Broadcast (+7 more)
 
 ### Community 380 - "Community 380"
-Cohesion: 0.06
-Nodes (31): devDependencies, @babel/core, babel-plugin-module-resolver, cross-env, eslint, eslint-config-expo, jest, jest-expo (+23 more)
+Cohesion: 0.07
+Nodes (29): expo, install, exclude, main, name, overrides, protobufjs, react (+21 more)
 
 ### Community 381 - "Community 381"
 Cohesion: 0.12
@@ -2627,8 +2634,8 @@ Cohesion: 0.13
 Nodes (4): AI chat retention (Step J) regression checks.  History: migration 141 (merged vi, TestReForkIntegrity, TestStepJ, TestTableMigrationPairing
 
 ### Community 389 - "Community 389"
-Cohesion: 0.14
-Nodes (18): admin_get_disputes(), admin_resolve_dispute(), create_dispute(), CreateDisputeRequest, get_dispute(), get_user_disputes(), disputes.py – Payment dispute/refund request endpoints for Spinr., Get all disputes filed by the current user. (+10 more)
+Cohesion: 0.07
+Nodes (35): admin_resolve_dispute(), Resolve a dispute (approve/reject refund)., ResolveDisputeRequest, Dispute refund dollars→cents conversion — HALF_UP, never truncation.  admin_reso, The Stripe idempotency key must be stable per dispute so admin retries     after, _resolve_and_capture_stripe_amount(), test_refund_idempotency_key_carries_dispute_id(), test_stripe_refund_amount_is_half_up_cents() (+27 more)
 
 ### Community 390 - "Community 390"
 Cohesion: 0.22
@@ -2647,8 +2654,8 @@ Cohesion: 0.19
 Nodes (10): _driver(), E2E — WAV (wheelchair-accessible vehicle) dispatch (L-P0-3).  Saskatchewan Trans, Driver rows pre-dating migration 60 have no is_wav key — treated as non-WAV., The get_rows call in match_driver_to_ride must add is_wav=True when required., When requires_wav=True the backend adds is_wav=True to the drivers query., Standard ride must NOT add is_wav=True to the query (would exclude non-WAV drive, filter_and_rank_drivers enforces the WAV gate — no I/O, deterministic., _ride() (+2 more)
 
 ### Community 394 - "Community 394"
-Cohesion: 0.13
-Nodes (9): The receipt snapshot must draw the travelled trip leg only — never the     navig, TestSnapshotTrailSelection, _coerce_polyline(), _extract_trail(), _haversine_km(), Render a PNG snapshot of a ride's route via Google Static Maps API.  Used for: -, Convert phase_polylines entry [lat, lng, ts] to (lat, lng) float tuples., Split a polyline into contiguous runs, breaking at outlier hops.      Returns th (+1 more)
+Cohesion: 0.11
+Nodes (7): _coerce_polyline(), _extract_trail(), _haversine_km(), Render a PNG snapshot of a ride's route via Google Static Maps API.  Used for: -, Convert phase_polylines entry [lat, lng, ts] to (lat, lng) float tuples., Split a polyline into contiguous runs, breaking at outlier hops.      Returns th, _split_on_gaps()
 
 ### Community 395 - "Community 395"
 Cohesion: 0.27
@@ -2691,8 +2698,8 @@ Cohesion: 0.13
 Nodes (14): A-P1-10 · Analytics Endpoints Fall Back to Empty Data on DB Failure (CLAUDE.md violation), A-P1-11 · FAQ Management Backend Has No Admin UI, A-P1-1 · Module-Level Access Defined But Never Backend-Enforced (RBAC bypass), A-P1-2 · Deactivating a Staff Member Does Not Invalidate Their Token, A-P1-3 · Deleting a Staff Member Does Not Invalidate Their Token, A-P1-4 · User Status Changes (Suspend/Ban) Are Not Audit-Logged, A-P1-5 · Wallet Credit/Debit Are Not Audit-Logged, A-P1-6 · Staff Create/Update/Delete Not Audit-Logged (+6 more)
 
 ### Community 405 - "Community 405"
-Cohesion: 0.13
-Nodes (12): _patch_settings(), _patch_stripe_confirm(), When payment_intent_id is supplied, confirm() is called, not create()., Without payment_intent_id the original create() path is taken., stripe.PaymentIntent.confirm raises CardError → declined outcome.         The ca, PI lands in requires_payment_method after confirm → declined., Non-card Stripe error (connection, rate-limit) → failed, not 5xx crash., stripe package absent at import time → unconfigured (not a crash). (+4 more)
+Cohesion: 0.18
+Nodes (7): Pin the sentinel-or-sanitize rule. The regex     ``^ERR_[A-Z0-9_]+$`` is deliber, Any free-text detail — even if it looks innocuous — must be         sanitised. T, The actual leak shapes from the production audit:         Stripe charge IDs, Sup, FastAPI lets HTTPException carry dict/list detail (used for         validation e, TestShouldSanitize5xxDetail, True if a 5xx HTTPException detail looks like an exception leak     rather than, _should_sanitize_5xx_detail()
 
 ### Community 406 - "Community 406"
 Cohesion: 0.14
@@ -2727,12 +2734,12 @@ Cohesion: 0.14
 Nodes (13): Application (Railway / Render), Chaos / drill cadence, Checklist, Common Findings, Data export / portability, Database (Supabase / Postgres), Dimension 18 — Disaster Recovery & Business Continuity, External dependencies (graceful degradation) (+5 more)
 
 ### Community 414 - "Community 414"
-Cohesion: 0.27
-Nodes (12): build_footer_html(), build_footer_text(), _coalesce(), _postal_address(), CASL-compliant marketing email sender.  Wraps utils.email_provider.send_transact, Send one marketing email iff the recipient has express consent and is not     su, Settings value as a clean string. The settings loader can surface a DB     NULL, Signed one-click unsubscribe URL for the email channel. (+4 more)
+Cohesion: 0.24
+Nodes (13): _send_email_one(), build_footer_html(), build_footer_text(), _coalesce(), _postal_address(), CASL-compliant marketing email sender.  Wraps utils.email_provider.send_transact, Send one marketing email iff the recipient has express consent and is not     su, Settings value as a clean string. The settings loader can surface a DB     NULL (+5 more)
 
 ### Community 415 - "Community 415"
-Cohesion: 0.14
-Nodes (11): Tests for the ride state-machine guard in routes/drivers.py.  These pin the C-RI, Pin the rider-side cancel state guard (_require_ride_in_state_rider).      The c, Critical invariant: in_progress → cancelled MUST be rejected with 409., Cancel must succeed when ride is in searching state., Cancel must succeed when a driver has been assigned but trip not started., Cancel must be rejected with 409 when ride is already completed., Sanity check: no source-state allowlist should include terminals., Completion must be a CAS on status='in_progress'.      The read-then-write windo (+3 more)
+Cohesion: 0.13
+Nodes (14): Load a rider's ride only if it is in one of allowed_states.      Raises 409 if t, _require_ride_in_state_rider(), test_require_ride_in_state_rider_not_found(), Tests for the ride state-machine guard in routes/drivers.py.  These pin the C-RI, Pin the rider-side cancel state guard (_require_ride_in_state_rider).      The c, Critical invariant: in_progress → cancelled MUST be rejected with 409., Cancel must succeed when ride is in searching state., Cancel must succeed when a driver has been assigned but trip not started. (+6 more)
 
 ### Community 416 - "Community 416"
 Cohesion: 0.23
@@ -2747,8 +2754,8 @@ Cohesion: 0.25
 Nodes (13): close_linked_records(), When Zoho tickets close, close the linked Spinr records (reverse sync).      Cal, _map_ticket(), _name(), _parse(), Any, datetime, Zoho Desk -> Postgres mirror sync.  Pulls recent tickets from Zoho Desk and upse (+5 more)
 
 ### Community 419 - "Community 419"
-Cohesion: 0.21
-Nodes (17): _credit(), _credit_marks(), _d(), _f(), _parse_iso(), _process_one(), datetime, Decimal (+9 more)
+Cohesion: 0.13
+Nodes (25): Insert an immutable ledger entry., _record_transaction(), Admin failed-referral-claim re-queue endpoint (bug #5 → side-aware re-credit)., test_requeue_404_when_no_failed_claim(), _credit(), _credit_marks(), _d(), _f() (+17 more)
 
 ### Community 420 - "Community 420"
 Cohesion: 0.14
@@ -2775,20 +2782,20 @@ Cohesion: 0.22
 Nodes (12): _bound_names(), _catches_import_error(), _guarded_files(), Dual-import branch parity — fallback branches must mirror the try branch.  Every, If an observability module is renamed, move the guard with it., Fail when a baselined violation gets fixed, so the entry is removed., Names a statement list binds: imports, defs, assigns, and nested     try/except, test_extra_guarded_modules_exist() (+4 more)
 
 ### Community 426 - "Community 426"
-Cohesion: 0.13
-Nodes (12): _decode(), _mint(), P3-6: Admin JWT module-gating integration tests.  Admin JWTs carry a `modules` c, The session endpoint must reflect the modules embedded in the JWT., An expired admin JWT must not authenticate., A 'custom' role staff member sees only their assigned modules., A JWT with an invalid signature must not authenticate., Mint a real (signed) admin JWT using the same code path as production. (+4 more)
+Cohesion: 0.27
+Nodes (7): _decode(), _mint(), P3-6: Admin JWT module-gating integration tests.  Admin JWTs carry a `modules` c, Mint a real (signed) admin JWT using the same code path as production., The exp claim must be roughly ADMIN_ACCESS_TOKEN_TTL_HOURS in the future., A token with no module access is still structurally valid., TestMintAdminAccessToken
 
 ### Community 427 - "Community 427"
-Cohesion: 0.22
-Nodes (11): apply_promo(), ApplyPromoRequest, Validate promo code against all rules: usage, expiry, area, user targeting, fare, Apply a promo code (records usage). Call after ride creation.     R-P1-8: uses s, validate_promo(), ValidatePromoRequest, P2-15: Promo / wallet / loyalty E2E (R8, R9, R16)  Implemented endpoints:   POST, Pins apply_promo: server-fare used, application recorded.      Code under test: (+3 more)
+Cohesion: 0.21
+Nodes (10): circuitBadgeVariant(), formatDuration(), formatNumber(), memoryColor(), RedisMonitoringPage(), InfrastructureStats, RedisConnectivityProbe, RedisHealthResponse (+2 more)
 
 ### Community 429 - "Community 429"
 Cohesion: 0.25
 Nodes (13): _fake_intent(), _make_ride(), Unit tests for payment_retry double-charge guard.  Verifies that: 1. A Stripe PI, Codex P1: once an admin has sent a payable Stripe invoice     (stripe_invoice_id, Codex round-3 (#2): the retry loop must NOT re-charge in-app while ANY     invoi, When Stripe reports the PI as 'requires_payment_method', the loop must:       -, When stripe.PaymentIntent.retrieve raises a StripeError, the loop must:       -, When Stripe reports the PI as 'succeeded', the loop must:       - Update the DB (+5 more)
 
 ### Community 430 - "Community 430"
-Cohesion: 0.14
-Nodes (14): scripts, android, build:web, doctor, ios, lint, postinstall, start (+6 more)
+Cohesion: 0.26
+Nodes (8): Update the current user's driver profile.      Accepts vehicle info, personal de, update_my_driver(), Pins that gst_registered and gst_bn reach the DB via PUT /drivers/me.      L-P1-, Return an ExitStack that covers all DB calls in update_my_driver., Setting gst_registered=True via PUT /drivers/me writes to drivers table., Setting gst_bn via PUT /drivers/me writes the correct column name., Omitting GST fields from PUT body leaves driver row unchanged., TestUpdateDriverGstFields
 
 ### Community 431 - "Community 431"
 Cohesion: 0.30
@@ -2895,8 +2902,8 @@ Cohesion: 0.21
 Nodes (7): Tests for PATCH /rides/{id}/notes — rider-attached post-confirm note.  Endpoint, Once the ride is in_progress the note is locked (409)., Rider can attach a note while driver is en route., Empty/whitespace input clears the column to NULL., A user other than the rider gets 403., _ride(), TestRideNotesPatch
 
 ### Community 457 - "Community 457"
-Cohesion: 0.16
-Nodes (12): admin_send_test_push(), mark_all_read(), mark_as_read(), _mask_token(), NotificationCreate, notifications.py – In-app notification system for Spinr., Mark a single notification as read., Mark all notifications as read for the current user. (+4 more)
+Cohesion: 0.17
+Nodes (13): admin_send_test_push(), get_preferences(), _mask_token(), NotificationCreate, PreferencesUpdate, notifications.py – In-app notification system for Spinr., Get user's notification preferences., Update notification preferences. (+5 more)
 
 ### Community 458 - "Community 458"
 Cohesion: 0.17
@@ -2915,8 +2922,8 @@ Cohesion: 0.23
 Nodes (8): Create a mock urlopen context manager., _fetch_page(), main(), Quarterly sub-processor monitoring for PIPEDA compliance.  Fetches each vendor's, Fetch URL text content and ETag. Returns (content, etag_or_None)., Returns 0 if no changes, 1 if changes detected, 2 on fatal error., run_audit(), _sha256()
 
 ### Community 462 - "Community 462"
-Cohesion: 0.23
-Nodes (12): Request, Create a Stripe PaymentIntent for wallet top-up.      Returns the PaymentSheet s, top_up_wallet(), TopUpRequest, _assert_ephemeral_key_contract(), Regression tests for stripe.EphemeralKey.create() call sites.  Background ------, Assert EphemeralKey.create was called the way stripe-python 15.x requires., _settings() (+4 more)
+Cohesion: 0.24
+Nodes (9): _app_with_mocked_auth(), _make_ride(), charge_ride returns succeeded → process_payment returns 200., charge_ride returns declined → process_payment returns 402., charge_ride returns failed (ops error) → process_payment returns 402 payment_err, Return a TestClient-ready FastAPI app with auth bypassed.      The rides router, HTTP surface tests for process_payment — verifies that charge_ride     outcomes, Ensure routes.rides is loaded into sys.modules before patching.          conftes (+1 more)
 
 ### Community 463 - "Community 463"
 Cohesion: 0.17
@@ -3059,8 +3066,8 @@ Cohesion: 0.20
 Nodes (11): _legacy_admin_payload(), Regressions for the security-audit P0/P1 fixes (June 2026 sweep).  Pins:   - Leg, Admin-shaped payload WITHOUT an aud claim — the retired legacy form., A no-aud token with admin role+email claims must 401, not verify., Properly-minted admin tokens (aud claim present) keep working., A plain rider payload (no role/email) is not admin — returns None so     the cal, PIPEDA: the phone claim must be empty, not a duplicate of the email., test_admin_aud_token_still_verifies() (+3 more)
 
 ### Community 498 - "Community 498"
-Cohesion: 0.10
-Nodes (20): AIAuthError, Any, Request-scoped auth context for AI tool execution.  The in-process chat path pas, Raised when a tool executes without an authenticated user in context., require_ai_user(), build_mcp_asgi_app(), MCPAuthMiddleware, Build the wrapped ASGI app, or None when the SDK is unavailable or     construct (+12 more)
+Cohesion: 0.13
+Nodes (15): build_mcp_asgi_app(), MCPAuthMiddleware, Build the wrapped ASGI app, or None when the SDK is unavailable or     construct, Raw ASGI middleware: kill switch + Bearer auth + ContextVar scoping.      Reuses, ensure_registry_loaded(), Import the domain handler modules exactly once.      They self-register into TOO, /mcp surface: auth middleware, kill switch, registry exposure rules.  The ``mcp`, Inner ASGI app that records whether it ran and what user was in context. (+7 more)
 
 ### Community 499 - "Community 499"
 Cohesion: 0.27
@@ -3099,16 +3106,16 @@ Cohesion: 0.25
 Nodes (7): NotificationService, UNMutableNotificationContent, UNNotificationContent, UNNotificationRequest, UNNotificationServiceExtension, UserNotifications, Void
 
 ### Community 508 - "Community 508"
-Cohesion: 0.39
-Nodes (3): _promo(), Pins promo validation rules.      Code under test: backend/routes/promotions.py:, TestValidatePromo
+Cohesion: 0.17
+Nodes (10): demand=0, supply=5 → ratio=0 → multiplier=1.0., demand=5, supply=0 → ratio=5/1=5.0 → SURGE_CAP (2.5)., demand=15, supply=4 → ratio=3.75 → SURGE_CAP., demand=4, supply=5 → ratio=0.8 → 1.5×., test_calculate_surge_high_demand_returns_cap(), test_calculate_surge_mid_tier(), test_calculate_surge_no_demand_returns_normal(), test_calculate_surge_zero_supply_uses_1_as_denominator() (+2 more)
 
 ### Community 509 - "Community 509"
 Cohesion: 0.17
 Nodes (5): POST /api/v1/quests/progress/{progress_id}/claim, Two simultaneous claims: the loser's CAS update matches zero rows         and mu, If recording the driver_bonuses row fails and no bonus row already         exist, If the bonus insert conflicts but a bonus row already exists (retry /         un, TestClaimQuestReward
 
 ### Community 510 - "Community 510"
-Cohesion: 0.21
-Nodes (11): CLASSIFICATIONS, duration(), fmtTime(), PRIORITIES, QUICK_TAGS, statusClass(), STATUSES, TicketDetailPage() (+3 more)
+Cohesion: 0.27
+Nodes (10): Full admin verification: aud, JTI revocation, staff active, token_version, idle, _verify_admin_payload(), _admin_payload(), Regression: admin JTI-revocation denylist fails OPEN on a Redis outage.  A Redis, redis_get raising (Upstash down) must NOT reject a valid admin token., When Redis IS reachable and the JTI is on the denylist, still 401., Healthy Redis, JTI absent from denylist → token passes., test_allows_when_redis_reports_not_revoked() (+2 more)
 
 ### Community 511 - "Community 511"
 Cohesion: 0.17
@@ -3120,7 +3127,7 @@ Nodes (5): utils.quest_tracker.update_quest_progress_on_ride_complete — the ho
 
 ### Community 513 - "Community 513"
 Cohesion: 0.03
-Nodes (46): claim_driver_atomic(), Atomically set is_available = false for driver if currently available., TestAtomicClaims, Unit tests for rides API and related functionality. Tests cover ride creation, u, Walk the complete ride state machine: accept → arrive → verify-otp → complete., Tests for ride creation functionality., Sample ride creation request data., Test successful ride creation. (+38 more)
+Nodes (51): update_ride(), TestUpdateRide, Unit tests for rides API and related functionality. Tests cover ride creation, u, Walk the complete ride state machine: accept → arrive → verify-otp → complete., Tests for ride creation functionality., Sample ride creation request data., Test successful ride creation., Test ride creation with promo code. (+43 more)
 
 ### Community 514 - "Community 514"
 Cohesion: 0.17
@@ -3139,8 +3146,8 @@ Cohesion: 0.21
 Nodes (7): admin_update_settings(), Update settings (upsert single app_settings row). Writes an audit log entry., Schema for admin settings updates.      The frontend ships the full settings obj, SettingsUpdateRequest, Admin AI settings surface.  Pins: the 4 per-provider keys are masked on GET exac, TestCredentialMasking, TestUpdateValidation
 
 ### Community 518 - "Community 518"
-Cohesion: 0.21
-Nodes (9): Save FCM push token for this user/device.      Writes to two places:      * `pus, register_push_token(), RegisterTokenRequest, When the same user/platform registers again, the row is updated,         not dup, Registration must also mirror the token to users.fcm_token so the         send_p, One row per (user, platform) — iOS and Android tokens are distinct., Pins register_push_token: upsert behavior + users.fcm_token mirror.      Code un, TestRegisterPushToken (+1 more)
+Cohesion: 0.25
+Nodes (6): When the same user/platform registers again, the row is updated,         not dup, Registration must also mirror the token to users.fcm_token so the         send_p, One row per (user, platform) — iOS and Android tokens are distinct., Pins register_push_token: upsert behavior + users.fcm_token mirror.      Code un, TestRegisterPushToken, _token_row()
 
 ### Community 519 - "Community 519"
 Cohesion: 0.26
@@ -3279,16 +3286,16 @@ Cohesion: 0.24
 Nodes (3): AppSettings, TestCatalog, TestAppSettingsAIDefaults
 
 ### Community 553 - "Community 553"
-Cohesion: 0.10
-Nodes (13): get_driver_documents(), Get all documents uploaded by the current driver., Unit tests for document management functionality. Tests cover document requireme, Tests for document API endpoints., Test getting document requirements endpoint.          The autouse supabase patch, Test uploading document endpoint.          Smoke test — route path may differ be, Test getting driver documents endpoint., Test admin document review endpoint. (+5 more)
+Cohesion: 0.18
+Nodes (6): Tests for document API endpoints., Test getting document requirements endpoint.          The autouse supabase patch, Test uploading document endpoint.          Smoke test — route path may differ be, Test getting driver documents endpoint., Test admin document review endpoint., TestDocumentEndpoints
 
 ### Community 554 - "Community 554"
 Cohesion: 0.33
 Nodes (10): _make_http_mocks(), _ok_status(), Unit tests for utils/loop_alert.py.  Pins:   - No HTTP call when webhook_url is, Return (cm_mock, inner_client_mock) for patching httpx.AsyncClient.      httpx.A, _stale_status(), test_logs_error_on_post_failure(), test_no_call_when_no_stale_loops(), test_no_call_when_no_webhook() (+2 more)
 
 ### Community 555 - "Community 555"
-Cohesion: 0.06
-Nodes (21): get_payout_history(), _driver_row(), _payout_row(), P2-16: Payout / T4A driver flows (D8, D13)  Implemented endpoints:   POST /drive, Pins request_payout: balance check, bank-account guard, payout persisted.      C, Pins get_payout_history: driver-scoped; not-found guard.      Code under test: b, Pins get_t4a_summary: sums driver_earnings across completed rides.      Code und, gst_registered=True + gst_bn propagate from driver row into summary. (+13 more)
+Cohesion: 0.15
+Nodes (10): _driver_row(), _payout_row(), P2-16: Payout / T4A driver flows (D8, D13)  Implemented endpoints:   POST /drive, Pins get_payout_history: driver-scoped; not-found guard.      Code under test: b, Pins get_t4a_summary: sums driver_earnings across completed rides.      Code und, gst_registered=True + gst_bn propagate from driver row into summary., Driver rows without GST columns default to False / empty string., _ride_row() (+2 more)
 
 ### Community 556 - "Community 556"
 Cohesion: 0.27
@@ -3299,8 +3306,8 @@ Cohesion: 0.35
 Nodes (5): _call(), Unit tests for the admin referral analytics endpoint.  Covers the redemption fun, Return an AsyncMock for db_supabase.get_rows that dispatches by table., _rows_router(), TestReferralAnalytics
 
 ### Community 558 - "Community 558"
-Cohesion: 0.18
-Nodes (6): Tests for ride status update functionality., Test updating ride status., Test updating ride with driver assignment., Test completing a ride., Test cancelling a ride., TestRideStatusUpdates
+Cohesion: 0.24
+Nodes (9): create_driver(), Register a new driver (admin only or internal process), Unit tests for utils.driver_code.generate_driver_code., test_codes_are_random(), test_format_and_alphabet(), generate_driver_code(), Human-readable short codes for driver rows.  drivers.id stays a UUID (foreign ke, Return a fresh DRV-XXXXXX code using a crypto-strong RNG. (+1 more)
 
 ### Community 559 - "Community 559"
 Cohesion: 0.21
@@ -3319,8 +3326,8 @@ Cohesion: 0.18
 Nodes (11): Delta — 2026-04-25 (PR #51 rollout), Executive Summary Update, N-001 (Advisory) — Session model diverges from `settings.json` pin, N-002 (P1) — `claude-review.yml` permanently fails without `ANTHROPIC_API_KEY` secret, N-003 (P2) — `CLAUDE.md` 3× expansion increases session token budget, N-004 (P2) — 4 new slash commands not yet exercised in any transcript, N-005 (info) — Pre-commit hook patched with meta-doc exclude list, New Findings (+3 more)
 
 ### Community 563 - "Community 563"
-Cohesion: 0.14
-Nodes (5): Unit tests for the Spinr Pass daily ride-quota helpers.  Covers the per-calendar, TestComputeQuotaWindowOverride, TestForceOfflineIfExhausted, TestHoursUntil, TestQuotaWindowForSub
+Cohesion: 0.11
+Nodes (5): Unit tests for the Spinr Pass daily ride-quota helpers.  Covers the per-calendar, TestComputePassExpiry, TestComputeQuotaWindowOverride, TestHoursUntil, TestQuotaWindowForSub
 
 ### Community 564 - "Community 564"
 Cohesion: 0.18
@@ -3427,16 +3434,16 @@ Cohesion: 0.17
 Nodes (7): Pins send_push_notification's dispatch path.      Code under test: backend/featu, A dispatch push reaches messaging.send on the request path and is         NOT pa, If the immediate send fails, the dispatch push is enqueued for retry         so, No token on file → drop immediately; enqueuing can't fix a missing         token, A transient Supabase read failure in the users lookup must NOT drop a         ti, A non-time-critical push keeps its best-effort contract: a DB error in         t, TestDispatchPushIsImmediate
 
 ### Community 590 - "Community 590"
-Cohesion: 0.05
-Nodes (28): DriverActionBar(), getDriverStatus(), Activity, DriverActivity(), fmtDuration(), Phase, PHASE_LABEL, Ride (+20 more)
+Cohesion: 0.33
+Nodes (5): DEFAULT_CONFIG, DriverTimeline(), EVENT_CONFIG, fmtDate(), groupByDate()
 
 ### Community 591 - "Community 591"
 Cohesion: 0.46
 Nodes (7): _make_request(), StarletteRequest, Per-account TOTP failure lockout on /mfa/challenge.  The per-IP SlowAPI limit (1, _staff_row(), test_invalid_code_records_account_failure(), test_locked_account_rejected_even_with_valid_code(), test_successful_exchange_clears_failures()
 
 ### Community 592 - "Community 592"
-Cohesion: 0.26
-Nodes (11): effective_available(), effective_online(), filter_effective_online(), _parse_ts(), Any, datetime, Effective driver online state — Uber/Lyft-style composition.  Source of truth sp, Convenience filter for readers that want only effective-online rows. (+3 more)
+Cohesion: 0.03
+Nodes (92): build_monitoring_ride(), fetch_monitoring_drivers(), fetch_monitoring_rides(), flush_redis_prefix(), FlushPrefixRequest, get_email_deliverability(), get_infrastructure_stats(), get_monitoring_drivers() (+84 more)
 
 ### Community 593 - "Community 593"
 Cohesion: 0.20
@@ -3499,8 +3506,8 @@ Cohesion: 0.20
 Nodes (9): Data classification (referenced by Dimension 12), Federal, How to use, Industry standards, Municipal, Per-module applicability (quick index), Provincial — Saskatchewan (expand per-province on entry), Safety / screening (+1 more)
 
 ### Community 608 - "Community 608"
-Cohesion: 0.20
-Nodes (6): Tests for document requirement management., Test getting all document requirements., Test creating a new document requirement., Test updating a document requirement., Test deleting a document requirement., TestDocumentRequirements
+Cohesion: 0.08
+Nodes (17): get_driver_documents(), Get all documents uploaded by the current driver., Unit tests for document management functionality. Tests cover document requireme, Tests for document requirement management., Tests for document expiry tracking., Test checking for expiring documents., Test getting all document requirements., Test marking expired documents. (+9 more)
 
 ### Community 609 - "Community 609"
 Cohesion: 0.20
@@ -3535,12 +3542,12 @@ Cohesion: 0.20
 Nodes (6): If ws.close raises (socket already torn down server-side), the         registry, Pin disconnect_user behaviour. Lives in backend/socket_manager.py., Kicks rider_u1 + driver_u1 but not admin_u1 (not in scope)         and not rider, Kicking a user with no live sockets returns 0 without raising —         callers, When caller passes client_types=None, all three surfaces are kicked., TestDisconnectUser
 
 ### Community 617 - "Community 617"
-Cohesion: 0.24
-Nodes (7): FareConfig, ServiceArea, _model_to_json_dict(), Phase 5 contract test — money fields serialize as Decimal strings.  Regression g, Round-trip a Pydantic model through .model_dump_json() to mirror what     FastAP, Every money field on every response model must serialize as `"X.XX"`,     never, TestMoneyFieldsSerializeAsString
+Cohesion: 0.25
+Nodes (7): evaluate_policy_for_ride(), PolicyResult, datetime, Decimal, Policy evaluation for corporate ride bookings (v1 stub).  Public API:   evaluate, Structured result from evaluate_policy / evaluate_policy_for_ride.      Attribut, Fetch policy + member allowance from the DB and evaluate all rules.      Returns
 
 ### Community 618 - "Community 618"
 Cohesion: 0.20
-Nodes (9): 12. State Management Architecture, 18. Architecture Decision Records (ADRs), 3. Application Surface Map, 8. Shared Package — Full File Mapping, Architecture Reference, Integration Guide & Alignment Document, Spinr — Comprehensive Tech Stack & File Mapping, Store Topology, Table of Contents (+1 more)
+Nodes (9): 18. Architecture Decision Records (ADRs), 3. Application Surface Map, 5. Rider App — Full File Mapping, 8. Shared Package — Full File Mapping, App Screens (Expo Router — file = route), Architecture Reference, Integration Guide & Alignment Document, Rider Stores, Spinr — Comprehensive Tech Stack & File Mapping (+1 more)
 
 ### Community 619 - "Community 619"
 Cohesion: 0.20
@@ -3631,8 +3638,8 @@ Cohesion: 0.22
 Nodes (8): Checklist, Dimension 08 — Payments & Earnings, PaymentIntent Security, Payout Flow, PCI-DSS Compliance, Severity Guide, Testing, Webhook Security
 
 ### Community 641 - "Community 641"
-Cohesion: 0.29
-Nodes (5): TestValidateEmail, pydantic_email_validator(), Pydantic validator for email addresses., Validate email address format.      Args:         email: Email address string to, validate_email()
+Cohesion: 0.36
+Nodes (6): PaymentResult, _duration_count(), _outcome_count(), KPI instrumentation for payment settlement (CLAUDE.md metric scheme).  spinr_pay, Idempotent replays moved no money — they must not inflate the         settlement, TestRecordSettlementMetrics
 
 ### Community 642 - "Community 642"
 Cohesion: 0.47
@@ -3659,8 +3666,8 @@ Cohesion: 0.29
 Nodes (8): B3.1 — resolve_active_rides_cached: 5s Redis cache on the GPS-ping hot path.  Th, Codex P2 (PR #1758): an idle driver's cached [] must not survive ride     assign, _ride(), test_dispatch_assignment_invalidates_the_cache(), test_invalidation_busts_a_cached_empty_list(), test_redis_failure_degrades_to_db_query(), test_resolve_active_ride_returns_first_row(), test_second_call_within_ttl_skips_db()
 
 ### Community 649 - "Community 649"
-Cohesion: 0.16
-Nodes (9): Tests for the get_client_identifier key function., Tests for the get_phone_based_key key function., TestGetClientIdentifier, TestGetPhoneBasedKey, get_client_identifier(), get_phone_based_key(), Request, Get a unique client identifier combining IP and user info.      Priority:     1. (+1 more)
+Cohesion: 0.31
+Nodes (5): Tests for the get_phone_based_key key function., TestGetPhoneBasedKey, get_phone_based_key(), Request, Get rate limit key based on phone number for OTP endpoints.
 
 ### Community 650 - "Community 650"
 Cohesion: 0.22
@@ -3799,8 +3806,8 @@ Cohesion: 0.39
 Nodes (5): setAdminAuthCookie(), mockDashboardAPIs(), MOCK_DRIVER, MOCK_RIDES, mockAdminAPIs()
 
 ### Community 686 - "Community 686"
-Cohesion: 0.12
-Nodes (15): BillingPage(), formatCAD(), monthOptions(), toCSV(), formatCAD(), OverviewPage(), DecisionDialogProps, AllowanceRequestRow (+7 more)
+Cohesion: 0.14
+Nodes (13): BillingPage(), formatCAD(), monthOptions(), toCSV(), formatCAD(), OverviewPage(), BillingStatement, BillingSummary (+5 more)
 
 ### Community 687 - "Community 687"
 Cohesion: 0.25
@@ -3835,8 +3842,8 @@ Cohesion: 0.25
 Nodes (7): Backend Service Layer, Conventions, Migration plan, Naming, The contract, What does NOT belong here, Why a service layer?
 
 ### Community 696 - "Community 696"
-Cohesion: 0.17
-Nodes (8): init_firebase(), Initialize Firebase Admin SDK, Tests for Firebase authentication integration., Test Firebase initialization., Test creating user via Firebase., Test getting user from Firebase., Test getting user by phone number., TestFirebaseIntegration
+Cohesion: 0.22
+Nodes (10): _guarded_fetch(), Regression tests for A-P1-10: analytics driver-list DB error must surface as 503, Mirror of the fixed guard: raise on DB error instead of returning []., Core invariant: DB failure must raise, never silently return []., Regression proof: the old code swallowed the error and returned []., Driver-list DB failure must propagate as 503, not return partial data., test_db_error_raises_instead_of_returning_empty_list(), test_db_success_returns_drivers() (+2 more)
 
 ### Community 698 - "Community 698"
 Cohesion: 0.31
@@ -3895,8 +3902,8 @@ Cohesion: 0.36
 Nodes (6): _clean_schema(), Any, ChatMessage, Gemini adapter (google-generativeai — already in the backend lockfile).  Gemini', _to_wire(), _tools_to_wire()
 
 ### Community 713 - "Community 713"
-Cohesion: 0.25
-Nodes (8): attest_device(), Verify device integrity on go-online. Flags emulators and suspicious devices., Server-side device integrity verification.  Validates device attestation signals, # NOTE: "google" is intentionally NOT a brand indicator — real Pixel phones, Evaluate device trust level. Returns {"trusted": bool, "risk_tier": str, "reason, Store attestation result for admin visibility and pattern detection., _record_attestation(), verify_device()
+Cohesion: 0.18
+Nodes (5): The session endpoint must reflect the modules embedded in the JWT., An expired admin JWT must not authenticate., A 'custom' role staff member sees only their assigned modules., A JWT with an invalid signature must not authenticate., TestAdminSessionEndpoint
 
 ### Community 714 - "Community 714"
 Cohesion: 0.22
@@ -3905,10 +3912,6 @@ Nodes (4): Tests for admin vehicle-type illustration_url persistence.  The uploa
 ### Community 715 - "Community 715"
 Cohesion: 0.39
 Nodes (5): _claimed_card_ride(), _dispatch_patches(), Integration test for dispatch-time pre-authorization of scheduled rides (backend, Patch the full dependency surface of _dispatch_scheduled_ride., TestScheduledDispatchPreauth
-
-### Community 716 - "Community 716"
-Cohesion: 0.25
-Nodes (5): Tests for SMS input validation., Test validating valid phone numbers., Test validating invalid phone numbers., Test SMS message length validation., TestSMSValidation
 
 ### Community 718 - "Community 718"
 Cohesion: 0.22
@@ -4006,10 +4009,6 @@ Nodes (4): testAdminLogin(), redactCoords(), redactEmail(), redactPhone()
 Cohesion: 0.38
 Nodes (3): DELETE(), POST(), cookieSetSpy
 
-### Community 742 - "Community 742"
-Cohesion: 0.46
-Nodes (5): Redeem loyalty points for wallet credit., redeem_points(), RedeemRequest, Pins redeem_points: points deducted, wallet credited, guards.      Code under te, TestLoyaltyRedeem
-
 ### Community 743 - "Community 743"
 Cohesion: 0.29
 Nodes (6): Applicable Dimensions, Key Files (most important to read), Known Approved Decisions (do not re-flag), Module: Driver App, Previous Audits, Screens Inventory
@@ -4019,7 +4018,7 @@ Cohesion: 0.25
 Nodes (5): Tests for driver location tracking., Test updating driver location.          The RPC had a text/uuid type mismatch so, Test finding nearby drivers.          conftest.py's autouse fixture wires ``clie, Test finding nearby drivers when none available., TestDriverLocation
 
 ### Community 745 - "Community 745"
-Cohesion: 0.40
+Cohesion: 0.43
 Nodes (6): _authoritative_ride_charge(), Any, Decimal, _q2(), Quantize a money value to 2dp (HALF_UP). Decimal-only — never float., Server-authoritative amount the rider owes for a ride: grand_total + tip.      `
 
 ### Community 746 - "Community 746"
@@ -4162,17 +4161,21 @@ Nodes (6): 1. Apply Schema Changes, 2. Verify Backend, 3. Start Server, Database
 Cohesion: 0.25
 Nodes (5): Tests for saved addresses functionality., Test saving an address., Test getting saved addresses for a user., Test deleting a saved address., TestSavedAddresses
 
+### Community 786 - "Community 786"
+Cohesion: 0.27
+Nodes (3): test_list_filters_by_status(), E2E: approve company → Stripe customer created → wallet provisioned → manual top, test_wallet_lifecycle()
+
 ### Community 788 - "Community 788"
-Cohesion: 0.09
-Nodes (14): Coverage-boost tests — maps_eta, metrics, validators.  These tests target the ~1, Test _get_redis() directly to cover cache-hit and creation paths., Exercise the rate_limit_auth decorator inner functions., TestGetRedisDirect, TestHaversine, TestInitRateLimiting, TestRateLimitAuthDecorator, TestSubprocessorAuditMain (+6 more)
+Cohesion: 0.17
+Nodes (8): Coverage-boost tests — maps_eta, metrics, validators.  These tests target the ~1, TestHaversine, TestInitRateLimiting, TestSubprocessorAuditMain, _haversine_eta_seconds(), _haversine_km(), init_rate_limiting(), Initialize rate limiting for a FastAPI application.      Args:         app: Fast
 
 ### Community 789 - "Community 789"
 Cohesion: 0.33
 Nodes (3): Perf/correctness tests for dispatch (#4): batched offer_skip + retry cap., Past the cap, _dispatch_retry must not re-query or re-dispatch — the     stuck-r, test_dispatch_retry_stops_at_attempt_cap()
 
 ### Community 790 - "Community 790"
-Cohesion: 0.33
-Nodes (4): Tests for document expiry tracking., Test checking for expiring documents., Test marking expired documents., TestDocumentExpiry
+Cohesion: 0.22
+Nodes (8): ActiveRide, DailyEarning, DriverState, EarningsSummary, IncomingRide, RideState, TripEarning, useDriverStore
 
 ### Community 791 - "Community 791"
 Cohesion: 0.29
@@ -4206,6 +4209,10 @@ Nodes (3): GET /api/v1/fare-split/{split_id}, A user who is neither requester no
 Cohesion: 0.33
 Nodes (3): Referral reward credit routing (utils/referral_payout._credit).  Driver referral, No driver row for the user → raise so the caller marks the claim 'failed'     (m, test_driver_referral_missing_driver_row_raises()
 
+### Community 800 - "Community 800"
+Cohesion: 0.25
+Nodes (7): { height: SCREEN_H }, MINUTES, MONTH_NAMES, Props, SchedulePicker(), toDateStr(), WEEK_DAYS
+
 ### Community 801 - "Community 801"
 Cohesion: 0.29
 Nodes (6): Findings Summary (as of 2026-04-18), Folder Structure, How to Use This, Naming Convention for Future Audits, Spinr Audit Reports, What Was Audited
@@ -4219,8 +4226,8 @@ Cohesion: 0.38
 Nodes (4): Delivery path — firebase_admin.messaging mocked via sys.modules.      Code under, iOS APNs-routed FCM token reaches messaging.send., Android FCM registration token reaches messaging.send., TestNativePushDelivery
 
 ### Community 807 - "Community 807"
-Cohesion: 0.43
-Nodes (4): buildReceiptHtml(), _money(), _num(), RideDetailsScreen()
+Cohesion: 0.39
+Nodes (3): build_default_fares(), Build a default fare entry per vehicle type.      Pure function — no DB or exter, TestBuildDefaultFares
 
 ### Community 808 - "Community 808"
 Cohesion: 0.33
@@ -4307,8 +4314,8 @@ Cohesion: 0.33
 Nodes (3): fs, path, { withDangerousMod }
 
 ### Community 829 - "Community 829"
-Cohesion: 0.33
-Nodes (3): Cross-app ride-lifecycle integration test.  Simulates a full ride by driving the, Shape contracts between rider and driver apps and the backend.      These are lo, TestCrossAppHTTPContract
+Cohesion: 0.46
+Nodes (3): find_service_area_for_point(), Return the first service area whose polygon contains (lat, lng), or None.      P, TestFindServiceArea
 
 ### Community 830 - "Community 830"
 Cohesion: 0.40
@@ -4339,8 +4346,8 @@ Cohesion: 0.60
 Nodes (4): _patches(), Replay-safety tests for allowance_reset (F8): CAS claim on the period roll.  Two, test_reset_runs_once_when_cas_won(), test_reset_skipped_when_cas_lost()
 
 ### Community 839 - "Community 839"
-Cohesion: 0.33
-Nodes (6): estimate_ride(), Drivers within 10km with user_id should be counted., Dropoff geofence should use the same polygon fallback as pickup., test_estimate_ride_allows_dropoff_matched_by_polygon_fallback(), test_estimate_ride_includes_nearby_drivers(), test_estimate_ride_returns_estimates()
+Cohesion: 0.36
+Nodes (4): Tests for the get_client_identifier key function., TestGetClientIdentifier, get_client_identifier(), Get a unique client identifier combining IP and user info.      Priority:     1.
 
 ### Community 840 - "Community 840"
 Cohesion: 0.40
@@ -4371,16 +4378,12 @@ Cohesion: 0.40
 Nodes (3): 3-day warning sets expiry_warned_3d flag; 24h warning still fires later., expiry_warned_3d=True means no second 3-day push., TestExpiryWarning3Day
 
 ### Community 852 - "Community 852"
-Cohesion: 0.33
-Nodes (5): Regression tests for the DB readiness probe used by GET /health.  Background (Fl, ping() must read the real `settings` table, never `app_settings`., A failed probe must raise DatabaseError so /health correctly 503s.      This is, test_ping_probes_settings_table_not_app_settings(), test_ping_raises_databaseerror_when_probe_fails()
+Cohesion: 0.36
+Nodes (4): Test checkout.session.completed webhook activates subscription., checkout.session.completed activates a pending row and links the         Stripe, If the row was superseded before this stale session paid, don't link         the, TestWebhookActivation
 
 ### Community 854 - "Community 854"
-Cohesion: 0.40
-Nodes (4): Admin failed-referral-claim re-queue endpoint (bug #5 → side-aware re-credit)., test_requeue_404_when_no_failed_claim(), No 'failed' referral_payouts claim exists for the given referee (or it was     c, ReferralClaimNotFound
-
-### Community 857 - "Community 857"
-Cohesion: 0.33
-Nodes (4): Tests for Twilio integration., Test Twilio client initialization., Test Twilio message creation parameters., TestTwilioIntegration
+Cohesion: 0.38
+Nodes (4): Exercise the rate_limit_auth decorator inner functions., TestRateLimitAuthDecorator, rate_limit_auth(), Rate limit decorator for authentication endpoints.      Args:         requests:
 
 ### Community 860 - "Community 860"
 Cohesion: 0.60
@@ -4411,8 +4414,8 @@ Cohesion: 0.40
 Nodes (5): 17. Continuous Security Framework, Layer 1 — Commit-Time (Every Developer Commit), Layer 2 — PR-Time (Every Pull Request), Layer 3 — Weekly (Automated), Layer 4 — Sprint Cadence (Every 2 Weeks)
 
 ### Community 867 - "Community 867"
-Cohesion: 0.02
-Nodes (102): BACKEND_URL, BACKEND_URL, BACKEND_URL, # IMPORTANT: Rotate this key before deploying — see docs/key-rotation.md, Compatibility shim for the removed ``db`` module.  Upstream commit ``33f252b4``, Identity passthrough kept for legacy callers.      The original implementation c, serialize_doc(), get_saved_addresses() (+94 more)
+Cohesion: 0.03
+Nodes (72): BACKEND_URL, BACKEND_URL, BACKEND_URL, # IMPORTANT: Rotate this key before deploying — see docs/key-rotation.md, Compatibility shim for the removed ``db`` module.  Upstream commit ``33f252b4``, Identity passthrough kept for legacy callers.      The original implementation c, serialize_doc(), admin_get_stats() (+64 more)
 
 ### Community 868 - "Community 868"
 Cohesion: 0.40
@@ -4510,10 +4513,6 @@ Nodes (4): Reset MemoryStorage on a SlowAPI Limiter instance (if present)., Rese
 Cohesion: 0.40
 Nodes (4): Tier 1 — Summary, Tier 2 — Impact, Tier 3 — Compliance flags, Tier 4 — Verification
 
-### Community 895 - "Community 895"
-Cohesion: 0.33
-Nodes (4): Tests for SMS retry logic., Test SMS retry logic on failure., Test SMS retry exhaustion., TestSMSRetry
-
 ### Community 902 - "Community 902"
 Cohesion: 0.50
 Nodes (3): Output format, /plan — Decompose before coding, Steps
@@ -4598,10 +4597,6 @@ Nodes (3): Highlights, Rider App — P1b Sprint Verification (items 18–33 of 3
 Cohesion: 0.50
 Nodes (3): Per-Item Verification, Rider App — P3 Sprint Verification (8 items), Verification YAML
 
-### Community 928 - "Community 928"
-Cohesion: 0.50
-Nodes (3): TestDomain, Normalize and validate an email domain for allowlist use.      Strips whitespace, validate_email_domain()
-
 ### Community 932 - "Community 932"
 Cohesion: 0.40
 Nodes (3): _extract_user_id(), Request, Pull the current user's id out of the route dependency injection.      Conventio
@@ -4682,10 +4677,6 @@ Nodes (3): 15. Testing Coverage Map, Coverage by Surface, Test Configuration Fil
 Cohesion: 0.67
 Nodes (3): 1. Platform Architecture Overview, Container Diagram (C4 Level 2), System Context Diagram (C4 Level 1)
 
-### Community 956 - "Community 956"
-Cohesion: 0.67
-Nodes (3): 5. Rider App — Full File Mapping, App Screens (Expo Router — file = route), Rider Stores
-
 ### Community 957 - "Community 957"
 Cohesion: 0.67
 Nodes (3): E-1. Live credentials in `app_settings`, E-2. Test OTP delivery, E. Twilio configuration
@@ -4742,25 +4733,29 @@ Nodes (3): check_user(), main(), promote_user()
 Cohesion: 0.67
 Nodes (3): 17. Dependency Graph, Import Resolution — TypeScript Path Aliases, Package Dependency Tree (critical paths)
 
+### Community 1089 - "Community 1089"
+Cohesion: 0.67
+Nodes (3): 12. State Management Architecture, Store Topology, Token Persistence
+
 ## Knowledge Gaps
 - **5932 isolated node(s):** `post-python-write.sh script`, `pre-migration-write.sh script`, `session-start.sh script`, `$schema`, `model` (+5927 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **114 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **125 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `SpinrException` connect `Community 38` to `Community 4`, `Community 6`, `Community 7`, `Community 394`, `Community 14`, `Community 143`, `Community 16`, `Community 270`, `Community 15`, `Community 405`, `Community 22`, `Community 25`, `Community 282`, `Community 415`, `Community 32`, `Community 290`, `Community 167`, `Community 427`, `Community 173`, `Community 179`, `Community 56`, `Community 186`, `Community 62`, `Community 65`, `Community 193`, `Community 67`, `Community 72`, `Community 462`, `Community 207`, `Community 85`, `Community 97`, `Community 867`, `Community 742`, `Community 237`, `Community 242`, `Community 508`, `Community 127`?**
-  _High betweenness centrality (0.032) - this node is a cross-community bridge._
-- **Why does `get_app_settings()` connect `Community 29` to `Community 4`, `Community 389`, `Community 6`, `Community 7`, `Community 9`, `Community 12`, `Community 14`, `Community 16`, `Community 145`, `Community 273`, `Community 22`, `Community 414`, `Community 36`, `Community 38`, `Community 167`, `Community 1065`, `Community 42`, `Community 170`, `Community 300`, `Community 173`, `Community 46`, `Community 1076`, `Community 53`, `Community 66`, `Community 194`, `Community 69`, `Community 198`, `Community 199`, `Community 70`, `Community 75`, `Community 462`, `Community 207`, `Community 83`, `Community 347`, `Community 221`, `Community 867`, `Community 229`, `Community 103`, `Community 117`, `Community 127`?**
-  _High betweenness centrality (0.031) - this node is a cross-community bridge._
-- **Why does `useTheme()` connect `Community 3` to `Community 312`, `Community 35`, `Community 807`, `Community 11`, `Community 43`, `Community 13`, `Community 588`, `Community 47`, `Community 80`, `Community 17`, `Community 51`, `Community 55`, `Community 152`, `Community 24`, `Community 26`?**
-  _High betweenness centrality (0.015) - this node is a cross-community bridge._
+- **Why does `SpinrException` connect `Community 22` to `Community 4`, `Community 6`, `Community 270`, `Community 16`, `Community 25`, `Community 415`, `Community 32`, `Community 290`, `Community 38`, `Community 167`, `Community 173`, `Community 50`, `Community 179`, `Community 56`, `Community 186`, `Community 61`, `Community 1087`, `Community 65`, `Community 193`, `Community 323`, `Community 67`, `Community 72`, `Community 462`, `Community 207`, `Community 592`, `Community 84`, `Community 85`, `Community 97`, `Community 867`, `Community 745`, `Community 237`, `Community 110`, `Community 242`, `Community 116`, `Community 117`, `Community 127`?**
+  _High betweenness centrality (0.037) - this node is a cross-community bridge._
+- **Why does `get_app_settings()` connect `Community 36` to `Community 4`, `Community 389`, `Community 6`, `Community 7`, `Community 9`, `Community 14`, `Community 16`, `Community 145`, `Community 20`, `Community 22`, `Community 29`, `Community 414`, `Community 38`, `Community 167`, `Community 1065`, `Community 170`, `Community 42`, `Community 300`, `Community 173`, `Community 46`, `Community 49`, `Community 50`, `Community 1076`, `Community 53`, `Community 66`, `Community 194`, `Community 198`, `Community 199`, `Community 70`, `Community 75`, `Community 207`, `Community 592`, `Community 81`, `Community 83`, `Community 347`, `Community 221`, `Community 867`, `Community 229`, `Community 103`, `Community 745`, `Community 110`, `Community 117`, `Community 127`?**
+  _High betweenness centrality (0.028) - this node is a cross-community bridge._
+- **Why does `useTheme()` connect `Community 3` to `Community 800`, `Community 35`, `Community 297`, `Community 11`, `Community 43`, `Community 13`, `Community 588`, `Community 47`, `Community 143`, `Community 17`, `Community 80`, `Community 51`, `Community 21`, `Community 55`, `Community 152`, `Community 24`, `Community 26`?**
+  _High betweenness centrality (0.017) - this node is a cross-community bridge._
 - **Are the 138 inferred relationships involving `SpinrException` (e.g. with `FirebaseAuthRequest` and `LogoutRequest`) actually correct?**
   _`SpinrException` has 138 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 3 inferred relationships involving `useTheme()` (e.g. with `Sidebar()` and `AiAuroraBackground()`) actually correct?**
   _`useTheme()` has 3 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `post-python-write.sh script`, `pre-migration-write.sh script`, `session-start.sh script` to the rest of the system?**
-  _9414 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _9415 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Community 0` be split into smaller, more focused modules?**
   _Cohesion score 0.002770083102493075 - nodes in this community are weakly interconnected._

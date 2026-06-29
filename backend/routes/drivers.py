@@ -3062,6 +3062,101 @@ def _build_export_email_html(filename: str) -> str:
     )
 
 
+# Signed download link lives for 7 days — long enough for the driver to grab it
+# on their own schedule, short enough that a leaked link self-expires.
+_EXPORT_LINK_TTL_SECONDS = 7 * 24 * 3600
+
+
+async def _upload_export_zip(user_id: str, zip_bytes: bytes, expires_in_seconds: int) -> str:
+    """Upload the export ZIP to the private ``data-exports`` bucket and return a
+    time-limited signed download URL. Raises on failure so the caller can fall
+    back to attaching the ZIP."""
+    import asyncio  # noqa: PLC0415
+
+    try:
+        from ..supabase_client import supabase  # type: ignore
+    except ImportError:
+        from supabase_client import supabase  # type: ignore
+    try:
+        from ..documents import _extract_signed_url  # type: ignore
+    except ImportError:
+        from documents import _extract_signed_url  # type: ignore
+
+    bucket = "data-exports"
+    storage_path = f"exports/{user_id}/{uuid.uuid4()}.zip"
+    loop = asyncio.get_running_loop()
+
+    # Best-effort provisioning: a private bucket so objects are reachable only
+    # via a signed URL. Swallow "already exists" and any supabase-py signature
+    # drift — a genuinely missing bucket surfaces on the upload below.
+    def _ensure_bucket() -> None:
+        try:
+            supabase.storage.create_bucket(bucket, options={"public": False})
+        except Exception as exc:
+            # Already exists (the common case) or a supabase-py signature
+            # difference — debug-only; a real missing bucket surfaces on upload.
+            logger.debug("data-exports bucket ensure skipped: %s", exc)
+
+    await loop.run_in_executor(None, _ensure_bucket)
+    await loop.run_in_executor(
+        None,
+        lambda: supabase.storage.from_(bucket).upload(
+            path=storage_path,
+            file=zip_bytes,
+            file_options={"content-type": "application/zip", "upsert": "true"},
+        ),
+    )
+    res = await loop.run_in_executor(
+        None,
+        lambda: supabase.storage.from_(bucket).create_signed_url(storage_path, expires_in_seconds),
+    )
+    return _extract_signed_url(res)
+
+
+def _build_export_link_email_text(download_url: str, expires_human: str) -> str:
+    """Plain-text 'your data is ready' email with a download link + expiry."""
+    return (
+        "Hi,\n\n"
+        "As requested, your personal data held by Spinr is ready to download:\n\n"
+        f"  {download_url}\n\n"
+        f"This secure link expires on {expires_human}. If it expires before you "
+        "download it, just request a new export from the app.\n\n"
+        "The download is a ZIP archive containing:\n"
+        "  • README.txt — what each file contains\n"
+        "  • account.csv, driver_profile.csv — your profile\n"
+        "  • rides.csv — your trip history\n"
+        "  • payouts.csv — your payout history\n"
+        "  • documents.csv — your uploaded document records\n"
+        "  • notification_preferences.csv — your notification settings\n"
+        "  • raw_data.json — the complete machine-readable export\n\n"
+        "If you have any questions about your data or would like to request "
+        "deletion, please contact privacy@spinr.ca.\n\n"
+        "— The Spinr Team"
+    )
+
+
+def _build_export_link_email_html(download_url: str, expires_human: str) -> str:
+    """Lyft-style 'your data is ready' HTML email with a download button."""
+    return (
+        '<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;'
+        'max-width:520px;margin:0 auto;color:#1a1a1a;line-height:1.5">'
+        '<h2 style="margin:0 0 12px">Your data export is ready</h2>'
+        "<p>As requested, your personal data held by Spinr is ready to download.</p>"
+        f'<p style="margin:20px 0"><a href="{download_url}" '
+        'style="background:#FF3B30;color:#fff;text-decoration:none;padding:12px 22px;'
+        'border-radius:8px;display:inline-block;font-weight:600">Download my data (ZIP)</a></p>'
+        f'<p style="color:#555;font-size:13px">This secure link expires on '
+        f"<strong>{expires_human}</strong>. If it expires before you download it, just "
+        "request a new export from the app.</p>"
+        "<p>The download contains spreadsheet (CSV) files you can open in Excel, Numbers, "
+        "or Google Sheets, plus a README and the complete machine-readable JSON.</p>"
+        '<p style="color:#555;font-size:13px">Questions about your data or want it deleted? '
+        'Contact <a href="mailto:privacy@spinr.ca">privacy@spinr.ca</a>.</p>'
+        '<p style="color:#888;font-size:12px">— The Spinr Team</p>'
+        "</div>"
+    )
+
+
 @api_router.post("/me/export-data")
 async def export_driver_data(
     background_tasks: BackgroundTasks,
@@ -3141,40 +3236,55 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
         # Lyft-style bundle: human-readable CSV files (one per data category)
         # plus a README and the complete machine-readable JSON, zipped together.
         # Drivers get spreadsheets they can open, not a raw JSON blob.
-        generated_on = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        now = datetime.now(timezone.utc)
+        generated_on = now.strftime("%Y-%m-%d")
         zip_bytes = _build_export_zip(export_payload, generated_on)
-        filename = f"spinr-data-export-{generated_on}.zip"
-
         subject = "Your Spinr data export is ready"
-        text_body = (
-            "Hi,\n\n"
-            "As requested, your personal data held by Spinr is attached as a ZIP "
-            f"archive (\"{filename}\").\n\n"
-            "Inside you'll find:\n"
-            "  • README.txt — what each file contains\n"
-            "  • account.csv, driver_profile.csv — your profile\n"
-            "  • rides.csv — your trip history\n"
-            "  • payouts.csv — your payout history\n"
-            "  • documents.csv — your uploaded document records\n"
-            "  • notification_preferences.csv — your notification settings\n"
-            "  • raw_data.json — the complete machine-readable export\n\n"
-            "If you have any questions about your data or would like to request "
-            "deletion, please contact privacy@spinr.ca.\n\n"
-            "— The Spinr Team"
-        )
-        html_body = _build_export_email_html(filename)
 
-        await send_email(
-            to=email,
-            subject=subject,
-            body=text_body,
-            html=html_body,
-            attachments=[{"filename": filename, "content": zip_bytes, "mime": "application/zip"}],
-            email_type="dsar",
-            recipient_user_id=user_id,
-            log_id="dsar",
-        )
-        logger.info("Data export emailed for user %s", user_id)
+        # Primary delivery: a time-limited signed download link (like Lyft) —
+        # keeps PII out of the email body and lets a leaked link self-expire.
+        try:
+            expires_human = (now + timedelta(seconds=_EXPORT_LINK_TTL_SECONDS)).strftime("%B %d, %Y")
+            download_url = await _upload_export_zip(user_id, zip_bytes, _EXPORT_LINK_TTL_SECONDS)
+            await send_email(
+                to=email,
+                subject=subject,
+                body=_build_export_link_email_text(download_url, expires_human),
+                html=_build_export_link_email_html(download_url, expires_human),
+                email_type="dsar",
+                recipient_user_id=user_id,
+                log_id="dsar",
+            )
+            logger.info("Data export link emailed for user %s (expires %s)", user_id, expires_human)
+        except Exception as link_exc:
+            # Storage/link generation failed — fall back to attaching the ZIP so
+            # the PIPEDA access request is still fulfilled. Logged loudly so the
+            # storage problem gets fixed rather than masked.
+            logger.error(
+                "Data export link generation failed for user %s; falling back to attachment: %s",
+                user_id,
+                link_exc,
+                exc_info=True,
+            )
+            filename = f"spinr-data-export-{generated_on}.zip"
+            await send_email(
+                to=email,
+                subject=subject,
+                body=(
+                    "Hi,\n\n"
+                    "As requested, your personal data held by Spinr is attached as a ZIP "
+                    f'archive ("{filename}").\n\n'
+                    "If you have any questions about your data or would like to request "
+                    "deletion, please contact privacy@spinr.ca.\n\n"
+                    "— The Spinr Team"
+                ),
+                html=_build_export_email_html(filename),
+                attachments=[{"filename": filename, "content": zip_bytes, "mime": "application/zip"}],
+                email_type="dsar",
+                recipient_user_id=user_id,
+                log_id="dsar",
+            )
+            logger.info("Data export emailed as attachment (fallback) for user %s", user_id)
         logger.info(
             "dsar_export_completed",
             extra={

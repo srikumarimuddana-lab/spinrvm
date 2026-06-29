@@ -358,7 +358,8 @@
         "prefNotSavedMsg": "Could not reach the server. Your setting has been reverted — please try again.",
         "wavNotSavedTitle": "Could not save",
         "wavNotSavedMsg": "WAV setting could not be updated. Please try again.",
-        "version": "Spinr Driver v1.0.0"
+        "version": "Spinr Driver v1.0.0",
+        "navApple": "Apple Maps"
     },
     "payout": {
         "title": "Payout",

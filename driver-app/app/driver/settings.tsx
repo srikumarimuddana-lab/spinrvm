@@ -136,6 +136,22 @@ export default function SettingsScreen() {
 
     const isDarkOn = colorScheme === 'dark';
 
+    // Platform-aware navigation choices. The "default" option maps to each
+    // platform's native maps app (Apple Maps on iOS, Google Maps on Android),
+    // matching what the launcher in ActiveRidePanel actually opens. Google Maps
+    // is only offered as a separate option on iOS (on Android it *is* default).
+    const navOptions: { key: 'default' | 'google' | 'waze'; label: string; icon: string }[] =
+        Platform.OS === 'ios'
+            ? [
+                  { key: 'default', label: t('settings.navApple'), icon: 'map' },
+                  { key: 'google', label: t('settings.navGoogle'), icon: 'navigate' },
+                  { key: 'waze', label: t('settings.navWaze'), icon: 'compass' },
+              ]
+            : [
+                  { key: 'default', label: t('settings.navGoogle'), icon: 'navigate' },
+                  { key: 'waze', label: t('settings.navWaze'), icon: 'compass' },
+              ];
+
     const handleExportData = async () => {
         setExportingData(true);
         try {
@@ -266,25 +282,19 @@ export default function SettingsScreen() {
                 <View style={styles.section}>
                     <Text style={styles.sectionTitle}>{t('settings.sectionNavigation')}</Text>
                     <View style={styles.card}>
-                        {(['default', 'google', 'waze'] as const).map((app, i) => (
-                            <React.Fragment key={app}>
+                        {navOptions.map((opt, i) => (
+                            <React.Fragment key={opt.key}>
                                 {i > 0 && <View style={styles.cardDivider} />}
                                 <TouchableOpacity
                                     style={styles.navOption}
-                                    onPress={() => { setNavApp(app); }}
+                                    onPress={() => { setNavApp(opt.key); }}
                                 >
                                     <View style={[styles.settingIcon, { backgroundColor: `${colors.primary}12` }]}>
-                                        <Ionicons
-                                            name={app === 'default' ? 'map' : app === 'google' ? 'navigate' : 'compass'}
-                                            size={18}
-                                            color={colors.primary}
-                                        />
+                                        <Ionicons name={opt.icon as any} size={18} color={colors.primary} />
                                     </View>
-                                    <Text style={styles.settingLabel}>
-                                        {app === 'default' ? t('settings.navDefault') : app === 'google' ? t('settings.navGoogle') : t('settings.navWaze')}
-                                    </Text>
-                                    <View style={[styles.radio, navApp === app && styles.radioActive]}>
-                                        {navApp === app && <View style={styles.radioInner} />}
+                                    <Text style={styles.settingLabel}>{opt.label}</Text>
+                                    <View style={[styles.radio, navApp === opt.key && styles.radioActive]}>
+                                        {navApp === opt.key && <View style={styles.radioInner} />}
                                     </View>
                                 </TouchableOpacity>
                             </React.Fragment>

@@ -280,7 +280,8 @@
         "prefNotSavedMsg": "No se pudo conectar con el servidor. Su ajuste se revirtió — inténtelo de nuevo.",
         "wavNotSavedTitle": "No se pudo guardar",
         "wavNotSavedMsg": "No se pudo actualizar el ajuste WAV. Inténtelo de nuevo.",
-        "version": "Spinr Conductor v1.0.0"
+        "version": "Spinr Conductor v1.0.0",
+        "navApple": "Apple Maps"
     },
     "errors": {
         "networkError": "Error de red. Verifica tu conexión.",

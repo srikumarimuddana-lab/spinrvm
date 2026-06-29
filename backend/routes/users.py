@@ -5,23 +5,27 @@ try:
     from ..dependencies import get_current_user  # type: ignore
     from ..schemas import CreateProfileRequest, UserProfile  # type: ignore
     from ..utils.audit_logger import log_admin_action  # type: ignore
+    from ..utils.redis_client import redis_delete  # type: ignore
     from ..utils.referral_terms import (  # type: ignore
         area_id_for_rider,
         paid_referee_earnings,
         paid_referral_earnings,
         resolve_referral_terms,
     )
+    from ..utils.refresh_tokens import revoke_all_for_user  # type: ignore
 except ImportError:
     import db_supabase  # type: ignore
     from dependencies import get_current_user  # type: ignore
     from schemas import CreateProfileRequest, UserProfile  # type: ignore
     from utils.audit_logger import log_admin_action  # type: ignore  # noqa: F811
+    from utils.redis_client import redis_delete  # type: ignore  # noqa: F811
     from utils.referral_terms import (  # type: ignore  # noqa: F811
         area_id_for_rider,
         paid_referee_earnings,
         paid_referral_earnings,
         resolve_referral_terms,
     )
+    from utils.refresh_tokens import revoke_all_for_user  # type: ignore  # noqa: F811
 import base64
 import logging
 import uuid
@@ -177,6 +181,11 @@ async def delete_account_pipeda(current_user: dict = Depends(get_current_user)):
     grace_period_end = (datetime.now(timezone.utc).replace(microsecond=0) + timedelta(days=30)).isoformat()
     now = datetime.now(timezone.utc).isoformat()
     try:
+        # Bump token_version so every already-issued access token (and WebSocket
+        # session, whose handshake checks token_version) is rejected immediately —
+        # not just on the per-request status guard. Without this a deletion-requested
+        # account could keep a live realtime channel until its token's TTL lapsed.
+        next_token_version = int(current_user.get("token_version") or 0) + 1
         await db_supabase.update_one(
             "users",
             {"id": user_id},
@@ -184,9 +193,19 @@ async def delete_account_pipeda(current_user: dict = Depends(get_current_user)):
                 "deletion_requested_at": now,
                 "deletion_scheduled_at": grace_period_end,
                 "status": "pending_deletion",
+                "token_version": next_token_version,
             },
         )
         await db_supabase.update_one("drivers", {"user_id": user_id}, {"deleted_at": now})
+        # Kill credentials at the root: revoke every refresh token (so /auth/refresh
+        # can't rotate a deleting account back to life) and drop the Redis session
+        # mirror. Best-effort — the deletion is already recorded above, and the daily
+        # purge + the per-request guard remain the durable enforcement.
+        try:
+            await revoke_all_for_user(user_id)
+            await redis_delete(f"session:{user_id}")
+        except Exception:
+            logger.error("Account deletion: session/refresh-token revocation failed (non-fatal)", exc_info=True)
         # R-P2-46: strip PII from ride records immediately even though the account
         # itself has a 30-day grace period.  Ride rows are retained for SK regulatory
         # retention (7 years) but personal identifiers are removed now.

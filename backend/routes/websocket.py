@@ -19,14 +19,24 @@ except ImportError:
 try:
     from .. import db_supabase
     from ..core.config import settings
-    from ..dependencies import _firebase_session_revoked, _verify_admin_payload, verify_jwt_token
+    from ..dependencies import (
+        _account_inaccessible,
+        _firebase_session_revoked,
+        _verify_admin_payload,
+        verify_jwt_token,
+    )
     from ..socket_manager import manager
     from ..utils.driver_presence import clear_presence, mark_present
     from ..utils.redis_client import redis_expire, redis_incr
 except ImportError:
     import db_supabase
     from core.config import settings
-    from dependencies import _firebase_session_revoked, _verify_admin_payload, verify_jwt_token
+    from dependencies import (
+        _account_inaccessible,
+        _firebase_session_revoked,
+        _verify_admin_payload,
+        verify_jwt_token,
+    )
     from socket_manager import manager
     from utils.driver_presence import clear_presence, mark_present
     from utils.redis_client import redis_expire, redis_incr  # type: ignore
@@ -447,6 +457,15 @@ async def websocket_endpoint(
 
         if not user:
             await websocket.send_json({"type": "error", "message": "invalid_token_or_user_not_found"})
+            await websocket.close()
+            return
+
+        # PIPEDA: a deletion-requested / purged account must not hold a realtime
+        # channel. This is the one auth surface NOT behind get_current_user, so the
+        # status guard has to be enforced here too. (admin_user rows carry no
+        # status/deleted_at, so this is a no-op for admins.)
+        if _account_inaccessible(user):
+            await websocket.send_json({"type": "error", "message": "ERR_ACCOUNT_DELETED"})
             await websocket.close()
             return
 

@@ -123,6 +123,62 @@ def verify_jwt_token(token: str) -> dict:
         raise HTTPException(status_code=401, detail="Invalid token") from None
 
 
+# ── Account-deletion (PIPEDA) auth guard ────────────────────────────────────
+# DELETE /users/account moves an account to status='pending_deletion' for a
+# 30-day grace window (then purge_pii_retention Step G scrubs PII). During that
+# window — and after the final 'deleted' state — the account must NOT be usable:
+# no normal API access on any device, even with a previously-issued token. The
+# only allowed action is deliberate self-serve reactivation (POST /auth/reactivate).
+_DELETED_STATUSES = ("pending_deletion", "deleted")
+_REACTIVATION_PURPOSE = "reactivate"
+REACTIVATION_TOKEN_TTL_MINUTES = 30
+
+
+def _account_inaccessible(user: dict) -> bool:
+    """True when the account has requested deletion (grace window) or been purged."""
+    status = str(user.get("status") or "").lower()
+    return status in _DELETED_STATUSES or bool(user.get("deleted_at"))
+
+
+def _enforce_account_active(user: dict) -> None:
+    """Reject auth for a deletion-requested / purged account. Distinct 403 code so
+    the client can route to the reactivation screen instead of a generic error."""
+    if _account_inaccessible(user):
+        raise HTTPException(status_code=403, detail="ERR_ACCOUNT_DELETED")
+
+
+def create_reactivation_token(user_id: str, phone: str) -> str:
+    """Short-lived, single-purpose token issued at login for a pending_deletion
+    account so the user can confirm reactivation. NOT an access token —
+    get_current_user rejects any token carrying purpose='reactivate'."""
+    now = datetime.now(timezone.utc)
+    payload = {
+        "user_id": user_id,
+        "phone": phone,
+        "aud": JWT_AUD_MOBILE,
+        "purpose": _REACTIVATION_PURPOSE,
+        "iat": now,
+        "exp": now + timedelta(minutes=REACTIVATION_TOKEN_TTL_MINUTES),
+    }
+    return jwt.encode(payload, settings.JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def verify_reactivation_token(token: str) -> str:
+    """Return the user_id from a valid reactivation token, else raise 401."""
+    try:
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[JWT_ALGORITHM], options={"verify_aud": False})
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="ERR_REACTIVATION_EXPIRED") from None
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token") from None
+    if payload.get("purpose") != _REACTIVATION_PURPOSE:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    uid = payload.get("user_id")
+    if not uid:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return str(uid)
+
+
 def _token_version_mismatch(payload: dict, user_row: dict) -> bool:
     """Return True if the access-token's token_version is stale.
 
@@ -245,8 +301,7 @@ async def _verify_admin_payload(payload: dict) -> "dict | None":
             _bg_active = await redis_get(f"admin:breakglass:{jti}")
         except Exception as _bg_err:
             logger.error(
-                "[auth] break-glass allowlist unreachable (Redis down) — failing "
-                f"CLOSED for jti={jti}: {_bg_err}"
+                f"[auth] break-glass allowlist unreachable (Redis down) — failing CLOSED for jti={jti}: {_bg_err}"
             )
             raise HTTPException(status_code=401, detail="ERR_TOKEN_REVOKED") from _bg_err
         if not _bg_active:
@@ -361,6 +416,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                 # the Supabase read load.
                 driver = await db_supabase.get_driver_by_user_id_cached(user["id"])
                 user["is_driver"] = True if driver else False
+            _enforce_account_active(user)
             return user
     except HTTPException:
         raise
@@ -376,6 +432,11 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         # cause is in the server log above; the client only learns the token is
         # invalid — matching every other auth path.
         raise HTTPException(status_code=401, detail="Invalid token") from e
+
+    # A reactivation token is single-purpose (POST /auth/reactivate); it must
+    # never authenticate normal API access.
+    if payload.get("purpose") == _REACTIVATION_PURPOSE:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
     # Full admin verification (aud, JTI revocation, staff active/version/idle) is
     # delegated to _verify_admin_payload — the WS path calls the same function so
@@ -458,6 +519,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     except Exception as e:
         logger.error(f"Unexpected error looking up driver row: {e}", exc_info=True)
         raise DatabaseError(details={"original": str(e)}) from e
+    _enforce_account_active(user)
     return user
 
 
@@ -540,6 +602,10 @@ async def get_current_user_allow_expired(
     db_session = user.get("current_session_id")
     if db_session and token_session != db_session:
         raise original
+    # A deletion-requested / purged account is unusable even on the SOS grace
+    # path. _enforce_account_active raises a 403 that propagates (the grace catch
+    # only wraps the inner get_current_user call, not this body).
+    _enforce_account_active(user)
     driver = await db_supabase.get_driver_by_user_id_cached(user["id"])
     user["is_driver"] = True if driver else False
     logger.warning(

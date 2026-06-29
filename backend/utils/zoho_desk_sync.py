@@ -19,6 +19,7 @@ webhooks — a later enhancement.)
 
 import asyncio
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -27,11 +28,13 @@ try:
     from ..services import zoho_desk_service as zoho
     from ..services.zoho_desk_integration import close_linked_records
     from ..services.zoho_desk_service import ZohoDeskError
+    from ..utils.redis_client import redis_set_nx
 except ImportError:  # pragma: no cover - allow direct module imports
     import db_supabase
     from services import zoho_desk_service as zoho
     from services.zoho_desk_integration import close_linked_records
     from services.zoho_desk_service import ZohoDeskError
+    from utils.redis_client import redis_set_nx
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +45,16 @@ _CONFIG_ID = "default"
 SYNC_INTERVAL_SECONDS = 600  # 10 minutes
 SEED_MAX_PAGES = 500  # first run: full backfill (safety cap ~50k tickets)
 INCREMENTAL_MAX_PAGES = 50  # safety cap; incremental runs stop at the cursor
+
+# Single-replica election: the loop runs on every replica, but only the lock
+# winner calls Zoho per interval — without this, N replicas would each spend
+# Zoho API credits every cycle. TTL is just under the interval so the lock
+# frees before the next tick (letting the leader re-acquire, or another replica
+# take over if the leader died). Fails open if Redis is down (degrades to the
+# pre-existing per-replica behaviour, never blocks the sync).
+_SYNC_LOCK_KEY = "spinr:zoho:sync:leader"
+_SYNC_LOCK_TTL = SYNC_INTERVAL_SECONDS - 60
+_INSTANCE_ID = uuid.uuid4().hex
 
 
 def _parse(value) -> Optional[datetime]:
@@ -183,12 +196,20 @@ async def zoho_desk_sync_loop() -> None:
     Gated on zoho_desk_config.auto_sync_enabled (default false). Manual "Sync
     now" (run_sync via the admin endpoint) is unaffected — only this periodic
     pull is opt-in.
+
+    Runs on every replica, but a Redis leader lock ensures only ONE replica
+    actually pulls from Zoho per interval, so API-credit usage doesn't scale
+    with replica count. The pull itself is incremental (sorted by -modifiedTime,
+    stops at the stored sync_cursor), so a quiet interval costs ~1 Zoho call.
     """
     while True:
         try:
             cfg = await db_supabase.find_one(_CONFIG_TABLE, {"id": _CONFIG_ID})
             if cfg and cfg.get("enabled") and cfg.get("auto_sync_enabled"):
-                await run_sync()
+                if await redis_set_nx(_SYNC_LOCK_KEY, _INSTANCE_ID, _SYNC_LOCK_TTL):
+                    await run_sync()
+                else:
+                    logger.debug("Zoho Desk sync skipped — another replica holds the leader lock")
         except ZohoDeskError as e:
             # Integration not configured / scope issue — warn, keep looping.
             logger.warning("Zoho Desk sync skipped: %s", e.message)

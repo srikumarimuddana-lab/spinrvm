@@ -166,10 +166,22 @@ class TestDsarExportBundle:
         payload = json.loads(files["raw_data.json"])
         assert "password_hash" not in payload.get("account", {}), "password_hash must be stripped from raw_data.json"
 
-    async def test_device_tokens_and_internal_fields_stripped(self):
+    async def test_credentials_and_internal_fields_stripped(self):
         files, box = await _run_export(
             {
-                "drivers": [{"id": "d1", "user_id": "u1"}],
+                "drivers": [
+                    {
+                        "id": "d1",
+                        "user_id": "u1",
+                        "license_number": "SK-LIC-123",
+                        "stripe_account_id": "acct_SECRET",
+                        "bank_account": "BANK_SECRET",
+                        "lat": 52.13,
+                        "lng": -106.66,
+                        "location_geog": "0101000020E6100000GEOG",
+                        "fcm_token": "DRIVER_FCM",
+                    }
+                ],
                 "users": [
                     {
                         "id": "u1",
@@ -177,6 +189,9 @@ class TestDsarExportBundle:
                         "fcm_token": "DEVICE_TOKEN_A",
                         "fcm_token_driver": "DEVICE_TOKEN_B",
                         "token_version": 7,
+                        "current_session_id": "sess_SECRET",
+                        "sessions_invalid_before": "2026-01-01T00:00:00Z",
+                        "stripe_customer_id": "cus_SECRET",
                     }
                 ],
                 "rides": [],
@@ -185,13 +200,31 @@ class TestDsarExportBundle:
                 "notification_preferences": [],
             }
         )
-        account = json.loads(files["raw_data.json"]).get("account", {})
-        for field in ("fcm_token", "fcm_token_driver", "token_version"):
-            assert field not in account, f"{field} must be redacted from the export"
-        assert "DEVICE_TOKEN_A" not in files["account.csv"]
-        assert "DEVICE_TOKEN_B" not in files["account.csv"]
-        # The driver's actual phone (their own data) is still present.
+        payload = json.loads(files["raw_data.json"])
+        account = payload.get("account", {})
+        for field in (
+            "fcm_token",
+            "fcm_token_driver",
+            "token_version",
+            "current_session_id",
+            "sessions_invalid_before",
+            "stripe_customer_id",
+        ):
+            assert field not in account, f"{field} must be redacted from the account export"
+
+        profile = payload.get("driver_profile", {})
+        for field in ("stripe_account_id", "bank_account", "lat", "lng", "location_geog", "fcm_token"):
+            assert field not in profile, f"{field} must be redacted from the driver profile export"
+
+        # No secret values leak into the CSVs either.
+        for secret in ("DEVICE_TOKEN_A", "sess_SECRET", "cus_SECRET"):
+            assert secret not in files["account.csv"]
+        for secret in ("acct_SECRET", "BANK_SECRET", "DRIVER_FCM"):
+            assert secret not in files["driver_profile.csv"]
+
+        # The subject's own data is still present.
         assert "+13061234567" in files["account.csv"]
+        assert "SK-LIC-123" in files["driver_profile.csv"], "driver's own license # is legitimate DSAR data"
 
     async def test_document_url_stripped_everywhere(self):
         files, box = await _run_export(

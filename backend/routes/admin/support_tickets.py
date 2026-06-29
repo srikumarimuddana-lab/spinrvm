@@ -18,23 +18,27 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 try:
     from ... import db_supabase
-    from ...dependencies import get_admin_user, require_module
+    from ...dependencies import require_module
     from ...services import zoho_desk_db
     from ...services import zoho_desk_service as zoho
+    from ...services import zoho_ticket_service_area as ticket_area
     from ...services.zoho_desk_service import ZohoDeskError
     from ...utils.audit_logger import log_admin_action
+    from ...utils.rate_limiter import admin_ai_suggest_limit
 except ImportError:  # pragma: no cover - direct module import in tests
     import db_supabase
-    from dependencies import get_admin_user, require_module
+    from dependencies import require_module
     from services import zoho_desk_db
     from services import zoho_desk_service as zoho
+    from services import zoho_ticket_service_area as ticket_area
     from services.zoho_desk_service import ZohoDeskError
     from utils.audit_logger import log_admin_action
+    from utils.rate_limiter import admin_ai_suggest_limit
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +46,7 @@ router = APIRouter(prefix="/support-tickets", tags=["Admin Support Tickets"])
 
 _CONFIG_TABLE = "zoho_desk_config"
 _CONFIG_ID = "default"
+_MIRROR_TABLE = "zoho_desk_tickets"
 
 
 def _err(e: ZohoDeskError) -> HTTPException:
@@ -120,13 +125,13 @@ def _config_status(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @router.get("/config")
-async def get_config(admin: dict = Depends(get_admin_user)):
+async def get_config(admin: dict = Depends(require_module("support_tickets"))):
     cfg = await db_supabase.find_one(_CONFIG_TABLE, {"id": _CONFIG_ID}) or {}
     return _config_status(cfg)
 
 
 @router.put("/config")
-async def update_config(payload: ZohoConfigUpdate, admin: dict = Depends(get_admin_user)):
+async def update_config(payload: ZohoConfigUpdate, admin: dict = Depends(require_module("support_tickets"))):
     fields = payload.model_dump(exclude_unset=True)
     if not fields:
         raise HTTPException(status_code=400, detail="No fields supplied")
@@ -174,7 +179,7 @@ async def trigger_sync(admin: dict = Depends(require_module("support_tickets")))
 
 
 @router.post("/config/test")
-async def test_connection(admin: dict = Depends(get_admin_user)):
+async def test_connection(admin: dict = Depends(require_module("support_tickets"))):
     """Verify the stored credentials by making a lightweight Zoho call."""
     try:
         depts = await zoho.list_departments()
@@ -633,3 +638,116 @@ async def update_ticket_tags(
         {"added": payload.add, "removed": payload.remove},
     )
     return {"ok": True}
+
+
+# --------------------------------------------------------------------------
+# Service area (Spinr-local, not synced to Zoho)
+# --------------------------------------------------------------------------
+
+
+@router.get("/service-areas")
+async def service_areas(admin: dict = Depends(require_module("support_tickets"))):
+    """Active service areas (id + name) for the Help Desk assign dropdown.
+
+    Lightweight + gated by the support_tickets module so support staff can
+    assign without needing the full service_areas admin module."""
+    rows = await db_supabase.get_rows(
+        "service_areas", {"is_active": True}, order="name", columns="id,name,city,province"
+    )
+    return {"data": rows or []}
+
+
+@router.get("/tickets/{ticket_id}/service-area")
+async def get_ticket_service_area(
+    ticket_id: str, admin: dict = Depends(require_module("support_tickets"))
+):
+    """Current service-area assignment for a ticket. When unassigned, attempts
+    an auto-assign from the contact's ride history; if none is found, returns
+    ``needs_assignment=True`` so the UI highlights it (assignment is optional).
+
+    Resolves from the local mirror (the contact email is all that's needed) so a
+    ticket view spends no Zoho API credit; falls back to a live fetch only when
+    the ticket isn't mirrored yet (pre-backfill)."""
+    ticket = await db_supabase.find_one(_MIRROR_TABLE, {"zoho_id": ticket_id})
+    if not ticket:
+        try:
+            ticket = await zoho.get_ticket(ticket_id)
+        except ZohoDeskError as e:
+            raise _err(e) from e
+    return await ticket_area.assignment_view(ticket_id, ticket or {})
+
+
+class ServiceAreaAssign(BaseModel):
+    service_area_id: Optional[str] = None  # None clears the assignment
+
+
+@router.put("/tickets/{ticket_id}/service-area")
+async def set_ticket_service_area(
+    ticket_id: str,
+    payload: ServiceAreaAssign,
+    admin: dict = Depends(require_module("support_tickets")),
+):
+    """Manually assign (or clear) a ticket's service area. Stored locally only —
+    Zoho has no service-area concept — and preserved across syncs."""
+    area_id = (payload.service_area_id or "").strip() or None
+    if area_id:
+        area = await db_supabase.find_one("service_areas", {"id": area_id})
+        if not area:
+            raise HTTPException(status_code=404, detail="Service area not found")
+    result = await ticket_area.set_ticket_area(
+        ticket_id, area_id, source="manual", assigned_by=str(admin.get("id") or ""), upsert=True
+    )
+    await log_admin_action(
+        admin,
+        "zoho_desk_ticket_service_area",
+        "zoho_desk_ticket",
+        ticket_id,
+        {"service_area_id": area_id},
+    )
+    return {**result, "needs_assignment": not result.get("service_area_id"), "suggested": None}
+
+
+# --------------------------------------------------------------------------
+# AI reply suggestion (draft for a human to review/edit/send)
+# --------------------------------------------------------------------------
+
+_AI_ERROR_STATUS = {"ai_disabled": 409, "ai_misconfigured": 502, "provider_error": 502, "empty": 502}
+
+
+@router.post("/tickets/{ticket_id}/ai-suggest-reply")
+@admin_ai_suggest_limit
+async def ai_suggest_reply(
+    request: Request, ticket_id: str, admin: dict = Depends(require_module("support_tickets"))
+):
+    """Draft a reply using the AI assistant. Returns the suggestion only — the
+    agent reviews/edits and sends it via the normal /reply endpoint. Nothing is
+    sent to the customer here."""
+    try:
+        from ...ai.support_assistant import SupportAssistantError, suggest_ticket_reply
+    except ImportError:
+        from ai.support_assistant import SupportAssistantError, suggest_ticket_reply
+
+    try:
+        ticket = await zoho.get_ticket(ticket_id)
+        threads = await zoho.get_ticket_threads(ticket_id)
+    except ZohoDeskError as e:
+        raise _err(e) from e
+
+    area = await ticket_area.get_ticket_area(ticket_id)
+    try:
+        result = await suggest_ticket_reply(
+            ticket=ticket or {},
+            thread=(threads or {}).get("data"),
+            service_area_name=area.get("service_area_name"),
+        )
+    except SupportAssistantError as e:
+        raise HTTPException(status_code=_AI_ERROR_STATUS.get(e.code, 502), detail=e.message) from e
+
+    await log_admin_action(
+        admin,
+        "zoho_desk_ticket_ai_suggest",
+        "zoho_desk_ticket",
+        ticket_id,
+        {"provider": result.get("provider"), "model": result.get("model")},
+    )
+    return result

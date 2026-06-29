@@ -2959,3 +2959,36 @@ export const getDeskAgents = () =>
     request<ZohoTicketsResponse>("/api/admin/support-tickets/agents");
 export const getDeskDepartments = () =>
     request<ZohoTicketsResponse>("/api/admin/support-tickets/departments");
+
+/* ── Service area (Spinr-local; not synced to Zoho) ─────────────────────── */
+export interface DeskServiceArea {
+    id: string;
+    name?: string;
+    city?: string;
+    province?: string;
+}
+export interface DeskTicketServiceArea {
+    service_area_id?: string | null;
+    service_area_name?: string | null;
+    service_area_source?: "auto" | "manual" | null;
+    service_area_assigned_at?: string | null;
+    service_area_assigned_by?: string | null;
+    needs_assignment?: boolean;
+    suggested?: { service_area_id: string; service_area_name?: string; matched_user_id?: string } | null;
+}
+export const getDeskServiceAreas = () =>
+    request<{ data: DeskServiceArea[] }>("/api/admin/support-tickets/service-areas");
+export const getDeskTicketServiceArea = (id: string) =>
+    request<DeskTicketServiceArea>(`/api/admin/support-tickets/tickets/${id}/service-area`);
+export const setDeskTicketServiceArea = (id: string, service_area_id: string | null) =>
+    request<DeskTicketServiceArea>(`/api/admin/support-tickets/tickets/${id}/service-area`, {
+        method: "PUT",
+        body: JSON.stringify({ service_area_id }),
+    });
+
+/* ── AI reply suggestion (draft only; agent reviews + sends) ────────────── */
+export const aiSuggestDeskReply = (id: string) =>
+    request<{ reply: string; provider?: string; model?: string }>(
+        `/api/admin/support-tickets/tickets/${id}/ai-suggest-reply`,
+        { method: "POST" },
+    );

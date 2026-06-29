@@ -2945,6 +2945,123 @@ async def export_earnings(year: int = Query(None), current_user: dict = Depends(
     return {"data": csv_data, "filename": filename}
 
 
+def _csv_cell(value: Any) -> str:
+    """Render a single CSV cell. Nested dict/list → compact JSON; None → ''."""
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, default=str, ensure_ascii=False)
+    return str(value)
+
+
+def _rows_to_csv(rows: list) -> str:
+    """Tabular CSV for a list of dict records (union of keys, first-seen order)."""
+    if not rows:
+        return "No records.\n"
+    import csv  # noqa: PLC0415
+    import io  # noqa: PLC0415
+
+    fieldnames: list = []
+    for row in rows:
+        for key in row.keys():
+            if key not in fieldnames:
+                fieldnames.append(key)
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({k: _csv_cell(row.get(k)) for k in fieldnames})
+    return buf.getvalue()
+
+
+def _object_to_csv(obj: dict) -> str:
+    """Two-column field,value CSV for a single record (account/profile)."""
+    import csv  # noqa: PLC0415
+    import io  # noqa: PLC0415
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["field", "value"])
+    for key, value in (obj or {}).items():
+        writer.writerow([key, _csv_cell(value)])
+    return buf.getvalue()
+
+
+def _build_export_readme(payload: dict, generated_on: str) -> str:
+    """Human-readable index of what's in the export archive."""
+    account = payload.get("account", {}) or {}
+    name = account.get("name") or account.get("full_name") or account.get("first_name") or "Driver"
+    return (
+        "Spinr — Personal Data Export\n"
+        "============================\n\n"
+        f"Generated: {generated_on}\n"
+        f"Account: {name}\n\n"
+        "This archive contains the personal data Spinr holds about you, provided\n"
+        "in PIPEDA-compliant form. Files:\n\n"
+        "  account.csv                  Your account record (field,value).\n"
+        "  driver_profile.csv           Your driver profile (field,value).\n"
+        "  rides.csv                    Your trip history (one row per ride).\n"
+        "  payouts.csv                  Your payout history (one row per payout).\n"
+        "  documents.csv                Records of documents you uploaded\n"
+        "                               (the file contents themselves are not included).\n"
+        "  notification_preferences.csv Your notification settings.\n"
+        "  raw_data.json                The complete export in machine-readable JSON.\n\n"
+        "Counts:\n"
+        f"  Rides:     {len(payload.get('rides') or [])}\n"
+        f"  Payouts:   {len(payload.get('payouts') or [])}\n"
+        f"  Documents: {len(payload.get('documents') or [])}\n\n"
+        "Questions or deletion requests: privacy@spinr.ca\n"
+    )
+
+
+def _build_export_zip(payload: dict, generated_on: str) -> bytes:
+    """Bundle the export payload into a ZIP of CSV files + README + JSON."""
+    import io  # noqa: PLC0415
+    import zipfile  # noqa: PLC0415
+
+    files = {
+        "README.txt": _build_export_readme(payload, generated_on),
+        "account.csv": _object_to_csv(payload.get("account", {})),
+        "driver_profile.csv": _object_to_csv(payload.get("driver_profile", {})),
+        "rides.csv": _rows_to_csv(payload.get("rides") or []),
+        "payouts.csv": _rows_to_csv(payload.get("payouts") or []),
+        "documents.csv": _rows_to_csv(payload.get("documents") or []),
+        "notification_preferences.csv": _rows_to_csv(payload.get("notification_preferences") or []),
+        "raw_data.json": json.dumps(payload, indent=2, default=str),
+    }
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, content in files.items():
+            zf.writestr(name, content)
+    return buf.getvalue()
+
+
+def _build_export_email_html(filename: str) -> str:
+    """Lyft-style 'your data is ready' HTML email body."""
+    return (
+        '<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;'
+        'max-width:520px;margin:0 auto;color:#1a1a1a;line-height:1.5">'
+        '<h2 style="margin:0 0 12px">Your data export is ready</h2>'
+        "<p>As requested, your personal data held by Spinr is attached as a ZIP archive "
+        f"(<strong>{filename}</strong>).</p>"
+        "<p>Inside you'll find spreadsheet (CSV) files you can open in Excel, Numbers, or "
+        "Google Sheets:</p>"
+        "<ul>"
+        "<li><strong>README.txt</strong> — what each file contains</li>"
+        "<li><strong>account.csv</strong>, <strong>driver_profile.csv</strong> — your profile</li>"
+        "<li><strong>rides.csv</strong> — your trip history</li>"
+        "<li><strong>payouts.csv</strong> — your payout history</li>"
+        "<li><strong>documents.csv</strong> — your uploaded document records</li>"
+        "<li><strong>notification_preferences.csv</strong> — your notification settings</li>"
+        "<li><strong>raw_data.json</strong> — the complete machine-readable export</li>"
+        "</ul>"
+        '<p style="color:#555;font-size:13px">Questions about your data or want it deleted? '
+        'Contact <a href="mailto:privacy@spinr.ca">privacy@spinr.ca</a>.</p>'
+        '<p style="color:#888;font-size:12px">— The Spinr Team</p>'
+        "</div>"
+    )
+
+
 @api_router.post("/me/export-data")
 async def export_driver_data(
     background_tasks: BackgroundTasks,
@@ -3021,20 +3138,42 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
             "notification_preferences": notification_prefs,
         }
 
-        export_json = json.dumps(export_payload, indent=2, default=str)
+        # Lyft-style bundle: human-readable CSV files (one per data category)
+        # plus a README and the complete machine-readable JSON, zipped together.
+        # Drivers get spreadsheets they can open, not a raw JSON blob.
+        generated_on = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        zip_bytes = _build_export_zip(export_payload, generated_on)
+        filename = f"spinr-data-export-{generated_on}.zip"
 
-        subject = "Your Spinr Data Export"
-        body = (
+        subject = "Your Spinr data export is ready"
+        text_body = (
             "Hi,\n\n"
-            "As requested, here is a full export of your personal data held by Spinr.\n\n"
-            "Your data export is attached below as JSON.\n\n"
-            "If you have any questions about your data or would like to request deletion, "
-            "please contact privacy@spinr.ca.\n\n"
-            "— The Spinr Team\n\n"
-            "---\n\n" + export_json
+            "As requested, your personal data held by Spinr is attached as a ZIP "
+            f"archive (\"{filename}\").\n\n"
+            "Inside you'll find:\n"
+            "  • README.txt — what each file contains\n"
+            "  • account.csv, driver_profile.csv — your profile\n"
+            "  • rides.csv — your trip history\n"
+            "  • payouts.csv — your payout history\n"
+            "  • documents.csv — your uploaded document records\n"
+            "  • notification_preferences.csv — your notification settings\n"
+            "  • raw_data.json — the complete machine-readable export\n\n"
+            "If you have any questions about your data or would like to request "
+            "deletion, please contact privacy@spinr.ca.\n\n"
+            "— The Spinr Team"
         )
+        html_body = _build_export_email_html(filename)
 
-        await send_email(to=email, subject=subject, body=body)
+        await send_email(
+            to=email,
+            subject=subject,
+            body=text_body,
+            html=html_body,
+            attachments=[{"filename": filename, "content": zip_bytes, "mime": "application/zip"}],
+            email_type="dsar",
+            recipient_user_id=user_id,
+            log_id="dsar",
+        )
         logger.info("Data export emailed for user %s", user_id)
         logger.info(
             "dsar_export_completed",

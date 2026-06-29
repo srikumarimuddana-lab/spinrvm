@@ -44,12 +44,18 @@ def _ticket_contact_email(ticket: Dict[str, Any]) -> Optional[str]:
 
 
 async def resolve_suggested_area(ticket: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Derive a service area for a ticket from its contact's ride history.
+    """Derive a service area for a ticket from its contact's footprint.
 
-    Returns ``{"service_area_id", "service_area_name", "matched_user_id"}`` when
-    the contact email maps to a known user whose most recent ride carries a
-    service area, else ``None``. Never raises — a lookup failure just means no
-    suggestion (the admin assigns manually).
+    Resolves the contact email to a known user, then takes the first service
+    area from either (a) their most recent ride (rider history) or, failing
+    that, (b) their driver profile's home ``service_area_id``. Returns
+    ``{"service_area_id", "service_area_name", "matched_user_id"}`` or ``None``
+    (unknown contact / phone-only rider / no area on file -> admin assigns
+    manually).
+
+    Best-effort by design: a DB failure yields ``None`` rather than breaking the
+    ticket view, but is logged at ``error`` (not ``warning``) so a real outage
+    still surfaces — per CLAUDE.md's DB-error rule.
     """
     email = _ticket_contact_email(ticket)
     if not email:
@@ -58,22 +64,33 @@ async def resolve_suggested_area(ticket: Dict[str, Any]) -> Optional[Dict[str, A
         user = await db_supabase.find_one("users", {"email": email})
         if not user or not user.get("id"):
             return None
+
         rides = await db_supabase.get_rides_for_user(user["id"], limit=20)
         area_id = next(
             (r.get("service_area_id") for r in (rides or []) if r.get("service_area_id")),
             None,
         )
+        # Driver contacts rarely have rider rides; fall back to their driver
+        # profile's home service area (drivers carry service_area_id directly).
+        if not area_id:
+            driver = await db_supabase.get_driver_by_user_id_cached(user["id"])
+            area_id = (driver or {}).get("service_area_id")
         if not area_id:
             return None
+
         area = await db_supabase.find_one("service_areas", {"id": area_id})
         return {
             "service_area_id": area_id,
             "service_area_name": (area or {}).get("name"),
             "matched_user_id": user["id"],
         }
-    except Exception:
-        # Resolution is best-effort; a DB hiccup must not break the ticket view.
-        logger.warning("service-area resolution failed for a ticket", exc_info=True)
+    except Exception as e:
+        detail = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
+        logger.error(
+            "service-area resolution failed (best-effort, no suggestion): %s",
+            detail or e,
+            exc_info=True,
+        )
         return None
 
 
@@ -143,7 +160,7 @@ async def assignment_view(zoho_id: str, ticket: Dict[str, Any]) -> Dict[str, Any
                 return {**saved, "needs_assignment": False, "suggested": suggested}
         except Exception:
             # Persisting is best-effort; fall through to surfacing the suggestion.
-            logger.warning("auto-assign of service area failed for ticket %s", zoho_id, exc_info=True)
+            logger.error("auto-assign of service area failed for ticket %s", zoho_id, exc_info=True)
         # Ticket not mirrored yet (no-op update) — surface the suggestion so the
         # admin can apply it manually instead of silently dropping it.
         return {**current, "needs_assignment": True, "suggested": suggested}

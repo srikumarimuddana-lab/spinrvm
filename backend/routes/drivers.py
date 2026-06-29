@@ -2945,6 +2945,15 @@ async def export_earnings(year: int = Query(None), current_user: dict = Depends(
     return {"data": csv_data, "filename": filename}
 
 
+# Fields stripped from the account / driver_profile sections of a data export.
+# password_hash is a credential; the fcm_token_* columns are device push tokens
+# (a device credential, useless to the data subject); token_version is an
+# internal refresh-token-invalidation counter. None belong in a DSAR dump.
+_EXPORT_REDACT_FIELDS = frozenset(
+    {"password_hash", "fcm_token", "fcm_token_rider", "fcm_token_driver", "token_version"}
+)
+
+
 def _csv_cell(value: Any) -> str:
     """Render a single CSV cell. Nested dict/list → compact JSON; None → ''."""
     if value is None:
@@ -3225,8 +3234,8 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
 
         export_payload = {
             "export_generated_at": datetime.now(timezone.utc).isoformat() + "Z",
-            "account": {k: v for k, v in user.items() if k not in ("password_hash",)},
-            "driver_profile": {k: v for k, v in driver.items() if k not in ("password_hash",)},
+            "account": {k: v for k, v in user.items() if k not in _EXPORT_REDACT_FIELDS},
+            "driver_profile": {k: v for k, v in driver.items() if k not in _EXPORT_REDACT_FIELDS},
             "rides": rides,
             "payouts": payouts,
             "documents": [{k: v for k, v in doc.items() if k != "document_url"} for doc in documents],

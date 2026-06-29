@@ -166,6 +166,33 @@ class TestDsarExportBundle:
         payload = json.loads(files["raw_data.json"])
         assert "password_hash" not in payload.get("account", {}), "password_hash must be stripped from raw_data.json"
 
+    async def test_device_tokens_and_internal_fields_stripped(self):
+        files, box = await _run_export(
+            {
+                "drivers": [{"id": "d1", "user_id": "u1"}],
+                "users": [
+                    {
+                        "id": "u1",
+                        "phone": "+13061234567",
+                        "fcm_token": "DEVICE_TOKEN_A",
+                        "fcm_token_driver": "DEVICE_TOKEN_B",
+                        "token_version": 7,
+                    }
+                ],
+                "rides": [],
+                "driver_payouts": [],
+                "driver_documents": [],
+                "notification_preferences": [],
+            }
+        )
+        account = json.loads(files["raw_data.json"]).get("account", {})
+        for field in ("fcm_token", "fcm_token_driver", "token_version"):
+            assert field not in account, f"{field} must be redacted from the export"
+        assert "DEVICE_TOKEN_A" not in files["account.csv"]
+        assert "DEVICE_TOKEN_B" not in files["account.csv"]
+        # The driver's actual phone (their own data) is still present.
+        assert "+13061234567" in files["account.csv"]
+
     async def test_document_url_stripped_everywhere(self):
         files, box = await _run_export(
             {

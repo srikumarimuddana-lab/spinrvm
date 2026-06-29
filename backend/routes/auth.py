@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from slowapi.util import get_remote_address
 
@@ -15,10 +15,13 @@ try:
     from ..core.csrf import clear_csrf_cookie, generate_csrf_token, set_csrf_cookie
     from ..dependencies import (
         OTP_EXPIRY_MINUTES,
+        _enforce_account_active,
         _firebase_session_revoked,
         create_jwt_token,
+        create_reactivation_token,
         generate_otp,
         get_current_user,
+        verify_reactivation_token,
     )
     from ..schemas import (
         AuthResponse,
@@ -58,10 +61,13 @@ except ImportError:
     from core.csrf import clear_csrf_cookie, generate_csrf_token, set_csrf_cookie
     from dependencies import (
         OTP_EXPIRY_MINUTES,
+        _enforce_account_active,
         _firebase_session_revoked,
         create_jwt_token,
+        create_reactivation_token,
         generate_otp,
         get_current_user,
+        verify_reactivation_token,
     )
     from schemas import (
         AuthResponse,
@@ -522,6 +528,31 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
         client_ip = get_remote_address(request)
 
         if existing_user:
+            # PIPEDA: a deletion-requested account is in its 30-day grace window.
+            # Do NOT mint normal tokens — that would silently undelete it. Hand the
+            # client a single-purpose reactivation token + the scheduled date so it
+            # can offer deliberate self-serve reactivation (POST /auth/reactivate).
+            if str(existing_user.get("status") or "").lower() == "pending_deletion":
+                logger.info("verify_otp: account pending_deletion — returning reactivation handoff")
+                try:
+                    asyncio.create_task(
+                        _audit_log_user(existing_user, "otp_verify_pending_deletion", "users", existing_user["id"], {})
+                    )
+                except Exception:
+                    logger.error("audit_log write failed for otp_verify_pending_deletion", exc_info=True)
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "requires_reactivation": True,
+                        "deletion_scheduled_at": existing_user.get("deletion_scheduled_at"),
+                        "reactivation_token": create_reactivation_token(existing_user["id"], phone),
+                    },
+                )
+            # A fully-deleted / purged account (e.g. via DELETE /profile, which
+            # leaves phone intact, or a row mid-purge) cannot be reactivated — its
+            # PII is gone. Refuse to mint tokens; the client should sign up fresh.
+            if str(existing_user.get("status") or "").lower() == "deleted" or existing_user.get("deleted_at"):
+                raise HTTPException(status_code=410, detail="ERR_ACCOUNT_DELETED")
             logger.info("User exists, creating token")
             session_id = str(uuid.uuid4())
             try:
@@ -694,6 +725,94 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
         ) from e
 
 
+class ReactivateRequest(BaseModel):
+    reactivation_token: str
+
+
+@api_router.post("/reactivate", response_model=AuthResponse)
+@limiter.limit("5/minute")
+async def reactivate_account(request: Request, response: Response, body: ReactivateRequest):
+    """Self-serve reactivation inside the 30-day deletion grace window (PIPEDA).
+
+    Authorised by the single-purpose reactivation token issued at /auth/verify-otp
+    for a pending_deletion account (proves the phone+OTP just verified). Clears the
+    pending deletion, restores access, and logs the user in.
+
+    Ride PII anonymised at deletion time is NOT restored — that is irreversible by
+    design; reactivation restores account ACCESS, not already-scrubbed history.
+    """
+    user_id = verify_reactivation_token(body.reactivation_token)
+
+    user = await db_supabase.get_user_by_id(user_id)
+    status = str((user or {}).get("status") or "").lower()
+    if not user or status == "deleted":
+        # Grace elapsed and the purge already scrubbed PII → nothing to reactivate.
+        raise HTTPException(status_code=410, detail="ERR_ACCOUNT_DELETED")
+
+    phone = user.get("phone") or ""
+    user_agent = request.headers.get("user-agent", "")
+    client_ip = get_remote_address(request)
+
+    # Restore the account. Idempotent: a repeat call on an already-active account
+    # skips the write and just re-issues a session.
+    if status == "pending_deletion":
+        try:
+            await db_supabase.update_one(
+                "users",
+                {"id": user_id},
+                {"status": "active", "deletion_requested_at": None, "deletion_scheduled_at": None},
+            )
+            await db_supabase.update_one("drivers", {"user_id": user_id}, {"deleted_at": None})
+        except Exception as e:
+            logger.error(f"Account reactivation failed for user {user_id}: {e}", exc_info=True)
+            raise SpinrException(
+                message="Could not reactivate account, please try again",
+                error_code=ErrorCode.DATABASE_ERROR,
+                status_code=503,
+                message_key=ErrorKeys.SYSTEM_DATABASE,
+            ) from e
+        user["status"] = "active"
+        try:
+            asyncio.create_task(_audit_log_user(user, "dsar_reactivated", "users", user_id, {"pipeda": True}))
+        except Exception:
+            logger.error("audit_log write failed for dsar_reactivated", exc_info=True)
+
+    # Log the user back in (fresh session + tokens), mirroring verify-otp.
+    session_id = str(uuid.uuid4())
+    try:
+        await db_supabase.update_one("users", {"id": user_id}, {"current_session_id": session_id})
+        user["current_session_id"] = session_id
+    except Exception as e:
+        logger.error(f"reactivate: could not set session_id for user {user_id}: {e}", exc_info=True)
+    await redis_set(f"session:{user_id}", session_id, ttl=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60)
+    token_version = int(user.get("token_version") or 0)
+    access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    token = create_jwt_token(user_id, phone, session_id=session_id, token_version=token_version)
+    refresh_raw, _, refresh_expires_at = await issue_refresh_token(
+        user_id, audience="rider", user_agent=user_agent, ip=client_ip
+    )
+    try:
+        user_obj = UserProfile(**user)
+    except Exception:
+        user_obj = user
+    csrf = generate_csrf_token()
+    set_csrf_cookie(
+        response, csrf, secure=settings.ENV == "production", max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    )
+    logger.info(f"Account reactivated for user {user_id}")
+    return _make_auth_response(
+        response,
+        token,
+        refresh_raw,
+        user_obj,
+        is_new_user=False,
+        access_expires_at=access_expires_at,
+        refresh_expires_at=refresh_expires_at,
+        csrf_token=csrf,
+        admin_ttl_minutes=15,
+    )
+
+
 class FirebaseAuthRequest(BaseModel):
     firebase_token: str
 
@@ -807,6 +926,21 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
                 status_code=401,
                 message_key=ErrorKeys.AUTH_INVALID_CREDENTIALS,
             )
+        # PIPEDA: a deletion-requested account must not be logged in. Mirror
+        # verify-otp — hand back a reactivation token instead of minting tokens.
+        _fb_status = str(user.get("status") or "").lower()
+        if _fb_status == "pending_deletion":
+            logger.info("firebase_auth: account pending_deletion — returning reactivation handoff")
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "requires_reactivation": True,
+                    "deletion_scheduled_at": user.get("deletion_scheduled_at"),
+                    "reactivation_token": create_reactivation_token(user["id"], phone),
+                },
+            )
+        if _fb_status == "deleted" or user.get("deleted_at"):
+            raise HTTPException(status_code=410, detail="ERR_ACCOUNT_DELETED")
         try:
             await db_supabase.update_one("users", {"id": uid}, {"current_session_id": session_id})
         except Exception as e:
@@ -1026,6 +1160,10 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
             message_key=ErrorKeys.AUTH_TOKEN_EXPIRED,
             action_hint="Sign in again",
         )
+
+    # PIPEDA: never rotate/mint tokens for a deletion-requested or purged account.
+    # (Deletion also revokes refresh tokens, so this is belt-and-suspenders.)
+    _enforce_account_active(user)
 
     user_agent = request.headers.get("user-agent", "")
     client_ip = get_remote_address(request)

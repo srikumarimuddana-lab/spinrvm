@@ -231,6 +231,10 @@ payment_action_limit = default_limiter.limit("5/minute")
 # Ride rating — once per completed ride, extra friction prevents spam
 ride_rating_limit = default_limiter.limit("5/hour")
 
+# Data export (DSAR) — each call fans out 6 DB reads, builds a ZIP, uploads to
+# Storage, and sends an email. Tight cap prevents storage fill / SES exhaustion.
+dsar_export_limit = default_limiter.limit("3/hour")
+
 # AI assistant chat — each message triggers LLM spend; per-user daily cap
 # (ai_daily_message_cap) is enforced separately in backend/ai/orchestrator.py
 ai_chat_limit = default_limiter.limit("10/minute")

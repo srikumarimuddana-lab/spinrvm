@@ -19,6 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useLanguageStore } from '../../store/languageStore';
+import { useNavStore } from '../../store/navStore';
 import { showAlert } from '../AlertDialog';
 import CancelReasonSheet from '../CancelReasonSheet';
 
@@ -106,6 +107,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
   const { t } = useLanguageStore();
+  const { navApp, loadNavApp } = useNavStore();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [reasonVisible, setReasonVisible] = useState(false);
   const [waitSeconds, setWaitSeconds] = useState(0);
@@ -183,6 +185,12 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
       },
     }),
   ).current;
+
+  // Hydrate the driver's saved navigation-app choice once so the
+  // navigate buttons launch the right app even on a cold start.
+  useEffect(() => {
+    loadNavApp();
+  }, []);
 
   // Phase changes always re-open the sheet — the PIN keypad or the new
   // action buttons must never appear while the sheet is collapsed.
@@ -306,17 +314,47 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
     return m > 0 ? `${m}m ${sec.toString().padStart(2, '0')}s` : `${sec}s`;
   };
 
-  const openMapsNavigation = (lat: number, lng: number, _label: string) => {
-    // Use Google Maps web URL as primary — works on all devices regardless
-    // of whether the native Google Maps app is installed. On devices WITH
-    // the app installed, the web URL auto-redirects to the app. On devices
-    // without it (or in Expo Go), it opens in the browser which still
-    // provides turn-by-turn. The old `google.navigation:` scheme crashes
-    // with "No Activity found to handle Intent" when the app isn't present.
-    const googleUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
+  const openMapsNavigation = async (lat: number, lng: number, _label: string) => {
+    // The Google Maps web URL is the universal fallback — it works on every
+    // device whether or not a native app is installed. On devices WITH the
+    // Google Maps app it auto-redirects; without it (or in Expo Go) it opens
+    // the browser which still provides turn-by-turn.
+    const googleWebUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
     const appleUrl = `http://maps.apple.com/?daddr=${lat},${lng}&dirflg=d`;
-    const url = Platform.OS === 'ios' ? appleUrl : googleUrl;
-    Linking.openURL(url).catch(() => Linking.openURL(googleUrl));
+    // If the chosen app isn't installed, fall back to the phone's built-in
+    // maps (Apple Maps on iOS, Google Maps web on Android) — always present
+    // and always gives driving directions.
+    const defaultUrl = Platform.OS === 'ios' ? appleUrl : googleWebUrl;
+
+    // Try a dedicated app's deep link, falling back when it isn't installed.
+    // canOpenURL is the reliable cross-platform check: on iOS the `waze` and
+    // `comgooglemaps` schemes are whitelisted in app.config's
+    // LSApplicationQueriesSchemes, so canOpenURL returns false (not a system
+    // error) when the app is absent; on Android it reflects installed intents.
+    const openWithFallback = async (appUrl: string) => {
+      try {
+        if (await Linking.canOpenURL(appUrl)) {
+          await Linking.openURL(appUrl);
+          return;
+        }
+      } catch {
+        // canOpenURL/openURL threw — fall through to the default maps app.
+      }
+      Linking.openURL(defaultUrl).catch(() => Linking.openURL(googleWebUrl));
+    };
+
+    // Honour the driver's saved choice (Settings → Navigation).
+    if (navApp === 'waze') {
+      await openWithFallback(`waze://?ll=${lat},${lng}&navigate=yes`);
+      return;
+    }
+    if (navApp === 'google') {
+      await openWithFallback(`comgooglemaps://?daddr=${lat},${lng}&directionsmode=driving`);
+      return;
+    }
+
+    // 'default' — use the platform's native maps app.
+    Linking.openURL(defaultUrl).catch(() => Linking.openURL(googleWebUrl));
   };
 
   const showConfirm = (

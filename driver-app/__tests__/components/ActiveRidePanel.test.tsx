@@ -1,6 +1,6 @@
 import React from 'react';
-import { Animated } from 'react-native';
-import { render } from '@testing-library/react-native';
+import { Animated, Linking } from 'react-native';
+import { render, fireEvent, waitFor } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ActiveRidePanel } from '../../components/dashboard/ActiveRidePanel';
 
@@ -60,6 +60,12 @@ jest.mock('../../components/AlertDialog', () => ({
 
 jest.mock('../../store/languageStore', () => ({
   useLanguageStore: () => ({ t: (key: string) => key }),
+}));
+
+// Driver's saved navigation-app choice — mutate `mockNavApp` per test.
+let mockNavApp = 'default';
+jest.mock('../../store/navStore', () => ({
+  useNavStore: () => ({ navApp: mockNavApp, loadNavApp: jest.fn() }),
 }));
 
 jest.mock('../../hooks/useToast', () => ({
@@ -149,5 +155,60 @@ describe('ActiveRidePanel', () => {
     const { queryByText } = renderWithSafeArea(<ActiveRidePanel {...defaultProps} ride={null} />);
     expect(queryByText('Jane D.')).toBeNull();
     expect(queryByText('Cancel Ride')).toBeNull();
+  });
+
+  describe('navigation app preference', () => {
+    let openURL: jest.SpyInstance;
+    let canOpenURL: jest.SpyInstance;
+    beforeEach(() => {
+      openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(true as never);
+      // Default: the chosen app IS installed.
+      canOpenURL = jest.spyOn(Linking, 'canOpenURL').mockResolvedValue(true as never);
+    });
+    afterEach(() => {
+      mockNavApp = 'default';
+      openURL.mockRestore();
+      canOpenURL.mockRestore();
+    });
+
+    it('launches Waze deep link when the driver chose Waze and it is installed', async () => {
+      mockNavApp = 'waze';
+      const { getByLabelText } = renderWithSafeArea(<ActiveRidePanel {...defaultProps} />);
+      fireEvent.press(getByLabelText('activeRide.navigateToPickup'));
+      await waitFor(() =>
+        expect(openURL).toHaveBeenCalledWith('waze://?ll=52.1333,-106.6667&navigate=yes'),
+      );
+    });
+
+    it('launches the Google Maps app deep link when chosen and installed', async () => {
+      mockNavApp = 'google';
+      const { getByLabelText } = renderWithSafeArea(<ActiveRidePanel {...defaultProps} />);
+      fireEvent.press(getByLabelText('activeRide.navigateToPickup'));
+      await waitFor(() =>
+        expect(openURL).toHaveBeenCalledWith('comgooglemaps://?daddr=52.1333,-106.6667&directionsmode=driving'),
+      );
+    });
+
+    it('falls back to the default maps app when the chosen app is NOT installed', async () => {
+      mockNavApp = 'waze';
+      canOpenURL.mockResolvedValue(false as never); // Waze not installed
+      const { getByLabelText } = renderWithSafeArea(<ActiveRidePanel {...defaultProps} />);
+      fireEvent.press(getByLabelText('activeRide.navigateToPickup'));
+      await waitFor(() => expect(openURL).toHaveBeenCalled());
+      // Never the unhandled waze:// scheme — falls back to a real maps URL.
+      for (const call of openURL.mock.calls) {
+        expect((call[0] as string).startsWith('waze://')).toBe(false);
+      }
+    });
+
+    it('does not use Waze/Google deep links when the driver left it on Default', async () => {
+      mockNavApp = 'default';
+      const { getByLabelText } = renderWithSafeArea(<ActiveRidePanel {...defaultProps} />);
+      fireEvent.press(getByLabelText('activeRide.navigateToPickup'));
+      await waitFor(() => expect(openURL).toHaveBeenCalled());
+      const calledWith = openURL.mock.calls[0][0] as string;
+      expect(calledWith.startsWith('waze://')).toBe(false);
+      expect(calledWith.startsWith('comgooglemaps://')).toBe(false);
+    });
   });
 });

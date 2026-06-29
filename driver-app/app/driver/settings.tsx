@@ -19,6 +19,7 @@ import { useRouter } from 'expo-router';
 import { ScreenHeader } from '../../components/ScreenHeader';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLanguageStore } from '../../store/languageStore';
+import { useNavStore } from '../../store/navStore';
 import { languages, Language } from '../../i18n';
 import api from '@shared/api/client';
 import {
@@ -36,6 +37,7 @@ export default function SettingsScreen() {
     const insets = useSafeAreaInsets();
     const { logout } = useAuthStore();
     const { language, setLanguage, loadLanguage, t } = useLanguageStore();
+    const { navApp, setNavApp, loadNavApp } = useNavStore();
     const { colors, colorScheme, setTheme } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
 
@@ -47,6 +49,7 @@ export default function SettingsScreen() {
 
     useEffect(() => {
         loadLanguage();
+        loadNavApp();
     }, []);
 
     // Preference states (local)
@@ -83,7 +86,7 @@ export default function SettingsScreen() {
             await api.put('/marketing/preferences', { [field]: value, source: 'driver_app' });
         } catch {
             setter(!value);
-            showToast('error', 'Preference not saved', 'Could not reach the server. Your setting has been reverted — please try again.');
+            showToast('error', t('settings.prefNotSavedTitle'), t('settings.prefNotSavedMsg'));
         }
     };
 
@@ -121,7 +124,7 @@ export default function SettingsScreen() {
         updatePreferences.mutate({ [key]: value }, {
             onError: () => {
                 revert();
-                showToast('error', 'Preference not saved', 'Could not reach the server. Your setting has been reverted — please try again.');
+                showToast('error', t('settings.prefNotSavedTitle'), t('settings.prefNotSavedMsg'));
             },
         });
     };
@@ -130,17 +133,32 @@ export default function SettingsScreen() {
         setter(value);
         savePreference(key, value, () => setter(!value));
     };
-    const [navApp, setNavApp] = useState<'default' | 'google' | 'waze'>('default');
 
     const isDarkOn = colorScheme === 'dark';
+
+    // Platform-aware navigation choices. The "default" option maps to each
+    // platform's native maps app (Apple Maps on iOS, Google Maps on Android),
+    // matching what the launcher in ActiveRidePanel actually opens. Google Maps
+    // is only offered as a separate option on iOS (on Android it *is* default).
+    const navOptions: { key: 'default' | 'google' | 'waze'; label: string; icon: string }[] =
+        Platform.OS === 'ios'
+            ? [
+                  { key: 'default', label: t('settings.navApple'), icon: 'map' },
+                  { key: 'google', label: t('settings.navGoogle'), icon: 'navigate' },
+                  { key: 'waze', label: t('settings.navWaze'), icon: 'compass' },
+              ]
+            : [
+                  { key: 'default', label: t('settings.navGoogle'), icon: 'navigate' },
+                  { key: 'waze', label: t('settings.navWaze'), icon: 'compass' },
+              ];
 
     const handleExportData = async () => {
         setExportingData(true);
         try {
             await api.post('/drivers/me/export-data');
-            showToast('success', 'Export Requested', 'Your data export is on its way — check your email.');
+            showToast('success', t('settings.exportRequestedTitle'), t('settings.exportRequestedMsg'));
         } catch {
-            showToast('error', 'Export Failed', 'Failed to request data export. Please try again.');
+            showToast('error', t('settings.exportFailedTitle'), t('settings.exportFailedMsg'));
         } finally {
             setExportingData(false);
         }
@@ -148,18 +166,18 @@ export default function SettingsScreen() {
 
     const handleDeleteAccount = () => {
         Alert.alert(
-            'Delete Account',
-            'Your account will be scheduled for deletion with a 30-day recovery window.\n\nYou can reactivate any time within 30 days by signing in again; after that, all your data, earnings history, and ride records are permanently deleted.',
+            t('settings.deleteAccount'),
+            t('settings.deleteAccountConfirmMsg'),
             [
-                { text: 'Cancel', style: 'cancel' },
-                { text: 'Yes, Continue', style: 'destructive', onPress: () => { setDeleteInput(''); setShowDeleteStep2(true); } },
+                { text: t('settings.cancel'), style: 'cancel' },
+                { text: t('settings.deleteContinue'), style: 'destructive', onPress: () => { setDeleteInput(''); setShowDeleteStep2(true); } },
             ]
         );
     };
 
     const executeDelete = async () => {
         if (deleteInput.trim().toUpperCase() !== 'DELETE') {
-            showToast('warning', 'Not Confirmed', 'You must type DELETE to confirm account deletion.');
+            showToast('warning', t('settings.notConfirmedTitle'), t('settings.notConfirmedMsg'));
             return;
         }
         try {
@@ -174,7 +192,7 @@ export default function SettingsScreen() {
             router.replace('/login' as any);
         } catch (err: any) {
             setShowDeleteStep2(false);
-            showToast('error', 'Delete Failed', 'Could not delete account. Please contact support.');
+            showToast('error', t('settings.deleteFailedTitle'), t('settings.deleteFailedMsg'));
         }
     };
 
@@ -215,74 +233,68 @@ export default function SettingsScreen() {
 
     return (
         <View style={styles.container}>
-            <ScreenHeader title="Settings" />
+            <ScreenHeader title={t('settings.title')} />
 
             <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 40 }} showsVerticalScrollIndicator={false}>
                 {/* Notifications Section */}
                 <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Notifications</Text>
+                    <Text style={styles.sectionTitle}>{t('settings.notifications')}</Text>
                     <View style={styles.card}>
-                        {renderToggle('Push Notifications', 'Receive real-time notifications', pushNotifications, handleToggle('push_notifications', setPushNotifications), 'notifications', colors.primary)}
+                        {renderToggle(t('settings.pushNotifications'), t('settings.pushNotificationsDesc'), pushNotifications, handleToggle('push_notifications', setPushNotifications), 'notifications', colors.primary)}
                         <View style={styles.cardDivider} />
-                        {renderToggle('Ride Alerts', 'Sound and vibration for new rides', rideAlerts, handleToggle('ride_alerts', setRideAlerts), 'car', colors.orange)}
+                        {renderToggle(t('settings.rideAlerts'), t('settings.rideAlertsDesc'), rideAlerts, handleToggle('ride_alerts', setRideAlerts), 'car', colors.orange)}
                         <View style={styles.cardDivider} />
-                        {renderToggle('Daily Earnings Summary', 'Get notified about daily earnings', earningsSummary, handleToggle('earnings_summary', setEarningsSummary), 'wallet', colors.gold)}
+                        {renderToggle(t('settings.earningsSummary'), t('settings.earningsSummaryDesc'), earningsSummary, handleToggle('earnings_summary', setEarningsSummary), 'wallet', colors.gold)}
                         <View style={styles.cardDivider} />
-                        {renderToggle('Promotions & Offers', 'Special offers and promotions', promotions, handleToggle('promotions', setPromotions), 'gift', colors.primaryDark)}
+                        {renderToggle(t('settings.promotions'), t('settings.promotionsDesc'), promotions, handleToggle('promotions', setPromotions), 'gift', colors.primaryDark)}
                     </View>
                 </View>
 
                 {/* Marketing (CASL consent) */}
                 <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Marketing</Text>
+                    <Text style={styles.sectionTitle}>{t('settings.sectionMarketing')}</Text>
                     <View style={styles.card}>
-                        {renderToggle('Marketing Emails', 'Offers, news, and updates by email', marketingEmails, handleMarketingToggle('email_opt_in', setMarketingEmails), 'mail', colors.primary)}
+                        {renderToggle(t('settings.marketingEmails'), t('settings.marketingEmailsDesc'), marketingEmails, handleMarketingToggle('email_opt_in', setMarketingEmails), 'mail', colors.primary)}
                         <View style={styles.cardDivider} />
-                        {renderToggle('Marketing SMS', 'Offers and updates by text', marketingSms, handleMarketingToggle('sms_opt_in', setMarketingSms), 'chatbubble-ellipses', colors.primary)}
+                        {renderToggle(t('settings.marketingSms'), t('settings.marketingSmsDesc'), marketingSms, handleMarketingToggle('sms_opt_in', setMarketingSms), 'chatbubble-ellipses', colors.primary)}
                     </View>
                 </View>
 
                 {/* Sound & Haptics */}
                 <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Sound & Haptics</Text>
+                    <Text style={styles.sectionTitle}>{t('settings.sectionSound')}</Text>
                     <View style={styles.card}>
-                        {renderToggle('Sound Effects', 'Play sounds for ride events', soundEffects, handleToggle('sound_effects', setSoundEffects), 'volume-high', colors.primary)}
+                        {renderToggle(t('settings.soundEffects'), t('settings.soundEffectsDesc'), soundEffects, handleToggle('sound_effects', setSoundEffects), 'volume-high', colors.primary)}
                         <View style={styles.cardDivider} />
-                        {renderToggle('Vibration', 'Haptic feedback for new rides', vibration, handleToggle('vibration', setVibration), 'phone-portrait', colors.orange)}
+                        {renderToggle(t('settings.vibration'), t('settings.vibrationDesc'), vibration, handleToggle('vibration', setVibration), 'phone-portrait', colors.orange)}
                     </View>
                 </View>
 
                 {/* Appearance */}
                 <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Appearance</Text>
+                    <Text style={styles.sectionTitle}>{t('settings.sectionAppearance')}</Text>
                     <View style={styles.card}>
-                        {renderToggle('Dark Mode', 'Reduce eye strain at night', isDarkOn, (v) => setTheme(v ? 'dark' : 'light'), 'moon', '#6366F1')}
+                        {renderToggle(t('settings.darkMode'), t('settings.darkModeDesc'), isDarkOn, (v) => setTheme(v ? 'dark' : 'light'), 'moon', '#6366F1')}
                     </View>
                 </View>
 
                 {/* Navigation */}
                 <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Navigation</Text>
+                    <Text style={styles.sectionTitle}>{t('settings.sectionNavigation')}</Text>
                     <View style={styles.card}>
-                        {(['default', 'google', 'waze'] as const).map((app, i) => (
-                            <React.Fragment key={app}>
+                        {navOptions.map((opt, i) => (
+                            <React.Fragment key={opt.key}>
                                 {i > 0 && <View style={styles.cardDivider} />}
                                 <TouchableOpacity
                                     style={styles.navOption}
-                                    onPress={() => setNavApp(app)}
+                                    onPress={() => { setNavApp(opt.key); }}
                                 >
                                     <View style={[styles.settingIcon, { backgroundColor: `${colors.primary}12` }]}>
-                                        <Ionicons
-                                            name={app === 'default' ? 'map' : app === 'google' ? 'navigate' : 'compass'}
-                                            size={18}
-                                            color={colors.primary}
-                                        />
+                                        <Ionicons name={opt.icon as any} size={18} color={colors.primary} />
                                     </View>
-                                    <Text style={styles.settingLabel}>
-                                        {app === 'default' ? 'Default Maps' : app === 'google' ? 'Google Maps' : 'Waze'}
-                                    </Text>
-                                    <View style={[styles.radio, navApp === app && styles.radioActive]}>
-                                        {navApp === app && <View style={styles.radioInner} />}
+                                    <Text style={styles.settingLabel}>{opt.label}</Text>
+                                    <View style={[styles.radio, navApp === opt.key && styles.radioActive]}>
+                                        {navApp === opt.key && <View style={styles.radioInner} />}
                                     </View>
                                 </TouchableOpacity>
                             </React.Fragment>
@@ -292,18 +304,18 @@ export default function SettingsScreen() {
 
                 {/* Vehicle Accessibility */}
                 <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Vehicle Accessibility</Text>
+                    <Text style={styles.sectionTitle}>{t('settings.sectionAccessibility')}</Text>
                     <View style={styles.card}>
                         {renderToggle(
-                            'Wheelchair-Accessible Vehicle (WAV)',
-                            'Enables you to receive ride requests from riders who need an accessible vehicle (SK Transportation Act)',
+                            t('settings.wavTitle'),
+                            t('settings.wavDesc'),
                             isWav,
                             (value) => {
                                 setIsWav(value);
                                 updateDriverMe.mutate({ is_wav: value }, {
                                     onError: () => {
                                         setIsWav(!value);
-                                        showToast('error', 'Could not save', 'WAV setting could not be updated. Please try again.');
+                                        showToast('error', t('settings.wavNotSavedTitle'), t('settings.wavNotSavedMsg'));
                                     },
                                 });
                             },
@@ -311,15 +323,12 @@ export default function SettingsScreen() {
                             '#0EA5E9',
                         )}
                     </View>
-                    <Text style={styles.wavHint}>
-                        When enabled, you will appear in searches for wheelchair-accessible rides.
-                        Ensure your vehicle meets WAV requirements before enabling.
-                    </Text>
+                    <Text style={styles.wavHint}>{t('settings.wavHint')}</Text>
                 </View>
 
                 {/* Account */}
                 <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Account</Text>
+                    <Text style={styles.sectionTitle}>{t('settings.account')}</Text>
                     <View style={styles.card}>
                         <TouchableOpacity
                             style={styles.actionRow}
@@ -329,18 +338,7 @@ export default function SettingsScreen() {
                                 <Ionicons name="language" size={18} color={colors.primary} />
                             </View>
                             <Text style={styles.settingLabel}>{t('settings.language')}</Text>
-                            <Text style={styles.settingValue}>{language === 'en' ? 'English' : 'Français'}</Text>
-                            <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
-                        </TouchableOpacity>
-                        <View style={styles.cardDivider} />
-                        <TouchableOpacity
-                            style={styles.actionRow}
-                            onPress={() => router.push('/driver/faq' as any)}
-                        >
-                            <View style={[styles.settingIcon, { backgroundColor: `${colors.primary}12` }]}>
-                                <Ionicons name="help-circle" size={18} color={colors.primary} />
-                            </View>
-                            <Text style={styles.settingLabel}>Help Center & FAQ</Text>
+                            <Text style={styles.settingValue}>{languages.find((l) => l.code === language)?.nativeName ?? 'English'}</Text>
                             <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                         </TouchableOpacity>
                         <View style={styles.cardDivider} />
@@ -348,8 +346,8 @@ export default function SettingsScreen() {
                             <View style={[styles.settingIcon, { backgroundColor: `${colors.primary}12` }]}>
                                 <Ionicons name="document-text" size={18} color={colors.primary} />
                             </View>
-                            <Text style={styles.settingLabel}>Legal</Text>
-                            <Text style={styles.settingValue}>Terms & Privacy</Text>
+                            <Text style={styles.settingLabel}>{t('settings.legal')}</Text>
+                            <Text style={styles.settingValue}>{t('settings.termsAndPrivacy')}</Text>
                             <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                         </TouchableOpacity>
                         <View style={styles.cardDivider} />
@@ -360,7 +358,7 @@ export default function SettingsScreen() {
                             <View style={[styles.settingIcon, { backgroundColor: `${colors.primary}12` }]}>
                                 <Ionicons name="receipt" size={18} color={colors.primary} />
                             </View>
-                            <Text style={styles.settingLabel}>Tax Documents (T4A)</Text>
+                            <Text style={styles.settingLabel}>{t('settings.taxDocuments')}</Text>
                             <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                         </TouchableOpacity>
                     </View>
@@ -368,16 +366,16 @@ export default function SettingsScreen() {
 
                 {/* Emergency Assistance */}
                 <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Emergency Assistance</Text>
+                    <Text style={styles.sectionTitle}>{t('settings.sectionEmergency')}</Text>
                     <View style={styles.card}>
                         <TouchableOpacity
                             style={styles.actionRow}
-                            onPress={() => Alert.alert('Emergency Services', 'Call 911 for immediate emergency assistance.', [{ text: 'Cancel', style: 'cancel' }, { text: 'Call 911', style: 'destructive', onPress: () => Linking.openURL('tel:911') }])}
+                            onPress={() => Alert.alert(t('settings.emergencyServicesTitle'), t('settings.emergencyServicesMsg'), [{ text: t('settings.cancel'), style: 'cancel' }, { text: t('settings.call911'), style: 'destructive', onPress: () => Linking.openURL('tel:911') }])}
                         >
                             <View style={[styles.settingIcon, { backgroundColor: 'rgba(239,68,68,0.1)' }]}>
                                 <Ionicons name="call" size={18} color="#EF4444" />
                             </View>
-                            <Text style={[styles.settingLabel, { color: '#EF4444' }]}>Call Emergency (911)</Text>
+                            <Text style={[styles.settingLabel, { color: '#EF4444' }]}>{t('settings.callEmergency')}</Text>
                             <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                         </TouchableOpacity>
                         <View style={styles.cardDivider} />
@@ -385,7 +383,7 @@ export default function SettingsScreen() {
                             <View style={[styles.settingIcon, { backgroundColor: 'rgba(245,158,11,0.1)' }]}>
                                 <Ionicons name="warning" size={18} color="#F59E0B" />
                             </View>
-                            <Text style={styles.settingLabel}>Report Safety Issue</Text>
+                            <Text style={styles.settingLabel}>{t('settings.reportSafety')}</Text>
                             <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                         </TouchableOpacity>
                         <View style={styles.cardDivider} />
@@ -393,7 +391,7 @@ export default function SettingsScreen() {
                             <View style={[styles.settingIcon, { backgroundColor: 'rgba(34,197,94,0.1)' }]}>
                                 <Ionicons name="people" size={18} color="#22C55E" />
                             </View>
-                            <Text style={styles.settingLabel}>Emergency Contacts</Text>
+                            <Text style={styles.settingLabel}>{t('settings.emergencyContacts')}</Text>
                             <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                         </TouchableOpacity>
                     </View>
@@ -401,7 +399,7 @@ export default function SettingsScreen() {
 
                 {/* Privacy */}
                 <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Privacy</Text>
+                    <Text style={styles.sectionTitle}>{t('settings.sectionPrivacy')}</Text>
                     <View style={styles.card}>
                         <TouchableOpacity
                             style={styles.actionRow}
@@ -411,7 +409,7 @@ export default function SettingsScreen() {
                             <View style={[styles.settingIcon, { backgroundColor: `${colors.primary}12` }]}>
                                 <Ionicons name="download-outline" size={18} color={colors.primary} />
                             </View>
-                            <Text style={styles.settingLabel}>Download My Data</Text>
+                            <Text style={styles.settingLabel}>{t('settings.downloadData')}</Text>
                             {exportingData ? (
                                 <ActivityIndicator size="small" color={colors.primary} />
                             ) : (
@@ -425,12 +423,12 @@ export default function SettingsScreen() {
                 <View style={styles.section}>
                     <TouchableOpacity style={styles.deleteBtn} onPress={handleDeleteAccount}>
                         <Ionicons name="trash-outline" size={16} color={colors.error} />
-                        <Text style={styles.deleteText}>Delete Account</Text>
+                        <Text style={styles.deleteText}>{t('settings.deleteAccount')}</Text>
                     </TouchableOpacity>
                 </View>
 
                 {/* App Version */}
-                <Text style={styles.version}>Spinr Driver v1.0.0</Text>
+                <Text style={styles.version}>{t('settings.version')}</Text>
             </ScrollView>
 
             {/* Language Modal */}
@@ -490,11 +488,11 @@ export default function SettingsScreen() {
                 <Pressable style={styles.deleteOverlay} onPress={() => setShowDeleteStep2(false)}>
                     <Pressable style={styles.deleteModal} onPress={e => e.stopPropagation()}>
                         <Ionicons name="alert-circle" size={40} color={colors.error} style={{ marginBottom: 12 }} />
-                        <Text style={styles.deleteModalTitle}>Confirm Deletion</Text>
-                        <Text style={styles.deleteModalMsg}>Type "DELETE" below to permanently delete your account.</Text>
+                        <Text style={styles.deleteModalTitle}>{t('settings.confirmDeletionTitle')}</Text>
+                        <Text style={styles.deleteModalMsg}>{t('settings.confirmDeletionMsg')}</Text>
                         <TextInput
                             style={styles.deleteInput}
-                            placeholder="Type DELETE"
+                            placeholder={t('settings.typeDelete')}
                             placeholderTextColor={colors.textDim}
                             value={deleteInput}
                             onChangeText={setDeleteInput}
@@ -502,10 +500,10 @@ export default function SettingsScreen() {
                         />
                         <View style={{ flexDirection: 'row', gap: 12, marginTop: 16 }}>
                             <TouchableOpacity style={[styles.deleteModalBtn, { backgroundColor: colors.surface }]} onPress={() => setShowDeleteStep2(false)}>
-                                <Text style={[styles.deleteModalBtnText, { color: colors.text }]}>Cancel</Text>
+                                <Text style={[styles.deleteModalBtnText, { color: colors.text }]}>{t('settings.cancel')}</Text>
                             </TouchableOpacity>
                             <TouchableOpacity style={[styles.deleteModalBtn, { backgroundColor: colors.error }]} onPress={executeDelete}>
-                                <Text style={[styles.deleteModalBtnText, { color: '#fff' }]}>Delete Forever</Text>
+                                <Text style={[styles.deleteModalBtnText, { color: '#fff' }]}>{t('settings.deleteForever')}</Text>
                             </TouchableOpacity>
                         </View>
                     </Pressable>

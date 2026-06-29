@@ -147,6 +147,40 @@ def quota_window_for_sub(
     return quota_day_bounds_utc(now, tz=tz)
 
 
+def compute_pass_expiry(
+    duration_days: Any, now: Optional[datetime] = None, tz: TzArg = None
+) -> datetime:
+    """UTC expiry for an N-day pass, anchored to the driver's local day.
+
+    A **1-day pass** expires exactly 24h from ``now`` ("by hours",
+    timezone-independent — the one pass that lapses by the clock). Every
+    **longer** pass expires at local **midnight ending its Nth day**: ``now`` is
+    floored to the start of the driver's local calendar day and N days are added
+    (DST-correct, since the arithmetic is done in local wall-clock then
+    converted back). So the day of purchase is day 1, the pass spans N whole
+    local days, and a morning purchase and an evening purchase on the same day
+    share one expiry — the evening buyer's first day is simply shorter (its
+    rides still lapse at the upcoming midnight). ``tz`` is the driver's location
+    timezone (America/Regina default).
+    """
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    days = _as_int(duration_days)
+    if days < 1:
+        days = 30  # missing/garbage → fall back to the standard 30-day pass
+    if days == 1:
+        return now + timedelta(days=1)
+    zone = _coerce_tz(tz)
+    start_local = now.astimezone(zone).replace(hour=0, minute=0, second=0, microsecond=0)
+    # Add N days in local wall-clock, then re-pin to midnight so a DST shift in
+    # the window can't drag the expiry an hour off the local day boundary.
+    expiry_local = (start_local + timedelta(days=days)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    return expiry_local.astimezone(timezone.utc)
+
+
 def compute_quota(
     rides_per_day: Any,
     used_today: Any,

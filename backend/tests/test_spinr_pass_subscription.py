@@ -745,6 +745,9 @@ class TestActivationAtomicClaim:
             side_effect=[
                 {"id": "s1", "status": "pending", "driver_id": "d1"},
                 {"id": "plan-1", "duration_days": 7, "subscriber_count": 0},
+                # Driver row fetched before the claim to resolve the expiry
+                # timezone (no service_area_id → no service_areas lookup).
+                {"id": "d1"},
             ]
         )
         push_mock = AsyncMock()

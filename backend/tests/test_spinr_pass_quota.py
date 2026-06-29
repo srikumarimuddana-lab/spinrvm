@@ -470,6 +470,50 @@ class TestComputeQuotaWindowOverride:
         assert q["hours_until_reset"] == 4.0
 
 
+class TestComputePassExpiry:
+    def test_one_day_pass_is_24h_by_the_hour(self):
+        now = datetime(2026, 6, 25, 18, 30, tzinfo=timezone.utc)
+        assert spinr_pass.compute_pass_expiry(1, now=now) == now + timedelta(days=1)
+
+    def test_one_day_pass_ignores_timezone(self):
+        # The 1-day pass lapses by the clock — tz must not shift it.
+        now = datetime(2026, 6, 25, 18, 30, tzinfo=timezone.utc)
+        assert spinr_pass.compute_pass_expiry(1, now=now, tz="America/Edmonton") == now + timedelta(hours=24)
+
+    def test_30day_pass_expires_at_local_midnight_of_30th_day(self):
+        # Regina (UTC-6). 2026-06-01 14:00Z = 08:00 local June 1; local midnight
+        # June 1 = 06:00Z; +30 days = 06:00Z July 1.
+        now = datetime(2026, 6, 1, 14, 0, tzinfo=timezone.utc)
+        assert spinr_pass.compute_pass_expiry(30, now=now) == datetime(2026, 7, 1, 6, 0, tzinfo=timezone.utc)
+
+    def test_morning_and_evening_same_local_day_share_expiry(self):
+        morning = datetime(2026, 6, 1, 14, 0, tzinfo=timezone.utc)  # 08:00 local June 1
+        evening = datetime(2026, 6, 2, 4, 0, tzinfo=timezone.utc)  # 22:00 local June 1
+        assert spinr_pass.compute_pass_expiry(30, now=morning) == spinr_pass.compute_pass_expiry(30, now=evening)
+        assert spinr_pass.compute_pass_expiry(30, now=evening) == datetime(2026, 7, 1, 6, 0, tzinfo=timezone.utc)
+
+    def test_uses_service_area_timezone(self):
+        # Winter: Edmonton MST (UTC-7). 2026-01-15 06:30Z = 23:30 MST Jan 14;
+        # local midnight Jan 14 = 07:00Z; +7 days = 07:00Z Jan 21.
+        now = datetime(2026, 1, 15, 6, 30, tzinfo=timezone.utc)
+        assert spinr_pass.compute_pass_expiry(7, now=now, tz="America/Edmonton") == datetime(
+            2026, 1, 21, 7, 0, tzinfo=timezone.utc
+        )
+
+    def test_malformed_duration_falls_back_to_30(self):
+        now = datetime(2026, 6, 1, 14, 0, tzinfo=timezone.utc)
+        assert spinr_pass.compute_pass_expiry(None, now=now) == datetime(2026, 7, 1, 6, 0, tzinfo=timezone.utc)
+
+    def test_pairs_with_pass_is_hourly(self):
+        # Closes the loop: a pass built from compute_pass_expiry reads back as
+        # hourly only for the 1-day case.
+        now = datetime(2026, 6, 25, 18, 0, tzinfo=timezone.utc)
+        one = {"started_at": now.isoformat(), "expires_at": spinr_pass.compute_pass_expiry(1, now=now).isoformat()}
+        thirty = {"started_at": now.isoformat(), "expires_at": spinr_pass.compute_pass_expiry(30, now=now).isoformat()}
+        assert spinr_pass._pass_is_hourly(one) is True
+        assert spinr_pass._pass_is_hourly(thirty) is False
+
+
 @pytest.mark.anyio
 class TestOneDayPassEnforcement:
     def _evening_sub(self, now, *, cap=4, hours=24):

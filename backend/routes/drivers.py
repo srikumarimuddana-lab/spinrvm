@@ -3174,6 +3174,31 @@ async def _upload_export_zip(user_id: str, zip_bytes: bytes, expires_in_seconds:
         None,
         lambda: supabase.storage.from_(bucket).create_signed_url(storage_path, expires_in_seconds),
     )
+
+    # Record the object so the purge loop can delete it after the link expires
+    # (PIPEDA data minimization — see utils/data_export_purge.py). Best-effort:
+    # the export itself already succeeded, so a tracking-insert failure must not
+    # fail the user's request — but log it at error level so the orphan is
+    # visible (the loop can only purge what it knows about).
+    try:
+        await db_supabase.insert_one(
+            "data_export_objects",
+            {
+                "user_id": user_id,
+                "storage_path": storage_path,
+                "expires_at": (
+                    datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds)
+                ).isoformat(),
+            },
+        )
+    except Exception as exc:
+        logger.error(
+            "Failed to record data-export object for purge tracking (orphan risk) user=%s: %s",
+            user_id,
+            exc,
+            exc_info=True,
+        )
+
     return _extract_signed_url(res)
 
 

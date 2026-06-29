@@ -129,5 +129,5 @@ uvicorn==0.46.0           # via -r requirements.in
 watchfiles==1.1.1         # via uvicorn
 websockets==15.0.1        # via -r requirements.in, realtime, uvicorn
 wrapt==2.1.2              # via deprecated
-yarl==1.23.0              # via aiohttp, postgrest, storage3, supabase, supabase-functions
+yarl==1.24.2              # via aiohttp, postgrest, storage3, supabase, supabase-functions
 zstandard==0.25.0         # via pyiceberg

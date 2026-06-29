@@ -66,6 +66,7 @@ try:
     from ..utils.metrics import inc as _metric_inc
     from ..utils.metrics import observe as _metric_observe
     from ..utils.money import dollars_to_cents, to_decimal
+    from ..utils.rate_limiter import dsar_export_limit
     from ..utils.referral_terms import paid_referral_earnings, resolve_referral_terms
     from ..utils.t4a_pdf import generate_t4a_pdf
 except ImportError:
@@ -110,6 +111,7 @@ except ImportError:
     from utils.metrics import inc as _metric_inc  # type: ignore
     from utils.metrics import observe as _metric_observe  # type: ignore
     from utils.money import dollars_to_cents, to_decimal
+    from utils.rate_limiter import dsar_export_limit
     from utils.referral_terms import paid_referral_earnings, resolve_referral_terms  # type: ignore
     from utils.t4a_pdf import generate_t4a_pdf  # noqa: F401 – used in download_t4a_pdf
 
@@ -3220,8 +3222,10 @@ def _build_export_link_email_html(download_url: str, expires_human: str) -> str:
 
 
 @api_router.post("/me/export-data")
+@dsar_export_limit
 async def export_driver_data(
     background_tasks: BackgroundTasks,
+    request: Request = None,
     current_user: dict = Depends(get_current_user),
 ):
     """GDPR/PIPEDA: export all personal data for the authenticated driver.
@@ -3229,6 +3233,10 @@ async def export_driver_data(
     Immediately returns a confirmation message. The actual data collection,
     JSON generation, and email delivery happen in a background task so the
     driver does not wait.
+
+    Rate-limited (@dsar_export_limit, 3/hour) — each call fans out DB reads, a
+    ZIP build, a Storage upload, and an email. SlowAPI needs a parameter named
+    ``request`` typed as starlette Request; do not remove it.
     """
     user_id = current_user["id"]
     # Export is delivered by email only — require a real address. Falling back

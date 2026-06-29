@@ -31,10 +31,12 @@ try:
 except ImportError:
     from subscription_invoice_pdf import generate_subscription_invoice_pdf  # type: ignore
 
-logger = logging.getLogger(__name__)
+try:
+    from .spinr_pass import pass_duration_label
+except ImportError:
+    from spinr_pass import pass_duration_label  # type: ignore
 
-# Human-readable plan cadence keyed by the plan's duration_days.
-_DURATION_LABELS = {1: "Daily", 7: "Weekly", 30: "Monthly", 365: "Annual"}
+logger = logging.getLogger(__name__)
 
 
 def _q2(value) -> Decimal:
@@ -58,7 +60,7 @@ async def _resolve_invoice_scalars(payment: dict) -> dict:
     if payment.get("plan_id"):
         plan = await db_supabase.find_one("subscription_plans", {"id": payment["plan_id"]})
     duration_days = (plan or {}).get("duration_days", 30)
-    duration_label = _DURATION_LABELS.get(duration_days, f"{duration_days}-day")
+    duration_label = pass_duration_label(duration_days)
 
     total = _q2(payment.get("amount"))
     # Tax columns (migration 186) are nullable — legacy rows have none, so fall

@@ -230,11 +230,10 @@ export default function SubscriptionScreen() {
     }
   };
 
+  // Passes are named by their length in days — never "monthly"/"weekly". A
+  // 1-day pass is sold as 24 hours of validity.
   const getDurationLabel = (days: number) => {
-    if (days === 1) return 'Day';
-    if (days === 7) return 'Week';
-    if (days === 30) return 'Month';
-    if (days === 365) return 'Year';
+    if (days === 1) return '1 day';
     return `${days} days`;
   };
 
@@ -257,12 +256,21 @@ export default function SubscriptionScreen() {
     return `${days} day${days === 1 ? '' : 's'}`;
   };
 
-  // Shown before subscribing to a multi-day pass so the driver understands the
-  // allowance is per CALENDAR DAY (resets at midnight, no roll-over) — not the
-  // whole period's rides up front. Mirrors how quota-based plans disclose limits.
+  // Shown before subscribing so the driver understands how the allowance is
+  // counted. A 1-day pass covers its rides across 24 hours (expires by the
+  // hour); every longer pass counts per CALENDAR DAY (resets at midnight, no
+  // roll-over) — not the whole period's rides up front.
   const quotaDisclaimer = (plan: Plan): string => {
-    if (plan.rides_per_day === -1 || plan.duration_days <= 1) return '';
-    const label = getDurationLabel(plan.duration_days).toLowerCase();
+    if (plan.rides_per_day === -1) return '';
+    // Only an exact 1-day pass is the 24h/by-the-hour case; the backend treats
+    // any other duration (including a misconfigured 0) as a calendar-day pass.
+    if (plan.duration_days === 1) {
+      return (
+        `\n\nHeads up: this 1-day pass covers ${plan.rides_per_day} rides over the ` +
+        `24 hours from purchase — it expires by the hour, not at midnight.`
+      );
+    }
+    const label = getDurationLabel(plan.duration_days);
     return (
       `\n\nHeads up: this ${label} pass gives you ${plan.rides_per_day} rides per ` +
       `calendar day — your allowance resets at midnight and unused rides don't ` +
@@ -312,12 +320,12 @@ export default function SubscriptionScreen() {
                 <Text style={styles.statValue}>
                   {currentSub.rides_remaining === 'unlimited' ? '∞' : currentSub.rides_remaining}
                 </Text>
-                <Text style={styles.statLabel}>Rides left today</Text>
+                <Text style={styles.statLabel}>{currentSub.hourly_pass ? 'Rides left' : 'Rides left today'}</Text>
               </View>
               <View style={styles.statDivider} />
               <View style={styles.currentStat}>
                 <Text style={styles.statValue}>{currentSub.today_rides}</Text>
-                <Text style={styles.statLabel}>Rides today</Text>
+                <Text style={styles.statLabel}>{currentSub.hourly_pass ? 'Rides used' : 'Rides today'}</Text>
               </View>
               <View style={styles.statDivider} />
               <View style={styles.currentStat}>
@@ -329,7 +337,9 @@ export default function SubscriptionScreen() {
             {/* Hours-left countdowns: daily allowance reset + pass expiry */}
             {(formatResetCountdown(currentSub.hours_until_reset) || formatExpiryCountdown(currentSub.hours_until_expiry)) && (
               <View style={styles.countdownRow}>
-                {currentSub.rides_remaining !== 'unlimited' && formatResetCountdown(currentSub.hours_until_reset) && (
+                {/* A 1-day pass never refills mid-pass — its "reset" is the pass
+                    end, already shown by "Pass ends in", so skip the duplicate. */}
+                {!currentSub.hourly_pass && currentSub.rides_remaining !== 'unlimited' && formatResetCountdown(currentSub.hours_until_reset) && (
                   <View style={styles.countdownItem}>
                     <Ionicons name="refresh" size={14} color="rgba(255,255,255,0.85)" />
                     <Text style={styles.countdownText}>

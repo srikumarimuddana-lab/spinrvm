@@ -6559,9 +6559,23 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
     # window powers go-online / dispatch / accept enforcement, so the numbers
     # the driver sees here match the ones enforced on the rides.
     try:
-        from ..utils.spinr_pass import area_timezone, completed_today, compute_quota, hours_until
+        from ..utils.spinr_pass import (
+            _pass_is_hourly,
+            area_timezone,
+            completed_today,
+            compute_quota,
+            hours_until,
+            quota_window_for_sub,
+        )
     except ImportError:
-        from utils.spinr_pass import area_timezone, completed_today, compute_quota, hours_until  # type: ignore
+        from utils.spinr_pass import (  # type: ignore
+            _pass_is_hourly,
+            area_timezone,
+            completed_today,
+            compute_quota,
+            hours_until,
+            quota_window_for_sub,
+        )
 
     # Same service-area timezone the enforcement gates use, so the countdown the
     # driver sees matches when their rides actually reset. This is display only,
@@ -6572,8 +6586,15 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
     except Exception:
         logger.warning("get_current_subscription: area timezone lookup failed; using default", exc_info=True)
         _tz = None
-    today_rides = await completed_today(driver["id"], tz=_tz)
-    quota = compute_quota(sub.get("rides_per_day", -1), today_rides, tz=_tz)
+    # 1-day pass → count across its own 24h window; longer pass → calendar day.
+    # Read the same window for the count and the countdown so the numbers shown
+    # here match exactly what's enforced on go-online / accept.
+    _window = quota_window_for_sub(sub, tz=_tz)
+    _hourly = _pass_is_hourly(sub)
+    today_rides = await completed_today(driver["id"], tz=_tz, window_start=_window[0])
+    quota = compute_quota(
+        sub.get("rides_per_day", -1), today_rides, tz=_tz, window=_window, hourly=_hourly
+    )
 
     return {
         "has_subscription": True,
@@ -6581,9 +6602,12 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
         "today_rides": today_rides,
         "rides_remaining": quota["rides_remaining"],
         "can_accept_rides": quota["can_accept_rides"],
-        # Quota refills (rides reset) at the next local midnight.
+        # Multi-day pass: refills at the next local midnight. 1-day pass: this
+        # is the pass's own expiry (the allowance never refills mid-pass).
         "quota_resets_at": quota["quota_resets_at"],
         "hours_until_reset": quota["hours_until_reset"],
+        # True for a 1-day pass so the app can word "ends in Xh" not "resets".
+        "hourly_pass": quota["hourly"],
         # Pass itself ends (must renew) at expires_at.
         "hours_until_expiry": hours_until(sub.get("expires_at")),
     }
@@ -6805,7 +6829,20 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
         pass
 
     now = datetime.now(timezone.utc)
-    expires = now + timedelta(days=plan.get("duration_days", 30))
+    # Anchor expiry to the driver's location timezone: a multi-day pass ends at
+    # local midnight on its Nth day; a 1-day pass is 24h by the hour.
+    try:
+        from ..utils.spinr_pass import area_timezone, compute_pass_expiry
+    except ImportError:
+        from utils.spinr_pass import area_timezone, compute_pass_expiry  # type: ignore
+    try:
+        _sub_tz = await area_timezone(driver.get("service_area_id"))
+    except Exception:
+        # Payment-path DB read — surface at error (we still fall back to Regina
+        # so the purchase isn't blocked, but the failure must not be hidden).
+        logger.error("[SUBSCRIBE] area timezone lookup failed; using default for expiry", exc_info=True)
+        _sub_tz = None
+    expires = compute_pass_expiry(plan.get("duration_days", 30), now=now, tz=_sub_tz)
     plan_price = Decimal(str(plan.get("price", 0) or 0))
     subscription_id = str(uuid.uuid4())
 
@@ -7555,13 +7592,37 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
     # end on the next event.)
     plan = await db.find_one("subscription_plans", {"id": plan_id}) if plan_id else None
     now = datetime.now(timezone.utc)
+    # Fetch the driver once here so the expiry below can be anchored to their
+    # location timezone (reused for the activation push further down). This runs
+    # before the atomic claim, so a DB error must NOT abort activation — the
+    # driver already paid. Degrade to no row (→ Regina expiry, no push) and log.
+    try:
+        _drv = await db.find_one("drivers", {"id": driver_id}) if driver_id else None
+    except Exception:
+        logger.error("[SUBSCRIBE] driver lookup failed during activation; continuing", exc_info=True)
+        _drv = None
+    try:
+        from ..utils.spinr_pass import area_timezone, compute_pass_expiry, pass_duration_label
+    except ImportError:
+        from utils.spinr_pass import area_timezone, compute_pass_expiry, pass_duration_label  # type: ignore
+    try:
+        _act_tz = await area_timezone((_drv or {}).get("service_area_id"))
+    except Exception:
+        # Payment-path DB read — surface at error; expiry falls back to Regina.
+        logger.error("[SUBSCRIBE] activation tz lookup failed; using default for expiry", exc_info=True)
+        _act_tz = None
     activate_updates = {
         "status": "active",
         "payment_status": "paid",
         "started_at": now.isoformat(),
     }
-    if plan and plan.get("duration_days"):
-        activate_updates["expires_at"] = (now + timedelta(days=plan["duration_days"])).isoformat()
+    if plan:
+        # Multi-day pass → local midnight ending its Nth day; 1-day → 24h by hour.
+        # Pairs with started_at above (missing duration_days → 30-day fallback) so
+        # the row's lifetime is always self-consistent.
+        activate_updates["expires_at"] = compute_pass_expiry(
+            plan.get("duration_days"), now=now, tz=_act_tz
+        ).isoformat()
 
     # Atomic claim: flip pending→active filtering on status='pending'. Only the
     # caller that wins (webhook vs verify-session can race) gets a row back and
@@ -7651,9 +7712,9 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
 
     logger.info(f"[SUBSCRIBE] Subscription {subscription_id} activated for driver {driver_id}")
 
-    # Push notification + invoice email to driver.
+    # Push notification + invoice email to driver. Reuse the row fetched above.
     if driver_id:
-        driver = await db.find_one("drivers", {"id": driver_id})
+        driver = _drv
         if driver and driver.get("user_id"):
             try:
                 await send_push_notification(
@@ -7668,9 +7729,7 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
         # their invoice email from the invoice.paid webhook (which has the
         # authoritative Stripe invoice URL and amount for every charge).
         if plan and _is_one_off:
-            _days = plan.get("duration_days", 30)
-            _dur_map = {1: "Daily", 7: "Weekly", 30: "Monthly", 365: "Annual"}
-            _dur_label = _dur_map.get(_days, f"{_days}-day")
+            _dur_label = pass_duration_label(plan.get("duration_days", 30))
             await _send_subscription_invoice_email(
                 driver_id=driver_id,
                 plan_name=plan.get("name", "Spinr Pass"),
@@ -7788,9 +7847,11 @@ async def resend_subscription_invoice(
     plan = None
     if payment.get("plan_id"):
         plan = await db_supabase.find_one("subscription_plans", {"id": payment["plan_id"]})
-    _days = (plan or {}).get("duration_days", 30)
-    _dur_map = {1: "Daily", 7: "Weekly", 30: "Monthly", 365: "Annual"}
-    _dur_label = _dur_map.get(_days, f"{_days}-day")
+    try:
+        from ..utils.spinr_pass import pass_duration_label
+    except ImportError:
+        from utils.spinr_pass import pass_duration_label  # type: ignore
+    _dur_label = pass_duration_label((plan or {}).get("duration_days", 30))
 
     def _q2(v):
         return Decimal(str(v)).quantize(Decimal("0.01"))

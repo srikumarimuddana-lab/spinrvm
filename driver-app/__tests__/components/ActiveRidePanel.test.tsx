@@ -1,6 +1,6 @@
 import React from 'react';
-import { Animated } from 'react-native';
-import { render } from '@testing-library/react-native';
+import { Animated, Linking } from 'react-native';
+import { render, fireEvent } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ActiveRidePanel } from '../../components/dashboard/ActiveRidePanel';
 
@@ -60,6 +60,12 @@ jest.mock('../../components/AlertDialog', () => ({
 
 jest.mock('../../store/languageStore', () => ({
   useLanguageStore: () => ({ t: (key: string) => key }),
+}));
+
+// Driver's saved navigation-app choice — mutate `mockNavApp` per test.
+let mockNavApp = 'default';
+jest.mock('../../store/navStore', () => ({
+  useNavStore: () => ({ navApp: mockNavApp, loadNavApp: jest.fn() }),
 }));
 
 jest.mock('../../hooks/useToast', () => ({
@@ -149,5 +155,40 @@ describe('ActiveRidePanel', () => {
     const { queryByText } = renderWithSafeArea(<ActiveRidePanel {...defaultProps} ride={null} />);
     expect(queryByText('Jane D.')).toBeNull();
     expect(queryByText('Cancel Ride')).toBeNull();
+  });
+
+  describe('navigation app preference', () => {
+    let openURL: jest.SpyInstance;
+    beforeEach(() => {
+      openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(true as never);
+    });
+    afterEach(() => {
+      mockNavApp = 'default';
+      openURL.mockRestore();
+    });
+
+    it('launches Waze deep link when the driver chose Waze', () => {
+      mockNavApp = 'waze';
+      const { getByLabelText } = renderWithSafeArea(<ActiveRidePanel {...defaultProps} />);
+      fireEvent.press(getByLabelText('activeRide.navigateToPickup'));
+      expect(openURL).toHaveBeenCalledWith('waze://?ll=52.1333,-106.6667&navigate=yes');
+    });
+
+    it('launches the Google Maps app deep link when the driver chose Google Maps', () => {
+      mockNavApp = 'google';
+      const { getByLabelText } = renderWithSafeArea(<ActiveRidePanel {...defaultProps} />);
+      fireEvent.press(getByLabelText('activeRide.navigateToPickup'));
+      expect(openURL).toHaveBeenCalledWith('comgooglemaps://?daddr=52.1333,-106.6667&directionsmode=driving');
+    });
+
+    it('does not use Waze/Google deep links when the driver left it on Default', () => {
+      mockNavApp = 'default';
+      const { getByLabelText } = renderWithSafeArea(<ActiveRidePanel {...defaultProps} />);
+      fireEvent.press(getByLabelText('activeRide.navigateToPickup'));
+      expect(openURL).toHaveBeenCalledTimes(1);
+      const calledWith = openURL.mock.calls[0][0] as string;
+      expect(calledWith.startsWith('waze://')).toBe(false);
+      expect(calledWith.startsWith('comgooglemaps://')).toBe(false);
+    });
   });
 });

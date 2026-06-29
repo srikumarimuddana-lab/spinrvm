@@ -19,6 +19,7 @@ import { useRouter } from 'expo-router';
 import { ScreenHeader } from '../../components/ScreenHeader';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLanguageStore } from '../../store/languageStore';
+import { useNavStore } from '../../store/navStore';
 import { languages, Language } from '../../i18n';
 import api from '@shared/api/client';
 import {
@@ -36,6 +37,7 @@ export default function SettingsScreen() {
     const insets = useSafeAreaInsets();
     const { logout } = useAuthStore();
     const { language, setLanguage, loadLanguage, t } = useLanguageStore();
+    const { navApp, setNavApp, loadNavApp } = useNavStore();
     const { colors, colorScheme, setTheme } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
 
@@ -47,6 +49,7 @@ export default function SettingsScreen() {
 
     useEffect(() => {
         loadLanguage();
+        loadNavApp();
     }, []);
 
     // Preference states (local)
@@ -130,7 +133,6 @@ export default function SettingsScreen() {
         setter(value);
         savePreference(key, value, () => setter(!value));
     };
-    const [navApp, setNavApp] = useState<'default' | 'google' | 'waze'>('default');
 
     const isDarkOn = colorScheme === 'dark';
 
@@ -269,7 +271,7 @@ export default function SettingsScreen() {
                                 {i > 0 && <View style={styles.cardDivider} />}
                                 <TouchableOpacity
                                     style={styles.navOption}
-                                    onPress={() => setNavApp(app)}
+                                    onPress={() => { setNavApp(app); }}
                                 >
                                     <View style={[styles.settingIcon, { backgroundColor: `${colors.primary}12` }]}>
                                         <Ionicons

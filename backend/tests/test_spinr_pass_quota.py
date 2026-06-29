@@ -440,6 +440,24 @@ class TestPassIsHourly:
         start = datetime(2026, 6, 25, 18, 0, tzinfo=timezone.utc).isoformat()
         assert spinr_pass._pass_is_hourly({"started_at": start, "expires_at": start}) is False
 
+    def test_recurring_oneday_renewal_stays_hourly_only_when_reanchored(self):
+        # Regression for the recurring-renewal misclassification: invoice.paid
+        # advances expires_at every cycle. If started_at is re-anchored to the
+        # new period (lifetime 24h) the pass stays hourly; if it's left at the
+        # original cycle (lifetime 2 days) it wrongly reads as multi-day and the
+        # driver gets a calendar-day reset on top of their 24h allowance.
+        start = datetime(2026, 6, 25, 14, 0, tzinfo=timezone.utc)
+        reanchored = {
+            "started_at": start.isoformat(),
+            "expires_at": (start + timedelta(days=1)).isoformat(),
+        }
+        stale = {
+            "started_at": (start - timedelta(days=1)).isoformat(),
+            "expires_at": (start + timedelta(days=1)).isoformat(),
+        }
+        assert spinr_pass._pass_is_hourly(reanchored) is True
+        assert spinr_pass._pass_is_hourly(stale) is False
+
 
 class TestQuotaWindowForSub:
     def test_oneday_pass_window_is_the_pass_lifetime(self):

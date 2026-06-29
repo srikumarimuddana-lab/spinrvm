@@ -494,6 +494,7 @@ async def exhausted_driver_ids(
         from models.ride_status import RideStatus  # type: ignore
 
     ids = list(finite.keys())
+    _ROW_CAP = 10000
     rows = await db.get_rows(
         "rides",
         {
@@ -502,8 +503,20 @@ async def exhausted_driver_ids(
             "ride_completed_at": {"$gte": earliest.isoformat()},
         },
         columns="driver_id,ride_completed_at",
-        limit=10000,
+        limit=_ROW_CAP,
     )
+    # No silent caps: a truncated read under-counts completions, which would let
+    # an exhausted driver read as still-eligible. The window can reach ~24h back
+    # when a 1-day pass (anchored at started_at) is batched with calendar-day
+    # passes, so flag truncation loudly for ops rather than silently dropping rows.
+    if rows is not None and len(rows) >= _ROW_CAP:
+        logger.error(
+            "exhausted_driver_ids hit the %d-row cap (drivers=%d, window_start=%s) — "
+            "completion counts may be under-counted; consider paginating.",
+            _ROW_CAP,
+            len(ids),
+            earliest.isoformat(),
+        )
     counts: Dict[str, int] = {}
     for r in rows or []:
         did = r.get("driver_id")

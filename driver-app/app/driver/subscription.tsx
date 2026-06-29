@@ -262,7 +262,9 @@ export default function SubscriptionScreen() {
   // roll-over) — not the whole period's rides up front.
   const quotaDisclaimer = (plan: Plan): string => {
     if (plan.rides_per_day === -1) return '';
-    if (plan.duration_days <= 1) {
+    // Only an exact 1-day pass is the 24h/by-the-hour case; the backend treats
+    // any other duration (including a misconfigured 0) as a calendar-day pass.
+    if (plan.duration_days === 1) {
       return (
         `\n\nHeads up: this 1-day pass covers ${plan.rides_per_day} rides over the ` +
         `24 hours from purchase — it expires by the hour, not at midnight.`

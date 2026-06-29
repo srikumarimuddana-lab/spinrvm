@@ -310,6 +310,27 @@ def _invoice_period_end_iso(invoice: dict) -> str | None:
     return None
 
 
+def _invoice_period_start_iso(invoice: dict) -> str | None:
+    """Extract the billing-period start (ISO UTC) from a Stripe Invoice.
+
+    Mirror of ``_invoice_period_end_iso``. Used to re-anchor a renewed pass's
+    ``started_at`` to the new cycle so the row's lifetime
+    (``started_at``..``expires_at``) stays ~one period — keeping a recurring
+    1-day pass classified as a 24h "hourly" pass instead of silently widening
+    into a multi-day calendar-day window after the first renewal.
+    """
+    try:
+        lines = (invoice.get("lines") or {}).get("data") or []
+        if lines:
+            period = lines[0].get("period") or {}
+            start = period.get("start")
+            if start:
+                return datetime.fromtimestamp(int(start), tz=timezone.utc).isoformat()
+    except Exception:
+        return None
+    return None
+
+
 def _event_to_plain_dict(event):
     """Normalize a verified Stripe webhook Event to a plain, recursively-plain dict.
 
@@ -1047,12 +1068,19 @@ async def stripe_webhook(request: Request):
                             duration_days = plan["duration_days"]
                     new_expires = (datetime.now(timezone.utc) + timedelta(days=duration_days)).isoformat()
 
+                # Re-anchor started_at to the new cycle so the row's lifetime
+                # tracks one period. Without this, expires_at advances each
+                # renewal while started_at stays put, and a recurring 1-day pass
+                # eventually reads as multi-day (lifetime > 25h) — handing the
+                # driver a calendar-day reset on top of their 24h allowance.
+                new_started = _invoice_period_start_iso(invoice) or datetime.now(timezone.utc).isoformat()
                 await db_supabase.update_one(
                     "driver_subscriptions",
                     {"id": row["id"]},
                     {
                         "status": "active",
                         "payment_status": "paid",
+                        "started_at": new_started,
                         "expires_at": new_expires,
                         "expiry_warned": False,
                         "expiry_warned_3d": False,

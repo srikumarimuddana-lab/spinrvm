@@ -136,7 +136,22 @@ export default function OtpScreen() {
         code: code,
       });
       if (!response.data) throw new Error('Empty response from auth server');
-      const otpData = response.data as { token?: string; refresh_token?: string; expires_in?: number; user?: any };
+      const otpData = response.data as any;
+
+      // PIPEDA: the account is in its 30-day deletion grace window. The backend
+      // issued no access token — route to the reactivation screen instead of
+      // signing in.
+      if (otpData.requires_reactivation) {
+        router.replace({
+          pathname: '/reactivate-account',
+          params: {
+            reactivationToken: otpData.reactivation_token ?? '',
+            deletionScheduledAt: otpData.deletion_scheduled_at ?? '',
+          },
+        } as any);
+        return;
+      }
+
       const { token, refresh_token, expires_in, user: userData } = otpData;
       if (token) {
         await useAuthStore.getState().setTokens(token, refresh_token ?? '', expires_in ?? 900);

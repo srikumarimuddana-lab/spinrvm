@@ -358,7 +358,8 @@
         "prefNotSavedMsg": "Impossible de joindre le serveur. Votre réglage a été rétabli — veuillez réessayer.",
         "wavNotSavedTitle": "Enregistrement impossible",
         "wavNotSavedMsg": "Le réglage VAF n'a pas pu être mis à jour. Veuillez réessayer.",
-        "version": "Spinr Chauffeur v1.0.0"
+        "version": "Spinr Chauffeur v1.0.0",
+        "navApple": "Plans (Apple)"
     },
     "payout": {
         "title": "Paiement",

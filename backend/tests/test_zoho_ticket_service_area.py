@@ -18,7 +18,7 @@ import services.zoho_ticket_service_area as tsa
 pytestmark = pytest.mark.anyio
 
 
-def _patch(monkeypatch, *, user=None, rides=None, area=None, update_returns=None):
+def _patch(monkeypatch, *, user=None, rides=None, area=None, driver=None, update_returns=None):
     """Wire db_supabase helpers used by the module to async stand-ins.
 
     find_one dispatches by table: users / service_areas / zoho_desk_tickets.
@@ -34,6 +34,7 @@ def _patch(monkeypatch, *, user=None, rides=None, area=None, update_returns=None
 
     monkeypatch.setattr(tsa.db_supabase, "find_one", AsyncMock(side_effect=_find_one))
     monkeypatch.setattr(tsa.db_supabase, "get_rides_for_user", AsyncMock(return_value=rides or []))
+    monkeypatch.setattr(tsa.db_supabase, "get_driver_by_user_id_cached", AsyncMock(return_value=driver))
     monkeypatch.setattr(tsa.db_supabase, "update_one", AsyncMock(return_value=None))
 
 
@@ -64,6 +65,23 @@ async def test_user_with_recent_ride_area_suggested(monkeypatch):
         "service_area_id": "sa_regina",
         "service_area_name": "Regina",
         "matched_user_id": "u1",
+    }
+
+
+async def test_driver_contact_falls_back_to_driver_home_area(monkeypatch):
+    # Driver with no rider rides -> use their driver profile's service area.
+    _patch(
+        monkeypatch,
+        user={"id": "u9"},
+        rides=[],
+        driver={"id": "d9", "service_area_id": "sa_saskatoon"},
+        area={"id": "sa_saskatoon", "name": "Saskatoon"},
+    )
+    out = await tsa.resolve_suggested_area({"contact": {"email": "driver@x.com"}})
+    assert out == {
+        "service_area_id": "sa_saskatoon",
+        "service_area_name": "Saskatoon",
+        "matched_user_id": "u9",
     }
 
 

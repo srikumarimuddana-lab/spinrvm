@@ -131,7 +131,8 @@ def build_ticket_context(
         lines.append(f"Service area: {service_area_name}")
     if ticket.get("category"):
         lines.append(f"Category: {ticket['category']}")
-    lines.append(f"Subject: {ticket.get('subject') or '(no subject)'}")
+    # Subjects routinely embed PII ("Re: refund to a@b.com") — scrub like the body.
+    lines.append(f"Subject: {scrub_pii(ticket.get('subject') or '(no subject)')}")
     lines.append("")
     lines.append("Ticket description:")
     lines.append(_truncate(scrub_pii(_plain(ticket.get("description") or "")) or "(empty)"))

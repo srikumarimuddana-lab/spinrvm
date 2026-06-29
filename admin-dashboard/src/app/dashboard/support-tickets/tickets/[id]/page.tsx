@@ -191,11 +191,14 @@ export default function TicketDetailPage() {
         getDeskServiceAreas().then((r) => setAreas(r.data || [])).catch(() => {});
     }, [allowed]);
 
-    // Resolve/auto-assign the ticket's service area once the ticket is loaded.
+    // Resolve/auto-assign the ticket's service area once, on mount. The endpoint
+    // is keyed by id (it fetches the ticket itself), so it must NOT depend on the
+    // `ticket` object — otherwise every unrelated save (status/priority/tags)
+    // replaces `ticket`'s identity and re-fires this fetch + its auto-assign write.
     useEffect(() => {
-        if (!allowed || !id || !ticket) return;
+        if (!allowed || !id) return;
         getDeskTicketServiceArea(id).then(setAreaInfo).catch(() => setAreaInfo(null));
-    }, [allowed, id, ticket]);
+    }, [allowed, id]);
 
     const assignArea = async (service_area_id: string | null) => {
         setSavingArea(true);

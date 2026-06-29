@@ -83,7 +83,8 @@ tell them to call 911; note that Spinr's SOS button alerts their emergency \
 contacts and our safety team but is NOT a replacement for emergency services.
 - Privacy (PIPEDA): never ask for or repeat full card numbers, passwords, or \
 government IDs. Redaction tokens like [EMAIL]/[PHONE] in the ticket are scrubbed \
-PII — do not echo them; address the customer by first name if provided.
+PII — do not echo them. Open with a brief courteous greeting (e.g. "Hi there,"); \
+the customer's name is withheld, so do not address them by name or guess one.
 - If the issue clearly needs a human decision (refund, safety incident, legal, \
 account dispute), keep the reply short and set the expectation that a specialist \
 will follow up.
@@ -107,12 +108,6 @@ def _plain(html_or_text: str) -> str:
     return re.sub(r"<[^>]+>", " ", html_or_text or "").replace("&nbsp;", " ").strip()
 
 
-def _first_name(ticket: Dict[str, Any]) -> Optional[str]:
-    contact = ticket.get("contact") or {}
-    name = (contact.get("firstName") or ticket.get("contact_name") or "").strip()
-    return name.split()[0] if name else None
-
-
 def _thread_role(m: Dict[str, Any]) -> str:
     if m.get("type") == "comment":
         return "Internal note"
@@ -122,11 +117,13 @@ def _thread_role(m: Dict[str, Any]) -> str:
 def build_ticket_context(
     ticket: Dict[str, Any], thread: Optional[List[Dict[str, Any]]], service_area_name: Optional[str]
 ) -> str:
-    """Compose the (PII-scrubbed) user message describing the ticket."""
-    first = _first_name(ticket)
+    """Compose the (PII-scrubbed) user message describing the ticket.
+
+    The customer's name is intentionally NOT included — names can't be reliably
+    regex-scrubbed, so (like the rider/driver assistant) we don't send them to
+    the third-party LLM.
+    """
     lines: List[str] = []
-    if first:
-        lines.append(f"Customer first name: {first}")
     if service_area_name:
         lines.append(f"Service area: {service_area_name}")
     if ticket.get("category"):

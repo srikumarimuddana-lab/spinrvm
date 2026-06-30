@@ -242,6 +242,18 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 compileSdkVersion: 36,
                 targetSdkVersion: 36,
                 kotlinVersion: '2.2.21',
+            },
+            ios: {
+                deploymentTarget: '16.0', // match ios.minimumOsVersion; Firebase pods need >= 15
+                // @react-native-firebase Swift pods (AppCheckCore,
+                // FirebaseCoreInternal, FirebaseCrashlytics, FirebaseSessions)
+                // depend on non-modular Google pods (GoogleUtilities,
+                // GoogleDataTransport, nanopb, RecaptchaInterop) that can't be
+                // imported from Swift when built as plain static libraries.
+                // Building all pods as static *frameworks* gives them module maps
+                // so the import works. This is the documented RNFirebase + Expo
+                // fix; without it `pod install` fails on the static-lib error.
+                useFrameworks: 'static',
             }
         }],
         // Belt-and-suspenders: re-stamps android.compileSdkVersion=36 and

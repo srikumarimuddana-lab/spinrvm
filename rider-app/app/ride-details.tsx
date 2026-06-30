@@ -200,6 +200,15 @@ export default function RideDetailsScreen() {
     return lines;
   }, [ride]);
 
+  // Cancelled rides are billed a flat cancellation fee, never the full trip
+  // fare — the original fare_breakdown reflects the booking-time estimate,
+  // not what was actually charged, so it must never be shown for a cancelled
+  // ride (it reads as "you paid for a ride you never took").
+  const cancellationFeeTotal = useMemo(
+    () => _num(ride?.cancellation_fee_admin) + _num(ride?.cancellation_fee_driver),
+    [ride]
+  );
+
   const savedPolyline = useMemo(() => {
     if (!ride) return [];
     const raw = (Array.isArray(ride.route_polyline) && ride.route_polyline.length >= 2)
@@ -396,65 +405,95 @@ export default function RideDetailsScreen() {
           </View>
         </View>
 
-        {/* Fare breakdown — same layout as ride-options */}
-        {normalizedBreakdown.length > 0 && (
-          <View style={styles.fareBreakdownCard}>
-            <Text style={styles.fareBreakdownTitle}>Fare breakdown</Text>
-            {normalizedBreakdown.map((line: any, i: number) => (
-              line.amount != null ? (
-                <View key={i} style={[styles.fareBreakdownRow, line.type === 'ride' && { alignItems: 'flex-start' }]}>
-                  {line.type === 'ride' ? (
-                    <View style={{ flex: 1 }}>
+        {/* Fare breakdown — same layout as ride-options. Cancelled rides never
+            took a trip, so they show the flat cancellation fee instead of the
+            booking-time fare estimate. */}
+        {isCancelled ? (
+          cancellationFeeTotal > 0 && (
+            <View style={styles.fareBreakdownCard}>
+              <Text style={styles.fareBreakdownTitle}>Cancellation fee</Text>
+              <View style={[styles.fareBreakdownRow, styles.fareBreakdownTotal]}>
+                <Text style={styles.fareBreakdownTotalLabel}>You paid</Text>
+                <Text style={styles.fareBreakdownTotalValue}>${cancellationFeeTotal.toFixed(2)}</Text>
+              </View>
+              <View style={styles.paymentRow}>
+                <Ionicons
+                  name={ride.payment_method === 'wallet' ? 'wallet' : ride.payment_method === 'company_allowance' ? 'business' : 'card'}
+                  size={14}
+                  color={ride.payment_status === 'paid' ? '#10B981' : colors.textDim}
+                />
+                <Text style={[styles.paymentText, ride.payment_status === 'paid' && { color: '#10B981' }]}>
+                  {ride.payment_method === 'wallet'
+                    ? 'Spinr Wallet'
+                    : ride.payment_method === 'company_allowance'
+                      ? 'Company Account'
+                      : ride.card_last4 ? `Card •••• ${ride.card_last4}` : 'Card'}
+                  {' · '}
+                  {ride.payment_status === 'paid' ? 'Paid' : ride.payment_status === 'failed' ? 'Failed' : 'Pending'}
+                </Text>
+              </View>
+            </View>
+          )
+        ) : (
+          normalizedBreakdown.length > 0 && (
+            <View style={styles.fareBreakdownCard}>
+              <Text style={styles.fareBreakdownTitle}>Fare breakdown</Text>
+              {normalizedBreakdown.map((line: any, i: number) => (
+                line.amount != null ? (
+                  <View key={i} style={[styles.fareBreakdownRow, line.type === 'ride' && { alignItems: 'flex-start' }]}>
+                    {line.type === 'ride' ? (
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.fareBreakdownLabel}>{line.label}</Text>
+                        <Text style={styles.fareBreakdownDriverBadge}>100% goes to your driver · ride local, support local</Text>
+                      </View>
+                    ) : line.type === 'discount' ? (
+                      <Text style={[styles.fareBreakdownLabel, { color: '#10B981' }]}>{line.label}</Text>
+                    ) : line.type === 'tip' ? (
+                      <Text style={[styles.fareBreakdownLabel, { color: '#3B82F6' }]}>{line.label}</Text>
+                    ) : line.type === 'tax' ? (
+                      <Text style={[styles.fareBreakdownLabel, { color: '#6B7280' }]}>{line.label}</Text>
+                    ) : (
                       <Text style={styles.fareBreakdownLabel}>{line.label}</Text>
-                      <Text style={styles.fareBreakdownDriverBadge}>100% goes to your driver · ride local, support local</Text>
-                    </View>
-                  ) : line.type === 'discount' ? (
-                    <Text style={[styles.fareBreakdownLabel, { color: '#10B981' }]}>{line.label}</Text>
-                  ) : line.type === 'tip' ? (
-                    <Text style={[styles.fareBreakdownLabel, { color: '#3B82F6' }]}>{line.label}</Text>
-                  ) : line.type === 'tax' ? (
-                    <Text style={[styles.fareBreakdownLabel, { color: '#6B7280' }]}>{line.label}</Text>
-                  ) : (
-                    <Text style={styles.fareBreakdownLabel}>{line.label}</Text>
-                  )}
-                  <Text style={[
-                    styles.fareBreakdownValue,
-                    line.type === 'discount' && { color: '#10B981' },
-                    line.type === 'tip' && { color: '#3B82F6' },
-                  ]}>
-                    {line.type === 'discount'
-                      ? `-$${Math.abs(parseFloat(String(line.amount))).toFixed(2)}`
-                      : `$${parseFloat(String(line.amount)).toFixed(2)}`}
-                  </Text>
-                </View>
-              ) : line.type === 'modifier' ? (
-                <View key={i} style={[styles.fareBreakdownRow, { gap: 4 }]}>
-                  <Ionicons name="flash" size={12} color="#F59E0B" />
-                  <Text style={[styles.fareBreakdownLabel, { color: '#F59E0B' }]}>{line.label}</Text>
-                </View>
-              ) : null
-            ))}
-            <View style={[styles.fareBreakdownRow, styles.fareBreakdownTotal]}>
-              <Text style={styles.fareBreakdownTotalLabel}>You paid</Text>
-              <Text style={styles.fareBreakdownTotalValue}>${normalizedBreakdown.reduce((sum: number, l: any) => l.amount != null ? sum + parseFloat(String(l.amount)) : sum, 0).toFixed(2)}</Text>
+                    )}
+                    <Text style={[
+                      styles.fareBreakdownValue,
+                      line.type === 'discount' && { color: '#10B981' },
+                      line.type === 'tip' && { color: '#3B82F6' },
+                    ]}>
+                      {line.type === 'discount'
+                        ? `-$${Math.abs(parseFloat(String(line.amount))).toFixed(2)}`
+                        : `$${parseFloat(String(line.amount)).toFixed(2)}`}
+                    </Text>
+                  </View>
+                ) : line.type === 'modifier' ? (
+                  <View key={i} style={[styles.fareBreakdownRow, { gap: 4 }]}>
+                    <Ionicons name="flash" size={12} color="#F59E0B" />
+                    <Text style={[styles.fareBreakdownLabel, { color: '#F59E0B' }]}>{line.label}</Text>
+                  </View>
+                ) : null
+              ))}
+              <View style={[styles.fareBreakdownRow, styles.fareBreakdownTotal]}>
+                <Text style={styles.fareBreakdownTotalLabel}>You paid</Text>
+                <Text style={styles.fareBreakdownTotalValue}>${normalizedBreakdown.reduce((sum: number, l: any) => l.amount != null ? sum + parseFloat(String(l.amount)) : sum, 0).toFixed(2)}</Text>
+              </View>
+              <View style={styles.paymentRow}>
+                <Ionicons
+                  name={ride.payment_method === 'wallet' ? 'wallet' : ride.payment_method === 'company_allowance' ? 'business' : 'card'}
+                  size={14}
+                  color={ride.payment_status === 'paid' ? '#10B981' : colors.textDim}
+                />
+                <Text style={[styles.paymentText, ride.payment_status === 'paid' && { color: '#10B981' }]}>
+                  {ride.payment_method === 'wallet'
+                    ? 'Spinr Wallet'
+                    : ride.payment_method === 'company_allowance'
+                      ? 'Company Account'
+                      : ride.card_last4 ? `Card •••• ${ride.card_last4}` : 'Card'}
+                  {' · '}
+                  {ride.payment_status === 'paid' ? 'Paid' : ride.payment_status === 'failed' ? 'Failed' : 'Pending'}
+                </Text>
+              </View>
             </View>
-            <View style={styles.paymentRow}>
-              <Ionicons
-                name={ride.payment_method === 'wallet' ? 'wallet' : ride.payment_method === 'company_allowance' ? 'business' : 'card'}
-                size={14}
-                color={ride.payment_status === 'paid' ? '#10B981' : colors.textDim}
-              />
-              <Text style={[styles.paymentText, ride.payment_status === 'paid' && { color: '#10B981' }]}>
-                {ride.payment_method === 'wallet'
-                  ? 'Spinr Wallet'
-                  : ride.payment_method === 'company_allowance'
-                    ? 'Company Account'
-                    : ride.card_last4 ? `Card •••• ${ride.card_last4}` : 'Card'}
-                {' · '}
-                {ride.payment_status === 'paid' ? 'Paid' : ride.payment_status === 'failed' ? 'Failed' : 'Pending'}
-              </Text>
-            </View>
-          </View>
+          )
         )}
 
         {/* Trip Stats — actual GPS-tracked values from the API, with the

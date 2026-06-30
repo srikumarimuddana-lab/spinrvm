@@ -70,6 +70,19 @@ Until real keys exist in this file, `apns_client._render_ui_json` returns `None`
   (one download only). Note the **Key ID** (10 chars) and your **Team ID** (10 chars).
 - **App Group:** Identifiers → App Groups → create `group.com.spinr.user`; ensure the
   rider app id `com.spinr.user` is a member (the Voltra plugin uses this `groupIdentifier`).
+  **Also add the Live Activity extension App ID `com.spinr.user.SpinrLiveActivity` to the
+  same App Group** (Identifiers → App IDs → that id → enable **App Groups** → assign
+  `group.com.spinr.user`). The Voltra plugin writes
+  `com.apple.security.application-groups = [group.com.spinr.user]` into the *extension's*
+  entitlements, so if the extension App ID isn't in the group the EAS-generated profile won't
+  contain it and the archive fails with:
+  > Provisioning profile "…SpinrLiveActivity…" doesn't support the group.com.spinr.user App
+  > Group … doesn't match the entitlements file's value for the
+  > com.apple.security.application-groups entitlement.
+  After enabling it, **regenerate the cached profiles** or EAS reuses the stale ones:
+  `cd rider-app && eas credentials -p ios` → Production → remove the App Store provisioning
+  profile(s) (keep the distribution cert); the next `eas build -p ios` reissues both the app
+  and extension profiles with the App Group included.
 
 ---
 

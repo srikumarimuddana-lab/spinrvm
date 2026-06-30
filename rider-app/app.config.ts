@@ -33,9 +33,13 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         minimumOsVersion: '16.0', // SDK 55 minimum; was 13.0 on SDK 54
         bundleIdentifier: BUNDLE_ID,
         googleServicesFile: './GoogleService-Info.plist',
-        config: {
-            googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY
-        },
+        // No ios.config.googleMapsApiKey on purpose: iOS uses Apple Maps. Every
+        // MapView sets provider = (Platform.OS === 'android' ? PROVIDER_GOOGLE :
+        // undefined), so iOS renders Apple Maps and never needs the Google SDK.
+        // Setting this key makes @expo/config-plugins (ios/Maps.js) inject the
+        // obsolete `react-native-google-maps` pod, which react-native-maps 1.x no
+        // longer ships → `pod install` fails. Google Maps stays Android-only
+        // (see android.config.googleMaps.apiKey below).
         associatedDomains: [
             'applinks:spinr.app',
             'applinks:spinr-track.app',

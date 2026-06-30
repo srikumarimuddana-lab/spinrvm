@@ -169,6 +169,10 @@ class ServiceAreaCreateRequest(BaseModel):
     rider_referee_reward: float = Field(default=5, ge=0, le=1000)
     rider_referral_rides_required: int = Field(default=1, ge=1, le=100)
     driver_referral_reward: float = Field(default=10, ge=0, le=1000)
+    # Driver signup bonus (migration 201) — off by default; an admin opts a
+    # service area in by setting this above 0. Shares driver_referral_rides_required
+    # with the referrer (no separate referee-side threshold).
+    driver_referee_reward: float = Field(default=0, ge=0, le=1000)
     driver_referral_rides_required: int = Field(default=10, ge=1, le=100)
     # Free-text referral T&C (migration 176); blank → dynamic default sentence.
     rider_referral_terms: Optional[str] = Field(default=None, max_length=2000)
@@ -224,6 +228,7 @@ class ServiceAreaUpdateRequest(BaseModel):
     rider_referee_reward: Optional[float] = Field(default=None, ge=0, le=1000)
     rider_referral_rides_required: Optional[int] = Field(default=None, ge=1, le=100)
     driver_referral_reward: Optional[float] = Field(default=None, ge=0, le=1000)
+    driver_referee_reward: Optional[float] = Field(default=None, ge=0, le=1000)
     driver_referral_rides_required: Optional[int] = Field(default=None, ge=1, le=100)
     # Free-text referral T&C (migration 176); blank → dynamic default sentence.
     rider_referral_terms: Optional[str] = Field(default=None, max_length=2000)
@@ -431,6 +436,7 @@ async def admin_create_service_area(area: ServiceAreaCreateRequest, admin: dict 
         "rider_referee_reward": area.rider_referee_reward,
         "rider_referral_rides_required": area.rider_referral_rides_required,
         "driver_referral_reward": area.driver_referral_reward,
+        "driver_referee_reward": area.driver_referee_reward,
         "driver_referral_rides_required": area.driver_referral_rides_required,
         "rider_referral_terms": area.rider_referral_terms,
         "driver_referral_terms": area.driver_referral_terms,
@@ -572,6 +578,7 @@ async def admin_update_service_area(
         "rider_referee_reward",
         "rider_referral_rides_required",
         "driver_referral_reward",
+        "driver_referee_reward",
         "driver_referral_rides_required",
         "rider_referral_terms",
         "driver_referral_terms",

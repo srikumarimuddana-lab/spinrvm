@@ -2960,70 +2960,95 @@ def _driver_email_or_400(current_user: dict) -> str:
     return email
 
 
+async def _email_driver_document(
+    user_id: str,
+    email: str,
+    *,
+    subject: str,
+    body: str,
+    filename: str,
+    content: bytes,
+    mime: str,
+    log_id: str,
+) -> None:
+    """Background task: email a generated document to the driver as an attachment.
+
+    Shared by the T4A PDF and earnings-CSV senders (and any future tax/document
+    email). Runs off-request, so a send failure can't surface to the client —
+    it is logged loudly (never swallowed), mirroring the DSAR export pattern.
+    """
+    try:
+        await send_email(
+            to=email,
+            subject=subject,
+            body=body,
+            attachments=[{"filename": filename, "content": content, "mime": mime}],
+            email_type="transactional",
+            recipient_user_id=user_id,
+            log_id=log_id,
+        )
+        logger.info("%s emailed for user %s (%s)", log_id, user_id, filename)
+    except Exception as exc:
+        original = exc.details.get("original") if hasattr(exc, "details") and isinstance(exc.details, dict) else None
+        logger.error(
+            "%s email failed for user %s (%s): %s%s",
+            log_id,
+            user_id,
+            filename,
+            exc,
+            f" — {original}" if original else "",
+            exc_info=True,
+        )
+
+
 async def _email_t4a_document(user_id: str, email: str, year: int, summary: dict) -> None:
     """Background task: render the T4A PDF and email it to the driver."""
     try:
         pdf_bytes = generate_t4a_pdf(summary)
-        filename = f"T4A_{year}_{user_id[:8]}.pdf"
-        await send_email(
-            to=email,
-            subject=f"Your Spinr T4A summary for {year}",
-            body=(
-                "Hi,\n\n"
-                f"As requested, your T4A earnings summary for the {year} tax year is "
-                f'attached as a PDF ("{filename}").\n\n'
-                "Keep this document for your Canadian tax filing. If you have any "
-                "questions, contact support@spinr.ca.\n\n"
-                "— The Spinr Team"
-            ),
-            attachments=[{"filename": filename, "content": pdf_bytes, "mime": "application/pdf"}],
-            email_type="transactional",
-            recipient_user_id=user_id,
-            log_id="t4a",
-        )
-        logger.info("T4A %s emailed for user %s", year, user_id)
-    except Exception as exc:
-        original = exc.details.get("original") if hasattr(exc, "details") and isinstance(exc.details, dict) else None
-        logger.error(
-            "T4A email failed for user %s year %s: %s%s",
-            user_id,
-            year,
-            exc,
-            f" — {original}" if original else "",
-            exc_info=True,
-        )
+    except Exception:
+        # Render failure is logged here (not in the shared sender) since it's
+        # specific to PDF generation; nothing is emailed.
+        logger.error("T4A PDF render failed for user %s year %s", user_id, year, exc_info=True)
+        return
+    filename = f"T4A_{year}_{user_id[:8]}.pdf"
+    await _email_driver_document(
+        user_id,
+        email,
+        subject=f"Your Spinr T4A summary for {year}",
+        body=(
+            "Hi,\n\n"
+            f"As requested, your T4A earnings summary for the {year} tax year is "
+            f'attached as a PDF ("{filename}").\n\n'
+            "Keep this document for your Canadian tax filing. If you have any "
+            "questions, contact support@spinr.ca.\n\n"
+            "— The Spinr Team"
+        ),
+        filename=filename,
+        content=pdf_bytes,
+        mime="application/pdf",
+        log_id="t4a",
+    )
 
 
 async def _email_earnings_csv(user_id: str, email: str, year: int, csv_data: str) -> None:
     """Background task: email the trip-by-trip earnings CSV to the driver."""
-    try:
-        filename = f"earnings_export_{year}.csv"
-        await send_email(
-            to=email,
-            subject=f"Your Spinr earnings export for {year}",
-            body=(
-                "Hi,\n\n"
-                f"As requested, your detailed earnings export for {year} is attached "
-                f'as a CSV ("{filename}").\n\n'
-                "If you have any questions, contact support@spinr.ca.\n\n"
-                "— The Spinr Team"
-            ),
-            attachments=[{"filename": filename, "content": csv_data.encode("utf-8"), "mime": "text/csv"}],
-            email_type="transactional",
-            recipient_user_id=user_id,
-            log_id="earnings",
-        )
-        logger.info("Earnings CSV %s emailed for user %s", year, user_id)
-    except Exception as exc:
-        original = exc.details.get("original") if hasattr(exc, "details") and isinstance(exc.details, dict) else None
-        logger.error(
-            "Earnings CSV email failed for user %s year %s: %s%s",
-            user_id,
-            year,
-            exc,
-            f" — {original}" if original else "",
-            exc_info=True,
-        )
+    filename = f"earnings_export_{year}.csv"
+    await _email_driver_document(
+        user_id,
+        email,
+        subject=f"Your Spinr earnings export for {year}",
+        body=(
+            "Hi,\n\n"
+            f"As requested, your detailed earnings export for {year} is attached "
+            f'as a CSV ("{filename}").\n\n'
+            "If you have any questions, contact support@spinr.ca.\n\n"
+            "— The Spinr Team"
+        ),
+        filename=filename,
+        content=csv_data.encode("utf-8"),
+        mime="text/csv",
+        log_id="earnings",
+    )
 
 
 @api_router.post("/t4a/{year}/email")

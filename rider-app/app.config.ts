@@ -45,6 +45,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // Only declare keys for capabilities actually used; declaring unused
         // permissions triggers App Review questions.
         infoPlist: {
+            // Export compliance: Spinr uses only standard HTTPS/TLS (exempt
+            // encryption), so declare false. Without this, every TestFlight /
+            // App Store upload blocks on a manual "does your app use
+            // encryption?" answer in App Store Connect.
+            ITSAppUsesNonExemptEncryption: false,
             NSCameraUsageDescription:
                 'Spinr uses your camera so you can take a profile photo for your rider account.',
             NSPhotoLibraryUsageDescription:

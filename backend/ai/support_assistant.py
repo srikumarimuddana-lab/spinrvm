@@ -138,19 +138,21 @@ def build_ticket_context(
         lines.append(f"Category: {ticket['category']}")
     # Subjects routinely embed PII ("Re: refund to a@b.com") — scrub like the body.
     lines.append(f"Subject: {scrub_pii(ticket.get('subject') or '(no subject)')}")
-    lines.append("")
-    lines.append("Ticket description:")
-    lines.append(_truncate(scrub_pii(_plain(ticket.get("description") or "")) or "(empty)"))
+
+    description = _truncate(scrub_pii(_plain(ticket.get("description") or "")) or "(empty)")
 
     # Keep the most recent messages, then present them newest-first so the model
     # reads the latest message (the one being replied to) before older context.
+    # Oldest content is bottom-anchored: the ticket description (the original,
+    # oldest message) is shown AFTER the conversation chain, not before it.
     msgs = list(reversed((thread or [])[-_MAX_THREAD_MESSAGES:]))
     if msgs:
         lines.append("")
         lines.append(
             "Conversation so far, MOST RECENT FIRST. The first entry below is the "
             "latest message and is what you are replying to; the entries after it "
-            "are older, for context only:"
+            "(and the original ticket request at the very bottom) are older, for "
+            "context only:"
         )
         is_latest = True  # marks the first message we actually emit, not just msgs[0]
         for m in msgs:
@@ -160,6 +162,15 @@ def build_ticket_context(
             marker = " (latest — reply to this)" if is_latest else ""
             lines.append(f"[{_thread_role(m)}{marker}] {_truncate(scrub_pii(body), _MAX_FIELD_CHARS)}")
             is_latest = False
+        # Oldest message last (bottom-anchored), for context.
+        lines.append("")
+        lines.append("Original ticket request (oldest message, for context):")
+        lines.append(description)
+    else:
+        # No replies yet — the original request IS the message to reply to.
+        lines.append("")
+        lines.append("Ticket request (this is the message you are replying to):")
+        lines.append(description)
 
     if instruction and instruction.strip():
         lines.append("")

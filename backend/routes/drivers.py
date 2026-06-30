@@ -66,7 +66,7 @@ try:
     from ..utils.metrics import inc as _metric_inc
     from ..utils.metrics import observe as _metric_observe
     from ..utils.money import dollars_to_cents, to_decimal
-    from ..utils.rate_limiter import dsar_export_limit
+    from ..utils.rate_limiter import dsar_export_limit, tax_doc_email_limit
     from ..utils.referral_terms import paid_referral_earnings, resolve_referral_terms
     from ..utils.t4a_pdf import generate_t4a_pdf
 except ImportError:
@@ -111,7 +111,7 @@ except ImportError:
     from utils.metrics import inc as _metric_inc  # type: ignore
     from utils.metrics import observe as _metric_observe  # type: ignore
     from utils.money import dollars_to_cents, to_decimal
-    from utils.rate_limiter import dsar_export_limit
+    from utils.rate_limiter import dsar_export_limit, tax_doc_email_limit
     from utils.referral_terms import paid_referral_earnings, resolve_referral_terms  # type: ignore
     from utils.t4a_pdf import generate_t4a_pdf  # noqa: F401 – used in download_t4a_pdf
 
@@ -2978,7 +2978,7 @@ async def _email_driver_document(
     it is logged loudly (never swallowed), mirroring the DSAR export pattern.
     """
     try:
-        await send_email(
+        sent = await send_email(
             to=email,
             subject=subject,
             body=body,
@@ -2987,7 +2987,11 @@ async def _email_driver_document(
             recipient_user_id=user_id,
             log_id=log_id,
         )
-        logger.info("%s emailed for user %s (%s)", log_id, user_id, filename)
+        if sent:
+            logger.info("%s emailed for user %s (%s)", log_id, user_id, filename)
+        else:
+            # Both providers rejected without raising — surface, don't log success.
+            logger.error("%s email NOT sent (provider rejected) for user %s (%s)", log_id, user_id, filename)
     except Exception as exc:
         original = exc.details.get("original") if hasattr(exc, "details") and isinstance(exc.details, dict) else None
         logger.error(
@@ -3052,15 +3056,21 @@ async def _email_earnings_csv(user_id: str, email: str, year: int, csv_data: str
 
 
 @api_router.post("/t4a/{year}/email")
+@tax_doc_email_limit
 async def email_t4a_summary(
     year: int,
     background_tasks: BackgroundTasks,
+    request: Request = None,
     current_user: dict = Depends(get_current_user),
 ):
     """Email the T4A summary PDF to the driver (no in-app download).
 
     Returns immediately; the PDF render and email send happen in a background
     task so the driver does not wait.
+
+    Rate-limited (@tax_doc_email_limit, 6/hour) — each call reads up to 10k
+    rides and sends an email; the cap prevents inbox/SES abuse. SlowAPI needs a
+    parameter named ``request`` typed as starlette Request; do not remove it.
     """
     email = _driver_email_or_400(current_user)
     summary = await get_t4a_summary(year, current_user)
@@ -3069,12 +3079,18 @@ async def email_t4a_summary(
 
 
 @api_router.post("/earnings/export/email")
+@tax_doc_email_limit
 async def email_earnings_export(
     background_tasks: BackgroundTasks,
     year: int = Query(None),
+    request: Request = None,
     current_user: dict = Depends(get_current_user),
 ):
-    """Email the trip-by-trip earnings CSV to the driver (no in-app download)."""
+    """Email the trip-by-trip earnings CSV to the driver (no in-app download).
+
+    Rate-limited (@tax_doc_email_limit, 6/hour). SlowAPI needs a parameter
+    named ``request`` typed as starlette Request; do not remove it.
+    """
     if not year:
         year = datetime.now(timezone.utc).year
     email = _driver_email_or_400(current_user)

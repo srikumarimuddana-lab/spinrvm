@@ -235,6 +235,13 @@ ride_rating_limit = default_limiter.limit("5/hour")
 # Storage, and sends an email. Tight cap prevents storage fill / SES exhaustion.
 dsar_export_limit = default_limiter.limit("3/hour")
 
+# Tax-document email (T4A PDF / earnings CSV) — each call reads up to 10k rides,
+# renders/builds a document, and sends an email to the driver. Cap prevents
+# inbox-bombing + SES quota / sender-reputation abuse (cf. dsar_export_limit).
+# Applied per-endpoint, so this allows 6 T4A + 6 CSV sends/hour with headroom
+# for retries.
+tax_doc_email_limit = default_limiter.limit("6/hour")
+
 # AI assistant chat — each message triggers LLM spend; per-user daily cap
 # (ai_daily_message_cap) is enforced separately in backend/ai/orchestrator.py
 ai_chat_limit = default_limiter.limit("10/minute")

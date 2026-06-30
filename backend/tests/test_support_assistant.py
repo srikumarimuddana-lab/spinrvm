@@ -107,6 +107,35 @@ async def test_instruction_steers_draft_and_full_thread_body_used(monkeypatch):
     assert long_body.strip() in user_msg
 
 
+async def test_conversation_presented_newest_first(monkeypatch):
+    """The thread (passed oldest->newest) is presented to the model newest-first,
+    with the latest message flagged as the one to reply to."""
+    fake = _FakeAdapter()
+
+    async def _get_adapter():
+        return fake
+
+    monkeypatch.setattr(sa, "get_adapter", _get_adapter)
+    await sa.suggest_ticket_reply(
+        ticket={"subject": "Help"},
+        thread=[
+            {"type": "thread", "direction": "in", "content": "OLDEST customer message"},
+            {"type": "thread", "direction": "out", "content": "MIDDLE agent reply"},
+            {"type": "thread", "direction": "in", "content": "NEWEST customer message"},
+        ],
+        settings={"ai_assistant_enabled": True},
+    )
+    user_msg = fake.captured["messages"][0]["content"]
+    pos_new = user_msg.index("NEWEST customer message")
+    pos_mid = user_msg.index("MIDDLE agent reply")
+    pos_old = user_msg.index("OLDEST customer message")
+    # Newest appears before middle, which appears before oldest.
+    assert pos_new < pos_mid < pos_old
+    # The latest message is explicitly flagged for the model.
+    assert "(latest — reply to this)" in user_msg
+    assert user_msg.index("(latest — reply to this)") < pos_new + len("NEWEST customer message")
+
+
 async def test_no_instruction_omits_guidance_block(monkeypatch):
     fake = _FakeAdapter()
 

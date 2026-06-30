@@ -142,15 +142,24 @@ def build_ticket_context(
     lines.append("Ticket description:")
     lines.append(_truncate(scrub_pii(_plain(ticket.get("description") or "")) or "(empty)"))
 
-    msgs = (thread or [])[-_MAX_THREAD_MESSAGES:]
+    # Keep the most recent messages, then present them newest-first so the model
+    # reads the latest message (the one being replied to) before older context.
+    msgs = list(reversed((thread or [])[-_MAX_THREAD_MESSAGES:]))
     if msgs:
         lines.append("")
-        lines.append("Conversation so far (oldest to newest):")
+        lines.append(
+            "Conversation so far, MOST RECENT FIRST. The first entry below is the "
+            "latest message and is what you are replying to; the entries after it "
+            "are older, for context only:"
+        )
+        is_latest = True  # marks the first message we actually emit, not just msgs[0]
         for m in msgs:
             body = _plain(m.get("content") or m.get("summary") or m.get("plainText") or "")
             if not body:
                 continue
-            lines.append(f"[{_thread_role(m)}] {_truncate(scrub_pii(body), _MAX_FIELD_CHARS)}")
+            marker = " (latest — reply to this)" if is_latest else ""
+            lines.append(f"[{_thread_role(m)}{marker}] {_truncate(scrub_pii(body), _MAX_FIELD_CHARS)}")
+            is_latest = False
 
     if instruction and instruction.strip():
         lines.append("")

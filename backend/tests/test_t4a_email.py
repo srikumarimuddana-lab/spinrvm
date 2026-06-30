@@ -173,6 +173,19 @@ class TestEmailBackgroundTasks:
         assert att["mime"] == "text/csv"
         assert att["content"] == csv_data.encode("utf-8")
 
+    async def test_t4a_pdf_render_failure_skips_email(self):
+        """A PDF render failure logs and returns — no email is attempted."""
+        from backend.routes.drivers import _email_t4a_document
+
+        with (
+            patch("backend.routes.drivers.generate_t4a_pdf", side_effect=RuntimeError("bad font")),
+            patch("backend.routes.drivers.send_email", AsyncMock(return_value=True)) as send,
+        ):
+            # Must not raise.
+            await _email_t4a_document(DRIVER_USER_ID, DRIVER_EMAIL, 2025, {"year": 2025})
+
+        send.assert_not_awaited()
+
     async def test_send_failure_is_logged_not_raised(self):
         """A provider failure must not escape the background task (already off-request)."""
         from backend.routes.drivers import _email_earnings_csv

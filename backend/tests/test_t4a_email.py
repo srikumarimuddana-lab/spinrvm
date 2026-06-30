@@ -23,6 +23,12 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi import BackgroundTasks
 
+# Both endpoints are @tax_doc_email_limit (6/hour) in production. The conftest
+# autouse `reset_rate_limiters` fixture sets default_limiter.enabled = False, so
+# these direct handler calls pass request=None and skip the limiter (firing
+# behaviour is not unit-testable under that harness — same as every other
+# @limiter.limit endpoint in the suite).
+
 DRIVER_USER_ID = "driver_user_t4a_email"
 DRIVER_ID = "driver_row_t4a_email"
 DRIVER_EMAIL = "driver@example.com"

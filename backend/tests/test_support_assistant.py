@@ -81,6 +81,44 @@ async def test_returns_draft_and_scrubs_pii(monkeypatch):
     assert fake.captured["tools"] == []
 
 
+async def test_instruction_steers_draft_and_full_thread_body_used(monkeypatch):
+    """The agent's guidance reaches the prompt verbatim, and the conversation
+    uses each thread's full body (not a truncated snippet)."""
+    fake = _FakeAdapter()
+
+    async def _get_adapter():
+        return fake
+
+    monkeypatch.setattr(sa, "get_adapter", _get_adapter)
+
+    long_body = "The rider explains in detail. " * 80  # > the old 1500-char clamp
+    out = await sa.suggest_ticket_reply(
+        ticket={"subject": "Help", "description": "see thread"},
+        thread=[{"type": "thread", "direction": "in", "content": long_body}],
+        instruction="Confirm the $25 refund is approved and ask for the trip date.",
+        settings={"ai_assistant_enabled": True},
+    )
+    assert out["reply"] == "Hi Sam, thanks for reaching out."
+
+    user_msg = fake.captured["messages"][0]["content"]
+    # Agent guidance is first-party input — passed through unscrubbed (amounts intact).
+    assert "Confirm the $25 refund is approved" in user_msg
+    # The full mail body is present, not clipped to the old snippet length.
+    assert long_body.strip() in user_msg
+
+
+async def test_no_instruction_omits_guidance_block(monkeypatch):
+    fake = _FakeAdapter()
+
+    async def _get_adapter():
+        return fake
+
+    monkeypatch.setattr(sa, "get_adapter", _get_adapter)
+    await sa.suggest_ticket_reply(ticket={"subject": "Help"}, settings={"ai_assistant_enabled": True})
+    user_msg = fake.captured["messages"][0]["content"]
+    assert "support agent handling this ticket gave you specific guidance" not in user_msg
+
+
 async def test_misconfigured_adapter_raises(monkeypatch):
     from ai.providers.base import AIConfigError
 

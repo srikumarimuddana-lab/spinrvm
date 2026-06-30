@@ -2987,8 +2987,15 @@ export const setDeskTicketServiceArea = (id: string, service_area_id: string | n
     });
 
 /* ── AI reply suggestion (draft only; agent reviews + sends) ────────────── */
-export const aiSuggestDeskReply = (id: string) =>
+export const aiSuggestDeskReply = (id: string, instruction?: string) =>
     request<{ reply: string; provider?: string; model?: string }>(
         `/api/admin/support-tickets/tickets/${id}/ai-suggest-reply`,
-        { method: "POST" },
+        {
+            method: "POST",
+            // Optional agent guidance steering the draft. Omit the body when
+            // there's nothing to add so the endpoint behaves exactly as before.
+            ...(instruction && instruction.trim()
+                ? { body: JSON.stringify({ instruction: instruction.trim() }) }
+                : {}),
+        },
     );

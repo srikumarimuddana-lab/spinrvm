@@ -115,13 +115,21 @@ def _thread_role(m: Dict[str, Any]) -> str:
 
 
 def build_ticket_context(
-    ticket: Dict[str, Any], thread: Optional[List[Dict[str, Any]]], service_area_name: Optional[str]
+    ticket: Dict[str, Any],
+    thread: Optional[List[Dict[str, Any]]],
+    service_area_name: Optional[str],
+    instruction: Optional[str] = None,
 ) -> str:
     """Compose the (PII-scrubbed) user message describing the ticket.
 
     The customer's name is intentionally NOT included — names can't be reliably
     regex-scrubbed, so (like the rider/driver assistant) we don't send them to
     the third-party LLM.
+
+    ``instruction`` is the support agent's own guidance for this reply (what to
+    say, the decision to convey). It is first-party staff input — not customer
+    PII — so it is passed through verbatim (the agent is steering the draft, the
+    same text they'd otherwise type by hand) and only length-bounded.
     """
     lines: List[str] = []
     if service_area_name:
@@ -142,7 +150,17 @@ def build_ticket_context(
             body = _plain(m.get("content") or m.get("summary") or m.get("plainText") or "")
             if not body:
                 continue
-            lines.append(f"[{_thread_role(m)}] {_truncate(scrub_pii(body), 1500)}")
+            lines.append(f"[{_thread_role(m)}] {_truncate(scrub_pii(body), _MAX_FIELD_CHARS)}")
+
+    if instruction and instruction.strip():
+        lines.append("")
+        lines.append(
+            "The support agent handling this ticket gave you specific guidance for "
+            "this reply. Follow it as the intent of the response, while staying "
+            "within the ground rules above (never fabricate facts the guidance does "
+            "not supply):"
+        )
+        lines.append(_truncate(instruction.strip(), _MAX_FIELD_CHARS))
 
     lines.append("")
     lines.append("Draft the reply to send to the customer now.")
@@ -154,6 +172,7 @@ async def suggest_ticket_reply(
     ticket: Dict[str, Any],
     thread: Optional[List[Dict[str, Any]]] = None,
     service_area_name: Optional[str] = None,
+    instruction: Optional[str] = None,
     settings: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Return ``{"reply", "provider", "model"}`` — a draft for a human to send.
@@ -174,7 +193,7 @@ async def suggest_ticket_reply(
     if contact_bits:
         system += f"\n\nSupport contact for sign-off if needed: {', '.join(contact_bits)}."
 
-    user_content = build_ticket_context(ticket, thread, service_area_name)
+    user_content = build_ticket_context(ticket, thread, service_area_name, instruction)
 
     # SEAM: to give the Help Desk its own model, branch here on
     # settings.get("ai_support_model") and pass an override to a model-aware

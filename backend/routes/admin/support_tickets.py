@@ -774,14 +774,20 @@ async def ai_suggest_reply(
     except ImportError:
         from ai.support_assistant import SupportAssistantError, suggest_ticket_reply
 
+    # The ticket, its conversation list, and its (Spinr-local) service area are
+    # independent reads — fetch them concurrently so the agent waits on one
+    # round-trip, not three, before the LLM call. Hydration depends on the
+    # conversation list, so it chains after.
     try:
-        ticket = await zoho.get_ticket(ticket_id)
-        threads = await zoho.get_ticket_threads(ticket_id)
+        ticket, threads, area = await asyncio.gather(
+            zoho.get_ticket(ticket_id),
+            zoho.get_ticket_threads(ticket_id),
+            ticket_area.get_ticket_area(ticket_id),
+        )
         thread = await _hydrate_thread_bodies(ticket_id, (threads or {}).get("data"))
     except ZohoDeskError as e:
         raise _err(e) from e
 
-    area = await ticket_area.get_ticket_area(ticket_id)
     try:
         result = await suggest_ticket_reply(
             ticket=ticket or {},

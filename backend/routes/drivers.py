@@ -2947,6 +2947,117 @@ async def export_earnings(year: int = Query(None), current_user: dict = Depends(
     return {"data": csv_data, "filename": filename}
 
 
+def _driver_email_or_400(current_user: dict) -> str:
+    """Return the driver's on-file email or raise 400.
+
+    Tax documents are delivered by email only (no in-app download), so a real
+    address is mandatory. Falling back to the phone number would hand a raw
+    phone number to the email provider — it fails to send and risks logging PII.
+    """
+    email = (current_user.get("email") or "").strip()
+    if "@" not in email:
+        raise HTTPException(status_code=400, detail="No email address on file to send the document to.")
+    return email
+
+
+async def _email_t4a_document(user_id: str, email: str, year: int, summary: dict) -> None:
+    """Background task: render the T4A PDF and email it to the driver."""
+    try:
+        pdf_bytes = generate_t4a_pdf(summary)
+        filename = f"T4A_{year}_{user_id[:8]}.pdf"
+        await send_email(
+            to=email,
+            subject=f"Your Spinr T4A summary for {year}",
+            body=(
+                "Hi,\n\n"
+                f"As requested, your T4A earnings summary for the {year} tax year is "
+                f'attached as a PDF ("{filename}").\n\n'
+                "Keep this document for your Canadian tax filing. If you have any "
+                "questions, contact support@spinr.ca.\n\n"
+                "— The Spinr Team"
+            ),
+            attachments=[{"filename": filename, "content": pdf_bytes, "mime": "application/pdf"}],
+            email_type="transactional",
+            recipient_user_id=user_id,
+            log_id="t4a",
+        )
+        logger.info("T4A %s emailed for user %s", year, user_id)
+    except Exception as exc:
+        original = exc.details.get("original") if hasattr(exc, "details") and isinstance(exc.details, dict) else None
+        logger.error(
+            "T4A email failed for user %s year %s: %s%s",
+            user_id,
+            year,
+            exc,
+            f" — {original}" if original else "",
+            exc_info=True,
+        )
+
+
+async def _email_earnings_csv(user_id: str, email: str, year: int, csv_data: str) -> None:
+    """Background task: email the trip-by-trip earnings CSV to the driver."""
+    try:
+        filename = f"earnings_export_{year}.csv"
+        await send_email(
+            to=email,
+            subject=f"Your Spinr earnings export for {year}",
+            body=(
+                "Hi,\n\n"
+                f"As requested, your detailed earnings export for {year} is attached "
+                f'as a CSV ("{filename}").\n\n'
+                "If you have any questions, contact support@spinr.ca.\n\n"
+                "— The Spinr Team"
+            ),
+            attachments=[{"filename": filename, "content": csv_data.encode("utf-8"), "mime": "text/csv"}],
+            email_type="transactional",
+            recipient_user_id=user_id,
+            log_id="earnings",
+        )
+        logger.info("Earnings CSV %s emailed for user %s", year, user_id)
+    except Exception as exc:
+        original = exc.details.get("original") if hasattr(exc, "details") and isinstance(exc.details, dict) else None
+        logger.error(
+            "Earnings CSV email failed for user %s year %s: %s%s",
+            user_id,
+            year,
+            exc,
+            f" — {original}" if original else "",
+            exc_info=True,
+        )
+
+
+@api_router.post("/t4a/{year}/email")
+async def email_t4a_summary(
+    year: int,
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user),
+):
+    """Email the T4A summary PDF to the driver (no in-app download).
+
+    Returns immediately; the PDF render and email send happen in a background
+    task so the driver does not wait.
+    """
+    email = _driver_email_or_400(current_user)
+    summary = await get_t4a_summary(year, current_user)
+    background_tasks.add_task(_email_t4a_document, current_user["id"], email, year, summary)
+    return {"message": f"Your T4A summary for {year} is on its way. Check your email."}
+
+
+@api_router.post("/earnings/export/email")
+async def email_earnings_export(
+    background_tasks: BackgroundTasks,
+    year: int = Query(None),
+    current_user: dict = Depends(get_current_user),
+):
+    """Email the trip-by-trip earnings CSV to the driver (no in-app download)."""
+    if not year:
+        year = datetime.now(timezone.utc).year
+    email = _driver_email_or_400(current_user)
+    export = await export_earnings(year=year, current_user=current_user)
+    background_tasks.add_task(_email_earnings_csv, current_user["id"], email, year, export["data"])
+    return {"message": f"Your earnings export for {year} is on its way. Check your email."}
+
+
 # Account (users) fields omitted from a data export: credentials and internal
 # session/auth state that are not "personal data about the subject".
 #  - password_hash: credential
@@ -3186,9 +3297,7 @@ async def _upload_export_zip(user_id: str, zip_bytes: bytes, expires_in_seconds:
             {
                 "user_id": user_id,
                 "storage_path": storage_path,
-                "expires_at": (
-                    datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds)
-                ).isoformat(),
+                "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds)).isoformat(),
             },
         )
     except Exception as exc:
@@ -6592,9 +6701,7 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
     _window = quota_window_for_sub(sub, tz=_tz)
     _hourly = _pass_is_hourly(sub)
     today_rides = await completed_today(driver["id"], tz=_tz, window_start=_window[0])
-    quota = compute_quota(
-        sub.get("rides_per_day", -1), today_rides, tz=_tz, window=_window, hourly=_hourly
-    )
+    quota = compute_quota(sub.get("rides_per_day", -1), today_rides, tz=_tz, window=_window, hourly=_hourly)
 
     return {
         "has_subscription": True,
@@ -7620,9 +7727,7 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
         # Multi-day pass → local midnight ending its Nth day; 1-day → 24h by hour.
         # Pairs with started_at above (missing duration_days → 30-day fallback) so
         # the row's lifetime is always self-consistent.
-        activate_updates["expires_at"] = compute_pass_expiry(
-            plan.get("duration_days"), now=now, tz=_act_tz
-        ).isoformat()
+        activate_updates["expires_at"] = compute_pass_expiry(plan.get("duration_days"), now=now, tz=_act_tz).isoformat()
 
     # Atomic claim: flip pending→active filtering on status='pending'. Only the
     # caller that wins (webhook vs verify-session can race) gets a row back and

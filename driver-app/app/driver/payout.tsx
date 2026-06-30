@@ -45,8 +45,8 @@ function PayoutScreen() {
     // Hosted Stripe onboarding opens in the system browser, so track the brief
     // "opening…" state while we mint the AccountLink and hand off.
     const [stripeOnboarding, setStripeOnboarding] = useState(false);
-    const [downloadingT4A, setDownloadingT4A] = useState(false);
-    const [downloadingCSV, setDownloadingCSV] = useState(false);
+    const [sendingT4A, setSendingT4A] = useState(false);
+    const [sendingCSV, setSendingCSV] = useState(false);
     // gst_bn (CRA Business Number) is the canonical column on the driver row
     // served by useDriverMe and accepted by PUT /drivers/me — keep a local form
     // state for the input but seed it from the cached server value (also
@@ -214,7 +214,7 @@ function PayoutScreen() {
     };
 
     const handleEmailT4A = async () => {
-        setDownloadingT4A(true);
+        setSendingT4A(true);
         try {
             // CRA T4A is generated per tax year — default to the most recently
             // completed year so drivers don't get an in-progress year's partial total.
@@ -226,12 +226,12 @@ function PayoutScreen() {
         } catch (err: any) {
             showToast('error', 'Send Failed', err.response?.data?.detail || 'Could not send your T4A. Please try again.');
         } finally {
-            setDownloadingT4A(false);
+            setSendingT4A(false);
         }
     };
 
     const handleEmailCSV = async () => {
-        setDownloadingCSV(true);
+        setSendingCSV(true);
         try {
             const year = new Date().getFullYear();
             const res = await api.post<{ message?: string }>(`/drivers/earnings/export/email?year=${year}`);
@@ -239,7 +239,7 @@ function PayoutScreen() {
         } catch (err: any) {
             showToast('error', 'Send Failed', err.response?.data?.detail || 'Could not send your earnings export. Please try again.');
         } finally {
-            setDownloadingCSV(false);
+            setSendingCSV(false);
         }
     };
 
@@ -619,9 +619,9 @@ function PayoutScreen() {
                     <Text style={styles.sectionTitle}>Tax Documents</Text>
                     <View style={styles.payoutCard}>
                         <TouchableOpacity
-                            style={[styles.docRow, downloadingT4A && styles.docRowDisabled]}
+                            style={[styles.docRow, sendingT4A && styles.docRowDisabled]}
                             onPress={handleEmailT4A}
-                            disabled={downloadingT4A}
+                            disabled={sendingT4A}
                         >
                             <View style={styles.docRowLeft}>
                                 <Ionicons name="document-text-outline" size={22} color={colors.primary} />
@@ -630,7 +630,7 @@ function PayoutScreen() {
                                     <Text style={styles.docRowSub}>Annual earnings slip sent to your email</Text>
                                 </View>
                             </View>
-                            {downloadingT4A ? (
+                            {sendingT4A ? (
                                 <ActivityIndicator size="small" color={colors.primary} />
                             ) : (
                                 <Ionicons name="mail-outline" size={20} color={colors.primary} />
@@ -640,9 +640,9 @@ function PayoutScreen() {
                         <View style={styles.docDivider} />
 
                         <TouchableOpacity
-                            style={[styles.docRow, downloadingCSV && styles.docRowDisabled]}
+                            style={[styles.docRow, sendingCSV && styles.docRowDisabled]}
                             onPress={handleEmailCSV}
-                            disabled={downloadingCSV}
+                            disabled={sendingCSV}
                         >
                             <View style={styles.docRowLeft}>
                                 <Ionicons name="grid-outline" size={22} color={colors.primary} />
@@ -651,7 +651,7 @@ function PayoutScreen() {
                                     <Text style={styles.docRowSub}>Trip-by-trip earnings export sent to your email</Text>
                                 </View>
                             </View>
-                            {downloadingCSV ? (
+                            {sendingCSV ? (
                                 <ActivityIndicator size="small" color={colors.primary} />
                             ) : (
                                 <Ionicons name="mail-outline" size={20} color={colors.primary} />

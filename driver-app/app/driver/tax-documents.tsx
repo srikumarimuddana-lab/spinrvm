@@ -34,7 +34,7 @@ function TaxDocumentsScreen() {
     const [documents, setDocuments] = useState<TaxDocument[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
-    const [downloadingId, setDownloadingId] = useState<string | null>(null);
+    const [sendingId, setSendingId] = useState<string | null>(null);
 
     useEffect(() => {
         fetchDocuments();
@@ -44,9 +44,9 @@ function TaxDocumentsScreen() {
         try {
             // There is no server-side listing endpoint for tax documents yet —
             // T4A summaries are generated per-year on demand via
-            // GET /drivers/t4a/{year}. Synthesize a list client-side for the
-            // last three completed tax years; the actual summary is fetched
-            // when the driver taps Download.
+            // POST /drivers/t4a/{year}/email. Synthesize a list client-side for
+            // the last three completed tax years; the actual PDF is emailed
+            // when the driver taps the row.
             const now = new Date();
             const latestCompletedYear = now.getFullYear() - 1;
             const years = [latestCompletedYear, latestCompletedYear - 1, latestCompletedYear - 2];
@@ -72,7 +72,7 @@ function TaxDocumentsScreen() {
     };
 
     const handleEmail = async (doc: TaxDocument) => {
-        setDownloadingId(doc.id);
+        setSendingId(doc.id);
         try {
             // Tax documents are delivered by email only (no in-app download); the
             // backend renders the PDF and emails it as an attachment.
@@ -85,7 +85,7 @@ function TaxDocumentsScreen() {
         } catch (err: any) {
             showToast('error', 'Send Failed', err?.response?.data?.detail || 'Could not send the document. Please try again.');
         } finally {
-            setDownloadingId(null);
+            setSendingId(null);
         }
     };
 
@@ -113,7 +113,7 @@ function TaxDocumentsScreen() {
     };
 
     const renderDocumentItem = ({ item }: { item: TaxDocument }) => {
-        const isDownloading = downloadingId === item.id;
+        const isSending = sendingId === item.id;
         return (
             <View style={styles.docCard}>
                 <View style={styles.docIcon}>
@@ -127,11 +127,11 @@ function TaxDocumentsScreen() {
                     )}
                 </View>
                 <TouchableOpacity
-                    style={[styles.downloadBtn, isDownloading && styles.downloadBtnDisabled]}
+                    style={[styles.emailBtn, isSending && styles.emailBtnDisabled]}
                     onPress={() => handleEmail(item)}
-                    disabled={isDownloading}
+                    disabled={isSending}
                 >
-                    {isDownloading ? (
+                    {isSending ? (
                         <ActivityIndicator size="small" color="#fff" />
                     ) : (
                         <Ionicons name="mail-outline" size={18} color="#fff" />
@@ -277,7 +277,7 @@ function createStyles(colors: ThemeColors) {
             marginTop: 2,
         },
 
-        downloadBtn: {
+        emailBtn: {
             backgroundColor: colors.primary,
             width: 40,
             height: 40,
@@ -285,7 +285,7 @@ function createStyles(colors: ThemeColors) {
             justifyContent: 'center',
             alignItems: 'center',
         },
-        downloadBtnDisabled: {
+        emailBtnDisabled: {
             opacity: 0.6,
         },
 

@@ -12,6 +12,7 @@ center) is managed here too, but the secret values are write-only:
 GET /config returns presence flags, never the secrets themselves.
 """
 
+import asyncio
 import logging
 import statistics
 from collections import Counter
@@ -658,9 +659,7 @@ async def service_areas(admin: dict = Depends(require_module("support_tickets"))
 
 
 @router.get("/tickets/{ticket_id}/service-area")
-async def get_ticket_service_area(
-    ticket_id: str, admin: dict = Depends(require_module("support_tickets"))
-):
+async def get_ticket_service_area(ticket_id: str, admin: dict = Depends(require_module("support_tickets"))):
     """Current service-area assignment for a ticket. When unassigned, attempts
     an auto-assign from the contact's ride history; if none is found, returns
     ``needs_assignment=True`` so the UI highlights it (assignment is optional).
@@ -713,15 +712,63 @@ async def set_ticket_service_area(
 
 _AI_ERROR_STATUS = {"ai_disabled": 409, "ai_misconfigured": 502, "provider_error": 502, "empty": 502}
 
+# How many of the most recent conversation entries to hydrate with their full
+# body before drafting — matches the assistant's context budget so we never
+# spend a Zoho call (or tokens) on threads the draft won't read.
+try:
+    from ...ai.support_assistant import _MAX_THREAD_MESSAGES as _AI_MAX_THREADS
+except ImportError:  # pragma: no cover - direct module import in tests
+    from ai.support_assistant import _MAX_THREAD_MESSAGES as _AI_MAX_THREADS
+
+
+async def _hydrate_thread_bodies(ticket_id: str, conversations: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    """Replace each email thread's truncated ``summary`` with its full body.
+
+    Zoho's /conversations list returns only a short ``summary`` per email
+    thread; the complete mail text lives on the per-thread resource. Without
+    this, the AI drafts from snippets and misses the actual conversation. We
+    hydrate only the most recent entries (the ones the assistant keeps) and
+    fetch them concurrently. Comments already carry full content, and any
+    per-thread fetch failure falls back to the summary rather than failing the
+    whole suggestion.
+    """
+    recent = (conversations or [])[-_AI_MAX_THREADS:]
+
+    async def _full(m: Dict[str, Any]) -> Dict[str, Any]:
+        if m.get("type") == "comment":
+            return m
+        thread_id = str(m.get("id") or "")
+        if not thread_id:
+            return m
+        try:
+            full = await zoho.get_thread(ticket_id, thread_id)
+        except ZohoDeskError as e:
+            logger.warning("Could not hydrate thread %s of ticket %s: %s", thread_id, ticket_id, e.message)
+            return m
+        body = (full or {}).get("content") or (full or {}).get("plainText")
+        return {**m, "content": body} if body else m
+
+    return list(await asyncio.gather(*[_full(m) for m in recent]))
+
+
+class AiSuggestRequest(BaseModel):
+    # Optional agent guidance — what the reply should say / the decision to
+    # convey. Steers the draft; the agent still reviews and edits before sending.
+    instruction: Optional[str] = Field(None, max_length=4000)
+
 
 @router.post("/tickets/{ticket_id}/ai-suggest-reply")
 @admin_ai_suggest_limit
 async def ai_suggest_reply(
-    request: Request, ticket_id: str, admin: dict = Depends(require_module("support_tickets"))
+    request: Request,
+    ticket_id: str,
+    payload: Optional[AiSuggestRequest] = None,
+    admin: dict = Depends(require_module("support_tickets")),
 ):
-    """Draft a reply using the AI assistant. Returns the suggestion only — the
-    agent reviews/edits and sends it via the normal /reply endpoint. Nothing is
-    sent to the customer here."""
+    """Draft a reply using the AI assistant. Reads the full ticket mail chain
+    (not just thread summaries) and optionally follows the agent's guidance.
+    Returns the suggestion only — the agent reviews/edits and sends it via the
+    normal /reply endpoint. Nothing is sent to the customer here."""
     try:
         from ...ai.support_assistant import SupportAssistantError, suggest_ticket_reply
     except ImportError:
@@ -730,6 +777,7 @@ async def ai_suggest_reply(
     try:
         ticket = await zoho.get_ticket(ticket_id)
         threads = await zoho.get_ticket_threads(ticket_id)
+        thread = await _hydrate_thread_bodies(ticket_id, (threads or {}).get("data"))
     except ZohoDeskError as e:
         raise _err(e) from e
 
@@ -737,8 +785,9 @@ async def ai_suggest_reply(
     try:
         result = await suggest_ticket_reply(
             ticket=ticket or {},
-            thread=(threads or {}).get("data"),
+            thread=thread,
             service_area_name=area.get("service_area_name"),
+            instruction=payload.instruction if payload else None,
         )
     except SupportAssistantError as e:
         raise HTTPException(status_code=_AI_ERROR_STATUS.get(e.code, 502), detail=e.message) from e
@@ -748,6 +797,10 @@ async def ai_suggest_reply(
         "zoho_desk_ticket_ai_suggest",
         "zoho_desk_ticket",
         ticket_id,
-        {"provider": result.get("provider"), "model": result.get("model")},
+        {
+            "provider": result.get("provider"),
+            "model": result.get("model"),
+            "had_instruction": bool(payload and (payload.instruction or "").strip()),
+        },
     )
     return result

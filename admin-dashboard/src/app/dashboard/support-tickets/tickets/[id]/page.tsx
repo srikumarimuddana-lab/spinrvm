@@ -124,6 +124,9 @@ export default function TicketDetailPage() {
     const [sending, setSending] = useState(false);
     const [savingField, setSavingField] = useState(false);
     const [suggesting, setSuggesting] = useState(false);
+    // Optional guidance the agent gives the AI before drafting (what to say /
+    // the decision to convey). Empty = let the AI draft from the ticket alone.
+    const [aiInstruction, setAiInstruction] = useState("");
 
     // Service area (Spinr-local; auto-derived from the contact's ride history
     // when possible, else highlighted for an optional manual assignment).
@@ -216,7 +219,7 @@ export default function TicketDetailPage() {
     const suggestAI = async () => {
         setSuggesting(true);
         try {
-            const { reply: draft } = await aiSuggestDeskReply(id);
+            const { reply: draft } = await aiSuggestDeskReply(id, aiInstruction);
             setReply(textToHtml(draft));
             toast({ title: "Draft ready", description: "Review and edit before sending." });
         } catch (e: any) {
@@ -417,6 +420,19 @@ export default function TicketDetailPage() {
                                 </Button>
                             </CardHeader>
                             <CardContent className="space-y-2">
+                                <div className="space-y-1 rounded-md border border-dashed bg-muted/30 p-2">
+                                    <Label htmlFor="ai-instruction" className="text-xs text-muted-foreground">
+                                        Tell the AI what to say (optional)
+                                    </Label>
+                                    <Textarea
+                                        id="ai-instruction"
+                                        rows={2}
+                                        value={aiInstruction}
+                                        onChange={(e) => setAiInstruction(e.target.value)}
+                                        placeholder="e.g. Apologize for the delay, confirm the refund is approved, and ask for the trip date. The AI reads the full ticket chain — add anything it can't know."
+                                        disabled={suggesting || sending}
+                                    />
+                                </div>
                                 <RichTextEditor
                                     value={reply}
                                     onChange={setReply}

@@ -2599,10 +2599,10 @@
     "@jridgewell/resolve-uri" "^3.1.0"
     "@jridgewell/sourcemap-codec" "^1.4.14"
 
-"@logrocket/react-native@^2.3.1":
-  version "2.3.3"
-  resolved "https://registry.npmjs.org/@logrocket/react-native/-/react-native-2.3.3.tgz"
-  integrity sha512-m/79X7yzb2tjd0ieUCEZ6pB8j68jm6+oMWnVtnAZ1kyCocircu5ik+rcxojD77FJV+5PJWac2TnllgTDrbF10g==
+"@logrocket/react-native@^3.3.1":
+  version "3.3.1"
+  resolved "https://registry.yarnpkg.com/@logrocket/react-native/-/react-native-3.3.1.tgz#a1542cafb21c7460824c76da49829e98f2fffd1a"
+  integrity sha512-hGiJbvapDqzITl+NUmJLFPwYTne5NsQw0JITzyoHgyDN9xPvA9ymos26CXOlvK4Nq6wbR0rDtLwOvUvaEhT5nA==
 
 "@napi-rs/wasm-runtime@^0.2.11":
   version "0.2.12"

@@ -24,6 +24,7 @@ interface ReferralInfo {
     qualified_referrals?: number;
     pending_referrals?: number;
     referral_earnings: string | number;
+    referee_earnings?: string | number;
     reward_amount?: string | number;
     referrer_reward?: string | number;
     referee_reward?: string | number;
@@ -183,10 +184,20 @@ export default function ReferralScreen() {
                         <Text style={styles.statLabel}>Rewarded</Text>
                     </View>
                     <View style={styles.statCard}>
-                        <Text style={styles.statValue}>${parseFloat(String(referralInfo?.referral_earnings ?? 0)).toFixed(2)}</Text>
+                        <Text style={styles.statValue}>
+                            ${(
+                                parseFloat(String(referralInfo?.referral_earnings ?? 0)) +
+                                parseFloat(String(referralInfo?.referee_earnings ?? 0))
+                            ).toFixed(2)}
+                        </Text>
                         <Text style={styles.statLabel}>Earned</Text>
                     </View>
                 </View>
+                {parseFloat(String(referralInfo?.referee_earnings ?? 0)) > 0 ? (
+                    <Text style={styles.referredByText}>
+                        Includes your ${parseFloat(String(referralInfo?.referee_earnings ?? 0)).toFixed(2)} signup bonus
+                    </Text>
+                ) : null}
 
                 {/* Reward amounts — who earns what ($0 = that party earns nothing) */}
                 <View style={styles.statsRow}>

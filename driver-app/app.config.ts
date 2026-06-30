@@ -48,6 +48,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // during payout setup). Location strings come from the expo-location
         // plugin block.
         infoPlist: {
+            // Export compliance: Spinr Driver uses only standard HTTPS/TLS
+            // (exempt encryption), so declare false. Without this, every
+            // TestFlight / App Store upload blocks on a manual "does your app
+            // use encryption?" answer in App Store Connect.
+            ITSAppUsesNonExemptEncryption: false,
             NSCameraUsageDescription:
                 'Spinr Driver uses your camera to scan and upload your driver license, vehicle insurance, and vehicle registration documents, and to verify your identity for payouts.',
             NSPhotoLibraryUsageDescription:

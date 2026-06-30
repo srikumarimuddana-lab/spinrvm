@@ -407,7 +407,7 @@ export default function SettingsScreen() {
                             disabled={exportingData}
                         >
                             <View style={[styles.settingIcon, { backgroundColor: `${colors.primary}12` }]}>
-                                <Ionicons name="download-outline" size={18} color={colors.primary} />
+                                <Ionicons name="mail-outline" size={18} color={colors.primary} />
                             </View>
                             <Text style={styles.settingLabel}>{t('settings.downloadData')}</Text>
                             {exportingData ? (

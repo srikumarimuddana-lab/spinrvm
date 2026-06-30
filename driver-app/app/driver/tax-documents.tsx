@@ -6,7 +6,6 @@ import {
     TouchableOpacity,
     FlatList,
     ActivityIndicator,
-    Linking,
 } from 'react-native';
 import SafeRefreshControl from '../../components/SafeRefreshControl';
 import { showToast } from '../../hooks/useToast';
@@ -72,31 +71,19 @@ function TaxDocumentsScreen() {
         fetchDocuments();
     };
 
-    const handleDownload = async (doc: TaxDocument) => {
+    const handleEmail = async (doc: TaxDocument) => {
         setDownloadingId(doc.id);
         try {
-            if (doc.file_url) {
-                await Linking.openURL(doc.file_url);
-                return;
-            }
-
-            // T4A: fetch the per-year summary and either open the signed URL
-            // (once the PDF generator ships) or display the summary inline.
-            const res = await api.get<{ url?: string; file_url?: string; total_earnings?: string; year?: number; total_trips?: number; net_earnings?: string }>(`/drivers/t4a/${doc.tax_year}`);
-            const url = res.data?.url || res.data?.file_url;
-            if (url) {
-                await Linking.openURL(url);
-            } else if (res.data?.total_earnings != null) {
-                showToast(
-                    'info',
-                    `T4A Summary — ${res.data.year}`,
-                    `Total earnings: $${Number(res.data.total_earnings).toFixed(2)}\nTotal trips: ${res.data.total_trips}\nNet earnings: $${Number(res.data.net_earnings).toFixed(2)}\n\nA downloadable PDF will be available once tax documents are finalized.`,
-                );
-            } else {
-                showToast('info', 'Unavailable', 'This document is not yet available for download.');
-            }
-        } catch (err) {
-            showToast('error', 'Open Failed', 'Could not open the document. Please try again.');
+            // Tax documents are delivered by email only (no in-app download); the
+            // backend renders the PDF and emails it as an attachment.
+            const res = await api.post<{ message?: string }>(`/drivers/t4a/${doc.tax_year}/email`);
+            showToast(
+                'success',
+                'Check Your Email',
+                res.data?.message || `Your T4A summary for ${doc.tax_year} is on its way.`,
+            );
+        } catch (err: any) {
+            showToast('error', 'Send Failed', err?.response?.data?.detail || 'Could not send the document. Please try again.');
         } finally {
             setDownloadingId(null);
         }
@@ -141,13 +128,13 @@ function TaxDocumentsScreen() {
                 </View>
                 <TouchableOpacity
                     style={[styles.downloadBtn, isDownloading && styles.downloadBtnDisabled]}
-                    onPress={() => handleDownload(item)}
+                    onPress={() => handleEmail(item)}
                     disabled={isDownloading}
                 >
                     {isDownloading ? (
                         <ActivityIndicator size="small" color="#fff" />
                     ) : (
-                        <Ionicons name="download-outline" size={18} color="#fff" />
+                        <Ionicons name="mail-outline" size={18} color="#fff" />
                     )}
                 </TouchableOpacity>
             </View>
@@ -193,7 +180,7 @@ function TaxDocumentsScreen() {
                         <View style={styles.infoCard}>
                             <Ionicons name="information-circle" size={20} color={colors.primary} />
                             <Text style={styles.infoText}>
-                                Download your T4A slips and earnings summaries for Canadian tax filing purposes.
+                                Tap to have your T4A slips and earnings summaries emailed to you for Canadian tax filing purposes.
                             </Text>
                         </View>
                     }

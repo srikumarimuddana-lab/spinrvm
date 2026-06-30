@@ -2,7 +2,8 @@
 
 Covers the fallback contract (no area / missing row / NULL column → global
 default), area overrides winning, Decimal money coercion, the driver referee
-always being 0, and the area-derivation helpers.
+reward (off by default, admin-overridable per area like every other side),
+and the area-derivation helpers.
 """
 
 import asyncio
@@ -115,13 +116,26 @@ class TestResolveReferralTerms:
             t = asyncio.run(referral_terms.resolve_referral_terms("a", "driver"))
         assert t["window_days"] == 30
 
-    def test_driver_referee_always_zero(self):
+    def test_driver_referee_defaults_to_zero_when_area_unset(self):
+        # NULL driver_referee_reward column → falls back to the global default
+        # (0), same as every other field — "no area override yet" still means
+        # "off" for a referee reward that an admin hasn't opted into.
         area = {"id": "a", "driver_referral_reward": 25, "driver_referral_rides_required": 4}
         with _patch_global(), _patch_rows([area]):
             t = asyncio.run(referral_terms.resolve_referral_terms("a", "driver"))
         assert t["referrer"] == Decimal("25.00")
         assert t["rides"] == 4
         assert t["referee"] == Decimal("0.00")
+
+    def test_driver_referee_area_override_wins(self):
+        # An admin who opts in by setting driver_referee_reward on the area
+        # gets that amount, sharing the SAME ride threshold as the referrer
+        # (no separate referee-side rides_required column).
+        area = {"id": "a", "driver_referral_reward": 10, "driver_referee_reward": 7.5}
+        with _patch_global(), _patch_rows([area]):
+            t = asyncio.run(referral_terms.resolve_referral_terms("a", "driver"))
+        assert t["referrer"] == Decimal("10.00")
+        assert t["referee"] == Decimal("7.50")
 
     def test_lookup_failure_propagates(self):
         # A real DB error must NOT be swallowed into the global default — it

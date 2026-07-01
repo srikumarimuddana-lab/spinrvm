@@ -176,11 +176,11 @@ try:
         settle_corporate,
         settle_wallet,
     )
-    from ..utils.stripe_charge import authorize_ride, verify_authorization
+    from ..utils.stripe_charge import authorize_ride, charge_ancillary_fee, verify_authorization
 except ImportError:
     from services.cancellation_service import calculate_cancellation_fee, pay_driver_cancellation_fee  # type: ignore
     from services.payment_service import send_ride_receipt, settle_card, settle_corporate, settle_wallet  # type: ignore
-    from utils.stripe_charge import authorize_ride, verify_authorization  # type: ignore
+    from utils.stripe_charge import authorize_ride, charge_ancillary_fee, verify_authorization  # type: ignore
 
 db = db_supabase  # legacy alias
 
@@ -4627,6 +4627,9 @@ async def cancel_ride_rider(
     # then fall through to driver cleanup. charged_* default to 0 so a failed
     # fee computation records no fee rather than a stale/partial one.
     charged_admin = charged_driver = Decimal("0")
+    cancel_fee_payment_status: Optional[str] = None
+    cancel_fee_payment_intent_id: Optional[str] = None
+    cancel_fee_charge_attempted = False
     try:
         settings = await get_app_settings()
         area = None
@@ -4668,6 +4671,80 @@ async def cancel_ride_rider(
                                 "created_at": datetime.now(timezone.utc).isoformat(),
                             },
                         )
+            elif payment_method == "card":
+                # Mirrors settle_card's payment-method resolution: a card pinned
+                # to the ride wins (e.g. the in-app "Change Card" escape), else
+                # the rider's saved default. Company-allowance / corporate-paid
+                # rides are intentionally excluded — that fee belongs on the
+                # corporate wallet ledger, not a personal Stripe card, and isn't
+                # wired up here.
+                rider_user = await db_supabase.get_user_by_id(current_user["id"])
+                stripe_customer_id = (rider_user or {}).get("stripe_customer_id")
+                payment_method_id = ride.get("payment_method_id") or (rider_user or {}).get("default_payment_method")
+                outcome = await charge_ancillary_fee(
+                    ride=ride,
+                    rider_id=current_user["id"],
+                    amount=total_cancel_fee,
+                    payment_method_id=payment_method_id,
+                    stripe_customer_id=stripe_customer_id,
+                    fee_type="cancellation_fee",
+                )
+                if outcome.status == "unconfigured":
+                    # Stripe isn't wired up (dev/test) — no Stripe call was made
+                    # at all, so leave payment_status/payment_intent_id untouched
+                    # rather than mislabel a config gap as a decline.
+                    logger.error(
+                        "[CANCEL] cancellation fee charge skipped (stripe unconfigured) ride=%s amount=%s",
+                        ride_id,
+                        total_cancel_fee,
+                    )
+                else:
+                    # A real charge attempt happened (success or decline) — always
+                    # overwrite both fields together, even to None on a decline.
+                    # Leaving a stale booking-time hold's payment_intent_id in
+                    # place next to a fresh payment_status="failed" would make
+                    # payment_retry.py's blind PI-status scan retry the wrong
+                    # PaymentIntent. Mirrors settle_card's declined-branch write.
+                    cancel_fee_charge_attempted = True
+                    cancel_fee_payment_intent_id = outcome.payment_intent_id
+                    if outcome.status == "succeeded":
+                        cancel_fee_payment_status = "paid"
+                        try:
+                            await db_supabase.insert_one(
+                                "financial_events",
+                                {
+                                    "event_type": "stripe_charge",
+                                    "user_id": current_user["id"],
+                                    "ride_id": ride_id,
+                                    "delta_cents": int(_round(total_cancel_fee * Decimal("100"))),
+                                    "ref": outcome.payment_intent_id,
+                                    "metadata": {"source": "cancellation_fee", "driver_id": driver_id or ""},
+                                    "created_at": datetime.now(timezone.utc).isoformat(),
+                                },
+                            )
+                        except Exception:
+                            # Never let a ledger-write failure block the cancel or
+                            # mask that the card WAS actually charged — log loudly
+                            # so ops can backfill the reconciliation row.
+                            logger.error(
+                                "[CANCEL] financial_events write failed for cancellation fee "
+                                "ride=%s pi=%s amount=%s — charge succeeded but is unrecorded",
+                                ride_id,
+                                outcome.payment_intent_id,
+                                total_cancel_fee,
+                                exc_info=True,
+                            )
+                    else:
+                        cancel_fee_payment_status = "failed"
+                        logger.error(
+                            "[CANCEL] cancellation fee card charge failed ride=%s rider=%s amount=%s "
+                            "status=%s error=%s",
+                            ride_id,
+                            current_user["id"],
+                            total_cancel_fee,
+                            outcome.status,
+                            outcome.error_message,
+                        )
 
         if driver_id and charged_driver > 0:
             await pay_driver_cancellation_fee(
@@ -4695,6 +4772,11 @@ async def cancel_ride_rider(
         "cancellation_fee_driver": _f(charged_driver),
         "updated_at": _now,
     }
+    if cancel_fee_charge_attempted:
+        # Overwrite both together, even payment_intent_id -> None on a decline —
+        # never leave a stale booking-time hold's PI paired with a fresh status.
+        _base_update["payment_status"] = cancel_fee_payment_status
+        _base_update["payment_intent_id"] = cancel_fee_payment_intent_id
     # Migration 38 — attribution. Fall back to the legacy payload on
     # PGRST204 so the rider's cancel button never 503s if the column
     # isn't in prod yet.

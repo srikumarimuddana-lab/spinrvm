@@ -570,6 +570,9 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
     max_simultaneous_offers: area.max_simultaneous_offers || 3,
     use_eta_ranking: area.use_eta_ranking !== false,
     show_demand_heatmap: area.show_demand_heatmap || false,
+    heatmap_data_source: area.heatmap_data_source || "all_requests",
+    heatmap_data_window_hours: area.heatmap_data_window_hours ?? 168,
+    heatmap_refresh_seconds: area.heatmap_refresh_seconds ?? 300,
     // Surge is per-area and admin-gated. The toggle below is the master
     // enable (surge_enabled): until it's on, the backend prices every ride at
     // 1.0× and the surge engine skips this area entirely. surge_multiplier is
@@ -613,6 +616,9 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
       max_simultaneous_offers: Math.max(1, Math.min(10, parseInt(String(form.max_simultaneous_offers)) || 3)),
       use_eta_ranking: form.use_eta_ranking,
       show_demand_heatmap: form.show_demand_heatmap,
+      heatmap_data_source: form.heatmap_data_source,
+      heatmap_data_window_hours: Math.max(1, Math.min(720, parseInt(String(form.heatmap_data_window_hours)) || 168)),
+      heatmap_refresh_seconds: Math.max(30, Math.min(3600, parseInt(String(form.heatmap_refresh_seconds)) || 300)),
     };
     // Touch surge only when it actually changed. Sending surge_active on every
     // save would flip an enabled-but-idle auto area (surge_enabled=true,
@@ -671,13 +677,61 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
             {form.is_active ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-gray-300" />}
           </button>
         </div>
-        <div className="flex items-center gap-2 pt-5">
-          <label className="text-xs font-semibold text-gray-500">Demand Heatmap</label>
+      </div>
+
+      {/* Demand Heatmap — per-area driver-app overlay config (migration 202) */}
+      <div>
+        <h4 className="font-bold text-gray-800 mb-2">Demand Heatmap</h4>
+        <p className="text-sm text-gray-500 mb-3">
+          Show drivers a demand overlay on their map while idle, so they can position
+          toward busy blocks. Data is aggregated to ~110&nbsp;m cells — no exact pickup
+          locations are exposed.
+        </p>
+        <div className="flex items-center gap-2 pt-1">
           <button onClick={() => setForm({ ...form, show_demand_heatmap: !form.show_demand_heatmap })}>
             {form.show_demand_heatmap ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-gray-300" />}
           </button>
-          <span className="text-xs text-gray-400">Show ride demand overlay to drivers</span>
+          <label className="text-xs font-semibold text-gray-500">
+            Heatmap {form.show_demand_heatmap ? "ON" : "off"}
+          </label>
         </div>
+        {form.show_demand_heatmap && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-3">
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 mb-1">Data Source</label>
+              <select
+                className="w-full border rounded-lg px-3 py-2 text-sm"
+                value={form.heatmap_data_source}
+                onChange={e => setForm({ ...form, heatmap_data_source: e.target.value })}
+              >
+                <option value="all_requests">All ride requests</option>
+                <option value="completed_rides">Completed rides only</option>
+                <option value="missed_rides">Missed (cancelled) requests</option>
+              </select>
+              <p className="text-[11px] text-gray-400 mt-1">Missed requests highlight where riders couldn&apos;t get a car.</p>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 mb-1">Data Window (hours)</label>
+              <input
+                className="w-full border rounded-lg px-3 py-2 text-sm"
+                type="number" min="1" max="720" step="1"
+                value={form.heatmap_data_window_hours}
+                onChange={e => setForm({ ...form, heatmap_data_window_hours: e.target.value as any })}
+              />
+              <p className="text-[11px] text-gray-400 mt-1">1–720 · 24 = today&apos;s pattern, 168 = weekly pattern</p>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 mb-1">App Refresh (seconds)</label>
+              <input
+                className="w-full border rounded-lg px-3 py-2 text-sm"
+                type="number" min="30" max="3600" step="30"
+                value={form.heatmap_refresh_seconds}
+                onChange={e => setForm({ ...form, heatmap_refresh_seconds: e.target.value as any })}
+              />
+              <p className="text-[11px] text-gray-400 mt-1">30–3600 · how often idle driver apps re-fetch</p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Surge pricing — lives here now, no separate /dashboard/pricing page */}

@@ -300,6 +300,139 @@ async def charge_ride(
     )
 
 
+async def charge_ancillary_fee(
+    *,
+    ride: Dict[str, Any],
+    rider_id: str,
+    amount: Union[Decimal, float],
+    payment_method_id: Optional[str],
+    stripe_customer_id: Optional[str],
+    fee_type: str,
+) -> ChargeOutcome:
+    """Charge a rider's saved card for a fee outside normal trip settlement
+    (e.g. a rider-initiated cancellation fee).
+
+    Deliberately separate from ``charge_ride``: that function's metadata and
+    idempotency key assume the amount is a fare+tip total (it computes
+    ``tip = total_amount - ride.total_fare``), which would be nonsense for an
+    unrelated ancillary charge and would pollute Stripe-side reporting. Same
+    off-session card-charge mechanics, own metadata/idempotency namespace.
+
+    ``fee_type`` (e.g. ``"cancellation_fee"``) tags the Stripe metadata and
+    idempotency key so retries of two different fee types on the same ride
+    never collide, and so the charge is identifiable in the Stripe dashboard.
+    """
+    if amount <= 0:
+        return ChargeOutcome(status="succeeded", charged_amount=Decimal("0.00"))
+
+    if stripe is None:
+        logger.error("stripe package not installed; cannot charge %s", fee_type)
+        return ChargeOutcome(status="unconfigured", error_message="stripe not installed")
+
+    settings = await get_app_settings()
+    stripe_secret = settings.get("stripe_secret_key", "") or ""
+    if not stripe_secret:
+        logger.error(
+            "stripe_secret_key not configured; skipping %s charge for ride=%s",
+            fee_type,
+            ride.get("id"),
+        )
+        return ChargeOutcome(
+            status="unconfigured",
+            error_message="Payment processing is not configured",
+        )
+
+    if not stripe_customer_id:
+        return ChargeOutcome(
+            status="failed",
+            error_message="No Stripe customer on file for rider",
+        )
+
+    if not payment_method_id:
+        return ChargeOutcome(
+            status="failed",
+            error_message="No default payment method on file",
+        )
+
+    ride_id = ride.get("id") or ""
+    amount_dec = Decimal(str(amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    amount_cents = dollars_to_cents(amount_dec)
+
+    # Own idempotency namespace (prefixed with fee_type) so a retry of this
+    # exact fee on this ride/amount/card dedupes against itself only — never
+    # against a same-ride-and-amount fare charge or a different fee type.
+    idempotency_key = f"{fee_type}-{ride_id}-{amount_cents}-{payment_method_id}"
+
+    params: Dict[str, Any] = {
+        "amount": amount_cents,
+        "currency": CURRENCY,
+        "customer": stripe_customer_id,
+        "payment_method": payment_method_id,
+        "off_session": True,
+        "confirm": True,
+        "automatic_payment_methods": {"enabled": True, "allow_redirects": "never"},
+        "metadata": {
+            "ride_id": ride_id,
+            "rider_id": rider_id,
+            "fee_amount": str(amount_dec),
+            "source": fee_type,
+        },
+    }
+
+    try:
+        intent = stripe.PaymentIntent.create(
+            **params,
+            api_key=stripe_secret,
+            idempotency_key=idempotency_key,
+        )
+    except _StripeCardError as e:
+        err = getattr(e, "error", None)
+        decline_code = getattr(err, "decline_code", None) or getattr(err, "code", None)
+        logger.info(
+            "Card declined for %s ride=%s rider=%s code=%s: %s",
+            fee_type,
+            ride_id,
+            rider_id,
+            decline_code,
+            e,
+        )
+        return ChargeOutcome(
+            status="declined",
+            decline_code=decline_code,
+            error_message=str(getattr(err, "message", None) or e),
+        )
+    except _StripeBaseError as e:
+        logger.error("Stripe error charging %s for ride=%s rider=%s: %s", fee_type, ride_id, rider_id, e)
+        return ChargeOutcome(status="failed", error_message=str(e))
+    except Exception as e:  # pragma: no cover — defence-in-depth
+        logger.exception("Unexpected error charging %s for ride=%s: %s", fee_type, ride_id, e)
+        return ChargeOutcome(status="failed", error_message=str(e))
+
+    status = getattr(intent, "status", "") or ""
+    pi_id = getattr(intent, "id", None)
+    client_secret = getattr(intent, "client_secret", None)
+
+    if status == "succeeded":
+        return ChargeOutcome(status="succeeded", payment_intent_id=pi_id, charged_amount=amount_dec)
+
+    if status in ("requires_action", "requires_source_action"):
+        return ChargeOutcome(status="requires_action", payment_intent_id=pi_id, client_secret=client_secret)
+
+    if status in ("requires_payment_method", "requires_confirmation"):
+        return ChargeOutcome(
+            status="declined",
+            payment_intent_id=pi_id,
+            error_message=f"PaymentIntent unexpectedly in state: {status}",
+        )
+
+    logger.error("Unhandled PaymentIntent status=%s for %s ride=%s pi=%s", status, fee_type, ride_id, pi_id)
+    return ChargeOutcome(
+        status="failed",
+        payment_intent_id=pi_id,
+        error_message=f"Unhandled PaymentIntent status: {status}",
+    )
+
+
 async def _resolve_stripe_secret(ride_id: str) -> Optional[str]:
     """Shared secret lookup for the authorize/capture helpers.
 

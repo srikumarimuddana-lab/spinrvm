@@ -20,7 +20,9 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_ENV": "preview"
+        "EXPO_PUBLIC_ENV": "preview",
+        "EXPO_USE_PRECOMPILED_MODULES": "0",
+        "SENTRY_ALLOW_FAILURE": "true"
       }
     },
     "preview": {
@@ -30,7 +32,9 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_ENV": "preview"
+        "EXPO_PUBLIC_ENV": "preview",
+        "EXPO_USE_PRECOMPILED_MODULES": "0",
+        "SENTRY_ALLOW_FAILURE": "true"
       }
     },
     "production": {
@@ -39,7 +43,9 @@
       "channel": "production",
       "environment": "production",
       "env": {
-        "EXPO_PUBLIC_ENV": "production"
+        "EXPO_PUBLIC_ENV": "production",
+        "EXPO_USE_PRECOMPILED_MODULES": "0",
+        "SENTRY_ALLOW_FAILURE": "true"
       }
     }
   },

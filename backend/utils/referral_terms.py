@@ -8,12 +8,14 @@ service area". Used by:
     snapshot the area onto the referral_payouts ledger row.
 
 Resolution:
-  - service_areas carries per-area columns (migration 173). When a rider/driver
-    resolves to an area whose columns are set, those win.
+  - service_areas carries per-area columns (migration 173; driver_referee_reward
+    added in migration 201). When a rider/driver resolves to an area whose
+    columns are set, those win.
   - When no area is resolved (NULL / outside all areas / brand-new rider with no
     rides), or the area row is missing, fall back to the global constants in
     routes/users.py + routes/drivers.py — the historical default ($5/$5/1,
-    $10/10). This keeps behaviour identical for un-mapped users.
+    $10 referrer/$0 referee/10). This keeps behaviour identical for un-mapped
+    users.
 
 Money safety: all reward values are returned as Decimal, never float — callers
 write them to the financial ledger.
@@ -48,6 +50,7 @@ def _global_terms() -> dict:
     """
     try:
         from ..routes.drivers import (  # type: ignore
+            DRIVER_REFEREE_REWARD,
             REFERRAL_REWARD_AMOUNT,
             REFERRAL_RIDES_REQUIRED,
             REFERRAL_WINDOW_DAYS,
@@ -60,6 +63,7 @@ def _global_terms() -> dict:
         )
     except ImportError:
         from routes.drivers import (  # type: ignore
+            DRIVER_REFEREE_REWARD,
             REFERRAL_REWARD_AMOUNT,
             REFERRAL_RIDES_REQUIRED,
             REFERRAL_WINDOW_DAYS,
@@ -83,7 +87,7 @@ def _global_terms() -> dict:
         "driver": {
             "rides": int(REFERRAL_RIDES_REQUIRED),
             "referrer": _money(REFERRAL_REWARD_AMOUNT),
-            "referee": _money(0),
+            "referee": _money(DRIVER_REFEREE_REWARD),
             "window_days": int(REFERRAL_WINDOW_DAYS),
             "terms": None,
         },
@@ -104,7 +108,7 @@ _AREA_COLUMNS = {
     "driver": {
         "rides": "driver_referral_rides_required",
         "referrer": "driver_referral_reward",
-        "referee": None,  # drivers have no referee-side reward
+        "referee": "driver_referee_reward",
         "window_days": "driver_referral_window_days",
         "terms": "driver_referral_terms",
     },

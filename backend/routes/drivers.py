@@ -67,7 +67,11 @@ try:
     from ..utils.metrics import observe as _metric_observe
     from ..utils.money import dollars_to_cents, to_decimal
     from ..utils.rate_limiter import dsar_export_limit, tax_doc_email_limit
-    from ..utils.referral_terms import paid_referral_earnings, resolve_referral_terms
+    from ..utils.referral_terms import (
+        paid_referee_earnings,
+        paid_referral_earnings,
+        resolve_referral_terms,
+    )
     from ..utils.t4a_pdf import generate_t4a_pdf
 except ImportError:
     import db_supabase
@@ -112,7 +116,11 @@ except ImportError:
     from utils.metrics import observe as _metric_observe  # type: ignore
     from utils.money import dollars_to_cents, to_decimal
     from utils.rate_limiter import dsar_export_limit, tax_doc_email_limit
-    from utils.referral_terms import paid_referral_earnings, resolve_referral_terms  # type: ignore
+    from utils.referral_terms import (  # type: ignore
+        paid_referee_earnings,
+        paid_referral_earnings,
+        resolve_referral_terms,
+    )
     from utils.t4a_pdf import generate_t4a_pdf  # noqa: F401 – used in download_t4a_pdf
 
 db = db_supabase  # legacy alias
@@ -5706,6 +5714,12 @@ class ApplyReferralCodeRequest(BaseModel):
 # per-referee progress, and the displayed terms can never drift apart.
 REFERRAL_RIDES_REQUIRED = 10
 REFERRAL_REWARD_AMOUNT = 10  # CAD, paid per referee who reaches the ride target
+# Referee's own signup bonus once they reach REFERRAL_RIDES_REQUIRED (the same
+# threshold as the referrer — there is no separate referee ride count). 0 by
+# default: this is a distinct payout stream from the rider program's symmetric
+# $5/$5, and must not start crediting money until an admin opts in per service
+# area (service_areas.driver_referee_reward, migration 201).
+DRIVER_REFEREE_REWARD = 0
 # Days the referee has to reach REFERRAL_RIDES_REQUIRED (from referral_applied_at)
 # before the referral expires unpaid. 0 = no deadline. Per-area override lives in
 # service_areas.driver_referral_window_days (migration 189).
@@ -5786,6 +5800,12 @@ async def get_driver_referral_info(current_user: dict = Depends(get_current_user
     paid = await paid_referral_earnings(current_user["id"], "driver")
     referral_earnings = paid if paid is not None else (reward_amount * qualified_referrals)
 
+    # The viewer's OWN signup bonus — what they earned as a REFEREE (referred by
+    # another driver). Actual paid amount only (paid at most once), 0 when not
+    # referred / not yet paid / the area has the referee side set to 0. Mirrors
+    # the rider "Refer & Earn" screen's referee_earnings (routes/users.py).
+    referee_earned = await paid_referee_earnings(current_user["id"], "driver") or Decimal("0")
+
     # Who referred THIS driver (inbound). users.referred_by holds the referrer's
     # DRIVER id for driver referrals; resolve to a name + code. None if this
     # driver wasn't referred (or was referred via a rider code → not a driver row).
@@ -5814,18 +5834,29 @@ async def get_driver_referral_info(current_user: dict = Depends(get_current_user
         # Money serialised as 2-dp strings (house convention; clients parseFloat).
         "referral_earnings": _money_str(referral_earnings),
         "reward_amount": _money_str(reward_amount),
-        # Both sides' reward amounts so the app shows who earns what. referee=0 for
-        # drivers (no signup bonus) → app renders "$0 = that party earns nothing".
+        # The viewer's own signup bonus (paid only, 0 if not referred / not yet
+        # paid / area has the referee side at 0).
+        "referee_earnings": _money_str(referee_earned),
+        # Both sides' reward amounts so the app shows who earns what. referee_reward
+        # is 0 unless an admin has opted this service area into a driver signup
+        # bonus (service_areas.driver_referee_reward, migration 201) → app renders
+        # "$0 = that party earns nothing".
         "referrer_reward": _money_str(reward_amount),
         "referee_reward": _money_str(terms["referee"]),
         "referred_by": referred_by,
         "rides_required": rides_required,
         # Admin-authored per-area T&C wins; otherwise generate the default
-        # sentence from this area's reward numbers.
+        # sentence from this area's reward numbers. Mention the referee bonus
+        # only when this area actually pays one.
         "terms": terms.get("terms")
         or (
             f"Earn ${_fmt_money(reward_amount)} for each driver who signs up with your code "
             f"and completes {rides_required} rides."
+            + (
+                f" They earn ${_fmt_money(terms['referee'])} too once they complete {rides_required} rides."
+                if terms["referee"] > 0
+                else ""
+            )
         ),
     }
 

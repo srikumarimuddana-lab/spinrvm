@@ -1,0 +1,36 @@
+-- Migration 201: per-service-area driver REFEREE referral reward
+--
+-- Driver referrals previously paid the referrer only ($10 default, see
+-- migration 173) — the referred driver (referee) earned nothing on signup,
+-- unlike the rider program where both sides earn ($5/$5). This migration adds
+-- the missing referee-side reward column so admins can turn on a driver
+-- signup bonus per service area, exactly like every other referral amount.
+--
+-- Design:
+--   * One additive column on service_areas, same shape as the existing
+--     rider_referee_reward / driver_referral_reward columns (migration 173).
+--   * Default 0 (NOT the rider program's $5) — this is a brand-new payout
+--     stream and must not start crediting money anywhere until an admin
+--     explicitly opts in for that area. A per-area value of 0 already means
+--     "don't pay this side" in utils/referral_payout.py, so 0 is also the
+--     correct "off" state, not a special case.
+--   * The referee still qualifies on the SAME threshold as the referrer
+--     (driver_referral_rides_required) — there is no separate referee ride
+--     count, mirroring the rider program's single shared threshold.
+--   * backend/utils/referral_terms.py falls back to the global constant
+--     DRIVER_REFEREE_REWARD (= 0) in backend/routes/drivers.py when no area
+--     is resolved, exactly like every other referral term.
+--
+-- Money column is numeric (never float), matching the sibling reward columns.
+-- Additive + defaulted → forward-compatible with in-flight traffic; no
+-- backfill required.
+--
+-- Rollback:
+--   (on paper — drop the added column)
+--   ALTER TABLE service_areas DROP COLUMN IF EXISTS driver_referee_reward;
+--   (Dropping the column reverts the backend to the $0 global default;
+--    rewards already paid are unaffected — referral_payouts.referee_reward
+--    is a separate, already-snapshotted ledger column.)
+
+ALTER TABLE service_areas
+    ADD COLUMN IF NOT EXISTS driver_referee_reward numeric(10, 2) NOT NULL DEFAULT 0;

@@ -261,7 +261,7 @@
         "emergencyServicesMsg": "Llame al 911 para asistencia de emergencia inmediata.",
         "call911": "Llamar al 911",
         "cancel": "Cancelar",
-        "downloadData": "Descargar mis datos",
+        "downloadData": "Enviar mis datos por correo",
         "exportRequestedTitle": "Exportación solicitada",
         "exportRequestedMsg": "Su exportación de datos está en camino — revise su correo.",
         "exportFailedTitle": "Error de exportación",

@@ -380,7 +380,6 @@ interface DriverState {
     fetchDriverBalance: () => Promise<void>;
     requestPayout: (amount: number) => Promise<{ success: boolean; error?: string }>;
     fetchPayoutHistory: (limit?: number, offset?: number) => Promise<void>;
-    exportEarnings: (year?: number) => Promise<{ data: string; filename: string } | null>;
 
     // T4A Tax Documents
     fetchT4ASummaries: () => Promise<void>;
@@ -1014,16 +1013,6 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             set({ payoutHistory: res.data.payouts || [] });
         } catch (err) {
             console.log('Fetch payout history error:', err);
-        }
-    },
-
-    exportEarnings: async (year?: number): Promise<{ data: string; filename: string } | null> => {
-        try {
-            const res = await api.get<{ data: string; filename: string }>(`/drivers/earnings/export?year=${year || new Date().getFullYear()}`);
-            return { data: res.data.data, filename: res.data.filename };
-        } catch (err) {
-            console.log('Export earnings error:', err);
-            return null;
         }
     },
 

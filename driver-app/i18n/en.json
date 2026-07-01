@@ -312,7 +312,7 @@
         "emergencyServicesMsg": "Call 911 for immediate emergency assistance.",
         "call911": "Call 911",
         "cancel": "Cancel",
-        "downloadData": "Download My Data",
+        "downloadData": "Email My Data",
         "exportRequestedTitle": "Export Requested",
         "exportRequestedMsg": "Your data export is on its way — check your email.",
         "exportFailedTitle": "Export Failed",

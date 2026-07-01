@@ -66,7 +66,7 @@ try:
     from ..utils.metrics import inc as _metric_inc
     from ..utils.metrics import observe as _metric_observe
     from ..utils.money import dollars_to_cents, to_decimal
-    from ..utils.rate_limiter import dsar_export_limit
+    from ..utils.rate_limiter import dsar_export_limit, tax_doc_email_limit
     from ..utils.referral_terms import (
         paid_referee_earnings,
         paid_referral_earnings,
@@ -115,7 +115,7 @@ except ImportError:
     from utils.metrics import inc as _metric_inc  # type: ignore
     from utils.metrics import observe as _metric_observe  # type: ignore
     from utils.money import dollars_to_cents, to_decimal
-    from utils.rate_limiter import dsar_export_limit
+    from utils.rate_limiter import dsar_export_limit, tax_doc_email_limit
     from utils.referral_terms import (  # type: ignore
         paid_referee_earnings,
         paid_referral_earnings,
@@ -2953,6 +2953,158 @@ async def export_earnings(year: int = Query(None), current_user: dict = Depends(
     filename = f"earnings_export_{year}.csv"
 
     return {"data": csv_data, "filename": filename}
+
+
+def _driver_email_or_400(current_user: dict) -> str:
+    """Return the driver's on-file email or raise 400.
+
+    Tax documents are delivered by email only (no in-app download), so a real
+    address is mandatory. Falling back to the phone number would hand a raw
+    phone number to the email provider — it fails to send and risks logging PII.
+    """
+    email = (current_user.get("email") or "").strip()
+    if "@" not in email:
+        raise HTTPException(status_code=400, detail="No email address on file to send the document to.")
+    return email
+
+
+async def _email_driver_document(
+    user_id: str,
+    email: str,
+    *,
+    subject: str,
+    body: str,
+    filename: str,
+    content: bytes,
+    mime: str,
+    log_id: str,
+) -> None:
+    """Background task: email a generated document to the driver as an attachment.
+
+    Shared by the T4A PDF and earnings-CSV senders (and any future tax/document
+    email). Runs off-request, so a send failure can't surface to the client —
+    it is logged loudly (never swallowed), mirroring the DSAR export pattern.
+    """
+    try:
+        sent = await send_email(
+            to=email,
+            subject=subject,
+            body=body,
+            attachments=[{"filename": filename, "content": content, "mime": mime}],
+            email_type="transactional",
+            recipient_user_id=user_id,
+            log_id=log_id,
+        )
+        if sent:
+            logger.info("%s emailed for user %s (%s)", log_id, user_id, filename)
+        else:
+            # Both providers rejected without raising — surface, don't log success.
+            logger.error("%s email NOT sent (provider rejected) for user %s (%s)", log_id, user_id, filename)
+    except Exception as exc:
+        original = exc.details.get("original") if hasattr(exc, "details") and isinstance(exc.details, dict) else None
+        logger.error(
+            "%s email failed for user %s (%s): %s%s",
+            log_id,
+            user_id,
+            filename,
+            exc,
+            f" — {original}" if original else "",
+            exc_info=True,
+        )
+
+
+async def _email_t4a_document(user_id: str, email: str, year: int, summary: dict) -> None:
+    """Background task: render the T4A PDF and email it to the driver."""
+    try:
+        pdf_bytes = generate_t4a_pdf(summary)
+    except Exception:
+        # Render failure is logged here (not in the shared sender) since it's
+        # specific to PDF generation; nothing is emailed.
+        logger.error("T4A PDF render failed for user %s year %s", user_id, year, exc_info=True)
+        return
+    filename = f"T4A_{year}_{user_id[:8]}.pdf"
+    await _email_driver_document(
+        user_id,
+        email,
+        subject=f"Your Spinr T4A summary for {year}",
+        body=(
+            "Hi,\n\n"
+            f"As requested, your T4A earnings summary for the {year} tax year is "
+            f'attached as a PDF ("{filename}").\n\n'
+            "Keep this document for your Canadian tax filing. If you have any "
+            "questions, contact support@spinr.ca.\n\n"
+            "— The Spinr Team"
+        ),
+        filename=filename,
+        content=pdf_bytes,
+        mime="application/pdf",
+        log_id="t4a",
+    )
+
+
+async def _email_earnings_csv(user_id: str, email: str, year: int, csv_data: str) -> None:
+    """Background task: email the trip-by-trip earnings CSV to the driver."""
+    filename = f"earnings_export_{year}.csv"
+    await _email_driver_document(
+        user_id,
+        email,
+        subject=f"Your Spinr earnings export for {year}",
+        body=(
+            "Hi,\n\n"
+            f"As requested, your detailed earnings export for {year} is attached "
+            f'as a CSV ("{filename}").\n\n'
+            "If you have any questions, contact support@spinr.ca.\n\n"
+            "— The Spinr Team"
+        ),
+        filename=filename,
+        content=csv_data.encode("utf-8"),
+        mime="text/csv",
+        log_id="earnings",
+    )
+
+
+@api_router.post("/t4a/{year}/email")
+@tax_doc_email_limit
+async def email_t4a_summary(
+    year: int,
+    background_tasks: BackgroundTasks,
+    request: Request = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """Email the T4A summary PDF to the driver (no in-app download).
+
+    Returns immediately; the PDF render and email send happen in a background
+    task so the driver does not wait.
+
+    Rate-limited (@tax_doc_email_limit, 6/hour) — each call reads up to 10k
+    rides and sends an email; the cap prevents inbox/SES abuse. SlowAPI needs a
+    parameter named ``request`` typed as starlette Request; do not remove it.
+    """
+    email = _driver_email_or_400(current_user)
+    summary = await get_t4a_summary(year, current_user)
+    background_tasks.add_task(_email_t4a_document, current_user["id"], email, year, summary)
+    return {"message": f"Your T4A summary for {year} is on its way. Check your email."}
+
+
+@api_router.post("/earnings/export/email")
+@tax_doc_email_limit
+async def email_earnings_export(
+    background_tasks: BackgroundTasks,
+    year: int = Query(None),
+    request: Request = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """Email the trip-by-trip earnings CSV to the driver (no in-app download).
+
+    Rate-limited (@tax_doc_email_limit, 6/hour). SlowAPI needs a parameter
+    named ``request`` typed as starlette Request; do not remove it.
+    """
+    if not year:
+        year = datetime.now(timezone.utc).year
+    email = _driver_email_or_400(current_user)
+    export = await export_earnings(year=year, current_user=current_user)
+    background_tasks.add_task(_email_earnings_csv, current_user["id"], email, year, export["data"])
+    return {"message": f"Your earnings export for {year} is on its way. Check your email."}
 
 
 # Account (users) fields omitted from a data export: credentials and internal

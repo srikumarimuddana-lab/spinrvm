@@ -78,7 +78,7 @@ class TestCardCancellationFeeCharge:
             ) as charge_mock,
             patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=_driver())),
             patch("backend.routes.rides.db.update_one", AsyncMock()),
-            patch("backend.routes.rides.db.insert_one", AsyncMock()),
+            patch("backend.routes.rides.db.insert_one", AsyncMock()) as insert_one_mock,
             patch("backend.routes.rides.db_supabase.update_ride", update_ride_mock),
             patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride_cancelled)),
             patch("backend.routes.rides.db_supabase.set_driver_available", AsyncMock()),
@@ -109,6 +109,17 @@ class TestCardCancellationFeeCharge:
         written = update_ride_mock.call_args_list[0].args[1]
         assert written["payment_status"] == "paid"
         assert written["payment_intent_id"] == "pi_test_ok"
+
+        # A successful Stripe charge must leave a reconciliation trail — a
+        # financial_events row written BEFORE the ride update, mirroring
+        # settle_card's record_payment_event, so a crash between the two
+        # never loses track of money already collected.
+        ledger_calls = [c for c in insert_one_mock.call_args_list if c.args[0] == "financial_events"]
+        assert len(ledger_calls) == 1
+        ledger_row = ledger_calls[0].args[1]
+        assert ledger_row["ride_id"] == RIDE_ID
+        assert ledger_row["ref"] == "pi_test_ok"
+        assert ledger_row["delta_cents"] == 450
 
     async def test_declined_charge_marks_ride_failed(self):
         from backend.routes import rides as rides_mod
@@ -153,6 +164,101 @@ class TestCardCancellationFeeCharge:
         assert result["success"] is True
         written = update_ride_mock.call_args_list[0].args[1]
         assert written["payment_status"] == "failed"
+        # A decline never returns a PaymentIntent id — payment_intent_id must
+        # still be explicitly overwritten (here, to None) rather than left at
+        # whatever stale booking-time hold PI the ride already had. Otherwise
+        # payment_retry.py's blind payment_status scan would pick up this
+        # cancelled ride and retry an unrelated PaymentIntent forever.
+        assert "payment_intent_id" in written
+        assert written["payment_intent_id"] is None
+
+    async def test_requires_action_also_marks_ride_failed(self):
+        """No 3DS retry flow exists for a cancellation fee, so requires_action
+        is treated the same as a decline — but must still overwrite
+        payment_intent_id to the real (challenged) PI, not leave it unset."""
+        from backend.routes import rides as rides_mod
+
+        ride_arrived = _ride(status="driver_arrived")
+        ride_cancelled = _ride(status="cancelled")
+        update_ride_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.rides.db.find_one", AsyncMock(return_value=ride_arrived)),
+            patch("backend.routes.rides.get_app_settings", AsyncMock(return_value=SETTINGS)),
+            patch("backend.routes.rides.db_supabase.get_user_by_id", AsyncMock(return_value=_rider_user())),
+            patch(
+                "backend.routes.rides.charge_ancillary_fee",
+                AsyncMock(
+                    return_value=ChargeOutcome(
+                        status="requires_action", payment_intent_id="pi_test_3ds", client_secret="secret_x"
+                    )
+                ),
+            ),
+            patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=_driver())),
+            patch("backend.routes.rides.db.update_one", AsyncMock()),
+            patch("backend.routes.rides.db.insert_one", AsyncMock()),
+            patch("backend.routes.rides.db_supabase.update_ride", update_ride_mock),
+            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride_cancelled)),
+            patch("backend.routes.rides.db_supabase.set_driver_available", AsyncMock()),
+            patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.rides.manager.broadcast_to_admins", AsyncMock()),
+            patch("backend.routes.rides.send_push_notification", AsyncMock()),
+        ):
+            fn = getattr(rides_mod.cancel_ride_rider, "__wrapped__", rides_mod.cancel_ride_rider)
+            result = await fn(
+                request=MagicMock(),
+                ride_id=RIDE_ID,
+                reason="",
+                current_user={"id": RIDER_ID},
+            )
+
+        assert result["success"] is True
+        written = update_ride_mock.call_args_list[0].args[1]
+        assert written["payment_status"] == "failed"
+        assert written["payment_intent_id"] == "pi_test_3ds"
+
+    async def test_unconfigured_stripe_leaves_payment_status_untouched(self):
+        """When Stripe isn't wired up at all, no charge was attempted — the
+        ride's existing payment_status/payment_intent_id must be left alone
+        rather than mislabelled as a decline."""
+        from backend.routes import rides as rides_mod
+
+        ride_arrived = _ride(status="driver_arrived")
+        ride_cancelled = _ride(status="cancelled")
+        update_ride_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.rides.db.find_one", AsyncMock(return_value=ride_arrived)),
+            patch("backend.routes.rides.get_app_settings", AsyncMock(return_value=SETTINGS)),
+            patch("backend.routes.rides.db_supabase.get_user_by_id", AsyncMock(return_value=_rider_user())),
+            patch(
+                "backend.routes.rides.charge_ancillary_fee",
+                AsyncMock(return_value=ChargeOutcome(status="unconfigured", error_message="not configured")),
+            ),
+            patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=_driver())),
+            patch("backend.routes.rides.db.update_one", AsyncMock()),
+            patch("backend.routes.rides.db.insert_one", AsyncMock()),
+            patch("backend.routes.rides.db_supabase.update_ride", update_ride_mock),
+            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride_cancelled)),
+            patch("backend.routes.rides.db_supabase.set_driver_available", AsyncMock()),
+            patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.rides.manager.broadcast_to_admins", AsyncMock()),
+            patch("backend.routes.rides.send_push_notification", AsyncMock()),
+        ):
+            fn = getattr(rides_mod.cancel_ride_rider, "__wrapped__", rides_mod.cancel_ride_rider)
+            result = await fn(
+                request=MagicMock(),
+                ride_id=RIDE_ID,
+                reason="",
+                current_user={"id": RIDER_ID},
+            )
+
+        assert result["success"] is True
+        written = update_ride_mock.call_args_list[0].args[1]
+        assert "payment_status" not in written
+        assert "payment_intent_id" not in written
 
     async def test_company_allowance_never_calls_card_charge(self):
         """Corporate-paid rides must not attempt a Stripe charge on the rider's

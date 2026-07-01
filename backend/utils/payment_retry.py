@@ -40,6 +40,7 @@ except ImportError:
 try:
     from ..db import db
     from ..features import send_push_notification
+    from ..models.ride_status import RideStatus
     from ..settings_loader import get_app_settings
     from ..socket_manager import manager
     from .datetime_utils import parse_iso_utc
@@ -47,6 +48,7 @@ try:
 except ImportError:
     from db import db
     from features import send_push_notification
+    from models.ride_status import RideStatus
     from settings_loader import get_app_settings
     from socket_manager import manager
     from utils.datetime_utils import parse_iso_utc
@@ -205,7 +207,17 @@ async def retry_failed_payments():
     try:
         rides = await db.get_rows(
             "rides",
-            {"payment_status": {"$in": ["failed", "requires_action", "processing"]}},
+            {
+                "payment_status": {"$in": ["failed", "requires_action", "processing"]},
+                # Cancelled rides never had a fare charge to retry — their
+                # payment_status here reflects a cancellation-fee charge
+                # (see cancel_ride_rider), which has its own PaymentIntent
+                # namespace. Retrying it here would confirm/create a fare
+                # PaymentIntent against a stale booking-time hold instead,
+                # and the ride would sit in this scan forever since none of
+                # this loop's success paths ever apply to a cancelled ride.
+                "status": {"$ne": RideStatus.CANCELLED},
+            },
             limit=50,
             order="created_at",
             columns=(

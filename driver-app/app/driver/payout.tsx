@@ -8,7 +8,6 @@ import {
     Platform,
     TextInput,
     ActivityIndicator,
-    Linking,
     KeyboardAvoidingView,
 } from 'react-native';
 import { showToast } from '../../hooks/useToast';
@@ -46,8 +45,8 @@ function PayoutScreen() {
     // Hosted Stripe onboarding opens in the system browser, so track the brief
     // "opening…" state while we mint the AccountLink and hand off.
     const [stripeOnboarding, setStripeOnboarding] = useState(false);
-    const [downloadingT4A, setDownloadingT4A] = useState(false);
-    const [downloadingCSV, setDownloadingCSV] = useState(false);
+    const [sendingT4A, setSendingT4A] = useState(false);
+    const [sendingCSV, setSendingCSV] = useState(false);
     // gst_bn (CRA Business Number) is the canonical column on the driver row
     // served by useDriverMe and accepted by PUT /drivers/me — keep a local form
     // state for the input but seed it from the cached server value (also
@@ -214,52 +213,33 @@ function PayoutScreen() {
         }
     };
 
-    const handleDownloadT4A = async () => {
-        setDownloadingT4A(true);
+    const handleEmailT4A = async () => {
+        setSendingT4A(true);
         try {
             // CRA T4A is generated per tax year — default to the most recently
             // completed year so drivers don't get an in-progress year's partial total.
             const year = new Date().getFullYear() - 1;
-            const res = await api.get<{ url?: string; file_url?: string; total_earnings?: string; year?: number; total_trips?: number; net_earnings?: string }>(`/drivers/t4a/${year}`);
-            const url = res.data?.url || res.data?.file_url;
-            if (url) {
-                await Linking.openURL(url);
-            } else if (res.data?.total_earnings != null) {
-                showToast(
-                    'info',
-                    `T4A Summary — ${res.data.year}`,
-                    `Total earnings: $${Number(res.data.total_earnings).toFixed(2)}\nTotal trips: ${res.data.total_trips}\nNet earnings: $${Number(res.data.net_earnings).toFixed(2)}\n\nA downloadable PDF will be available once tax documents are finalized.`,
-                );
-            } else {
-                showToast('info', 'Unavailable', 'T4A document is not yet available. Please try again later.');
-            }
+            // Tax documents are delivered by email only (no in-app download); the
+            // backend renders the PDF and emails it as an attachment.
+            const res = await api.post<{ message?: string }>(`/drivers/t4a/${year}/email`);
+            showToast('success', 'Check Your Email', res.data?.message || `Your T4A summary for ${year} is on its way.`);
         } catch (err: any) {
-            showToast('error', 'Download Failed', err.response?.data?.detail || 'Could not download T4A. Please try again.');
+            showToast('error', 'Send Failed', err.response?.data?.detail || 'Could not send your T4A. Please try again.');
         } finally {
-            setDownloadingT4A(false);
+            setSendingT4A(false);
         }
     };
 
-    const handleDownloadCSV = async () => {
-        setDownloadingCSV(true);
+    const handleEmailCSV = async () => {
+        setSendingCSV(true);
         try {
             const year = new Date().getFullYear();
-            const res = await api.get<{ url?: string; file_url?: string; data?: string }>(`/drivers/earnings/export?year=${year}`);
-            const url = res.data?.url || res.data?.file_url;
-            if (url) {
-                await Linking.openURL(url);
-            } else if (res.data?.data) {
-                // Backend returns { data: <csv-string>, filename }. Open a data: URL
-                // so the OS share sheet can hand it to Mail/Drive/Files.
-                const encoded = encodeURIComponent(res.data.data);
-                await Linking.openURL(`data:text/csv;charset=utf-8,${encoded}`);
-            } else {
-                showToast('info', 'Unavailable', 'Earnings CSV is not yet available. Please try again later.');
-            }
+            const res = await api.post<{ message?: string }>(`/drivers/earnings/export/email?year=${year}`);
+            showToast('success', 'Check Your Email', res.data?.message || `Your earnings export for ${year} is on its way.`);
         } catch (err: any) {
-            showToast('error', 'Download Failed', err.response?.data?.detail || 'Could not download earnings CSV. Please try again.');
+            showToast('error', 'Send Failed', err.response?.data?.detail || 'Could not send your earnings export. Please try again.');
         } finally {
-            setDownloadingCSV(false);
+            setSendingCSV(false);
         }
     };
 
@@ -639,42 +619,42 @@ function PayoutScreen() {
                     <Text style={styles.sectionTitle}>Tax Documents</Text>
                     <View style={styles.payoutCard}>
                         <TouchableOpacity
-                            style={[styles.docRow, downloadingT4A && styles.docRowDisabled]}
-                            onPress={handleDownloadT4A}
-                            disabled={downloadingT4A}
+                            style={[styles.docRow, sendingT4A && styles.docRowDisabled]}
+                            onPress={handleEmailT4A}
+                            disabled={sendingT4A}
                         >
                             <View style={styles.docRowLeft}>
                                 <Ionicons name="document-text-outline" size={22} color={colors.primary} />
                                 <View style={{ marginLeft: 12 }}>
-                                    <Text style={styles.docRowTitle}>Download T4A</Text>
-                                    <Text style={styles.docRowSub}>Annual earnings slip for tax filing</Text>
+                                    <Text style={styles.docRowTitle}>Email T4A</Text>
+                                    <Text style={styles.docRowSub}>Annual earnings slip sent to your email</Text>
                                 </View>
                             </View>
-                            {downloadingT4A ? (
+                            {sendingT4A ? (
                                 <ActivityIndicator size="small" color={colors.primary} />
                             ) : (
-                                <Ionicons name="download-outline" size={20} color={colors.primary} />
+                                <Ionicons name="mail-outline" size={20} color={colors.primary} />
                             )}
                         </TouchableOpacity>
 
                         <View style={styles.docDivider} />
 
                         <TouchableOpacity
-                            style={[styles.docRow, downloadingCSV && styles.docRowDisabled]}
-                            onPress={handleDownloadCSV}
-                            disabled={downloadingCSV}
+                            style={[styles.docRow, sendingCSV && styles.docRowDisabled]}
+                            onPress={handleEmailCSV}
+                            disabled={sendingCSV}
                         >
                             <View style={styles.docRowLeft}>
                                 <Ionicons name="grid-outline" size={22} color={colors.primary} />
                                 <View style={{ marginLeft: 12 }}>
-                                    <Text style={styles.docRowTitle}>Download Earnings CSV</Text>
-                                    <Text style={styles.docRowSub}>Detailed trip-by-trip earnings export</Text>
+                                    <Text style={styles.docRowTitle}>Email Earnings CSV</Text>
+                                    <Text style={styles.docRowSub}>Trip-by-trip earnings export sent to your email</Text>
                                 </View>
                             </View>
-                            {downloadingCSV ? (
+                            {sendingCSV ? (
                                 <ActivityIndicator size="small" color={colors.primary} />
                             ) : (
-                                <Ionicons name="download-outline" size={20} color={colors.primary} />
+                                <Ionicons name="mail-outline" size={20} color={colors.primary} />
                             )}
                         </TouchableOpacity>
                     </View>

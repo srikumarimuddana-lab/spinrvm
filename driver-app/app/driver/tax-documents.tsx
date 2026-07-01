@@ -6,7 +6,6 @@ import {
     TouchableOpacity,
     FlatList,
     ActivityIndicator,
-    Linking,
 } from 'react-native';
 import SafeRefreshControl from '../../components/SafeRefreshControl';
 import { showToast } from '../../hooks/useToast';
@@ -35,7 +34,7 @@ function TaxDocumentsScreen() {
     const [documents, setDocuments] = useState<TaxDocument[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
-    const [downloadingId, setDownloadingId] = useState<string | null>(null);
+    const [sendingId, setSendingId] = useState<string | null>(null);
 
     useEffect(() => {
         fetchDocuments();
@@ -45,9 +44,9 @@ function TaxDocumentsScreen() {
         try {
             // There is no server-side listing endpoint for tax documents yet —
             // T4A summaries are generated per-year on demand via
-            // GET /drivers/t4a/{year}. Synthesize a list client-side for the
-            // last three completed tax years; the actual summary is fetched
-            // when the driver taps Download.
+            // POST /drivers/t4a/{year}/email. Synthesize a list client-side for
+            // the last three completed tax years; the actual PDF is emailed
+            // when the driver taps the row.
             const now = new Date();
             const latestCompletedYear = now.getFullYear() - 1;
             const years = [latestCompletedYear, latestCompletedYear - 1, latestCompletedYear - 2];
@@ -72,33 +71,21 @@ function TaxDocumentsScreen() {
         fetchDocuments();
     };
 
-    const handleDownload = async (doc: TaxDocument) => {
-        setDownloadingId(doc.id);
+    const handleEmail = async (doc: TaxDocument) => {
+        setSendingId(doc.id);
         try {
-            if (doc.file_url) {
-                await Linking.openURL(doc.file_url);
-                return;
-            }
-
-            // T4A: fetch the per-year summary and either open the signed URL
-            // (once the PDF generator ships) or display the summary inline.
-            const res = await api.get<{ url?: string; file_url?: string; total_earnings?: string; year?: number; total_trips?: number; net_earnings?: string }>(`/drivers/t4a/${doc.tax_year}`);
-            const url = res.data?.url || res.data?.file_url;
-            if (url) {
-                await Linking.openURL(url);
-            } else if (res.data?.total_earnings != null) {
-                showToast(
-                    'info',
-                    `T4A Summary — ${res.data.year}`,
-                    `Total earnings: $${Number(res.data.total_earnings).toFixed(2)}\nTotal trips: ${res.data.total_trips}\nNet earnings: $${Number(res.data.net_earnings).toFixed(2)}\n\nA downloadable PDF will be available once tax documents are finalized.`,
-                );
-            } else {
-                showToast('info', 'Unavailable', 'This document is not yet available for download.');
-            }
-        } catch (err) {
-            showToast('error', 'Open Failed', 'Could not open the document. Please try again.');
+            // Tax documents are delivered by email only (no in-app download); the
+            // backend renders the PDF and emails it as an attachment.
+            const res = await api.post<{ message?: string }>(`/drivers/t4a/${doc.tax_year}/email`);
+            showToast(
+                'success',
+                'Check Your Email',
+                res.data?.message || `Your T4A summary for ${doc.tax_year} is on its way.`,
+            );
+        } catch (err: any) {
+            showToast('error', 'Send Failed', err?.response?.data?.detail || 'Could not send the document. Please try again.');
         } finally {
-            setDownloadingId(null);
+            setSendingId(null);
         }
     };
 
@@ -126,7 +113,7 @@ function TaxDocumentsScreen() {
     };
 
     const renderDocumentItem = ({ item }: { item: TaxDocument }) => {
-        const isDownloading = downloadingId === item.id;
+        const isSending = sendingId === item.id;
         return (
             <View style={styles.docCard}>
                 <View style={styles.docIcon}>
@@ -140,14 +127,14 @@ function TaxDocumentsScreen() {
                     )}
                 </View>
                 <TouchableOpacity
-                    style={[styles.downloadBtn, isDownloading && styles.downloadBtnDisabled]}
-                    onPress={() => handleDownload(item)}
-                    disabled={isDownloading}
+                    style={[styles.emailBtn, isSending && styles.emailBtnDisabled]}
+                    onPress={() => handleEmail(item)}
+                    disabled={isSending}
                 >
-                    {isDownloading ? (
+                    {isSending ? (
                         <ActivityIndicator size="small" color="#fff" />
                     ) : (
-                        <Ionicons name="download-outline" size={18} color="#fff" />
+                        <Ionicons name="mail-outline" size={18} color="#fff" />
                     )}
                 </TouchableOpacity>
             </View>
@@ -193,7 +180,7 @@ function TaxDocumentsScreen() {
                         <View style={styles.infoCard}>
                             <Ionicons name="information-circle" size={20} color={colors.primary} />
                             <Text style={styles.infoText}>
-                                Download your T4A slips and earnings summaries for Canadian tax filing purposes.
+                                Tap to have your T4A slips and earnings summaries emailed to you for Canadian tax filing purposes.
                             </Text>
                         </View>
                     }
@@ -290,7 +277,7 @@ function createStyles(colors: ThemeColors) {
             marginTop: 2,
         },
 
-        downloadBtn: {
+        emailBtn: {
             backgroundColor: colors.primary,
             width: 40,
             height: 40,
@@ -298,7 +285,7 @@ function createStyles(colors: ThemeColors) {
             justifyContent: 'center',
             alignItems: 'center',
         },
-        downloadBtnDisabled: {
+        emailBtnDisabled: {
             opacity: 0.6,
         },
 

@@ -175,6 +175,16 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             // Voltra Live Activities require iOS 16.4+ (the activity APIs).
             ios: {
                 deploymentTarget: '16.4',
+                // Compile React Native from source instead of the prebuilt
+                // ReactNativeCore.xcframework. On SDK 55 the prebuilt 0.85.2 core
+                // exposes a 4-arg RCTDevMenuConfiguration(...,bundleConfiguration:)
+                // while expo-dev-launcher 55.0.36 still calls the 3-arg form that
+                // matches the npm RN *source* headers — so against the prebuilt
+                // binary the dev-launcher Swift fails to compile ("missing argument
+                // for parameter 'bundleConfiguration'"). Building from source aligns
+                // every RN header with what expo-dev-launcher expects. The 4-arg
+                // API only lands in SDK 56; until we migrate, source build is the fix.
+                buildReactNativeFromSource: true,
                 // @react-native-firebase Swift pods (AppCheckCore,
                 // FirebaseCoreInternal, FirebaseCrashlytics, FirebaseSessions)
                 // depend on non-modular Google pods (GoogleUtilities,

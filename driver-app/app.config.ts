@@ -266,6 +266,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 useFrameworks: 'static',
             }
         }],
+        // Must run AFTER expo-build-properties: injects into the generated
+        // Podfile post_install so the iOS static-frameworks + source-build combo
+        // above doesn't fail the Firebase compile on non-modular header includes.
+        './plugins/withFirebaseNonModularHeaders',
         // Belt-and-suspenders: re-stamps android.compileSdkVersion=36 and
         // android.targetSdkVersion=36 into gradle.properties. EAS build #59fcaa6b
         // showed [ExpoRootProject] compileSdk: 35 even though expo-build-properties

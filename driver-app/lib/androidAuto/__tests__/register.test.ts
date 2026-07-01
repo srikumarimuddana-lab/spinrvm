@@ -279,3 +279,26 @@ it('never creates a template when no car is connected', () => {
   mockListeners.didConnect?.();
   expect(mockTemplates).toHaveLength(0);
 });
+
+it('degrades to no-car-support instead of throwing when the native module is missing', () => {
+  // Simulates Expo Go / an older binary receiving this JS via OTA: importing
+  // @iternio/react-native-auto-play instantiates its Nitro HybridObject, which
+  // throws when the native side is absent. registerAutoPlay runs at bundle
+  // load (index.js), so a throw here would crash the whole phone app.
+  const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+  jest.isolateModules(() => {
+    jest.doMock('@iternio/react-native-auto-play', () => {
+      throw new Error('Nitro HybridObject "AutoPlay" is not registered');
+    });
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const register = require('../register').default as typeof registerAutoPlay;
+    expect(() => register()).not.toThrow();
+  });
+  expect(errSpy).toHaveBeenCalledWith(
+    expect.stringContaining('native module unavailable'),
+    expect.any(Error),
+  );
+  expect(mockTemplates).toHaveLength(0);
+  errSpy.mockRestore();
+  jest.dontMock('@iternio/react-native-auto-play');
+});

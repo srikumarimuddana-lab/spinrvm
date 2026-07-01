@@ -88,8 +88,23 @@ export default function registerAutoPlay(): void {
     return;
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const autoPlay = require('@iternio/react-native-auto-play');
+  // Importing the package instantiates its Nitro HybridObject natively, which
+  // THROWS on any binary that doesn't contain the iternio module (Expo Go, or an
+  // older installed build receiving this JS over-the-air). This runs at bundle
+  // load from index.js, so an unguarded throw here would crash the entire phone
+  // app at startup — degrade to "no car support" instead and surface it in logs.
+  let autoPlay: typeof import('@iternio/react-native-auto-play');
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    autoPlay = require('@iternio/react-native-auto-play');
+  } catch (e) {
+    console.error(
+      '[android-auto] native module unavailable — Android Auto disabled for this session. ' +
+        'This binary predates the @iternio/react-native-auto-play dependency (a new EAS build is required).',
+      e,
+    );
+    return;
+  }
   const { HybridAutoPlay, MapTemplate, Flag } = autoPlay;
 
   // A single "Navigate" hand-off on Android Auto — the platform default nav app

@@ -87,6 +87,7 @@ export const queryKeys = {
         config: ['driver', 'config'] as const,
         earnings: (period: string) => ['driver', 'earnings', period] as const,
         activeRide: ['driver', 'activeRide'] as const,
+        demandHeatmap: ['driver', 'demandHeatmap'] as const,
     },
     notifications: {
         list: ['notifications', 'list'] as const,

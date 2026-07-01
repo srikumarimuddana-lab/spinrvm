@@ -95,6 +95,71 @@ export const useDriverEarnings = (period: 'today' | 'week' | 'month' | string) =
     });
 };
 
+/** One weighted cell of the demand heatmap, ready for react-native-maps. */
+export interface DemandHeatmapPoint {
+    latitude: number;
+    longitude: number;
+    weight: number;
+}
+
+export interface DemandHeatmapData {
+    enabled: boolean;
+    points: DemandHeatmapPoint[];
+    /** Server-directed polling cadence (per-service-area admin setting). */
+    refreshSeconds: number;
+}
+
+/** Fallback cadence when the server omits refresh_seconds (older backend). */
+export const HEATMAP_DEFAULT_REFRESH_SECONDS = 300;
+/** Floor mirrors the backend clamp so a bad payload can't hammer the API. */
+export const HEATMAP_MIN_REFRESH_SECONDS = 30;
+
+/**
+ * Normalize the raw /drivers/demand-heatmap payload ([[lat,lng,weight],...])
+ * into typed points + a clamped refresh cadence. Exported for unit tests.
+ */
+export const normalizeDemandHeatmap = (raw: any): DemandHeatmapData => {
+    const enabled = !!raw?.enabled;
+    const refreshRaw = Number(raw?.refresh_seconds);
+    const refreshSeconds = Number.isFinite(refreshRaw) && refreshRaw > 0
+        ? Math.max(HEATMAP_MIN_REFRESH_SECONDS, refreshRaw)
+        : HEATMAP_DEFAULT_REFRESH_SECONDS;
+    const points: DemandHeatmapPoint[] = enabled
+        ? (Array.isArray(raw?.points) ? raw.points : [])
+            .filter((p: any) => Array.isArray(p) && typeof p[0] === 'number' && typeof p[1] === 'number')
+            .map((p: number[]) => ({ latitude: p[0], longitude: p[1], weight: p[2] || 1 }))
+        : [];
+    return { enabled, points, refreshSeconds };
+};
+
+/**
+ * GET /drivers/demand-heatmap — weighted demand cells for the driver's
+ * service area, or {enabled:false} when the admin has the overlay off.
+ *
+ * Polling cadence is server-driven: each response carries refresh_seconds
+ * (a per-service-area admin setting, migration 202), and refetchInterval
+ * reads it off the last payload — so ops can retune the cadence without an
+ * app release. `enabled` should be false while the driver is on a ride;
+ * the overlay is an idle-positioning aid, not an in-trip distraction.
+ */
+export const useDemandHeatmap = (enabled = true) => {
+    return useQuery({
+        queryKey: queryKeys.driver.demandHeatmap,
+        queryFn: async () => {
+            const res = await api.get('/drivers/demand-heatmap');
+            return normalizeDemandHeatmap(res.data);
+        },
+        enabled,
+        refetchInterval: (query) => {
+            const secs = query.state.data?.refreshSeconds ?? HEATMAP_DEFAULT_REFRESH_SECONDS;
+            return secs * 1000;
+        },
+        // Consider fresh until the next poll tick; a remount inside the
+        // window renders from cache instead of double-fetching.
+        staleTime: HEATMAP_MIN_REFRESH_SECONDS * 1000,
+    });
+};
+
 /**
  * GET /drivers/rides/active — the driver's currently-assigned ride, if any.
  *

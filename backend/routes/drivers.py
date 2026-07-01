@@ -720,13 +720,35 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
     return serialize_doc(await _decrypt_driver_pii(updated))
 
 
+# Demand-heatmap config bounds. Mirror the CHECK constraints in migration 202
+# and the pydantic validation in routes/admin/service_areas.py; the endpoint
+# re-clamps defensively so a row written before the constraints existed (or
+# via a direct DB edit) can't turn the driver app into a polling hammer.
+HEATMAP_DEFAULT_WINDOW_HOURS = 168
+HEATMAP_DEFAULT_REFRESH_SECONDS = 300
+_HEATMAP_SOURCE_STATUS_FILTER: dict = {
+    # all_requests: every ride request regardless of outcome — no filter
+    "all_requests": None,
+    # completed_rides: fulfilled demand only
+    "completed_rides": {"$in": ["completed"]},
+    # missed_rides: cancelled requests — demand that went unserved
+    "missed_rides": {"$in": ["cancelled"]},
+}
+# Grid size for pickup-coordinate bucketing: 3 decimal places ≈ 110 m. Riders'
+# exact pickup coordinates must never be shipped to every driver in the area
+# (PIPEDA data-minimization); the heatmap only needs block-level density.
+_HEATMAP_GRID_DECIMALS = 3
+
+
 @api_router.get("/demand-heatmap")
 async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
-    """Return recent ride pickup locations as heatmap points for the driver.
+    """Return recent ride demand as weighted heatmap points for the driver.
 
-    Scoped to the driver's service area (if set) and the last 7 days.
-    Only returns data when the admin has enabled `show_demand_heatmap`
-    on the driver's service area.
+    Scoped to the driver's service area and gated on the admin-managed
+    `show_demand_heatmap` flag. Window, data source, and the client refresh
+    cadence are configurable per service area (migration 202). Pickup
+    coordinates are bucketed to a ~110 m grid with a count weight so no
+    rider's exact pickup location is exposed.
     """
     driver = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
@@ -741,14 +763,37 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
 
     enabled = bool(service_area and service_area.get("show_demand_heatmap"))
     if not enabled:
-        return {"enabled": False, "points": [], "total_rides": 0}
+        return {
+            "enabled": False,
+            "points": [],
+            "total_rides": 0,
+            # Disabled areas still get a refresh cadence so the app knows how
+            # often to re-check whether an admin has turned the heatmap on.
+            "refresh_seconds": HEATMAP_DEFAULT_REFRESH_SECONDS,
+        }
 
-    query_filters: dict = {}
+    def _clamped_int(value, default: int, lo: int, hi: int) -> int:
+        try:
+            return max(lo, min(hi, int(value)))
+        except (TypeError, ValueError):
+            return default
 
-    # Last 7 days
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-    query_filters["created_at"] = {"$gte": cutoff}
-    query_filters["service_area_id"] = driver["service_area_id"]
+    window_hours = _clamped_int(service_area.get("heatmap_data_window_hours"), HEATMAP_DEFAULT_WINDOW_HOURS, 1, 720)
+    refresh_seconds = _clamped_int(
+        service_area.get("heatmap_refresh_seconds"), HEATMAP_DEFAULT_REFRESH_SECONDS, 30, 3600
+    )
+    data_source = service_area.get("heatmap_data_source") or "all_requests"
+    if data_source not in _HEATMAP_SOURCE_STATUS_FILTER:
+        data_source = "all_requests"
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat()
+    query_filters: dict = {
+        "created_at": {"$gte": cutoff},
+        "service_area_id": driver["service_area_id"],
+    }
+    status_filter = _HEATMAP_SOURCE_STATUS_FILTER[data_source]
+    if status_filter is not None:
+        query_filters["status"] = status_filter
 
     rides = await db_supabase.get_rows(
         "rides",
@@ -759,14 +804,26 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
         columns="pickup_lat,pickup_lng",
     )
 
-    points = []
+    # Bucket pickups onto a ~110 m grid; weight = request count per cell.
+    buckets: dict = {}
     for r in rides:
         lat = r.get("pickup_lat")
         lng = r.get("pickup_lng")
-        if lat is not None and lng is not None:
-            points.append([float(lat), float(lng), 1])
+        if lat is None or lng is None:
+            continue
+        cell = (round(float(lat), _HEATMAP_GRID_DECIMALS), round(float(lng), _HEATMAP_GRID_DECIMALS))
+        buckets[cell] = buckets.get(cell, 0) + 1
 
-    return {"enabled": True, "points": points, "total_rides": len(rides)}
+    points = [[cell_lat, cell_lng, weight] for (cell_lat, cell_lng), weight in buckets.items()]
+
+    return {
+        "enabled": True,
+        "points": points,
+        "total_rides": len(rides),
+        "refresh_seconds": refresh_seconds,
+        "data_window_hours": window_hours,
+        "data_source": data_source,
+    }
 
 
 @api_router.post("/register")

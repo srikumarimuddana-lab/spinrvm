@@ -164,6 +164,11 @@ class ServiceAreaCreateRequest(BaseModel):
     max_simultaneous_offers: int = Field(default=3, ge=1, le=10)
     use_eta_ranking: bool = True
     show_demand_heatmap: bool = False
+    # Demand-heatmap tuning (migration 202). Defaults mirror the DB defaults
+    # so an omitted field never diverges from what a fresh row would hold.
+    heatmap_data_window_hours: int = Field(default=168, ge=1, le=720)
+    heatmap_refresh_seconds: int = Field(default=300, ge=30, le=3600)
+    heatmap_data_source: str = Field(default="all_requests", pattern="^(all_requests|completed_rides|missed_rides)$")
     # Per-area referral rewards (CAD). Defaults equal the global constants.
     rider_referrer_reward: float = Field(default=5, ge=0, le=1000)
     rider_referee_reward: float = Field(default=5, ge=0, le=1000)
@@ -210,6 +215,10 @@ class ServiceAreaUpdateRequest(BaseModel):
     max_simultaneous_offers: Optional[int] = Field(default=None, ge=1, le=10)
     use_eta_ranking: Optional[bool] = None
     show_demand_heatmap: Optional[bool] = None
+    # Demand-heatmap tuning (migration 202).
+    heatmap_data_window_hours: Optional[int] = Field(default=None, ge=1, le=720)
+    heatmap_refresh_seconds: Optional[int] = Field(default=None, ge=30, le=3600)
+    heatmap_data_source: Optional[str] = Field(default=None, pattern="^(all_requests|completed_rides|missed_rides)$")
     vehicle_pricing: Optional[List[Dict[str, Any]]] = None
     province: Optional[str] = None
     max_pickup_radius_km: Optional[float] = Field(default=None, ge=0.1, le=200)
@@ -432,6 +441,9 @@ async def admin_create_service_area(area: ServiceAreaCreateRequest, admin: dict 
         "max_simultaneous_offers": area.max_simultaneous_offers,
         "use_eta_ranking": area.use_eta_ranking,
         "show_demand_heatmap": area.show_demand_heatmap,
+        "heatmap_data_window_hours": area.heatmap_data_window_hours,
+        "heatmap_refresh_seconds": area.heatmap_refresh_seconds,
+        "heatmap_data_source": area.heatmap_data_source,
         "rider_referrer_reward": area.rider_referrer_reward,
         "rider_referee_reward": area.rider_referee_reward,
         "rider_referral_rides_required": area.rider_referral_rides_required,
@@ -563,6 +575,9 @@ async def admin_update_service_area(
         "max_simultaneous_offers",
         "use_eta_ranking",
         "show_demand_heatmap",
+        "heatmap_data_window_hours",
+        "heatmap_refresh_seconds",
+        "heatmap_data_source",
         "vehicle_pricing",
         "max_pickup_radius_km",
         "insurance_fee_percent",

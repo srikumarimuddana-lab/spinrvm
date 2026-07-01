@@ -1,9 +1,12 @@
 """Referral reward payout loop (rider + driver).
 
-Pays a referrer once their referee reaches the ride threshold WITHIN the
-completion deadline (window_days from referral_terms; 0 = no deadline):
+Pays a referrer (and, where the area opts in, the referee too) once the referee
+reaches the ride threshold WITHIN the completion deadline (window_days from
+referral_terms; 0 = no deadline):
   - driver referral: referrer earns $10 once the referee (a driver) completes
-    REFERRAL_RIDES_REQUIRED (10) rides.
+    REFERRAL_RIDES_REQUIRED (10) rides; the referee additionally earns
+    DRIVER_REFEREE_REWARD (0 by default — admin opt-in per service area via
+    service_areas.driver_referee_reward, migration 201) on the SAME threshold.
   - rider referral: referrer AND referee each earn $5 once the referee completes
     RIDER_REFERRAL_RIDES_REQUIRED (1) ride ("first-ride bonus, both sides").
 

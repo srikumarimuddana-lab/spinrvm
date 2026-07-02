@@ -1,0 +1,78 @@
+diff --git a/node_modules/expo/ios/AppDelegates/EXReactRootViewFactory.mm b/node_modules/expo/ios/AppDelegates/EXReactRootViewFactory.mm
+index 1bc361f..f0a3324 100644
+--- a/node_modules/expo/ios/AppDelegates/EXReactRootViewFactory.mm
++++ b/node_modules/expo/ios/AppDelegates/EXReactRootViewFactory.mm
+@@ -2,6 +2,7 @@
+ 
+ #import <Expo/EXReactRootViewFactory.h>
+ #import <Expo/RCTAppDelegateUmbrella.h>
++#import <React/RCTBundleManager.h>
+ #import <React/RCTDevMenu.h>
+ #import <ExpoModulesCore/EXReactDelegateProtocol.h>
+ 
+@@ -24,15 +25,22 @@
+ }
+ 
+ #if TARGET_OS_IOS || TARGET_OS_TV
++// spinr patch (expo+55.0.26): react-native 0.85.2 replaced the
++// viewWithModuleName:initialProperties:launchOptions:devMenuConfiguration:
++// funnel with a 5-arg variant that adds bundleConfiguration:. Override the new
++// funnel (so the reactDelegate hook still intercepts every entry point — RN's
++// shorter overloads all forward here) and pass RN's own defaults, mirroring
++// RCTRootViewFactory.mm's convenience overloads.
+ - (UIView *)viewWithModuleName:(NSString *)moduleName
+              initialProperties:(nullable NSDictionary *)initialProperties
+                  launchOptions:(nullable NSDictionary *)launchOptions
++           bundleConfiguration:(RCTBundleConfiguration *)bundleConfiguration
+           devMenuConfiguration:(RCTDevMenuConfiguration *)devMenuConfiguration
+ {
+   if (self.reactDelegate != nil) {
+     return [((id<EXReactDelegateProtocol>)self.reactDelegate) createReactRootViewWithModuleName:moduleName initialProperties:initialProperties launchOptions:launchOptions];
+   }
+-  return [super viewWithModuleName:moduleName initialProperties:initialProperties launchOptions:launchOptions devMenuConfiguration:devMenuConfiguration];
++  return [super viewWithModuleName:moduleName initialProperties:initialProperties launchOptions:launchOptions bundleConfiguration:bundleConfiguration devMenuConfiguration:devMenuConfiguration];
+ }
+ 
+ - (UIView *)superViewWithModuleName:(NSString *)moduleName
+@@ -44,7 +52,7 @@
+     devMenuConfiguration = [RCTDevMenuConfiguration defaultConfiguration];
+   }
+ 
+-  return [super viewWithModuleName:moduleName initialProperties:initialProperties launchOptions:launchOptions devMenuConfiguration:devMenuConfiguration];
++  return [super viewWithModuleName:moduleName initialProperties:initialProperties launchOptions:launchOptions bundleConfiguration:[RCTBundleConfiguration defaultConfiguration] devMenuConfiguration:devMenuConfiguration];
+ }
+ #else
+ - (UIView *)viewWithModuleName:(NSString *)moduleName
+diff --git a/node_modules/expo/ios/AppDelegates/ExpoReactNativeFactory.swift b/node_modules/expo/ios/AppDelegates/ExpoReactNativeFactory.swift
+index 925e0f9..dc0b0a5 100644
+--- a/node_modules/expo/ios/AppDelegates/ExpoReactNativeFactory.swift
++++ b/node_modules/expo/ios/AppDelegates/ExpoReactNativeFactory.swift
+@@ -128,20 +128,19 @@ public class ExpoReactNativeFactory: ExpoReactNativeFactoryObjC, ExpoReactNative
+       )
+ #endif
+     } else {
+-#if os(iOS) || os(tvOS)
+-      rootView = rootViewFactory.view(
+-        withModuleName: moduleName ?? defaultModuleName,
+-        initialProperties: initialProps,
+-        launchOptions: launchOptions,
+-        devMenuConfiguration: self.devMenuConfiguration
+-      )
+-#else
++      // spinr patch (expo+55.0.26): react-native 0.85.2 removed the 4-arg
++      // view(withModuleName:initialProperties:launchOptions:devMenuConfiguration:)
++      // overload (the new funnel adds a required bundleConfiguration:). Use the
++      // still-present 3-arg overload — it forwards into the 5-arg funnel with
++      // RN's default bundle/dev-menu configurations, and for an
++      // EXReactRootViewFactory that funnel is overridden so the reactDelegate
++      // hook still fires. This branch is a defensive fallback anyway: Expo apps
++      // always hit the ExpoReactRootViewFactory branch above.
+       rootView = rootViewFactory.view(
+         withModuleName: moduleName ?? defaultModuleName,
+         initialProperties: initialProps,
+         launchOptions: launchOptions
+       )
+-#endif
+     }
+ 
+     return rootView

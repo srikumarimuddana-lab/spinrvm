@@ -154,9 +154,17 @@ export const useDemandHeatmap = (enabled = true) => {
             const secs = query.state.data?.refreshSeconds ?? HEATMAP_DEFAULT_REFRESH_SECONDS;
             return secs * 1000;
         },
-        // Consider fresh until the next poll tick; a remount inside the
-        // window renders from cache instead of double-fetching.
-        staleTime: HEATMAP_MIN_REFRESH_SECONDS * 1000,
+        // Fresh for a full server-directed tick, not a fixed 30 s: focus/
+        // reconnect/remount refetches must also respect the admin-tuned
+        // cadence, or app-switching drivers poll at the focus rate and the
+        // per-area load knob silently does nothing.
+        staleTime: (query) =>
+            (query.state.data?.refreshSeconds ?? HEATMAP_DEFAULT_REFRESH_SECONDS) * 1000,
+        // Never persist demand cells to disk: the app-level AsyncStorage
+        // persister (24 h maxAge) would otherwise hydrate yesterday's
+        // overlay — or another account's, on a shared device — at cold
+        // start before the first fetch. See _layout's shouldDehydrateQuery.
+        meta: { noPersist: true },
     });
 };
 

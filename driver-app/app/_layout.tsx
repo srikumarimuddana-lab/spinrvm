@@ -483,6 +483,15 @@ function RootLayout() {
         // app can't boot with a week-old earnings number on screen.
         maxAge: 24 * 60 * 60 * 1000,
         buster: QUERY_CACHE_BUSTER,
+        dehydrateOptions: {
+          // Default persistence rule (successful queries only), plus an
+          // opt-out: queries tagged meta.noPersist hold data that must
+          // never outlive the session on disk — e.g. the demand heatmap,
+          // which is location-derived and would otherwise hydrate stale
+          // (or, on a shared device, another driver's) cells at cold start.
+          shouldDehydrateQuery: (query) =>
+            query.state.status === 'success' && !query.meta?.noPersist,
+        },
       }}
     >
       <ThemeProvider>

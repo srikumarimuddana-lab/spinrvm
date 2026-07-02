@@ -630,8 +630,8 @@
     "semantic_hash": ""
   },
   "admin-dashboard/src/app/dashboard/service-areas/page.tsx": {
-    "mtime": 1782945483.9865549,
-    "ast_hash": "0aec26f4e5a58ef2c27fece7f0fcd4cb",
+    "mtime": 1782969247.2472658,
+    "ast_hash": "3bdb47a37a9b710d55f0ab3329eb9d13",
     "semantic_hash": ""
   },
   "admin-dashboard/src/app/dashboard/settings/loading.tsx": {
@@ -2350,8 +2350,8 @@
     "semantic_hash": ""
   },
   "backend/routes/drivers.py": {
-    "mtime": 1782945140.754553,
-    "ast_hash": "1237a0df38a41cc19f237238f8a234df",
+    "mtime": 1782969194.6472628,
+    "ast_hash": "b38ed4aeb57d06bb2970cfc8443220a8",
     "semantic_hash": ""
   },
   "backend/routes/faqs.py": {
@@ -3785,8 +3785,8 @@
     "semantic_hash": ""
   },
   "backend/utils/rate_limiter.py": {
-    "mtime": 1782944433.0745497,
-    "ast_hash": "40e35a8ad02ffb1257bbc1619a6bceed",
+    "mtime": 1782968978.21925,
+    "ast_hash": "98c6e2d918e04d6256b7d7ecd46a9f7a",
     "semantic_hash": ""
   },
   "backend/utils/receipt_email.py": {
@@ -9720,8 +9720,8 @@
     "semantic_hash": ""
   },
   "backend/tests/test_demand_heatmap.py": {
-    "mtime": 1782944968.9945521,
-    "ast_hash": "77bfc7afbe603f470c7144a94f24d0a0",
+    "mtime": 1782969157.8352606,
+    "ast_hash": "834506311342ce60ed21667cab065b00",
     "semantic_hash": ""
   },
   "backend/tests/test_support_assistant.py": {
@@ -9775,8 +9775,13 @@
     "semantic_hash": ""
   },
   "docs/driver-heatmap-impact-analysis.md": {
-    "mtime": 1782945824.5705564,
-    "ast_hash": "ba25704c4964c6b6cdcd4fa038c4dd7c",
+    "mtime": 1782969260.6552668,
+    "ast_hash": "7925c0f781cd1c26d1af8c5b48ddbe09",
+    "semantic_hash": ""
+  },
+  "backend/migrations/203_rides_service_area_created_index.sql": {
+    "mtime": 1782968965.1072493,
+    "ast_hash": "d0d7ead22b31c1103d24ee36b57cdcd0",
     "semantic_hash": ""
   }
 }

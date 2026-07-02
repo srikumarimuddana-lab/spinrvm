@@ -14,6 +14,10 @@ import {
   ActiveRidePanel,
   TripCompletedPanel,
   MapControls,
+  DemandHeatmapLegend,
+  dampenHeatmapPoints,
+  heatmapAppearance,
+  HEATMAP_RADIUS,
 } from '../../../components/dashboard';
 import { RideOfferPanel } from '../../../components/panels/RideOfferPanel';
 import { useDriverDashboard } from '../../../hooks/useDriverDashboard';
@@ -237,8 +241,14 @@ function DriverDashboard() {
   // window, refresh cadence). The hook polls at the server-directed interval
   // while idle; during a ride the query is disabled so the overlay never
   // competes with pickup/route rendering (and the API stays quiet).
+  // Weights are log-damped for display (see demandHeatmap.ts) and memoized so
+  // the native layer doesn't re-ingest the point set on unrelated re-renders.
   const { data: demandHeatmap } = useDemandHeatmap(rideState === 'idle');
-  const heatmapPoints = rideState === 'idle' ? (demandHeatmap?.points ?? []) : [];
+  const heatmapPoints = useMemo(
+    () => (rideState === 'idle' && demandHeatmap?.points ? dampenHeatmapPoints(demandHeatmap.points) : []),
+    [rideState, demandHeatmap?.points],
+  );
+  const heatmapLook = useMemo(() => heatmapAppearance(isDark), [isDark]);
 
   const [countdown, setCountdownState] = useState(countdownSeconds);
 
@@ -838,17 +848,14 @@ function DriverDashboard() {
           );
         })()}
 
-        {/* Demand heatmap overlay — admin-controlled per service area */}
+        {/* Demand heatmap overlay — admin-controlled per service area.
+            Ramp/opacity/damping spec: components/dashboard/demandHeatmap.ts */}
         {heatmapPoints.length > 0 && Platform.OS !== 'web' && (
           <Heatmap
             points={heatmapPoints}
-            radius={35}
-            opacity={0.65}
-            gradient={{
-              colors: ['#00D4AA', '#FFD700', '#FF6B35', '#FF2D2D'],
-              startPoints: [0.1, 0.4, 0.65, 0.9],
-              colorMapSize: 256,
-            }}
+            radius={HEATMAP_RADIUS}
+            opacity={heatmapLook.opacity}
+            gradient={heatmapLook.gradient}
           />
         )}
       </MapView>
@@ -876,6 +883,10 @@ function DriverDashboard() {
         currentRegionRef={currentRegionRef}
         onRecenter={() => refreshLocation(false)}
       />
+
+      {/* Demand-heatmap legend — the overlay's identity must never be
+          color-alone; renders only while the overlay itself is visible */}
+      {heatmapPoints.length > 0 && Platform.OS !== 'web' && <DemandHeatmapLegend />}
 
       {/* Bottom Panels */}
       {rideState === 'idle' && (

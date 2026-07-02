@@ -27,6 +27,7 @@ import type { ThemeColors } from '@shared/theme/index';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from '@shared/api/queryClient';
+import { useDemandHeatmap } from '@shared/hooks/queries';
 
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || '';
 
@@ -232,36 +233,12 @@ function DriverDashboard() {
     return () => clearInterval(interval);
   }, [rideState]);
 
-  // Demand heatmap — controlled by admin per service area
-  const [heatmapPoints, setHeatmapPoints] = useState<{ latitude: number; longitude: number; weight: number }[]>([]);
-
-  // Fetch heatmap data when idle (backend returns empty if admin disabled it)
-  useEffect(() => {
-    if (rideState !== 'idle') {
-      setHeatmapPoints([]);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await api.get<{ enabled: boolean; points?: number[][] }>('/drivers/demand-heatmap');
-        if (cancelled) return;
-        if (!res.data.enabled) {
-          setHeatmapPoints([]);
-          return;
-        }
-        const pts = (res.data.points || []).map((p: number[]) => ({
-          latitude: p[0],
-          longitude: p[1],
-          weight: p[2] || 1,
-        }));
-        setHeatmapPoints(pts);
-      } catch (e) {
-        console.log('Heatmap fetch error:', e);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [rideState]);
+  // Demand heatmap — admin-controlled per service area (enable, data source,
+  // window, refresh cadence). The hook polls at the server-directed interval
+  // while idle; during a ride the query is disabled so the overlay never
+  // competes with pickup/route rendering (and the API stays quiet).
+  const { data: demandHeatmap } = useDemandHeatmap(rideState === 'idle');
+  const heatmapPoints = rideState === 'idle' ? (demandHeatmap?.points ?? []) : [];
 
   const [countdown, setCountdownState] = useState(countdownSeconds);
 

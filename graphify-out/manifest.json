@@ -630,8 +630,8 @@
     "semantic_hash": ""
   },
   "admin-dashboard/src/app/dashboard/service-areas/page.tsx": {
-    "mtime": 1782749403.8702023,
-    "ast_hash": "ccae6b2bf410eec70a37f3550991a5ea",
+    "mtime": 1782945483.9865549,
+    "ast_hash": "0aec26f4e5a58ef2c27fece7f0fcd4cb",
     "semantic_hash": ""
   },
   "admin-dashboard/src/app/dashboard/settings/loading.tsx": {
@@ -650,7 +650,7 @@
     "semantic_hash": ""
   },
   "admin-dashboard/src/app/dashboard/subscriptions/page.tsx": {
-    "mtime": 1782767192.0541477,
+    "mtime": 1782944433.0345495,
     "ast_hash": "afc9a5f77b8372b4b4dddca10cf0f27e",
     "semantic_hash": ""
   },
@@ -665,8 +665,8 @@
     "semantic_hash": ""
   },
   "admin-dashboard/src/app/dashboard/support-tickets/tickets/[id]/page.tsx": {
-    "mtime": 1782749403.876446,
-    "ast_hash": "a0814bfeef2886a2751f5fcc13d8b18c",
+    "mtime": 1782944433.0345495,
+    "ast_hash": "9c98e93ca7bf0a42d93e9690d7ff2169",
     "semantic_hash": ""
   },
   "admin-dashboard/src/app/dashboard/support-tickets/tickets/page.tsx": {
@@ -885,8 +885,8 @@
     "semantic_hash": ""
   },
   "admin-dashboard/src/components/ui/rich-text-editor.tsx": {
-    "mtime": 1782749403.8875597,
-    "ast_hash": "4a767b71f6a4534f7511b7da6e475960",
+    "mtime": 1782944433.0345495,
+    "ast_hash": "287a617956bcaf9156de86867f3db76f",
     "semantic_hash": ""
   },
   "admin-dashboard/src/components/ui/select.tsx": {
@@ -995,8 +995,8 @@
     "semantic_hash": ""
   },
   "admin-dashboard/src/lib/api.ts": {
-    "mtime": 1782749403.8930984,
-    "ast_hash": "8f3989e0afeb6a8b3936eaae93f3401f",
+    "mtime": 1782944433.0385497,
+    "ast_hash": "84cdae5c2ffb0bdcd235aa57c5cf95b4",
     "semantic_hash": ""
   },
   "admin-dashboard/src/lib/export-csv.ts": {
@@ -1175,8 +1175,8 @@
     "semantic_hash": ""
   },
   "backend/core/lifespan.py": {
-    "mtime": 1782749403.9281561,
-    "ast_hash": "d5d3b5f7ea70f70a6752b2ec791037a8",
+    "mtime": 1782944433.0385497,
+    "ast_hash": "66c1e7d908c297ba2f23ce89bd42ab4f",
     "semantic_hash": ""
   },
   "backend/core/middleware.py": {
@@ -1225,8 +1225,8 @@
     "semantic_hash": ""
   },
   "backend/features.py": {
-    "mtime": 1782749403.9313726,
-    "ast_hash": "2167240bfa371c60c1cd59d8d5f93fa2",
+    "mtime": 1782944433.0425496,
+    "ast_hash": "0ec3cc6596d59200e112e6a9826dbd22",
     "semantic_hash": ""
   },
   "backend/geo_utils.py": {
@@ -2270,8 +2270,8 @@
     "semantic_hash": ""
   },
   "backend/routes/admin/service_areas.py": {
-    "mtime": 1782749403.9806385,
-    "ast_hash": "4dc47aad66214690ebd30ea9e3ce213a",
+    "mtime": 1782944864.2185516,
+    "ast_hash": "bc93717939cdf3fee1ef8a0ceff4a22d",
     "semantic_hash": ""
   },
   "backend/routes/admin/settings.py": {
@@ -2295,8 +2295,8 @@
     "semantic_hash": ""
   },
   "backend/routes/admin/support_tickets.py": {
-    "mtime": 1782749403.9846385,
-    "ast_hash": "d830c011d2850ca8f12363b2c73cb298",
+    "mtime": 1782944433.0425496,
+    "ast_hash": "09bd2165780eacd11b661918e7b90702",
     "semantic_hash": ""
   },
   "backend/routes/admin/users.py": {
@@ -2350,8 +2350,8 @@
     "semantic_hash": ""
   },
   "backend/routes/drivers.py": {
-    "mtime": 1782770181.6815875,
-    "ast_hash": "644282ec1bd9c303b0938b362e3bfd1d",
+    "mtime": 1782945140.754553,
+    "ast_hash": "1237a0df38a41cc19f237238f8a234df",
     "semantic_hash": ""
   },
   "backend/routes/faqs.py": {
@@ -2420,7 +2420,7 @@
     "semantic_hash": ""
   },
   "backend/routes/rides.py": {
-    "mtime": 1782766806.5421565,
+    "mtime": 1782944433.0625496,
     "ast_hash": "24eed69a9998cd3b2ce9df980e789874",
     "semantic_hash": ""
   },
@@ -2455,7 +2455,7 @@
     "semantic_hash": ""
   },
   "backend/routes/webhooks.py": {
-    "mtime": 1782770329.353584,
+    "mtime": 1782944433.0625496,
     "ast_hash": "05f213d6a7352c2b07c50f09443b2acc",
     "semantic_hash": ""
   },
@@ -2545,7 +2545,7 @@
     "semantic_hash": ""
   },
   "backend/services/dispatch_service.py": {
-    "mtime": 1782766806.5421565,
+    "mtime": 1782944433.0665495,
     "ast_hash": "2251240a4ddf912e3108c03401c98bea",
     "semantic_hash": ""
   },
@@ -3055,8 +3055,8 @@
     "semantic_hash": ""
   },
   "backend/tests/test_dsar_export.py": {
-    "mtime": 1782749404.0326385,
-    "ast_hash": "ee8c78600ea00570b600aa2f6d4d0bc9",
+    "mtime": 1782944433.0665495,
+    "ast_hash": "bb2698afc2f15bd95b1cd1cce84df265",
     "semantic_hash": ""
   },
   "backend/tests/test_dsar_export_gather.py": {
@@ -3560,7 +3560,7 @@
     "semantic_hash": ""
   },
   "backend/tests/test_webhooks_main.py": {
-    "mtime": 1782770256.5375857,
+    "mtime": 1782749404.0606384,
     "ast_hash": "d1c7df55e2fdcb8b918492f7a59c1e6d",
     "semantic_hash": ""
   },
@@ -3785,8 +3785,8 @@
     "semantic_hash": ""
   },
   "backend/utils/rate_limiter.py": {
-    "mtime": 1782749404.0886385,
-    "ast_hash": "a223f2adc03e982a54815e9313e1fcae",
+    "mtime": 1782944433.0745497,
+    "ast_hash": "40e35a8ad02ffb1257bbc1619a6bceed",
     "semantic_hash": ""
   },
   "backend/utils/receipt_email.py": {
@@ -3890,8 +3890,8 @@
     "semantic_hash": ""
   },
   "backend/utils/zoho_desk_sync.py": {
-    "mtime": 1782749404.0966384,
-    "ast_hash": "d2e6268ed59d11ee0a6ee1c869c7844e",
+    "mtime": 1782944433.0745497,
+    "ast_hash": "73718459b91448d7cccb75aafd361f93",
     "semantic_hash": ""
   },
   "backend/validators.py": {
@@ -3955,8 +3955,8 @@
     "semantic_hash": ""
   },
   "driver-app/__tests__/components/ActiveRidePanel.test.tsx": {
-    "mtime": 1782749404.1353767,
-    "ast_hash": "201842fac4e86759a7422f1926ce7bca",
+    "mtime": 1782944433.0745497,
+    "ast_hash": "a634ce2dd41d5b9df5758a7c47a14f20",
     "semantic_hash": ""
   },
   "driver-app/__tests__/components/ActivityView.test.tsx": {
@@ -3995,8 +3995,8 @@
     "semantic_hash": ""
   },
   "driver-app/app.config.ts": {
-    "mtime": 1782749404.136222,
-    "ast_hash": "87baa2f33ff9da57d5eb8c226fb054b4",
+    "mtime": 1782944433.0745497,
+    "ast_hash": "1bc47abc14fa9ea43be12400a5a6eee8",
     "semantic_hash": ""
   },
   "driver-app/app/_layout.tsx": {
@@ -4025,8 +4025,8 @@
     "semantic_hash": ""
   },
   "driver-app/app/driver/(tabs)/index.tsx": {
-    "mtime": 1782749404.1389618,
-    "ast_hash": "d890c90f80a4d3b7cba3b2b669c00b34",
+    "mtime": 1782945483.9865549,
+    "ast_hash": "5d4bc48bcaeb957ea58bb96353a9ded2",
     "semantic_hash": ""
   },
   "driver-app/app/driver/(tabs)/profile.tsx": {
@@ -4085,8 +4085,8 @@
     "semantic_hash": ""
   },
   "driver-app/app/driver/payout.tsx": {
-    "mtime": 1782749404.1406386,
-    "ast_hash": "132a90949a7e4c253a69d570eedd2b99",
+    "mtime": 1782944433.0785496,
+    "ast_hash": "83085de0d61180a27c09dc6357196b53",
     "semantic_hash": ""
   },
   "driver-app/app/driver/quests.tsx": {
@@ -4095,8 +4095,8 @@
     "semantic_hash": ""
   },
   "driver-app/app/driver/referral.tsx": {
-    "mtime": 1782749404.1406386,
-    "ast_hash": "1c79d057e0d94329503f6d95f108c86b",
+    "mtime": 1782944433.0785496,
+    "ast_hash": "a9f95291b01c2c64277515c34f529095",
     "semantic_hash": ""
   },
   "driver-app/app/driver/ride-detail.tsx": {
@@ -4105,18 +4105,18 @@
     "semantic_hash": ""
   },
   "driver-app/app/driver/settings.tsx": {
-    "mtime": 1782749404.1406386,
-    "ast_hash": "175a878fdaafb6db6092b6541b555b40",
+    "mtime": 1782944433.0825496,
+    "ast_hash": "80dac8428e6571ac7ab8c519a0ac989d",
     "semantic_hash": ""
   },
   "driver-app/app/driver/subscription.tsx": {
-    "mtime": 1782770181.6815875,
+    "mtime": 1782944433.0825496,
     "ast_hash": "d22cbdb138b718d0bd552d9d327e73a7",
     "semantic_hash": ""
   },
   "driver-app/app/driver/tax-documents.tsx": {
-    "mtime": 1782749404.1406386,
-    "ast_hash": "7cc9f574d2034401de605efd4287046f",
+    "mtime": 1782944433.0825496,
+    "ast_hash": "002a6450187d5ffc06c5139a256c9b0f",
     "semantic_hash": ""
   },
   "driver-app/app/index.tsx": {
@@ -4210,8 +4210,8 @@
     "semantic_hash": ""
   },
   "driver-app/components/dashboard/ActiveRidePanel.tsx": {
-    "mtime": 1782749404.1592627,
-    "ast_hash": "29fe0d42567d2ea1bbeedb2e30c6569f",
+    "mtime": 1782944433.0865495,
+    "ast_hash": "b06a9f1d3d109fb72adfc750d9104fba",
     "semantic_hash": ""
   },
   "driver-app/components/dashboard/DriverIdlePanel.tsx": {
@@ -4300,8 +4300,8 @@
     "semantic_hash": ""
   },
   "driver-app/eas.json": {
-    "mtime": 1782749404.1620133,
-    "ast_hash": "f7adad9ae17b65907d17bfc32b3923c8",
+    "mtime": 1782944433.0865495,
+    "ast_hash": "d63cc0ef6f450ac24918adbc01393029",
     "semantic_hash": ""
   },
   "driver-app/eslint.config.js": {
@@ -4365,18 +4365,18 @@
     "semantic_hash": ""
   },
   "driver-app/i18n/en.json": {
-    "mtime": 1782768510.7896256,
-    "ast_hash": "361c048f6ef7c28632134d4d48143e35",
+    "mtime": 1782944433.0865495,
+    "ast_hash": "4e05e35c96bbf5e87a0b49768ba2b12e",
     "semantic_hash": ""
   },
   "driver-app/i18n/es.json": {
-    "mtime": 1782749404.1669378,
-    "ast_hash": "a3dbd3741792468de7140d32e9202a7f",
+    "mtime": 1782944433.0865495,
+    "ast_hash": "786f81881ef7221f5fc35327a0488d0a",
     "semantic_hash": ""
   },
   "driver-app/i18n/fr.json": {
-    "mtime": 1782768516.1536255,
-    "ast_hash": "6da3a0b69cbab4a035b96e497f0a8d01",
+    "mtime": 1782944433.0905495,
+    "ast_hash": "e3a387533d0ecef796d057fd9b77fac6",
     "semantic_hash": ""
   },
   "driver-app/i18n/index.ts": {
@@ -4555,8 +4555,8 @@
     "semantic_hash": ""
   },
   "driver-app/store/driverStore.ts": {
-    "mtime": 1782749404.1744294,
-    "ast_hash": "0374359fcfec2791a7a204461fd21b25",
+    "mtime": 1782944433.0905495,
+    "ast_hash": "9a85810eb26eb78a212eab9f4989862a",
     "semantic_hash": ""
   },
   "driver-app/store/languageStore.ts": {
@@ -4965,8 +4965,8 @@
     "semantic_hash": ""
   },
   "rider-app/app.config.ts": {
-    "mtime": 1782749404.7459524,
-    "ast_hash": "9e13eb92180a5c1e5db0a7995462d084",
+    "mtime": 1782944433.7825496,
+    "ast_hash": "d891ad5d768190050a03552a3bdbaab9",
     "semantic_hash": ""
   },
   "rider-app/app/(tabs)/_layout.tsx": {
@@ -5275,8 +5275,8 @@
     "semantic_hash": ""
   },
   "rider-app/eas.json": {
-    "mtime": 1782749404.7635398,
-    "ast_hash": "2f864ab7445e68a8acee3518638174f7",
+    "mtime": 1782944433.7865496,
+    "ast_hash": "e81638f4bdbaef6728dd2d04a5972da0",
     "semantic_hash": ""
   },
   "rider-app/eslint.config.js": {
@@ -5670,8 +5670,8 @@
     "semantic_hash": ""
   },
   "shared/api/queryClient.ts": {
-    "mtime": 1782749404.7831295,
-    "ast_hash": "23806d439c3bb3d75b125ff4eca18fde",
+    "mtime": 1782945119.3795714,
+    "ast_hash": "2cc6f170ed3aaf47d9f4362a5096b6e1",
     "semantic_hash": ""
   },
   "shared/api/upload.ts": {
@@ -5765,8 +5765,8 @@
     "semantic_hash": ""
   },
   "shared/hooks/queries/driverQueries.ts": {
-    "mtime": 1782749404.792475,
-    "ast_hash": "370c1b1aab111a5d892a41f4970b234b",
+    "mtime": 1782945119.3795714,
+    "ast_hash": "7935f365787e020e7c1493fccbe9cd22",
     "semantic_hash": ""
   },
   "shared/hooks/queries/index.ts": {
@@ -6575,8 +6575,8 @@
     "semantic_hash": ""
   },
   "README.md": {
-    "mtime": 1782749403.8126385,
-    "ast_hash": "a7f5d6787e39b064ca3d0b5e43fd700f",
+    "mtime": 1782944433.0265496,
+    "ast_hash": "7b6887ce55331205dbce6a0d7123d618",
     "semantic_hash": ""
   },
   "SECURITY.md": {
@@ -8810,8 +8810,8 @@
     "semantic_hash": ""
   },
   "backend/tests/test_referral_terms.py": {
-    "mtime": 1782749404.0526385,
-    "ast_hash": "e56263dc62632ed05f4359af3a753638",
+    "mtime": 1782944433.0665495,
+    "ast_hash": "4164cab433b90dcc6fd90523e151896d",
     "semantic_hash": ""
   },
   "backend/tests/test_ride_preauth.py": {
@@ -8845,7 +8845,7 @@
     "semantic_hash": ""
   },
   "backend/tests/test_spinr_pass_subscription.py": {
-    "mtime": 1782769007.4416142,
+    "mtime": 1782944433.0665495,
     "ast_hash": "2f2d2e9a9e5cda5c78d538242d37f948",
     "semantic_hash": ""
   },
@@ -8920,13 +8920,13 @@
     "semantic_hash": ""
   },
   "backend/utils/referral_payout.py": {
-    "mtime": 1782749404.0926385,
-    "ast_hash": "46a3ef6bc56b6da7d566be22f0b3d840",
+    "mtime": 1782944433.0745497,
+    "ast_hash": "c18a7036c4c8b64433a65608b60d7d78",
     "semantic_hash": ""
   },
   "backend/utils/referral_terms.py": {
-    "mtime": 1782749404.0926385,
-    "ast_hash": "ab2069e603a52108c88e084306dfa519",
+    "mtime": 1782944433.0745497,
+    "ast_hash": "899a7261da81e5a8d4c197a9d462f0f3",
     "semantic_hash": ""
   },
   "backend/utils/sentry_scrub.py": {
@@ -9495,8 +9495,8 @@
     "semantic_hash": ""
   },
   "backend/tests/test_referral_payout_zero_reward.py": {
-    "mtime": 1782749404.0486386,
-    "ast_hash": "195e1f2039529b9979d211e754db0cc9",
+    "mtime": 1782944433.0665495,
+    "ast_hash": "e16676b770575b0c9bc2e2ea2bf5c9f2",
     "semantic_hash": ""
   },
   "backend/tests/test_referral_recredit_failed_claim.py": {
@@ -9505,7 +9505,7 @@
     "semantic_hash": ""
   },
   "backend/tests/test_spinr_pass_quota.py": {
-    "mtime": 1782770181.6815875,
+    "mtime": 1782944433.0665495,
     "ast_hash": "214b7bd3c6917936a64e8a2cde90de0c",
     "semantic_hash": ""
   },
@@ -9520,7 +9520,7 @@
     "semantic_hash": ""
   },
   "backend/tests/test_subscription_invoice.py": {
-    "mtime": 1782769182.5336103,
+    "mtime": 1782944433.0705495,
     "ast_hash": "f8578b6d8f83f86cb86eb1c1e605ae8e",
     "semantic_hash": ""
   },
@@ -9555,12 +9555,12 @@
     "semantic_hash": ""
   },
   "backend/utils/spinr_pass.py": {
-    "mtime": 1782770181.6815875,
+    "mtime": 1782944433.0745497,
     "ast_hash": "7ca7df264970135fd8599acde06e6c35",
     "semantic_hash": ""
   },
   "backend/utils/subscription_invoice.py": {
-    "mtime": 1782769155.6136107,
+    "mtime": 1782944433.0745497,
     "ast_hash": "bdcbc6e2b4a78b8e16b6ab2f418c2196",
     "semantic_hash": ""
   },
@@ -9682,6 +9682,101 @@
   "docs/runbooks/live-ride-activity-go-live.md": {
     "mtime": 1782749404.1198447,
     "ast_hash": "23f66368b06ba3f71784bea5b4216a7d",
+    "semantic_hash": ""
+  },
+  "backend/ai/support_assistant.py": {
+    "mtime": 1782944433.0385497,
+    "ast_hash": "7570e36db2ac33fa94688be6a2f8fdc8",
+    "semantic_hash": ""
+  },
+  "backend/migrations/200_data_export_objects.sql": {
+    "mtime": 1782944433.0425496,
+    "ast_hash": "5198dbd19660f10d20abc17eb918fc71",
+    "semantic_hash": ""
+  },
+  "backend/migrations/200_zoho_desk_ticket_service_area.sql": {
+    "mtime": 1782944433.0425496,
+    "ast_hash": "0b5606b5628f58874d723d30a91f1abc",
+    "semantic_hash": ""
+  },
+  "backend/migrations/201_service_area_driver_referee_reward.sql": {
+    "mtime": 1782944433.0425496,
+    "ast_hash": "7b54f8e8a8e4b9c2bfc5d4e1cd50f7f2",
+    "semantic_hash": ""
+  },
+  "backend/migrations/202_service_area_heatmap_config.sql": {
+    "mtime": 1782944829.1665516,
+    "ast_hash": "1d3385205e55d3f59ae6a87bf9f1574d",
+    "semantic_hash": ""
+  },
+  "backend/services/zoho_ticket_service_area.py": {
+    "mtime": 1782944433.0665495,
+    "ast_hash": "78f27f767aa62630a17876ebcb41234e",
+    "semantic_hash": ""
+  },
+  "backend/tests/test_data_export_purge.py": {
+    "mtime": 1782944433.0665495,
+    "ast_hash": "e7521550c6b723333cae03052d5a9d7b",
+    "semantic_hash": ""
+  },
+  "backend/tests/test_demand_heatmap.py": {
+    "mtime": 1782944968.9945521,
+    "ast_hash": "77bfc7afbe603f470c7144a94f24d0a0",
+    "semantic_hash": ""
+  },
+  "backend/tests/test_support_assistant.py": {
+    "mtime": 1782944433.0705495,
+    "ast_hash": "2283907b90198379dddbc14ed02c51be",
+    "semantic_hash": ""
+  },
+  "backend/tests/test_support_tickets_ai_suggest.py": {
+    "mtime": 1782944433.0705495,
+    "ast_hash": "0f2b989fe6496d14df49f6855016f838",
+    "semantic_hash": ""
+  },
+  "backend/tests/test_support_tickets_service_area_routes.py": {
+    "mtime": 1782944433.0705495,
+    "ast_hash": "f570067981026e50adbbc72e06b29c66",
+    "semantic_hash": ""
+  },
+  "backend/tests/test_t4a_email.py": {
+    "mtime": 1782944433.0705495,
+    "ast_hash": "969dab5f5d4cf473a8e574a903dabca8",
+    "semantic_hash": ""
+  },
+  "backend/tests/test_zoho_ticket_service_area.py": {
+    "mtime": 1782944433.0705495,
+    "ast_hash": "0e6ef6d7e8d6b2e5b31140dd635b8358",
+    "semantic_hash": ""
+  },
+  "backend/utils/data_export_purge.py": {
+    "mtime": 1782944433.0705495,
+    "ast_hash": "49020e405e0d252335f4f9e454033069",
+    "semantic_hash": ""
+  },
+  "driver-app/__tests__/shared/demandHeatmap.test.ts": {
+    "mtime": 1782945337.0985541,
+    "ast_hash": "a1a594eaa4a18c6e9caaf196c87af14d",
+    "semantic_hash": ""
+  },
+  "driver-app/plugins/withFirebaseNonModularHeaders.js": {
+    "mtime": 1782944433.0905495,
+    "ast_hash": "5647b2ebd7823925b406f19e02a10978",
+    "semantic_hash": ""
+  },
+  "driver-app/store/navStore.ts": {
+    "mtime": 1782944433.0905495,
+    "ast_hash": "cc2c3368a34228edb89e5e83c4c42e0a",
+    "semantic_hash": ""
+  },
+  "rider-app/plugins/withFirebaseNonModularHeaders.js": {
+    "mtime": 1782944433.7865496,
+    "ast_hash": "5647b2ebd7823925b406f19e02a10978",
+    "semantic_hash": ""
+  },
+  "docs/driver-heatmap-impact-analysis.md": {
+    "mtime": 1782945824.5705564,
+    "ast_hash": "ba25704c4964c6b6cdcd4fa038c4dd7c",
     "semantic_hash": ""
   }
 }

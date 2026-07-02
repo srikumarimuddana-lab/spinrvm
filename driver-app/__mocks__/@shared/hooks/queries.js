@@ -29,7 +29,10 @@ module.exports = {
     enabled: !!(raw && raw.enabled),
     points: [],
     refreshSeconds: 300,
+    colorTheme: 'inferno',
   })),
   HEATMAP_DEFAULT_REFRESH_SECONDS: 300,
   HEATMAP_MIN_REFRESH_SECONDS: 30,
+  HEATMAP_THEMES: ['inferno', 'ocean', 'viridis'],
+  HEATMAP_DEFAULT_THEME: 'inferno',
 };

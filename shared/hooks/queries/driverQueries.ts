@@ -102,11 +102,18 @@ export interface DemandHeatmapPoint {
     weight: number;
 }
 
+/** Curated ramp names the driver app knows how to render (migration 204). */
+export type DemandHeatmapTheme = 'inferno' | 'ocean' | 'viridis';
+export const HEATMAP_THEMES: readonly DemandHeatmapTheme[] = ['inferno', 'ocean', 'viridis'];
+export const HEATMAP_DEFAULT_THEME: DemandHeatmapTheme = 'inferno';
+
 export interface DemandHeatmapData {
     enabled: boolean;
     points: DemandHeatmapPoint[];
     /** Server-directed polling cadence (per-service-area admin setting). */
     refreshSeconds: number;
+    /** Per-service-area ramp; unknown server values map to the default. */
+    colorTheme: DemandHeatmapTheme;
 }
 
 /** Fallback cadence when the server omits refresh_seconds (older backend). */
@@ -129,7 +136,10 @@ export const normalizeDemandHeatmap = (raw: any): DemandHeatmapData => {
             .filter((p: any) => Array.isArray(p) && typeof p[0] === 'number' && typeof p[1] === 'number')
             .map((p: number[]) => ({ latitude: p[0], longitude: p[1], weight: p[2] || 1 }))
         : [];
-    return { enabled, points, refreshSeconds };
+    const colorTheme: DemandHeatmapTheme = HEATMAP_THEMES.includes(raw?.color_theme)
+        ? raw.color_theme
+        : HEATMAP_DEFAULT_THEME;
+    return { enabled, points, refreshSeconds, colorTheme };
 };
 
 /**

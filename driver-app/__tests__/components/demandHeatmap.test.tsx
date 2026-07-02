@@ -29,7 +29,8 @@ jest.mock('expo-linear-gradient', () => {
 import {
   dampenHeatmapPoints,
   heatmapAppearance,
-  DEMAND_RAMP_COLORS,
+  rampColors,
+  DEMAND_RAMPS,
 } from '../../components/dashboard/demandHeatmap';
 import { DemandHeatmapLegend } from '../../components/dashboard/DemandHeatmapLegend';
 
@@ -66,19 +67,31 @@ describe('dampenHeatmapPoints', () => {
 });
 
 describe('heatmapAppearance', () => {
-  it('uses the validated demand ramp in both modes', () => {
-    expect(heatmapAppearance(true).gradient.colors).toEqual(DEMAND_RAMP_COLORS);
-    expect(heatmapAppearance(false).gradient.colors).toEqual(DEMAND_RAMP_COLORS);
+  it('defaults to the inferno ramp in both modes', () => {
+    expect(heatmapAppearance(true).gradient.colors).toEqual(DEMAND_RAMPS.inferno);
+    expect(heatmapAppearance(false).gradient.colors).toEqual(DEMAND_RAMPS.inferno);
   });
 
-  it('keeps startPoints sorted and within (0, 1] with one stop per color', () => {
+  it('selects the admin-configured ramp per theme', () => {
+    expect(heatmapAppearance(true, 'ocean').gradient.colors).toEqual(DEMAND_RAMPS.ocean);
+    expect(heatmapAppearance(false, 'viridis').gradient.colors).toEqual(DEMAND_RAMPS.viridis);
+  });
+
+  it('falls back to the default ramp for unknown theme names', () => {
+    expect(rampColors('lava' as any)).toEqual(DEMAND_RAMPS.inferno);
+    expect(rampColors(undefined)).toEqual(DEMAND_RAMPS.inferno);
+  });
+
+  it('keeps startPoints sorted and within (0, 1] with one stop per color, every theme', () => {
     for (const isDark of [true, false]) {
-      const { gradient } = heatmapAppearance(isDark);
-      expect(gradient.startPoints).toHaveLength(gradient.colors.length);
-      const sorted = [...gradient.startPoints].sort((x, y) => x - y);
-      expect(gradient.startPoints).toEqual(sorted);
-      expect(sorted[0]).toBeGreaterThan(0);
-      expect(sorted[sorted.length - 1]).toBeLessThanOrEqual(1);
+      for (const theme of Object.keys(DEMAND_RAMPS) as (keyof typeof DEMAND_RAMPS)[]) {
+        const { gradient } = heatmapAppearance(isDark, theme);
+        expect(gradient.startPoints).toHaveLength(gradient.colors.length);
+        const sorted = [...gradient.startPoints].sort((x, y) => x - y);
+        expect(gradient.startPoints).toEqual(sorted);
+        expect(sorted[0]).toBeGreaterThan(0);
+        expect(sorted[sorted.length - 1]).toBeLessThanOrEqual(1);
+      }
     }
   });
 

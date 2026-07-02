@@ -1,14 +1,18 @@
 /**
  * Presentation spec for the driver demand-heatmap overlay.
  *
- * Colors: a sequential "demand" ramp (inferno-like). Chosen over the old
- * teal→gold→red gradient because magnitude should read through *lightness*,
- * not hue decoding: this ramp is lightness-monotonic (L ≈ 0.22 → 0.93), so
- * "brighter = busier" holds for every viewer, including red-green colorblind
- * drivers — green→red ramps are the classic CVD failure. Validated with the
- * dataviz palette checker: adjacent-pair CVD separation passes on light and
- * dark surfaces (worst pair ΔE 17 protan, target ≥ 12); the low-contrast
- * bright end is relieved by the on-map legend (identity is never color-alone).
+ * Colors: curated sequential ramps, selected per service area by the admin
+ * (service_areas.heatmap_color_theme, migration 204) and delivered via the
+ * demand-heatmap payload. A curated enum rather than free-form colors so an
+ * operator can't configure a ramp that's illegible to red-green colorblind
+ * drivers: every ramp here is lightness-monotonic ("brighter = busier"
+ * holds for every viewer) and validated with the dataviz palette checker —
+ * adjacent-pair CVD separation passes on light and dark surfaces (worst
+ * pairs: inferno ΔE 17 protan, ocean ΔE 22.8 deutan, viridis ΔE 19.4
+ * deutan; target ≥ 12). The low-contrast bright end is relieved by the
+ * on-map legend (identity is never color-alone). Unknown theme names fall
+ * back to the default, so a theme can be retired server-side without
+ * breaking older app builds.
  *
  * Weights: cell counts are log-damped before rendering so one downtown cell
  * with hundreds of requests doesn't max the intensity scale and flatten
@@ -16,22 +20,34 @@
  * *texture*, not a single hotspot.
  */
 
-import type { DemandHeatmapPoint } from '@shared/hooks/queries';
+import type { DemandHeatmapPoint, DemandHeatmapTheme } from '@shared/hooks/queries';
 
-export const DEMAND_RAMP_COLORS = ['#1B0C41', '#781C6D', '#CF4446', '#F98C0A', '#F5F13E'];
+export const DEMAND_RAMPS: Record<DemandHeatmapTheme, string[]> = {
+  // Deep violet → magenta → orange → bright yellow (default).
+  inferno: ['#1B0C41', '#781C6D', '#CF4446', '#F98C0A', '#F5F13E'],
+  // Deep navy → blue → cyan → pale aqua.
+  ocean: ['#0A1A4F', '#1D4E9E', '#1C8FCB', '#54D2E0', '#DFF6E8'],
+  // Violet → slate blue → teal → green → yellow-green.
+  viridis: ['#440154', '#3B528B', '#21918C', '#5EC962', '#FDE725'],
+};
+
+const DEFAULT_THEME: DemandHeatmapTheme = 'inferno';
+
+export const rampColors = (theme?: DemandHeatmapTheme): string[] =>
+  DEMAND_RAMPS[theme ?? DEFAULT_THEME] ?? DEMAND_RAMPS[DEFAULT_THEME];
 
 export const HEATMAP_RADIUS = 40;
 
 /**
  * Gradient + opacity tuned per map surface. Dark maps take a slightly
- * earlier ramp start and higher opacity (the deep-purple low end recedes
- * into dark tiles by design); light maps start the ramp later so faint
- * cells stay subtle instead of greying the whole street grid.
+ * earlier ramp start and higher opacity (the dark low end recedes into dark
+ * tiles by design); light maps start the ramp later so faint cells stay
+ * subtle instead of greying the whole street grid.
  */
-export const heatmapAppearance = (isDark: boolean) => ({
+export const heatmapAppearance = (isDark: boolean, theme?: DemandHeatmapTheme) => ({
   opacity: isDark ? 0.75 : 0.6,
   gradient: {
-    colors: DEMAND_RAMP_COLORS,
+    colors: rampColors(theme),
     startPoints: isDark ? [0.04, 0.28, 0.52, 0.76, 0.94] : [0.12, 0.34, 0.56, 0.78, 0.94],
     colorMapSize: 256,
   },

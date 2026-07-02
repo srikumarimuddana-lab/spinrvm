@@ -81,6 +81,14 @@ describe('normalizeDemandHeatmap', () => {
       enabled: false,
       points: [],
       refreshSeconds: HEATMAP_DEFAULT_REFRESH_SECONDS,
+      colorTheme: 'inferno',
     });
+  });
+
+  it('passes known color themes through and maps unknown ones to the default', () => {
+    expect(normalizeDemandHeatmap({ enabled: true, color_theme: 'ocean' }).colorTheme).toBe('ocean');
+    expect(normalizeDemandHeatmap({ enabled: true, color_theme: 'viridis' }).colorTheme).toBe('viridis');
+    expect(normalizeDemandHeatmap({ enabled: true, color_theme: 'rainbow' }).colorTheme).toBe('inferno');
+    expect(normalizeDemandHeatmap({ enabled: true }).colorTheme).toBe('inferno');
   });
 });

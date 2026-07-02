@@ -3,7 +3,8 @@ import { View, Text, StyleSheet } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import { DEMAND_RAMP_COLORS } from './demandHeatmap';
+import type { DemandHeatmapTheme } from '@shared/hooks/queries';
+import { rampColors } from './demandHeatmap';
 
 /**
  * Compact legend chip for the demand-heatmap overlay.
@@ -13,7 +14,7 @@ import { DEMAND_RAMP_COLORS } from './demandHeatmap';
  * color-alone. Mirrors MapControls' floating-chip styling (overlay surface,
  * hairline border) and sits bottom-left, opposite the zoom controls.
  */
-export const DemandHeatmapLegend: React.FC = () => {
+export const DemandHeatmapLegend: React.FC<{ theme?: DemandHeatmapTheme }> = ({ theme }) => {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
@@ -23,7 +24,7 @@ export const DemandHeatmapLegend: React.FC = () => {
       <View style={styles.scaleRow}>
         <Text style={styles.endLabel}>Low</Text>
         <LinearGradient
-          colors={DEMAND_RAMP_COLORS as [string, string, ...string[]]}
+          colors={rampColors(theme) as [string, string, ...string[]]}
           start={{ x: 0, y: 0.5 }}
           end={{ x: 1, y: 0.5 }}
           style={styles.gradientBar}

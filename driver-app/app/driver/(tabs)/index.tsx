@@ -248,7 +248,10 @@ function DriverDashboard() {
     () => (rideState === 'idle' && demandHeatmap?.points ? dampenHeatmapPoints(demandHeatmap.points) : []),
     [rideState, demandHeatmap?.points],
   );
-  const heatmapLook = useMemo(() => heatmapAppearance(isDark), [isDark]);
+  const heatmapLook = useMemo(
+    () => heatmapAppearance(isDark, demandHeatmap?.colorTheme),
+    [isDark, demandHeatmap?.colorTheme],
+  );
 
   const [countdown, setCountdownState] = useState(countdownSeconds);
 
@@ -886,7 +889,9 @@ function DriverDashboard() {
 
       {/* Demand-heatmap legend — the overlay's identity must never be
           color-alone; renders only while the overlay itself is visible */}
-      {heatmapPoints.length > 0 && Platform.OS !== 'web' && <DemandHeatmapLegend />}
+      {heatmapPoints.length > 0 && Platform.OS !== 'web' && (
+        <DemandHeatmapLegend theme={demandHeatmap?.colorTheme} />
+      )}
 
       {/* Bottom Panels */}
       {rideState === 'idle' && (

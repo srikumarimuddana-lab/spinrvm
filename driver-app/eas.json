@@ -26,6 +26,7 @@
       }
     },
     "preview": {
+      "autoIncrement": true,
       "channel": "preview",
       "environment": "preview",
       "android": {

@@ -25,8 +25,14 @@ pieces that were never joined up into a configurable product:
    touches the new controls.
 2. **Backend** — the driver endpoint honors the config, and now aggregates
    pickups onto a ~110 m grid (3-decimal rounding) with count weights instead
-   of returning each rider's exact pickup point. Config is re-clamped at read
-   time so a pre-constraint row can't produce a runaway polling cadence.
+   of returning each rider's exact pickup point. Cells with fewer than 3
+   requests are suppressed (k-anonymity floor) so a lone rural pickup can't
+   be re-identified from its cell. Config is re-clamped at read time so a
+   pre-constraint row can't produce a runaway polling cadence, and the
+   endpoint carries a dedicated 10/min rate limit (the server-directed
+   polling floor is 30 s, so legitimate clients sit at ~2/min). Migration
+   203 adds the previously missing `rides(service_area_id, created_at DESC)`
+   index the query relies on.
 3. **Driver app** — the inline one-shot fetch is replaced by a shared
    TanStack Query hook (`useDemandHeatmap`) whose `refetchInterval` reads
    `refresh_seconds` off the last payload: ops tune the cadence per area from
@@ -34,9 +40,10 @@ pieces that were never joined up into a configurable product:
 4. **Admin dashboard** — the toggle grew into a "Demand Heatmap" section
    (source / window / refresh) in the service-area General tab, mirroring the
    Surge Pricing block's layout and save semantics.
-5. **Tests** — 13 backend unit tests (gating, config, clamping, bucketing,
-   the no-exact-coordinates guarantee) and 7 driver-side normalization tests
-   (malformed payloads degrade to "no overlay", never a crash or fast-poll).
+5. **Tests** — 14 backend unit tests (gating, config, clamping, bucketing,
+   k-floor suppression, the no-exact-coordinates guarantee) and 7 driver-side
+   normalization tests (malformed payloads degrade to "no overlay", never a
+   crash or fast-poll).
 
 ## 3. Impact analysis
 
@@ -45,6 +52,13 @@ pieces that were never joined up into a configurable product:
   full precision to every driver in the area. They are now aggregated to
   ~110 m cells before leaving the endpoint. This is a data-minimization fix,
   not just a feature: the overlay needs block-level density, never addresses.
+- **Residual risk (accepted, mitigated)**: aggregation alone is not
+  anonymization — a weight-1 cell in a low-density area still says "one ride
+  started in this ~110 m box", which local knowledge could re-identify.
+  Cells below 3 requests are therefore suppressed before leaving the
+  endpoint (`_HEATMAP_MIN_CELL_COUNT`, pinned by a regression test). The
+  trade-off: very-low-volume areas may show an empty overlay; raising the
+  data window is the admin's lever there.
 - GPS coordinates still never appear in logs (unchanged; nothing new is
   logged by the endpoint).
 - `missed_rides` source exposes only the same aggregated cells filtered by
@@ -54,9 +68,11 @@ pieces that were never joined up into a configurable product:
 - Old client behavior: one fetch per idle transition (unbounded staleness).
   New behavior: one fetch per `refresh_seconds` while idle (default 300 s).
   Worst-case admin config (30 s) ≈ 120 requests/driver/hour; each request is
-  a two-row lookup plus one indexed `rides` query capped at 2 000 rows.
-  `rides(service_area_id, created_at)` access matches existing dispatch/surge
-  query patterns.
+  a two-row lookup plus one `rides` query capped at 2 000 rows, backed by
+  the new `idx_rides_service_area_created` index (migration 203 — before it,
+  this query pattern had no covering index and sequential-scanned `rides`).
+  A dedicated 10/min rate limit stops a scripted client that ignores
+  `refresh_seconds` from using the scan as a DoS lever.
 - Response size *shrinks*: bucketing collapses up to 2 000 points into unique
   cells; weights carry the density that duplicate points used to.
 - No new background loop, no WebSocket traffic, no Redis dependency.
@@ -88,8 +104,11 @@ Closed by this change:
 - [x] Config was enable-only → now source/window/refresh per area
 - [x] No client refresh → server-driven polling while idle
 - [x] Exact rider pickup coords shipped to drivers → ~110 m aggregation
+      with a k-anonymity floor (cells under 3 requests suppressed)
 - [x] All points weight=1 (density invisible) → count weights per cell
-- [x] Zero test coverage on the endpoint or client mapping → 20 tests
+- [x] No covering index on the heatmap query → `idx_rides_service_area_created`
+- [x] Only the global rate limit guarded the endpoint → dedicated 10/min cap
+- [x] Zero test coverage on the endpoint or client mapping → 21 tests
 
 Known gaps remaining (candidates for follow-up tickets):
 
@@ -128,7 +147,8 @@ Known gaps remaining (candidates for follow-up tickets):
 ## 5. Rollout notes
 
 - Apply migration 202 (additive, fast, safe with traffic in flight;
-  reviewed by the migration checklist — verdict "safe to apply").
+  reviewed by the migration checklist — verdict "safe to apply") and
+  migration 203 (`CREATE INDEX CONCURRENTLY`, no write lock on `rides`).
 - Feature stays dark until an admin enables it per area; defaults reproduce
   the old behavior for areas where the old boolean was already on.
 - Client change requires an app release (Expo EAS, `[build]` commit tag) for

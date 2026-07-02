@@ -684,8 +684,9 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
         <h4 className="font-bold text-gray-800 mb-2">Demand Heatmap</h4>
         <p className="text-sm text-gray-500 mb-3">
           Show drivers a demand overlay on their map while idle, so they can position
-          toward busy blocks. Data is aggregated to ~110&nbsp;m cells — no exact pickup
-          locations are exposed.
+          toward busy blocks. Data is aggregated to ~110&nbsp;m cells and cells with fewer
+          than 3 requests are hidden — no exact or re-identifiable pickup locations are
+          exposed.
         </p>
         <div className="flex items-center gap-2 pt-1">
           <button onClick={() => setForm({ ...form, show_demand_heatmap: !form.show_demand_heatmap })}>

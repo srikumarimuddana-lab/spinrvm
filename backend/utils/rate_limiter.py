@@ -225,10 +225,38 @@ promo_validate_limit = default_limiter.limit("10/minute")
 # Location updates - allow frequent updates for drivers
 location_update_limit = default_limiter.limit("60/minute")
 
+
+def _bearer_user_or_ip(request: Request) -> str:
+    """Rate-limit key: the JWT's user_id when a Bearer token is present, else IP.
+
+    Mobile drivers sit behind carrier-grade NAT, so keying per-driver limits
+    by IP shares one bucket across unrelated drivers on the same egress IP
+    and 429s legitimate traffic. The decode is unverified, but that's safe
+    here: endpoints using this key also require get_current_user, which
+    rejects forged tokens with 401 before the handler (and this limiter)
+    runs — so any request that reaches the bucket carried a valid signature.
+    Unauthenticated junk still falls into the shared per-IP bucket.
+    """
+    try:
+        import jwt as _jwt
+
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            payload = _jwt.decode(auth[len("Bearer ") :], options={"verify_signature": False})
+            uid = payload.get("user_id") or payload.get("sub")
+            if uid:
+                return f"user:{uid}"
+    except Exception:  # noqa: S110 — malformed token → per-IP bucket
+        pass
+    return get_ipaddr(request)
+
+
 # Demand heatmap — server-directed polling floor is 30 s (≈2 req/min); 10/min
-# leaves retry headroom while stopping a scripted client that ignores
-# refresh_seconds from turning the per-area rides scan into a DoS lever.
-demand_heatmap_limit = default_limiter.limit("10/minute")
+# per driver leaves retry + focus-refetch headroom while stopping a scripted
+# client that ignores refresh_seconds from turning the per-area rides scan
+# into a DoS lever. Keyed per-user (not per-IP) so drivers behind carrier
+# NAT don't share one bucket.
+demand_heatmap_limit = default_limiter.limit("10/minute", key_func=_bearer_user_or_ip)
 
 # Payment actions (tip, process-payment) — sensitive financial ops, tight limit
 payment_action_limit = default_limiter.limit("5/minute")

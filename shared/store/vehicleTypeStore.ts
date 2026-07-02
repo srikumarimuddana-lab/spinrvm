@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
-import { AppState, Image } from 'react-native';
+import { AppState } from 'react-native';
+import { Image as ExpoImage } from 'expo-image';
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -57,7 +58,7 @@ export const useVehicleTypeStore = create<VehicleTypeState>()(
           // Fire-and-forget — failures just defer to the bundled fallback.
           for (const vt of Object.values(byId)) {
             if (vt.marker_image_url) {
-              Image.prefetch(vt.marker_image_url).catch(() => {});
+              ExpoImage.prefetch(vt.marker_image_url, 'disk').catch(() => {});
             }
           }
         } catch (error) {

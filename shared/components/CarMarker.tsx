@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Image, Platform } from 'react-native';
+import { View, Platform } from 'react-native';
+import { Image as ExpoImage } from 'expo-image';
 import { AnimatedRegion, Marker } from 'react-native-maps';
 
 const CAR_IMAGES = {
@@ -229,14 +230,15 @@ const CarMarkerComponent: React.FC<CarMarkerProps> = ({
                     justifyContent: 'center',
                 }}
             >
-                <Image
+                <ExpoImage
                     source={useCustomImage ? { uri: imageUri as string } : CAR_IMAGES[variant]}
                     onError={() => { setImageFailed(true); setTracksViewChanges(true); }}
                     onLoad={handleImageLoaded}
+                    contentFit="contain"
+                    cachePolicy="disk"
                     style={{
                         width: size,
                         height: size,
-                        resizeMode: 'contain',
                         backgroundColor: 'transparent',
                     }}
                 />

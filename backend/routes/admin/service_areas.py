@@ -13,6 +13,8 @@ try:
     from ...services.fare_service import DEFAULT_FARE
     from ...utils.audit_logger import log_admin_action
     from ...utils.heatmap import (
+        HEATMAP_COLOR_THEME_DEFAULT,
+        HEATMAP_COLOR_THEME_PATTERN,
         HEATMAP_DATA_SOURCE_DEFAULT,
         HEATMAP_DATA_SOURCE_PATTERN,
         HEATMAP_REFRESH_SECONDS_DEFAULT,
@@ -30,6 +32,8 @@ except ImportError:
     from services.fare_service import DEFAULT_FARE
     from utils.audit_logger import log_admin_action  # noqa: F401
     from utils.heatmap import (
+        HEATMAP_COLOR_THEME_DEFAULT,
+        HEATMAP_COLOR_THEME_PATTERN,
         HEATMAP_DATA_SOURCE_DEFAULT,
         HEATMAP_DATA_SOURCE_PATTERN,
         HEATMAP_REFRESH_SECONDS_DEFAULT,
@@ -193,6 +197,7 @@ class ServiceAreaCreateRequest(BaseModel):
         default=HEATMAP_REFRESH_SECONDS_DEFAULT, ge=HEATMAP_REFRESH_SECONDS_MIN, le=HEATMAP_REFRESH_SECONDS_MAX
     )
     heatmap_data_source: str = Field(default=HEATMAP_DATA_SOURCE_DEFAULT, pattern=HEATMAP_DATA_SOURCE_PATTERN)
+    heatmap_color_theme: str = Field(default=HEATMAP_COLOR_THEME_DEFAULT, pattern=HEATMAP_COLOR_THEME_PATTERN)
     # Per-area referral rewards (CAD). Defaults equal the global constants.
     rider_referrer_reward: float = Field(default=5, ge=0, le=1000)
     rider_referee_reward: float = Field(default=5, ge=0, le=1000)
@@ -247,6 +252,7 @@ class ServiceAreaUpdateRequest(BaseModel):
         default=None, ge=HEATMAP_REFRESH_SECONDS_MIN, le=HEATMAP_REFRESH_SECONDS_MAX
     )
     heatmap_data_source: Optional[str] = Field(default=None, pattern=HEATMAP_DATA_SOURCE_PATTERN)
+    heatmap_color_theme: Optional[str] = Field(default=None, pattern=HEATMAP_COLOR_THEME_PATTERN)
     vehicle_pricing: Optional[List[Dict[str, Any]]] = None
     province: Optional[str] = None
     max_pickup_radius_km: Optional[float] = Field(default=None, ge=0.1, le=200)
@@ -472,6 +478,7 @@ async def admin_create_service_area(area: ServiceAreaCreateRequest, admin: dict 
         "heatmap_data_window_hours": area.heatmap_data_window_hours,
         "heatmap_refresh_seconds": area.heatmap_refresh_seconds,
         "heatmap_data_source": area.heatmap_data_source,
+        "heatmap_color_theme": area.heatmap_color_theme,
         "rider_referrer_reward": area.rider_referrer_reward,
         "rider_referee_reward": area.rider_referee_reward,
         "rider_referral_rides_required": area.rider_referral_rides_required,
@@ -606,6 +613,7 @@ async def admin_update_service_area(
         "heatmap_data_window_hours",
         "heatmap_refresh_seconds",
         "heatmap_data_source",
+        "heatmap_color_theme",
         "vehicle_pricing",
         "max_pickup_radius_km",
         "insurance_fee_percent",

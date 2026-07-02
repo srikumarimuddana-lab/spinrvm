@@ -795,6 +795,7 @@ async def get_demand_heatmap(request: Request, current_user: dict = Depends(get_
                 "refresh_seconds": refresh_seconds,
                 "data_window_hours": window_hours,
                 "data_source": data_source,
+                "color_theme": config["color_theme"],
             }
 
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat()
@@ -827,6 +828,7 @@ async def get_demand_heatmap(request: Request, current_user: dict = Depends(get_
         "refresh_seconds": refresh_seconds,
         "data_window_hours": window_hours,
         "data_source": data_source,
+        "color_theme": config["color_theme"],
     }
 
 

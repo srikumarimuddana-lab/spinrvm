@@ -200,6 +200,21 @@ class TestConfig:
         assert result["refresh_seconds"] == 300
         assert result["data_window_hours"] == 168
 
+    def test_color_theme_defaults_to_inferno(self):
+        # Pre-migration-204 rows (column absent) and unknown names both map
+        # to the default so a removed theme can never break old rows.
+        assert _run(_driver(), _area(), [])["color_theme"] == "inferno"
+        assert _run(_driver(), _area(heatmap_color_theme="rainbow"), [])["color_theme"] == "inferno"
+
+    def test_configured_color_theme_is_returned(self):
+        result = _run(_driver(), _area(heatmap_color_theme="ocean"), [])
+        assert result["color_theme"] == "ocean"
+
+    def test_color_theme_rides_along_on_cache_hits(self):
+        cached = json.dumps({"points": [[52.13, -106.67, 5]], "total_rides": 5})
+        result = _run(_driver(), _area(heatmap_color_theme="viridis"), None, cached_payload=cached)
+        assert result["color_theme"] == "viridis"
+
 
 class TestCaching:
     def test_result_is_written_to_the_per_area_cache(self):

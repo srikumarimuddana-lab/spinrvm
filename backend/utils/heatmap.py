@@ -43,6 +43,17 @@ HEATMAP_DATA_SOURCE_DEFAULT = "all_requests"
 # For pydantic Field(pattern=...) in the admin request models.
 HEATMAP_DATA_SOURCE_PATTERN = f"^({'|'.join(HEATMAP_DATA_SOURCES)})$"
 
+# Curated color themes for the driver-app overlay (migration 204). Names
+# only — the actual ramps live in the driver app
+# (driver-app/components/dashboard/demandHeatmap.ts), each pre-validated for
+# CVD legibility and lightness monotonicity. A curated enum (not free-form
+# colors) so an admin can't configure a ramp that's illegible to red-green
+# colorblind drivers; the app falls back to the default on unknown names, so
+# themes can be removed later without breaking old rows.
+HEATMAP_COLOR_THEMES = ("inferno", "ocean", "viridis")
+HEATMAP_COLOR_THEME_DEFAULT = "inferno"
+HEATMAP_COLOR_THEME_PATTERN = f"^({'|'.join(HEATMAP_COLOR_THEMES)})$"
+
 # Grid size for pickup-coordinate bucketing: 3 decimal places ≈ 110 m.
 # Riders' exact pickup coordinates must never be shipped to every driver in
 # the area (PIPEDA data minimization); the heatmap only needs block-level
@@ -90,7 +101,11 @@ def resolve_heatmap_config(service_area: Optional[Dict[str, Any]]) -> Dict[str, 
     data_source = area.get("heatmap_data_source") or HEATMAP_DATA_SOURCE_DEFAULT
     if data_source not in HEATMAP_SOURCE_FILTERS:
         data_source = HEATMAP_DATA_SOURCE_DEFAULT
+    color_theme = area.get("heatmap_color_theme") or HEATMAP_COLOR_THEME_DEFAULT
+    if color_theme not in HEATMAP_COLOR_THEMES:
+        color_theme = HEATMAP_COLOR_THEME_DEFAULT
     return {
+        "color_theme": color_theme,
         "window_hours": clamp_int(
             area.get("heatmap_data_window_hours"),
             HEATMAP_WINDOW_HOURS_MIN,

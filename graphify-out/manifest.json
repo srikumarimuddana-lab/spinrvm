@@ -630,8 +630,8 @@
     "semantic_hash": ""
   },
   "admin-dashboard/src/app/dashboard/service-areas/page.tsx": {
-    "mtime": 1782971847.3942108,
-    "ast_hash": "ff9e544564333d83768105fd64bbb44c",
+    "mtime": 1783013318.3945405,
+    "ast_hash": "3f02f0a911f50b46f966940fcd183893",
     "semantic_hash": ""
   },
   "admin-dashboard/src/app/dashboard/settings/loading.tsx": {
@@ -2270,8 +2270,8 @@
     "semantic_hash": ""
   },
   "backend/routes/admin/service_areas.py": {
-    "mtime": 1782971655.39626,
-    "ast_hash": "155beff20e15da8a5fefa9257a62bcf2",
+    "mtime": 1783013091.2164426,
+    "ast_hash": "48205aac6e694d4993d819e832068751",
     "semantic_hash": ""
   },
   "backend/routes/admin/settings.py": {
@@ -2350,8 +2350,8 @@
     "semantic_hash": ""
   },
   "backend/routes/drivers.py": {
-    "mtime": 1782971482.9402633,
-    "ast_hash": "f7130f0aafdf7e969bb0fdde85f09d6a",
+    "mtime": 1783013076.3265262,
+    "ast_hash": "595e5f97d26078acad3f459841cb44ff",
     "semantic_hash": ""
   },
   "backend/routes/faqs.py": {
@@ -4025,8 +4025,8 @@
     "semantic_hash": ""
   },
   "driver-app/app/driver/(tabs)/index.tsx": {
-    "mtime": 1782993812.7941275,
-    "ast_hash": "b61a596157443110b20419526ec84fe0",
+    "mtime": 1783013198.7905335,
+    "ast_hash": "455185447cb7c0eb4d272f154168c480",
     "semantic_hash": ""
   },
   "driver-app/app/driver/(tabs)/profile.tsx": {
@@ -5765,8 +5765,8 @@
     "semantic_hash": ""
   },
   "shared/hooks/queries/driverQueries.ts": {
-    "mtime": 1782971847.3942108,
-    "ast_hash": "0caca100ac90f990d1f9fda13ec603a0",
+    "mtime": 1783013154.4905307,
+    "ast_hash": "7f719247cb094562b19ba7eeee669063",
     "semantic_hash": ""
   },
   "shared/hooks/queries/index.ts": {
@@ -9720,8 +9720,8 @@
     "semantic_hash": ""
   },
   "backend/tests/test_demand_heatmap.py": {
-    "mtime": 1782971623.4162607,
-    "ast_hash": "f4dc9d258f583423d869451ed19e8716",
+    "mtime": 1783013105.094528,
+    "ast_hash": "09c0d9fdbecd8621ca3c21a2b3121ee0",
     "semantic_hash": ""
   },
   "backend/tests/test_support_assistant.py": {
@@ -9755,8 +9755,8 @@
     "semantic_hash": ""
   },
   "driver-app/__tests__/shared/demandHeatmap.test.ts": {
-    "mtime": 1782945337.0985541,
-    "ast_hash": "a1a594eaa4a18c6e9caaf196c87af14d",
+    "mtime": 1783013228.1305351,
+    "ast_hash": "59b1830e20e8f53de9a556aa1adfce1c",
     "semantic_hash": ""
   },
   "driver-app/plugins/withFirebaseNonModularHeaders.js": {
@@ -9775,8 +9775,8 @@
     "semantic_hash": ""
   },
   "docs/driver-heatmap-impact-analysis.md": {
-    "mtime": 1782994025.8981402,
-    "ast_hash": "070984611d39aee4f725612899f7f6aa",
+    "mtime": 1783013398.2865453,
+    "ast_hash": "7a3522ac122447de7c5cb4a174f970aa",
     "semantic_hash": ""
   },
   "backend/migrations/203_rides_service_area_created_index.sql": {
@@ -9785,28 +9785,33 @@
     "semantic_hash": ""
   },
   "backend/utils/heatmap.py": {
-    "mtime": 1782971426.7322643,
-    "ast_hash": "116260d4903081a156d6905a05b5e28a",
+    "mtime": 1783013064.2945254,
+    "ast_hash": "6e119b723adb5949dd8306b61b058b1c",
     "semantic_hash": ""
   },
   "driver-app/__mocks__/@shared/hooks/queries.js": {
-    "mtime": 1782971755.8282583,
-    "ast_hash": "57052d5478b8ddf11dbb24cf3bb62b73",
+    "mtime": 1783013202.1585336,
+    "ast_hash": "b3cd4973232b3215daa4f14951bdabf4",
     "semantic_hash": ""
   },
   "driver-app/__tests__/components/demandHeatmap.test.tsx": {
-    "mtime": 1782993834.8541288,
-    "ast_hash": "eb3c111f6b2e424db9303c5f6e07fc8d",
+    "mtime": 1783013217.8105345,
+    "ast_hash": "2d1c6d5fc502996711487098df68aacb",
     "semantic_hash": ""
   },
   "driver-app/components/dashboard/DemandHeatmapLegend.tsx": {
-    "mtime": 1782993753.622124,
-    "ast_hash": "81004a720ba245b02911750b613ae236",
+    "mtime": 1783013183.7585325,
+    "ast_hash": "992099418c690c112b134f6398776a56",
     "semantic_hash": ""
   },
   "driver-app/components/dashboard/demandHeatmap.ts": {
-    "mtime": 1782972002.6602538,
-    "ast_hash": "9b46a331302adabdfbbf98e54bd51770",
+    "mtime": 1783013177.0945323,
+    "ast_hash": "1ae34f9cb1337699f7204dadd93ff903",
+    "semantic_hash": ""
+  },
+  "backend/migrations/204_service_area_heatmap_color_theme.sql": {
+    "mtime": 1783013033.5225236,
+    "ast_hash": "632cfc3e3d888f1ac1c4abff8a712098",
     "semantic_hash": ""
   }
 }

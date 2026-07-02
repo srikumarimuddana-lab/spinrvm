@@ -149,10 +149,15 @@ Known gaps remaining (candidates for follow-up tickets):
    *admin dashboard's* heatmap page only. Operators may reasonably believe it
    configures the driver overlay. Recommend renaming that card ("Admin
    Analytics Heatmap") or folding both into one surface.
-2. **Render styling is app-side**: the ramp, radius, damping, and legend live
-   in `driver-app/components/dashboard/demandHeatmap.ts` (theme-aware, CVD-
-   validated). If ops ever need *per-area* styling, it can ride on the same
-   endpoint payload later (additive).
+2. ~~Render styling is app-side only~~ **Closed (migration 204)**: admins now
+   pick a per-area color theme (Inferno / Ocean / Viridis) in the Demand
+   Heatmap section, delivered via the payload's `color_theme`. Deliberately a
+   curated enum, not free-form colors: every ramp is lightness-monotonic and
+   CVD-validated, so an operator can't configure an inaccessible ramp. The
+   authoritative ramps live in
+   `driver-app/components/dashboard/demandHeatmap.ts`; unknown names fall
+   back to Inferno, so themes can be retired without breaking old rows or
+   old app builds. Radius/damping remain app-side.
 3. **No time-of-day weighting**: a 168 h window mixes Friday-night and
    Tuesday-morning demand. A "same hour-of-week" mode would make the overlay
    predictive rather than historical. (Kept out of scope: needs product
@@ -179,7 +184,7 @@ Known gaps remaining (candidates for follow-up tickets):
 
 ## 5. Rollout notes
 
-- **Apply migrations 202 and 203 BEFORE deploying the backend and admin
+- **Apply migrations 202, 203, and 204 BEFORE deploying the backend and admin
   dashboard.** Migrations run manually (`migrate.py`) while Fly/Railway and
   Vercel auto-deploy from main — under the inverse order, creating a service
   area 500s until 202 lands (updates are protected by touched-gating, but

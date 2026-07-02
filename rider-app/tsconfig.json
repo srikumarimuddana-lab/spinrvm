@@ -43,6 +43,9 @@
       "expo-constants": [
         "./node_modules/expo-constants"
       ],
+      "expo-image": [
+        "./node_modules/expo-image"
+      ],
       "zustand/middleware": [
         "./node_modules/zustand/middleware"
       ],

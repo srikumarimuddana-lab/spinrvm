@@ -28,24 +28,7 @@ import pytest
 PHONE = "+13065203304"
 
 
-def _resolve_inner(fn):
-    """slowapi's @limiter.limit wraps the coroutine in async_wrapper without
-    setting __wrapped__. Walk __closure__ cells to pull out the original
-    so we can call the handler without tripping rate-limit state."""
-    while True:
-        nxt = getattr(fn, "__wrapped__", None)
-        if nxt is None:
-            # slowapi closure-wrapped case: look inside __closure__ for the
-            # first coroutine function.
-            closure = getattr(fn, "__closure__", None) or ()
-            for cell in closure:
-                val = cell.cell_contents
-                if callable(val) and getattr(val, "__code__", None) is not None:
-                    if val is fn:
-                        continue
-                    return val
-            return fn
-        fn = nxt
+from backend.tests._factories import resolve_inner as _resolve_inner  # noqa: E402
 
 
 async def _call_send_otp(db_settings_return=None, db_settings_raise=None):

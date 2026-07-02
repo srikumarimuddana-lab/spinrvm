@@ -35,24 +35,7 @@ import jwt
 import pytest
 from fastapi import HTTPException
 
-
-def _resolve_inner(fn):
-    """Unwrap slowapi's @limiter.limit closure so we can call the
-    handler directly without tripping rate-limit state. Same helper
-    used in test_auth_send_otp.py."""
-    while True:
-        nxt = getattr(fn, "__wrapped__", None)
-        if nxt is None:
-            closure = getattr(fn, "__closure__", None) or ()
-            for cell in closure:
-                val = cell.cell_contents
-                if callable(val) and getattr(val, "__code__", None) is not None:
-                    if val is fn:
-                        continue
-                    return val
-            return fn
-        fn = nxt
-
+from backend.tests._factories import resolve_inner as _resolve_inner  # noqa: E402
 
 # ─────────────────────────────────────────────────────────────────────────────
 # /auth/logout-all (rider/driver)

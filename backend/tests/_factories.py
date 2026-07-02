@@ -186,3 +186,25 @@ def payout_row(**overrides: Any) -> Dict[str, Any]:
     }
     base.update(overrides)
     return base
+
+
+def resolve_inner(fn):
+    """Unwrap a slowapi @limiter.limit-decorated handler to the raw coroutine.
+
+    slowapi wraps the endpoint in async_wrapper without setting __wrapped__,
+    so tests walk __closure__ cells to pull out the original and call it
+    without tripping (or sharing) rate-limit state. Used by
+    test_demand_heatmap / test_auth_send_otp / test_logout_all.
+    """
+    while True:
+        nxt = getattr(fn, "__wrapped__", None)
+        if nxt is None:
+            closure = getattr(fn, "__closure__", None) or ()
+            for cell in closure:
+                val = cell.cell_contents
+                if callable(val) and getattr(val, "__code__", None) is not None:
+                    if val is fn:
+                        continue
+                    return val
+            return fn
+        fn = nxt

@@ -80,7 +80,7 @@ def _install_common_patches(outcome, *, ride_row=None, already_paid=False):
         patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=None)),
         patch("backend.routes.rides.db_supabase.update_ride", AsyncMock(side_effect=_capture_update)),
         patch("backend.routes.rides.db_supabase.update_one", AsyncMock(return_value=guard_row)),
-        patch("backend.routes.rides.charge_ride", AsyncMock(return_value=outcome)),
+        patch("backend.services.payment_service.charge_ride", AsyncMock(return_value=outcome)),
     ]
     return patches, updates
 
@@ -285,7 +285,7 @@ class TestIdempotencyGuards:
         with (
             patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
             patch("backend.routes.rides.db_supabase.get_user_by_id", AsyncMock(return_value=rider_user)),
-            patch("backend.routes.rides.charge_ride", charge_mock),
+            patch("backend.services.payment_service.charge_ride", charge_mock),
         ):
             req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
             result = await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
@@ -295,9 +295,10 @@ class TestIdempotencyGuards:
 
     async def test_concurrent_request_loses_to_atomic_guard(self):
         """Two parallel requests: the first sets payment_status=processing
-        via the atomic update_one. The second's update_one matches 0 rows
-        and the handler returns {already_paid: True} without calling
-        Stripe. Pins the double-charge race protection."""
+        via the atomic update_one. The second's update_one matches 0 rows;
+        the handler re-reads the ride, sees the winner's card 'processing'
+        state, and returns {already_paid: True} without calling Stripe.
+        Pins the double-charge race protection."""
         from backend.routes import rides as rides_mod
         from backend.utils.stripe_charge import ChargeOutcome
 
@@ -306,6 +307,11 @@ class TestIdempotencyGuards:
         patches, updates = _install_common_patches(outcome, already_paid=True)
 
         charge_mock = AsyncMock(return_value=outcome)
+        # First read: pre-claim state. Second read (after losing the guard):
+        # the winner has already flipped the row to processing.
+        get_ride_mock = AsyncMock(
+            side_effect=[_completed_ride(), _completed_ride(payment_status="processing")]
+        )
 
         from contextlib import ExitStack
 
@@ -313,13 +319,45 @@ class TestIdempotencyGuards:
             for p in patches:
                 st.enter_context(p)
             # Override charge_ride patch so we can assert not-called
-            st.enter_context(patch("backend.routes.rides.charge_ride", charge_mock))
+            st.enter_context(patch("backend.services.payment_service.charge_ride", charge_mock))
+            st.enter_context(patch("backend.routes.rides.db_supabase.get_ride", get_ride_mock))
 
             req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
             result = await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
 
         assert result.get("already_paid") is True
         charge_mock.assert_not_called()
+
+    async def test_concurrent_loser_gets_409_when_wallet_processing(self):
+        """A wallet ride the loser couldn't claim is NOT reported as paid —
+        wallet 'processing' may still fail, so the loser gets a retryable
+        409 instead of a false 'Paid'."""
+        from backend.routes import rides as rides_mod
+        from backend.utils.stripe_charge import ChargeOutcome
+
+        outcome = ChargeOutcome(status="succeeded", payment_intent_id="pi")
+        patches, updates = _install_common_patches(
+            outcome, ride_row=_completed_ride(payment_method="wallet"), already_paid=True
+        )
+        get_ride_mock = AsyncMock(
+            side_effect=[
+                _completed_ride(payment_method="wallet"),
+                _completed_ride(payment_method="wallet", payment_status="processing"),
+            ]
+        )
+
+        from contextlib import ExitStack
+
+        with ExitStack() as st:
+            for p in patches:
+                st.enter_context(p)
+            st.enter_context(patch("backend.routes.rides.db_supabase.get_ride", get_ride_mock))
+
+            req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
+            with pytest.raises(HTTPException) as exc_info:
+                await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
+
+        assert exc_info.value.status_code == 409
 
 
 @pytest.mark.asyncio

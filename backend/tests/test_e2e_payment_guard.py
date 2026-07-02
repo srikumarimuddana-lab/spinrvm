@@ -109,12 +109,12 @@ class TestPaymentAtomicGuard:
         """
         Simulates two concurrent process_payment calls on the same ride.
         The first call wins the atomic UPDATE WHERE payment_status='pending';
-        the second sees update_one return None (no matching row) and returns
+        the second sees update_one return None (no matching row), re-reads
+        the ride, observes the winner's card 'processing' state, and returns
         already_paid=True without going on to charge Stripe.
         """
         from backend.routes import rides as rides_mod
-
-        ride = _completed_ride()
+        from backend.utils.stripe_charge import ChargeOutcome
 
         # First call: update_one returns the updated row (won the race)
         # Second call: update_one returns None (lost the race)
@@ -123,15 +123,32 @@ class TestPaymentAtomicGuard:
             None,  # loser
         ]
 
-        stripe_mock = AsyncMock(return_value={"success": True, "charged_amount": 18.5, "email_sent": False})
+        stripe_mock = AsyncMock(
+            return_value=ChargeOutcome(status="succeeded", payment_intent_id="pi_guard", charged_amount=18.5)
+        )
+
+        # Both requests' pre-claim reads see 'pending'; any read after the
+        # winner's claim (notably the loser's post-guard re-read) sees the
+        # winner's 'processing' row.
+        _reads = {"n": 0}
+
+        async def _get_ride(_ride_id):
+            _reads["n"] += 1
+            if _reads["n"] <= 2:
+                return _completed_ride()
+            return _completed_ride(payment_status="processing")
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(side_effect=_get_ride)),
+            patch(
+                "backend.routes.rides.db_supabase.get_user_by_id",
+                AsyncMock(return_value={"stripe_customer_id": "cus_g", "default_payment_method": "pm_g"}),
+            ),
             patch(
                 "backend.routes.rides.db_supabase.update_one",
                 AsyncMock(side_effect=update_side_effects),
             ),
-            patch("backend.routes.rides.charge_ride", stripe_mock),
+            patch("backend.services.payment_service.charge_ride", stripe_mock),
             patch("backend.routes.rides.db_supabase.update_ride", AsyncMock()),
         ):
             results = await asyncio.gather(

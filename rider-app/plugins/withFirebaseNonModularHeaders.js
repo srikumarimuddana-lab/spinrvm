@@ -3,41 +3,71 @@ const { mergeContents } = require('@expo/config-plugins/build/utils/generateCode
 const fs = require('fs');
 const path = require('path');
 
-// Allow non-modular header includes inside framework modules on iOS.
+// iOS static-frameworks compatibility for @react-native-firebase.
 //
 // Why this exists: two other iOS build settings, each required on its own,
 // combine to break the Firebase compile:
 //   1. expo-build-properties ios.useFrameworks='static' — needed so the
 //      @react-native-firebase Swift pods can import the non-modular Google pods
-//      (GoogleUtilities / RecaptchaInterop / nanopb). Makes RNFB* clang
-//      *framework* modules.
+//      (GoogleUtilities / RecaptchaInterop / nanopb). Makes every pod a clang
+//      *framework* module.
 //   2. expo-build-properties ios.buildReactNativeFromSource=true — needed so
 //      expo-dev-launcher compiles against RN 0.85.2 *source* headers (the
 //      prebuilt ReactNativeCore.xcframework exposes a 4-arg
 //      RCTDevMenuConfiguration the SDK-55 dev-launcher doesn't call).
 //
-// Together, the RNFB* framework modules #import non-modular headers —
-// React/RCTConvert.h (source-built React lacks the clean module map the prebuilt
-// React.xcframework had) plus FirebaseCore / nanopb / RecaptchaInterop. Clang
-// treats "include of non-modular header inside framework module" as an ERROR,
-// failing the archive on RNFBApp.RCTConvert_FIRApp (and, transitively,
-// FirebaseSessions.sessions_nanopb).
+// This plugin makes two Podfile edits:
 //
-// Setting CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES=YES on every pod
-// target restores the tolerance the prebuilt-React path had. Applied globally
-// rather than only to RNFB* so we don't have to enumerate the transitive Google
-// pods (the pod-target names, e.g. RNFBApp / RNFBMessaging, are not the npm
-// package names, so an explicit list is easy to get silently wrong).
+// (a) pre_install: force build_type = static_library for the RNFB pods.
+//     Their *public* headers textually include React headers (e.g.
+//     RNFBMessaging+AppDelegate.h imports <React/RCTBridgeModule.h>), which
+//     makes their own framework modules invalid: when RNFBApp was compiled as a
+//     framework module the React declarations got absorbed into it, and
+//     RNFBMessaging then failed with "declaration of 'RCTPromiseRejectBlock'
+//     must be imported from module 'RNFBApp.RNFBAppModule' before it is
+//     required". As plain static libraries they compile textually, the way
+//     RNFB was designed. This replicates what expo-modules-autolinking's
+//     installer.rb does for ExpoModulesCore/expo-dev-menu (same reason, same
+//     singleton-method technique) — but that path is gated on
+//     RCT_USE_PREBUILT_RNCORE=1, so with buildReactNativeFromSource=true the
+//     expo-build-properties `forceStaticLinking` option silently no-ops and we
+//     must apply it ourselves.
 //
-// Runs as a dangerous mod that injects into the Expo-generated Podfile
-// post_install block; idempotent via the mergeContents tag.
+// (b) post_install: CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES=YES
+//     on all pod targets. Source-built React headers are not covered by a
+//     module map from other pods' compile context, so any remaining ObjC
+//     framework-module pod that textually includes React headers
+//     (react-native-maps, react-native-webview, netinfo, …) would otherwise
+//     error with "include of non-modular header inside framework module".
+//     Safe for the RNFB family because (a) removed them from module builds —
+//     this setting is what caused the absorption problem when they were still
+//     framework modules, so (a) and (b) must ship together.
+//
+// Runs as a dangerous mod on the Expo-generated Podfile; idempotent via
+// mergeContents tags.
 //
 // Removal criteria: drop this once we either stop building RN from source
 // (e.g. SDK 56's prebuilt core matches expo-dev-launcher, so buildReactNative-
-// FromSource can go) or RNFirebase ships a clean module map under static
-// frameworks. See the expo-build-properties ios block in app.config.ts.
+// FromSource can go and forceStaticLinking works again) or RNFirebase ships
+// headers that don't publicly include React core.
 
-const SNIPPET = [
+// Pod target names (from each package's .podspec) — NOT npm package names.
+const RNFB_PODS = "['RNFBApp', 'RNFBMessaging', 'RNFBCrashlytics', 'RNFBAppCheck']";
+
+const PRE_INSTALL_SNIPPET = [
+    `  pre_install do |installer|`,
+    `    installer.pod_targets.each do |pod|`,
+    `      if ${RNFB_PODS}.include?(pod.name)`,
+    `        Pod::UI.puts "[withFirebaseNonModularHeaders] Forcing static_library build type for #{pod.name}"`,
+    `        def pod.build_type`,
+    `          Pod::BuildType.static_library`,
+    `        end`,
+    `      end`,
+    `    end`,
+    `  end`,
+].join('\n');
+
+const POST_INSTALL_SNIPPET = [
     '    installer.pods_project.targets.each do |target|',
     '      target.build_configurations.each do |bc|',
     "        bc.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'",
@@ -53,18 +83,35 @@ const withFirebaseNonModularHeaders = (config) => {
                 config.modRequest.platformProjectRoot,
                 'Podfile'
             );
-            const contents = fs.readFileSync(podfilePath, 'utf8');
-            const result = mergeContents({
+            let contents = fs.readFileSync(podfilePath, 'utf8');
+
+            // (a) pre_install hook — inserted immediately BEFORE post_install.
+            const preResult = mergeContents({
+                tag: 'withFirebaseNonModularHeaders-preinstall',
+                src: contents,
+                newSrc: PRE_INSTALL_SNIPPET,
+                anchor: /post_install do \|installer\|/,
+                offset: 0,
+                comment: '#',
+            });
+            if (preResult.didMerge) {
+                contents = preResult.contents;
+            }
+
+            // (b) build setting — inserted just INSIDE post_install.
+            const postResult = mergeContents({
                 tag: 'withFirebaseNonModularHeaders',
                 src: contents,
-                newSrc: SNIPPET,
+                newSrc: POST_INSTALL_SNIPPET,
                 anchor: /post_install do \|installer\|/,
                 offset: 1,
                 comment: '#',
             });
-            if (result.didMerge) {
-                fs.writeFileSync(podfilePath, result.contents);
+            if (postResult.didMerge) {
+                contents = postResult.contents;
             }
+
+            fs.writeFileSync(podfilePath, contents);
             return config;
         },
     ]);

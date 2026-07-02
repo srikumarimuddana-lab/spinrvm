@@ -53,9 +53,8 @@
   "submit": {
     "production": {
       "ios": {
-        "appleId": "$APPLE_ID",
-        "ascAppId": "$ASC_DRIVER_APP_ID",
-        "appleTeamId": "$APPLE_TEAM_ID",
+        "ascAppId": "6755680810",
+        "appleTeamId": "X8863WAU7L",
         "bundleIdentifier": "com.spinr.driver",
         "language": "en-CA"
       },

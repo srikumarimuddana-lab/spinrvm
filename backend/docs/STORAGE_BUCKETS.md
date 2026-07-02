@@ -17,6 +17,27 @@ writes to them at runtime.
 - **Visibility:** Private (signed upload URLs)
 - **Used by:** `backend/db_supabase.py` — corporate KYB verification.
 
+## `vehicle-illustrations` (public)
+
+- **Visibility:** Public
+- **Provisioned by:** `backend/migrations/202_admin_media_storage_buckets.sql`
+- **Used by:** `backend/routes/admin/vehicle_fleet.py` — admin-uploaded
+  vehicle type illustrations and custom map markers.
+- **Limits:** 500 KB; PNG, JPEG, or WebP for illustrations; PNG or WebP
+  for custom markers.
+- **If the bucket is missing:** admin vehicle image uploads fail with
+  `Storage upload failed` / `Bucket not found`.
+
+## `audio-assets` (public)
+
+- **Visibility:** Public
+- **Provisioned by:** `backend/migrations/202_admin_media_storage_buckets.sql`
+- **Used by:** `backend/routes/admin/settings.py` — admin-uploaded driver
+  ride-offer sound.
+- **Limits:** 500 KB; MP3 or WAV.
+- **If the bucket is missing:** ride-offer sound uploads fail with
+  `Storage upload failed` / `Bucket not found`.
+
 ## `ride-snapshots` (public)
 
 - **Visibility:** **Public**

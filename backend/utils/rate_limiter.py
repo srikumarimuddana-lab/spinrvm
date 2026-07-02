@@ -225,6 +225,11 @@ promo_validate_limit = default_limiter.limit("10/minute")
 # Location updates - allow frequent updates for drivers
 location_update_limit = default_limiter.limit("60/minute")
 
+# Demand heatmap — server-directed polling floor is 30 s (≈2 req/min); 10/min
+# leaves retry headroom while stopping a scripted client that ignores
+# refresh_seconds from turning the per-area rides scan into a DoS lever.
+demand_heatmap_limit = default_limiter.limit("10/minute")
+
 # Payment actions (tip, process-payment) — sensitive financial ops, tight limit
 payment_action_limit = default_limiter.limit("5/minute")
 

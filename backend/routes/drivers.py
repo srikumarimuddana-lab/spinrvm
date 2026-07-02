@@ -66,7 +66,7 @@ try:
     from ..utils.metrics import inc as _metric_inc
     from ..utils.metrics import observe as _metric_observe
     from ..utils.money import dollars_to_cents, to_decimal
-    from ..utils.rate_limiter import dsar_export_limit, tax_doc_email_limit
+    from ..utils.rate_limiter import demand_heatmap_limit, dsar_export_limit, tax_doc_email_limit
     from ..utils.referral_terms import (
         paid_referee_earnings,
         paid_referral_earnings,
@@ -115,7 +115,7 @@ except ImportError:
     from utils.metrics import inc as _metric_inc  # type: ignore
     from utils.metrics import observe as _metric_observe  # type: ignore
     from utils.money import dollars_to_cents, to_decimal
-    from utils.rate_limiter import dsar_export_limit, tax_doc_email_limit
+    from utils.rate_limiter import demand_heatmap_limit, dsar_export_limit, tax_doc_email_limit
     from utils.referral_terms import (  # type: ignore
         paid_referee_earnings,
         paid_referral_earnings,
@@ -738,10 +738,16 @@ _HEATMAP_SOURCE_STATUS_FILTER: dict = {
 # exact pickup coordinates must never be shipped to every driver in the area
 # (PIPEDA data-minimization); the heatmap only needs block-level density.
 _HEATMAP_GRID_DECIMALS = 3
+# k-anonymity floor: cells with fewer requests than this are suppressed. A
+# weight-1 cell in a low-density area still says "someone requested a ride in
+# this specific ~110 m box", which local knowledge can re-identify (single
+# farmhouse on a rural road). Aggregation alone is not anonymization.
+_HEATMAP_MIN_CELL_COUNT = 3
 
 
 @api_router.get("/demand-heatmap")
-async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
+@demand_heatmap_limit
+async def get_demand_heatmap(request: Request, current_user: dict = Depends(get_current_user)):
     """Return recent ride demand as weighted heatmap points for the driver.
 
     Scoped to the driver's service area and gated on the admin-managed
@@ -814,7 +820,11 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
         cell = (round(float(lat), _HEATMAP_GRID_DECIMALS), round(float(lng), _HEATMAP_GRID_DECIMALS))
         buckets[cell] = buckets.get(cell, 0) + 1
 
-    points = [[cell_lat, cell_lng, weight] for (cell_lat, cell_lng), weight in buckets.items()]
+    points = [
+        [cell_lat, cell_lng, weight]
+        for (cell_lat, cell_lng), weight in buckets.items()
+        if weight >= _HEATMAP_MIN_CELL_COUNT
+    ]
 
     return {
         "enabled": True,

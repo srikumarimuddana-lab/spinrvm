@@ -616,10 +616,27 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
       max_simultaneous_offers: Math.max(1, Math.min(10, parseInt(String(form.max_simultaneous_offers)) || 3)),
       use_eta_ranking: form.use_eta_ranking,
       show_demand_heatmap: form.show_demand_heatmap,
-      heatmap_data_source: form.heatmap_data_source,
-      heatmap_data_window_hours: Math.max(1, Math.min(720, parseInt(String(form.heatmap_data_window_hours)) || 168)),
-      heatmap_refresh_seconds: Math.max(30, Math.min(3600, parseInt(String(form.heatmap_refresh_seconds)) || 300)),
     };
+    // NaN-aware clamp: "0" must clamp to the minimum, not silently become
+    // the default (parseInt(...) || dflt treats 0 as missing).
+    const clampInt = (v: any, lo: number, hi: number, dflt: number) => {
+      const n = parseInt(String(v), 10);
+      return Number.isNaN(n) ? dflt : Math.max(lo, Math.min(hi, n));
+    };
+    const heatmapWindow = clampInt(form.heatmap_data_window_hours, 1, 720, 168);
+    const heatmapRefresh = clampInt(form.heatmap_refresh_seconds, 30, 3600, 300);
+    // Send the migration-202 columns only when the operator actually touched
+    // them (mirrors the surgeTouched pattern): an unrelated save on a
+    // backend that predates the migration must not 500 on unknown columns.
+    const heatmapTouched =
+      form.heatmap_data_source !== (area.heatmap_data_source || "all_requests") ||
+      heatmapWindow !== (area.heatmap_data_window_hours ?? 168) ||
+      heatmapRefresh !== (area.heatmap_refresh_seconds ?? 300);
+    if (heatmapTouched) {
+      updates.heatmap_data_source = form.heatmap_data_source;
+      updates.heatmap_data_window_hours = heatmapWindow;
+      updates.heatmap_refresh_seconds = heatmapRefresh;
+    }
     // Touch surge only when it actually changed. Sending surge_active on every
     // save would flip an enabled-but-idle auto area (surge_enabled=true,
     // surge_active=false) to active, making the public API advertise surge the

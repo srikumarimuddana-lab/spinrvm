@@ -177,9 +177,11 @@ launch path (iternio's `CarAppService` is a new `<service>` merged from its libr
    `expo-router/entry` (phone app unchanged) then calls `registerAutoPlay()`. Verify normal
    phone cold-start is unaffected. The iternio require is guarded: importing the package
    instantiates its Nitro HybridObject, which throws on a binary without the native module
-   (Expo Go, or an older install receiving this JS via an expo-updates OTA — `runtimeVersion`
-   was **not** bumped when this native dep landed). The guard degrades that to
-   "no car support + console.error" instead of crashing the phone app at startup.
+   (Expo Go, or a stale dev client). The guard degrades that to "no car support" +
+   `console.error` + a Crashlytics non-fatal instead of crashing the phone app at startup.
+   (OTA safety itself is already fenced: the `runtimeVersion` 2.3.0 bump landed in the same
+   merge as the iternio/nitro deps — the app.config comment names only webview, but the
+   fence covers all three. The guard is Expo Go coverage + belt-and-suspenders.)
 2. **New native deps** (`@iternio/...` + `react-native-nitro-modules`) ⇒ new EAS build; car
    testing needs a dev build (not Expo Go). Nitro pulls in codegen — first build is the gate.
 3. **iOS:** the iternio pod autolinks and compiles, but with CarPlay dormant (no entitlement,

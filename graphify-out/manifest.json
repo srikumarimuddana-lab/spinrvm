@@ -3995,8 +3995,8 @@
     "semantic_hash": ""
   },
   "driver-app/app.config.ts": {
-    "mtime": 1782944384.3956163,
-    "ast_hash": "1bc47abc14fa9ea43be12400a5a6eee8",
+    "mtime": 1782971220.2628522,
+    "ast_hash": "19b766297a1af8c56510c32b1981615e",
     "semantic_hash": ""
   },
   "driver-app/app/_layout.tsx": {
@@ -4420,8 +4420,8 @@
     "semantic_hash": ""
   },
   "driver-app/lib/androidAuto/__tests__/register.test.ts": {
-    "mtime": 1782968393.144424,
-    "ast_hash": "906543945b7402227d2eb17984e3eda9",
+    "mtime": 1782971193.6188507,
+    "ast_hash": "7dc673360e2eca3d0a83e7560acfeba9",
     "semantic_hash": ""
   },
   "driver-app/lib/androidAuto/carMapCamera.ts": {
@@ -4445,8 +4445,8 @@
     "semantic_hash": ""
   },
   "driver-app/lib/androidAuto/register.ts": {
-    "mtime": 1782968558.6444337,
-    "ast_hash": "80976766ea979164937ec2793453ba2a",
+    "mtime": 1782971180.7428498,
+    "ast_hash": "c0f9cd7ecfc0e1df21bfe124f74a00bc",
     "semantic_hash": ""
   },
   "driver-app/lib/androidAuto/useCarLocation.ts": {
@@ -7100,8 +7100,8 @@
     "semantic_hash": ""
   },
   "docs/carplay-android-auto.md": {
-    "mtime": 1782945056.9116564,
-    "ast_hash": "6de085705727d51a0dafd7a8ca30d8ab",
+    "mtime": 1782971217.318852,
+    "ast_hash": "c662d3dd1e49b05c7f0a14e213f43b9f",
     "semantic_hash": ""
   },
   "docs/ci-security-gates.md": {
@@ -9757,6 +9757,11 @@
   "rider-app/plugins/withFirebaseNonModularHeaders.js": {
     "mtime": 1782944384.8756163,
     "ast_hash": "5647b2ebd7823925b406f19e02a10978",
+    "semantic_hash": ""
+  },
+  "driver-app/lib/androidAuto/__tests__/register.degrade.test.ts": {
+    "mtime": 1782971206.7828515,
+    "ast_hash": "38edbe7af8b25b9ba6004017996de298",
     "semantic_hash": ""
   }
 }

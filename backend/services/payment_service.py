@@ -24,11 +24,13 @@ except ImportError:
     from services import corporate_allowance_service, corporate_wallet_service  # type: ignore
     from services.corporate_policy_service import evaluate_policy  # type: ignore
     from socket_manager import manager  # type: ignore
-    from utils.stripe_charge import capture_ride, charge_ride  # type: ignore
+    from utils.stripe_charge import cancel_authorization, capture_ride, charge_ride  # type: ignore
 
 try:
+    from ..core.config import settings as app_config
     from ..features import send_push_notification
 except ImportError:
+    from core.config import settings as app_config  # type: ignore
     from features import send_push_notification  # type: ignore
 
 
@@ -46,6 +48,38 @@ def _f(v: Decimal) -> float:
 
 def _money_str(v: Decimal) -> str:
     return f"{_round(v):.2f}"
+
+
+async def _refuse_unconfigured_settlement(ride_id: str, context: str) -> "PaymentResult":
+    """Production guard for the Stripe-unconfigured settlement paths.
+
+    ``charge_ride``/``capture_ride`` return status ``unconfigured`` when
+    ``stripe_secret_key`` is empty. In dev/test the callers mark the ride paid
+    so flows don't wedge — but the key lives in the app_settings DB row (not
+    env), so there is NO startup fail-fast: if the row is ever blanked in
+    production (e.g. mid key-rotation), every settling ride would be marked
+    paid for free. Refuse loudly instead and leave the ride collectible.
+    """
+    logger.error(
+        "[PAYMENT] stripe_secret_key is EMPTY in production — refusing to mark "
+        "ride {} paid without a real {}. Restore the key in app_settings; the "
+        "retry loop / admin invoicing will collect this ride.",
+        ride_id,
+        context,
+    )
+    await db_supabase.update_ride(
+        ride_id,
+        {
+            "payment_status": "failed",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    return PaymentResult(
+        success=False,
+        error_code="stripe_unconfigured",
+        error="Payment processing is temporarily unavailable. Please try again shortly.",
+        status_code=503,
+    )
 
 
 def _tip_ride_update(ride: dict, tip_amount: Decimal) -> dict:
@@ -437,12 +471,14 @@ async def _settle_against_hold(
         )
 
     if cap.status == "unconfigured":
-        # DEV/TEST ONLY: reached only when stripe_secret_key is unset. Production
-        # fails fast on a missing Stripe key at startup (core/config), so this
-        # branch is unreachable in prod and intentionally writes no
-        # financial_events row — mirroring the existing fresh-charge
-        # `unconfigured` branch below, which also marks paid without a ledger
-        # entry so dev flows don't wedge when Stripe isn't wired up.
+        # DEV/TEST ONLY below the guard: reached only when stripe_secret_key is
+        # unset. The key lives in the app_settings DB row (not env), so there is
+        # no startup fail-fast — in production refuse to settle rather than
+        # marking the ride paid for free. In dev/test, mark paid with no
+        # financial_events row — mirroring the fresh-charge `unconfigured`
+        # branch below — so flows don't wedge when Stripe isn't wired up.
+        if app_config.ENV.lower() == "production":
+            return await _refuse_unconfigured_settlement(ride_id, "capture")
         logger.error("Stripe unconfigured — marking ride %s paid (held) without real capture", ride_id)
         await db_supabase.update_ride(
             ride_id,
@@ -736,6 +772,8 @@ async def settle_card(
         )
 
     if outcome.status == "unconfigured":
+        if app_config.ENV.lower() == "production":
+            return await _refuse_unconfigured_settlement(ride_id, "charge")
         logger.error("Stripe unconfigured — marking ride %s paid without real charge", ride_id)
         await db_supabase.update_ride(
             ride_id,

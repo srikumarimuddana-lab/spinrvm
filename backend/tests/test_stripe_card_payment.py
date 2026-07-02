@@ -2,14 +2,17 @@
 
 Covers:
   - Success path: charge_ride succeeds → ride marked paid, WS event emitted.
-  - Card-declined failure: charge_ride returns 'declined' → ride marked failed, HTTP 402.
-  - Generic Stripe error: charge_ride returns 'failed' → HTTP 502, ride marked failed.
-  - No saved payment method → charge_ride returns 'failed' → HTTP 502.
-  - Unexpected intent status (requires_action) → HTTP 200 success=False with client_secret.
+  - Card-declined failure: charge_ride returns 'declined' → ride marked failed,
+    HTTP 402 {code: card_declined, decline_code, suggested_action: change_card}.
+  - Generic Stripe error: charge_ride returns 'failed' → HTTP 402 payment_error,
+    ride marked failed.
+  - No saved payment method → pre-flight 402 {code: no_payment_method}.
+  - requires_action (off-session 3DS) → HTTP 402 authentication_required,
+    ride marked failed (retry loop / rider re-confirm recovers it).
 
 Strategy: call process_payment() directly (no TestClient) with:
   - Patched db_supabase helpers so no real DB calls are made.
-  - Patched charge_ride at backend.routes.rides.charge_ride (module-level import in rides.py).
+  - Patched charge_ride at backend.services.payment_service.charge_ride (module-level import in rides.py).
 
 This avoids the TestClient lifespan / circuit-breaker race-condition that makes
 TestClient tests flaky when Supabase is unreachable in CI.
@@ -77,7 +80,7 @@ def _base_patches(*, rider=None, charge_outcome=None):
         "backend.routes.rides.manager.send_personal_message": AsyncMock(return_value=None),
         # Intercept charge_ride at the module-level alias in rides.py so we never
         # touch stripe_charge.py or the real Stripe SDK.
-        "backend.routes.rides.charge_ride": AsyncMock(return_value=charge_outcome),
+        "backend.services.payment_service.charge_ride": AsyncMock(return_value=charge_outcome),
     }
 
 
@@ -122,7 +125,7 @@ async def test_stripe_create_called_with_correct_args():
     """Verify charge_ride is called with correct ride, rider_id, total_amount."""
     result, mocks = await _call()
 
-    charge_mock = mocks["backend.routes.rides.charge_ride"]
+    charge_mock = mocks["backend.services.payment_service.charge_ride"]
     charge_mock.assert_called_once()
     kw = charge_mock.call_args.kwargs
     assert kw["ride"]["id"] == _RIDE_ID
@@ -172,11 +175,10 @@ async def test_generic_stripe_error_returns_402():
 
 
 @pytest.mark.asyncio
-async def test_no_saved_payment_method_returns_400():
-    """Rider has no default_payment_method → pre-flight guard raises 400.
-
-    process_payment validates the payment method before calling charge_ride
-    and raises 400 if none is configured.
+async def test_no_saved_payment_method_returns_402():
+    """Rider has no default_payment_method → pre-flight guard raises 402
+    with a structured no_payment_method code so the app can surface the
+    Change Card / Add Card escape (was a bare 400).
     """
     from fastapi import HTTPException
 
@@ -190,7 +192,9 @@ async def test_no_saved_payment_method_returns_400():
             ),
         )
 
-    assert exc_info.value.status_code == 400
+    assert exc_info.value.status_code == 402
+    assert exc_info.value.detail["code"] == "no_payment_method"
+    assert exc_info.value.detail["suggested_action"] == "change_card"
 
 
 @pytest.mark.asyncio

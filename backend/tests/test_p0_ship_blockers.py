@@ -736,7 +736,7 @@ class TestPaymentFailureAtComplete:
                 "backend.routes.rides.db_supabase.get_user_by_id",
                 AsyncMock(return_value={"id": RIDER_ID, "email": "r@s.ca", "stripe_customer_id": "cus_test"}),
             ),
-            patch("backend.routes.rides.charge_ride", AsyncMock(return_value=declined_outcome)),
+            patch("backend.services.payment_service.charge_ride", AsyncMock(return_value=declined_outcome)),
         ):
             from backend.routes.rides import ProcessPaymentRequest
 
@@ -807,6 +807,8 @@ class TestE3HappyPath:
         mock_stripe.PaymentIntent.confirm.assert_called_once_with(
             "pi_e3_existing",
             api_key="sk_test_xxx",
+            # Replay-safe confirm: deterministic key ride-confirm-<ride>-<cents>
+            idempotency_key="ride-confirm-ride_e3_1-3000",
         )
         # create must NOT have been called (side_effect would raise AssertionError)
         mock_stripe.PaymentIntent.create.assert_not_called()
@@ -1005,17 +1007,22 @@ class TestProcessPaymentHTTP:
         ride = _make_ride()
         outcome = ChargeOutcome(status="succeeded", payment_intent_id="pi_ok", charged_amount=20.0)
 
-        with (
-            patch.object(rides_mod, "db_supabase") as mock_db,
-            patch.object(rides_mod, "charge_ride", AsyncMock(return_value=outcome)),
-        ):
-            mock_db.get_ride = AsyncMock(return_value=ride)
-            mock_db.get_user_by_id = AsyncMock(
-                return_value={"stripe_customer_id": "cus_1", "default_payment_method": "pm_1"}
-            )
-            mock_db.update_ride = AsyncMock()
-            mock_db.update_one = AsyncMock(return_value={"id": "ride_http_1"})
+        mock_db = MagicMock()
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        mock_db.get_user_by_id = AsyncMock(
+            return_value={"stripe_customer_id": "cus_1", "default_payment_method": "pm_1"}
+        )
+        mock_db.update_ride = AsyncMock()
+        mock_db.update_one = AsyncMock(return_value={"id": "ride_http_1"})
 
+        # The card path moved into services/payment_service.settle_card (Phase 4
+        # decomposition) — patch charge_ride and db access there, and keep the
+        # rides-module db patched for the handler's own pre-reads/guards.
+        with (
+            patch.object(rides_mod, "db_supabase", mock_db),
+            patch("backend.services.payment_service.db_supabase", mock_db),
+            patch("backend.services.payment_service.charge_ride", AsyncMock(return_value=outcome)),
+        ):
             client = _app_with_mocked_auth()
             resp = client.post("/rides/ride_http_1/process-payment", json={"tip_amount": "0"})
 
@@ -1032,17 +1039,22 @@ class TestProcessPaymentHTTP:
             error_message="Your card has insufficient funds.",
         )
 
-        with (
-            patch.object(rides_mod, "db_supabase") as mock_db,
-            patch.object(rides_mod, "charge_ride", AsyncMock(return_value=outcome)),
-        ):
-            mock_db.get_ride = AsyncMock(return_value=ride)
-            mock_db.get_user_by_id = AsyncMock(
-                return_value={"stripe_customer_id": "cus_1", "default_payment_method": "pm_1"}
-            )
-            mock_db.update_ride = AsyncMock()
-            mock_db.update_one = AsyncMock(return_value={"id": "ride_http_1"})
+        mock_db = MagicMock()
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        mock_db.get_user_by_id = AsyncMock(
+            return_value={"stripe_customer_id": "cus_1", "default_payment_method": "pm_1"}
+        )
+        mock_db.update_ride = AsyncMock()
+        mock_db.update_one = AsyncMock(return_value={"id": "ride_http_1"})
 
+        # The card path moved into services/payment_service.settle_card (Phase 4
+        # decomposition) — patch charge_ride and db access there, and keep the
+        # rides-module db patched for the handler's own pre-reads/guards.
+        with (
+            patch.object(rides_mod, "db_supabase", mock_db),
+            patch("backend.services.payment_service.db_supabase", mock_db),
+            patch("backend.services.payment_service.charge_ride", AsyncMock(return_value=outcome)),
+        ):
             client = _app_with_mocked_auth()
             resp = client.post("/rides/ride_http_1/process-payment", json={"tip_amount": "0"})
 
@@ -1060,17 +1072,22 @@ class TestProcessPaymentHTTP:
             error_message="api_connection_error: Unable to reach Stripe",
         )
 
-        with (
-            patch.object(rides_mod, "db_supabase") as mock_db,
-            patch.object(rides_mod, "charge_ride", AsyncMock(return_value=outcome)),
-        ):
-            mock_db.get_ride = AsyncMock(return_value=ride)
-            mock_db.get_user_by_id = AsyncMock(
-                return_value={"stripe_customer_id": "cus_1", "default_payment_method": "pm_1"}
-            )
-            mock_db.update_ride = AsyncMock()
-            mock_db.update_one = AsyncMock(return_value={"id": "ride_http_1"})
+        mock_db = MagicMock()
+        mock_db.get_ride = AsyncMock(return_value=ride)
+        mock_db.get_user_by_id = AsyncMock(
+            return_value={"stripe_customer_id": "cus_1", "default_payment_method": "pm_1"}
+        )
+        mock_db.update_ride = AsyncMock()
+        mock_db.update_one = AsyncMock(return_value={"id": "ride_http_1"})
 
+        # The card path moved into services/payment_service.settle_card (Phase 4
+        # decomposition) — patch charge_ride and db access there, and keep the
+        # rides-module db patched for the handler's own pre-reads/guards.
+        with (
+            patch.object(rides_mod, "db_supabase", mock_db),
+            patch("backend.services.payment_service.db_supabase", mock_db),
+            patch("backend.services.payment_service.charge_ride", AsyncMock(return_value=outcome)),
+        ):
             client = _app_with_mocked_auth()
             resp = client.post("/rides/ride_http_1/process-payment", json={"tip_amount": "0"})
 

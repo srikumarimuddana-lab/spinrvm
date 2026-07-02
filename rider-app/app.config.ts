@@ -8,7 +8,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     ...config,
     name: APP_NAME,
     slug: 'spinr-rider',
-    version: '1.0.0',
+    // Must stay above the shipped App Store version (currently 1.0.2 from the
+    // pre-rewrite app) — Apple closes released version trains, so an upload at
+    // or below it is rejected at App Store Connect validation.
+    version: '2.0.0',
     orientation: 'portrait',
     icon: './assets/images/icon.png',
     scheme: SCHEME,

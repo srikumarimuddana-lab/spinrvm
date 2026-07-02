@@ -4420,8 +4420,8 @@
     "semantic_hash": ""
   },
   "driver-app/lib/androidAuto/__tests__/register.test.ts": {
-    "mtime": 1782945036.6516552,
-    "ast_hash": "9582435e2f3ae01c4541f83b99a1c708",
+    "mtime": 1782968393.144424,
+    "ast_hash": "906543945b7402227d2eb17984e3eda9",
     "semantic_hash": ""
   },
   "driver-app/lib/androidAuto/carMapCamera.ts": {
@@ -4445,8 +4445,8 @@
     "semantic_hash": ""
   },
   "driver-app/lib/androidAuto/register.ts": {
-    "mtime": 1782944850.791644,
-    "ast_hash": "3e8ac9cab591f771e91f33ba1cad11f2",
+    "mtime": 1782968558.6444337,
+    "ast_hash": "80976766ea979164937ec2793453ba2a",
     "semantic_hash": ""
   },
   "driver-app/lib/androidAuto/useCarLocation.ts": {

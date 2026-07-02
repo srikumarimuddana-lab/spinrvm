@@ -93,7 +93,10 @@ export default function registerAutoPlay(): void {
   // older installed build receiving this JS over-the-air). This runs at bundle
   // load from index.js, so an unguarded throw here would crash the entire phone
   // app at startup — degrade to "no car support" instead and surface it in logs.
-  let autoPlay: typeof import('@iternio/react-native-auto-play');
+  // Deliberately untyped (require has always returned `any` here): typing it
+  // `typeof import(...)` makes tsc enforce iternio's 1|2|3|4 button-tuple types
+  // on arrays we build dynamically — churn with no runtime benefit.
+  let autoPlay: any;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     autoPlay = require('@iternio/react-native-auto-play');

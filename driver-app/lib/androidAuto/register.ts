@@ -25,6 +25,7 @@
 // All car actions call the SAME useDriverStore actions the phone calls, so every
 // dispatch / insurance-period / settlement invariant is preserved.
 import { Linking, Platform } from 'react-native';
+import { recordNonFatal } from '../../utils/crashlytics';
 import { useDriverStore } from '../../store/driverStore';
 import {
   buildHandoffUrl,
@@ -101,11 +102,16 @@ export default function registerAutoPlay(): void {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     autoPlay = require('@iternio/react-native-auto-play');
   } catch (e) {
+    // console.error alone never reaches a dashboard (Sentry drops console
+    // breadcrumbs) — record a Crashlytics non-fatal so a cohort losing car
+    // support is visible remotely. recordNonFatal is bundle-load-safe and
+    // no-ops where Firebase native is absent (Expo Go).
     console.error(
       '[android-auto] native module unavailable — Android Auto disabled for this session. ' +
         'This binary predates the @iternio/react-native-auto-play dependency (a new EAS build is required).',
       e,
     );
+    recordNonFatal(e, { module: 'androidAuto', reason: 'native_module_unavailable' });
     return;
   }
   const { HybridAutoPlay, MapTemplate, Flag } = autoPlay;
@@ -367,6 +373,10 @@ export default function registerAutoPlay(): void {
       onConnect();
     }
   } catch (e) {
-    log('Android Auto registration failed:', e);
+    // Was a dev-only log(): in production a listener-registration failure left
+    // Android Auto dead with zero diagnostics. Surface it like the require
+    // guard above — loud local log + a remotely visible Crashlytics non-fatal.
+    console.error('[android-auto] registration failed — Android Auto disabled for this session.', e);
+    recordNonFatal(e, { module: 'androidAuto', reason: 'registration_failed' });
   }
 }

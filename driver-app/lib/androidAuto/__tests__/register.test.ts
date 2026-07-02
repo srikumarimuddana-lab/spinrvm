@@ -286,19 +286,26 @@ it('degrades to no-car-support instead of throwing when the native module is mis
   // throws when the native side is absent. registerAutoPlay runs at bundle
   // load (index.js), so a throw here would crash the whole phone app.
   const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-  jest.isolateModules(() => {
-    jest.doMock('@iternio/react-native-auto-play', () => {
-      throw new Error('Nitro HybridObject "AutoPlay" is not registered');
-    });
+  jest.resetModules();
+  jest.doMock('@iternio/react-native-auto-play', () => {
+    throw new Error('Nitro HybridObject "AutoPlay" is not registered');
+  });
+  try {
+    // The reset registry re-evaluates react-native with the preset default OS
+    // (ios) — force android or the guard exits before requiring the package.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    (require('react-native').Platform as { OS: string }).OS = 'android';
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const register = require('../register').default as typeof registerAutoPlay;
     expect(() => register()).not.toThrow();
-  });
-  expect(errSpy).toHaveBeenCalledWith(
-    expect.stringContaining('native module unavailable'),
-    expect.any(Error),
-  );
-  expect(mockTemplates).toHaveLength(0);
-  errSpy.mockRestore();
-  jest.dontMock('@iternio/react-native-auto-play');
+    expect(errSpy).toHaveBeenCalledWith(
+      expect.stringContaining('native module unavailable'),
+      expect.any(Error),
+    );
+    expect(mockTemplates).toHaveLength(0);
+  } finally {
+    errSpy.mockRestore();
+    jest.dontMock('@iternio/react-native-auto-play');
+    jest.resetModules();
+  }
 });

@@ -720,31 +720,6 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
     return serialize_doc(await _decrypt_driver_pii(updated))
 
 
-# Demand-heatmap config bounds. Mirror the CHECK constraints in migration 202
-# and the pydantic validation in routes/admin/service_areas.py; the endpoint
-# re-clamps defensively so a row written before the constraints existed (or
-# via a direct DB edit) can't turn the driver app into a polling hammer.
-HEATMAP_DEFAULT_WINDOW_HOURS = 168
-HEATMAP_DEFAULT_REFRESH_SECONDS = 300
-_HEATMAP_SOURCE_STATUS_FILTER: dict = {
-    # all_requests: every ride request regardless of outcome — no filter
-    "all_requests": None,
-    # completed_rides: fulfilled demand only
-    "completed_rides": {"$in": ["completed"]},
-    # missed_rides: cancelled requests — demand that went unserved
-    "missed_rides": {"$in": ["cancelled"]},
-}
-# Grid size for pickup-coordinate bucketing: 3 decimal places ≈ 110 m. Riders'
-# exact pickup coordinates must never be shipped to every driver in the area
-# (PIPEDA data-minimization); the heatmap only needs block-level density.
-_HEATMAP_GRID_DECIMALS = 3
-# k-anonymity floor: cells with fewer requests than this are suppressed. A
-# weight-1 cell in a low-density area still says "someone requested a ride in
-# this specific ~110 m box", which local knowledge can re-identify (single
-# farmhouse on a rural road). Aggregation alone is not anonymization.
-_HEATMAP_MIN_CELL_COUNT = 3
-
-
 @api_router.get("/demand-heatmap")
 @demand_heatmap_limit
 async def get_demand_heatmap(request: Request, current_user: dict = Depends(get_current_user)):
@@ -752,21 +727,39 @@ async def get_demand_heatmap(request: Request, current_user: dict = Depends(get_
 
     Scoped to the driver's service area and gated on the admin-managed
     `show_demand_heatmap` flag. Window, data source, and the client refresh
-    cadence are configurable per service area (migration 202). Pickup
-    coordinates are bucketed to a ~110 m grid with a count weight so no
-    rider's exact pickup location is exposed.
+    cadence are configurable per service area (migration 202); bounds, source
+    semantics, and the privacy aggregation (110 m grid + k-anonymity floor)
+    live in utils/heatmap.py.
+
+    The aggregated payload is cached per (area, source, window) so N idle
+    drivers in one area cost one rides scan per TTL, not one per driver per
+    poll tick.
     """
-    driver = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
-    )
+    try:
+        from ..utils.heatmap import (
+            HEATMAP_SOURCE_FILTERS,
+            bucket_ride_points,
+            resolve_heatmap_config,
+        )
+        from ..utils.redis_client import redis_get, redis_set
+    except ImportError:
+        from utils.heatmap import (  # type: ignore
+            HEATMAP_SOURCE_FILTERS,
+            bucket_ride_points,
+            resolve_heatmap_config,
+        )
+        from utils.redis_client import redis_get, redis_set  # type: ignore
+
+    # get_current_user already resolved and cached this row moments ago —
+    # reuse the warm cache instead of a second uncached drivers read.
+    driver = await db_supabase.get_driver_by_user_id_cached(current_user["id"])
 
     # Check if heatmap is enabled for this driver's service area
     service_area = None
     if driver and driver.get("service_area_id"):
-        service_area = (lambda _r: _r[0] if _r else None)(
-            await db_supabase.get_rows("service_areas", {"id": driver["service_area_id"]}, limit=1)
-        )
+        service_area = await db_supabase.find_one("service_areas", {"id": driver["service_area_id"]})
 
+    config = resolve_heatmap_config(service_area)
     enabled = bool(service_area and service_area.get("show_demand_heatmap"))
     if not enabled:
         return {
@@ -774,33 +767,47 @@ async def get_demand_heatmap(request: Request, current_user: dict = Depends(get_
             "points": [],
             "total_rides": 0,
             # Disabled areas still get a refresh cadence so the app knows how
-            # often to re-check whether an admin has turned the heatmap on.
-            "refresh_seconds": HEATMAP_DEFAULT_REFRESH_SECONDS,
+            # often to re-check whether an admin has turned the heatmap on —
+            # honoring the per-area setting so an admin who raised the cadence
+            # to shed load keeps that protection while the overlay is off.
+            "refresh_seconds": config["refresh_seconds"],
         }
 
-    def _clamped_int(value, default: int, lo: int, hi: int) -> int:
-        try:
-            return max(lo, min(hi, int(value)))
-        except (TypeError, ValueError):
-            return default
+    window_hours = config["window_hours"]
+    refresh_seconds = config["refresh_seconds"]
+    data_source = config["data_source"]
+    area_id = driver["service_area_id"]
 
-    window_hours = _clamped_int(service_area.get("heatmap_data_window_hours"), HEATMAP_DEFAULT_WINDOW_HOURS, 1, 720)
-    refresh_seconds = _clamped_int(
-        service_area.get("heatmap_refresh_seconds"), HEATMAP_DEFAULT_REFRESH_SECONDS, 30, 3600
-    )
-    data_source = service_area.get("heatmap_data_source") or "all_requests"
-    if data_source not in _HEATMAP_SOURCE_STATUS_FILTER:
-        data_source = "all_requests"
+    # Per-area cache of the aggregated payload. TTL tracks the polling
+    # cadence (capped at 5 min) so config changes surface within one tick.
+    cache_key = f"heatmap:v1:{area_id}:{data_source}:{window_hours}"
+    cache_ttl = min(refresh_seconds, 300)
+    cached = await redis_get(cache_key)
+    if cached is not None:
+        try:
+            payload = json.loads(cached)
+        except (TypeError, ValueError):
+            payload = None
+        if isinstance(payload, dict) and "points" in payload:
+            return {
+                "enabled": True,
+                **payload,
+                "refresh_seconds": refresh_seconds,
+                "data_window_hours": window_hours,
+                "data_source": data_source,
+            }
 
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat()
     query_filters: dict = {
         "created_at": {"$gte": cutoff},
-        "service_area_id": driver["service_area_id"],
+        "service_area_id": area_id,
+        **HEATMAP_SOURCE_FILTERS[data_source],
     }
-    status_filter = _HEATMAP_SOURCE_STATUS_FILTER[data_source]
-    if status_filter is not None:
-        query_filters["status"] = status_filter
 
+    # NOTE: in areas busier than 2 000 requests per window the scan is
+    # truncated to the most recent 2 000 (total_rides saturates with it) —
+    # the overlay stays correct for "recent demand" but the effective window
+    # is shorter than configured.
     rides = await db_supabase.get_rows(
         "rides",
         query_filters,
@@ -810,26 +817,13 @@ async def get_demand_heatmap(request: Request, current_user: dict = Depends(get_
         columns="pickup_lat,pickup_lng",
     )
 
-    # Bucket pickups onto a ~110 m grid; weight = request count per cell.
-    buckets: dict = {}
-    for r in rides:
-        lat = r.get("pickup_lat")
-        lng = r.get("pickup_lng")
-        if lat is None or lng is None:
-            continue
-        cell = (round(float(lat), _HEATMAP_GRID_DECIMALS), round(float(lng), _HEATMAP_GRID_DECIMALS))
-        buckets[cell] = buckets.get(cell, 0) + 1
-
-    points = [
-        [cell_lat, cell_lng, weight]
-        for (cell_lat, cell_lng), weight in buckets.items()
-        if weight >= _HEATMAP_MIN_CELL_COUNT
-    ]
+    points = bucket_ride_points(rides)
+    payload = {"points": points, "total_rides": len(rides)}
+    await redis_set(cache_key, json.dumps(payload), ttl=cache_ttl)
 
     return {
         "enabled": True,
-        "points": points,
-        "total_rides": len(rides),
+        **payload,
         "refresh_seconds": refresh_seconds,
         "data_window_hours": window_hours,
         "data_source": data_source,

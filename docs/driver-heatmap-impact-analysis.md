@@ -1,6 +1,6 @@
 # Driver Demand Heatmap — Impact Analysis & Gap Register
 
-Date: 2026-07-01 · Branch: `claude/driver-heatmap-config-ayl7mp`
+Date: 2026-07-01 (audit revisions 2026-07-02) · Branch: `claude/driver-heatmap-config-ayl7mp`
 
 ## 1. What existed before this change
 
@@ -66,13 +66,21 @@ pieces that were never joined up into a configurable product:
 
 ### Load / performance
 - Old client behavior: one fetch per idle transition (unbounded staleness).
-  New behavior: one fetch per `refresh_seconds` while idle (default 300 s).
-  Worst-case admin config (30 s) ≈ 120 requests/driver/hour; each request is
-  a two-row lookup plus one `rides` query capped at 2 000 rows, backed by
-  the new `idx_rides_service_area_created` index (migration 203 — before it,
-  this query pattern had no covering index and sequential-scanned `rides`).
-  A dedicated 10/min rate limit stops a scripted client that ignores
-  `refresh_seconds` from using the scan as a DoS lever.
+  New behavior: one fetch per `refresh_seconds` while idle (default 300 s),
+  and focus/reconnect refetches also respect that cadence (staleTime tracks
+  the server value).
+- Per request: the driver row comes from the auth-warm Redis cache, the
+  area row is one PK read, and the aggregated payload is cached per
+  (area, source, window) with `ttl = min(refresh_seconds, 300)` — N idle
+  drivers in one area cost **one** rides scan per TTL, not one per driver
+  per tick. The scan itself is backed by `idx_rides_service_area_created`
+  (migration 203; before it this pattern sequential-scanned `rides`) and
+  capped at 2 000 rows — in areas busier than 2 000 requests per window the
+  effective window is shorter than configured (`total_rides` saturates
+  with it).
+- A dedicated 10/min rate limit — keyed **per user**, not per IP, so
+  drivers behind carrier-grade NAT don't share a bucket — stops a scripted
+  client that ignores `refresh_seconds` from using the scan as a DoS lever.
 - Response size *shrinks*: bucketing collapses up to 2 000 points into unique
   cells; weights carry the density that duplicate points used to.
 - No new background loop, no WebSocket traffic, no Redis dependency.
@@ -107,8 +115,32 @@ Closed by this change:
       with a k-anonymity floor (cells under 3 requests suppressed)
 - [x] All points weight=1 (density invisible) → count weights per cell
 - [x] No covering index on the heatmap query → `idx_rides_service_area_created`
-- [x] Only the global rate limit guarded the endpoint → dedicated 10/min cap
-- [x] Zero test coverage on the endpoint or client mapping → 21 tests
+- [x] Only the global rate limit guarded the endpoint → dedicated 10/min cap,
+      keyed per user (per-IP would 429 legitimate drivers behind carrier NAT)
+- [x] Zero test coverage on the endpoint or client mapping → 33 tests
+      (18 backend endpoint/config/cache, 7 payload normalization, 8 render
+      spec/legend)
+
+Closed by the post-merge audit (8-angle review, 2026-07-02):
+
+- [x] `missed_rides` counted every cancellation as unmet demand → now filters
+      `cancellation_type='no_drivers_found'` (migration 38), so rider
+      changed-my-mind cancels can't steer drivers to the wrong blocks
+- [x] Migration 203's block comment broke the CONCURRENTLY runner path
+      (splitter chokes on `/* ...; */`) → line comments; runner-verified
+- [x] Heatmap cells persisted 24 h in AsyncStorage and could hydrate stale
+      (or another account's) demand at cold start → `meta.noPersist` +
+      persister filter
+- [x] Unrelated admin saves would 500 against a pre-migration backend →
+      new columns sent only when touched (surgeTouched pattern)
+- [x] Admin entering `0` silently got the default → NaN-aware clamps
+- [x] Every driver re-scanned rides per poll → per-area Redis payload cache
+- [x] Config bounds/enums duplicated across four files → `utils/heatmap.py`
+      single source (pydantic imports the same constants the endpoint clamps
+      with); k-floor and grid size live there as named PIPEDA primitives
+- [x] Fixed teal→gold→red gradient (red-green CVD failure; one hot cell
+      flattened the scale; no labeling) → validated lightness-monotonic
+      ramp, theme-aware opacity, log-damped weights, on-map legend
 
 Known gaps remaining (candidates for follow-up tickets):
 
@@ -117,9 +149,10 @@ Known gaps remaining (candidates for follow-up tickets):
    *admin dashboard's* heatmap page only. Operators may reasonably believe it
    configures the driver overlay. Recommend renaming that card ("Admin
    Analytics Heatmap") or folding both into one surface.
-2. **Client render styling is fixed**: `radius=35`, opacity, and gradient are
-   hardcoded in the driver app. If ops want per-area styling, it can ride on
-   the same endpoint payload later (additive).
+2. **Render styling is app-side**: the ramp, radius, damping, and legend live
+   in `driver-app/components/dashboard/demandHeatmap.ts` (theme-aware, CVD-
+   validated). If ops ever need *per-area* styling, it can ride on the same
+   endpoint payload later (additive).
 3. **No time-of-day weighting**: a 168 h window mixes Friday-night and
    Tuesday-morning demand. A "same hour-of-week" mode would make the overlay
    predictive rather than historical. (Kept out of scope: needs product
@@ -146,9 +179,15 @@ Known gaps remaining (candidates for follow-up tickets):
 
 ## 5. Rollout notes
 
-- Apply migration 202 (additive, fast, safe with traffic in flight;
-  reviewed by the migration checklist — verdict "safe to apply") and
-  migration 203 (`CREATE INDEX CONCURRENTLY`, no write lock on `rides`).
+- **Apply migrations 202 and 203 BEFORE deploying the backend and admin
+  dashboard.** Migrations run manually (`migrate.py`) while Fly/Railway and
+  Vercel auto-deploy from main — under the inverse order, creating a service
+  area 500s until 202 lands (updates are protected by touched-gating, but
+  creates always insert the new columns). 202 is additive and safe with
+  traffic in flight (migration checklist verdict: safe to apply); 203 is
+  `CREATE INDEX CONCURRENTLY`, no write lock on `rides` — and must keep its
+  double-dash comment style (the CONCURRENTLY runner path splits on
+  semicolons and only strips `--` lines).
 - Feature stays dark until an admin enables it per area; defaults reproduce
   the old behavior for areas where the old boolean was already on.
 - Client change requires an app release (Expo EAS, `[build]` commit tag) for

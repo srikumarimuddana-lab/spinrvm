@@ -7,13 +7,13 @@ import {
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
-  Image,
   useWindowDimensions,
   Platform,
   Modal,
   Animated,
   TextInput,
 } from 'react-native';
+import { Image as ExpoImage } from 'expo-image';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import CustomToggle from '../components/CustomToggle';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -1189,7 +1189,12 @@ function AnimatedVehicleCard({
         disabled={!isAvailable}>
         <View style={[styles.carImageContainer, !isAvailable && { opacity: 0.4 }]}>
           {estimate.vehicle_type.image_url ? (
-            <Image source={{ uri: estimate.vehicle_type.image_url }} style={styles.carImage} resizeMode="contain" />
+            <ExpoImage
+              source={{ uri: estimate.vehicle_type.image_url }}
+              style={styles.carImage}
+              contentFit="contain"
+              cachePolicy="disk"
+            />
           ) : (
             <View style={styles.carIconFallback}>
               <Ionicons name="car" size={32} color="#666" />

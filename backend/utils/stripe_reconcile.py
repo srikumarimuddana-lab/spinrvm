@@ -396,7 +396,7 @@ async def _reconcile_stuck_processing_rides() -> List[Dict[str, Any]]:
     """
     discrepancies: List[Dict[str, Any]] = []
     cutoff = datetime.now(timezone.utc) - _STUCK_PROCESSING_AFTER
-    cols = "id,payment_intent_id,payment_status,status,updated_at,completed_at"
+    cols = "id,payment_intent_id,payment_status,status,updated_at,ride_completed_at"
     try:
         rows = await db_supabase.get_rows("rides", {"payment_status": "processing"}, columns=cols, limit=500) or []
     except Exception:
@@ -407,9 +407,9 @@ async def _reconcile_stuck_processing_rides() -> List[Dict[str, Any]]:
         # Defensive: re-assert the state, never trust the query filter alone.
         if row.get("payment_status") != "processing":
             continue
-        # updated_at moves on every write; fall back to completed_at. A row with
+        # updated_at moves on every write; fall back to ride_completed_at. A row with
         # neither timestamp is surfaced rather than hidden (_is_older_than → True).
-        ts = row.get("updated_at") or row.get("completed_at")
+        ts = row.get("updated_at") or row.get("ride_completed_at")
         if ts and not _is_older_than(ts, cutoff):
             continue  # still in-flight — a settlement may be mid-round-trip
         discrepancies.append(

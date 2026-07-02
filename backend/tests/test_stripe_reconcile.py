@@ -760,7 +760,7 @@ def _processing_ride(ride_id: str, *, minutes_ago: int, pi_id: str | None = "pi_
         "payment_status": "processing",
         "status": "completed",
         "updated_at": ts,
-        "completed_at": ts,
+        "ride_completed_at": ts,
     }
 
 
@@ -781,6 +781,9 @@ async def test_stuck_processing_flags_only_aged_rows():
 
     assert {d["ride_id"] for d in out} == {"stuck"}
     assert out[0]["type"] == "RIDE_PAYMENT_STUCK_PROCESSING"
+    columns = db_mock.get_rows.await_args.kwargs["columns"]
+    assert "ride_completed_at" in columns
+    assert "completed_at" not in columns.replace("ride_completed_at", "")
     # Detection only — never writes/mutates a ride.
     db_mock.update_one.assert_not_awaited()
     db_mock.insert_one.assert_not_awaited()
@@ -788,7 +791,7 @@ async def test_stuck_processing_flags_only_aged_rows():
 
 @pytest.mark.asyncio
 async def test_stuck_processing_surfaces_row_with_no_timestamp():
-    """A processing row with neither updated_at nor completed_at is surfaced
+    """A processing row with neither updated_at nor ride_completed_at is surfaced
     (better to over-report to ops than hide a potentially stranded charge)."""
     db_mock = AsyncMock()
     db_mock.get_rows.return_value = [

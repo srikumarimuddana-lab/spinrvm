@@ -555,6 +555,15 @@ export default function ServiceAreasPage() {
 
 // ─── Inline Editable Field Components ───
 
+// Preview swatches for the driver-app heatmap ramps. Display-only — the
+// authoritative ramps live in driver-app/components/dashboard/demandHeatmap.ts
+// (each CVD-validated); keep in sync when a theme is added or retired.
+const HEATMAP_THEME_PREVIEWS: Record<string, string[]> = {
+  inferno: ["#1B0C41", "#781C6D", "#CF4446", "#F98C0A", "#F5F13E"],
+  ocean: ["#0A1A4F", "#1D4E9E", "#1C8FCB", "#54D2E0", "#DFF6E8"],
+  viridis: ["#440154", "#3B528B", "#21918C", "#5EC962", "#FDE725"],
+};
+
 // --- General Tab with single Save button ---
 
 function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (updates: any) => Promise<void>; onDelete: () => void }) {
@@ -573,6 +582,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
     heatmap_data_source: area.heatmap_data_source || "all_requests",
     heatmap_data_window_hours: area.heatmap_data_window_hours ?? 168,
     heatmap_refresh_seconds: area.heatmap_refresh_seconds ?? 300,
+    heatmap_color_theme: area.heatmap_color_theme || "inferno",
     // Surge is per-area and admin-gated. The toggle below is the master
     // enable (surge_enabled): until it's on, the backend prices every ride at
     // 1.0× and the surge engine skips this area entirely. surge_multiplier is
@@ -631,11 +641,13 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
     const heatmapTouched =
       form.heatmap_data_source !== (area.heatmap_data_source || "all_requests") ||
       heatmapWindow !== (area.heatmap_data_window_hours ?? 168) ||
-      heatmapRefresh !== (area.heatmap_refresh_seconds ?? 300);
+      heatmapRefresh !== (area.heatmap_refresh_seconds ?? 300) ||
+      form.heatmap_color_theme !== (area.heatmap_color_theme || "inferno");
     if (heatmapTouched) {
       updates.heatmap_data_source = form.heatmap_data_source;
       updates.heatmap_data_window_hours = heatmapWindow;
       updates.heatmap_refresh_seconds = heatmapRefresh;
+      updates.heatmap_color_theme = form.heatmap_color_theme;
     }
     // Touch surge only when it actually changed. Sending surge_active on every
     // save would flip an enabled-but-idle auto area (surge_enabled=true,
@@ -714,7 +726,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
           </label>
         </div>
         {form.show_demand_heatmap && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-3">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-3">
             <div>
               <label className="block text-xs font-semibold text-gray-500 mb-1">Data Source</label>
               <select
@@ -747,6 +759,26 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
                 onChange={e => setForm({ ...form, heatmap_refresh_seconds: e.target.value as any })}
               />
               <p className="text-[11px] text-gray-400 mt-1">30–3600 · how often idle driver apps re-fetch</p>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 mb-1">Color Theme</label>
+              <select
+                className="w-full border rounded-lg px-3 py-2 text-sm"
+                value={form.heatmap_color_theme}
+                onChange={e => setForm({ ...form, heatmap_color_theme: e.target.value })}
+              >
+                <option value="inferno">Inferno (default)</option>
+                <option value="ocean">Ocean</option>
+                <option value="viridis">Viridis</option>
+              </select>
+              <div
+                className="h-2 rounded-full mt-2 border"
+                style={{
+                  background: `linear-gradient(to right, ${(HEATMAP_THEME_PREVIEWS[form.heatmap_color_theme] || HEATMAP_THEME_PREVIEWS.inferno).join(", ")})`,
+                }}
+                title="Low → High demand"
+              />
+              <p className="text-[11px] text-gray-400 mt-1">All themes are colorblind-validated · Low → High</p>
             </div>
           </div>
         )}

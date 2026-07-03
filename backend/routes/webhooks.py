@@ -547,6 +547,41 @@ async def stripe_webhook(request: Request):
         payment_intent_id = data_object.get("id")
 
         if ride_id:
+            # SECURITY: mirror the /payments/confirm underpay guard. The
+            # metadata binds the PI to this ride, but a partially-captured
+            # or cheaper intent must not settle it — verify amount_received
+            # covers the authoritative owed total before marking paid.
+            ride = await db_supabase.get_ride(ride_id)
+            if ride is None:
+                logger.error(
+                    f"Webhook payment_intent.succeeded: ride {ride_id} not found — "
+                    f"payment {payment_intent_id} unlinked",
+                    extra={"domain": "payments", "event_id": event_id, "ride_id": ride_id},
+                )
+                raise HTTPException(status_code=500, detail="Ride lookup failed — Stripe will retry")
+
+            owed = ride.get("grand_total")
+            if owed is None:
+                owed = ride.get("total_fare", 0)
+            owed_cents = int(
+                (Decimal(str(owed)).quantize(_TWO_PLACES, rounding=ROUND_HALF_UP) * 100).to_integral_value()
+            )
+            received_cents = int(data_object.get("amount_received") or 0)
+            if received_cents < owed_cents:
+                # Permanent condition — retrying won't change the amounts.
+                # Leave the ride unpaid (payment_retry / reconciliation own it),
+                # leave processed_at NULL for the audit trail, and return 200
+                # so Stripe stops re-sending.
+                logger.error(
+                    "[webhook][security] underpay ride=%s pi=%s received=%d owed=%d — refusing to mark paid",
+                    ride_id,
+                    payment_intent_id,
+                    received_cents,
+                    owed_cents,
+                    extra={"domain": "payments", "event_id": event_id, "ride_id": ride_id},
+                )
+                return {"received": True, "underpaid": True, "event_id": event_id}
+
             updated = await db_supabase.update_ride(
                 ride_id,
                 {

@@ -64,6 +64,8 @@ sys.modules["slowapi.errors"].RateLimitExceeded = _real_RateLimitExceeded
 for _bare_key in list(sys.modules.keys()):
     if _bare_key.split(".")[0] in {
         "routes",
+        "services",
+        "repositories",
         "utils",
         "core",
         "documents",

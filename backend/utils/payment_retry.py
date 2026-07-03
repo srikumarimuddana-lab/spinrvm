@@ -28,6 +28,7 @@ import os
 import random
 import socket
 from datetime import datetime, timezone
+from decimal import Decimal
 
 try:
     from utils.loop_monitor import record_heartbeat as _record_heartbeat
@@ -44,6 +45,7 @@ try:
     from ..settings_loader import get_app_settings
     from ..socket_manager import manager
     from .datetime_utils import parse_iso_utc
+    from .money import dollars_to_cents
     from .redis_client import redis_set_nx
 except ImportError:
     from db import db
@@ -52,6 +54,7 @@ except ImportError:
     from settings_loader import get_app_settings
     from socket_manager import manager
     from utils.datetime_utils import parse_iso_utc
+    from utils.money import dollars_to_cents
     from utils.redis_client import redis_set_nx
 
 logger = logging.getLogger(__name__)
@@ -381,6 +384,45 @@ async def retry_failed_payments():
                     except Exception as push_err:
                         logger.debug(f"Payment retry push to driver failed: {push_err}")
 
+            elif intent.status == "requires_capture":
+                # A booking-time manual-capture hold that settlement never
+                # captured (e.g. stripe_secret_key was blank mid-settlement —
+                # see payment_service._refuse_unconfigured_settlement). Capture
+                # the owed amount now that Stripe is reachable again. NEVER
+                # capture the full authorized amount blindly: the hold includes
+                # the tip buffer, so that would overcharge the rider.
+                owed = ride.get("grand_total")
+                if owed is None:
+                    owed = ride.get("total_fare", 0)
+                owed_d = Decimal(str(owed or 0)) + Decimal(str(ride.get("tip_amount") or 0))
+                capture_cents = min(dollars_to_cents(owed_d), int(intent.amount))
+                attempt = retry_count + 1
+                # Same key shape as stripe_charge.capture_ride so a partially
+                # completed settlement capture for the same amount dedupes.
+                stripe.PaymentIntent.capture(
+                    payment_intent_id,
+                    amount_to_capture=capture_cents,
+                    api_key=stripe_secret,
+                    idempotency_key=f"ride-capture-{ride_id}-{capture_cents}",
+                )
+                await db.update_one(
+                    "rides",
+                    {"id": ride_id},
+                    {
+                        "$set": {
+                            "payment_status": "paid",
+                            "auth_status": "captured",
+                            "payment_retry_count": attempt,
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                    },
+                )
+                logger.info(
+                    f"Payment retry: captured stranded hold for ride {ride_id} "
+                    f"({capture_cents} cents of {intent.amount} authorized)"
+                )
+                continue
+
             elif intent.status == "canceled":
                 await db.update_one(
                     "rides",
@@ -395,9 +437,28 @@ async def retry_failed_payments():
                 )
 
             else:
-                logger.warning(
-                    f"PaymentIntent {intent.id} in unexpected state {intent.status!r} for ride {ride_id}; skipping confirm"
+                # Release the claim — leaving the row in 'retrying' would wedge
+                # it forever (the scan only picks up failed/requires_action/
+                # processing). Bump the counter so a persistently unexpected
+                # state exhausts to the admin alert instead of looping silently.
+                logger.error(
+                    f"PaymentIntent {intent.id} in unexpected state {intent.status!r} for ride {ride_id}; "
+                    "releasing claim back to 'failed'"
                 )
+                new_count = retry_count + 1
+                await db.update_one(
+                    "rides",
+                    {"id": ride_id},
+                    {
+                        "$set": {
+                            "payment_status": "failed",
+                            "payment_retry_count": new_count,
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                    },
+                )
+                if new_count >= MAX_RETRIES:
+                    await _alert_admins_payment_exhausted(ride)
                 continue
 
         except Exception as e:

@@ -256,8 +256,14 @@ class ConnectionManager:
             reason=reason,
         )
 
-    async def send_personal_message(self, message: dict, client_id: str):
+    async def send_personal_message(self, message: dict, client_id: str, *, durable: bool = True):
         """Send a message to a client, possibly on a different machine.
+
+        ``durable=False`` marks the message as ephemeral: it skips the
+        per-client seq/outbox replay ring (see ws_pubsub.publish) so 1 Hz
+        location fan-out can't evict the ride events that ``?last_seq``
+        reconnect recovery replays. Use for messages the next tick
+        supersedes; everything ride-state-related stays durable.
 
         When ``ws_pubsub`` is active (production / multi-machine) the
         message goes onto a shared Redis channel; every machine's
@@ -281,7 +287,7 @@ class ConnectionManager:
         # label measures publish-to-Redis (delivery completes on the
         # subscriber's _deliver_local); local measures the actual socket send.
         t0 = time.monotonic()
-        if await pubsub.publish(client_id, message):
+        if await pubsub.publish(client_id, message, durable=durable):
             _metric_observe("spinr_ws_fanout_duration_ms", (time.monotonic() - t0) * 1000.0, {"path": "pubsub"})
             return
         await self._deliver_local(message, client_id)
@@ -298,8 +304,23 @@ class ConnectionManager:
         msg_type = message.get("type", "?") if isinstance(message, dict) else "?"
         if client_id in self.active_connections:
             try:
-                await self.active_connections[client_id].send_json(message)
+                # B-P3-1 (unicast): same per-message deadline as broadcast().
+                # The Redis pub/sub consumer delivers serially, so a single
+                # half-closed socket blocking send_json until the kernel
+                # keepalive fires (~tens of seconds) would queue every offer /
+                # ride_taken / status change on this replica behind it,
+                # breaching the <100ms fan-out and <2s dispatch SLAs.
+                await asyncio.wait_for(
+                    self.active_connections[client_id].send_json(message),
+                    timeout=_BROADCAST_SEND_TIMEOUT,
+                )
                 diag_logger.info(f"[WS] SEND ok client_id={client_id} type={msg_type}")
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"_deliver_local: send timed out after {_BROADCAST_SEND_TIMEOUT}s "
+                    f"client_id={client_id} type={msg_type}; skipping (heartbeat will reap the socket)"
+                )
+                diag_logger.info(f"[WS] SEND TIMEOUT client_id={client_id} type={msg_type}")
             except Exception as e:
                 diag_logger.info(f"[WS] SEND FAILED client_id={client_id} type={msg_type} err={e}")
         else:

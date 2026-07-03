@@ -3,7 +3,7 @@ import math
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from firebase_admin import auth as firebase_auth
 from loguru import logger
 
@@ -121,6 +121,11 @@ HEARTBEAT_TIMEOUT = 10  # Expect pong within 10 seconds
 # Rate limiting: max messages per second per connection
 WS_MAX_MESSAGES_PER_SECOND = 30
 WS_MAX_MESSAGE_SIZE = 64 * 1024  # 64 KB max message payload
+
+# F8: min seconds between durable drivers-row location UPDATEs per connection.
+# 1 Hz pings still refresh the Redis cache + rider/admin fan-out every tick;
+# only the authoritative Postgres write is throttled to this interval.
+_DRIVER_LOC_DB_WRITE_INTERVAL_S = 3.0
 
 _ADMIN_ROLES = {"admin", "super_admin", "operations", "support", "finance", "custom"}
 
@@ -383,16 +388,33 @@ async def websocket_endpoint(
             return
 
         token = auth_msg.get("token")
-        # Try Firebase token first. verify_id_token is a synchronous
-        # crypto call (RSA verify + key fetch) that blocks the event
-        # loop for tens of ms under cold-cache — enough to stall every
-        # other socket on this VM during a reconnect storm. Push it
-        # into the default threadpool so only this coroutine waits.
+        # Phase 1 — token verification only, no DB. verify_id_token is a
+        # synchronous crypto call (RSA verify + key fetch) that blocks the
+        # event loop for tens of ms under cold-cache — enough to stall every
+        # other socket on this VM during a reconnect storm. Push it into the
+        # default threadpool so only this coroutine waits. DB lookups happen
+        # AFTER this block so a Supabase outage is closed as 1013 "try again
+        # later" instead of being misreported as invalid_token (which client
+        # backoff treats as terminal).
+        firebase_payload = None
+        jwt_payload = None
         try:
-            payload = await asyncio.to_thread(firebase_auth.verify_id_token, token)
+            firebase_payload = await asyncio.to_thread(firebase_auth.verify_id_token, token)
+        except Exception:
+            # Fallback to legacy JWT. Same threadpool rationale — jwt.decode
+            # performs HMAC verification which is fast but still blocking.
+            try:
+                jwt_payload = await asyncio.to_thread(verify_jwt_token, token)
+            except Exception:
+                jwt_payload = None
+
+        user = None
+        payload = None
+        if firebase_payload is not None:
+            payload = firebase_payload
             # B-P1-1 / DV-10: bind audience to client_type. Without this a
-            # driver-app Firebase token would mint a `role: "rider"` row
-            # below (or vice versa) — same cross-app reuse hazard fixed in
+            # driver-app Firebase token could authenticate a rider socket
+            # (or vice versa) — same cross-app reuse hazard fixed in
             # routes/auth.py and dependencies/__init__.py. Production fails
             # fast in core/config._guard_production_secrets when either
             # FIREBASE_*_APP_ID is unset, so the empty-string branch is
@@ -412,48 +434,71 @@ async def websocket_endpoint(
                 return
 
             uid = payload.get("uid") or payload.get("user_id")
-            user = await db_supabase.get_user_by_id(uid)
-            if not user:
-                phone = payload.get("phone_number")
-                if phone:
-                    user = await db_supabase.get_user_by_phone(phone)
-                if not user:
-                    new_user = {
-                        "id": uid,
-                        "phone": phone or "",
-                        "role": "rider",
-                        "created_at": datetime.now(timezone.utc),
-                        "profile_complete": False,
-                    }
-                    await db_supabase.create_user(new_user)
-                    user = new_user
-        except Exception:
-            # Fallback to legacy JWT. Same threadpool rationale —
-            # jwt.decode performs HMAC verification which is fast but
-            # still blocking; keep the loop free under load.
             try:
-                payload = await asyncio.to_thread(verify_jwt_token, token)
-                # Admin tokens are minted with a `role` claim and have no row
-                # in the `users` table (admin-001 is env-var creds; admin_staff
-                # rows live in a separate table). Without this branch the
-                # lookup returns None and the client is told
-                # invalid_token_or_user_not_found — which the monitoring
-                # hook reacts to with exponential-backoff reconnects, i.e.
-                # the repeating "WebSocket failed" loop seen in the admin
-                # live-monitoring console. Mirrors get_current_user() in
-                # dependencies/__init__.py.
-                # Run the same full admin checks as the HTTP path (aud, JTI
-                # revocation, staff active, token_version, idle timeout). Any
-                # HTTPException is caught by the outer `except Exception` which
-                # sets user=None and closes the socket — correct behaviour for
-                # a revoked / expired / disabled admin token.
+                user = await db_supabase.get_user_by_id(uid)
+                if not user:
+                    phone = payload.get("phone_number")
+                    if phone:
+                        user = await db_supabase.get_user_by_phone(phone)
+            except Exception as _db_exc:
+                # DB errors surface loudly (CLAUDE.md): close 1013 so the
+                # client retries — never degrade an outage into invalid_token.
+                _orig = getattr(_db_exc, "details", None)
+                _orig = _orig.get("original") if isinstance(_orig, dict) else None
+                logger.error(
+                    "WS auth: user lookup failed for firebase uid={} — closing 1013: {}",
+                    uid,
+                    _orig or _db_exc,
+                )
+                await websocket.close(code=1013, reason="service_unavailable_retry")
+                return
+            if not user:
+                # Mirror get_current_user (dependencies/__init__.py): NEVER
+                # auto-create on a lookup miss. A valid Firebase token with no
+                # users row is almost always a transient replica miss — and a
+                # forged row forks a phantom account, masks the outage, and
+                # lets a PIPEDA-deleted account re-provision itself over a
+                # socket. New Firebase users are created only by /auth/firebase.
+                logger.error(
+                    "WS auth(firebase): no user row for uid={} — refusing to auto-create (likely transient DB miss)",
+                    uid,
+                )
+                await websocket.close(code=1013, reason="service_unavailable_retry")
+                return
+        elif jwt_payload is not None:
+            payload = jwt_payload
+            # Admin tokens are minted with a `role` claim and have no row
+            # in the `users` table (admin-001 is env-var creds; admin_staff
+            # rows live in a separate table). Without this branch the
+            # lookup returns None and the client is told
+            # invalid_token_or_user_not_found — which the monitoring
+            # hook reacts to with exponential-backoff reconnects, i.e.
+            # the repeating "WebSocket failed" loop seen in the admin
+            # live-monitoring console. Mirrors get_current_user() in
+            # dependencies/__init__.py.
+            # _verify_admin_payload runs the same full admin checks as the
+            # HTTP path (aud, JTI revocation, staff active, token_version,
+            # idle timeout) and raises HTTPException for a revoked / expired /
+            # disabled admin token — a genuine auth failure, handled below as
+            # invalid_token. Only non-HTTP errors (DB outage) close 1013.
+            try:
                 admin_user = await _verify_admin_payload(payload)
                 if admin_user is not None:
                     user = admin_user
-                else:
+                elif payload.get("user_id"):
                     user = await db_supabase.get_user_by_id(payload["user_id"])
-            except Exception:
+            except HTTPException:
                 user = None
+            except Exception as _db_exc:
+                _orig = getattr(_db_exc, "details", None)
+                _orig = _orig.get("original") if isinstance(_orig, dict) else None
+                logger.error(
+                    "WS auth: user lookup failed for jwt user_id={} — closing 1013: {}",
+                    payload.get("user_id"),
+                    _orig or _db_exc,
+                )
+                await websocket.close(code=1013, reason="service_unavailable_retry")
+                return
 
         if not user:
             await websocket.send_json({"type": "error", "message": "invalid_token_or_user_not_found"})
@@ -669,13 +714,19 @@ async def websocket_endpoint(
                     if not trusted:
                         continue
 
-                    # Persist to the authoritative drivers table FIRST. The
-                    # admin live-monitoring marker and /drivers/nearby read
-                    # lat/lng from this row, so the durable write must not be
-                    # gated behind the ephemeral Redis cache below — a Redis
-                    # blip there previously raised and skipped this DB write,
-                    # leaving an online driver with no position (no car marker).
-                    await db_supabase.update_driver_location(driver_id, lat, lng, heading=data.get("heading"))
+                    # Persist to the authoritative drivers table FIRST (before
+                    # the ephemeral Redis cache below — a Redis blip there
+                    # previously raised and skipped this write, leaving an
+                    # online driver with no car marker), but THROTTLED: at 1 Hz
+                    # pings this was one Postgres UPDATE per second per driver
+                    # (write amplification vs the 150ms location-write SLA).
+                    # The admin marker / /drivers/nearby readers tolerate a few
+                    # seconds of row staleness; the Redis cache and rider/admin
+                    # fan-out below still run on EVERY ping.
+                    _loc_now = asyncio.get_event_loop().time()
+                    if _loc_now - conn_state.get("last_loc_db_write", 0.0) >= _DRIVER_LOC_DB_WRITE_INTERVAL_S:
+                        await db_supabase.update_driver_location(driver_id, lat, lng, heading=data.get("heading"))
+                        conn_state["last_loc_db_write"] = _loc_now
                     # Best-effort 60 s cache for the rider-map fast path;
                     # swallows its own Redis errors (see ConnectionManager).
                     await manager.update_driver_location(driver_id, lat, lng)
@@ -773,9 +824,13 @@ async def websocket_endpoint(
                                         exc_info=True,
                                     )
 
+                        # durable=False: 1 Hz location pings must not fill the
+                        # 50-entry replay outbox and evict ride events (F8);
+                        # the next ping supersedes this one anyway.
                         await manager.send_personal_message(
                             rider_msg,
                             f"rider_{ride['rider_id']}",
+                            durable=False,
                         )
 
                     # Broadcast live location to admin monitoring clients —
@@ -872,9 +927,13 @@ async def websocket_endpoint(
                             # cache is best-effort and must not gate it (mirrors
                             # the single-ping handler — a Redis blip on the cache
                             # previously skipped persistence and hid the marker).
-                            await db_supabase.update_driver_location(
-                                driver_id, _lat, _lng, heading=last_pt.get("heading")
-                            )
+                            # Same F8 throttle as the single-ping handler.
+                            _loc_now = asyncio.get_event_loop().time()
+                            if _loc_now - conn_state.get("last_loc_db_write", 0.0) >= _DRIVER_LOC_DB_WRITE_INTERVAL_S:
+                                await db_supabase.update_driver_location(
+                                    driver_id, _lat, _lng, heading=last_pt.get("heading")
+                                )
+                                conn_state["last_loc_db_write"] = _loc_now
                             await manager.update_driver_location(driver_id, _lat, _lng)
                             await mark_present(driver_id)
 
@@ -936,35 +995,57 @@ async def websocket_endpoint(
                                                 "ETA fetch failed for batch; omitting eta_seconds",
                                                 exc_info=True,
                                             )
+                                # durable=False: same replay-outbox exemption
+                                # as the single-ping fan-out (F8).
                                 await manager.send_personal_message(
                                     _batch_rider_msg,
                                     f"rider_{_batch_ride['rider_id']}",
+                                    durable=False,
                                 )
                             await manager.broadcast_driver_location_to_admins(driver_id, _batch_loc_update)
                     await websocket.send_json({"type": "location_batch_ack", "count": inserted})
 
             elif data.get("type") == "ride_status_update":
                 ride_id = data.get("ride_id")
-                status = data.get("status")
-                if ride_id and status:
+                if ride_id:
                     ride = await db_supabase.get_ride(ride_id)
                     if ride:
-                        await manager.send_personal_message(
-                            {
-                                "type": "ride_status_changed",
-                                "ride_id": ride_id,
-                                "status": status,
-                            },
-                            f"rider_{ride['rider_id']}",
-                        )
-                        # Broadcast to admin monitoring clients
-                        await manager.broadcast_to_admins(
-                            {
-                                "type": "ride_status_changed",
-                                "ride_id": ride_id,
-                                "status": status,
-                            }
-                        )
+                        # Participant check — same policy as chat_message
+                        # below: only the assigned driver or the ride's rider
+                        # may trigger a rebroadcast. Without it any
+                        # authenticated socket could push events for any ride
+                        # to the victim rider and every admin console.
+                        authorized = False
+                        if client_type == "driver":
+                            _dp = await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1)
+                            _dp = _dp[0] if _dp else None
+                            authorized = bool(_dp and _dp["id"] == ride.get("driver_id"))
+                        elif client_type == "rider":
+                            authorized = user["id"] == ride.get("rider_id")
+                        if not authorized:
+                            await websocket.send_json({"type": "error", "message": "not_ride_participant"})
+                        else:
+                            # Echo the canonical DB status — never relay the
+                            # client-supplied string. Real transitions happen
+                            # via the HTTP endpoints (which emit their own WS
+                            # events); this message only re-broadcasts the
+                            # ride's current state.
+                            await manager.send_personal_message(
+                                {
+                                    "type": "ride_status_changed",
+                                    "ride_id": ride_id,
+                                    "status": ride["status"],
+                                },
+                                f"rider_{ride['rider_id']}",
+                            )
+                            # Broadcast to admin monitoring clients
+                            await manager.broadcast_to_admins(
+                                {
+                                    "type": "ride_status_changed",
+                                    "ride_id": ride_id,
+                                    "status": ride["status"],
+                                }
+                            )
 
             elif data.get("type") == "get_nearby_drivers":
                 lat = data.get("lat")

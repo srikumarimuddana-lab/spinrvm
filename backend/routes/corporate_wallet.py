@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from decimal import Decimal
 from typing import Optional
@@ -137,7 +138,9 @@ async def manual_topup(
         body.client_idempotency_key
         or f"corp-topup-{wallet['id']}-{dollars_to_cents(body.amount)}-{int(time.time() // 60)}"
     )
-    intent = stripe.PaymentIntent.create(**intent_kwargs)
+    # Sync Stripe SDK: threadpool so the round-trip doesn't block the event
+    # loop (idempotency key above makes retries safe).
+    intent = await asyncio.to_thread(lambda: stripe.PaymentIntent.create(**intent_kwargs))
     return {"payment_intent_id": intent.id, "client_secret": intent.client_secret}
 
 

@@ -2577,12 +2577,17 @@ async def request_payout(
 
     if stripe_secret and stripe_account_id:
         try:
-            transfer = stripe.Transfer.create(
-                amount=dollars_to_cents(req.amount),
-                currency="cad",
-                destination=stripe_account_id,
-                api_key=stripe_secret,
-                idempotency_key=f"payout-transfer-{payout_id}",
+            # Sync Stripe SDK: run in the threadpool so the HTTP round-trip
+            # doesn't block the event loop (the idempotency key keeps a
+            # retried call from double-transferring).
+            transfer = await asyncio.to_thread(
+                lambda: stripe.Transfer.create(
+                    amount=dollars_to_cents(req.amount),
+                    currency="cad",
+                    destination=stripe_account_id,
+                    api_key=stripe_secret,
+                    idempotency_key=f"payout-transfer-{payout_id}",
+                )
             )
             status = RideStatus.COMPLETED
             stripe_payout_id = transfer.id
@@ -2622,10 +2627,12 @@ async def _attempt_transfer_reversal(transfer_id: str, stripe_secret: str, payou
     reversal — the caller writes "reversed" vs "stranded" accordingly.
     """
     try:
-        stripe.Transfer.create_reversal(
-            transfer_id,
-            api_key=stripe_secret,
-            idempotency_key=f"instant-payout-reversal-{payout_id}",
+        await asyncio.to_thread(
+            lambda: stripe.Transfer.create_reversal(
+                transfer_id,
+                api_key=stripe_secret,
+                idempotency_key=f"instant-payout-reversal-{payout_id}",
+            )
         )
         return True
     except Exception:
@@ -2722,12 +2729,15 @@ async def request_instant_payout(
 
     # ── Step 1: Transfer platform → connect account ───────────────────
     try:
-        transfer = stripe.Transfer.create(
-            amount=dollars_to_cents(req.amount),
-            currency="cad",
-            destination=stripe_account_id,
-            api_key=stripe_secret,
-            idempotency_key=f"instant-payout-transfer-{payout_id}",
+        # Threadpool: sync Stripe SDK must not block the event loop.
+        transfer = await asyncio.to_thread(
+            lambda: stripe.Transfer.create(
+                amount=dollars_to_cents(req.amount),
+                currency="cad",
+                destination=stripe_account_id,
+                api_key=stripe_secret,
+                idempotency_key=f"instant-payout-transfer-{payout_id}",
+            )
         )
         stripe_transfer_id = transfer.id
     except Exception as e:
@@ -2780,13 +2790,15 @@ async def request_instant_payout(
         # Stripe deducts its own ~1% fee from the platform side (separate
         # from the fee we charge the driver). Pass stripe_account so the
         # call runs in the connected account's context.
-        payout_obj = stripe.Payout.create(
-            amount=dollars_to_cents(net_amount),
-            currency="cad",
-            method="instant",
-            api_key=stripe_secret,
-            stripe_account=stripe_account_id,
-            idempotency_key=f"instant-payout-{payout_id}",
+        payout_obj = await asyncio.to_thread(
+            lambda: stripe.Payout.create(
+                amount=dollars_to_cents(net_amount),
+                currency="cad",
+                method="instant",
+                api_key=stripe_secret,
+                stripe_account=stripe_account_id,
+                idempotency_key=f"instant-payout-{payout_id}",
+            )
         )
         stripe_payout_id = payout_obj.id
     except Exception as payout_exc:
@@ -3935,9 +3947,14 @@ async def get_ride_history(
 
 @api_router.post("/rides/{ride_id}/accept")
 async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
-    driver = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    # F7: the driver profile and the ride row are independent reads — overlap
+    # them instead of paying two serial round-trips inside the <2s accept
+    # budget. Validation order below is unchanged.
+    _driver_rows, ride = await asyncio.gather(
+        db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1),
+        db_supabase.get_ride(ride_id),
     )
+    driver = _driver_rows[0] if _driver_rows else None
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
@@ -3948,7 +3965,6 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
             action_hint="Contact support",
         )
 
-    ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
@@ -3965,7 +3981,18 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
     # still reach this point.
     if ride.get("service_area_id"):
         try:
-            _ride_area = await db_supabase.find_one("service_areas", {"id": ride["service_area_id"]})
+            # F7: fetch the area row and the driver's active subscription
+            # concurrently — the sub row is only *used* when the area (or its
+            # parent) requires a pass, but in pass-required markets that's the
+            # common case, and the speculative read is one indexed lookup.
+            _ride_area, _sub_rows = await asyncio.gather(
+                db_supabase.find_one("service_areas", {"id": ride["service_area_id"]}),
+                db_supabase.get_rows(
+                    "driver_subscriptions",
+                    {"driver_id": driver["id"], "status": "active"},
+                    limit=1,
+                ),
+            )
             # Finding F: child areas (airport sub-regions) inherit subscription_required
             # from their parent; check parent when child flag is False.
             _accept_sub_required = bool(_ride_area and _ride_area.get("subscription_required"))
@@ -3973,13 +4000,7 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
                 _parent = await db_supabase.find_one("service_areas", {"id": _ride_area["parent_service_area_id"]})
                 _accept_sub_required = bool(_parent and _parent.get("subscription_required"))
             if _accept_sub_required:
-                _active_sub = (lambda _r: _r[0] if _r else None)(
-                    await db_supabase.get_rows(
-                        "driver_subscriptions",
-                        {"driver_id": driver["id"], "status": "active"},
-                        limit=1,
-                    )
-                )
+                _active_sub = _sub_rows[0] if _sub_rows else None
                 # Expiry check: the background sweeper runs periodically so an
                 # active row may have passed expires_at before it was flipped.
                 if _active_sub and _active_sub.get("expires_at"):
@@ -4256,11 +4277,16 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
         await manager.send_personal_message(
             {"type": "driver_accepted", "ride_id": ride_id}, f"rider_{ride['rider_id']}"
         )
-        await send_push_notification(
-            ride["rider_id"],
-            "Driver Assigned! 🚗",
-            "Your driver has accepted the ride and is on the way.",
-            data={"type": "driver_accepted", "ride_id": str(ride_id)},
+        # Backgrounded like the arrive/start siblings: FCM is a slow external
+        # round-trip and accept sits inside the <2s dispatch SLA. The WS send
+        # above stays awaited — it drives the instant in-app transition.
+        asyncio.create_task(
+            send_push_notification(
+                ride["rider_id"],
+                "Driver Assigned! 🚗",
+                "Your driver has accepted the ride and is on the way.",
+                data={"type": "driver_accepted", "ride_id": str(ride_id)},
+            )
         )
     await manager.broadcast_ride_status(ride_id, RideStatus.DRIVER_ACCEPTED, rider_id=(ride or {}).get("rider_id"))
 
@@ -4769,7 +4795,18 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                     from ..utils.route_distance import compute_road_route
                 except ImportError:
                     from utils.route_distance import compute_road_route  # type: ignore
-                road_result = await compute_road_route(all_breadcrumbs)
+                # Hard deadline: settlement targets <1s P95 and an unbounded
+                # provider call here (OSRM/Google over up to 10k breadcrumbs)
+                # previously held the driver's Complete tap for as long as the
+                # provider hung. On timeout we settle on the spike-protected
+                # haversine value — the same fallback as a provider error, and
+                # already an accepted billable baseline (the 1/3×–3× sanity
+                # band treats haversine as the reference).
+                road_result = await asyncio.wait_for(compute_road_route(all_breadcrumbs), timeout=1.5)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"[complete_ride] road-snap recompute exceeded 1.5s for ride {ride_id}; keeping haversine"
+                )
             except Exception:
                 logger.warning(
                     "[complete_ride] road-snap recompute raised; keeping haversine",
@@ -5258,11 +5295,15 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             },
             f"rider_{completed_ride['rider_id']}",
         )
-        await send_push_notification(
-            completed_ride["rider_id"],
-            "Ride Completed! ✅",
-            f"Your ride has finished. Total fare: ${rider_bill}",
-            data={"type": "ride_completed", "ride_id": str(ride_id)},
+        # Backgrounded: FCM must not sit inside the <1s settlement SLA; the
+        # awaited WS message above already drives the in-app transition.
+        asyncio.create_task(
+            send_push_notification(
+                completed_ride["rider_id"],
+                "Ride Completed! ✅",
+                f"Your ride has finished. Total fare: ${rider_bill}",
+                data={"type": "ride_completed", "ride_id": str(ride_id)},
+            )
         )
 
     total_fare = (completed_ride or {}).get("total_fare", ride.get("total_fare", 0))
@@ -5321,8 +5362,10 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         except Exception:
             logger.warning("complete_ride: quota auto_offline notify failed for driver=%s", driver["id"])
         # Push so the driver sees it even with the app backgrounded.
-        try:
-            await send_push_notification(
+        # Backgrounded off the settlement response; send_push_notification
+        # handles its own failures.
+        asyncio.create_task(
+            send_push_notification(
                 driver["user_id"],
                 "Daily ride limit reached",
                 (
@@ -5332,8 +5375,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                 data={"type": "quota_exhausted", "driver_id": str(driver["id"])},
                 target_app="driver",
             )
-        except Exception:
-            logger.warning("complete_ride: quota push failed for driver=%s", driver["id"])
+        )
 
     return serialize_doc(completed_ride)
 
@@ -5446,11 +5488,15 @@ async def cancel_ride(
             {"type": "ride_cancelled", "ride_id": ride_id, "reason": reason},
             f"rider_{ride['rider_id']}",
         )
-        await send_push_notification(
-            ride["rider_id"],
-            "Ride Cancelled ❌",
-            "Your driver has cancelled the ride.",
-            data={"type": "ride_cancelled", "ride_id": str(ride_id)},
+        # Backgrounded like the accept/arrive/start pushes — the awaited WS
+        # message above is what the open app reacts to.
+        asyncio.create_task(
+            send_push_notification(
+                ride["rider_id"],
+                "Ride Cancelled ❌",
+                "Your driver has cancelled the ride.",
+                data={"type": "ride_cancelled", "ride_id": str(ride_id)},
+            )
         )
     await manager.broadcast_ride_status(
         ride_id,
@@ -5637,11 +5683,14 @@ async def mark_rider_noshow(
             },
             f"rider_{rider_id}",
         )
-        await send_push_notification(
-            rider_id,
-            "Ride Cancelled",
-            f"Your driver waited but you didn't show up. A ${float(total_fee.quantize(Decimal('0.01'))):.2f} no-show fee has been charged.",
-            data={"type": "ride_noshow", "ride_id": str(ride_id)},
+        # Backgrounded like the other ride-transition pushes.
+        asyncio.create_task(
+            send_push_notification(
+                rider_id,
+                "Ride Cancelled",
+                f"Your driver waited but you didn't show up. A ${float(total_fee.quantize(Decimal('0.01'))):.2f} no-show fee has been charged.",
+                data={"type": "ride_noshow", "ride_id": str(ride_id)},
+            )
         )
 
     await manager.broadcast_ride_status(
@@ -6005,6 +6054,12 @@ async def get_driver_leaderboard(
 
     Returns the top drivers for the specified period with the current
     driver's rank highlighted.
+
+    Aggregates from driver_daily_stats via one GROUP BY RPC (migration 204)
+    and tops up with completed rides newer than each driver's last rollup
+    date — one batched query, no double count. Replaces the per-driver
+    rides+users scan (~1,001 sequential round-trips at a 500-driver fleet,
+    whose per-driver 1,000-ride cap silently undercounted long periods).
     """
     driver = await db.find_one("drivers", {"user_id": current_user["id"]})
     if not driver:
@@ -6012,52 +6067,131 @@ async def get_driver_leaderboard(
 
     now = datetime.now(timezone.utc)
     if period == "week":
-        start = (now - timedelta(days=7)).isoformat()
+        start_dt = now - timedelta(days=7)
     elif period == "month":
-        start = (now - timedelta(days=30)).isoformat()
+        start_dt = now - timedelta(days=30)
     else:
-        start = "2020-01-01"
+        start_dt = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    start_date_str = start_dt.strftime("%Y-%m-%d")
 
     try:
-        all_drivers = await db.get_rows("drivers", {}, limit=500)
+        all_drivers = await db.get_rows("drivers", {}, limit=500) or []
     except Exception:
         all_drivers = []
 
-    rankings = []
-    for d in all_drivers:
-        d_id = d["id"]
+    # Rollup totals: one aggregate round-trip for the whole fleet.
+    totals: Dict[str, dict] = {}
+    _oldest_uncovered = start_dt.isoformat()
+    try:
+        _agg = await db_supabase.run_sync(
+            lambda: db_supabase.supabase.rpc("driver_leaderboard_totals", {"p_start": start_date_str}).execute()
+        )
+        _max_stat_date = None
+        for row in _agg.data or []:
+            totals[row["driver_id"]] = {
+                "rides": int(row.get("rides") or 0),
+                "earnings": Decimal(str(row.get("earnings") or 0)),
+                "tips": Decimal(str(row.get("tips") or 0)),
+            }
+            _row_date = row.get("last_stat_date")
+            if _row_date and (_max_stat_date is None or _row_date > _max_stat_date):
+                _max_stat_date = _row_date
+        if _max_stat_date:
+            # Rides on days after the newest rollup row aren't aggregated yet;
+            # top them up below. Keyed off the actual MAX(stat_date), not
+            # "yesterday" — the rollup endpoint takes an arbitrary target_date.
+            _day_after = datetime.strptime(str(_max_stat_date), "%Y-%m-%d") + timedelta(days=1)
+            _oldest_uncovered = max(start_dt.replace(tzinfo=None), _day_after).isoformat()
+    except Exception:
+        # Pre-migration-204 environment (or RPC outage): approximate from the
+        # most recent daily rows, capped so PostgREST can't silently truncate
+        # an unbounded fetch. Never falls back to the old per-driver N+1.
+        logger.error("leaderboard: aggregate RPC failed; using capped daily-row fallback", exc_info=True)
         try:
-            rides = await db.get_rows(
-                "rides",
-                {"driver_id": d_id, "status": RideStatus.COMPLETED},
-                limit=1000,
+            _rows = (
+                await db.get_rows(
+                    "driver_daily_stats",
+                    {"stat_date": {"$gte": start_date_str}},
+                    columns="driver_id,stat_date,rides_completed,total_earnings,total_tips",
+                    order="stat_date",
+                    desc=True,
+                    limit=5000,
+                )
+                or []
             )
-            period_rides = [
-                r for r in rides if isinstance(r.get("created_at", ""), str) and r.get("created_at", "") >= start
-            ]
         except Exception:
-            period_rides = []
+            _rows = []
+        _fb_max_date = None
+        for r in _rows:
+            t = totals.setdefault(r["driver_id"], {"rides": 0, "earnings": Decimal("0"), "tips": Decimal("0")})
+            t["rides"] += int(r.get("rides_completed") or 0)
+            t["earnings"] += Decimal(str(r.get("total_earnings") or 0))
+            t["tips"] += Decimal(str(r.get("total_tips") or 0))
+            _r_date = str(r.get("stat_date") or "")[:10]
+            if _r_date and (_fb_max_date is None or _r_date > _fb_max_date):
+                _fb_max_date = _r_date
+        if _fb_max_date:
+            # Same no-double-count boundary as the RPC path.
+            _day_after = datetime.strptime(_fb_max_date, "%Y-%m-%d") + timedelta(days=1)
+            _oldest_uncovered = max(start_dt.replace(tzinfo=None), _day_after).isoformat()
 
-        total_rides = len(period_rides)
-        total_earnings = sum(
+    # Freshness top-up: completed rides the rollup hasn't covered yet, in one
+    # batched query (same earnings formula as the old implementation).
+    try:
+        _fresh_rides = (
+            await db.get_rows(
+                "rides",
+                {"status": RideStatus.COMPLETED, "created_at": {"$gte": _oldest_uncovered}},
+                columns="driver_id,base_fare,distance_fare,time_fare,tip_amount,created_at",
+                limit=5000,
+            )
+            or []
+        )
+    except Exception:
+        _fresh_rides = []
+    for r in _fresh_rides:
+        _rid = r.get("driver_id")
+        if not _rid:
+            continue
+        t = totals.setdefault(_rid, {"rides": 0, "earnings": Decimal("0"), "tips": Decimal("0")})
+        t["rides"] += 1
+        t["earnings"] += (
             Decimal(str(r.get("base_fare") or 0))
             + Decimal(str(r.get("distance_fare") or 0))
             + Decimal(str(r.get("time_fare") or 0))
             + Decimal(str(r.get("tip_amount") or 0))
-            for r in period_rides
         )
-        total_tips = sum(Decimal(str(r.get("tip_amount") or 0)) for r in period_rides)
+        t["tips"] += Decimal(str(r.get("tip_amount") or 0))
 
-        user = await db.find_one("users", {"id": d.get("user_id")})
-        name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "Driver"
+    # Names: one batched users read instead of one find_one per driver.
+    _user_ids = [d.get("user_id") for d in all_drivers if d.get("user_id")]
+    _names: Dict[str, str] = {}
+    if _user_ids:
+        try:
+            _users = (
+                await db.get_rows(
+                    "users",
+                    {"id": {"$in": _user_ids}},
+                    columns="id,first_name,last_name",
+                    limit=len(_user_ids),
+                )
+                or []
+            )
+            _names = {u["id"]: f"{u.get('first_name', '')} {u.get('last_name', '')}".strip() for u in _users}
+        except Exception:
+            logger.warning("leaderboard: batched users lookup failed; using placeholders", exc_info=True)
 
+    rankings = []
+    for d in all_drivers:
+        d_id = d["id"]
+        t = totals.get(d_id, {"rides": 0, "earnings": Decimal("0"), "tips": Decimal("0")})
         rankings.append(
             {
                 "driver_id": d_id,
-                "name": name,
-                "rides": total_rides,
-                "earnings": _money_str(total_earnings),
-                "tips": _money_str(total_tips),
+                "name": _names.get(d.get("user_id"), "") or "Driver",
+                "rides": t["rides"],
+                "earnings": _money_str(t["earnings"]),
+                "tips": _money_str(t["tips"]),
                 "rating": d.get("rating", 0),
                 "is_current_user": d_id == driver["id"],
             }
@@ -6522,7 +6656,45 @@ async def update_driver_status(
     # On PGRST204 (column missing pre-migration) fall back to the legacy
     # payload so the flip itself still lands.
     _now_iso = datetime.now(timezone.utc).isoformat()
-    _base = {"is_online": is_online, "is_available": is_online, "updated_at": _now_iso}
+    # is_available is system-computed (see docstring): online AND not on an
+    # active ride AND not offer-pending. Writing is_available = is_online
+    # unconditionally let a mid-trip "Go online" re-tap (or an app-relaunch
+    # re-assert) put a busy driver back into the dispatch pool — dispatch
+    # candidates filter on is_available alone, so that meant a second
+    # concurrent ride offered to a driver who already has one. A DB error in
+    # either lookup propagates (503) rather than guessing: dispatch
+    # double-booking is worse than one failed toggle.
+    is_available = is_online
+    if is_online:
+        _busy_ride = await db_supabase.get_rows(
+            "rides",
+            {
+                "driver_id": driver_id,
+                "status": {
+                    "$in": [
+                        RideStatus.DRIVER_ASSIGNED,
+                        RideStatus.DRIVER_ACCEPTED,
+                        RideStatus.DRIVER_ARRIVED,
+                        RideStatus.IN_PROGRESS,
+                    ]
+                },
+            },
+            limit=1,
+        )
+        if _busy_ride:
+            is_available = False
+        else:
+            # Batch dispatch holds no ride row pre-acceptance — the claim
+            # lives in ride_offers (claim_driver already set
+            # is_available=False; don't re-assert it mid-offer).
+            _pending_offers = await db_supabase.get_rows(
+                "ride_offers",
+                {"driver_id": driver_id, "status": "pending"},
+                limit=1,
+            )
+            if _pending_offers:
+                is_available = False
+    _base = {"is_online": is_online, "is_available": is_available, "updated_at": _now_iso}
     # If the driver app supplied current GPS on Go Online, persist it in the
     # same write so the rider/admin queries see a real location immediately
     # instead of the registration default (0, 0). Guarded on is_online so the
@@ -6824,7 +6996,7 @@ async def _cancel_stripe_subscription(stripe_subscription_id: str | None, *, rai
             raise RuntimeError("stripe_secret_key not configured — cannot cancel Stripe subscription")
         return
     try:
-        stripe.Subscription.delete(stripe_subscription_id, api_key=stripe_secret)
+        await asyncio.to_thread(lambda: stripe.Subscription.delete(stripe_subscription_id, api_key=stripe_secret))
         logger.info(f"[SUBSCRIBE] Stripe subscription {stripe_subscription_id} cancelled")
     except Exception:
         logger.exception(f"[SUBSCRIBE] Failed to cancel Stripe subscription {stripe_subscription_id}")
@@ -7140,16 +7312,18 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
             # / invoice.payment_failed (dunning) / customer.subscription.*
             # which routes/webhooks.py reconciles. Requires a recurring Price
             # created in the Stripe dashboard and stored on the plan.
-            _session = stripe.checkout.Session.create(
-                mode="subscription",
-                line_items=[{"price": _price_id, "quantity": 1}],
-                metadata=_metadata,
-                # Mirror our ids onto the Stripe Subscription so renewal
-                # invoices and subscription events are self-identifying.
-                subscription_data={"metadata": _metadata},
-                success_url=_success_url,
-                cancel_url=_cancel_url,
-                api_key=_stripe_secret,
+            _session = await asyncio.to_thread(
+                lambda: stripe.checkout.Session.create(
+                    mode="subscription",
+                    line_items=[{"price": _price_id, "quantity": 1}],
+                    metadata=_metadata,
+                    # Mirror our ids onto the Stripe Subscription so renewal
+                    # invoices and subscription events are self-identifying.
+                    subscription_data={"metadata": _metadata},
+                    success_url=_success_url,
+                    cancel_url=_cancel_url,
+                    api_key=_stripe_secret,
+                )
             )
             checkout_url = _session.url
             stripe_session_id = _session.id
@@ -7165,32 +7339,34 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
             # Compute province tax and charge the inclusive total to Stripe.
             _tax = await _compute_subscription_tax(driver["id"], plan_price)
             _amount_cents = dollars_to_cents(_tax["total"])
-            _session = stripe.checkout.Session.create(
-                payment_method_types=["card"],
-                mode="payment",
-                customer_creation="always",
-                line_items=[
-                    {
-                        "price_data": {
-                            "currency": "cad",
-                            "product_data": {
-                                "name": plan.get("name", "Spinr Pass"),
-                                **({} if not plan.get("description") else {"description": plan["description"]}),
+            _session = await asyncio.to_thread(
+                lambda: stripe.checkout.Session.create(
+                    payment_method_types=["card"],
+                    mode="payment",
+                    customer_creation="always",
+                    line_items=[
+                        {
+                            "price_data": {
+                                "currency": "cad",
+                                "product_data": {
+                                    "name": plan.get("name", "Spinr Pass"),
+                                    **({} if not plan.get("description") else {"description": plan["description"]}),
+                                },
+                                "unit_amount": _amount_cents,
                             },
-                            "unit_amount": _amount_cents,
-                        },
-                        "quantity": 1,
-                    }
-                ],
-                metadata=_metadata,
-                # Propagate our ids onto the underlying PaymentIntent so the
-                # nightly reconciler (stripe_reconcile.py) can identify a
-                # subscription charge instead of flagging it STRIPE_ORPHAN if
-                # checkout.session.completed is ever missed.
-                payment_intent_data={"metadata": _metadata},
-                success_url=_success_url,
-                cancel_url=_cancel_url,
-                api_key=_stripe_secret,
+                            "quantity": 1,
+                        }
+                    ],
+                    metadata=_metadata,
+                    # Propagate our ids onto the underlying PaymentIntent so the
+                    # nightly reconciler (stripe_reconcile.py) can identify a
+                    # subscription charge instead of flagging it STRIPE_ORPHAN if
+                    # checkout.session.completed is ever missed.
+                    payment_intent_data={"metadata": _metadata},
+                    success_url=_success_url,
+                    cancel_url=_cancel_url,
+                    api_key=_stripe_secret,
+                )
             )
             checkout_url = _session.url
             stripe_session_id = _session.id
@@ -7240,7 +7416,12 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
             _stale_session = row.get("stripe_session_id")
             if _stale_session and _stripe_secret:
                 try:
-                    stripe.checkout.Session.expire(_stale_session, api_key=_stripe_secret)
+                    # Default-arg binding: the lambda runs inside this loop
+                    # iteration, but bind explicitly so a later refactor can't
+                    # introduce the classic late-binding bug (ruff B023).
+                    await asyncio.to_thread(
+                        lambda _sid=_stale_session: stripe.checkout.Session.expire(_sid, api_key=_stripe_secret)
+                    )
                 except Exception:
                     logger.info(
                         f"[SUBSCRIBE] Could not expire superseded checkout session {_stale_session} "
@@ -7281,7 +7462,9 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
         # can't be paid, and log at error (payment-path failure).
         if checkout_url and stripe_session_id and _stripe_secret:
             try:
-                stripe.checkout.Session.expire(stripe_session_id, api_key=_stripe_secret)
+                await asyncio.to_thread(
+                    lambda: stripe.checkout.Session.expire(stripe_session_id, api_key=_stripe_secret)
+                )
             except Exception:
                 logger.info(f"[SUBSCRIBE] Could not expire race-loser session {stripe_session_id}")
         existing_pending = (
@@ -7407,7 +7590,7 @@ async def verify_subscription_session(
         return {"status": "pending"}
 
     try:
-        session = stripe.checkout.Session.retrieve(session_id, api_key=stripe_key)
+        session = await asyncio.to_thread(lambda: stripe.checkout.Session.retrieve(session_id, api_key=stripe_key))
     except Exception as e:
         logger.error(f"[SUBSCRIBE] verify-session Stripe error: {e}", exc_info=True)
         return {"status": "pending"}

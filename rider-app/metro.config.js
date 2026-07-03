@@ -51,6 +51,16 @@ config.resolver.extraNodeModules = {
   'react-native': path.resolve(__dirname, 'node_modules/react-native'),
 };
 
+// Disable Metro's package-"exports" resolution (default-ON since SDK 53).
+// With it on, @sentry/core resolves to its ESM build (build/esm/*), whose
+// module-namespace bindings are frozen under Hermes; Sentry's module-scope
+// writes to them throw "[runtime not ready]: TypeError: property is not
+// writable" and abort the app at launch (release-only; dev tolerates it).
+// Falling back to legacy main-field resolution loads Sentry's CJS build
+// (build/cjs/*) instead. Verified via bundle diff that @sentry/core is the ONLY
+// package whose resolution changes, so this is safe. See expo/expo#36589.
+config.resolver.unstable_enablePackageExports = false;
+
 // ── Web build: stub native-only packages ──────────────────────────────────
 // react-native-maps and react-native-maps-directions are native-only.
 // On web, Metro resolves them to thin stubs so `expo export --platform web`

@@ -123,8 +123,18 @@ export const useLocationStore = create<LocationState>()(
   )
 );
 
-// Mock implementation for server-side rendering
-if (typeof window === 'undefined') {
+// Mock navigator.geolocation for server-side rendering (Next.js/web ONLY).
+//
+// MUST be gated on Platform.OS === 'web'. On React Native (Hermes, bridgeless),
+// `window` is undefined during early bundle evaluation, so the bare
+// `typeof window === 'undefined'` guard let this run on iOS/Android at module
+// scope — where navigator.geolocation is a read-only property. Object.assign
+// then threw "[runtime not ready]: TypeError: property is not writable",
+// RCTFatal aborted the process before React Native finished booting, and the
+// app crashed on launch (white screen, uncatchable by any JS error handler).
+// On web SSR, Platform.OS === 'web' && window === undefined still applies the
+// mock; on native, Platform.OS is 'ios'/'android' so this is skipped entirely.
+if (Platform.OS === 'web' && typeof window === 'undefined') {
   Object.assign(navigator, {
     geolocation: {
       getCurrentPosition: () => {},

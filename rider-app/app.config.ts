@@ -218,6 +218,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // Podfile post_install so the iOS static-frameworks + source-build combo
         // above doesn't fail the Firebase compile on non-modular header includes.
         './plugins/withFirebaseNonModularHeaders',
+        // TEMPORARY DIAGNOSTIC: native RCTSetFatalHandler → shows the startup
+        // fatal (message + JS stack) in an on-device alert instead of aborting.
+        // Remove together with plugins/withStartupFatalAlert.js once fixed.
+        './plugins/withStartupFatalAlert',
         // Belt-and-suspenders: re-stamps android.compileSdkVersion=36 and
         // android.targetSdkVersion=36 into gradle.properties. EAS build #59fcaa6b
         // showed [ExpoRootProject] compileSdk: 35 even though expo-build-properties

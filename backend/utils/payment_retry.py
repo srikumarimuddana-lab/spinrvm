@@ -226,6 +226,10 @@ async def retry_failed_payments():
             columns=(
                 "id,rider_id,driver_id,payment_status,payment_retry_count,"
                 "payment_intent_id,admin_alerted_payment_exhausted,total_fare,"
+                # grand_total + tip_amount feed the requires_capture owed
+                # computation — without them every stranded-hold capture would
+                # silently fall back to total_fare (no fees/taxes/tip).
+                "grand_total,tip_amount,payment_method,surge_multiplier,"
                 "stripe_invoice_id,created_at,updated_at"
             ),
         )
@@ -394,9 +398,26 @@ async def retry_failed_payments():
                 owed = ride.get("grand_total")
                 if owed is None:
                     owed = ride.get("total_fare", 0)
-                owed_d = Decimal(str(owed or 0)) + Decimal(str(ride.get("tip_amount") or 0))
+                tip_d = Decimal(str(ride.get("tip_amount") or 0))
+                owed_d = Decimal(str(owed or 0)) + tip_d
                 capture_cents = min(dollars_to_cents(owed_d), int(intent.amount))
                 attempt = retry_count + 1
+                # Flip to 'processing' BEFORE capturing: if the post-capture
+                # paid-write fails, the ride must sit in the state the
+                # stuck-processing reconciler owns — never fall back to
+                # 'failed', which would look retryable/invoiceable after
+                # money has already moved (duplicate-collection risk).
+                await db.update_one(
+                    "rides",
+                    {"id": ride_id},
+                    {
+                        "$set": {
+                            "payment_status": "processing",
+                            "payment_retry_count": attempt,
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                    },
+                )
                 # Same key shape as stripe_charge.capture_ride so a partially
                 # completed settlement capture for the same amount dedupes.
                 stripe.PaymentIntent.capture(
@@ -405,18 +426,43 @@ async def retry_failed_payments():
                     api_key=stripe_secret,
                     idempotency_key=f"ride-capture-{ride_id}-{capture_cents}",
                 )
-                await db.update_one(
-                    "rides",
-                    {"id": ride_id},
-                    {
-                        "$set": {
-                            "payment_status": "paid",
-                            "auth_status": "captured",
-                            "payment_retry_count": attempt,
-                            "updated_at": datetime.now(timezone.utc).isoformat(),
-                        }
-                    },
+                # Ledger row BEFORE the ride update (same order as the normal
+                # settlement path) so a recovery record exists even if the
+                # paid-write below fails. record_payment_event never raises.
+                try:
+                    from ..services.payment_service import record_payment_event
+                except ImportError:
+                    from services.payment_service import record_payment_event
+                await record_payment_event(
+                    ride_id,
+                    ride.get("rider_id"),
+                    capture_cents,
+                    payment_intent_id,
+                    ride=ride,
+                    tip_amount=tip_d,
                 )
+                try:
+                    await db.update_one(
+                        "rides",
+                        {"id": ride_id},
+                        {
+                            "$set": {
+                                "payment_status": "paid",
+                                "auth_status": "captured",
+                                "updated_at": datetime.now(timezone.utc).isoformat(),
+                            }
+                        },
+                    )
+                except Exception as db_err:
+                    # Money HAS moved — leave the row in 'processing' for the
+                    # stuck-processing reconciler; do NOT let the outer except
+                    # reset it to 'failed'.
+                    logger.error(
+                        f"Payment retry: captured hold for ride {ride_id} but paid-write failed — "
+                        f"leaving 'processing' for reconciler: {db_err}",
+                        exc_info=True,
+                    )
+                    continue
                 logger.info(
                     f"Payment retry: captured stranded hold for ride {ride_id} "
                     f"({capture_cents} cents of {intent.amount} authorized)"

@@ -270,12 +270,15 @@ async def test_requires_capture_hold_is_captured_for_owed_amount():
     """Codex P2 (PR #2021): a stranded manual-capture hold (settlement failed
     mid-flight, e.g. blank Stripe key) must be captured by the retry loop once
     Stripe is reachable — for the OWED amount (grand_total + tip), never the
-    full authorized amount, which includes the tip buffer."""
+    full authorized amount, which includes the tip buffer. Codex P2
+    (PR #2023): the capture must be preceded by a 'processing' claim flip and
+    write a financial_events ledger row before marking paid."""
     ride = _make_ride(grand_total=20.00, tip_amount=2.00)
 
     mock_db_update = AsyncMock(return_value={"id": RIDE_ID})
     mock_capture = MagicMock()
     mock_confirm = MagicMock()
+    mock_ledger = AsyncMock()
 
     intent = _fake_intent("requires_capture")
     intent.amount = 3000  # $30 hold: fare + buffer
@@ -290,6 +293,7 @@ async def test_requires_capture_hold_is_captured_for_owed_amount():
         patch("stripe.PaymentIntent.retrieve", MagicMock(return_value=intent)),
         patch("stripe.PaymentIntent.capture", mock_capture),
         patch("stripe.PaymentIntent.confirm", mock_confirm),
+        patch("services.payment_service.record_payment_event", mock_ledger),
     ):
         from utils import payment_retry
 
@@ -304,9 +308,57 @@ async def test_requires_capture_hold_is_captured_for_owed_amount():
     )
     mock_confirm.assert_not_called()
 
+    # Ledger row for the recovered capture (reconciliation/reporting).
+    mock_ledger.assert_awaited_once()
+    assert mock_ledger.await_args.args[2] == 2200
+    assert mock_ledger.await_args.args[3] == PI_ID
+
+    # Status sequence: retrying (claim) → processing (pre-capture) → paid.
+    statuses = [c[0][2].get("$set", {}).get("payment_status") for c in mock_db_update.await_args_list]
+    assert statuses == ["retrying", "processing", "paid"]
     paid_calls = [c for c in mock_db_update.await_args_list if c[0][2].get("$set", {}).get("payment_status") == "paid"]
-    assert len(paid_calls) == 1
     assert paid_calls[0][0][2]["$set"]["auth_status"] == "captured"
+
+
+@pytest.mark.anyio
+async def test_requires_capture_paid_write_failure_leaves_processing():
+    """Codex P2 (PR #2023): if the capture succeeds but the paid-write fails,
+    the ride must stay in 'processing' (owned by the stuck-processing
+    reconciler) — NEVER be reset to 'failed', which would look
+    retryable/invoiceable after money has already moved."""
+    ride = _make_ride(grand_total=20.00, tip_amount=0)
+
+    intent = _fake_intent("requires_capture")
+    intent.amount = 3000
+
+    async def _update_one(_table, _filters, patch_body):
+        if patch_body.get("$set", {}).get("payment_status") == "paid":
+            raise RuntimeError("DB write failed")
+        return {"id": RIDE_ID}
+
+    mock_db_update = AsyncMock(side_effect=_update_one)
+    mock_capture = MagicMock()
+
+    fake_settings = {"stripe_secret_key": STRIPE_SECRET}
+
+    with (
+        patch("utils.payment_retry.db.get_rows", AsyncMock(return_value=[ride])),
+        patch("utils.payment_retry.get_app_settings", AsyncMock(return_value=fake_settings)),
+        patch("utils.payment_retry.db.update_one", mock_db_update),
+        patch("utils.payment_retry.send_push_notification", AsyncMock()),
+        patch("stripe.PaymentIntent.retrieve", MagicMock(return_value=intent)),
+        patch("stripe.PaymentIntent.capture", mock_capture),
+        patch("services.payment_service.record_payment_event", AsyncMock()),
+    ):
+        from utils import payment_retry
+
+        await payment_retry.retry_failed_payments()
+
+    mock_capture.assert_called_once()
+    # No write may reset the ride to 'failed' after the capture succeeded;
+    # the last successful status write is the pre-capture 'processing'.
+    statuses = [c[0][2].get("$set", {}).get("payment_status") for c in mock_db_update.await_args_list]
+    assert "failed" not in statuses
 
 
 @pytest.mark.anyio
@@ -330,6 +382,7 @@ async def test_requires_capture_never_exceeds_authorized_amount():
         patch("utils.payment_retry.send_push_notification", AsyncMock()),
         patch("stripe.PaymentIntent.retrieve", MagicMock(return_value=intent)),
         patch("stripe.PaymentIntent.capture", mock_capture),
+        patch("services.payment_service.record_payment_event", AsyncMock()),
     ):
         from utils import payment_retry
 

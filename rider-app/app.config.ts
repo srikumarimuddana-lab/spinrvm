@@ -19,6 +19,16 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     newArchEnabled: true, // REQUIRED: react-native-reanimated 4 / react-native-worklets only run on the New Architecture (old arch crashed on first animated screen)
     updates: {
         url: 'https://u.expo.dev/8f1e4f60-720e-46b0-9b71-33c13d3af043',
+        // TEMPORARY DIAGNOSTIC (crash: expo.controller.errorRecoveryQueue SIGABRT,
+        // pre-splash, no JS frames — see build 4 TestFlight crash log). Default
+        // checkAutomatically is 'ON_LOAD', which makes the bridgeless AppController
+        // fetch+verify an OTA update synchronously before JS ever renders. If a bad
+        // bundle is/was published on the 'production' channel, that reconciliation
+        // can abort natively instead of falling back to the embedded bundle. Setting
+        // 'NEVER' rules this in/out: ship one build with this, if the crash
+        // disappears the root cause is a broken production-channel update, not
+        // native module init. Revert to 'ON_LOAD' (or remove the line) once confirmed.
+        checkAutomatically: 'NEVER',
     },
     // Bare workflow requires a literal string runtimeVersion (policies like
     // 'fingerprint'/'appVersion' rejected by EAS CLI). Bump manually when

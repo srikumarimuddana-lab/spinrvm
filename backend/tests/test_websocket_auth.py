@@ -357,6 +357,234 @@ async def test_ws_message_rate_limit_resets_after_window():
     assert allowed, "after the window expires, the next message should be accepted"
 
 
+# ── C4: no auto-create on lookup miss; DB outage ≠ invalid token ──────────────
+
+
+def test_ws_firebase_user_missing_is_not_auto_created(app_with_ws):
+    """A valid Firebase token whose users row is missing must NOT mint a new
+    user over the socket (C4 — mirrors get_current_user in dependencies/).
+
+    The old path called create_user() on a lookup miss: a transient Supabase
+    replica miss forked a phantom account, and a PIPEDA-deleted account's
+    Firebase UID could re-provision itself over a socket. The endpoint now
+    closes 1013 (try again later) so the client retries.
+    """
+    firebase_payload = {
+        "uid": "ghost-uid-c4",
+        "phone_number": "+15550009999",
+        "aud": _TEST_FIREBASE_APP_ID,
+    }
+    create_user = AsyncMock()
+
+    patches = _start_patches(
+        patch("backend.routes.websocket.settings", _rider_settings_mock()),
+        patch(
+            "backend.routes.websocket.firebase_auth.verify_id_token",
+            return_value=firebase_payload,
+        ),
+        patch(
+            "backend.routes.websocket.db_supabase.get_user_by_id",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "backend.routes.websocket.db_supabase.get_user_by_phone",
+            new=AsyncMock(return_value=None),
+        ),
+        patch("backend.routes.websocket.db_supabase.create_user", new=create_user),
+    )
+    try:
+        client = TestClient(app_with_ws)
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            with client.websocket_connect("/ws/rider/ghost-uid-c4") as ws:
+                ws.send_json({"type": "auth", "token": "valid-token-rowless-user"})
+                ws.receive_json()
+        assert exc_info.value.code == 1013, f"expected 1013 (try again later), got {exc_info.value.code}"
+        create_user.assert_not_awaited()
+    finally:
+        _stop_patches(patches)
+
+
+def test_ws_db_outage_closes_1013_not_invalid_token(app_with_ws):
+    """A Supabase outage during the user lookup is NOT an auth failure (C4).
+
+    The old blanket except turned a DB blip into invalid_token_or_user_not_found,
+    which client backoff treats as terminal. The endpoint must close 1013 so
+    the client retries.
+    """
+    firebase_payload = {
+        "uid": _RIDER_USER["id"],
+        "phone_number": _RIDER_USER["phone"],
+        "aud": _TEST_FIREBASE_APP_ID,
+    }
+
+    patches = _start_patches(
+        patch("backend.routes.websocket.settings", _rider_settings_mock()),
+        patch(
+            "backend.routes.websocket.firebase_auth.verify_id_token",
+            return_value=firebase_payload,
+        ),
+        patch(
+            "backend.routes.websocket.db_supabase.get_user_by_id",
+            new=AsyncMock(side_effect=Exception("supabase down")),
+        ),
+    )
+    try:
+        client = TestClient(app_with_ws)
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            with client.websocket_connect(f"/ws/rider/{_RIDER_USER['id']}") as ws:
+                ws.send_json({"type": "auth", "token": "valid-firebase-token"})
+                ws.receive_json()
+        assert exc_info.value.code == 1013, f"expected 1013 (try again later), got {exc_info.value.code}"
+    finally:
+        _stop_patches(patches)
+
+
+def test_ws_revoked_admin_jwt_is_invalid_token_not_1013(app_with_ws):
+    """A JWT that decodes but fails admin verification (revoked JTI, disabled
+    staff, stale token_version, idle timeout) is a genuine auth failure and
+    must stay on the invalid_token close — NOT become a 1013 "try again
+    later" (C4 boundary pin: only DB outages get 1013)."""
+    from fastapi import HTTPException
+
+    patches = _start_patches(
+        _patch_firebase_fail(),
+        _patch_jwt_return({"user_id": "admin_revoked_c4", "role": "admin"}),
+        patch(
+            "backend.routes.websocket._verify_admin_payload",
+            new=AsyncMock(side_effect=HTTPException(status_code=401, detail="ERR_TOKEN_REVOKED")),
+        ),
+    )
+    try:
+        client = TestClient(app_with_ws)
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect("/ws/admin/anyone") as ws:
+                ws.send_json({"type": "auth", "token": "decodes-but-revoked"})
+                msg = ws.receive_json()
+                assert msg["type"] == "error"
+                assert msg["message"] == "invalid_token_or_user_not_found"
+                ws.receive_json()
+    finally:
+        _stop_patches(patches)
+
+
+# ── C5: ride_status_update requires participation & echoes DB status ──────────
+
+_C5_RIDER = {
+    "id": "rider_ws_c5_1",
+    "phone": "+15550005555",
+    "role": "rider",
+    "first_name": "Carol",
+    "token_version": 0,
+}
+
+
+def _c5_patches(ride: dict, send_personal: AsyncMock, broadcast_admins: AsyncMock):
+    firebase_payload = {
+        "uid": _C5_RIDER["id"],
+        "phone_number": _C5_RIDER["phone"],
+        "aud": _TEST_FIREBASE_APP_ID,
+    }
+    return _start_patches(
+        patch("backend.routes.websocket.settings", _rider_settings_mock()),
+        patch(
+            "backend.routes.websocket.firebase_auth.verify_id_token",
+            return_value=firebase_payload,
+        ),
+        patch(
+            "backend.routes.websocket.db_supabase.get_user_by_id",
+            new=AsyncMock(return_value=_C5_RIDER),
+        ),
+        patch(
+            "backend.routes.websocket.db_supabase.get_ride",
+            new=AsyncMock(return_value=ride),
+        ),
+        patch(
+            "backend.routes.websocket.db_supabase.get_rows",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch("backend.routes.websocket.db.find_one", new=AsyncMock(return_value=None)),
+        patch("backend.routes.websocket.manager.send_personal_message", new=send_personal),
+        patch("backend.routes.websocket.manager.broadcast_to_admins", new=broadcast_admins),
+    )
+
+
+def _status_relays(mock: AsyncMock) -> list[dict]:
+    return [
+        c.args[0]
+        for c in mock.await_args_list
+        if c.args and isinstance(c.args[0], dict) and c.args[0].get("type") == "ride_status_changed"
+    ]
+
+
+def test_ws_ride_status_update_rejected_for_non_participant(app_with_ws):
+    """Any authenticated socket used to be able to relay an arbitrary status
+    string for ANY ride to the victim rider and every admin console (C5).
+    A non-participant now gets not_ride_participant and nothing is relayed.
+    """
+    victim_ride = {
+        "id": "ride_c5_victim",
+        "rider_id": "someone_else",
+        "driver_id": "driver_x",
+        "status": "in_progress",
+    }
+    send_personal = AsyncMock()
+    broadcast_admins = AsyncMock()
+    patches = _c5_patches(victim_ride, send_personal, broadcast_admins)
+    try:
+        client = TestClient(app_with_ws)
+        with client.websocket_connect(f"/ws/rider/{_C5_RIDER['id']}") as ws:
+            ws.send_json({"type": "auth", "token": "valid-firebase-token"})
+            assert ws.receive_json()["type"] == "auth_success"
+
+            ws.send_json({"type": "ride_status_update", "ride_id": "ride_c5_victim", "status": "cancelled"})
+            resp = ws.receive_json()
+            assert resp == {"type": "error", "message": "not_ride_participant"}
+
+        assert _status_relays(send_personal) == [], "spoofed status must not reach the rider"
+        assert _status_relays(broadcast_admins) == [], "spoofed status must not reach admins"
+    finally:
+        _stop_patches(patches)
+
+
+def test_ws_ride_status_update_echoes_db_status_not_client_string(app_with_ws):
+    """A participant's ride_status_update relays the ride's canonical DB
+    status — the client-supplied string must never reach other parties (C5).
+    """
+    own_ride = {
+        "id": "ride_c5_own",
+        "rider_id": _C5_RIDER["id"],
+        "driver_id": "driver_x",
+        "status": "driver_arrived",
+    }
+    send_personal = AsyncMock()
+    broadcast_admins = AsyncMock()
+    patches = _c5_patches(own_ride, send_personal, broadcast_admins)
+    try:
+        client = TestClient(app_with_ws)
+        with client.websocket_connect(f"/ws/rider/{_C5_RIDER['id']}") as ws:
+            ws.send_json({"type": "auth", "token": "valid-firebase-token"})
+            assert ws.receive_json()["type"] == "auth_success"
+
+            # Client lies about the status; the relay must use the DB value.
+            ws.send_json({"type": "ride_status_update", "ride_id": "ride_c5_own", "status": "completed"})
+
+            # Synchronization: get_nearby_drivers produces a response frame,
+            # and the message loop is sequential — once we get nearby_drivers
+            # back, the ride_status_update above has been fully processed.
+            ws.send_json({"type": "get_nearby_drivers", "lat": 52.13, "lng": -106.67})
+            assert ws.receive_json()["type"] == "nearby_drivers"
+
+        relayed = _status_relays(send_personal)
+        assert relayed, "participant rebroadcast should have been relayed to the rider"
+        assert all(m["status"] == "driver_arrived" for m in relayed), (
+            "relay must echo the DB status, not the client-supplied string"
+        )
+        admin_relayed = _status_relays(broadcast_admins)
+        assert admin_relayed and all(m["status"] == "driver_arrived" for m in admin_relayed)
+    finally:
+        _stop_patches(patches)
+
+
 @pytest.mark.anyio
 async def test_ws_rate_limit_response_keeps_socket_open(app_with_ws):
     """When the rate limit is exceeded the server sends `rate_limited` but

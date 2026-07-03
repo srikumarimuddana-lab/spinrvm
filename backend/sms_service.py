@@ -4,6 +4,8 @@ Supports Twilio for production SMS delivery with console fallback for developmen
 Credentials are read from DB settings (passed in by caller), not env vars.
 """
 
+import asyncio
+
 from loguru import logger
 
 try:
@@ -33,10 +35,16 @@ async def send_sms(
     try:
         from twilio.rest import Client
 
-        client = Client(twilio_sid, twilio_token)
-        sms = client.messages.create(body=message, from_=twilio_from, to=to_phone)
-        logger.info(f"SMS sent to {masked} via Twilio (SID: {sms.sid})")
-        return {"success": True, "provider": "twilio", "sid": sms.sid}
+        def _send() -> str:
+            # Twilio's REST client is synchronous; run it in the default
+            # threadpool so the HTTP round-trip doesn't block the event loop
+            # (SOS fires several of these at once).
+            client = Client(twilio_sid, twilio_token)
+            return client.messages.create(body=message, from_=twilio_from, to=to_phone).sid
+
+        sid = await asyncio.to_thread(_send)
+        logger.info(f"SMS sent to {masked} via Twilio (SID: {sid})")
+        return {"success": True, "provider": "twilio", "sid": sid}
     except Exception as e:
         logger.error(f"Failed to send SMS to {masked}: {e}")
         return {"success": False, "provider": "twilio", "error": str(e)}

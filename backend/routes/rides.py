@@ -2826,20 +2826,9 @@ async def create_ride(
     )
 
     ride_data = ride.dict()
-    # Snap the pickup to the nearest drivable road so the driver can always reach
-    # it — the rider may have dropped the pin inside a mall/building. Best-effort:
-    # the rider's exact pin (pickup_lat/lng) is untouched; on failure pickup_nav
-    # stays NULL and readers fall back to pickup_lat/lng.
-    try:
-        try:
-            from ..utils.route_distance import snap_to_road
-        except ImportError:
-            from utils.route_distance import snap_to_road  # type: ignore
-        _snapped = await snap_to_road(body.pickup_lat, body.pickup_lng)
-        if _snapped:
-            ride_data["pickup_nav_lat"], ride_data["pickup_nav_lng"] = _snapped
-    except Exception:
-        logger.warning("pickup snap_to_road failed; using original pin", exc_info=True)
+    # Pickup road-snap (pickup_nav_*) happens in _prep_and_dispatch after the
+    # insert — the Roads API round-trip was blocking the booking response.
+    # Readers fall back to pickup_lat/lng while pickup_nav_* is NULL.
     if body.corporate_account_id:
         ride_data["corporate_account_id"] = body.corporate_account_id
     if _corp_member_id:
@@ -3181,51 +3170,34 @@ async def create_ride(
         except Exception as _exc:  # pragma: no cover - best effort
             logger.warning(f"create_ride: admin broadcast failed: {_exc}")
 
-    # Server-side planned_route_polyline computation.
-    # If the rider-app didn't send one (race between booking tap and
-    # Directions finishing, or no Maps key on client), compute it here
-    # using the Google Directions API before dispatch so every offer
-    # carries a road-following polyline instead of falling back to the
-    # dashed straight-line in the driver-app.
-    _existing_poly = fresh_ride.get("planned_route_polyline")
-    if not _existing_poly or (isinstance(_existing_poly, list) and len(_existing_poly) < 2):
-        try:
-            _s = await get_app_settings()
-            _maps_key = (_s or {}).get("google_maps_api_key", "")
-            if _maps_key:
-                _computed = await _fetch_directions_polyline(
-                    fresh_ride["pickup_lat"],
-                    fresh_ride["pickup_lng"],
-                    fresh_ride["dropoff_lat"],
-                    fresh_ride["dropoff_lng"],
-                    _maps_key,
-                    waypoints=body.stops or [],
-                )
-                if _computed:
-                    await db_supabase.update_ride(ride.id, {"planned_route_polyline": _computed})
-                    fresh_ride["planned_route_polyline"] = _computed
-                    logger.info(
-                        "create_ride: server-computed polyline (%d pts) stored for ride %s",
-                        len(_computed),
-                        ride.id,
-                    )
-        except Exception as _poly_err:
-            logger.warning("create_ride: polyline computation failed (non-fatal): %s", _poly_err)
-
-    # Match driver — pass the fresh ride through so the dispatch path
-    # doesn't re-fetch the row we just inserted.
+    # Booking-latency fix: the pickup road-snap, the server-side Directions
+    # polyline, and the entire matching pipeline (driver scan, Redis
+    # presence, ETA matrix, offer inserts, per-driver quest reads) used to
+    # run inline here, so the rider's booking request blocked on all of it
+    # (multiple seconds against a <2s dispatch SLA). They now run in
+    # _prep_and_dispatch as a background task; the rider gets the inserted
+    # ride back immediately and learns about assignment via the
+    # ride_status_changed WS event — the same path scheduled rides and
+    # offer-timeout re-dispatch already use.
     #
-    # CR-1: skip immediate dispatch for deferred scheduled rides. They stay
-    # in SCHEDULED until scheduled_ride_dispatcher_loop transitions them to
-    # SEARCHING at their scheduled_time. Dispatching here would route a real
-    # driver to a pickup that is hours or days away.
-    if not _is_deferred_schedule:
-        await match_driver_to_ride(ride.id, ride=fresh_ride)
-    else:
+    # CR-1: deferred scheduled rides still skip dispatch (the scheduler loop
+    # dispatches at scheduled_time); the task still prepares nav + polyline
+    # so the eventual offers carry a road-following route.
+    if _is_deferred_schedule:
         logger.info(
             f"create_ride: ride {ride.id} scheduled for {body.scheduled_time} — "
             "parked in 'scheduled', deferring dispatch to scheduler loop"
         )
+    asyncio.create_task(
+        _prep_and_dispatch(
+            ride.id,
+            fresh_ride,
+            pickup_lat=body.pickup_lat,
+            pickup_lng=body.pickup_lng,
+            stops=body.stops or [],
+            dispatch=not _is_deferred_schedule,
+        )
+    )
 
     # Dispatch may have set driver_id / status; read the current state
     # for the response. Skipping this extra fetch would mean the rider
@@ -3256,6 +3228,78 @@ async def create_ride(
         updated_ride["promo_error"] = fresh_ride["promo_error"]
 
     return serialize_doc(updated_ride)
+
+
+async def _prep_and_dispatch(
+    ride_id: str,
+    fresh_ride: dict,
+    *,
+    pickup_lat: float,
+    pickup_lng: float,
+    stops: list,
+    dispatch: bool,
+) -> None:
+    """Post-booking pipeline: pickup road-snap → server polyline → dispatch.
+
+    Runs as a background task so the booking response never blocks on the
+    Roads API, Directions, or the matching pipeline. ``dispatch=False``
+    (deferred scheduled rides) still prepares nav/polyline but leaves
+    dispatch to the scheduler loop. Dispatch failures surface loudly —
+    ride_search_timeout and the stuck-ride sweeper remain the safety nets
+    for a ride stranded in 'searching'.
+    """
+    try:
+        # Pickup snap: best-effort; the rider's exact pin (pickup_lat/lng) is
+        # untouched, and readers fall back to it while pickup_nav_* is NULL.
+        try:
+            try:
+                from ..utils.route_distance import snap_to_road
+            except ImportError:
+                from utils.route_distance import snap_to_road  # type: ignore
+            _snapped = await snap_to_road(pickup_lat, pickup_lng)
+            if _snapped:
+                await db_supabase.update_ride(ride_id, {"pickup_nav_lat": _snapped[0], "pickup_nav_lng": _snapped[1]})
+                fresh_ride["pickup_nav_lat"], fresh_ride["pickup_nav_lng"] = _snapped
+        except Exception:
+            logger.warning("pickup snap_to_road failed; using original pin", exc_info=True)
+
+        # Server-side planned_route_polyline: only when the rider-app didn't
+        # send one (race between booking tap and Directions finishing, or no
+        # Maps key on client) — every offer should carry a road-following
+        # polyline instead of the dashed straight-line driver-app fallback.
+        _existing_poly = fresh_ride.get("planned_route_polyline")
+        if not _existing_poly or (isinstance(_existing_poly, list) and len(_existing_poly) < 2):
+            try:
+                _s = await get_app_settings()
+                _maps_key = (_s or {}).get("google_maps_api_key", "")
+                if _maps_key:
+                    _computed = await _fetch_directions_polyline(
+                        fresh_ride["pickup_lat"],
+                        fresh_ride["pickup_lng"],
+                        fresh_ride["dropoff_lat"],
+                        fresh_ride["dropoff_lng"],
+                        _maps_key,
+                        waypoints=stops,
+                    )
+                    if _computed:
+                        await db_supabase.update_ride(ride_id, {"planned_route_polyline": _computed})
+                        fresh_ride["planned_route_polyline"] = _computed
+                        logger.info(
+                            "create_ride: server-computed polyline (%d pts) stored for ride %s",
+                            len(_computed),
+                            ride_id,
+                        )
+            except Exception as _poly_err:
+                logger.warning("create_ride: polyline computation failed (non-fatal): %s", _poly_err)
+
+        if dispatch:
+            # Pass the fresh ride through so the dispatch path doesn't
+            # re-fetch the row we just inserted.
+            await match_driver_to_ride(ride_id, ride=fresh_ride)
+    except Exception:
+        # A failure here strands the ride in 'searching' with no offers —
+        # dispatch-domain errors must never vanish into a dropped task.
+        logger.error(f"[DISPATCH] post-booking pipeline failed for ride {ride_id}", exc_info=True)
 
 
 from fastapi import Request  # noqa: E402
@@ -3740,14 +3784,20 @@ async def get_ride(
         ride["fare_locked"] = False
     ride["actual_duration_minutes"] = _actual_duration_minutes(ride)
 
-    # Enrich with incentive claims and cancellation fee for this ride
+    # Enrich with incentive claims and cancellation fee for this ride.
+    # run_sync is mandatory here: a bare .execute() is a synchronous HTTP
+    # round-trip that freezes the event loop — and with it every concurrent
+    # request on this replica — for the full Supabase latency.
     try:
-        _claims = (
-            db_supabase.supabase.table("ride_incentive_claims")
-            .select("bonus_amount, incentive_id")
-            .eq("ride_id", ride_id)
-            .execute()
-        ).data or []
+        _claims_res = await db_supabase.run_sync(
+            lambda: (
+                db_supabase.supabase.table("ride_incentive_claims")
+                .select("bonus_amount, incentive_id")
+                .eq("ride_id", ride_id)
+                .execute()
+            )
+        )
+        _claims = _claims_res.data or []
         _incentive_total = sum(float(c.get("bonus_amount") or 0) for c in _claims)
         ride["incentive_amount"] = round(_incentive_total, 2)
     except Exception:
@@ -4159,7 +4209,13 @@ async def process_payment(
                     ride_id,
                     _snap_err,
                 )
-        email_sent = await send_ride_receipt(ride, current_user["id"], tip_rounded)
+        # Receipt email backgrounded off the payment path (<1s settlement
+        # SLA): send_ride_receipt logs and swallows its own failures, and no
+        # client surface reads the delivery outcome. email_sent now means
+        # "queued" (field kept for API-shape compatibility; the explicit
+        # resend endpoint still awaits delivery and reports it honestly).
+        asyncio.create_task(send_ride_receipt(ride, current_user["id"], tip_rounded))
+        email_sent = True
     return {
         "success": True,
         "charged_amount": _money_str(result.charged_amount),
@@ -5212,18 +5268,29 @@ async def trigger_emergency(
             f"{location_text} Call them or emergency services immediately."
         )
 
-        for contact in contacts:
-            phone = contact.get("phone", "")
-            if not phone:
-                continue
-            result = await send_sms(
-                phone,
-                sms_body,
-                twilio_sid=(sms_settings.get("twilio_account_sid", "") if sms_settings else ""),
-                twilio_token=(sms_settings.get("twilio_auth_token", "") if sms_settings else ""),
-                twilio_from=(sms_settings.get("twilio_from_number", "") if sms_settings else ""),
-            )
-            if result.get("success"):
+        # Send all contact SMS concurrently. Serial sends stacked up to five
+        # Twilio round-trips on the SOS response; gather cuts that to one.
+        # Deliberately awaited (not fire-and-forget): the response's
+        # contacts_notified count must reflect what actually happened —
+        # this is a safety flow, never claim delivery that wasn't attempted.
+        _sms_targets = [c for c in contacts if c.get("phone")]
+        _sms_results = await asyncio.gather(
+            *(
+                send_sms(
+                    c["phone"],
+                    sms_body,
+                    twilio_sid=(sms_settings.get("twilio_account_sid", "") if sms_settings else ""),
+                    twilio_token=(sms_settings.get("twilio_auth_token", "") if sms_settings else ""),
+                    twilio_from=(sms_settings.get("twilio_from_number", "") if sms_settings else ""),
+                )
+                for c in _sms_targets
+            ),
+            return_exceptions=True,
+        )
+        for contact, result in zip(_sms_targets, _sms_results, strict=False):
+            if isinstance(result, BaseException):
+                logger.error(f"SOS SMS failed for contact {contact.get('id')}: {result}")
+            elif result.get("success"):
                 contacts_notified += 1
             else:
                 logger.error(f"SOS SMS failed for contact {contact.get('id')}: {result.get('error')}")
@@ -5474,7 +5541,17 @@ async def cancel_scheduled_ride(
     request: Request = None,
     current_user: dict = Depends(get_current_user),
 ):
-    """Cancel a scheduled ride."""
+    """Cancel a scheduled ride.
+
+    Only the pre-dispatch ``scheduled`` state is handled here, behind an
+    atomic status-filtered claim. ``is_scheduled`` stays True after the
+    dispatch loop flips the ride live, so an id-only cancel here would
+    overwrite a searching/accepted/in_progress ride with no driver release,
+    no insurance-period transition, no fee, and no WS event. Once dispatched
+    the ride is a normal active ride — delegate to cancel_ride_rider, which
+    owns the atomic pre-trip claim and full cleanup (and 409s once the trip
+    is in_progress).
+    """
     ride = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows(
             "rides",
@@ -5495,22 +5572,77 @@ async def cancel_scheduled_ride(
             message_key=ErrorKeys.RIDE_ALREADY_CANCELLED,
         )
 
-    _now = datetime.now(timezone.utc)
-    _base = {
-        "status": RideStatus.CANCELLED,
-        "cancelled_at": _now,
-        "cancellation_reason": "Cancelled by rider (scheduled)",
-        "updated_at": _now,
-    }
-    try:
-        await db_supabase.update_ride(
-            ride_id,
-            {**_base, "cancelled_by": "rider", "cancellation_type": "rider_cancel"},
-        )
-    except Exception as _col_exc:
-        logger.warning(f"[SCHED-CANCEL] attribution write failed ({_col_exc}); retrying minimal")
-        await db_supabase.update_ride(ride_id, _base)
-    return {"success": True}
+    if ride.get("status") == RideStatus.SCHEDULED:
+        _now = datetime.now(timezone.utc)
+        _base = {
+            "status": RideStatus.CANCELLED,
+            "cancelled_at": _now,
+            "cancellation_reason": "Cancelled by rider (scheduled)",
+            "updated_at": _now,
+        }
+        _claim_filter = {
+            "id": ride_id,
+            "rider_id": current_user["id"],
+            "status": RideStatus.SCHEDULED,
+        }
+        try:
+            claimed = await db_supabase.update_one(
+                "rides",
+                _claim_filter,
+                {**_base, "cancelled_by": "rider", "cancellation_type": "rider_cancel"},
+            )
+        except Exception as _col_exc:
+            # Only a genuine missing-attribution-column error (migration 38
+            # not applied yet) may fall back to the minimal payload. Anything
+            # else is a real DB failure and must surface, not be retried as a
+            # routine schema mismatch. The column-missing text lives in
+            # details['original'] / __cause__, not str(_col_exc).
+            _details_attr = getattr(_col_exc, "details", None)
+            _detail = str(_details_attr.get("original") or "") if isinstance(_details_attr, dict) else ""
+            _cause_text = str(getattr(_col_exc, "__cause__", "") or "")
+            _combined = f"{_col_exc} {_detail} {_cause_text}".lower()
+            if not any(col in _combined for col in ("cancelled_by", "cancellation_type", "pgrst204")):
+                raise
+            logger.warning(
+                f"[SCHED-CANCEL] attribution column(s) missing; retrying minimal. original={_detail or _col_exc}"
+            )
+            claimed = await db_supabase.update_one("rides", _claim_filter, _base)
+        if claimed is not None:
+            # Pre-dispatch there is no driver, offer, or card hold to unwind;
+            # notify the rider's own devices and any watching admin console.
+            await manager.send_personal_message(
+                {"type": "ride_cancelled", "ride_id": ride_id, "reason": "rider_cancelled"},
+                f"rider_{current_user['id']}",
+            )
+            await manager.broadcast_ride_status(
+                ride_id,
+                RideStatus.CANCELLED,
+                rider_id=current_user["id"],
+                reason="rider_cancelled",
+                is_scheduled=True,
+            )
+            return {"success": True}
+        # Zero rows: the dispatch loop (or a concurrent cancel) won the race
+        # since the read above. Re-read and fall through to the live-ride
+        # path so the outcome matches the ride's real state.
+        ride = await db_supabase.get_ride(ride_id)
+        if not ride or ride.get("status") in RideStatus.terminal_statuses():
+            raise SpinrException(
+                message="Ride is already completed or cancelled",
+                error_code=ErrorCode.RIDE_ALREADY_CANCELLED,
+                status_code=400,
+                message_key=ErrorKeys.RIDE_ALREADY_CANCELLED,
+            )
+
+    # Dispatched (searching → driver_arrived): full rider-cancel path —
+    # atomic pre-trip claim (409 once in_progress), cancellation fee,
+    # driver + batch-offer release, period-1 insurance transition, WS fan-out.
+    return await cancel_ride_rider(
+        ride_id,
+        reason="Cancelled by rider (scheduled)",
+        request=request,
+        current_user=current_user,
+    )
 
 
 @api_router.post("/{ride_id}/simulate-arrival")

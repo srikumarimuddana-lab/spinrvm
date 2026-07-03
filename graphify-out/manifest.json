@@ -11915,8 +11915,8 @@
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\migrations\\202_admin_media_storage_buckets.sql": {
-    "mtime": 1782958648.0887601,
-    "ast_hash": "20532c8bdaa4b86af30fb8f98c2d8862",
+    "mtime": 1783013184.185145,
+    "ast_hash": "c68ef4f320889691c2f3e04900942ad5",
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\migrations\\20_quests.sql": {
@@ -12540,8 +12540,8 @@
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\routes\\drivers.py": {
-    "mtime": 1782873768.875926,
-    "ast_hash": "3ea7da78aebd267ff64005550d6ecde3",
+    "mtime": 1783022716.2872512,
+    "ast_hash": "8bf5ed49a42c4645535f932c6fb0eb88",
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\routes\\faqs.py": {
@@ -12620,8 +12620,8 @@
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\routes\\rides.py": {
-    "mtime": 1782782695.3816006,
-    "ast_hash": "7c38a8ae25c0d3484554161cd5dac377",
+    "mtime": 1783015137.0698848,
+    "ast_hash": "757dee096e0ee40346175c9844e372ff",
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\routes\\safety.py": {
@@ -12660,8 +12660,8 @@
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\routes\\websocket.py": {
-    "mtime": 1782683802.7654078,
-    "ast_hash": "26b5bdb389b5e4dae9151739e51ac7f2",
+    "mtime": 1783015241.6905344,
+    "ast_hash": "9a0fff4f62b62daf7439e41e0dac3151",
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\routes\\__init__.py": {
@@ -13820,8 +13820,8 @@
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\tests\\test_p2_scheduled_rides.py": {
-    "mtime": 1778195734.6002393,
-    "ast_hash": "16a0709fddd9ae23ed8a091db0c428eb",
+    "mtime": 1783022851.7081487,
+    "ast_hash": "3409a5eb98983e1fdb9b605ba695783d",
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\tests\\test_p2_sos.py": {
@@ -14160,7 +14160,7 @@
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\tests\\test_stripe_reconcile.py": {
-    "mtime": 1782958507.209521,
+    "mtime": 1783013183.6321342,
     "ast_hash": "16a52597e0793b9f89b5b05437b5bb8d",
     "semantic_hash": ""
   },
@@ -14265,8 +14265,8 @@
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\tests\\test_websocket_auth.py": {
-    "mtime": 1778195734.6124034,
-    "ast_hash": "c86934721e1b0b889d4434269cdbd2b6",
+    "mtime": 1783022920.89024,
+    "ast_hash": "0bd121808182cb3df5237aaf704efd71",
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\tests\\test_websocket_auth_ack.py": {
@@ -14585,8 +14585,8 @@
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\utils\\payment_retry.py": {
-    "mtime": 1782056029.4331045,
-    "ast_hash": "d20c19323d8d08588858eb7354f66de5",
+    "mtime": 1783013183.2263029,
+    "ast_hash": "cc9000938b71bb51665bb0f0c3973970",
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\utils\\pii.py": {
@@ -14710,8 +14710,8 @@
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\utils\\stripe_charge.py": {
-    "mtime": 1782056029.4351041,
-    "ast_hash": "474ec5891024ee9d70f5d7d41d05feb4",
+    "mtime": 1783013183.2283008,
+    "ast_hash": "2198f8a327a81c0dbe15f262eb8a38e7",
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\utils\\stripe_config.py": {
@@ -14720,7 +14720,7 @@
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\utils\\stripe_reconcile.py": {
-    "mtime": 1782958507.209521,
+    "mtime": 1783013183.6331394,
     "ast_hash": "afb4b0413d782d9059dcff17e4b0e6ac",
     "semantic_hash": ""
   },
@@ -14890,8 +14890,8 @@
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\driver-app\\tsconfig.json": {
-    "mtime": 1782959148.6778812,
-    "ast_hash": "44a513a42513bdef85f8e45fda500341",
+    "mtime": 1783013184.3346653,
+    "ast_hash": "f088ffbe7e3a864936467b9657221a5a",
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\driver-app\\vercel.json": {
@@ -15350,8 +15350,8 @@
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\driver-app\\plugins\\withFirebaseNonModularHeaders.js": {
-    "mtime": 1782873769.0827918,
-    "ast_hash": "90713e6da8da2fe82f02802547799cd5",
+    "mtime": 1783013184.8166642,
+    "ast_hash": "661cf525d0acf0a7440a2957dc1f6cb9",
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\driver-app\\plugins\\withForceCompileSdk.js": {
@@ -15945,8 +15945,8 @@
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\rider-app\\tsconfig.json": {
-    "mtime": 1782959138.9469912,
-    "ast_hash": "f7abecdda52876173b00fa52b58712f9",
+    "mtime": 1783013184.3366878,
+    "ast_hash": "3465f4a29f4a5a4b5b10aecba7df570d",
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\rider-app\\vercel.json": {
@@ -16085,8 +16085,8 @@
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\rider-app\\app\\ride-details.tsx": {
-    "mtime": 1782265337.510943,
-    "ast_hash": "3a00cc4519d1e4c1a90cc480dbab15bf",
+    "mtime": 1783013183.4583097,
+    "ast_hash": "7cd5caa2f21aaf7726cf39e032cc50c7",
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\rider-app\\app\\ride-in-progress.tsx": {
@@ -16095,8 +16095,8 @@
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\rider-app\\app\\ride-options.tsx": {
-    "mtime": 1782958942.6055655,
-    "ast_hash": "53acaa589466e92bee05c98a4a33f4d3",
+    "mtime": 1783013184.2676656,
+    "ast_hash": "3be9fb9fdc91d1c71363edccb987e3c7",
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\rider-app\\app\\ride-status.tsx": {
@@ -16390,8 +16390,8 @@
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\rider-app\\plugins\\withFirebaseNonModularHeaders.js": {
-    "mtime": 1782873769.0847783,
-    "ast_hash": "90713e6da8da2fe82f02802547799cd5",
+    "mtime": 1783013184.818665,
+    "ast_hash": "661cf525d0acf0a7440a2957dc1f6cb9",
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\rider-app\\plugins\\withForceCompileSdk.js": {
@@ -16765,8 +16765,8 @@
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\shared\\package.json": {
-    "mtime": 1782959064.8393455,
-    "ast_hash": "657256c50ac91323730c3fb49fbe0ad4",
+    "mtime": 1783013184.337667,
+    "ast_hash": "e509633980cb02ce3e2103cf8b9a86c3",
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\shared\\tsconfig.build.json": {
@@ -16870,8 +16870,8 @@
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\shared\\components\\CarMarker.tsx": {
-    "mtime": 1782959052.0084696,
-    "ast_hash": "412e6e29487726f7366f69b8e4e4db0b",
+    "mtime": 1783013184.4036672,
+    "ast_hash": "152647ce18ded60b1f287d168646ef45",
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\shared\\components\\CustomAlert.tsx": {
@@ -16970,8 +16970,8 @@
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\shared\\store\\vehicleTypeStore.ts": {
-    "mtime": 1782959059.496938,
-    "ast_hash": "8f7888d80c029b67fed98338479736d1",
+    "mtime": 1783013184.4046757,
+    "ast_hash": "413a35aab5159c1782b2edcac0a2a73f",
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\shared\\theme\\index.ts": {
@@ -17980,8 +17980,8 @@
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\docs\\STORAGE_BUCKETS.md": {
-    "mtime": 1782958657.43934,
-    "ast_hash": "e1148a500ebe7a1e950b1211cf871de4",
+    "mtime": 1783013184.1841452,
+    "ast_hash": "7b429693b8f3155131bc86d0a3d76299",
     "semantic_hash": ""
   },
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\services\\README.md": {
@@ -19427,6 +19427,21 @@
   "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\driver-app\\assets\\sounds\\ride_offer.mp3": {
     "mtime": 1782350343.7594855,
     "ast_hash": "03b58c187a9b70b5e96ebdf9c6fca407",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\migrations\\203_corporate_rpc_security_definer.sql": {
+    "mtime": 1783015285.8533812,
+    "ast_hash": "33f8d82006ffe1fb278343a83a4e6004",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\tests\\test_cancellation_fee_card_charge.py": {
+    "mtime": 1783013183.2223008,
+    "ast_hash": "4ab68bb49220fdbd16095f321846c34e",
+    "semantic_hash": ""
+  },
+  "C:\\Users\\swarn\\Documents\\Project\\spinrvm2\\backend\\tests\\test_go_online_availability.py": {
+    "mtime": 1783022941.681223,
+    "ast_hash": "e69869b5d992ab01d6e845b9f68402b1",
     "semantic_hash": ""
   }
 }

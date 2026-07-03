@@ -1,3 +1,4 @@
+import asyncio
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, Optional
 
@@ -217,10 +218,14 @@ async def create_payment_intent(
             idempotency_key = f"ride-{body.ride_id}-{current_user['id']}-{amount}"
         else:
             idempotency_key = f"intent-{current_user['id']}-{int(_time.time() // 60)}"
-        intent = stripe.PaymentIntent.create(
-            **intent_params,
-            api_key=stripe_secret,
-            idempotency_key=idempotency_key,
+        # Sync Stripe SDK: threadpool so the round-trip doesn't block the
+        # event loop (idempotency key makes retries safe).
+        intent = await asyncio.to_thread(
+            lambda: stripe.PaymentIntent.create(
+                **intent_params,
+                api_key=stripe_secret,
+                idempotency_key=idempotency_key,
+            )
         )
 
         # 3-D Secure / SCA happy-path: PaymentIntent succeeded at the API
@@ -402,7 +407,9 @@ async def confirm_payment(
     # never reach the old success-shaped fallback — a missing processor already
     # raised 503 before the claim.
     try:
-        intent = stripe.PaymentIntent.retrieve(payment_intent_id, api_key=stripe_secret)
+        intent = await asyncio.to_thread(
+            lambda: stripe.PaymentIntent.retrieve(payment_intent_id, api_key=stripe_secret)
+        )
 
         if intent.metadata.get("user_id") != str(current_user["id"]):
             raise HTTPException(status_code=403, detail="Not authorized to confirm this payment")
@@ -925,14 +932,16 @@ async def create_payment_sheet(
         else:
             idempotency_key = f"ps-{current_user['id']}-{int(_time.time() // 60)}"
 
-        intent = stripe.PaymentIntent.create(
-            amount=amount_cents,
-            currency="cad",
-            customer=customer_id,
-            automatic_payment_methods={"enabled": True},
-            metadata={"user_id": current_user["id"], "ride_id": body.ride_id or ""},
-            api_key=stripe_secret,
-            idempotency_key=idempotency_key,
+        intent = await asyncio.to_thread(
+            lambda: stripe.PaymentIntent.create(
+                amount=amount_cents,
+                currency="cad",
+                customer=customer_id,
+                automatic_payment_methods={"enabled": True},
+                metadata={"user_id": current_user["id"], "ride_id": body.ride_id or ""},
+                api_key=stripe_secret,
+                idempotency_key=idempotency_key,
+            )
         )
 
         return {

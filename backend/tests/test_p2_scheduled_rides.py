@@ -11,9 +11,13 @@ inside a DST gap (e.g. 02:30 America/Toronto on spring-forward night) when
 scheduled_timezone is provided (zoneinfo round-trip guard).
 
 These tests pin:
-  - get_scheduled_rides returns rides list (including the cursor-list path)
-  - cancel_scheduled_ride updates status to "cancelled"; only-owner guard;
-    non-scheduled ride → 404; already-cancelled → 400
+  - get_scheduled_rides returns the rider's upcoming rides (get_rows filtered
+    on rider_id + is_scheduled, terminal statuses excluded)
+  - cancel_scheduled_ride (C1): pre-dispatch rides are cancelled via an
+    atomic status-filtered claim (never an id-only write); dispatched rides
+    delegate to cancel_ride_rider (full cleanup path); in_progress can never
+    be cancelled here; only-owner guard; non-scheduled ride → 404;
+    already-cancelled → 400
   - DST boundary: UTC-stored scheduled_time round-trips correctly (E14 happy path)
   - DST gap: booking a non-existent local time is rejected with a ValidationError
 
@@ -24,7 +28,7 @@ Run:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -45,16 +49,6 @@ def _scheduled_ride(status: str = "searching", **extra) -> dict:
     }
 
 
-class _SimpleCursor:
-    """Minimal cursor stub — mirrors the pattern used in other P2 tests."""
-
-    def __init__(self, items):
-        self._items = items
-
-    async def to_list(self, length=None):
-        return self._items
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # GET /rides/scheduled
 # ─────────────────────────────────────────────────────────────────────────────
@@ -72,22 +66,23 @@ class TestGetScheduledRides:
         from backend.routes import rides as rides_mod
 
         rides = [_scheduled_ride(), _scheduled_ride(id="ride-002")]
-        cursor = _SimpleCursor(rides)
 
-        with patch("backend.routes.rides.db_supabase.get_rides_for_user", MagicMock(return_value=cursor)):
+        with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=rides)) as get_rows:
             result = await rides_mod.get_scheduled_rides(
                 current_user={"id": RIDER_ID},
             )
 
         assert isinstance(result, list)
         assert len(result) == 2
+        table, filters = get_rows.await_args.args[:2]
+        assert table == "rides"
+        assert filters["rider_id"] == RIDER_ID
+        assert filters["is_scheduled"] is True
 
     async def test_returns_empty_list_when_no_scheduled_rides(self):
         from backend.routes import rides as rides_mod
 
-        cursor = _SimpleCursor([])
-
-        with patch("backend.routes.rides.db_supabase.get_rides_for_user", MagicMock(return_value=cursor)):
+        with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])):
             result = await rides_mod.get_scheduled_rides(
                 current_user={"id": RIDER_ID},
             )
@@ -108,17 +103,24 @@ class TestCancelScheduledRide:
     Code under test: backend/routes/rides.py::cancel_scheduled_ride (~line 1933).
     """
 
-    async def test_cancel_sets_status_cancelled(self):
+    async def test_cancel_predispatch_uses_atomic_claim(self):
+        """A still-'scheduled' ride is cancelled via an atomic status-filtered
+        update_one claim (C1) — never an id-only write that could clobber a
+        ride the dispatch loop has already taken live."""
         from backend.routes import rides as rides_mod
 
-        ride = _scheduled_ride()
-        updates = []
+        ride = _scheduled_ride(status="scheduled")
+        claim_calls = []
+
+        async def _update_one(table, filters, update):
+            claim_calls.append((table, filters, update))
+            return {**ride, **update}
 
         with (
             patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[ride])),
-            patch(
-                "backend.routes.rides.db_supabase.update_ride", AsyncMock(side_effect=lambda rid, d: updates.append(d))
-            ),
+            patch("backend.routes.rides.db_supabase.update_one", AsyncMock(side_effect=_update_one)),
+            patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides.manager.broadcast_ride_status", AsyncMock()) as ws_broadcast,
         ):
             result = await rides_mod.cancel_scheduled_ride(
                 ride_id=RIDE_ID,
@@ -126,8 +128,103 @@ class TestCancelScheduledRide:
             )
 
         assert result["success"] is True
-        assert updates, "Ride was not updated"
-        assert updates[0]["status"] == "cancelled"
+        assert claim_calls, "Ride was not updated"
+        table, filters, update = claim_calls[0]
+        assert table == "rides"
+        # TOCTOU guard: the write must be filtered to the pre-dispatch state
+        # and the owner, not an id-only update.
+        assert filters.get("status") == "scheduled"
+        assert filters.get("rider_id") == RIDER_ID
+        assert update["status"] == "cancelled"
+        # Every state change emits a WS event (CLAUDE.md invariant).
+        ws_broadcast.assert_awaited_once()
+
+    async def test_cancel_dispatched_ride_delegates_to_full_cancel_path(self):
+        """Once the dispatch loop flips the ride live (is_scheduled stays
+        True), cancel must run through cancel_ride_rider — atomic pre-trip
+        claim, fee, driver release, insurance period, WS — never a bare
+        status write (C1)."""
+        from backend.routes import rides as rides_mod
+
+        ride = _scheduled_ride(status="searching")
+        delegate = AsyncMock(return_value={"success": True, "cancellation_fee": 0})
+
+        with (
+            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[ride])),
+            patch("backend.routes.rides.db_supabase.update_one", AsyncMock()) as update_one,
+            patch("backend.routes.rides.db_supabase.update_ride", AsyncMock()) as update_ride,
+            patch.object(rides_mod, "cancel_ride_rider", delegate),
+        ):
+            result = await rides_mod.cancel_scheduled_ride(
+                ride_id=RIDE_ID,
+                current_user={"id": RIDER_ID},
+            )
+
+        assert result["success"] is True
+        delegate.assert_awaited_once()
+        assert delegate.await_args.args[0] == RIDE_ID
+        # The scheduled-cancel endpoint itself must not write anything for a
+        # dispatched ride — all writes belong to the delegated path.
+        update_one.assert_not_awaited()
+        update_ride.assert_not_awaited()
+
+    async def test_cancel_predispatch_claim_race_falls_through_to_live_path(self):
+        """If the dispatch loop flips scheduled → searching between the read
+        and the claim, the zero-row claim must NOT report success on a stale
+        state — it re-reads and delegates to the full cancel path (C1)."""
+        from backend.routes import rides as rides_mod
+
+        ride = _scheduled_ride(status="scheduled")
+        live_ride = _scheduled_ride(status="searching")
+        delegate = AsyncMock(return_value={"success": True, "cancellation_fee": 0})
+
+        with (
+            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[ride])),
+            patch("backend.routes.rides.db_supabase.update_one", AsyncMock(return_value=None)),
+            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=live_ride)),
+            patch.object(rides_mod, "cancel_ride_rider", delegate),
+        ):
+            result = await rides_mod.cancel_scheduled_ride(
+                ride_id=RIDE_ID,
+                current_user={"id": RIDER_ID},
+            )
+
+        assert result["success"] is True
+        delegate.assert_awaited_once()
+
+    async def test_cancel_in_progress_scheduled_ride_is_rejected(self):
+        """An in_progress ride that started life as scheduled can NEVER be
+        cancelled through this endpoint, and nothing is written (C1 — the old
+        id-only write cancelled live trips underneath the driver)."""
+        from fastapi import HTTPException
+
+        from backend.routes import rides as rides_mod
+        from backend.utils.error_handling import SpinrException
+
+        ride = _scheduled_ride(status="in_progress")
+
+        async def _find_one(table, filters=None, **kwargs):
+            # _require_ride_in_state_rider: the status-filtered lookup misses
+            # (in_progress is not cancellable), the ownership lookup hits → 409.
+            if filters and "status" in filters:
+                return None
+            return ride
+
+        with (
+            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[ride])),
+            patch("backend.routes.rides.db_supabase.find_one", AsyncMock(side_effect=_find_one)),
+            patch("backend.routes.rides.db_supabase.update_one", AsyncMock()) as update_one,
+            patch("backend.routes.rides.db_supabase.update_ride", AsyncMock()) as update_ride,
+        ):
+            with pytest.raises((HTTPException, SpinrException)) as exc_info:
+                await rides_mod.cancel_scheduled_ride(
+                    ride_id=RIDE_ID,
+                    current_user={"id": RIDER_ID},
+                )
+
+        assert exc_info.value.status_code == 409
+        update_one.assert_not_awaited()
+        update_ride.assert_not_awaited()
 
     async def test_non_owner_or_non_scheduled_returns_404(self):
         """Ride lookup includes rider_id + is_scheduled filter;

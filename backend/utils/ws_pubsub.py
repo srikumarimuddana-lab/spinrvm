@@ -155,8 +155,17 @@ class _WSPubSub:
         logger.info(f"WS pub/sub started (backend={scheme}://…, channel={CHANNEL})")
         return True
 
-    async def publish(self, client_id: str, message: dict) -> bool:
+    async def publish(self, client_id: str, message: dict, *, durable: bool = True) -> bool:
         """Publish a unicast message to the shared channel.
+
+        ``durable=False`` skips the seq/outbox bookkeeping: ephemeral
+        messages (1 Hz driver-location fan-out) were filling the 50-entry
+        per-client replay ring in under a minute, evicting the durable ride
+        events (offers, ride_taken, status changes) that ``?last_seq``
+        reconnect recovery exists for. Non-durable messages are sent
+        unwrapped — the same shape clients already handle on the
+        Redis-outbox-failure path — and the next ping supersedes them
+        anyway, so replay would be pointless.
 
         Returns True if the message was handed to Redis; False means
         Redis is not active and the caller must deliver locally.
@@ -172,18 +181,19 @@ class _WSPubSub:
         # Sequence and buffer for reconnect replays (2 round-trips:
         # one INCR to get the seq, then a 3-op pipeline for the outbox).
         seq_message: Any = message
-        try:
-            seq = await self._redis.incr(f"spinr:ws:seq:{client_id}")
-            seq_message = {"seq": seq, "data": message}
-            outbox_key = f"spinr:ws:outbox:{client_id}"
-            pipe = self._redis.pipeline(transaction=False)
-            pipe.rpush(outbox_key, json.dumps(seq_message))
-            pipe.ltrim(outbox_key, -50, -1)
-            pipe.expire(outbox_key, 300)
-            await pipe.execute()
-        except Exception as e:
-            logger.error(f"WS pub/sub: outbox sequence failed for {client_id}: {e}")
-            seq_message = message
+        if durable:
+            try:
+                seq = await self._redis.incr(f"spinr:ws:seq:{client_id}")
+                seq_message = {"seq": seq, "data": message}
+                outbox_key = f"spinr:ws:outbox:{client_id}"
+                pipe = self._redis.pipeline(transaction=False)
+                pipe.rpush(outbox_key, json.dumps(seq_message))
+                pipe.ltrim(outbox_key, -50, -1)
+                pipe.expire(outbox_key, 300)
+                await pipe.execute()
+            except Exception as e:
+                logger.error(f"WS pub/sub: outbox sequence failed for {client_id}: {e}")
+                seq_message = message
 
         try:
             body = json.dumps({"kind": "unicast", "client_id": client_id, "message": seq_message})

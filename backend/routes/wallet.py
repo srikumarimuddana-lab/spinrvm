@@ -5,6 +5,7 @@ All balance mutations go through the ledger (wallet_transactions) so the
 audit trail is immutable.
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -189,25 +190,31 @@ async def top_up_wallet(
     idempotency_key = f"wallet-topup-{current_user['id']}-{int(_time.time() // 60)}"
 
     try:
-        ephemeral_key = stripe.EphemeralKey.create(
-            customer=stripe_customer_id,
-            stripe_version=stripe.api_version,
-            api_key=stripe_secret,
+        # Sync Stripe SDK: threadpool so these round-trips don't block the
+        # event loop (idempotency key makes the PI create retry-safe).
+        ephemeral_key = await asyncio.to_thread(
+            lambda: stripe.EphemeralKey.create(
+                customer=stripe_customer_id,
+                stripe_version=stripe.api_version,
+                api_key=stripe_secret,
+            )
         )
 
-        intent = stripe.PaymentIntent.create(
-            amount=amount_cents,
-            currency="cad",
-            customer=stripe_customer_id,
-            automatic_payment_methods={"enabled": True},
-            metadata={
-                "scope": "wallet_topup",
-                "user_id": current_user["id"],
-                "wallet_id": wallet["id"],
-                "amount_cad": _money_str(req.amount),
-            },
-            api_key=stripe_secret,
-            idempotency_key=idempotency_key,
+        intent = await asyncio.to_thread(
+            lambda: stripe.PaymentIntent.create(
+                amount=amount_cents,
+                currency="cad",
+                customer=stripe_customer_id,
+                automatic_payment_methods={"enabled": True},
+                metadata={
+                    "scope": "wallet_topup",
+                    "user_id": current_user["id"],
+                    "wallet_id": wallet["id"],
+                    "amount_cad": _money_str(req.amount),
+                },
+                api_key=stripe_secret,
+                idempotency_key=idempotency_key,
+            )
         )
 
         return {

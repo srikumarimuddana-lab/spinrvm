@@ -25,7 +25,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // 'fingerprint'/'appVersion' rejected by EAS CLI). Bump manually when
     // shipping native changes that break JS-bundle compatibility. Pre-launch
     // with no production users, OTA compatibility risk is zero.
-    runtimeVersion: '2.3.0', // bump from 2.2.0: adds react-native-webview (a new native module) for Stripe embedded onboarding + the Android CAMERA permission — old binaries lack both, so this JS must not reach them via OTA
+    runtimeVersion: '2.3.0', // bump from 2.2.0: adds react-native-webview (a new native module) for Stripe embedded onboarding + the Android CAMERA permission — old binaries lack both, so this JS must not reach them via OTA. The same bump also covers @iternio/react-native-auto-play + react-native-nitro-modules (Android Auto), which landed in the same merge.
     splash: {
         image: './assets/images/splash-blank.png',
         resizeMode: 'contain',

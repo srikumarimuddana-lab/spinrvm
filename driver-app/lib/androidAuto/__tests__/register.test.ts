@@ -279,3 +279,9 @@ it('never creates a template when no car is connected', () => {
   mockListeners.didConnect?.();
   expect(mockTemplates).toHaveLength(0);
 });
+
+// The missing-native-module degrade path is covered in register.degrade.test.ts:
+// it needs a THROWING @iternio mock as the hoisted module factory, and doing
+// that in this file via doMock/dontMock surgery leaves the module registry
+// without its baseline mock for any test appended later (order-dependent
+// breakage) — so it lives in its own file with its own registry.

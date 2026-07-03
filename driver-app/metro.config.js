@@ -52,6 +52,16 @@ config.resolver.blockList = [
   new RegExp(escapedSharedNM + '[\\\\/]react-is[\\\\/]'),
 ];
 
+// Disable Metro's package-"exports" resolution (default-ON since SDK 53).
+// With it on, @sentry/core resolves to its ESM build (build/esm/*), whose
+// module-namespace bindings are frozen under Hermes; Sentry's module-scope
+// writes to them throw "[runtime not ready]: TypeError: property is not
+// writable" and abort the app at launch (release-only; dev tolerates it).
+// Falling back to legacy main-field resolution loads Sentry's CJS build
+// (build/cjs/*) instead. Verified via bundle diff that @sentry/core is the ONLY
+// package whose resolution changes, so this is safe. See expo/expo#36589.
+config.resolver.unstable_enablePackageExports = false;
+
 // RN 0.85 moved some NativeComponent specs into src/private/specs_DEPRECATED/
 // using codegen types that Expo's Babel plugin can't parse. These codegen specs
 // return non-renderable objects under the New Architecture (Bridgeless) in

@@ -383,12 +383,102 @@ class TestStripeWebhookPaymentIntentSucceeded:
             patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
             patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
             patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch(
+                "backend.routes.webhooks.db_supabase.get_ride",
+                AsyncMock(return_value={"id": "ride_1", "grand_total": 18.50}),
+            ),
             patch("backend.routes.webhooks.db_supabase.update_ride", AsyncMock(return_value={"id": "ride_1"})),
             patch("backend.routes.webhooks.send_push_notification", AsyncMock()),
         ):
             result = asyncio.run(wh.stripe_webhook(request=self._mock_req()))
 
         assert result["received"] is True
+
+    def test_underpaid_intent_refused(self):
+        """SECURITY: a succeeded PI whose amount_received does not cover the
+        ride's grand_total must NOT mark the ride paid — mirrors the
+        /payments/confirm underpay guard. 200 (no Stripe retry), ride
+        untouched, processed_at left NULL."""
+        from backend.routes import webhooks as wh
+
+        # Ride owes $25.00 but the intent only captured $18.50.
+        event_obj, _ = self._make_event({"ride_id": "ride_1", "user_id": "user_1"}, amount_received=1850)
+
+        import stripe
+
+        mock_update = AsyncMock(return_value={"id": "ride_1"})
+        mock_processed = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", mock_processed),
+            patch(
+                "backend.routes.webhooks.db_supabase.get_ride",
+                AsyncMock(return_value={"id": "ride_1", "grand_total": 25.00}),
+            ),
+            patch("backend.routes.webhooks.db_supabase.update_ride", mock_update),
+            patch("backend.routes.webhooks.send_push_notification", AsyncMock()),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._mock_req()))
+
+        assert result.get("underpaid") is True
+        mock_update.assert_not_awaited()
+        mock_processed.assert_not_awaited()
+
+    def test_grand_total_none_falls_back_to_total_fare(self):
+        from backend.routes import webhooks as wh
+
+        event_obj, _ = self._make_event({"ride_id": "ride_1", "user_id": "user_1"}, amount_received=1850)
+
+        import stripe
+
+        mock_update = AsyncMock(return_value={"id": "ride_1"})
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch(
+                "backend.routes.webhooks.db_supabase.get_ride",
+                AsyncMock(return_value={"id": "ride_1", "grand_total": None, "total_fare": 18.50}),
+            ),
+            patch("backend.routes.webhooks.db_supabase.update_ride", mock_update),
+            patch("backend.routes.webhooks.send_push_notification", AsyncMock()),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._mock_req()))
+
+        assert result["received"] is True
+        mock_update.assert_awaited_once()
+
+    def test_ride_lookup_none_returns_500(self):
+        """get_ride returning None → 500 so Stripe retries (ride row may lag the PI)."""
+        from fastapi import HTTPException
+
+        from backend.routes import webhooks as wh
+
+        event_obj, _ = self._make_event({"ride_id": "ride_gone", "user_id": "user_1"})
+
+        import stripe
+
+        mock_update = AsyncMock()
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.get_ride", AsyncMock(return_value=None)),
+            patch("backend.routes.webhooks.db_supabase.update_ride", mock_update),
+            patch("backend.routes.webhooks.send_push_notification", AsyncMock()),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                asyncio.run(wh.stripe_webhook(request=self._mock_req()))
+
+        assert exc_info.value.status_code == 500
+        mock_update.assert_not_awaited()
 
     def test_corporate_topup_event(self):
         from backend.routes import webhooks as wh
@@ -432,9 +522,7 @@ class TestStripeWebhookPaymentIntentSucceeded:
 
         import stripe
 
-        mock_credit = AsyncMock(
-            return_value={"transaction_id": "txn_1", "balance_after": "50.00", "deduped": False}
-        )
+        mock_credit = AsyncMock(return_value={"transaction_id": "txn_1", "balance_after": "50.00", "deduped": False})
 
         with (
             patch("backend.routes.webhooks.get_app_settings", self._settings()),
@@ -846,6 +934,10 @@ class TestStripeWebhookRideNotFound:
             patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
             patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
             patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch(
+                "backend.routes.webhooks.db_supabase.get_ride",
+                AsyncMock(return_value={"id": "ride_missing", "grand_total": 10.00}),
+            ),
             # update_ride returns None → ride not found → handler must raise 500 so Stripe retries
             patch("backend.routes.webhooks.db_supabase.update_ride", AsyncMock(return_value=None)),
             patch("backend.routes.webhooks.send_push_notification", AsyncMock()),
@@ -884,6 +976,10 @@ class TestStripeWebhookPushNotificationFails:
             patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
             patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
             patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch(
+                "backend.routes.webhooks.db_supabase.get_ride",
+                AsyncMock(return_value={"id": "ride_1", "grand_total": 20.00}),
+            ),
             patch("backend.routes.webhooks.db_supabase.update_ride", AsyncMock(return_value={"id": "ride_1"})),
             # Push notification raises — should be swallowed
             patch("backend.routes.webhooks.send_push_notification", AsyncMock(side_effect=Exception("Firebase down"))),
@@ -1019,6 +1115,10 @@ class TestWebhookTimeoutDivergence:
             patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
             patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
             patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch(
+                "backend.routes.webhooks.db_supabase.get_ride",
+                AsyncMock(return_value={"id": "ride_stuck", "grand_total": 15.00, "payment_status": "processing"}),
+            ),
             patch("backend.routes.webhooks.db_supabase.update_ride", mock_update_ride),
             patch("backend.routes.webhooks.send_push_notification", AsyncMock()),
         ):

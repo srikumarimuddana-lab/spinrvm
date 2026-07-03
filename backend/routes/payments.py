@@ -21,6 +21,7 @@ try:
     from ..utils.idempotency import idempotent_endpoint
     from ..utils.money import dollars_to_cents
     from ..utils.rate_limiter import payment_action_limit
+    from ..utils.stripe_config import STRIPE_API_VERSION
 except ImportError:
     import db_supabase
     from core.config import settings as core_settings
@@ -36,6 +37,7 @@ except ImportError:
     from utils.idempotency import idempotent_endpoint
     from utils.money import dollars_to_cents
     from utils.rate_limiter import payment_action_limit
+    from utils.stripe_config import STRIPE_API_VERSION
 import logging
 
 import stripe
@@ -909,16 +911,16 @@ async def create_payment_sheet(
         amount_cents = dollars_to_cents(charge_amount)
 
         # EphemeralKey lets the PaymentSheet modal manage the customer's
-        # saved cards. api_version must match the version configured on the
-        # Stripe webhook endpoint in the dashboard. We pin it to the version
-        # bundled with the installed SDK (stripe.api_version) so it stays in
-        # sync automatically on SDK upgrades.
-        # Current bundled version: 2026-04-22.dahlia (stripe==15.1.0)
-        # ACTION REQUIRED on SDK upgrade: verify the Stripe dashboard webhook
-        # endpoint API version matches stripe.api_version after upgrading.
+        # saved cards. stripe_version must match the version configured on the
+        # Stripe webhook endpoint in the dashboard. Use the single pinned
+        # STRIPE_API_VERSION from utils/stripe_config — NOT stripe.api_version,
+        # which only equals the pin after configure_stripe() has run and
+        # otherwise silently falls back to the SDK's bundled version.
+        # ACTION REQUIRED when bumping STRIPE_API_VERSION: update the Stripe
+        # dashboard webhook endpoint API version to match.
         ephemeral_key = stripe.EphemeralKey.create(
             customer=customer_id,
-            stripe_version=stripe.api_version,
+            stripe_version=STRIPE_API_VERSION,
             api_key=stripe_secret,
         )
 

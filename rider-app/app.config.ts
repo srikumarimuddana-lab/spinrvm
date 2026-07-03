@@ -19,16 +19,21 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     newArchEnabled: true, // REQUIRED: react-native-reanimated 4 / react-native-worklets only run on the New Architecture (old arch crashed on first animated screen)
     updates: {
         url: 'https://u.expo.dev/8f1e4f60-720e-46b0-9b71-33c13d3af043',
-        // TEMPORARY DIAGNOSTIC (crash: expo.controller.errorRecoveryQueue SIGABRT,
-        // pre-splash, no JS frames — see build 4 TestFlight crash log). Default
-        // checkAutomatically is 'ON_LOAD', which makes the bridgeless AppController
-        // fetch+verify an OTA update synchronously before JS ever renders. If a bad
-        // bundle is/was published on the 'production' channel, that reconciliation
-        // can abort natively instead of falling back to the embedded bundle. Setting
-        // 'NEVER' rules this in/out: ship one build with this, if the crash
-        // disappears the root cause is a broken production-channel update, not
-        // native module init. Revert to 'ON_LOAD' (or remove the line) once confirmed.
-        checkAutomatically: 'NEVER',
+        // TEMPORARY DIAGNOSTIC — supersedes the earlier checkAutomatically:'NEVER'.
+        // The TestFlight crash is a SIGABRT on expo.controller.errorRecoveryQueue:
+        // expo-updates installs itself as the native RCTFatalExceptionHandler, so
+        // when a JS fatal fires at startup its ErrorRecovery pipeline runs and
+        // RE-RAISES the error as a native abort — before the JS-level crash trap
+        // in index.js can render the error on screen. checkAutomatically:'NEVER'
+        // only stops the update *check*; it leaves that fatal handler installed
+        // AND a previously-downloaded update could still launch. `enabled: false`
+        // removes expo-updates from the process entirely: the embedded (crash-trap)
+        // bundle is guaranteed to run, and its ErrorUtils handler gets a clean shot
+        // at any JS error. Two outcomes, both decisive:
+        //   - app now launches  → the crash WAS expo-updates (bad OTA / recovery)
+        //   - red error screen  → a JS startup error; screenshot reveals the message
+        // Revert (delete `enabled`, restore ON_LOAD default) once the cause is fixed.
+        enabled: false,
     },
     // Bare workflow requires a literal string runtimeVersion (policies like
     // 'fingerprint'/'appVersion' rejected by EAS CLI). Bump manually when

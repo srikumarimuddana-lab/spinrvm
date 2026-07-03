@@ -195,7 +195,16 @@ export function onForegroundMessage(handler: (message: RemoteMessage) => void) {
  */
 export function setBackgroundMessageHandler(handler: (message: RemoteMessage) => Promise<unknown> | void) {
   if (!messagingApi) return;
-  messagingApi.setBackgroundMessageHandler(messagingApi.getMessaging(), (msg) => handler(msg) ?? Promise.resolve());
+  // Called at module scope from app/_layout.tsx — this runs during initial
+  // bundle evaluation, BEFORE Sentry init and any error boundary. An unguarded
+  // throw here (e.g. getMessaging() when the native [DEFAULT] Firebase app
+  // failed to configure) aborts the entire app at launch in release builds.
+  // Degrade to no-background-push and log loudly instead.
+  try {
+    messagingApi.setBackgroundMessageHandler(messagingApi.getMessaging(), (msg) => handler(msg) ?? Promise.resolve());
+  } catch (e) {
+    console.error('[Firebase] setBackgroundMessageHandler failed — background push disabled:', e);
+  }
 }
 
 

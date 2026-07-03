@@ -575,7 +575,16 @@ async def stripe_webhook(request: Request):
                 # the claim first (no side effects have happened for this event)
                 # so Stripe's retry genuinely re-processes once the ride row is
                 # visible / the DB blip has passed.
-                await unclaim_stripe_event(event_id)
+                if not await unclaim_stripe_event(event_id):
+                    # Claim NOT released — Stripe's retry will be deduped and
+                    # this payment stays unlinked until an operator replays the
+                    # event. CRITICAL so the reconciliation alert fires.
+                    logger.critical(
+                        "Stripe event %s could not be unclaimed after ride lookup failure — "
+                        "retry path NOT restored; manual replay required for payment %s",
+                        event_id,
+                        payment_intent_id,
+                    )
                 raise HTTPException(status_code=500, detail="Ride lookup failed — Stripe will retry")
 
             # Owed = grand_total + stored tip (fallback total_fare + tip) —

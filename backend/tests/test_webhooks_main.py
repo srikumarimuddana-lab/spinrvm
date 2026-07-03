@@ -531,6 +531,38 @@ class TestStripeWebhookPaymentIntentSucceeded:
         mock_update.assert_not_awaited()
         mock_unclaim.assert_awaited_once_with("evt_test_1")
 
+    def test_ride_lookup_none_unclaim_failure_logs_critical(self, caplog):
+        """Codex P2 (PR #2023): when the unclaim itself fails, the retry path
+        was NOT restored — Stripe's redelivery will be deduped. The handler
+        must escalate (CRITICAL) so the reconciliation alert fires and an
+        operator replays the event."""
+        import logging as _logging
+
+        from fastapi import HTTPException
+
+        from backend.routes import webhooks as wh
+
+        event_obj, _ = self._make_event({"ride_id": "ride_gone", "user_id": "user_1"})
+
+        import stripe
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.unclaim_stripe_event", AsyncMock(return_value=False)),
+            patch("backend.routes.webhooks.db_supabase.get_ride", AsyncMock(return_value=None)),
+            patch("backend.routes.webhooks.db_supabase.update_ride", AsyncMock()),
+            patch("backend.routes.webhooks.send_push_notification", AsyncMock()),
+        ):
+            with caplog.at_level(_logging.CRITICAL, logger="backend.routes.webhooks"):
+                with pytest.raises(HTTPException) as exc_info:
+                    asyncio.run(wh.stripe_webhook(request=self._mock_req()))
+
+        assert exc_info.value.status_code == 500
+        assert any("could not be unclaimed" in r.message for r in caplog.records)
+
     def test_corporate_topup_event(self):
         from backend.routes import webhooks as wh
 

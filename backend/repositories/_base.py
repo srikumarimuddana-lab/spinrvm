@@ -189,6 +189,7 @@ async def run_sync(
     loop = asyncio.get_running_loop()
     backoffs = _BACKOFFS_BY_POLICY.get(retry_policy, _BACKOFFS_BY_POLICY["read"])
     last_exc: Exception | None = None
+    last_exc_transient = False
     _metric_inc("spinr_db_calls_total", {"policy": retry_policy})
 
     for attempt in range(len(backoffs) + 1):
@@ -218,6 +219,7 @@ async def run_sync(
             is_transient = (
                 is_conn_terminated or is_remote_disconnect or is_timeout or is_h2_stream_race or is_network_error
             )
+            last_exc_transient = is_transient
 
             if not is_transient:
                 break
@@ -259,7 +261,16 @@ async def run_sync(
 
             logger.error(f"Supabase transient failure ({exc_name}) exhausted retries: {exc}")
 
-    _breaker.record_failure()
+    if last_exc_transient:
+        _breaker.record_failure()
+    else:
+        # The server responded: application-level errors (duplicate keys,
+        # FK/CHECK violations, RLS denials, bad requests) prove connectivity
+        # is healthy and must NOT count against the breaker. Recording them
+        # as failures let the multi-replica duplicate-claim idempotency
+        # pattern (expected 23505 bursts, e.g. the daily onboarding-reminder
+        # scan) open the breaker and 503 the entire API.
+        _breaker.record_success()
     _metric_gauge(
         "spinr_db_circuit_state",
         1 if _breaker._state == "open" else (0.5 if _breaker._state == "half_open" else 0),

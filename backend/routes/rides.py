@@ -636,7 +636,11 @@ async def _dispatch_retry(ride_id: str, delay: int = 10, *, attempt: int = 1) ->
         logger.info(f"[DISPATCH] retry {attempt} for ride {ride_id}")
         await match_driver_to_ride(ride_id, ride=ride, attempt=attempt)
     except Exception as e:
+        # Keep the chain alive on transient failures (DB blip, Redis hiccup):
+        # ending it here would strand the ride in `searching` until the
+        # stuck-ride sweeper cancels it. The attempt cap above bounds this.
         logger.error(f"[DISPATCH] retry failed for {ride_id}: {e}", exc_info=True)
+        spawn(_dispatch_retry(ride_id, delay=delay, attempt=attempt + 1))
 
 
 async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, attempt: int = 0):
@@ -729,11 +733,24 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
     }
     if ride.get("requires_wav"):
         _dispatch_filter["is_wav"] = True
-    all_drivers = await db_supabase.get_rows(
-        "drivers",
-        _dispatch_filter,
-        limit=500,
-    )
+    try:
+        all_drivers = await db_supabase.get_rows(
+            "drivers",
+            _dispatch_filter,
+            limit=500,
+        )
+    except Exception:
+        # A transient Supabase failure here is NOT "no drivers". Letting it
+        # propagate ends the dispatch chain with no retry scheduled — the ride
+        # then sits in `searching` until the stuck-ride sweeper cancels it.
+        # Treat it like the empty-pool case: log loudly and retry; the attempt
+        # cap in _dispatch_retry still bounds the chain.
+        logger.error(
+            f"[DISPATCH] candidate fetch failed for ride {ride_id} — retrying in 10s (attempt {attempt})",
+            exc_info=True,
+        )
+        spawn(_dispatch_retry(ride_id, delay=10, attempt=attempt + 1))
+        return
 
     logger.info(
         f"[DISPATCH] candidate pool (pre-filter): {len(all_drivers)} drivers "

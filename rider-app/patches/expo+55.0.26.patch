@@ -43,6 +43,35 @@ index 1bc361f..f0a3324 100644
  }
  #else
  - (UIView *)viewWithModuleName:(NSString *)moduleName
+diff --git a/node_modules/expo/ios/AppDelegates/ExpoReactNativeFactory.mm b/node_modules/expo/ios/AppDelegates/ExpoReactNativeFactory.mm
+index 7dab148..6ca57f1 100644
+--- a/node_modules/expo/ios/AppDelegates/ExpoReactNativeFactory.mm
++++ b/node_modules/expo/ios/AppDelegates/ExpoReactNativeFactory.mm
+@@ -29,12 +29,19 @@
+ // [main thread]
+ - (void)hostDidStart:(nonnull RCTHost *)host
+ {
+-  // Setting the runtime delegate here doesn't feel right, but there is no other way
+-  // to capture the `host:didInitializeRuntime:` method call.
+-  // With the current API design we also depend that the runtime is initialized after the host started,
+-  // which isn't obvious, especially they are invoked on different threads.
+-  // Ideally if the current `RCTHostRuntimeDelegate` is part of `RCTHostDelegate`.
++  // spinr patch (expo+55.0.26): RN 0.84 merged `RCTHostRuntimeDelegate` into
++  // `RCTHostDelegate`, and RCTHost (0.85.2) now invokes
++  // `host:didInitializeRuntime:` on BOTH the host delegate and the runtime
++  // delegate. This factory is already the host delegate, so also assigning it
++  // as runtimeDelegate made the callback fire twice on the same Hermes
++  // runtime: the second prepareRuntime() re-defined the non-writable global
++  // `expo` object and Hermes aborted launch with
++  // "[runtime not ready]: TypeError: property is not writable".
++  // Upstream expo main keeps this assignment only for macOS (react-native-macos
++  // still lacks the merged delegate); mirror that here.
++#if TARGET_OS_OSX
+   host.runtimeDelegate = self;
++#endif
+ }
+ 
+ #pragma mark - RCTHostRuntimeDelegate
 diff --git a/node_modules/expo/ios/AppDelegates/ExpoReactNativeFactory.swift b/node_modules/expo/ios/AppDelegates/ExpoReactNativeFactory.swift
 index 925e0f9..dc0b0a5 100644
 --- a/node_modules/expo/ios/AppDelegates/ExpoReactNativeFactory.swift

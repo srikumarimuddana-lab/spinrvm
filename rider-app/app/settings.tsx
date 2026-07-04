@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal, FlatList,
 } from 'react-native';
@@ -11,6 +11,10 @@ import { showToast } from '../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import i18n, { useTranslation, useLanguageStore, LANGUAGES, type Language } from '../i18n';
+import {
+  useNotificationPreferences,
+  useUpdateNotificationPreferences,
+} from '@shared/hooks/queries';
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -26,6 +30,29 @@ export default function SettingsScreen() {
   const [showLangModal, setShowLangModal] = useState(false);
   const handleDarkModeToggle = (value: boolean) => {
     setTheme(value ? 'dark' : 'light');
+  };
+
+  // Real preference state lives server-side at /notifications/preferences —
+  // mirrors the driver app's wiring (driver-app/app/driver/settings.tsx).
+  const { data: notificationPrefs } = useNotificationPreferences();
+  const updatePreferences = useUpdateNotificationPreferences();
+
+  useEffect(() => {
+    const prefs: any = notificationPrefs;
+    if (prefs == null) return;
+    if (prefs.push_enabled != null) setPushEnabled(Boolean(prefs.push_enabled));
+    if (prefs.email_enabled != null) setEmailEnabled(Boolean(prefs.email_enabled));
+    if (prefs.sms_enabled != null) setSmsEnabled(Boolean(prefs.sms_enabled));
+  }, [notificationPrefs]);
+
+  const handleNotificationToggle = (key: string, setter: (v: boolean) => void) => (value: boolean) => {
+    setter(value);
+    updatePreferences.mutate({ [key]: value }, {
+      onError: () => {
+        setter(!value);
+        showToast(t('settings.prefNotSavedTitle'), t('settings.prefNotSavedMsg'), 'danger');
+      },
+    });
   };
 
   return (
@@ -44,13 +71,13 @@ export default function SettingsScreen() {
         <View style={styles.card}>
           <SettingToggle icon="notifications" iconColor="#F59E0B" iconBg="#FEF3C7"
             title={t('settings.push_notifications')} subtitle={t('settings.push_notifications_subtitle')}
-            value={pushEnabled} onToggle={setPushEnabled} />
+            value={pushEnabled} onToggle={handleNotificationToggle('push_enabled', setPushEnabled)} />
           <SettingToggle icon="mail" iconColor="#8B5CF6" iconBg="#EDE9FE"
             title={t('settings.email_notifications')} subtitle={t('settings.email_notifications_subtitle')}
-            value={emailEnabled} onToggle={setEmailEnabled} />
+            value={emailEnabled} onToggle={handleNotificationToggle('email_enabled', setEmailEnabled)} />
           <SettingToggle icon="chatbubble" iconColor="#10B981" iconBg="#ECFDF5"
             title={t('settings.sms_notifications')} subtitle={t('settings.sms_notifications_subtitle')}
-            value={smsEnabled} onToggle={setSmsEnabled} />
+            value={smsEnabled} onToggle={handleNotificationToggle('sms_enabled', setSmsEnabled)} />
         </View>
 
         {/* Appearance */}

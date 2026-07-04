@@ -1883,20 +1883,22 @@ async def compute_ride_estimates(
 
     polyline_task = spawn(_polyline_fetch()) if include_polyline else None
 
-    # Fetch nearby online+available drivers once. Order by went_online_at DESC
-    # so recently-toggled-online drivers fill the 200-row page first. Ghost
-    # drivers (is_available=True in DB but heartbeat expired) tend to carry
-    # stale went_online_at values and fall toward the tail, so they are less
-    # likely to crowd real drivers out of the cap before the presence filter
-    # below runs. This mitigates — but does not fully eliminate — the
-    # capped-page ghost leak; full elimination needs a geo-index (query by
-    # radius first) or a sweeper that writes is_available=False back on TTL
-    # expiry. Tracked as a follow-up.
+    # Fetch nearby online+available drivers once, geo-bounded to a box around
+    # the pickup (same dispatch_geo_bounds the dispatch path uses) so the
+    # 200-row cap applies to in-area drivers only — the rider's "X drivers"
+    # badge must be computed from the same pool dispatch would select from,
+    # not an arbitrary province-wide page. Order by went_online_at DESC so
+    # recently-toggled-online drivers fill the page first: ghost drivers
+    # (is_available=True in DB but heartbeat expired) tend to carry stale
+    # went_online_at values and fall toward the tail, so they are less likely
+    # to crowd real drivers out of the cap before the presence filter below.
     all_drivers = await db_supabase.get_rows(
         "drivers",
         {
             "is_online": True,
             "is_available": True,
+            # 10 km matches the exact haversine gate in the loop below.
+            "$and": dispatch_geo_bounds(body.pickup_lat, body.pickup_lng, 10.0),
         },
         order="went_online_at",
         desc=True,

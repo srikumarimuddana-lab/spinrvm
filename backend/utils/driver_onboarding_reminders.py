@@ -31,7 +31,7 @@ try:
         reminder_message,
         should_skip_driver,
     )
-    from ..utils.error_handling import DuplicateRecordError, db_error_text
+    from ..utils.error_handling import DuplicateRecordError, ServiceUnavailableException, db_error_text
 except ImportError:
     import db_supabase as db  # type: ignore
     from features import send_push_notification  # type: ignore
@@ -46,7 +46,11 @@ except ImportError:
         reminder_message,
         should_skip_driver,
     )
-    from utils.error_handling import DuplicateRecordError, db_error_text  # type: ignore
+    from utils.error_handling import (  # type: ignore
+        DuplicateRecordError,
+        ServiceUnavailableException,
+        db_error_text,
+    )
 
 
 logger = logging.getLogger(__name__)
@@ -96,6 +100,12 @@ async def _claim(driver_id: str, user_id: str, kind: str, local_date: str, now: 
         )
     except DuplicateRecordError:
         return None
+    except ServiceUnavailableException:
+        # Breaker-open / DB-down is systemic: every remaining claim in this
+        # scan will fail identically. Propagate so the scan aborts with ONE
+        # log line instead of a traceback per driver (2026-07-04 log storm);
+        # the window stays incomplete so the next tick retries.
+        raise
     except Exception as exc:
         # Already-claimed today is the expected, benign outcome of the daily
         # unique index (driver_id, reminder_type, local_date) — another replica,
@@ -190,6 +200,39 @@ async def check_driver_onboarding_reminders(now_utc: datetime | None = None) -> 
     # Any failed read below leaves scan_ok False so the window is NOT marked
     # completed — the next 15-min tick inside the same send hour retries.
     # Claims already written for earlier pages dedupe via DuplicateRecordError.
+    try:
+        scan_ok = await _scan_pages(areas, global_reqs, now, stats)
+    except ServiceUnavailableException as exc:
+        # Breaker-open / DB-down is systemic — _claim re-raises it so the
+        # scan aborts with one log line, not a traceback per driver.
+        logger.error("onboarding reminders: aborting scan, database unavailable: %s", exc)
+        scan_ok = False
+
+    if scan_ok:
+        _completed_windows.update(windows)
+    # Drop windows older than yesterday so the memo can't grow unbounded
+    # (ISO dates compare lexicographically).
+    cutoff = (now - timedelta(days=1)).date().isoformat()
+    _completed_windows.difference_update({w for w in _completed_windows if w.rsplit(":", 1)[1] < cutoff})
+
+    if stats["claims_attempted"]:
+        logger.info("onboarding reminders: %s", stats)
+    return stats
+
+
+async def _scan_pages(
+    areas: dict[str, dict[str, Any]],
+    global_reqs: list[dict[str, Any]],
+    now: datetime,
+    stats: dict[str, int],
+) -> bool:
+    """Page through drivers, attempting claims + pushes.
+
+    Returns scan_ok: False when any page read or per-row claim failed, so
+    the send window stays incomplete and the next tick retries.
+    ServiceUnavailableException propagates to the caller — systemic outage,
+    abort instead of iterating the remaining drivers.
+    """
     scan_ok = True
     offset = 0
     while True:
@@ -249,16 +292,7 @@ async def check_driver_onboarding_reminders(now_utc: datetime | None = None) -> 
             break
         offset += PAGE_SIZE
 
-    if scan_ok:
-        _completed_windows.update(windows)
-    # Drop windows older than yesterday so the memo can't grow unbounded
-    # (ISO dates compare lexicographically).
-    cutoff = (now - timedelta(days=1)).date().isoformat()
-    _completed_windows.difference_update({w for w in _completed_windows if w.rsplit(":", 1)[1] < cutoff})
-
-    if stats["claims_attempted"]:
-        logger.info("onboarding reminders: %s", stats)
-    return stats
+    return scan_ok
 
 
 async def driver_onboarding_reminder_loop() -> None:

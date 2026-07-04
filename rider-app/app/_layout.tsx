@@ -37,6 +37,9 @@ import BrandSplash from '../components/BrandSplash';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
 import { ThemeProvider, useTheme } from '@shared/theme/ThemeContext';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
+import { queryClient, asyncStoragePersister, QUERY_CACHE_BUSTER } from '@shared/api/queryClient';
 import { captureMessage, setUser, initErrorReporting, wrapApp } from '@shared/services/errorReporting';
 import Analytics from '@shared/analytics';
 import {
@@ -687,16 +690,29 @@ function RootLayout() {
 
   if (!fontsLoaded || fontError || !isAuthInitialized || !isLocationInitialized || !minSplashElapsed) {
     return (
-      <ErrorBoundary>
-        <BrandSplash onLayout={onLoadingLayout} />
-      </ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <ErrorBoundary>
+          <BrandSplash onLayout={onLoadingLayout} />
+        </ErrorBoundary>
+      </QueryClientProvider>
     );
   }
 
   return (
-    <ThemeProvider>
-      <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} stripePublishableKey={stripePublishableKey} trackBaseUrl={trackBaseUrl} wsState={wsState} confirmSheet={confirmSheet} setConfirmSheet={setConfirmSheet} />
-    </ThemeProvider>
+    <PersistQueryClientProvider
+      client={queryClient}
+      persistOptions={{
+        persister: asyncStoragePersister,
+        // 24h max age — anything older is dropped on rehydrate, so the
+        // app can't boot with a week-old notification-preferences value on screen.
+        maxAge: 24 * 60 * 60 * 1000,
+        buster: QUERY_CACHE_BUSTER,
+      }}
+    >
+      <ThemeProvider>
+        <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} stripePublishableKey={stripePublishableKey} trackBaseUrl={trackBaseUrl} wsState={wsState} confirmSheet={confirmSheet} setConfirmSheet={setConfirmSheet} />
+      </ThemeProvider>
+    </PersistQueryClientProvider>
   );
 }
 

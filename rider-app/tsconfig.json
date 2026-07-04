@@ -78,6 +78,12 @@
       ],
       "@react-native-firebase/app-check": [
         "./node_modules/@react-native-firebase/app-check"
+      ],
+      "@tanstack/react-query": [
+        "./node_modules/@tanstack/react-query"
+      ],
+      "@tanstack/query-async-storage-persister": [
+        "./node_modules/@tanstack/query-async-storage-persister"
       ]
     }
   },

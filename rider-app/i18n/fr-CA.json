@@ -133,7 +133,9 @@
     "saved_places_subtitle": "Domicile, travail, favoris",
     "about": "À propos",
     "tos": "Conditions d'utilisation",
-    "privacy_policy": "Politique de confidentialité"
+    "privacy_policy": "Politique de confidentialité",
+    "prefNotSavedTitle": "Préférence non enregistrée",
+    "prefNotSavedMsg": "Impossible de joindre le serveur. Votre réglage a été rétabli — veuillez réessayer."
   },
   "sos": {
     "button_label": "SOS d\u2019urgence",

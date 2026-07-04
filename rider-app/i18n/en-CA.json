@@ -133,7 +133,9 @@
     "saved_places_subtitle": "Home, work, favourites",
     "about": "About",
     "tos": "Terms of Service",
-    "privacy_policy": "Privacy Policy"
+    "privacy_policy": "Privacy Policy",
+    "prefNotSavedTitle": "Preference not saved",
+    "prefNotSavedMsg": "Could not reach the server. Your setting has been reverted — please try again."
   },
   "sos": {
     "button_label": "Emergency SOS",

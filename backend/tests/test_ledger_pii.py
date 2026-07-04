@@ -82,9 +82,7 @@ async def test_wallet_transactions_metadata_is_city_only():
         patch(ps + "db_supabase.insert_one", insert_mock),
         patch(ps + "db_supabase.update_ride", AsyncMock(return_value=None)),
     ):
-        result = await payment_service.settle_wallet(
-            _ride(), RIDE_ID, RIDER_ID, Decimal("27.00"), Decimal("2.00")
-        )
+        result = await payment_service.settle_wallet(_ride(), RIDE_ID, RIDER_ID, Decimal("27.00"), Decimal("2.00"))
 
     assert result.success is True
     wallet_tx = [c for c in insert_mock.call_args_list if c.args[0] == "wallet_transactions"]
@@ -102,3 +100,16 @@ def test_area_only_never_returns_a_street():
     # Nothing usable → None, never a street fragment.
     assert area_only("1742 Main Street") is None
     assert area_only(None) is None
+
+
+def test_area_only_geocoder_and_saint_city_formats():
+    """Regression: geocoder addresses end in ', Canada' (must not collapse the
+    city to the country), and 'St.'-prefixed cities must not be treated as a
+    street suffix and erased."""
+    from backend.utils.pii import area_only
+
+    assert area_only("1742 Main St, Saskatoon, SK, Canada") == "Saskatoon"
+    assert area_only("St. Albert, SK") == "St. Albert"
+    assert area_only("St. John's, NL, Canada") == "St. John's"
+    # Street suffixes still stripped when they are genuine streets.
+    assert area_only("Main St, Saskatoon") == "Saskatoon"

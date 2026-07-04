@@ -330,6 +330,27 @@ def mock_redis(monkeypatch: pytest.MonkeyPatch) -> dict:
 
 
 @pytest.fixture(autouse=True)
+def _ensure_main_thread_event_loop() -> Generator[None, None, None]:
+    """Heal the main-thread event loop before every test.
+
+    pytest-asyncio 0.23 (asyncio_mode=auto) resolves some async tests —
+    notably class-based ones — through a legacy wrapper that calls
+    ``asyncio.get_event_loop()``. Any earlier test that closes the ambient
+    loop without setting a new one (``asyncio.run`` does exactly this)
+    makes that raise ``RuntimeError: There is no current event loop``,
+    failing later tests order-dependently. Setting a fresh loop only when
+    none exists mirrors what pytest-asyncio's own ``event_loop`` fixture
+    would do, without touching a healthy loop.
+    """
+    policy = asyncio.get_event_loop_policy()
+    try:
+        policy.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(policy.new_event_loop())
+    yield
+
+
+@pytest.fixture(autouse=True)
 def patch_external_dependencies(
     mock_supabase_client: MagicMock, mock_firebase_admin: MagicMock, mock_sms_service: MagicMock
 ) -> None:

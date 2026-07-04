@@ -55,7 +55,10 @@ def _scheduled_ride(status: str = "searching", **extra) -> dict:
 
 
 @pytest.mark.e2e
-@pytest.mark.asyncio
+# No explicit async marker: asyncio_mode=auto handles these. An explicit
+# @pytest.mark.asyncio (or anyio) on a class routes through pytest-asyncio
+# 0.23's legacy get_event_loop() wrapper, which blows up order-dependently
+# once any earlier test leaves the main thread without a set event loop.
 class TestGetScheduledRides:
     """Pins get_scheduled_rides: returns rider's upcoming scheduled rides.
 
@@ -96,7 +99,6 @@ class TestGetScheduledRides:
 
 
 @pytest.mark.e2e
-@pytest.mark.asyncio
 class TestCancelScheduledRide:
     """Pins cancel_scheduled_ride: owner guard, status update, guards.
 

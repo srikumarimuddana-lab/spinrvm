@@ -18,6 +18,7 @@ Run as:
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -120,6 +121,12 @@ class TestDriverCancelNotifiesRider:
                 )
 
         assert result == {"success": True}
+
+        # The rider push is fire-and-forget (asyncio.create_task) so it must
+        # not hold up the cancel response; yield the loop a few ticks so the
+        # backgrounded task runs before we assert on it.
+        for _ in range(3):
+            await asyncio.sleep(0)
 
         rider_channels = [c for c, _ in ws_calls if f"rider_{RIDER_ID}" in str(c)]
         assert rider_channels, (

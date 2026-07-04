@@ -18,6 +18,7 @@ class FakeReminderDB:
         *,
         duplicate_claims: bool = False,
         raw_duplicate_claims: bool = False,
+        service_unavailable_claims: bool = False,
         docs: list[dict] | None = None,
     ):
         self.duplicate_claims = duplicate_claims
@@ -25,12 +26,15 @@ class FakeReminderDB:
         # carries the unique-violation (not the typed DuplicateRecordError) —
         # the dual-import-class-mismatch case the text fallback must still skip.
         self.raw_duplicate_claims = raw_duplicate_claims
+        # Simulate the DB circuit breaker rejecting the claim insert.
+        self.service_unavailable_claims = service_unavailable_claims
         self.docs = docs or []
         self.claims: list[dict] = []
         self.updates: list[tuple[dict, dict]] = []
         self.tables_read: list[str] = []
         self.failing_tables: set[str] = set()
         self.failing_claims = False
+        self.claim_attempts = 0
         self.driver = {
             "id": "driver-1",
             "user_id": "user-1",
@@ -67,6 +71,11 @@ class FakeReminderDB:
 
     async def insert_one(self, table: str, doc: dict):
         assert table == "driver_onboarding_reminder_log"
+        self.claim_attempts += 1
+        if self.service_unavailable_claims:
+            from utils.driver_onboarding_reminders import ServiceUnavailableException
+
+            raise ServiceUnavailableException("database")
         if self.failing_claims:
             raise RuntimeError("simulated claim insert outage")
         if self.duplicate_claims:
@@ -75,8 +84,7 @@ class FakeReminderDB:
             raise DuplicateRecordError("duplicate daily reminder")
         if self.raw_duplicate_claims:
             raise RuntimeError(
-                'duplicate key value violates unique constraint '
-                '"driver_onboarding_reminder_log_daily_uidx"'
+                'duplicate key value violates unique constraint "driver_onboarding_reminder_log_daily_uidx"'
             )
         row = {**doc, "id": f"log-{len(self.claims) + 1}"}
         self.claims.append(row)
@@ -151,6 +159,33 @@ async def test_raw_unique_violation_treated_as_already_claimed(monkeypatch):
     assert fake_db.claims == []
     assert fake_db.updates == []
     send_push.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_service_unavailable_aborts_scan_on_first_claim(monkeypatch):
+    """Breaker-open / DB-down is systemic: the scan must abort on the FIRST
+    failing claim with one log line — not attempt every remaining driver and
+    kind (2026-07-04: one traceback per driver, hundreds per tick) — and the
+    window must stay incomplete so the next tick retries."""
+    from utils import driver_onboarding_reminders as reminders
+
+    fake_db = FakeReminderDB(service_unavailable_claims=True)
+    send_push = AsyncMock(return_value=True)
+    monkeypatch.setattr(reminders, "db", fake_db)
+    monkeypatch.setattr(reminders, "send_push_notification", send_push)
+
+    stats = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 5, tzinfo=timezone.utc))
+
+    # The driver needs BOTH reminders, but only the first claim is attempted.
+    assert fake_db.claim_attempts == 1
+    assert stats["claims_attempted"] == 1
+    assert stats["pushes_delivered"] == 0
+    send_push.assert_not_awaited()
+
+    # Window incomplete → a later tick in the same hour rescans and delivers.
+    fake_db.service_unavailable_claims = False
+    second = await reminders.check_driver_onboarding_reminders(datetime(2026, 6, 9, 14, 20, tzinfo=timezone.utc))
+    assert second == {"drivers_scanned": 1, "claims_attempted": 2, "pushes_delivered": 2}
 
 
 @pytest.mark.asyncio

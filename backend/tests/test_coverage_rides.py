@@ -1955,9 +1955,16 @@ async def test_cancel_scheduled_ride_already_cancelled():
 async def test_cancel_scheduled_ride_success():
     from backend.routes.rides import cancel_scheduled_ride
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
-        mock_db.get_rows = AsyncMock(return_value=[_ride(status="scheduled")])
-        mock_db.update_ride = AsyncMock()
+    ride = _ride(status="scheduled")
+    with (
+        patch("backend.routes.rides.db_supabase") as mock_db,
+        patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
+        patch("backend.routes.rides.manager.broadcast_ride_status", AsyncMock()),
+    ):
+        mock_db.get_rows = AsyncMock(return_value=[ride])
+        # C1: pre-dispatch cancel goes through an atomic status-filtered
+        # update_one claim, not an id-only update_ride write.
+        mock_db.update_one = AsyncMock(return_value={**ride, "status": "cancelled"})
         result = await cancel_scheduled_ride(ride_id=_RIDE_ID, current_user=_USER)
     assert result["success"] is True
 

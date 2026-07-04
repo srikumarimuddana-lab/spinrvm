@@ -618,6 +618,18 @@ async def create_demo_drivers(vehicle_type_id: str, lat: float, lng: float):
 # can't leave a ride re-dispatching (and re-querying drivers) forever.
 _MAX_DISPATCH_ATTEMPTS = 30
 
+# Escalating re-arm delays for dispatch ERRORS (DB blip mid-attempt): back off
+# 10s → 30s → 60s so a struggling dependency isn't hammered at a fixed cadence.
+# The healthy no-drivers re-poll stays at 10s — that path is waiting for supply,
+# not for a dependency to recover.
+_DISPATCH_ERROR_BACKOFF = (10, 30, 60)
+
+
+def _dispatch_error_delay(attempt: int) -> int:
+    """Delay before re-arming after a FAILED dispatch attempt (not the
+    no-drivers poll): 10s, 30s, then 60s for every later attempt."""
+    return _DISPATCH_ERROR_BACKOFF[min(max(attempt, 0), len(_DISPATCH_ERROR_BACKOFF) - 1)]
+
 
 async def _dispatch_retry(ride_id: str, delay: int = 10, *, attempt: int = 1) -> None:
     """Re-attempt dispatch after a delay. Stops if the ride left searching or the
@@ -638,13 +650,49 @@ async def _dispatch_retry(ride_id: str, delay: int = 10, *, attempt: int = 1) ->
     except Exception as e:
         # Keep the chain alive on transient failures (DB blip, Redis hiccup):
         # ending it here would strand the ride in `searching` until the
-        # stuck-ride sweeper cancels it. The attempt cap above bounds this.
+        # stuck-ride sweeper cancels it. The attempt cap above bounds this;
+        # the escalating delay stops a broad outage becoming a retry storm.
         logger.error(f"[DISPATCH] retry failed for {ride_id}: {e}", exc_info=True)
-        spawn(_dispatch_retry(ride_id, delay=delay, attempt=attempt + 1))
+        spawn(_dispatch_retry(ride_id, delay=_dispatch_error_delay(attempt), attempt=attempt + 1))
 
 
 async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, attempt: int = 0):
-    """Dispatch a driver for ``ride_id``.
+    """Dispatch a driver for ``ride_id`` — recovery shell.
+
+    Runs one dispatch attempt and, if it raises, re-arms ``_dispatch_retry``
+    with escalating backoff (10s/30s/60s, bounded by the attempt cap). This is
+    the single recovery chokepoint for EVERY dispatch entry point — booking,
+    offer-timeout re-dispatch, and scheduled dispatch — so a transient failure
+    anywhere in an attempt can't strand the ride in ``searching`` until the
+    stuck-ride sweeper cancels it. Callers that catch exceptions around this
+    function will never see one; recovery is owned here.
+
+    If offers from this attempt are already pending when the failure hits
+    (e.g. a WS/notify error after the ride_offers insert), no retry is armed —
+    the offer-timeout handlers own progression from there, and re-arming would
+    over-offer beyond max_offers.
+    """
+    try:
+        await _match_driver_to_ride_attempt(ride_id, ride=ride, attempt=attempt)
+    except Exception:
+        logger.error(
+            f"[DISPATCH] attempt {attempt} failed mid-dispatch for ride {ride_id} — re-arming retry with backoff",
+            exc_info=True,
+        )
+        try:
+            _pending = await db_supabase.get_rows("ride_offers", {"ride_id": ride_id, "status": "pending"}, limit=1)
+        except Exception:
+            # Can't tell — prefer re-arming: _dispatch_retry re-checks ride
+            # status and claimed drivers are excluded, so a duplicate arm is
+            # near-idempotent, while NOT arming risks a stranded ride.
+            _pending = []
+        if not _pending:
+            spawn(_dispatch_retry(ride_id, delay=_dispatch_error_delay(attempt), attempt=attempt + 1))
+
+
+async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = None, attempt: int = 0):
+    """One dispatch attempt for ``ride_id`` (raises on mid-attempt failure;
+    the ``match_driver_to_ride`` shell owns recovery).
 
     ``ride`` may be passed when the caller already has the fresh row
     (e.g. straight after ``insert_ride``) so we skip a redundant
@@ -739,24 +787,14 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
     }
     if ride.get("requires_wav"):
         _dispatch_filter["is_wav"] = True
-    try:
-        all_drivers = await db_supabase.get_rows(
-            "drivers",
-            _dispatch_filter,
-            limit=500,
-        )
-    except Exception:
-        # A transient Supabase failure here is NOT "no drivers". Letting it
-        # propagate ends the dispatch chain with no retry scheduled — the ride
-        # then sits in `searching` until the stuck-ride sweeper cancels it.
-        # Treat it like the empty-pool case: log loudly and retry; the attempt
-        # cap in _dispatch_retry still bounds the chain.
-        logger.error(
-            f"[DISPATCH] candidate fetch failed for ride {ride_id} — retrying in 10s (attempt {attempt})",
-            exc_info=True,
-        )
-        spawn(_dispatch_retry(ride_id, delay=10, attempt=attempt + 1))
-        return
+    # A transient Supabase failure here is NOT "no drivers" — it raises to the
+    # match_driver_to_ride recovery shell, which re-arms the retry chain with
+    # backoff instead of letting the ride strand until the sweeper cancels it.
+    all_drivers = await db_supabase.get_rows(
+        "drivers",
+        _dispatch_filter,
+        limit=500,
+    )
 
     logger.info(
         f"[DISPATCH] candidate pool (pre-filter): {len(all_drivers)} drivers "
@@ -1146,7 +1184,10 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
         logger.error(f"[DISPATCH] ride_offers insert failed: {e}", exc_info=True)
         for d, _ in claimed_drivers:
             await db_supabase.set_driver_available(d["id"], True)
-        return
+        # Re-raise after releasing the claims: no offers exist, so the
+        # recovery shell re-arms the retry chain instead of stranding the
+        # ride in `searching` (the old `return` armed nothing).
+        raise
     _metric_inc("spinr_dispatch_offer_sent_total", by=len(offer_rows))
 
     # ── Parallel enrichment (shared across all drivers) ───────────

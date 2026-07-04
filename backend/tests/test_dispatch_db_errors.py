@@ -113,6 +113,59 @@ async def test_dispatch_retry_rearms_after_failed_attempt():
         call.args[0].close()
 
 
+def test_dispatch_error_delay_scales_10_30_60():
+    """Error re-arms back off 10s → 30s → 60s (then stay at 60s)."""
+    from backend.routes import rides as rides_mod
+
+    assert rides_mod._dispatch_error_delay(0) == 10
+    assert rides_mod._dispatch_error_delay(1) == 30
+    assert rides_mod._dispatch_error_delay(2) == 60
+    assert rides_mod._dispatch_error_delay(10) == 60
+    assert rides_mod._dispatch_error_delay(-1) == 10  # defensive clamp
+
+
+@pytest.mark.asyncio
+async def test_post_fetch_failure_rearms_with_backoff():
+    """A failure ANYWHERE in a dispatch attempt (not just the candidate fetch)
+    must re-arm the retry chain — this covers the offer-timeout and scheduled
+    entry points whose own except blocks only log."""
+    from backend.routes import rides as rides_mod
+
+    retry_mock = MagicMock(return_value=iter(()))  # placate spawn(coro)
+    spawn_mock = MagicMock()
+
+    with (
+        patch.object(rides_mod, "_match_driver_to_ride_attempt", AsyncMock(side_effect=RuntimeError("mid-claim boom"))),
+        patch.object(rides_mod, "_dispatch_retry", retry_mock),
+        patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])),  # no pending offers
+        patch("backend.routes.rides.spawn", spawn_mock),
+    ):
+        await rides_mod.match_driver_to_ride(ride_id=_RIDE["id"], attempt=1)
+
+    retry_mock.assert_called_once_with(_RIDE["id"], delay=30, attempt=2)
+    assert spawn_mock.called
+
+
+@pytest.mark.asyncio
+async def test_no_rearm_when_offers_already_pending():
+    """If this attempt's offers are already out, the offer-timeout handlers own
+    progression — re-arming would over-offer beyond max_offers."""
+    from backend.routes import rides as rides_mod
+
+    spawn_mock = MagicMock()
+
+    with (
+        patch.object(
+            rides_mod, "_match_driver_to_ride_attempt", AsyncMock(side_effect=RuntimeError("post-offer boom"))
+        ),
+        patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[{"id": "offer_1"}])),
+        patch("backend.routes.rides.spawn", spawn_mock),
+    ):
+        await rides_mod.match_driver_to_ride(ride_id=_RIDE["id"], attempt=0)
+
+    spawn_mock.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_dispatch_retry_respects_attempt_cap():
     """The re-arm must not defeat the attempt cap — past it, the chain stops."""

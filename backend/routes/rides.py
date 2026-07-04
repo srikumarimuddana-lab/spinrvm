@@ -32,6 +32,7 @@ try:
     from ..schemas import CreateRideRequest, DriverPublicView, Ride, RideRatingRequest
     from ..services import DispatchService
     from ..services.dispatch_service import (
+        dispatch_geo_bounds,
         filter_and_rank_drivers,
         rank_by_eta_with_acceptance,
     )
@@ -77,6 +78,7 @@ except ImportError:
     from schemas import CreateRideRequest, DriverPublicView, Ride, RideRatingRequest
     from services.dispatch_service import (
         DispatchService,
+        dispatch_geo_bounds,
         filter_and_rank_drivers,
         rank_by_eta_with_acceptance,
     )
@@ -708,12 +710,22 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
     # their is_online flag was left on (e.g. status flipped server-side after
     # they toggled online). Without these, accept_ride blocks them at accept time
     # but they still receive — and can see — offers they can never fulfil.
+    # Bounding-box pre-filter (index: idx_drivers_dispatch_geo, migration 206).
+    # Without it the LIMIT 500 below is an *arbitrary* 500 of all online
+    # drivers province-wide — above 500 candidates the nearest driver can sit
+    # in row 501 and dispatch reports a false "no drivers". The box is a
+    # superset of the search radius; filter_and_rank_drivers stays the exact
+    # haversine gate. Anchored on the same nav-snapped pickup that
+    # filter_and_rank_drivers ranks against.
+    _box_lat = ride["pickup_nav_lat"] if ride.get("pickup_nav_lat") is not None else ride["pickup_lat"]
+    _box_lng = ride["pickup_nav_lng"] if ride.get("pickup_nav_lng") is not None else ride["pickup_lng"]
     _dispatch_filter: dict = {
         "is_online": True,
         "is_available": True,
         "is_verified": True,
         "status": "active",
         "vehicle_type_id": ride["vehicle_type_id"],
+        "$and": dispatch_geo_bounds(_box_lat, _box_lng, search_radius),
     }
     if ride.get("requires_wav"):
         _dispatch_filter["is_wav"] = True
@@ -725,8 +737,15 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
 
     logger.info(
         f"[DISPATCH] candidate pool (pre-filter): {len(all_drivers)} drivers "
-        f"matching vehicle_type_id + online + available"
+        f"matching vehicle_type_id + online + available within {search_radius}km box"
     )
+    if len(all_drivers) >= 500:
+        # Even inside the box the pool is truncated — the dropped rows are
+        # in-radius candidates, so ranking quality degrades. Surface it.
+        logger.warning(
+            f"[DISPATCH] candidate pool hit the 500-row cap inside the "
+            f"{search_radius}km box for ride {ride_id} — pool truncated"
+        )
 
     # Presence filter: only dispatch to drivers whose WebSocket heartbeat is
     # still alive (Uber/Lyft-style). Matches the filter applied in the rider-
@@ -930,6 +949,9 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
                     "is_verified": True,
                     "status": "active",
                     "vehicle_type_id": {"$in": _casc_to},
+                    # Same geo box as the primary pool — an un-bounded LIMIT 500
+                    # here has the identical row-501 false-negative failure mode.
+                    "$and": dispatch_geo_bounds(_box_lat, _box_lng, search_radius),
                 }
                 if ride.get("requires_wav"):
                     _casc_filter["is_wav"] = True

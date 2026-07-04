@@ -322,3 +322,33 @@ async def mark_stripe_event_processed(event_id: str) -> None:
         await run_sync(_fn)
     except Exception as e:  # noqa: BLE001
         logger.warning(f"Failed to stamp processed_at on stripe event {event_id}: {e}")
+
+
+async def unclaim_stripe_event(event_id: str) -> bool:
+    """Delete a claimed-but-unprocessed stripe event row so Stripe's retry
+    of the same event_id can genuinely re-process it.
+
+    claim_stripe_event dedupes retries even when processed_at is NULL, so a
+    handler that fails on a TRANSIENT error (e.g. the ride row is not yet
+    visible) must release its claim before returning 5xx — otherwise the
+    retry is acknowledged as a duplicate and the event is lost until manual
+    replay. Only call this when NO side effects have been performed for the
+    event.
+
+    Returns True when the claim was released (retry path restored), False
+    when the delete failed — the row stays claimed-unprocessed, Stripe's
+    retry will be deduped, and the caller must escalate (the event needs a
+    manual replay via the admin endpoint).
+    """
+    if not supabase:
+        return False
+
+    def _fn():
+        supabase.table("stripe_events").delete().eq("event_id", event_id).is_("processed_at", "null").execute()
+
+    try:
+        await run_sync(_fn)
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Failed to unclaim stripe event {event_id}: {e}")
+        return False

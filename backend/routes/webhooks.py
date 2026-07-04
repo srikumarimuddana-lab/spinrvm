@@ -5,7 +5,13 @@ from fastapi import APIRouter, HTTPException, Request, Response
 try:
     from .. import db_supabase
     from ..core.config import settings as app_config
-    from ..db_supabase import DatabaseError, DuplicateRecordError, claim_stripe_event, mark_stripe_event_processed
+    from ..db_supabase import (
+        DatabaseError,
+        DuplicateRecordError,
+        claim_stripe_event,
+        mark_stripe_event_processed,
+        unclaim_stripe_event,
+    )
     from ..features import send_push_notification
     from ..settings_loader import get_app_settings
     from ..utils.money import cents_to_dollars
@@ -13,7 +19,13 @@ try:
 except ImportError:
     import db_supabase
     from core.config import settings as app_config
-    from db_supabase import DatabaseError, DuplicateRecordError, claim_stripe_event, mark_stripe_event_processed
+    from db_supabase import (
+        DatabaseError,
+        DuplicateRecordError,
+        claim_stripe_event,
+        mark_stripe_event_processed,
+        unclaim_stripe_event,
+    )
     from features import send_push_notification
     from settings_loader import get_app_settings
     from utils.money import cents_to_dollars
@@ -558,20 +570,39 @@ async def stripe_webhook(request: Request):
                     f"payment {payment_intent_id} unlinked",
                     extra={"domain": "payments", "event_id": event_id, "ride_id": ride_id},
                 )
+                # A raw 5xx would NOT get this event re-run: claim_stripe_event
+                # dedupes the retry delivery even with processed_at NULL. Release
+                # the claim first (no side effects have happened for this event)
+                # so Stripe's retry genuinely re-processes once the ride row is
+                # visible / the DB blip has passed.
+                if not await unclaim_stripe_event(event_id):
+                    # Claim NOT released — Stripe's retry will be deduped and
+                    # this payment stays unlinked until an operator replays the
+                    # event. CRITICAL so the reconciliation alert fires.
+                    logger.critical(
+                        "Stripe event %s could not be unclaimed after ride lookup failure — "
+                        "retry path NOT restored; manual replay required for payment %s",
+                        event_id,
+                        payment_intent_id,
+                    )
                 raise HTTPException(status_code=500, detail="Ride lookup failed — Stripe will retry")
 
+            # Owed = grand_total + stored tip (fallback total_fare + tip) —
+            # the same authoritative captured amount settlement and the nightly
+            # reconciler use. Checking grand_total alone would let a fare-only
+            # capture settle a ride that also has a persisted driver tip.
             owed = ride.get("grand_total")
             if owed is None:
                 owed = ride.get("total_fare", 0)
-            owed_cents = int(
-                (Decimal(str(owed)).quantize(_TWO_PLACES, rounding=ROUND_HALF_UP) * 100).to_integral_value()
-            )
+            owed_d = Decimal(str(owed or 0)) + Decimal(str(ride.get("tip_amount") or 0))
+            owed_cents = int((owed_d.quantize(_TWO_PLACES, rounding=ROUND_HALF_UP) * 100).to_integral_value())
             received_cents = int(data_object.get("amount_received") or 0)
             if received_cents < owed_cents:
                 # Permanent condition — retrying won't change the amounts.
-                # Leave the ride unpaid (payment_retry / reconciliation own it),
-                # leave processed_at NULL for the audit trail, and return 200
-                # so Stripe stops re-sending.
+                # Leave the ride unpaid (payment_retry / reconciliation own it)
+                # but mark the EVENT processed: the refusal IS this event's
+                # outcome, and an unstamped row would raise a false CRITICAL
+                # "STUCK" alert on every subsequent delivery of this event_id.
                 logger.error(
                     "[webhook][security] underpay ride=%s pi=%s received=%d owed=%d — refusing to mark paid",
                     ride_id,
@@ -580,6 +611,7 @@ async def stripe_webhook(request: Request):
                     owed_cents,
                     extra={"domain": "payments", "event_id": event_id, "ride_id": ride_id},
                 )
+                await mark_stripe_event_processed(event_id)
                 return {"received": True, "underpaid": True, "event_id": event_id}
 
             updated = await db_supabase.update_ride(

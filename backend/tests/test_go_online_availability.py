@@ -53,7 +53,10 @@ def _active_ride(status: str) -> dict:
 
 
 @pytest.mark.e2e
-@pytest.mark.asyncio
+# No explicit async marker: asyncio_mode=auto handles these. An explicit
+# @pytest.mark.asyncio (or anyio) on a class routes through pytest-asyncio
+# 0.23's legacy get_event_loop() wrapper, which blows up order-dependently
+# once any earlier test leaves the main thread without a set event loop.
 class TestGoOnlineAvailability:
     """Code under test: backend/routes/drivers.py::update_driver_status."""
 
@@ -138,3 +141,54 @@ class TestGoOnlineAvailability:
         payload = writes[0]
         assert payload["is_online"] is True
         assert payload["is_available"] is True
+
+    async def test_claim_landing_mid_write_is_repaired(self):
+        """dispatch_service.claim_driver() can fire between this handler's
+        pre-write busy/offer reads and its row write; the write then stomps
+        the claim (is_available back to True) and the driver re-enters the
+        dispatch pool while already offered a ride. The post-write re-check
+        must catch the claim and downgrade with claim_driver's conditional
+        shape ({id, is_available: True}) so the repair itself can never
+        stomp a newer state."""
+        from backend.routes import drivers as drv_mod
+
+        driver = _driver_row()
+        updated = {**driver, "is_online": True, "is_available": True}
+        writes: list[tuple[dict, dict]] = []
+        offer_calls = {"n": 0}
+
+        async def _get_rows(table, filters=None, limit=None, **kwargs):
+            if table == "ride_offers":
+                offer_calls["n"] += 1
+                if offer_calls["n"] == 1:
+                    return []  # pre-write check: no claim yet
+                # post-write re-check: a claim landed in the gap
+                return [{"id": "offer-race", "driver_id": DRIVER_ID, "status": "pending"}]
+            return []
+
+        async def _update_one(table, filters, update):
+            writes.append((filters, update.get("$set", update)))
+            return updated
+
+        with (
+            patch(
+                "backend.routes.drivers.db_supabase.get_driver_by_id",
+                AsyncMock(side_effect=[driver, updated]),
+            ),
+            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(side_effect=_update_one)),
+        ):
+            result = await drv_mod.update_driver_status(
+                driver_id=DRIVER_ID,
+                is_online=True,
+                current_user={"id": DRIVER_USER_ID},
+            )
+
+        assert result["success"] is True
+        assert writes[0][1]["is_available"] is True, "pre-checks were clear — main write asserts available"
+        assert len(writes) == 2, "claim landing mid-write must trigger exactly one repair write"
+        repair_filters, repair_payload = writes[1]
+        assert repair_payload == {"is_available": False}
+        assert repair_filters == {"id": DRIVER_ID, "is_available": True}, (
+            "repair must be conditional (claim_driver shape) so it can never stomp a newer state"
+        )

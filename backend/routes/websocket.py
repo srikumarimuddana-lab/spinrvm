@@ -122,6 +122,13 @@ HEARTBEAT_TIMEOUT = 10  # Expect pong within 10 seconds
 WS_MAX_MESSAGES_PER_SECOND = 30
 WS_MAX_MESSAGE_SIZE = 64 * 1024  # 64 KB max message payload
 
+# Per-connection cooldown for ride_status_update echoes. Each echo costs a
+# get_ride read plus a rider send and an all-admin broadcast; the global
+# 30 msg/s socket cap alone would let any ride participant amplify that
+# against the DB and every admin console. Legit clients send this on screen
+# focus / resync, never in bursts.
+RIDE_STATUS_ECHO_COOLDOWN_S = 2.0
+
 # F8: min seconds between durable drivers-row location UPDATEs per connection.
 # 1 Hz pings still refresh the Redis cache + rider/admin fan-out every tick;
 # only the authoritative Postgres write is throttled to this interval.
@@ -628,6 +635,9 @@ async def websocket_endpoint(
         # re-validate against the DB row each tick and close the socket
         # if /auth/logout-all bumped token_version since connect.
         conn_state: dict = {"last_pong_at": asyncio.get_event_loop().time()}
+        # -inf, not 0.0: loop time starts near zero on a fresh loop, so a 0.0
+        # sentinel would swallow the first echo of a connection's lifetime.
+        _last_status_echo_at = float("-inf")
         hb_task = asyncio.create_task(
             heartbeat_task(
                 websocket,
@@ -1006,6 +1016,14 @@ async def websocket_endpoint(
                     await websocket.send_json({"type": "location_batch_ack", "count": inserted})
 
             elif data.get("type") == "ride_status_update":
+                # Cooldown (see RIDE_STATUS_ECHO_COOLDOWN_S): excess echoes
+                # are dropped silently — every real transition is broadcast
+                # by the HTTP handlers regardless, so a dropped echo costs a
+                # spammer their amplification, not a rider their update.
+                _echo_now = asyncio.get_event_loop().time()
+                if _echo_now - _last_status_echo_at < RIDE_STATUS_ECHO_COOLDOWN_S:
+                    continue
+                _last_status_echo_at = _echo_now
                 ride_id = data.get("ride_id")
                 if ride_id:
                     ride = await db_supabase.get_ride(ride_id)
@@ -1015,11 +1033,12 @@ async def websocket_endpoint(
                         # may trigger a rebroadcast. Without it any
                         # authenticated socket could push events for any ride
                         # to the victim rider and every admin console.
+                        # Driver identity is the socket-bound
+                        # current_driver_id (fetched once at auth) — no
+                        # per-message drivers read.
                         authorized = False
                         if client_type == "driver":
-                            _dp = await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1)
-                            _dp = _dp[0] if _dp else None
-                            authorized = bool(_dp and _dp["id"] == ride.get("driver_id"))
+                            authorized = current_driver_id == ride.get("driver_id")
                         elif client_type == "rider":
                             authorized = user["id"] == ride.get("rider_id")
                         if not authorized:

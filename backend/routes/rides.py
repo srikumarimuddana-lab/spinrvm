@@ -40,6 +40,7 @@ try:
     from ..sms_service import send_sms
     from ..socket_manager import manager
     from ..utils.audit_logger import log_user_action
+    from ..utils.background import spawn
     from ..utils.error_handling import (
         ErrorCode,
         RideNotFoundException,
@@ -84,6 +85,7 @@ except ImportError:
     from sms_service import send_sms
     from socket_manager import manager
     from utils.audit_logger import log_user_action
+    from utils.background import spawn  # type: ignore
     from utils.error_handling import (
         ErrorCode,
         RideNotFoundException,
@@ -204,7 +206,7 @@ def _push_in_background(*args, _ctx: str = "", **kwargs) -> None:
         except Exception:
             logger.error(f"background push failed ({_ctx})", exc_info=True)
 
-    asyncio.create_task(_send())
+    spawn(_send())
 
 
 def _decode_polyline(encoded: str) -> list:
@@ -1028,7 +1030,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
 
     if not drivers_with_distance:
         logger.info(f"[DISPATCH] no eligible drivers for ride {ride_id} — scheduling retry in 10s (attempt {attempt})")
-        asyncio.create_task(_dispatch_retry(ride_id, delay=10, attempt=attempt + 1))
+        spawn(_dispatch_retry(ride_id, delay=10, attempt=attempt + 1))
         return
 
     # ── ETA ranking ───────────────────────────────────────────────
@@ -1284,7 +1286,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
                 # round-trip), and we don't want N drivers serialized on it.
                 # The WebSocket offer above already reached any foreground app;
                 # this push covers backgrounded / locked / killed devices.
-                asyncio.create_task(
+                spawn(
                     send_push_notification(
                         driver["user_id"],
                         f"New ride · {earnings_label}",
@@ -1298,7 +1300,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
                 logger.error(f"[DISPATCH] push failed for driver {driver['user_id']}: {e}", exc_info=True)
 
     # ── Batch timeout handler (no grace period) ───────────────────
-    asyncio.create_task(
+    spawn(
         _batch_offer_timeout_handler(
             ride_id,
             rider_id=ride.get("rider_id"),
@@ -1793,7 +1795,7 @@ async def compute_ride_estimates(
             logger.warning("[estimate] polyline fetch failed (non-fatal): %s", _poly_err)
             return None
 
-    polyline_task = asyncio.create_task(_polyline_fetch()) if include_polyline else None
+    polyline_task = spawn(_polyline_fetch()) if include_polyline else None
 
     # Fetch nearby online+available drivers once. Order by went_online_at DESC
     # so recently-toggled-online drivers fill the 200-row page first. Ghost
@@ -3144,7 +3146,7 @@ async def create_ride(
             except Exception as exc:
                 logger.error(f"create_ride: planned route snapshot failed: {exc}", exc_info=True)
 
-        asyncio.create_task(_create_planned_snapshot())
+        spawn(_create_planned_snapshot())
 
     # Let admin live-monitoring see the request before dispatch starts —
     # previously the dashboard only observed a ride once a driver accepted,
@@ -3188,7 +3190,7 @@ async def create_ride(
             f"create_ride: ride {ride.id} scheduled for {body.scheduled_time} — "
             "parked in 'scheduled', deferring dispatch to scheduler loop"
         )
-    asyncio.create_task(
+    spawn(
         _prep_and_dispatch(
             ride.id,
             fresh_ride,
@@ -3210,9 +3212,9 @@ async def create_ride(
         return doc
 
     if updated_ride and updated_ride.get("status") == RideStatus.SEARCHING:
-        asyncio.create_task(ride_search_timeout(ride.id))
+        spawn(ride_search_timeout(ride.id))
 
-    asyncio.create_task(
+    spawn(
         log_user_action(
             current_user,
             "ride_created",
@@ -4214,7 +4216,7 @@ async def process_payment(
         # client surface reads the delivery outcome. email_sent now means
         # "queued" (field kept for API-shape compatibility; the explicit
         # resend endpoint still awaits delivery and reports it honestly).
-        asyncio.create_task(send_ride_receipt(ride, current_user["id"], tip_rounded))
+        spawn(send_ride_receipt(ride, current_user["id"], tip_rounded))
         email_sent = True
     return {
         "success": True,
@@ -4527,7 +4529,7 @@ async def rate_driver(
             _ctx=f"[RATING] driver {driver['user_id']}",
         )
 
-    asyncio.create_task(
+    spawn(
         log_user_action(
             current_user,
             "driver_rated",
@@ -4961,13 +4963,13 @@ async def cancel_ride_rider(
         reason="rider_cancelled",
     )
     # End the rider's live activity (Lock Screen / ongoing notification).
-    asyncio.create_task(send_live_activity_update({"id": ride_id, "status": RideStatus.CANCELLED}, EVENT_END))
+    spawn(send_live_activity_update({"id": ride_id, "status": RideStatus.CANCELLED}, EVENT_END))
     try:
         await manager.broadcast_to_admins({"type": "ride_cancelled", "ride_id": ride_id, "reason": "rider_cancelled"})
     except Exception as _exc:  # pragma: no cover - best effort
         logger.warning(f"rider cancel admin broadcast failed: {_exc}")
 
-    asyncio.create_task(
+    spawn(
         log_user_action(
             current_user,
             "ride_cancelled",
@@ -5289,10 +5291,14 @@ async def trigger_emergency(
         )
         for contact, result in zip(_sms_targets, _sms_results, strict=False):
             if isinstance(result, BaseException):
-                logger.error(f"SOS SMS failed for contact {contact.get('id')}: {result}")
+                # PIPEDA: never log exception text here — Twilio errors embed
+                # the destination number. Type name only; contact id is fine.
+                logger.error(f"SOS SMS failed for contact {contact.get('id')}: {type(result).__name__}")
             elif result.get("success"):
                 contacts_notified += 1
             else:
+                # send_sms guarantees 'error' is a PII-free "type code=N
+                # status=N" string (never str(exception) — see sms_service).
                 logger.error(f"SOS SMS failed for contact {contact.get('id')}: {result.get('error')}")
 
         if contacts:
@@ -5479,7 +5485,7 @@ async def send_ride_message(
         preview = body.text.strip()
         if len(preview) > 100:
             preview = preview[:97] + "…"
-        asyncio.create_task(
+        spawn(
             send_push_notification(
                 push_recipient_user_id,
                 f"Message from {sender_name}",
@@ -5723,7 +5729,7 @@ async def rider_start_ride(
     rider_id = ride.get("rider_id")
     if rider_id:
         await manager.send_personal_message({"type": "ride_started", "ride_id": ride_id}, f"rider_{rider_id}")
-        asyncio.create_task(
+        spawn(
             send_push_notification(
                 rider_id,
                 "Ride Started! ▶️",
@@ -5733,7 +5739,7 @@ async def rider_start_ride(
         )
     await manager.broadcast_ride_status(ride_id, RideStatus.IN_PROGRESS, rider_id=rider_id)
     # Update the rider's live activity to the in-progress state.
-    asyncio.create_task(send_live_activity_update({**ride, "status": RideStatus.IN_PROGRESS}, EVENT_UPDATE))
+    spawn(send_live_activity_update({**ride, "status": RideStatus.IN_PROGRESS}, EVENT_UPDATE))
     return {"success": True}
 
 
@@ -5893,9 +5899,7 @@ async def rider_complete_ride(
         total_fare=total_fare,
     )
     # End the rider's live activity on trip completion.
-    asyncio.create_task(
-        send_live_activity_update(completed_ride or {"id": ride_id, "status": RideStatus.COMPLETED}, EVENT_END)
-    )
+    spawn(send_live_activity_update(completed_ride or {"id": ride_id, "status": RideStatus.COMPLETED}, EVENT_END))
     try:
         await manager.broadcast_to_admins(
             {
@@ -5919,7 +5923,7 @@ async def rider_complete_ride(
                 from ..utils.quest_tracker import update_quest_progress_on_ride_complete
             except ImportError:
                 from utils.quest_tracker import update_quest_progress_on_ride_complete
-            asyncio.create_task(update_quest_progress_on_ride_complete(driver_id, completed_ride or ride))
+            spawn(update_quest_progress_on_ride_complete(driver_id, completed_ride or ride))
         except Exception:
             logger.error(
                 "rider_complete_ride: scheduling quest progress update failed for ride %s", ride_id, exc_info=True

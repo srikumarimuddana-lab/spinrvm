@@ -34,6 +34,7 @@ try:
     from ..schemas import Driver, RideRatingRequest
     from ..services.fare_service import recalculate_fare_for_distance
     from ..socket_manager import manager
+    from ..utils.background import spawn
     from ..utils.breadcrumb_buffer import flush_driver_breadcrumbs
     from ..utils.breadcrumbs import invalidate_active_rides_cache
     from ..utils.datetime_utils import parse_iso_utc
@@ -83,6 +84,7 @@ except ImportError:
     from schemas import Driver, RideRatingRequest
     from services.fare_service import recalculate_fare_for_distance
     from socket_manager import manager
+    from utils.background import spawn  # type: ignore
     from utils.breadcrumb_buffer import flush_driver_breadcrumbs  # type: ignore
     from utils.breadcrumbs import invalidate_active_rides_cache  # type: ignore
     from utils.datetime_utils import parse_iso_utc
@@ -4280,7 +4282,7 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
         # Backgrounded like the arrive/start siblings: FCM is a slow external
         # round-trip and accept sits inside the <2s dispatch SLA. The WS send
         # above stays awaited — it drives the instant in-app transition.
-        asyncio.create_task(
+        spawn(
             send_push_notification(
                 ride["rider_id"],
                 "Driver Assigned! 🚗",
@@ -4292,7 +4294,7 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
 
     # Start the rider's live activity (no-op until the app registers its token).
     if ride:
-        asyncio.create_task(send_live_activity_update(ride, EVENT_START))
+        spawn(send_live_activity_update(ride, EVENT_START))
 
     return {"success": True}
 
@@ -4374,8 +4376,6 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
     # Early resolution: if no pending offers remain and ride is still
     # searching, re-dispatch immediately instead of waiting for batch timeout.
     try:
-        import asyncio
-
         try:
             from .rides import match_driver_to_ride
         except ImportError:
@@ -4393,7 +4393,7 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
                 )
             )
             if not (remaining.data or []):
-                asyncio.create_task(match_driver_to_ride(ride_id))
+                spawn(match_driver_to_ride(ride_id))
                 logger.info(f"[DECLINE] all offers resolved for ride {ride_id} — re-dispatching")
             else:
                 logger.info(f"[DECLINE] ride {ride_id} still has {len(remaining.data)} pending offer(s)")
@@ -4461,7 +4461,7 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
 
     if ride.get("rider_id"):
         await manager.send_personal_message({"type": "driver_arrived", "ride_id": ride_id}, f"rider_{ride['rider_id']}")
-        asyncio.create_task(
+        spawn(
             send_push_notification(
                 ride["rider_id"],
                 "Driver Arrived! 📍",
@@ -4472,7 +4472,7 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
     await manager.broadcast_ride_status(ride_id, RideStatus.DRIVER_ARRIVED, rider_id=ride.get("rider_id"))
 
     # Update the rider's live activity to "driver arrived".
-    asyncio.create_task(send_live_activity_update({**ride, "status": RideStatus.DRIVER_ARRIVED}, EVENT_UPDATE))
+    spawn(send_live_activity_update({**ride, "status": RideStatus.DRIVER_ARRIVED}, EVENT_UPDATE))
 
     return {"success": True}
 
@@ -4519,7 +4519,7 @@ async def verify_pickup_otp(
 
     if ride.get("rider_id"):
         await manager.send_personal_message({"type": "ride_started", "ride_id": ride_id}, f"rider_{ride['rider_id']}")
-        asyncio.create_task(
+        spawn(
             send_push_notification(
                 ride["rider_id"],
                 "Ride Started! ▶️",
@@ -4530,7 +4530,7 @@ async def verify_pickup_otp(
     await manager.broadcast_ride_status(ride_id, RideStatus.IN_PROGRESS, rider_id=ride.get("rider_id"))
 
     # Update the rider's live activity to "trip in progress".
-    asyncio.create_task(send_live_activity_update({**ride, "status": RideStatus.IN_PROGRESS}, EVENT_UPDATE))
+    spawn(send_live_activity_update({**ride, "status": RideStatus.IN_PROGRESS}, EVENT_UPDATE))
 
     return {"success": True}
 
@@ -4584,7 +4584,7 @@ async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user
 
     if ride.get("rider_id"):
         await manager.send_personal_message({"type": "ride_started", "ride_id": ride_id}, f"rider_{ride['rider_id']}")
-        asyncio.create_task(
+        spawn(
             send_push_notification(
                 ride["rider_id"],
                 "Ride Started! ▶️",
@@ -4594,7 +4594,7 @@ async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user
         )
     await manager.broadcast_ride_status(ride_id, RideStatus.IN_PROGRESS, rider_id=ride.get("rider_id"))
     # Update the rider's live activity to "trip in progress" (dev/staging path).
-    asyncio.create_task(send_live_activity_update({**ride, "status": RideStatus.IN_PROGRESS}, EVENT_UPDATE))
+    spawn(send_live_activity_update({**ride, "status": RideStatus.IN_PROGRESS}, EVENT_UPDATE))
     return {"success": True}
 
 
@@ -5233,7 +5233,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         # Prefer the road-snapped trip polyline: it follows the road network
         # even where raw GPS was sparse. phase_polylines is dropped in that
         # case so the renderer can't pick the raw trail over it.
-        asyncio.create_task(
+        spawn(
             _generate_and_store_ride_snapshot(
                 ride_id=ride_id,
                 pickup_lat=ride.get("pickup_lat"),
@@ -5253,10 +5253,10 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     # Fire-and-forget: validate GPS trace against road network.
     # Flags spoofed trips for admin review without blocking completion.
     _breadcrumbs_for_validation = all_breadcrumbs if "all_breadcrumbs" in locals() else []
-    asyncio.create_task(_validate_ride_route(ride_id, _breadcrumbs_for_validation, driver["id"]))
+    spawn(_validate_ride_route(ride_id, _breadcrumbs_for_validation, driver["id"]))
     # Fire-and-forget: road-snap the pickup leg for the admin map (display-only;
     # must not block completion on a provider round-trip).
-    asyncio.create_task(_snap_pickup_leg_async(ride_id, _breadcrumbs_for_validation))
+    spawn(_snap_pickup_leg_async(ride_id, _breadcrumbs_for_validation))
 
     # Update driver stats. Setting is_available=True is safe here because the
     # ride has just transitioned to `completed`, and the driver's row already
@@ -5297,7 +5297,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         )
         # Backgrounded: FCM must not sit inside the <1s settlement SLA; the
         # awaited WS message above already drives the in-app transition.
-        asyncio.create_task(
+        spawn(
             send_push_notification(
                 completed_ride["rider_id"],
                 "Ride Completed! ✅",
@@ -5314,9 +5314,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         total_fare=total_fare,
     )
     # End the rider's live activity on trip completion.
-    asyncio.create_task(
-        send_live_activity_update(completed_ride or {"id": ride_id, "status": RideStatus.COMPLETED}, EVENT_END)
-    )
+    spawn(send_live_activity_update(completed_ride or {"id": ride_id, "status": RideStatus.COMPLETED}, EVENT_END))
     # Keep the specific ``ride_completed`` event on admin too for dashboards
     # that switch directly on the event name rather than status.
     try:
@@ -5334,7 +5332,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             from ..utils.quest_tracker import update_quest_progress_on_ride_complete
         except ImportError:
             from utils.quest_tracker import update_quest_progress_on_ride_complete
-        asyncio.create_task(update_quest_progress_on_ride_complete(driver["id"], completed_ride or ride))
+        spawn(update_quest_progress_on_ride_complete(driver["id"], completed_ride or ride))
     except Exception:
         logger.error("complete_ride: scheduling quest progress update failed for ride %s", ride_id, exc_info=True)
 
@@ -5364,7 +5362,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         # Push so the driver sees it even with the app backgrounded.
         # Backgrounded off the settlement response; send_push_notification
         # handles its own failures.
-        asyncio.create_task(
+        spawn(
             send_push_notification(
                 driver["user_id"],
                 "Daily ride limit reached",
@@ -5490,7 +5488,7 @@ async def cancel_ride(
         )
         # Backgrounded like the accept/arrive/start pushes — the awaited WS
         # message above is what the open app reacts to.
-        asyncio.create_task(
+        spawn(
             send_push_notification(
                 ride["rider_id"],
                 "Ride Cancelled ❌",
@@ -5505,7 +5503,7 @@ async def cancel_ride(
         reason="driver_cancelled",
     )
     # End the rider's live activity on driver cancellation.
-    asyncio.create_task(send_live_activity_update(ride or {"id": ride_id, "status": RideStatus.CANCELLED}, EVENT_END))
+    spawn(send_live_activity_update(ride or {"id": ride_id, "status": RideStatus.CANCELLED}, EVENT_END))
     # Keep the specific ``ride_cancelled`` event on admin for dashboards
     # that switch on event name.
     try:
@@ -5684,7 +5682,7 @@ async def mark_rider_noshow(
             f"rider_{rider_id}",
         )
         # Backgrounded like the other ride-transition pushes.
-        asyncio.create_task(
+        spawn(
             send_push_notification(
                 rider_id,
                 "Ride Cancelled",
@@ -6120,6 +6118,11 @@ async def get_driver_leaderboard(
                 or []
             )
         except Exception:
+            # Deliberate degrade: display-only surface, so an empty
+            # leaderboard beats a 503 — but this read failing means the DB
+            # itself is unreachable (the RPC outage was already logged
+            # above), so it is error-level, never silent.
+            logger.error("leaderboard: daily-row fallback read failed", exc_info=True)
             _rows = []
         _fb_max_date = None
         for r in _rows:
@@ -6148,6 +6151,9 @@ async def get_driver_leaderboard(
             or []
         )
     except Exception:
+        # Deliberate degrade: stale-but-served beats a 503 for a display-only
+        # surface; error-level because a failing rides read is a DB fault.
+        logger.error("leaderboard: freshness top-up read failed", exc_info=True)
         _fresh_rides = []
     for r in _fresh_rides:
         _rid = r.get("driver_id")
@@ -6179,7 +6185,9 @@ async def get_driver_leaderboard(
             )
             _names = {u["id"]: f"{u.get('first_name', '')} {u.get('last_name', '')}".strip() for u in _users}
         except Exception:
-            logger.warning("leaderboard: batched users lookup failed; using placeholders", exc_info=True)
+            # Deliberate degrade (placeholder names still render), but a
+            # failing users read is a DB fault — error-level per convention.
+            logger.error("leaderboard: batched users lookup failed; using placeholders", exc_info=True)
 
     rankings = []
     for d in all_drivers:
@@ -6797,6 +6805,47 @@ async def update_driver_status(
         await reset_miss_streak(driver_id)
     else:
         await clear_presence(driver_id)
+
+    # Post-write claim re-check: the pre-write busy/offer reads and the row
+    # write above are not one atomic operation, so dispatch_service
+    # claim_driver() firing in that gap (a reconnect re-assert racing a live
+    # dispatch tick) gets stomped by our is_available=True — the driver
+    # re-enters the pool while already offered/assigned a ride. Re-read both
+    # claim sources now that the write landed and, if a claim slipped in,
+    # downgrade using claim_driver's own conditional shape so this repair can
+    # never stomp a newer state. Residual exposure: a claim whose ride/offer
+    # row is not yet visible when these reads run (single round-trip window);
+    # closing that fully requires the claim marker to land before the
+    # availability flag, which is a dispatch-path redesign, not fixable here.
+    if _base["is_available"]:
+        _busy_recheck, _offers_recheck = await asyncio.gather(
+            db_supabase.get_rows(
+                "rides",
+                {
+                    "driver_id": driver_id,
+                    "status": {
+                        "$in": [
+                            RideStatus.DRIVER_ASSIGNED,
+                            RideStatus.DRIVER_ACCEPTED,
+                            RideStatus.DRIVER_ARRIVED,
+                            RideStatus.IN_PROGRESS,
+                        ]
+                    },
+                },
+                limit=1,
+            ),
+            db_supabase.get_rows("ride_offers", {"driver_id": driver_id, "status": "pending"}, limit=1),
+        )
+        if _busy_recheck or _offers_recheck:
+            await db_supabase.update_one(
+                "drivers",
+                {"id": driver_id, "is_available": True},
+                {"$set": {"is_available": False}},
+            )
+            logger.info(
+                f"[GO-ONLINE] repair: dispatch claim landed during status write; "
+                f"is_available downgraded for driver_id={driver_id}"
+            )
 
     return {"success": True, "is_online": is_online}
 

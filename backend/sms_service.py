@@ -46,8 +46,21 @@ async def send_sms(
         logger.info(f"SMS sent to {masked} via Twilio (SID: {sid})")
         return {"success": True, "provider": "twilio", "sid": sid}
     except Exception as e:
-        logger.error(f"Failed to send SMS to {masked}: {e}")
-        return {"success": False, "provider": "twilio", "error": str(e)}
+        # PIPEDA: never log or return str(e) — TwilioRestException text
+        # embeds the destination number ("The 'To' number +1306... is not a
+        # valid phone number"). Exception type + Twilio error code/status
+        # carry the actionable signal without the PII; callers (e.g. the SOS
+        # path) log the returned 'error' verbatim and rely on this contract.
+        _code = getattr(e, "code", None)
+        _status = getattr(e, "status", None)
+        _parts = [type(e).__name__]
+        if _code is not None:
+            _parts.append(f"code={_code}")
+        if _status is not None:
+            _parts.append(f"status={_status}")
+        safe_error = " ".join(_parts)
+        logger.error(f"Failed to send SMS to {masked}: {safe_error}")
+        return {"success": False, "provider": "twilio", "error": safe_error}
 
 
 async def send_otp_sms(

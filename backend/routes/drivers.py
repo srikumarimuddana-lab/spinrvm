@@ -6269,6 +6269,29 @@ async def get_driver(driver_id: str, current_user: dict = Depends(get_current_us
     }
 
 
+# A pending offer normally resolves within ~15s (accept / decline / the
+# in-process timeout task). If that task dies with its process (crash,
+# restart, DB outage — 2026-07-04), the row stays 'pending' forever and
+# every busy-check would park the driver unavailable indefinitely: the
+# claim reaper skips "busy" drivers and go-online keeps re-asserting
+# unavailable. Anything older than this is an orphan, not a live claim.
+STALE_PENDING_OFFER_SECONDS = 90
+
+
+def _fresh_pending_offers(offers: list | None) -> list:
+    """Pending offers young enough to be live claims. Missing/unparseable
+    offered_at counts as fresh (never grant availability on ambiguity);
+    the schema default (now()) makes that a defensive-only path. Stale rows
+    are ignored here and expired by the claim reaper."""
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=STALE_PENDING_OFFER_SECONDS)
+    fresh = []
+    for offer in offers or []:
+        ts = parse_iso_utc(offer.get("offered_at"))
+        if ts is None or ts > cutoff:
+            fresh.append(offer)
+    return fresh
+
+
 @api_router.put("/{driver_id}/status")
 async def update_driver_status(
     driver_id: str,
@@ -6694,13 +6717,16 @@ async def update_driver_status(
         else:
             # Batch dispatch holds no ride row pre-acceptance — the claim
             # lives in ride_offers (claim_driver already set
-            # is_available=False; don't re-assert it mid-offer).
+            # is_available=False; don't re-assert it mid-offer). Only FRESH
+            # offers count (see _fresh_pending_offers): an orphaned pending
+            # row must not park the driver forever.
             _pending_offers = await db_supabase.get_rows(
                 "ride_offers",
                 {"driver_id": driver_id, "status": "pending"},
-                limit=1,
+                limit=5,
+                columns="id,offered_at",
             )
-            if _pending_offers:
+            if _fresh_pending_offers(_pending_offers):
                 is_available = False
     _base = {"is_online": is_online, "is_available": is_available, "updated_at": _now_iso}
     # If the driver app supplied current GPS on Go Online, persist it in the
@@ -6834,9 +6860,14 @@ async def update_driver_status(
                 },
                 limit=1,
             ),
-            db_supabase.get_rows("ride_offers", {"driver_id": driver_id, "status": "pending"}, limit=1),
+            db_supabase.get_rows(
+                "ride_offers",
+                {"driver_id": driver_id, "status": "pending"},
+                limit=5,
+                columns="id,offered_at",
+            ),
         )
-        if _busy_recheck or _offers_recheck:
+        if _busy_recheck or _fresh_pending_offers(_offers_recheck):
             await db_supabase.update_one(
                 "drivers",
                 {"id": driver_id, "is_available": True},

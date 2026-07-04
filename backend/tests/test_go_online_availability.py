@@ -17,7 +17,7 @@ Run:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -141,6 +141,23 @@ class TestGoOnlineAvailability:
         payload = writes[0]
         assert payload["is_online"] is True
         assert payload["is_available"] is True
+
+    async def test_go_online_stale_pending_offer_is_ignored(self):
+        """An orphaned pending offer (older than STALE_PENDING_OFFER_SECONDS,
+        i.e. its ~15s timeout task died with its process) must NOT park the
+        driver: the claim reaper expires the row; go-online ignores it.
+        Fresh offers still block (see the offer_pending test above)."""
+        stale = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        result, writes = await self._go_online(
+            rides_result=[],
+            offers_result=[{"id": "offer-stale", "driver_id": DRIVER_ID, "status": "pending", "offered_at": stale}],
+            expect_available=True,
+        )
+        assert result["success"] is True
+        assert writes[0]["is_available"] is True, (
+            "a stale orphaned offer must not keep the driver out of the dispatch pool"
+        )
+        assert len(writes) == 1, "stale offer must not trigger the post-write repair either"
 
     async def test_claim_landing_mid_write_is_repaired(self):
         """dispatch_service.claim_driver() can fire between this handler's

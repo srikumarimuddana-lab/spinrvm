@@ -398,7 +398,9 @@ class TestStripeWebhookPaymentIntentSucceeded:
         """SECURITY: a succeeded PI whose amount_received does not cover the
         ride's grand_total must NOT mark the ride paid — mirrors the
         /payments/confirm underpay guard. 200 (no Stripe retry), ride
-        untouched, processed_at left NULL."""
+        untouched. The EVENT is marked processed — the refusal is this
+        event's outcome, and an unstamped row would raise a false CRITICAL
+        'STUCK' alert on every subsequent delivery."""
         from backend.routes import webhooks as wh
 
         # Ride owes $25.00 but the intent only captured $18.50.
@@ -425,7 +427,50 @@ class TestStripeWebhookPaymentIntentSucceeded:
 
         assert result.get("underpaid") is True
         mock_update.assert_not_awaited()
-        mock_processed.assert_not_awaited()
+        mock_processed.assert_awaited_once()
+
+    def test_owed_includes_stored_tip(self):
+        """Codex P1 (PR #2021): a persisted tip_amount is part of the
+        authoritative owed total (grand_total + tip — same as settlement and
+        the nightly reconciler). A fare-only capture must NOT settle a ride
+        that also carries a driver tip."""
+        import stripe
+
+        from backend.routes import webhooks as wh
+
+        ride = {"id": "ride_1", "grand_total": 18.50, "tip_amount": 2.00}
+        mock_update = AsyncMock(return_value={"id": "ride_1"})
+
+        # Captured exactly the fare (1850) — misses the $2 tip → refused.
+        event_obj, _ = self._make_event({"ride_id": "ride_1", "user_id": "user_1"}, amount_received=1850)
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.webhooks.db_supabase.update_ride", mock_update),
+            patch("backend.routes.webhooks.send_push_notification", AsyncMock()),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._mock_req()))
+        assert result.get("underpaid") is True
+        mock_update.assert_not_awaited()
+
+        # Captured fare + tip (2050) → settles.
+        event_obj, _ = self._make_event({"ride_id": "ride_1", "user_id": "user_1"}, amount_received=2050)
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.webhooks.db_supabase.update_ride", mock_update),
+            patch("backend.routes.webhooks.send_push_notification", AsyncMock()),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._mock_req()))
+        assert result["received"] is True
+        assert "underpaid" not in result
+        mock_update.assert_awaited_once()
 
     def test_grand_total_none_falls_back_to_total_fare(self):
         from backend.routes import webhooks as wh
@@ -453,8 +498,11 @@ class TestStripeWebhookPaymentIntentSucceeded:
         assert result["received"] is True
         mock_update.assert_awaited_once()
 
-    def test_ride_lookup_none_returns_500(self):
-        """get_ride returning None → 500 so Stripe retries (ride row may lag the PI)."""
+    def test_ride_lookup_none_unclaims_and_returns_500(self):
+        """Codex P2 (PR #2021): get_ride returning None → release the event
+        claim BEFORE the 500. claim_stripe_event dedupes Stripe's retry even
+        with processed_at NULL, so without the unclaim the retry would be
+        acknowledged as a duplicate and the payment would stay unlinked."""
         from fastapi import HTTPException
 
         from backend.routes import webhooks as wh
@@ -464,12 +512,14 @@ class TestStripeWebhookPaymentIntentSucceeded:
         import stripe
 
         mock_update = AsyncMock()
+        mock_unclaim = AsyncMock()
 
         with (
             patch("backend.routes.webhooks.get_app_settings", self._settings()),
             patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
             patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
             patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.unclaim_stripe_event", mock_unclaim),
             patch("backend.routes.webhooks.db_supabase.get_ride", AsyncMock(return_value=None)),
             patch("backend.routes.webhooks.db_supabase.update_ride", mock_update),
             patch("backend.routes.webhooks.send_push_notification", AsyncMock()),
@@ -479,6 +529,39 @@ class TestStripeWebhookPaymentIntentSucceeded:
 
         assert exc_info.value.status_code == 500
         mock_update.assert_not_awaited()
+        mock_unclaim.assert_awaited_once_with("evt_test_1")
+
+    def test_ride_lookup_none_unclaim_failure_logs_critical(self, caplog):
+        """Codex P2 (PR #2023): when the unclaim itself fails, the retry path
+        was NOT restored — Stripe's redelivery will be deduped. The handler
+        must escalate (CRITICAL) so the reconciliation alert fires and an
+        operator replays the event."""
+        import logging as _logging
+
+        from fastapi import HTTPException
+
+        from backend.routes import webhooks as wh
+
+        event_obj, _ = self._make_event({"ride_id": "ride_gone", "user_id": "user_1"})
+
+        import stripe
+
+        with (
+            patch("backend.routes.webhooks.get_app_settings", self._settings()),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.unclaim_stripe_event", AsyncMock(return_value=False)),
+            patch("backend.routes.webhooks.db_supabase.get_ride", AsyncMock(return_value=None)),
+            patch("backend.routes.webhooks.db_supabase.update_ride", AsyncMock()),
+            patch("backend.routes.webhooks.send_push_notification", AsyncMock()),
+        ):
+            with caplog.at_level(_logging.CRITICAL, logger="backend.routes.webhooks"):
+                with pytest.raises(HTTPException) as exc_info:
+                    asyncio.run(wh.stripe_webhook(request=self._mock_req()))
+
+        assert exc_info.value.status_code == 500
+        assert any("could not be unclaimed" in r.message for r in caplog.records)
 
     def test_corporate_topup_event(self):
         from backend.routes import webhooks as wh

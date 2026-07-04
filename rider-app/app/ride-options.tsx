@@ -1159,15 +1159,26 @@ function AnimatedVehicleCard({
   onPress: (i: number) => void; styles: any; colors: any; appliedPromo: any;
 }) {
   const scaleAnim = useRef(new Animated.Value(isSelected ? 1 : 0)).current;
+  // Separate value for the car image size: width/height are layout props, so
+  // this one can't ride the native driver like scaleAnim does.
+  const imageSizeAnim = useRef(new Animated.Value(isSelected ? 1 : 0)).current;
 
   useEffect(() => {
     Animated.spring(scaleAnim, {
       toValue: isSelected ? 1 : 0,
       tension: 120, friction: 14, useNativeDriver: true,
     }).start();
+    Animated.spring(imageSizeAnim, {
+      toValue: isSelected ? 1 : 0,
+      tension: 120, friction: 14, useNativeDriver: false,
+    }).start();
   }, [isSelected]);
 
   const scale = scaleAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.03] });
+  // Lyft-style hero image: the selected option's car art grows to ~2× the
+  // resting thumbnail; unselected rows stay compact.
+  const imageWidth = imageSizeAnim.interpolate({ inputRange: [0, 1], outputRange: [64, 118] });
+  const imageHeight = imageSizeAnim.interpolate({ inputRange: [0, 1], outputRange: [42, 76] });
 
   return (
     <Animated.View style={[
@@ -1187,7 +1198,11 @@ function AnimatedVehicleCard({
         onPress={() => onPress(index)}
         activeOpacity={isAvailable ? 0.7 : 1}
         disabled={!isAvailable}>
-        <View style={[styles.carImageContainer, !isAvailable && { opacity: 0.4 }]}>
+        <Animated.View style={[
+          styles.carImageContainer,
+          { width: imageWidth, height: imageHeight },
+          !isAvailable && { opacity: 0.4 },
+        ]}>
           {estimate.vehicle_type.image_url ? (
             <ExpoImage
               source={{ uri: estimate.vehicle_type.image_url }}
@@ -1197,10 +1212,10 @@ function AnimatedVehicleCard({
             />
           ) : (
             <View style={styles.carIconFallback}>
-              <Ionicons name="car" size={32} color="#666" />
+              <Ionicons name="car" size={isSelected && isAvailable ? 48 : 32} color="#666" />
             </View>
           )}
-        </View>
+        </Animated.View>
         <View style={[styles.optionInfo, !isAvailable && { opacity: 0.4 }]}>
           <View style={styles.optionNameRow}>
             <Text style={styles.optionName}>{estimate.vehicle_type.name}</Text>
@@ -1423,20 +1438,20 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
     optionCardDisabled: {
       backgroundColor: colors.surfaceLight,
     },
+    // Width/height are animated per-card (64×42 resting → 118×76 selected),
+    // so the container only carries layout; the image/fallback fill it.
     carImageContainer: {
-      width: 64,
-      height: 42,
       marginRight: 12,
       justifyContent: 'center',
       alignItems: 'center',
     },
     carImage: {
-      width: 64,
-      height: 42,
+      width: '100%',
+      height: '100%',
     },
     carIconFallback: {
-      width: 64,
-      height: 42,
+      width: '100%',
+      height: '100%',
       borderRadius: 8,
       backgroundColor: colors.surfaceLight,
       justifyContent: 'center',

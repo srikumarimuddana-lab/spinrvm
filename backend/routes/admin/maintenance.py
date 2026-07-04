@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 try:
@@ -121,6 +121,16 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
     # Default to yesterday (UTC)
     if target_date:
         stat_date = datetime.fromisoformat(target_date).date()
+        # Completed days only: a partial-day rollup would make MAX(stat_date)
+        # claim today is covered, so the leaderboard's freshness top-up
+        # (routes/drivers.py::get_driver_leaderboard, keyed off day-after
+        # MAX(stat_date)) would silently drop every ride completed after the
+        # rollup ran until the next nightly pass.
+        if stat_date >= datetime.now(timezone.utc).date():
+            raise HTTPException(
+                status_code=422,
+                detail="target_date must be a completed UTC day (yesterday or earlier)",
+            )
     else:
         stat_date = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 

@@ -20,21 +20,28 @@ const { mergeContents } = require('@expo/config-plugins/build/utils/generateCode
 // Remove once the startup error is fixed (delete plugin + registration).
 
 const SWIFT_BLOCK = `
-    // spinr diagnostic: show startup fatals on-screen instead of aborting
+    // spinr diagnostic: show startup fatals on-screen instead of aborting.
+    // Renders the error text directly as a window's root view (NOT an alert
+    // presentation, which can silently fail this early in launch) and copies
+    // the full text to the clipboard so the tester can paste it.
     let spinrShowFatal: (String) -> Void = { details in
       DispatchQueue.main.async {
-        let alert = UIAlertController(
-          title: "Spinr startup error — screenshot this",
-          message: String(details.prefix(1800)),
-          preferredStyle: .alert
-        )
-        alert.addAction(UIAlertAction(title: "OK", style: .cancel, handler: nil))
+        UIPasteboard.general.string = details
+        let vc = UIViewController()
+        vc.view.backgroundColor = UIColor.white
+        let tv = UITextView(frame: vc.view.bounds.insetBy(dx: 12, dy: 60))
+        tv.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        tv.isEditable = false
+        tv.font = UIFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        tv.textColor = UIColor.red
+        tv.backgroundColor = UIColor.white
+        tv.text = "SPINR STARTUP ERROR — screenshot this (already copied to clipboard)\\n\\n" + details
+        vc.view.addSubview(tv)
         let w = UIWindow(frame: UIScreen.main.bounds)
-        w.rootViewController = UIViewController()
+        w.rootViewController = vc
         w.windowLevel = UIWindow.Level.alert + 1
         w.makeKeyAndVisible()
         self.window = w
-        w.rootViewController?.present(alert, animated: false, completion: nil)
       }
     }
     RCTSetFatalHandler { error in

@@ -714,13 +714,19 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
     # their is_online flag was left on (e.g. status flipped server-side after
     # they toggled online). Without these, accept_ride blocks them at accept time
     # but they still receive — and can see — offers they can never fulfil.
-    # Bounding-box pre-filter (index: idx_drivers_dispatch_geo, migration 206).
-    # Without it the LIMIT 500 below is an *arbitrary* 500 of all online
-    # drivers province-wide — above 500 candidates the nearest driver can sit
-    # in row 501 and dispatch reports a false "no drivers". The box is a
-    # superset of the search radius; filter_and_rank_drivers stays the exact
-    # haversine gate. Anchored on the same nav-snapped pickup that
-    # filter_and_rank_drivers ranks against.
+    # Bounding-box pre-filter. Without it the LIMIT 500 below is an
+    # *arbitrary* 500 of all online drivers province-wide — above 500
+    # candidates the nearest driver can sit in row 501 and dispatch reports a
+    # false "no drivers". The box is a superset of the search radius;
+    # filter_and_rank_drivers stays the exact haversine gate. Anchored on the
+    # same nav-snapped pickup that filter_and_rank_drivers ranks against.
+    #
+    # No dedicated (lat, lng) index: the online+available slice is small
+    # enough that a scan of it is cheap, and drivers already carries a
+    # trigger-maintained PostGIS location_geog + partial GiST index
+    # (migration 170) — a future radius query should go through an RPC on
+    # that column rather than a second btree that every location heartbeat
+    # would have to maintain.
     _box_lat = ride["pickup_nav_lat"] if ride.get("pickup_nav_lat") is not None else ride["pickup_lat"]
     _box_lng = ride["pickup_nav_lng"] if ride.get("pickup_nav_lng") is not None else ride["pickup_lng"]
     _dispatch_filter: dict = {

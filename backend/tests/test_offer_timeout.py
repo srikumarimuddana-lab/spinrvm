@@ -198,6 +198,43 @@ class TestDispatchHardening:
         create_task_mock.assert_not_called()  # no offer-timeout scheduled
 
     @pytest.mark.asyncio
+    async def test_dispatch_candidate_query_is_geo_bounded(self):
+        """The drivers candidate fetch must carry a lat/lng bounding box.
+
+        Regression: an un-geo-filtered LIMIT 500 fetch of all online drivers
+        meant that above 500 candidates province-wide the nearest driver
+        could sit in row 501 → false "no drivers" → ride auto-cancelled.
+        """
+        from backend.routes import rides as rides_mod
+
+        get_rows_mock = AsyncMock(return_value=[])
+
+        with (
+            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=self._RIDE_BASE)),
+            patch("backend.routes.rides.db_supabase.get_rows", get_rows_mock),
+            patch(
+                "backend.routes.rides.dispatch.resolve_matching_config",
+                AsyncMock(return_value=("nearest", 4.0, 10.0, 3, False)),
+            ),
+            patch("backend.routes.rides.get_app_settings", AsyncMock(return_value={})),
+            patch("backend.routes.rides.spawn", MagicMock()),
+            patch("backend.routes.rides.asyncio.create_task", MagicMock()),
+        ):
+            await rides_mod.match_driver_to_ride(ride_id=self._RIDE_BASE["id"])
+
+        driver_fetches = [c for c in get_rows_mock.call_args_list if c.args and c.args[0] == "drivers"]
+        assert driver_fetches, "Expected a drivers candidate fetch"
+        filt = driver_fetches[0].args[1]
+        box = filt.get("$and")
+        assert box, f"drivers fetch must be geo-bounded, got filter: {filt}"
+        bounded_cols = {col for clause in box for col in clause}
+        assert bounded_cols == {"lat", "lng"}
+        # Box must bracket the pickup on both axes.
+        flat = {(col, op): val for clause in box for col, pred in clause.items() for op, val in pred.items()}
+        assert flat[("lat", "$gte")] < self._RIDE_BASE["pickup_lat"] < flat[("lat", "$lte")]
+        assert flat[("lng", "$gte")] < self._RIDE_BASE["pickup_lng"] < flat[("lng", "$lte")]
+
+    @pytest.mark.asyncio
     async def test_dispatch_payload_includes_countdown_seconds(self):
         """new_ride_assignment WS payload carries the per-offer countdown."""
         from backend.routes import rides as rides_mod

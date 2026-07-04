@@ -585,6 +585,43 @@ def test_ws_ride_status_update_echoes_db_status_not_client_string(app_with_ws):
         _stop_patches(patches)
 
 
+def test_ws_ride_status_update_burst_is_cooled_down(app_with_ws):
+    """Each ride_status_update echo costs a get_ride read plus a rider send
+    and an all-admin broadcast; the 30 msg/s socket cap alone would let a
+    participant amplify that against the DB and every admin console. Frames
+    inside the per-connection RIDE_STATUS_ECHO_COOLDOWN_S window are dropped
+    silently (real transitions are broadcast by the HTTP handlers anyway)."""
+    own_ride = {
+        "id": "ride_c5_burst",
+        "rider_id": _C5_RIDER["id"],
+        "driver_id": "driver_x",
+        "status": "driver_arrived",
+    }
+    send_personal = AsyncMock()
+    broadcast_admins = AsyncMock()
+    patches = _c5_patches(own_ride, send_personal, broadcast_admins)
+    try:
+        client = TestClient(app_with_ws)
+        with client.websocket_connect(f"/ws/rider/{_C5_RIDER['id']}") as ws:
+            ws.send_json({"type": "auth", "token": "valid-firebase-token"})
+            assert ws.receive_json()["type"] == "auth_success"
+
+            for _ in range(3):
+                ws.send_json({"type": "ride_status_update", "ride_id": "ride_c5_burst", "status": "completed"})
+
+            # Sequential message loop: a nearby_drivers response means every
+            # frame above has been fully processed.
+            ws.send_json({"type": "get_nearby_drivers", "lat": 52.13, "lng": -106.67})
+            assert ws.receive_json()["type"] == "nearby_drivers"
+
+        relayed = _status_relays(send_personal)
+        assert len(relayed) == 1, f"burst must collapse to one echo, got {len(relayed)}"
+        admin_relayed = _status_relays(broadcast_admins)
+        assert len(admin_relayed) == 1, "admin fan-out must be cooled down too"
+    finally:
+        _stop_patches(patches)
+
+
 @pytest.mark.anyio
 async def test_ws_rate_limit_response_keeps_socket_open(app_with_ws):
     """When the rate limit is exceeded the server sends `rate_limited` but

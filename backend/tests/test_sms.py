@@ -75,6 +75,31 @@ class TestSMSService:
             assert "error" in result
 
     @pytest.mark.asyncio
+    async def test_send_sms_failure_error_is_pii_free(self):
+        """PIPEDA: Twilio exception text embeds the destination number
+        ("The 'To' number +1306... is not a valid phone number") and the SOS
+        path logs the returned 'error' verbatim — so it must carry only the
+        exception type and Twilio code/status, never str(e)."""
+        from backend.sms_service import send_sms
+
+        class FakeTwilioRestException(Exception):
+            def __init__(self):
+                super().__init__("Unable to create record: The 'To' number +13065551234 is not a valid phone number.")
+                self.code = 21211
+                self.status = 400
+
+        with patch("twilio.rest.Client") as mock_client:
+            mock_client.return_value.messages.create.side_effect = FakeTwilioRestException()
+
+            result = await send_sms(
+                "+13065551234", "Test message", twilio_sid="AC123", twilio_token="token", twilio_from="+10000000000"
+            )
+
+        assert result["success"] is False
+        assert "3065551234" not in result["error"], "destination number leaked into the error field"
+        assert result["error"] == "FakeTwilioRestException code=21211 status=400"
+
+    @pytest.mark.asyncio
     async def test_send_otp_sms(self):
         """Test sending OTP SMS."""
         from backend.sms_service import send_otp_sms

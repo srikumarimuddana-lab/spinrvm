@@ -70,6 +70,10 @@ area:money:
           - 'backend/routes/payouts.py'
           - 'backend/utils/surge_engine.py'
           - 'backend/utils/payment_retry.py'
+          # drivers.py holds Stripe Transfer/Payout + leaderboard earnings;
+          # rides.py holds process_payment settlement + cancellation fees.
+          - 'backend/routes/drivers.py'
+          - 'backend/routes/rides.py'
 
 area:auth:
   - changed-files:

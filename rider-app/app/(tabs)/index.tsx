@@ -40,7 +40,7 @@ const PROMO_MESSAGES: PromoMessage[] = [
   {
     icon: 'megaphone',
     title: 'Ride local. Support local.',
-    text: 'We take 0% commission. 100% of\nyour fare goes to your driver.',
+    text: 'Spinr takes no cut — 100% of\nyour fare goes to your driver.',
   },
   {
     icon: 'leaf',

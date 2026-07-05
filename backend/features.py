@@ -880,17 +880,24 @@ async def calculate_all_fees(
     return result
 
 
-@support_router.get("/rides/fare-estimate")
-async def fare_estimate(
-    pickup_lat: float = Query(...),
-    pickup_lng: float = Query(...),
-    dropoff_lat: float = Query(...),
-    dropoff_lng: float = Query(...),
-    distance_km: float = Query(...),
-    duration_minutes: int = Query(...),
-    vehicle_type_id: str = Query(...),
+async def compute_fare_estimate(
+    pickup_lat: float,
+    pickup_lng: float,
+    dropoff_lat: float,
+    dropoff_lng: float,
+    distance_km: float,
+    duration_minutes: int,
+    vehicle_type_id: str,
+    *,
+    surge_override: "Decimal | None" = None,
 ):
-    """Full fare estimate including base fare, area fees, and taxes."""
+    """Canonical fare pipeline (base/distance/time/booking + area fees + tax).
+
+    Callable form of the /rides/fare-estimate endpoint so server-side bookers
+    (corporate guest booking) share the exact same formula. ``surge_override``
+    pins the multiplier — corporate-paid rides are always 1.0x (surge never
+    applies to company-billed trips; see routes.rides._is_corporate_paid).
+    """
     fare_config = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("fare_configs", {"vehicle_type_id": vehicle_type_id}, limit=1)
     )
@@ -899,9 +906,11 @@ async def fare_estimate(
     # Resolve surge from the service area covering the pickup point
     all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=100)
     surge = Decimal("1")
+    matched_area_id = None
     for area in all_areas:
         poly = get_service_area_polygon(area)
         if poly and point_in_polygon(pickup_lat, pickup_lng, poly):
+            matched_area_id = area.get("id")
             # Gate on the per-area surge master toggle, same as the main fare
             # builders (fare_service / routes.fares). Without this, a stale
             # surge_active flag or parked multiplier on a disabled area would
@@ -910,6 +919,8 @@ async def fare_estimate(
             if area.get("surge_enabled") and area.get("surge_active") and area.get("surge_multiplier", 1.0) > 1.0:
                 surge = min(_fare_d(area["surge_multiplier"]), _fare_d(SURGE_CAP))
             break
+    if surge_override is not None:
+        surge = surge_override
 
     fb = calculate_fare(fare_info, distance_km, duration_minutes, surge=surge)
     subtotal = _fare_f(fb.total_fare)
@@ -940,7 +951,35 @@ async def fare_estimate(
         "tax_breakdown": fees_result["tax_breakdown"],
         "grand_total": grand_total,
         "service_area": fees_result.get("service_area_name"),
+        # Consumed by server-side bookers (corporate guest booking) that turn
+        # this estimate straight into a ride row; harmless extras for the
+        # public endpoint's JSON.
+        "service_area_id": matched_area_id,
+        "driver_earnings": _fare_f(fb.driver_earnings),
+        "admin_earnings": _fare_f(fb.admin_earnings),
     }
+
+
+@support_router.get("/rides/fare-estimate")
+async def fare_estimate(
+    pickup_lat: float = Query(...),
+    pickup_lng: float = Query(...),
+    dropoff_lat: float = Query(...),
+    dropoff_lng: float = Query(...),
+    distance_km: float = Query(...),
+    duration_minutes: int = Query(...),
+    vehicle_type_id: str = Query(...),
+):
+    """Full fare estimate including base fare, area fees, and taxes."""
+    return await compute_fare_estimate(
+        pickup_lat=pickup_lat,
+        pickup_lng=pickup_lng,
+        dropoff_lat=dropoff_lat,
+        dropoff_lng=dropoff_lng,
+        distance_km=distance_km,
+        duration_minutes=duration_minutes,
+        vehicle_type_id=vehicle_type_id,
+    )
 
 
 @support_router.get("/area-config")

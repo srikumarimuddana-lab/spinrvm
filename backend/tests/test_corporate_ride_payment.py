@@ -442,3 +442,151 @@ def test_company_allowance_missing_membership_returns_400(test_client, rider_ove
         for p in patchers:
             p.stop()
     assert resp.status_code == 400
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  C. settle_corporate — payer resolution via rides.corporate_member_id
+#     (guest bookings: the BOOKING EMPLOYEE pays, the rider is the company's
+#     customer with no membership at all; existing tests above keep covering
+#     the legacy rider-derived fallback because their ride carries no stamp)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_BOOKER_MEMBER_ID = "member_booker"
+_BOOKER_USER_ID = "user_booker"
+
+
+def _fake_guest_corporate_ride(total_fare=25.0):
+    return {
+        **_fake_corporate_ride(total_fare),
+        "rider_id": "guest_rider_1",  # the customer — NOT a member
+        "corporate_member_id": _BOOKER_MEMBER_ID,
+        "guest_booking": True,
+    }
+
+
+def _booker_member(status="active", company_id=_CORP_COMPANY_ID):
+    return {
+        "id": _BOOKER_MEMBER_ID,
+        "company_id": company_id,
+        "user_id": _BOOKER_USER_ID,
+        "status": status,
+        "policy_override": False,
+    }
+
+
+def _settle_patches(*, member_lookup, allowance, memberships=None):
+    """Unit-level patches for calling settle_corporate directly. Targets the
+    payment_service module's own references so the tests are immune to the
+    routes.rides module-identity quirks the endpoint-driven tests above hit."""
+    base = "backend.services.payment_service."
+    return {
+        base + "db_supabase.get_corporate_member_by_id": AsyncMock(return_value=member_lookup),
+        base + "db_supabase.list_active_memberships_for_user": AsyncMock(
+            return_value=memberships if memberships is not None else []
+        ),
+        base + "db_supabase.get_member_allowance": AsyncMock(return_value=allowance),
+        base + "db_supabase.get_corporate_wallet_by_company": AsyncMock(
+            return_value={"id": _WALLET_ID, "balance": 1000.0}
+        ),
+        base + "db_supabase.get_corporate_policy": AsyncMock(return_value={}),
+        base + "db_supabase.insert_one": AsyncMock(return_value=None),
+        base + "db_supabase.update_ride": AsyncMock(return_value=None),
+        base + "corporate_allowance_service.apply_rollback": AsyncMock(return_value={"transaction_id": "t1"}),
+        base + "corporate_wallet_service.apply_adjustment": AsyncMock(return_value={"transaction_id": "t2"}),
+    }
+
+
+async def _call_settle(ride, patch_dict):
+    from decimal import Decimal
+
+    from backend.services import payment_service as ps
+
+    patchers, mocks = _apply_all_patches(patch_dict)
+    try:
+        result = await ps.settle_corporate(ride, _RIDE_ID, Decimal("25.00"), Decimal("0"))
+    finally:
+        for p in patchers:
+            p.stop()
+    return result, mocks
+
+
+@pytest.mark.anyio
+async def test_settle_uses_stamped_member_not_rider_membership():
+    """A ride stamped with corporate_member_id settles against that member —
+    the rider (a guest customer) has NO membership and the rider-derived
+    lookup must not even run. Partial allowance forces a master split so the
+    ledger actor is asserted too."""
+    allowance = {"id": _ALLOWANCE_ID, "type": "fixed_recurring", "amount": 100, "used": 90}
+    deps = _settle_patches(member_lookup=_booker_member(), allowance=allowance)
+    result, mocks = await _call_settle(_fake_guest_corporate_ride(), deps)
+    base = "backend.services.payment_service."
+
+    assert result.success is True
+    mocks[base + "db_supabase.get_corporate_member_by_id"].assert_called_once_with(_BOOKER_MEMBER_ID)
+    mocks[base + "db_supabase.list_active_memberships_for_user"].assert_not_called()
+
+    rollback_kwargs = mocks[base + "corporate_allowance_service.apply_rollback"].call_args.kwargs
+    assert rollback_kwargs["member_id"] == _BOOKER_MEMBER_ID
+
+    adj_kwargs = mocks[base + "corporate_wallet_service.apply_adjustment"].call_args.kwargs
+    assert adj_kwargs["actor_user_id"] == _BOOKER_USER_ID, "ledger actor must be the payer, not the guest"
+
+    ps_rows = [
+        c.args[1] for c in mocks[base + "db_supabase.insert_one"].call_args_list if c.args[0] == "ride_payment_sources"
+    ]
+    assert ps_rows and ps_rows[0]["member_id"] == _BOOKER_MEMBER_ID
+
+
+@pytest.mark.anyio
+async def test_settle_stamped_member_wrong_company_leaves_pending():
+    """A stamped member from another company is a contract violation: fail
+    with 400, debit nothing, leave the ride pending for retry/ops."""
+    allowance = {"id": _ALLOWANCE_ID, "type": "fixed_recurring", "amount": 200, "used": 0}
+    deps = _settle_patches(member_lookup=_booker_member(company_id="some_other_company"), allowance=allowance)
+    result, mocks = await _call_settle(_fake_guest_corporate_ride(), deps)
+    base = "backend.services.payment_service."
+
+    assert result.success is False
+    assert result.status_code == 400
+    mocks[base + "corporate_allowance_service.apply_rollback"].assert_not_called()
+    mocks[base + "corporate_wallet_service.apply_adjustment"].assert_not_called()
+    pending_writes = [
+        c
+        for c in mocks[base + "db_supabase.update_ride"].call_args_list
+        if c.args[1].get("payment_status") == "pending"
+    ]
+    assert pending_writes, "ride must be left payment_status=pending"
+
+
+@pytest.mark.anyio
+async def test_settle_stamped_member_inactive_leaves_pending():
+    """A suspended/removed stamped member must not be billed."""
+    allowance = {"id": _ALLOWANCE_ID, "type": "fixed_recurring", "amount": 200, "used": 0}
+    deps = _settle_patches(member_lookup=_booker_member(status="suspended"), allowance=allowance)
+    result, mocks = await _call_settle(_fake_guest_corporate_ride(), deps)
+    base = "backend.services.payment_service."
+
+    assert result.success is False
+    assert result.status_code == 400
+    mocks[base + "corporate_allowance_service.apply_rollback"].assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_settle_without_stamp_falls_back_to_rider_membership():
+    """Legacy rides (no corporate_member_id) keep the rider-derived path."""
+    allowance = {"id": _ALLOWANCE_ID, "type": "fixed_recurring", "amount": 200, "used": 0}
+    rider_membership = {
+        "id": _MEMBER_ID,
+        "company_id": _CORP_COMPANY_ID,
+        "user_id": "rider_1",
+        "status": "active",
+    }
+    deps = _settle_patches(member_lookup=None, allowance=allowance, memberships=[rider_membership])
+    result, mocks = await _call_settle(_fake_corporate_ride(), deps)
+    base = "backend.services.payment_service."
+
+    assert result.success is True
+    mocks[base + "db_supabase.get_corporate_member_by_id"].assert_not_called()
+    mocks[base + "db_supabase.list_active_memberships_for_user"].assert_called_once_with("rider_1")
+    rollback_kwargs = mocks[base + "corporate_allowance_service.apply_rollback"].call_args.kwargs
+    assert rollback_kwargs["member_id"] == _MEMBER_ID

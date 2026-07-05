@@ -91,6 +91,12 @@ function routeFromNotificationData(data: Record<string, string> | undefined) {
       // ride by id and re-establishes the live connection.
       router.push({ pathname: '/driver-arriving', params: { rideId: ride_id } } as any);
       break;
+    case 'corporate_ride_booked':
+      // A company booked this ride FOR the rider (Spinr for Business guest
+      // booking where the customer already has the app). Same landing as a
+      // scheduled dispatch: the finding-driver screen fetches by id.
+      if (ride_id) router.push({ pathname: '/driver-arriving', params: { rideId: ride_id } } as any);
+      break;
     case 'ride_started':
       if (ride_id) router.push({ pathname: '/ride-in-progress', params: { rideId: ride_id } } as any);
       break;
@@ -528,7 +534,13 @@ function RootLayout() {
       // currentRide was cleared after booking (/rides/active excludes
       // 'scheduled'), so proactively reload it and route to the finding-driver
       // screen instead of leaving the rider stranded on home with only a banner.
-      if (remoteMessage?.data?.type === 'scheduled_ride_dispatched') {
+      if (
+        remoteMessage?.data?.type === 'scheduled_ride_dispatched' ||
+        remoteMessage?.data?.type === 'corporate_ride_booked'
+      ) {
+        // corporate_ride_booked: a company booked a ride FOR this rider
+        // (Spinr for Business). Identical handling — load the ride by id and
+        // land on the finding-driver screen.
         const dispatchedRideId = remoteMessage?.data?.ride_id as string | undefined;
         if (dispatchedRideId) {
           useRideStore.getState().fetchRide(dispatchedRideId).catch((e) =>

@@ -27,7 +27,7 @@ import logging
 import os
 import random
 import socket
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 try:
@@ -537,6 +537,46 @@ async def retry_failed_payments():
                         logger.debug(f"Payment failure push notification failed: {push_err}")
 
 
+async def sweep_guest_corporate_settlements() -> None:
+    """Settle corporate guest rides stuck at payment_status='pending' well
+    after completion. The completion hook (routes/drivers.py::complete_ride)
+    normally settles these server-side — a guest customer has no app, so
+    nobody ever calls /process-payment — and this sweep is the safety net
+    when that spawned task died with its process. Replay-safe: the atomic
+    pending→processing claim lives inside auto_settle_guest_corporate, so a
+    double-run (or a race with a late completion hook) matches zero rows and
+    no-ops.
+    """
+    try:
+        from ..services.payment_service import auto_settle_guest_corporate
+    except ImportError:
+        from services.payment_service import auto_settle_guest_corporate  # type: ignore
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    try:
+        stuck = await db.get_rows(
+            "rides",
+            {
+                "payment_method": "company_allowance",
+                "guest_booking": True,
+                "payment_status": "pending",
+                "status": "completed",
+                "ride_completed_at": {"$lte": cutoff},
+            },
+            limit=50,
+            columns="id",
+        )
+    except Exception:
+        logger.error("guest settlement sweep: candidate query failed", exc_info=True)
+        return
+
+    for row in stuck or []:
+        try:
+            await auto_settle_guest_corporate(row["id"])
+        except Exception:
+            logger.error("guest settlement sweep: settle failed for ride %s", row.get("id"), exc_info=True)
+
+
 async def payment_retry_loop():
     """Background loop that retries failed payments every RETRY_INTERVAL_SECONDS."""
     logger.info(f"Payment retry service started (interval={RETRY_INTERVAL_SECONDS}s)")
@@ -563,6 +603,10 @@ async def payment_retry_loop():
             await retry_stuck_payouts()
         except Exception as e:
             logger.error(f"Payout retry loop error: {e}", exc_info=True)
+        try:
+            await sweep_guest_corporate_settlements()
+        except Exception as e:
+            logger.error(f"Guest settlement sweep error: {e}", exc_info=True)
         _record_heartbeat("payment_retry (5min)")
         # B-P3-2: per-tick ±10% jitter so replicas don't tick in lockstep
         # and create a thundering herd against Stripe + Supabase. Tested

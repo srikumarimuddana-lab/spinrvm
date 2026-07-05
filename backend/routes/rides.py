@@ -769,12 +769,14 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     # filter_and_rank_drivers stays the exact haversine gate. Anchored on the
     # same nav-snapped pickup that filter_and_rank_drivers ranks against.
     #
-    # No dedicated (lat, lng) index: the online+available slice is small
-    # enough that a scan of it is cheap, and drivers already carries a
-    # trigger-maintained PostGIS location_geog + partial GiST index
-    # (migration 170) — a future radius query should go through an RPC on
-    # that column rather than a second btree that every location heartbeat
-    # would have to maintain.
+    # No dedicated (lat, lng) index — deliberate (PR #2028 review):
+    # idx_drivers_online_available_recency (migration 138, partial WHERE
+    # is_online AND is_available) already bounds this scan to the online
+    # fleet, so the box predicates only filter within that small walk; and
+    # drivers already carries a trigger-maintained PostGIS location_geog +
+    # partial GiST index (migration 170) — a future radius query should go
+    # through an RPC on that column rather than a second btree that every
+    # location heartbeat would have to maintain.
     _box_lat = ride["pickup_nav_lat"] if ride.get("pickup_nav_lat") is not None else ride["pickup_lat"]
     _box_lng = ride["pickup_nav_lng"] if ride.get("pickup_nav_lng") is not None else ride["pickup_lng"]
     _dispatch_filter: dict = {
@@ -1892,6 +1894,11 @@ async def compute_ride_estimates(
     # (is_available=True in DB but heartbeat expired) tend to carry stale
     # went_online_at values and fall toward the tail, so they are less likely
     # to crowd real drivers out of the cap before the presence filter below.
+    # Scan cost is bounded by idx_drivers_online_available_recency
+    # (migration 138, partial WHERE is_online AND is_available, ordered by
+    # went_online_at DESC): the planner walks it in order and the lat/lng box
+    # only filters within that online-fleet-sized walk, so the geo predicates
+    # need no index of their own (see the dispatch-path note above).
     all_drivers = await db_supabase.get_rows(
         "drivers",
         {

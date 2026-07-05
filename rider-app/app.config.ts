@@ -150,6 +150,12 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         'expo-image',
         'expo-secure-store',
         'expo-web-browser',
+        // Voice-to-text in the AI assistant. Native module: mic renders only
+        // in binaries built with it (ai-assistant.tsx guards the require).
+        ['expo-speech-recognition', {
+            microphonePermission: 'Spinr uses the microphone so you can dictate messages to the AI assistant.',
+            speechRecognitionPermission: 'Spinr uses speech recognition to turn your voice into text for the AI assistant.',
+        }],
         ['expo-splash-screen', {
             image: './assets/images/splash-blank.png',
             resizeMode: 'contain',

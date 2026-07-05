@@ -41,7 +41,20 @@ import AiAuroraBackground from '../components/AiAuroraBackground';
 import AiWelcomeOrb from '../components/AiWelcomeOrb';
 import { useAiChatStore } from '../store/aiChatStore';
 import { useRideStore } from '../store/rideStore';
+import { showToast } from '../store/toastStore';
 import { activeRideRouteFor } from '../utils/activeRideRoute';
+
+// expo-speech-recognition is a native module: it exists only in binaries
+// built after it was added (EAS dev-client / store builds). The guarded
+// require keeps Expo Go and older installed builds working — they simply
+// don't render the mic button.
+let SpeechRecognition: any = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  SpeechRecognition = require('expo-speech-recognition').ExpoSpeechRecognitionModule;
+} catch {
+  SpeechRecognition = null;
+}
 
 const QUICK_PROMPTS = [
   "Where's my driver?",
@@ -194,6 +207,50 @@ export default function AiAssistantScreen() {
   const loadConfig = useAiChatStore((s) => s.loadConfig);
 
   const [input, setInput] = React.useState('');
+  const [isListening, setIsListening] = React.useState(false);
+
+  // Voice input: partial transcripts stream into the input field while
+  // listening; recognition ends itself on silence (continuous: false), so
+  // the rider reviews the text and taps send — voice never auto-sends.
+  useEffect(() => {
+    if (!SpeechRecognition) return;
+    const subs = [
+      SpeechRecognition.addListener('result', (e: any) => {
+        const transcript = e?.results?.[0]?.transcript;
+        if (typeof transcript === 'string') setInput(transcript);
+      }),
+      SpeechRecognition.addListener('end', () => setIsListening(false)),
+      SpeechRecognition.addListener('error', (e: any) => {
+        setIsListening(false);
+        // 'aborted' is the rider tapping stop; 'no-speech' is silence —
+        // neither is a failure worth a toast.
+        if (e?.error && e.error !== 'aborted' && e.error !== 'no-speech') {
+          showToast('Voice input failed', 'Could not capture audio — please try again or type instead.', 'warning');
+        }
+      }),
+    ];
+    return () => subs.forEach((s) => s?.remove?.());
+  }, []);
+
+  const handleMicPress = useCallback(async () => {
+    if (!SpeechRecognition) return;
+    if (isListening) {
+      SpeechRecognition.stop();
+      return;
+    }
+    try {
+      const perms = await SpeechRecognition.requestPermissionsAsync();
+      if (!perms?.granted) {
+        showToast('Microphone needed', 'Allow microphone access in Settings to use voice input.', 'warning');
+        return;
+      }
+      setIsListening(true);
+      SpeechRecognition.start({ lang: 'en-CA', interimResults: true, continuous: false });
+    } catch {
+      setIsListening(false);
+      showToast('Voice input failed', 'Could not start voice capture — please type instead.', 'warning');
+    }
+  }, [isListening]);
 
   // Leaving the chat during an active ride lands on the screen that owns
   // the ride — never home. replace (not back/pop) so the chat doesn't
@@ -394,6 +451,20 @@ export default function AiAssistantScreen() {
               returnKeyType="send"
               blurOnSubmit={false}
             />
+            {SpeechRecognition && !isStreaming ? (
+              <TouchableOpacity
+                style={[styles.micButton, isListening && styles.micButtonActive]}
+                onPress={handleMicPress}
+                accessibilityLabel={isListening ? 'Stop voice input' : 'Start voice input'}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name={isListening ? 'mic' : 'mic-outline'}
+                  size={20}
+                  color={isListening ? '#fff' : colors.textDim}
+                />
+              </TouchableOpacity>
+            ) : null}
             {isStreaming ? (
               <TouchableOpacity style={styles.stopButton} onPress={stopStreaming} accessibilityLabel="Stop">
                 <Ionicons name="stop" size={18} color="#fff" />
@@ -601,6 +672,17 @@ const createStyles = (colors: ThemeColors) =>
       borderRadius: 19,
       justifyContent: 'center',
       alignItems: 'center',
+    },
+    micButton: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginRight: 4,
+    },
+    micButtonActive: {
+      backgroundColor: '#EF4444',
     },
     stopButton: {
       width: 38,

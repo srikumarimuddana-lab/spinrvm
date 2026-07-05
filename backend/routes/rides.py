@@ -2123,6 +2123,15 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                 "No nearby drivers were found. Your ride has been automatically cancelled. Please try again.",
                 {"type": "ride_cancelled", "ride_id": r_id, "is_auto": "true"},
             )
+            if current_ride.get("guest_booking"):
+                # Corporate guest customer (no app): tell them by SMS —
+                # otherwise they'd stand at the pickup point waiting for a
+                # car that is never coming.
+                try:
+                    from ..services.guest_notification_service import notify_guest_cancelled
+                except ImportError:
+                    from services.guest_notification_service import notify_guest_cancelled  # type: ignore
+                spawn(notify_guest_cancelled(dict(current_ride)))
             logger.info(f"Ride {r_id} auto-cancelled after {timeout_seconds}s - no driver found")
     except Exception as e:
         logger.error(f"Ride timeout handler error for {r_id}: {e}", exc_info=True)
@@ -2957,55 +2966,11 @@ async def create_ride(
                 }
             ride_data.update(_preauth.fields)
 
-    # ``insert_ride`` returns the row Supabase just wrote — use it directly
-    # instead of a follow-up ``get_ride`` round-trip. Fall back to the
-    # local ride_data if the driver returns None (e.g. stub DB in tests).
-    #
-    # ride_code (migration 40) is a short SPR-XXXXXX string operators and
-    # riders can quote. The UUID in ride_data["id"] stays primary key.
-    # On the astronomically-unlikely unique-constraint collision we retry
-    # with a fresh code; on PGRST204 ("column does not exist", migration
-    # hasn't landed yet) fall back to inserting without the code.
-    inserted = None
-    last_exc: Optional[Exception] = None
-    for _attempt in range(3):
-        ride_data["ride_code"] = generate_ride_code()
-        try:
-            inserted = await db_supabase.insert_ride(ride_data)
-            break
-        except Exception as e:
-            last_exc = e
-            # db_supabase.run_sync wraps PostgREST errors in DatabaseError/
-            # DuplicateRecordError, so str(e) is a generic sentinel — the SQLSTATE
-            # and constraint name live in details['original']/__cause__. Match the
-            # real text + structured code, not str(e) (which silently missed every
-            # branch below and fell through to a generic 409/503).
-            msg = db_error_text(e)
-            code = pg_error_code(e).upper()
-            if code == "PGRST204" or "pgrst204" in msg or "column" in msg:
-                ride_data.pop("ride_code", None)
-                inserted = await db_supabase.insert_ride(ride_data)
-                break
-            if "rides_one_active_per_rider" in msg:
-                raise HTTPException(status_code=409, detail="You already have an active ride") from e
-            if "idx_rides_rider_idempotency_key" in msg:
-                # DB-enforced idempotency: concurrent duplicate request lost the
-                # race. Return the already-created ride instead of a new charge.
-                existing = await db_supabase.find_one(
-                    "rides",
-                    {"idempotency_key": ride_data.get("idempotency_key"), "rider_id": current_user["id"]},
-                )
-                if existing:
-                    return existing
-                raise HTTPException(status_code=409, detail="Duplicate ride request") from e
-            if code == "23505" or "unique" in msg or "duplicate" in msg:
-                continue  # retry with a new code for ride_code conflicts
-            raise
-    else:
-        logger.error(f"create_ride: could not allocate unique ride_code after 3 tries: {last_exc}")
-        raise HTTPException(status_code=503, detail="Could not allocate ride code")
-
-    fresh_ride = inserted or ride_data
+    fresh_ride, _idempotent_reuse = await _insert_ride_with_code(ride_data, current_user["id"])
+    if _idempotent_reuse:
+        # DB-enforced idempotency: a concurrent duplicate request already
+        # created this ride — return it instead of double-charging.
+        return fresh_ride
 
     # ── Apply promo code if provided ──
     if body.promo_code:
@@ -3230,6 +3195,67 @@ async def create_ride(
         updated_ride["promo_error"] = fresh_ride["promo_error"]
 
     return serialize_doc(updated_ride)
+
+
+async def _insert_ride_with_code(ride_data: dict, rider_id: str) -> tuple[dict, bool]:
+    """Insert a ride row, allocating a unique SPR-XXXXXX ride_code.
+
+    Shared by create_ride and the corporate guest-booking service so the
+    collision/idempotency semantics live in one place. Returns
+    ``(ride_row, idempotent_reuse)`` — when ``idempotent_reuse`` is True the
+    row is a previously-created ride matched by idempotency_key and the
+    caller must NOT run post-insert side effects (promo, dispatch) again.
+
+    ``insert_ride`` returns the row Supabase just wrote — used directly
+    instead of a follow-up ``get_ride`` round-trip; falls back to the local
+    ride_data if the driver returns None (e.g. stub DB in tests).
+
+    ride_code (migration 40) is a short SPR-XXXXXX string operators and
+    riders can quote. The UUID in ride_data["id"] stays primary key. On the
+    astronomically-unlikely unique-constraint collision we retry with a
+    fresh code; on PGRST204 ("column does not exist", migration hasn't
+    landed yet) fall back to inserting without the code.
+    """
+    inserted = None
+    last_exc: Optional[Exception] = None
+    for _attempt in range(3):
+        ride_data["ride_code"] = generate_ride_code()
+        try:
+            inserted = await db_supabase.insert_ride(ride_data)
+            break
+        except Exception as e:
+            last_exc = e
+            # db_supabase.run_sync wraps PostgREST errors in DatabaseError/
+            # DuplicateRecordError, so str(e) is a generic sentinel — the SQLSTATE
+            # and constraint name live in details['original']/__cause__. Match the
+            # real text + structured code, not str(e) (which silently missed every
+            # branch below and fell through to a generic 409/503).
+            msg = db_error_text(e)
+            code = pg_error_code(e).upper()
+            if code == "PGRST204" or "pgrst204" in msg or "column" in msg:
+                ride_data.pop("ride_code", None)
+                inserted = await db_supabase.insert_ride(ride_data)
+                break
+            if "rides_one_active_per_rider" in msg:
+                raise HTTPException(status_code=409, detail="You already have an active ride") from e
+            if "idx_rides_rider_idempotency_key" in msg:
+                # Concurrent duplicate request lost the race — surface the
+                # already-created ride to the caller.
+                existing = await db_supabase.find_one(
+                    "rides",
+                    {"idempotency_key": ride_data.get("idempotency_key"), "rider_id": rider_id},
+                )
+                if existing:
+                    return existing, True
+                raise HTTPException(status_code=409, detail="Duplicate ride request") from e
+            if code == "23505" or "unique" in msg or "duplicate" in msg:
+                continue  # retry with a new code for ride_code conflicts
+            raise
+    else:
+        logger.error(f"_insert_ride_with_code: could not allocate unique ride_code after 3 tries: {last_exc}")
+        raise HTTPException(status_code=503, detail="Could not allocate ride code")
+
+    return inserted or ride_data, False
 
 
 async def _prep_and_dispatch(

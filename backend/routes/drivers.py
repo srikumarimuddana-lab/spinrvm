@@ -4290,6 +4290,16 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
                 data={"type": "driver_accepted", "ride_id": str(ride_id)},
             )
         )
+        if ride.get("guest_booking"):
+            # Corporate guest customer (no app): driver + vehicle + pickup
+            # OTP + live tracking link by SMS. No-ops if the customer
+            # claimed their account since booking (is_guest flipped — the
+            # push above already reaches them).
+            try:
+                from ..services.guest_notification_service import notify_guest_driver_assigned
+            except ImportError:
+                from services.guest_notification_service import notify_guest_driver_assigned  # type: ignore
+            spawn(notify_guest_driver_assigned(dict(ride), dict(driver)))
     await manager.broadcast_ride_status(ride_id, RideStatus.DRIVER_ACCEPTED, rider_id=(ride or {}).get("rider_id"))
 
     # Start the rider's live activity (no-op until the app registers its token).
@@ -4469,6 +4479,13 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
                 data={"type": "driver_arrived", "ride_id": str(ride_id)},
             )
         )
+        if ride.get("guest_booking"):
+            # Guest customer: "give the driver code XXXX" by SMS.
+            try:
+                from ..services.guest_notification_service import notify_guest_driver_arrived
+            except ImportError:
+                from services.guest_notification_service import notify_guest_driver_arrived  # type: ignore
+            spawn(notify_guest_driver_arrived(dict(ride)))
     await manager.broadcast_ride_status(ride_id, RideStatus.DRIVER_ARRIVED, rider_id=ride.get("rider_id"))
 
     # Update the rider's live activity to "driver arrived".
@@ -5132,6 +5149,17 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         raise RideStateError(
             f"Ride {ride_id} is no longer in_progress — completion already processed by a concurrent request"
         )
+
+    # Corporate guest rides settle server-side: the guest customer has no app
+    # and never calls /process-payment. Fire-and-forget — the atomic
+    # pending→processing claim lives inside auto_settle_guest_corporate, and
+    # the payment-retry sweep re-drives it if this task dies with the process.
+    if ride.get("guest_booking") and ride.get("payment_method") == "company_allowance":
+        try:
+            from ..services.payment_service import auto_settle_guest_corporate
+        except ImportError:
+            from services.payment_service import auto_settle_guest_corporate  # type: ignore
+        spawn(auto_settle_guest_corporate(ride_id))
 
     # ── Record incentive claims ──────────────────────────────────
     # Fetch active incentives matching this ride's service area / vehicle type

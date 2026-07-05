@@ -283,8 +283,40 @@ async def settle_corporate(
             status_code=400,
         )
 
-    memberships = await db_supabase.list_active_memberships_for_user(ride["rider_id"])
-    membership = next((m for m in memberships if m.get("company_id") == company_id), None)
+    # The payer is the member whose allowance is debited. Prefer the member
+    # stamped on the ride (rides.corporate_member_id, migration 36): for
+    # guest bookings that is the BOOKING EMPLOYEE — the rider (the company's
+    # customer) has no membership at all — and for self-booked work rides it
+    # is the rider's own membership, saving the list read. Legacy rides
+    # booked before the stamp fall back to deriving from the rider.
+    membership = None
+    stamped_member_id = ride.get("corporate_member_id")
+    if stamped_member_id:
+        candidate = await db_supabase.get_corporate_member_by_id(stamped_member_id)
+        if candidate and candidate.get("company_id") == company_id and candidate.get("status") == "active":
+            membership = candidate
+        else:
+            # A stamped member that doesn't belong to the ride's company (or
+            # is no longer active) is a contract violation — surface loudly
+            # and leave the ride pending rather than guessing a payer.
+            logger.error(
+                "[PAYMENT] ride %s corporate_member_id %s invalid for company %s (found=%s status=%s company=%s)",
+                ride_id,
+                stamped_member_id,
+                company_id,
+                bool(candidate),
+                (candidate or {}).get("status"),
+                (candidate or {}).get("company_id"),
+            )
+            await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
+            return PaymentResult(
+                success=False,
+                error="Corporate membership not found",
+                status_code=400,
+            )
+    else:
+        memberships = await db_supabase.list_active_memberships_for_user(ride["rider_id"])
+        membership = next((m for m in memberships if m.get("company_id") == company_id), None)
     if not membership:
         await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
         return PaymentResult(
@@ -326,7 +358,9 @@ async def settle_corporate(
                 wallet_id=corp_wallet["id"],
                 amount=-_f(master_debit),
                 notes=f"Ride fallback debit {ride_id}",
-                actor_user_id=ride.get("rider_id", "system"),
+                # Ledger actor = the PAYING member's user. For guest bookings
+                # the rider is the company's customer, not the payer.
+                actor_user_id=membership.get("user_id") or ride.get("rider_id", "system"),
                 floor=0.0,
             )
         except Exception as master_err:
@@ -405,6 +439,63 @@ async def settle_corporate(
         },
     )
     return PaymentResult(success=True, charged_amount=_money_str(total_charge))
+
+
+async def auto_settle_guest_corporate(ride_id: str) -> Optional[PaymentResult]:
+    """Server-side settlement for corporate GUEST rides.
+
+    A guest customer has no app and never calls /process-payment, so the
+    completion path (and the payment-retry sweep) drives settlement instead.
+    Replay-safe: the conditional pending/failed → processing claim below is
+    the same atomic gate process_payment uses — concurrent callers (driver
+    completion hook + retry sweep on another replica) match zero rows and
+    no-op. Guests cannot tip: tip is pinned to 0.
+    """
+    ride = await db_supabase.get_ride(ride_id)
+    if not ride:
+        logger.error("[PAYMENT] auto-settle: ride %s not found", ride_id)
+        return None
+    if not ride.get("guest_booking") or ride.get("payment_method") != "company_allowance":
+        return None
+    if ride.get("status") != "completed":
+        # Only completed rides settle — the caller hooks fire on completion,
+        # but the retry sweep must never settle an in-flight ride.
+        return None
+
+    claimed = None
+    for _claim_status in ("pending", "failed"):
+        claimed = await db_supabase.update_one(
+            "rides",
+            {"id": ride_id, "payment_status": _claim_status},
+            {"payment_status": "processing", "updated_at": datetime.now(timezone.utc).isoformat()},
+        )
+        if claimed:
+            break
+    if not claimed:
+        return None  # another replica/settlement won the claim — done
+
+    total = _round(_d(str(ride.get("grand_total") or ride.get("total_fare") or 0)))
+    try:
+        result = await settle_corporate(ride, ride_id, total_charge=total, tip_amount=Decimal("0"))
+    except Exception:
+        # settle_corporate resets payment_status itself on its known failure
+        # paths; an unexpected raise would strand the ride in 'processing' —
+        # release the claim so the retry sweep can pick it up again.
+        logger.error("[PAYMENT] auto-settle crashed for guest ride %s", ride_id, exc_info=True)
+        await db_supabase.update_one(
+            "rides",
+            {"id": ride_id, "payment_status": "processing"},
+            {"payment_status": "pending", "updated_at": datetime.now(timezone.utc).isoformat()},
+        )
+        return None
+    if not result.success:
+        logger.error(
+            "[PAYMENT] auto-settle failed for guest ride %s: %s (status %s)",
+            ride_id,
+            result.error,
+            result.status_code,
+        )
+    return result
 
 
 # ── Card (Stripe) settlement ─────────────────────────────────────────
@@ -819,7 +910,9 @@ async def settle_card(
 # ── Receipt ──────────────────────────────────────────────────────────
 
 
-async def send_ride_receipt(ride: dict, rider_id: str, tip_amount: Decimal, recipient_email: Optional[str] = None) -> bool:
+async def send_ride_receipt(
+    ride: dict, rider_id: str, tip_amount: Decimal, recipient_email: Optional[str] = None
+) -> bool:
     """Send receipt email. Returns True if email was sent.
 
     ``recipient_email`` overrides the destination address (admin can send the

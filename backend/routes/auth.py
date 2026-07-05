@@ -556,12 +556,21 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
             logger.info("User exists, creating token")
             session_id = str(uuid.uuid4())
             try:
+                _session_update: dict = {"current_session_id": session_id}
+                if existing_user.get("is_guest"):
+                    # Row was provisioned by a corporate guest booking
+                    # (services/guest_user_service). The phone owner just
+                    # proved possession via OTP — the account and its guest
+                    # ride history are theirs now.
+                    _session_update["is_guest"] = False
                 await db_supabase.update_one(
                     "users",
                     {"id": existing_user["id"]},
-                    {"current_session_id": session_id},
+                    _session_update,
                 )
                 existing_user["current_session_id"] = session_id
+                if existing_user.get("is_guest"):
+                    existing_user["is_guest"] = False
             except Exception as e:
                 logger.error(f"Could not update session_id for existing user: {e}", exc_info=True)
             # Mirror session_id in Redis so revocation propagates instantly across

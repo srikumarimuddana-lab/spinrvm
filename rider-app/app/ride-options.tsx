@@ -13,7 +13,6 @@ import {
   Animated,
   TextInput,
   Keyboard,
-  KeyboardAvoidingView,
 } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
@@ -119,6 +118,34 @@ function RideOptionsScreenContent() {
   const [showPromoSheet, setShowPromoSheet] = useState(false);
   const [promoInput, setPromoInput] = useState('');
   const [promoError, setPromoError] = useState('');
+  // Promo sheet keyboard tracking. KeyboardAvoidingView inside an RN Modal
+  // miscomputes its frame on iOS and left the sheet hovering mid-screen, so
+  // the sheet rides the keyboard explicitly instead: marginBottom animates to
+  // the keyboard height while it's up and back to 0 (flush with the screen
+  // edge) when it hides. Android needs none of this — the window itself
+  // resizes (softwareKeyboardLayoutMode: 'resize' in app.config.ts).
+  const promoSheetLift = useRef(new Animated.Value(0)).current;
+  const [promoKbVisible, setPromoKbVisible] = useState(false);
+  useEffect(() => {
+    if (Platform.OS !== 'ios') return;
+    const show = Keyboard.addListener('keyboardWillShow', (e) => {
+      setPromoKbVisible(true);
+      Animated.timing(promoSheetLift, {
+        toValue: e.endCoordinates.height,
+        duration: e.duration || 220,
+        useNativeDriver: false, // margin is a layout prop
+      }).start();
+    });
+    const hide = Keyboard.addListener('keyboardWillHide', (e) => {
+      setPromoKbVisible(false);
+      Animated.timing(promoSheetLift, {
+        toValue: 0,
+        duration: e.duration || 180,
+        useNativeDriver: false,
+      }).start();
+    });
+    return () => { show.remove(); hide.remove(); };
+  }, [promoSheetLift]);
   const [fareBreakdownOpen, setFareBreakdownOpen] = useState(false);
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean; title: string; message: string;
@@ -1015,10 +1042,11 @@ function RideOptionsScreenContent() {
       {/* ═══ Promo selection modal ═══ */}
       <Modal visible={showPromoSheet} animationType="slide" transparent onRequestClose={() => setShowPromoSheet(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowPromoSheet(false)}>
-          {/* Without this, the open keyboard (promo input) covers the sheet's
-              lower half on iOS — the Done button is visually there but sits
-              behind the keyboard, so taps never reach it. */}
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          {/* marginBottom rides the keyboard (see promoSheetLift): sheet
+              bottom sits exactly on the keyboard top while typing — Done and
+              the offers stay reachable — and returns flush to the screen
+              edge the moment the keyboard hides. */}
+          <Animated.View style={{ marginBottom: promoSheetLift }}>
           <TouchableOpacity activeOpacity={1} style={styles.promoSheet}>
             <View style={styles.paymentModalHandle} />
             <Text style={styles.paymentModalTitle}>Promo Code</Text>
@@ -1061,10 +1089,11 @@ function RideOptionsScreenContent() {
 
             {/* keyboardShouldPersistTaps: with the promo input focused, the
                 first tap on a list row otherwise only dismisses the keyboard
-                and the row press is swallowed. */}
+                and the row press is swallowed. The list shrinks while the
+                keyboard is up so the lifted sheet never overflows the top. */}
             <ScrollView
               showsVerticalScrollIndicator={false}
-              style={{ maxHeight: 340 }}
+              style={{ maxHeight: promoKbVisible ? 180 : 340 }}
               keyboardShouldPersistTaps="handled"
             >
               {availablePromos.map((promo: any) => {
@@ -1143,7 +1172,7 @@ function RideOptionsScreenContent() {
               <Text style={styles.paymentDoneBtnText}>Done</Text>
             </TouchableOpacity>
           </TouchableOpacity>
-          </KeyboardAvoidingView>
+          </Animated.View>
         </TouchableOpacity>
       </Modal>
 

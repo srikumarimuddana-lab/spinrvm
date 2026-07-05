@@ -386,12 +386,13 @@ export default function ActivityScreen() {
 
       {activeTab === 'history' && (
         <>
-          {/* Period pills — ordered broadest-first so riders see lifetime impact first */}
+          {/* Period pills — narrowest-first (matches the driver app's activity
+              filters): recent activity is the common case; lifetime is last. */}
           <View style={styles.periodPillRow}>
             {([
-              { key: 'all',   label: 'All Time' },
-              { key: 'month', label: 'This Month' },
               { key: 'week',  label: 'This Week' },
+              { key: 'month', label: 'This Month' },
+              { key: 'all',   label: 'All Time' },
             ] as { key: Period; label: string }[]).map(({ key, label }) => (
               <TouchableOpacity
                 key={key}

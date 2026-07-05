@@ -1,3 +1,4 @@
+import io
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -10,6 +11,7 @@ from fastapi import (  # noqa: F401
     HTTPException,
     UploadFile,
 )
+from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel
 
 try:
@@ -47,6 +49,38 @@ def _validate_marker_variant(value: str) -> None:
             status_code=422,
             detail=f"Invalid marker_variant '{value}'. Must be one of: {', '.join(sorted(_VALID_MARKER_VARIANTS))}",
         )
+
+
+# Corner pixels count as "transparent enough" below this alpha (0-255).
+# Real car art always has fully transparent corners; a small tolerance
+# absorbs anti-aliasing halos from export tools.
+_CORNER_ALPHA_MAX = 32
+
+
+def _validate_image_transparency(file_bytes: bytes, content_type: str, asset_label: str) -> None:
+    """Reject car art with a baked-in background (white box, checkerboard).
+
+    These assets render directly on the rider-app ride card / map, so they
+    must have a real alpha channel with transparent corners — otherwise the
+    background ships inside the image and shows as an ugly box in the app.
+    JPEG cannot store transparency at all, so it is rejected outright.
+    """
+    fix_hint = (
+        f"The {asset_label} is drawn directly on the app UI, so it needs a "
+        "transparent background. Export a PNG or WebP with alpha — no white "
+        "or checkerboard backdrop baked into the pixels."
+    )
+    if content_type == "image/jpeg":
+        raise HTTPException(status_code=400, detail=f"JPEG cannot store transparency. {fix_hint}")
+    try:
+        img = Image.open(io.BytesIO(file_bytes))
+        img = img.convert("RGBA")
+    except (UnidentifiedImageError, OSError) as e:
+        raise HTTPException(status_code=400, detail="Could not decode image file") from e
+    width, height = img.size
+    corners = [(0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1)]
+    if any(img.getpixel(c)[3] > _CORNER_ALPHA_MAX for c in corners):
+        raise HTTPException(status_code=400, detail=f"Image has an opaque background. {fix_hint}")
 
 
 # ---------- Pydantic models ----------
@@ -227,6 +261,7 @@ async def admin_upload_vehicle_illustration(
     # Magic-byte check (shared with driver-document upload path) catches
     # mis-declared types (e.g. a .png renamed to .jpg).
     _validate_file_type(file_bytes, content_type)
+    _validate_image_transparency(file_bytes, content_type, "car illustration")
 
     ext_map = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}
     ext = ext_map.get(content_type, ".bin")
@@ -296,6 +331,7 @@ async def admin_upload_vehicle_marker(
     if len(file_bytes) > _MAX_ILLUSTRATION_BYTES:
         raise HTTPException(status_code=400, detail="File exceeds 500 KB limit")
     _validate_file_type(file_bytes, content_type)
+    _validate_image_transparency(file_bytes, content_type, "map marker")
 
     ext = ".png" if content_type == "image/png" else ".webp"
     object_path = f"markers/{type_id}/{uuid.uuid4()}{ext}"

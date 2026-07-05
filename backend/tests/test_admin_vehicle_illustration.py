@@ -96,3 +96,66 @@ class TestVehicleTypeIllustrationPersistence:
         update_mock.assert_called_once()
         _, _, patch_doc = update_mock.call_args.args
         assert "illustration_url" not in patch_doc
+
+
+class TestIllustrationTransparencyValidation:
+    """Car art must have a transparent background — it renders directly on
+    the ride card. An opaque backdrop (white box / checkerboard) baked into
+    the pixels must be rejected at upload time with an actionable message."""
+
+    @staticmethod
+    def _png_bytes(mode: str, bg) -> bytes:
+        import io
+
+        from PIL import Image
+
+        img = Image.new(mode, (40, 24), bg)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
+    def test_transparent_png_passes(self):
+        from backend.routes.admin.vehicle_fleet import _validate_image_transparency
+
+        data = self._png_bytes("RGBA", (255, 0, 0, 0))
+        _validate_image_transparency(data, "image/png", "car illustration")
+
+    def test_opaque_white_png_rejected(self):
+        from fastapi import HTTPException
+
+        from backend.routes.admin.vehicle_fleet import _validate_image_transparency
+
+        data = self._png_bytes("RGBA", (255, 255, 255, 255))
+        with pytest.raises(HTTPException) as exc:
+            _validate_image_transparency(data, "image/png", "car illustration")
+        assert exc.value.status_code == 400
+        assert "transparent background" in exc.value.detail
+
+    def test_png_without_alpha_channel_rejected(self):
+        from fastapi import HTTPException
+
+        from backend.routes.admin.vehicle_fleet import _validate_image_transparency
+
+        data = self._png_bytes("RGB", (240, 240, 240))
+        with pytest.raises(HTTPException) as exc:
+            _validate_image_transparency(data, "image/png", "car illustration")
+        assert exc.value.status_code == 400
+
+    def test_jpeg_rejected_outright(self):
+        from fastapi import HTTPException
+
+        from backend.routes.admin.vehicle_fleet import _validate_image_transparency
+
+        with pytest.raises(HTTPException) as exc:
+            _validate_image_transparency(b"\xff\xd8\xff\xe0", "image/jpeg", "car illustration")
+        assert exc.value.status_code == 400
+        assert "JPEG" in exc.value.detail
+
+    def test_undecodable_bytes_rejected(self):
+        from fastapi import HTTPException
+
+        from backend.routes.admin.vehicle_fleet import _validate_image_transparency
+
+        with pytest.raises(HTTPException) as exc:
+            _validate_image_transparency(b"not an image", "image/png", "car illustration")
+        assert exc.value.status_code == 400

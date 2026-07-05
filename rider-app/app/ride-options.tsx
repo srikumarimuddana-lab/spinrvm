@@ -12,6 +12,8 @@ import {
   Modal,
   Animated,
   TextInput,
+  Keyboard,
+  KeyboardAvoidingView,
 } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
@@ -37,6 +39,7 @@ import { useResponsive } from '@shared/utils/responsive';
 import api from '@shared/api/client';
 import Analytics from '@shared/analytics';
 import { useScheduledRideReminder } from '../hooks/useScheduledRideReminder';
+import { promoDiscountForEstimate, grandTotalOf } from '../utils/promoDiscount';
 
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
@@ -146,8 +149,11 @@ function RideOptionsScreenContent() {
   const selectedEstimate = estimates.length > selectedIndex ? estimates[selectedIndex] : null;
 
   const allUnavailable = estimates.length > 0 && !estimates.some(e => e.available);
-  // Use server-computed discount_amount — correct for percentage promos and free_ride.
-  const promoDiscount = appliedPromo?.discount_amount ?? 0;
+  // Per-card promo math (mirrors the server — utils/promoDiscount): the
+  // server-computed discount_amount is only valid for the single fare promos
+  // were fetched with, so it goes stale the moment the rider switches vehicle
+  // type. The server recomputes and enforces the real discount at booking.
+  const promoDiscount = promoDiscountForEstimate(appliedPromo, selectedEstimate as any);
   const totalFare = Math.max(0, parseFloat((selectedEstimate as any)?.grand_total || selectedEstimate?.total_fare || '0') - promoDiscount);
 
   const paymentLabel = useMemo(() => {
@@ -1009,6 +1015,10 @@ function RideOptionsScreenContent() {
       {/* ═══ Promo selection modal ═══ */}
       <Modal visible={showPromoSheet} animationType="slide" transparent onRequestClose={() => setShowPromoSheet(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowPromoSheet(false)}>
+          {/* Without this, the open keyboard (promo input) covers the sheet's
+              lower half on iOS — the Done button is visually there but sits
+              behind the keyboard, so taps never reach it. */}
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <TouchableOpacity activeOpacity={1} style={styles.promoSheet}>
             <View style={styles.paymentModalHandle} />
             <Text style={styles.paymentModalTitle}>Promo Code</Text>
@@ -1049,7 +1059,14 @@ function RideOptionsScreenContent() {
               <Text style={[styles.promoSectionLabel, { color: colors.textDim }]}>Available Offers</Text>
             )}
 
-            <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 340 }}>
+            {/* keyboardShouldPersistTaps: with the promo input focused, the
+                first tap on a list row otherwise only dismisses the keyboard
+                and the row press is swallowed. */}
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              style={{ maxHeight: 340 }}
+              keyboardShouldPersistTaps="handled"
+            >
               {availablePromos.map((promo: any) => {
                 const isSelected = appliedPromo?.promo_id === promo.promo_id || appliedPromo?.code === promo.code;
                 const isIneligible = promo.eligible === false;
@@ -1119,10 +1136,14 @@ function RideOptionsScreenContent() {
               </TouchableOpacity>
             )}
 
-            <TouchableOpacity style={styles.paymentDoneBtn} onPress={() => setShowPromoSheet(false)}>
+            <TouchableOpacity
+              style={styles.paymentDoneBtn}
+              onPress={() => { Keyboard.dismiss(); setShowPromoSheet(false); }}
+            >
               <Text style={styles.paymentDoneBtnText}>Done</Text>
             </TouchableOpacity>
           </TouchableOpacity>
+          </KeyboardAvoidingView>
         </TouchableOpacity>
       </Modal>
 
@@ -1179,6 +1200,12 @@ function AnimatedVehicleCard({
   // option's image grows into a hero graphic (Lyft-style emphasis on top).
   const imageWidth = imageSizeAnim.interpolate({ inputRange: [0, 1], outputRange: [88, 150] });
   const imageHeight = imageSizeAnim.interpolate({ inputRange: [0, 1], outputRange: [58, 98] });
+
+  // Every card shows its own discounted price (not just the selected one) —
+  // computed per fare because percentage promos scale with each card's ride
+  // portion and min_ride_fare can gate cheaper types out (utils/promoDiscount).
+  const cardGrandTotal = grandTotalOf(estimate);
+  const cardDiscount = promoDiscountForEstimate(appliedPromo, estimate);
 
   return (
     <Animated.View style={[
@@ -1243,18 +1270,18 @@ function AnimatedVehicleCard({
           )}
         </View>
         <View style={[styles.optionPriceContainer, !isAvailable && { opacity: 0.4 }]}>
-          {appliedPromo && (appliedPromo.discount_amount ?? 0) > 0 && isSelected ? (
+          {cardDiscount > 0 ? (
             <View style={{ alignItems: 'flex-end' }}>
               <Text style={styles.optionPriceStruck} allowFontScaling={false}>
-                ${parseFloat((estimate as any).grand_total || estimate.total_fare || '0').toFixed(2)}
+                ${cardGrandTotal.toFixed(2)}
               </Text>
               <Text style={styles.optionPriceDiscounted} allowFontScaling={false}>
-                ${Math.max(0, parseFloat((estimate as any).grand_total || estimate.total_fare || '0') - (appliedPromo.discount_amount ?? 0)).toFixed(2)}
+                ${Math.max(0, cardGrandTotal - cardDiscount).toFixed(2)}
               </Text>
             </View>
           ) : (
             <Text style={styles.optionPrice} allowFontScaling={false}>
-              ${parseFloat((estimate as any).grand_total || estimate.total_fare || '0').toFixed(2)}
+              ${cardGrandTotal.toFixed(2)}
             </Text>
           )}
           {isSelected && isAvailable && (

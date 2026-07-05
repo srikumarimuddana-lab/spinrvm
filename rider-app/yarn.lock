@@ -5917,6 +5917,11 @@ expo-sharing@~55.0.0:
     "@expo/config-types" "^55.0.5"
     "@expo/plist" "^0.5.4"
 
+expo-speech-recognition@^56.0.1:
+  version "56.0.1"
+  resolved "https://registry.yarnpkg.com/expo-speech-recognition/-/expo-speech-recognition-56.0.1.tgz#09dbce63257c70013e1b580a4d0f54c158f0c04a"
+  integrity sha512-TpP1KCiq3vYfSQF0XpUkWLXp4mTw6MLuyMGPzVVKwqzs7oiKlJ/e0q3PNNjfqs058X47ftqT+31lTaWRWRbmPg==
+
 expo-splash-screen@~55.0.21:
   version "55.0.21"
   resolved "https://registry.yarnpkg.com/expo-splash-screen/-/expo-splash-screen-55.0.21.tgz#0a8f465ebd6eab4f388fb917cde20db4dcc3709c"

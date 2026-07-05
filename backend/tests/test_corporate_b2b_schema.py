@@ -21,6 +21,8 @@ REQUIRED_TABLES = [
     "corporate_allowed_domains",
     "ride_payment_sources",
     "corporate_policy_evaluations",
+    # Guest booking (migration 206)
+    "corporate_sections",
 ]
 
 REQUIRED_CORP_COLS = [

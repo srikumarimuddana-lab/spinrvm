@@ -31,7 +31,16 @@ async def require_company_admin(
     memberships = await list_active_memberships_for_user(current_user["id"])
     for m in memberships:
         if m.get("company_id") == company_id and m.get("role") in _ADMIN_ROLES:
-            return {"user": current_user, "company_id": company_id, "role": m["role"]}
+            # member_id/member: booking endpoints attribute spend to the
+            # caller's corporate_members row — returning it here saves every
+            # handler a re-query of the same membership list.
+            return {
+                "user": current_user,
+                "company_id": company_id,
+                "role": m["role"],
+                "member_id": m.get("id"),
+                "member": m,
+            }
     raise HTTPException(status_code=403, detail="not a company admin")
 
 
@@ -42,5 +51,11 @@ async def require_company_member(
     memberships = await list_active_memberships_for_user(current_user["id"])
     for m in memberships:
         if m.get("company_id") == company_id:
-            return {"user": current_user, "company_id": company_id, "role": m["role"]}
+            return {
+                "user": current_user,
+                "company_id": company_id,
+                "role": m["role"],
+                "member_id": m.get("id"),
+                "member": m,
+            }
     raise HTTPException(status_code=403, detail="not a company member")

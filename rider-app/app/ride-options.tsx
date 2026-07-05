@@ -656,7 +656,7 @@ function RideOptionsScreenContent() {
               {[0, 1, 2].map((i) => (
                 <View key={i} style={{ flexDirection: 'row', alignItems: 'center', padding: 14, marginBottom: 6,
                   backgroundColor: colors.surface, borderRadius: 12 }}>
-                  <SkeletonBox width={64} height={42} borderRadius={8} style={{ marginRight: 12 }} />
+                  <SkeletonBox width={88} height={58} borderRadius={8} style={{ marginRight: 12 }} />
                   <View style={{ flex: 1, gap: 6 }}>
                     <SkeletonBox width="50%" height={14} />
                     <SkeletonBox width="35%" height={11} />
@@ -1175,10 +1175,10 @@ function AnimatedVehicleCard({
   }, [isSelected]);
 
   const scale = scaleAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.03] });
-  // Lyft-style hero image: the selected option's car art grows to ~2× the
-  // resting thumbnail; unselected rows stay compact.
-  const imageWidth = imageSizeAnim.interpolate({ inputRange: [0, 1], outputRange: [64, 118] });
-  const imageHeight = imageSizeAnim.interpolate({ inputRange: [0, 1], outputRange: [42, 76] });
+  // Uber-scale car art: generous thumbnails on every row, and the selected
+  // option's image grows into a hero graphic (Lyft-style emphasis on top).
+  const imageWidth = imageSizeAnim.interpolate({ inputRange: [0, 1], outputRange: [88, 150] });
+  const imageHeight = imageSizeAnim.interpolate({ inputRange: [0, 1], outputRange: [58, 98] });
 
   return (
     <Animated.View style={[
@@ -1212,7 +1212,7 @@ function AnimatedVehicleCard({
             />
           ) : (
             <View style={styles.carIconFallback}>
-              <Ionicons name="car" size={isSelected && isAvailable ? 48 : 32} color="#666" />
+              <Ionicons name="car" size={isSelected && isAvailable ? 60 : 42} color="#666" />
             </View>
           )}
         </Animated.View>

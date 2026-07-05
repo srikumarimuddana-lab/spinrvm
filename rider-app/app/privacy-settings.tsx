@@ -168,6 +168,13 @@ export default function PrivacySettingsScreen() {
         <Text style={styles.sectionTitle}>{t('privacy.data_section')}</Text>
         <View style={styles.card}>
           <SettingRow
+            icon="shield-outline" iconColor="#6366F1" iconBg="#E0E7FF"
+            title={t('privacy.privacy_policy')}
+            subtitle={t('privacy.privacy_policy_subtitle')}
+            onPress={() => router.push('/legal?type=privacy' as any)}
+            colors={colors}
+          />
+          <SettingRow
             icon="download-outline" iconColor="#6B7280" iconBg="#F3F4F6"
             title={t('privacy.download_data')}
             subtitle={t('privacy.download_data_subtitle')}

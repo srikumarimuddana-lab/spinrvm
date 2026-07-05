@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   StatusBar,
-  Linking,
   Alert,
 } from 'react-native';
 import { Image } from 'expo-image';
@@ -23,7 +22,6 @@ import { showToast } from '../../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useWorkProfileStore } from '../../store/workProfileStore';
-import { useAiChatStore } from '../../store/aiChatStore';
 
 const BLURHASH_PLACEHOLDER = 'LGF5]+Yk^6#M@-5c,1J5@[or[Q6.';
 
@@ -34,27 +32,11 @@ export default function AccountScreen() {
   const { profiles, workModeEnabled } = useWorkProfileStore();
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const aiEnabled = useAiChatStore((s) => s.enabled);
-  const loadAiConfig = useAiChatStore((s) => s.loadConfig);
-
-  useEffect(() => {
-    loadAiConfig();
-  }, [loadAiConfig]);
-
-  const handleAiPress = () => {
-    if (aiEnabled) {
-      router.push('/ai-assistant' as any);
-    } else {
-      showToast('Coming Soon', 'AI Ride Booking is coming soon!', 'info');
-    }
-  };
-
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [companyInfo, setCompanyInfo] = useState<{
     name?: string; address?: string; phone?: string; email?: string; website?: string;
   }>({});
-  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
 
   const showFeedback = (
     title: string,
@@ -110,32 +92,6 @@ export default function AccountScreen() {
       showFeedback('Upload Failed', 'Photo upload failed. Please try again.', 'danger');
     } finally {
       setIsUploadingPhoto(false);
-    }
-  };
-
-  const handleDeleteAccountConfirmed = async () => {
-    setIsDeletingAccount(true);
-    try {
-      await api.delete('/users/account');
-      await logout();
-      router.replace('/login' as any);
-    } catch (err: any) {
-      showFeedback('Deletion Failed', err?.response?.data?.detail || 'Could not schedule account deletion. Please contact support.', 'danger');
-    } finally {
-      setIsDeletingAccount(false);
-    }
-  };
-
-  const handleRequestDataExport = async () => {
-    try {
-      await api.post('/users/data-export');
-      showFeedback(
-        'Data Export Requested',
-        'Your data export request has been received. We will respond within 30 days as required by PIPEDA.',
-        'success',
-      );
-    } catch (err: any) {
-      showFeedback('Request Failed', err?.response?.data?.detail || 'Could not submit data export request. Please try again.', 'danger');
     }
   };
 
@@ -355,61 +311,12 @@ export default function AccountScreen() {
             <View style={styles.card}>
               <MenuRow styles={styles} colors={colors} icon="bag-handle" iconColor="#F97316" iconBg="rgba(249, 115, 22, 0.1)" label="Lost & Found" onPress={() => router.push('/lost-and-found' as any)} />
               <View style={styles.cardDivider} />
-              <MenuRow styles={styles} colors={colors} icon="sparkles" iconColor="#8B5CF6" iconBg="rgba(139, 92, 246, 0.1)" label="AI Assistant" onPress={handleAiPress} />
-              <View style={styles.cardDivider} />
               <MenuRow styles={styles} colors={colors} icon="help-circle" iconColor="#2563EB" iconBg="rgba(37, 99, 235, 0.1)" label="Help Center" onPress={() => router.push('/support' as any)} />
               <View style={styles.cardDivider} />
+              {/* Privacy Policy / Request My Data / Delete Account live in
+                  Privacy & Settings (Safety & Privacy section above) — they
+                  were duplicated here and made this menu unwieldy. */}
               <MenuRow styles={styles} colors={colors} icon="document-text" iconColor={colors.textDim} iconBg={colors.surfaceLight} label="Legal" onPress={() => router.push('/legal?type=tos' as any)} />
-              <View style={styles.cardDivider} />
-              <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => Linking.openURL('https://spinr.ca/privacy')}>
-                <View style={[styles.iconBox, { backgroundColor: 'rgba(99, 102, 241, 0.1)' }]}>
-                  <Ionicons name="shield" size={18} color="#6366F1" />
-                </View>
-                <Text style={styles.actionText}>Privacy Policy</Text>
-                <Ionicons name="open-outline" size={16} color="#D1D5DB" />
-              </TouchableOpacity>
-              <View style={styles.cardDivider} />
-              <TouchableOpacity
-                style={styles.actionRow}
-                activeOpacity={0.7}
-                onPress={() => {
-                  Alert.alert(
-                    'Request My Data',
-                    'Under PIPEDA you have the right to request a copy of your personal data. We will deliver your data export within 30 days.',
-                    [
-                      { text: 'Cancel', style: 'cancel' },
-                      { text: 'Submit Request', onPress: handleRequestDataExport },
-                    ],
-                  );
-                }}
-              >
-                <View style={[styles.iconBox, { backgroundColor: 'rgba(16, 185, 129, 0.1)' }]}>
-                  <Ionicons name="download" size={18} color="#10B981" />
-                </View>
-                <Text style={styles.actionText}>Request My Data</Text>
-                <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
-              </TouchableOpacity>
-              <View style={styles.cardDivider} />
-              <TouchableOpacity
-                style={styles.actionRow}
-                activeOpacity={0.7}
-                onPress={() => {
-                  Alert.alert(
-                    'Delete Account',
-                    'Your account will enter a 30-day grace period before permanent deletion. Ride records are retained for 7 years per regulation. Are you sure?',
-                    [
-                      { text: 'Cancel', style: 'cancel' },
-                      { text: 'Delete My Account', style: 'destructive', onPress: handleDeleteAccountConfirmed },
-                    ],
-                  );
-                }}
-              >
-                <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.05)' }]}>
-                  <Ionicons name="trash" size={18} color="#EF4444" />
-                </View>
-                <Text style={[styles.actionText, { color: '#EF4444' }]}>Delete Account</Text>
-                <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
-              </TouchableOpacity>
               <View style={styles.cardDivider} />
               <TouchableOpacity
                 style={styles.actionRow}

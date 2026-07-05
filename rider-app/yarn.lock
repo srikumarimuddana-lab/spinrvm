@@ -5674,6 +5674,13 @@ expect@^29.0.0, expect@^29.7.0:
     jest-message-util "^29.7.0"
     jest-util "^29.7.0"
 
+expo-app-metrics@~0.2.3:
+  version "0.2.3"
+  resolved "https://registry.yarnpkg.com/expo-app-metrics/-/expo-app-metrics-0.2.3.tgz#b2d8ffa8dc376b3521514eb88e8bcabcb14368c7"
+  integrity sha512-XVnjJWRBqc6P3CS+LUTAb8n7pTCSk6hAaao3oUlN1oJlcHx/3L6QhTGbocgEj/CtKS62LFUdeRX6wuQkHAmL6A==
+  dependencies:
+    expo-updates-interface "~55.1.6"
+
 expo-application@~55.0.15:
   version "55.0.15"
   resolved "https://registry.yarnpkg.com/expo-application/-/expo-application-55.0.15.tgz#5ae5484baa94c69a6eda92757c8e76be035a628d"
@@ -5796,6 +5803,13 @@ expo-image@^55.0.11, expo-image@~55.0.11:
   dependencies:
     sf-symbols-typescript "^2.2.0"
 
+expo-insights@~55.0.18:
+  version "55.0.18"
+  resolved "https://registry.yarnpkg.com/expo-insights/-/expo-insights-55.0.18.tgz#1e67e11651e79e68d7f4cfb7180641b3e1e6206c"
+  integrity sha512-pgWeoGBn7w2NlfZEuonSJQzyHXE6flIQ05fsrO91ntrZhGJhp914OX8bnxipyxQ1EujLgVTh8xaVULR7ZRKMLw==
+  dependencies:
+    expo-eas-client "~55.0.5"
+
 expo-json-utils@~55.0.2:
   version "55.0.2"
   resolved "https://registry.npmjs.org/expo-json-utils/-/expo-json-utils-55.0.2.tgz"
@@ -5860,6 +5874,14 @@ expo-notifications@~55.0.23:
     badgin "^1.1.5"
     expo-application "~55.0.15"
     expo-constants "~55.0.16"
+
+expo-observe@~0.2.3:
+  version "0.2.3"
+  resolved "https://registry.yarnpkg.com/expo-observe/-/expo-observe-0.2.3.tgz#c97d84ebd0289d968918a9827dd92a84c81c19a4"
+  integrity sha512-3dudjYVL46z/sQZTH8qxKViKg7KNhOjELMGZo69m5ziVAXFQtuXHqgWzncpvf/8Dh8faqlQjo1p34cnP1/XG3w==
+  dependencies:
+    expo-app-metrics "~0.2.3"
+    expo-eas-client "~55.0.5"
 
 expo-print@~55.0.0:
   version "55.0.15"

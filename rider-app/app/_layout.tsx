@@ -41,6 +41,22 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { queryClient, asyncStoragePersister, QUERY_CACHE_BUSTER } from '@shared/api/queryClient';
 import { captureMessage, setUser, initErrorReporting, wrapApp } from '@shared/services/errorReporting';
+
+// EAS Observe (SDK 55 API: AppMetricsRoot / AppMetrics). Native module —
+// present only in binaries built with it, so the guarded require keeps older
+// installed builds and Expo Go booting with metrics simply off (same pattern
+// as the startup-crash trap for module-scope native access).
+let ObserveMetricsRoot: any = null;
+let ObserveMetrics: any = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const _observe = require('expo-observe');
+  ObserveMetricsRoot = _observe.AppMetricsRoot ?? null;
+  ObserveMetrics = _observe.AppMetrics ?? null;
+} catch {
+  ObserveMetricsRoot = null;
+  ObserveMetrics = null;
+}
 import Analytics from '@shared/analytics';
 import {
   initFirebaseServices,
@@ -206,6 +222,11 @@ function RootLayout() {
   // before the navigator exists and the navigation would be silently dropped.
   const navReady =
     fontsLoaded && !fontError && isAuthInitialized && isLocationInitialized && minSplashElapsed;
+  // EAS Observe: Time-to-Interactive ends when the loading gate clears and
+  // the navigator is live — the first moment the rider can actually act.
+  useEffect(() => {
+    if (navReady) ObserveMetrics?.markInteractive?.();
+  }, [navReady]);
   const [stripePublishableKey, setStripePublishableKey] = useState<string | null>(null);
   const [trackBaseUrl, setTrackBaseUrl] = useState<string | null>(null);
   const fcmRegisteredRef = useRef(false);
@@ -839,5 +860,6 @@ function RootLayoutInner({
 
 // Wrap the root with Sentry's error boundary + navigation/touch instrumentation.
 // No-op until EXPO_PUBLIC_SENTRY_DSN is set (see initErrorReporting); safe in Expo Go/web.
-export default wrapApp(RootLayout);
+// Sentry (wrapApp) stays outermost so it also catches the Observe wrapper.
+export default wrapApp(ObserveMetricsRoot ? ObserveMetricsRoot.wrap(RootLayout) : RootLayout);
 

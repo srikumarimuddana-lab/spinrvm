@@ -415,10 +415,15 @@ export default function VehicleTypesPage() {
                                 <ImageIcon className="h-4 w-4" />
                                 Illustration
                             </Label>
+                            <p className="text-xs text-muted-foreground">
+                                Use a PNG or WebP with a <strong>transparent background</strong> —
+                                the car art sits directly on the ride card in the rider app.
+                                JPEGs and images with a white/checkerboard backdrop are rejected.
+                            </p>
                             <div className="flex items-center gap-2">
                                 <Input
                                     type="file"
-                                    accept="image/png,image/jpeg,image/webp"
+                                    accept="image/png,image/webp"
                                     disabled={uploading || !editingId}
                                     onChange={(e) => {
                                         const f = e.target.files?.[0];

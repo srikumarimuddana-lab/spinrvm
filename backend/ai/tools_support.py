@@ -134,37 +134,63 @@ async def _persist_embedding(row: Dict[str, Any], vec: list, model: str) -> None
         logger.error("ai faq embedding persist failed", exc_info=True)
 
 
+def _schedule_persist(pairs: list, model: str) -> None:
+    """Fire-and-forget the embedding writes so the user-facing tool path never
+    blocks on Supabase — awaiting up to _SEMANTIC_MAX_EMBED writes inside the 5s
+    tool budget risked a timeout (Codex). Ranking already has the vectors in
+    memory, so persistence is pure background work."""
+
+    async def _run() -> None:
+        await asyncio.gather(*(_persist_embedding(r, v, model) for r, v in pairs))
+
+    task = asyncio.create_task(_run())
+    task.add_done_callback(lambda t: t.exception())  # swallow, avoid warnings
+
+
+def _merge_results(primary: list, secondary: list) -> list:
+    """Union two result lists, primary first, deduped by question, capped at 5."""
+    seen, out = set(), []
+    for r in (*primary, *secondary):
+        key = r.get("question")
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out[:5]
+
+
 async def _semantic_results(rows: list, query: str, settings: Dict[str, Any]):
-    """Rank FAQs by cosine similarity to the query. Returns a results list, or
-    None when embeddings are unavailable (caller then uses lexical). An empty
-    list means embeddings ran but nothing cleared the similarity floor."""
+    """Rank FAQs by cosine similarity. Returns (results, complete) or None when
+    embeddings are unavailable (caller uses lexical). ``complete`` is False when
+    some rows had no vector this pass (cold rollout beyond the embed cap) — the
+    caller then merges lexical matches so an un-embedded but keyword-matching FAQ
+    is not dropped. An empty results list means nothing cleared the floor."""
     model = embeddings.embedding_model_for(settings)
     if not model or not rows:
         return None
 
-    missing = [r for r in rows if _stored_vector(r, model) is None][:_SEMANTIC_MAX_EMBED]
-    vectors = await embeddings.embed_texts([query] + [r.get("question", "") for r in missing], settings)
+    to_embed = [r for r in rows if _stored_vector(r, model) is None][:_SEMANTIC_MAX_EMBED]
+    vectors = await embeddings.embed_texts([query] + [r.get("question", "") for r in to_embed], settings)
     if vectors is None:
         return None
 
     q_vec, new_vecs = vectors[0], vectors[1:]
-    fresh = {}
-    for row, vec in zip(missing, new_vecs, strict=True):
-        fresh[row["id"]] = vec
+    fresh = {r["id"]: v for r, v in zip(to_embed, new_vecs, strict=True)}
     if fresh:
-        await asyncio.gather(*(_persist_embedding(r, fresh[r["id"]], model) for r in missing))
+        _schedule_persist([(r, fresh[r["id"]]) for r in to_embed], model)  # deferred, not awaited
 
     min_score = float(settings.get("ai_faq_semantic_min_score") or 0.30)
-    scored = []
+    scored, covered = [], 0
     for row in rows:
         vec = fresh.get(row.get("id")) or _stored_vector(row, model)
         if vec is None:
-            continue  # not embedded this call — lexical fallback covers it
+            continue  # not embedded this pass — lexical merge covers it
+        covered += 1
         sim = embeddings.cosine(q_vec, vec)
         if sim >= min_score:
             scored.append((sim, row))
     scored.sort(key=lambda pair: pair[0], reverse=True)
-    return [_faq_view(r) for _, r in scored[:5]]
+    return [_faq_view(r) for _, r in scored[:5]], covered == len(rows)
 
 
 async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
@@ -181,13 +207,18 @@ async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
 
     results = None
     if settings.get("ai_faq_semantic_enabled"):
-        results = await _semantic_results(rows, query, settings)
+        sem = await _semantic_results(rows, query, settings)
+        if sem is not None:
+            sem_results, complete = sem
+            # When not every row was embedded yet, merge keyword matches so a
+            # relevant un-embedded FAQ can't be omitted by a semantic-only pass.
+            results = sem_results if complete else _merge_results(sem_results, _lexical_results(rows, query))
     # None (embeddings unavailable) or empty (nothing above floor) → lexical.
     if not results:
         results = _lexical_results(rows, query)
     if not results:
         return dict(_NO_MATCH)
-    return {"results": results}
+    return {"results": results[:5]}
 
 
 async def get_company_info(user: Dict[str, Any]) -> Dict[str, Any]:

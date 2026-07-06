@@ -20,6 +20,13 @@ def _patch_driver(row):
 
 
 class TestApplicationStatus:
+    @pytest.fixture(autouse=True)
+    def _no_docs(self):
+        # Default: no driver_documents rows, so these tests exercise the
+        # drivers-row expiry path. Individual tests override get_rows.
+        with patch.object(tools_driver.db_supabase, "get_rows", AsyncMock(return_value=[])):
+            yield
+
     @pytest.mark.anyio
     async def test_no_application_on_file(self):
         with _patch_driver(None):
@@ -49,12 +56,25 @@ class TestApplicationStatus:
 
     @pytest.mark.anyio
     async def test_active_driver_with_expired_doc_cannot_go_online(self):
-        # active status but expired CRC → go-online is blocked
+        # active status but expired CRC on the drivers row → go-online blocked
         row = {**DRIVER_ROW, "background_check_expiry_date": "2020-01-01T00:00:00Z"}
         with _patch_driver(row):
             result, ok = await execute_tool("get_driver_application_status", {}, user=DRIVER, audience="driver")
         assert result["status"] == "active"
         assert result["can_go_online"] is False
+
+    @pytest.mark.anyio
+    async def test_expired_approved_upload_blocks_go_online(self):
+        # legacy drivers-row columns empty, but an approved driver_documents
+        # upload is expired → mirror the go_online gate and block.
+        docs = [{"document_type": "insurance", "status": "approved", "expiry_date": "2020-01-01T00:00:00Z"}]
+        with _patch_driver(DRIVER_ROW), patch.object(
+            tools_driver.db_supabase, "get_rows", AsyncMock(return_value=docs)
+        ):
+            result, ok = await execute_tool("get_driver_application_status", {}, user=DRIVER, audience="driver")
+        assert result["status"] == "active"
+        assert result["can_go_online"] is False
+        assert any(f["state"] == "expired" for f in result["expiring_or_expired_documents"])
 
 
 class TestDocumentStatus:
@@ -100,6 +120,26 @@ class TestDocumentStatus:
         ):
             result, ok = await execute_tool("get_document_status", {}, user=DRIVER, audience="driver")
         assert "secret" not in str(result)
+
+    @pytest.mark.anyio
+    async def test_superseded_older_upload_is_collapsed(self):
+        # newest first: a fresh approved re-upload supersedes the old rejected
+        # row for the same requirement — only the current one is surfaced.
+        docs = [
+            {"requirement_key": "crc", "document_type": "criminal_record_check", "status": "approved",
+             "uploaded_at": "2026-06-10T10:00:00Z"},
+            {"requirement_key": "crc", "document_type": "criminal_record_check", "status": "rejected",
+             "uploaded_at": "2026-05-01T10:00:00Z", "rejection_reason": "old blurry copy"},
+        ]
+        with (
+            _patch_driver(DRIVER_ROW),
+            patch.object(tools_driver.db_supabase, "get_rows", AsyncMock(return_value=docs)),
+        ):
+            result, ok = await execute_tool("get_document_status", {}, user=DRIVER, audience="driver")
+        assert ok
+        crc = [d for d in result["documents"] if d["document_type"] == "criminal_record_check"]
+        assert len(crc) == 1 and crc[0]["status"] == "approved"
+        assert "action_needed" not in crc[0]  # stale rejection not surfaced
 
 
 class TestEarnings:

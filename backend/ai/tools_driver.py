@@ -57,23 +57,82 @@ def _date_only(value: Any) -> Optional[str]:
     return str(value)[:10] if value else None
 
 
-def _expiry_flags(driver: Dict[str, Any]) -> List[Dict[str, Any]]:
-    today = datetime.now(timezone.utc).date()
+def _expiry_state(raw: Any) -> Optional[tuple]:
+    """(state, iso_date) for an expiry value, or None. state ∈ expired|expiring_soon."""
+    if not raw:
+        return None
+    try:
+        exp = datetime.fromisoformat(str(raw).replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+    days = (exp - datetime.now(timezone.utc).date()).days
+    if days < 0:
+        return "expired", exp.isoformat()
+    if days <= 30:
+        return "expiring_soon", exp.isoformat()
+    return None
+
+
+def _driver_row_expiry_flags(driver: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Expiry flags from the drivers-row legacy *_expiry_date columns."""
     out: List[Dict[str, Any]] = []
     for field, label in _EXPIRY_FIELDS.items():
-        raw = driver.get(field)
-        if not raw:
-            continue
-        try:
-            exp = datetime.fromisoformat(str(raw).replace("Z", "+00:00")).date()
-        except ValueError:
-            continue
-        days = (exp - today).days
-        if days < 0:
-            out.append({"document": label, "state": "expired", "expiry_date": exp.isoformat()})
-        elif days <= 30:
-            out.append({"document": label, "state": "expiring_soon", "expiry_date": exp.isoformat()})
+        state = _expiry_state(driver.get(field))
+        if state:
+            out.append({"document": label, "state": state[0], "expiry_date": state[1]})
     return out
+
+
+def _doc_key(doc: Dict[str, Any]) -> Any:
+    """Group key for a driver_documents row — a re-upload for the same
+    requirement supersedes older rows for that key."""
+    return doc.get("requirement_id") or doc.get("requirement_key") or doc.get("document_type") or doc.get("id")
+
+
+def _latest_per_key(rows: list) -> list:
+    """Keep only the newest row per requirement (rows already sorted newest
+    first), dropping superseded / historical uploads."""
+    latest, out = set(), []
+    for r in rows or []:
+        k = _doc_key(r)
+        if k in latest:
+            continue
+        latest.add(k)
+        out.append(r)
+    return out
+
+
+def _doc_expiry_flags(latest_docs: list) -> List[Dict[str, Any]]:
+    """Expiry flags from the driver's current APPROVED uploads — mirrors the
+    go_online gate, which blocks on expired approved driver_documents even when
+    the legacy drivers-row column is empty/stale."""
+    out: List[Dict[str, Any]] = []
+    for d in latest_docs:
+        if d.get("status") != "approved":
+            continue
+        state = _expiry_state(d.get("expiry_date"))
+        if state:
+            label = d.get("document_type") or d.get("requirement_key") or "Document"
+            out.append({"document": label, "state": state[0], "expiry_date": state[1]})
+    return out
+
+
+def _merge_flags(*groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    seen, out = set(), []
+    for g in groups:
+        for f in g:
+            key = (f["document"], f["state"])
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(f)
+    return out
+
+
+async def _driver_documents(driver_id: str) -> list:
+    return await db_supabase.get_rows(
+        "driver_documents", {"driver_id": driver_id}, order="uploaded_at", desc=True, limit=50
+    )
 
 
 async def get_driver_application_status(user: Dict[str, Any]) -> Dict[str, Any]:
@@ -85,17 +144,18 @@ async def get_driver_application_status(user: Dict[str, Any]) -> Dict[str, Any]:
             "Finish signing up in the driver app to get started.",
         }
     status = driver.get("status") or "pending"
-    expiry_flags = _expiry_flags(driver)
-    # An expired required document (CRC, licence, insurance, inspection) blocks
-    # going online even for an otherwise-active driver — mirror the go_online
-    # gate so the assistant never tells an ineligible driver they can drive.
-    has_expired = any(f["state"] == "expired" for f in expiry_flags)
+    latest_docs = _latest_per_key(await _driver_documents(driver["id"]))
+    # Combine drivers-row legacy expiry columns with the driver's current
+    # approved uploads — the go_online gate checks both, so the assistant must
+    # too, or it could tell an ineligible driver they can start driving.
+    flags = _merge_flags(_driver_row_expiry_flags(driver), _doc_expiry_flags(latest_docs))
+    has_expired = any(f["state"] == "expired" for f in flags)
     return {
         "status": status,
         "is_verified": bool(driver.get("is_verified")),
         "can_go_online": status == "active" and not has_expired,
         "summary": _STATUS_SUMMARY.get(status, "Your application is being processed."),
-        "expiring_or_expired_documents": expiry_flags,
+        "expiring_or_expired_documents": flags,
     }
 
 
@@ -104,13 +164,12 @@ async def get_document_status(user: Dict[str, Any]) -> Dict[str, Any]:
     if not driver:
         return {"documents": [], "note": "No driver application on file yet — finish signing up in the driver app."}
     # Live driver uploads live in driver_documents (the legacy `documents` table
-    # is not what the driver app writes). Whitelisted fields only — never the
-    # document_url.
-    rows = await db_supabase.get_rows(
-        "driver_documents", {"driver_id": driver["id"]}, order="uploaded_at", desc=True, limit=50
-    )
+    # is not what the driver app writes). Collapse to the latest upload per
+    # requirement so a superseded rejected/expired row isn't shown next to the
+    # current approved one. Whitelisted fields only — never the document_url.
+    latest_docs = _latest_per_key(await _driver_documents(driver["id"]))
     docs = []
-    for r in rows or []:
+    for r in latest_docs:
         status = r.get("status")  # pending | approved | rejected
         entry = {
             "document_type": r.get("document_type"),
@@ -124,7 +183,7 @@ async def get_document_status(user: Dict[str, Any]) -> Dict[str, Any]:
         docs.append(entry)
     return {
         "documents": docs,
-        "expiring_or_expired": _expiry_flags(driver),
+        "expiring_or_expired": _merge_flags(_driver_row_expiry_flags(driver), _doc_expiry_flags(latest_docs)),
         "note": (
             "If a document you uploaded isn't listed, it may still be syncing — check back shortly. "
             "Expired documents (including the Criminal Record Check) must be renewed before going online."

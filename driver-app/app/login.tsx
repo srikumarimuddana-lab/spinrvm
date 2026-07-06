@@ -11,6 +11,7 @@ import {
   StatusBar,
   Animated,
   ScrollView,
+  Image,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -28,7 +29,7 @@ export default function LoginScreen() {
   const router = useRouter();
   const { t } = useLanguageStore();
   const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [phoneNumber, setPhoneNumber] = useState('');
   const [loading, setLoading] = useState(false);
@@ -125,10 +126,16 @@ export default function LoginScreen() {
       {/* Top accent strip */}
       <View style={[styles.topStrip, { paddingTop: insets.top }]}>
         <View style={styles.brandRow}>
-          <View style={styles.logoCircle}>
-            <Ionicons name="car-sport" size={24} color="#fff" />
-          </View>
-          <Text style={styles.brandName}>Spinr</Text>
+          {/* Spinr wordmark. The PNG is a dark logo on a transparent
+              background, so tint it white in dark mode to stay visible on the
+              dark surface. */}
+          <Image
+            source={require('../assets/images/spinr-logo.png')}
+            style={[styles.brandLogo, isDark && styles.brandLogoDark]}
+            resizeMode="contain"
+            accessibilityRole="image"
+            accessibilityLabel="Spinr"
+          />
           <View style={styles.driverBadge}>
             <Text style={styles.driverBadgeText}>Driver</Text>
           </View>
@@ -278,20 +285,9 @@ function createStyles(colors: ThemeColors) {
       paddingTop: 12,
       gap: 10,
     },
-    logoCircle: {
-      width: 42,
-      height: 42,
-      borderRadius: 14,
-      backgroundColor: colors.primary,
-      justifyContent: 'center',
-      alignItems: 'center',
-    },
-    brandName: {
-      fontSize: 24,
-      fontWeight: '800',
-      color: colors.text,
-      letterSpacing: -0.5,
-    },
+    // 384:156 native ratio → 96:39 keeps the wordmark crisp.
+    brandLogo: { width: 96, height: 39 },
+    brandLogoDark: { tintColor: '#fff' },
     driverBadge: {
       backgroundColor: `${colors.primary}14`,
       paddingHorizontal: 10,

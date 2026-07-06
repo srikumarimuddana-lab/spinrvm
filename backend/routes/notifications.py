@@ -220,6 +220,7 @@ async def admin_debug_ride_offer(body: DebugRideOfferRequest, admin: dict = Depe
         "duration_minutes": 11,
         "rider_name": "Debug Rider",
         "requires_wav": False,
+        "quiet_mode": False,
         "countdown_seconds": body.countdown_seconds,
         "offer_expires_at": offer_expires_at,
         "deeplink": "/driver/",

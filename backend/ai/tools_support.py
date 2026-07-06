@@ -10,14 +10,15 @@ without asking the user to repeat themselves. Safety topics always route
 to 911/SOS language — never just a ticket.
 """
 
+import asyncio
 import logging
 from typing import Any, Dict, Optional
 
 try:
-    from . import conversations
+    from . import conversations, embeddings
     from .tools import ToolSpec, register
 except ImportError:
-    from ai import conversations
+    from ai import conversations, embeddings
     from ai.tools import ToolSpec, register
 
 try:
@@ -88,16 +89,24 @@ def _match_tokens(text: str) -> set:
     return tokens | concepts
 
 
-async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
-    audience = user.get("ai_audience", "rider")
-    rows = await db_supabase.get_rows(
-        "faqs",
-        {"is_active": True, "audience": {"$in": ["both", audience]}},
-        limit=200,
-    )
+# How many un-embedded FAQ rows one search may (re)embed + persist inline.
+# Bounds first-call latency and write fan-out; remaining rows are embedded on
+# subsequent searches until steady state (all embedded → query-only embed call).
+_SEMANTIC_MAX_EMBED = 50
+_NO_MATCH = {
+    "results": [],
+    "note": "No matching help-centre article — say so plainly and offer escalate_to_support.",
+}
+
+
+def _faq_view(row: Dict[str, Any]) -> Dict[str, Any]:
+    return {"question": row.get("question"), "answer": row.get("answer"), "category": row.get("category")}
+
+
+def _lexical_results(rows: list, query: str) -> list:
     q_tokens = _match_tokens(query)
     scored = []
-    for row in rows or []:
+    for row in rows:
         # Question matches count double — a query echoing the question is a
         # far stronger signal than the same words buried in an answer body.
         # _match_tokens folds synonyms so a reworded query still overlaps.
@@ -107,21 +116,78 @@ async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
         if score:
             scored.append((score, row))
     scored.sort(key=lambda pair: pair[0], reverse=True)
-    if not scored:
-        return {
-            "results": [],
-            "note": "No matching help-centre article — say so plainly and offer escalate_to_support.",
-        }
-    return {
-        "results": [
-            {
-                "question": r.get("question"),
-                "answer": r.get("answer"),
-                "category": r.get("category"),
-            }
-            for _, r in scored[:5]
-        ]
-    }
+    return [_faq_view(r) for _, r in scored[:5]]
+
+
+def _stored_vector(row: Dict[str, Any], model: str):
+    vec = row.get("embedding")
+    if isinstance(vec, list) and vec and row.get("embedding_model") == model:
+        return vec
+    return None
+
+
+async def _persist_embedding(row: Dict[str, Any], vec: list, model: str) -> None:
+    """Best-effort — a write failure must never fail the search."""
+    try:
+        await db_supabase.update_one("faqs", {"id": row["id"]}, {"embedding": vec, "embedding_model": model})
+    except Exception:
+        logger.error("ai faq embedding persist failed", exc_info=True)
+
+
+async def _semantic_results(rows: list, query: str, settings: Dict[str, Any]):
+    """Rank FAQs by cosine similarity to the query. Returns a results list, or
+    None when embeddings are unavailable (caller then uses lexical). An empty
+    list means embeddings ran but nothing cleared the similarity floor."""
+    model = embeddings.embedding_model_for(settings)
+    if not model or not rows:
+        return None
+
+    missing = [r for r in rows if _stored_vector(r, model) is None][:_SEMANTIC_MAX_EMBED]
+    vectors = await embeddings.embed_texts([query] + [r.get("question", "") for r in missing], settings)
+    if vectors is None:
+        return None
+
+    q_vec, new_vecs = vectors[0], vectors[1:]
+    fresh = {}
+    for row, vec in zip(missing, new_vecs, strict=True):
+        fresh[row["id"]] = vec
+    if fresh:
+        await asyncio.gather(*(_persist_embedding(r, fresh[r["id"]], model) for r in missing))
+
+    min_score = float(settings.get("ai_faq_semantic_min_score") or 0.30)
+    scored = []
+    for row in rows:
+        vec = fresh.get(row.get("id")) or _stored_vector(row, model)
+        if vec is None:
+            continue  # not embedded this call — lexical fallback covers it
+        sim = embeddings.cosine(q_vec, vec)
+        if sim >= min_score:
+            scored.append((sim, row))
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return [_faq_view(r) for _, r in scored[:5]]
+
+
+async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
+    audience = user.get("ai_audience", "rider")
+    rows = (
+        await db_supabase.get_rows(
+            "faqs",
+            {"is_active": True, "audience": {"$in": ["both", audience]}},
+            limit=200,
+        )
+        or []
+    )
+    settings = await get_app_settings()
+
+    results = None
+    if settings.get("ai_faq_semantic_enabled"):
+        results = await _semantic_results(rows, query, settings)
+    # None (embeddings unavailable) or empty (nothing above floor) → lexical.
+    if not results:
+        results = _lexical_results(rows, query)
+    if not results:
+        return dict(_NO_MATCH)
+    return {"results": results}
 
 
 async def get_company_info(user: Dict[str, Any]) -> Dict[str, Any]:

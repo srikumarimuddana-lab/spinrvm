@@ -706,6 +706,23 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
         logger.error(f"[DISPATCH] match_driver_to_ride: ride {ride_id} not found")
         return
 
+    # C2: never dispatch a ride that is no longer searching. The offer-timeout
+    # re-dispatch path runs ~15 awaits after its own status check, so a driver
+    # accept can land in that window and flip the ride to driver_accepted;
+    # without this guard we would claim fresh drivers and emit phantom offers on
+    # an already-live ride (ride-state invariant violation) and needlessly pull
+    # available drivers offline. Every caller either passes a fresh searching
+    # ride (booking) or re-fetches after ensuring searching (scheduled flips
+    # scheduled→searching first; offer-timeout / decline re-dispatch re-fetch),
+    # so this only ever skips a genuinely stale (already-accepted) ride.
+    if ride.get("status") != RideStatus.SEARCHING:
+        logger.info(
+            "[DISPATCH] skipping dispatch for ride %s — status is %s, not searching",
+            ride_id,
+            ride.get("status"),
+        )
+        return
+
     # Refuse to dispatch a ride with missing coordinates — the driver-app
     # cannot render the map polyline and would either drop the offer or
     # plot (0,0) (Gulf of Guinea). Surfacing loudly per CLAUDE.md ("Do not

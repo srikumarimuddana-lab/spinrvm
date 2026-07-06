@@ -95,8 +95,13 @@ def _tip_ride_update(ride: dict, tip_amount: Decimal) -> dict:
     existing_tip = _round(_d(ride.get("tip_amount") or 0))
     tip_delta = tip_d - existing_tip
     fields: dict = {"tip_amount": _f(tip_d)}
-    if tip_delta > 0:
-        fields["driver_earnings"] = _f(_round(_d(ride.get("driver_earnings") or 0) + tip_delta))
+    # Apply the delta in BOTH directions (C3): a downward tip correction must
+    # claw the over-credit back out of driver_earnings, not just an increase —
+    # otherwise a reduced/removed tip leaves the driver overpaid. Clamp at 0 so
+    # a correction can never drive earnings negative.
+    if tip_delta != 0:
+        new_earnings = _round(_d(ride.get("driver_earnings") or 0) + tip_delta)
+        fields["driver_earnings"] = _f(max(new_earnings, _round(Decimal("0"))))
     return fields
 
 

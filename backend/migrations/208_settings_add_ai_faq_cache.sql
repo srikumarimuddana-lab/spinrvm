@@ -16,7 +16,7 @@
 -- safe against in-flight production traffic (no rewrite, no lock beyond the
 -- brief catalog update). The settings table is a single-row config table.
 --
--- Rollback (manual, not expected):
+-- Rollback: (manual, not expected)
 --   ALTER TABLE settings
 --     DROP COLUMN IF EXISTS ai_faq_cache_enabled,
 --     DROP COLUMN IF EXISTS ai_faq_cache_ttl_seconds;

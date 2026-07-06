@@ -13,7 +13,7 @@
 -- admin having added the same question is safe. Forward-compatible, no schema
 -- change, no locks.
 --
--- Rollback (manual): DELETE FROM faqs WHERE audience = 'driver'
+-- Rollback: (manual) DELETE FROM faqs WHERE audience = 'driver'
 --   AND question IN (<the questions below>);
 
 INSERT INTO faqs (question, answer, category, audience, is_active, created_at)

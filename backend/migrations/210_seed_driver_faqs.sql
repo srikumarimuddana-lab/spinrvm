@@ -13,7 +13,7 @@
 -- dates; timing-specific answers point the driver to their in-app status or
 -- support. Forward-compatible, no schema change, no locks.
 --
--- Rollback (manual): DELETE FROM faqs WHERE audience = 'driver'
+-- Rollback: (manual) DELETE FROM faqs WHERE audience = 'driver'
 --   AND category IN ('onboarding','documents','payments','troubleshooting')
 --   AND question IN (<the questions below>);
 

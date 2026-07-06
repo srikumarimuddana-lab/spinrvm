@@ -391,6 +391,13 @@ class ConnectionManager:
         self._admin_loc_last[driver_id] = now
         await self.broadcast_to_admins(message)
 
+    def forget_driver_location_throttle(self, driver_id: str) -> None:
+        """Drop a driver's admin-location throttle entry (P7). Called on driver
+        disconnect so _admin_loc_last doesn't retain one float per driver ever
+        seen (an unbounded, if slow, leak). Location pings for a driver land on
+        one replica, so this local eviction is sufficient."""
+        self._admin_loc_last.pop(driver_id, None)
+
     async def broadcast_ride_status(
         self,
         ride_id: str,

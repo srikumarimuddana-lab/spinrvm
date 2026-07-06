@@ -57,9 +57,7 @@ def _fd(v: Any) -> float:
     return float(_round(_d(v)))
 
 
-def build_default_fares(
-    vehicle_types: List[Dict[str, Any]], surge: Any = _d(1)
-) -> List[Dict[str, Any]]:
+def build_default_fares(vehicle_types: List[Dict[str, Any]], surge: Any = _d(1)) -> List[Dict[str, Any]]:
     """
     Build a default fare entry per vehicle type.
 
@@ -83,9 +81,7 @@ def build_default_fares(
     ]
 
 
-def find_service_area_for_point(
-    areas: List[Dict[str, Any]], lat: float, lng: float
-) -> Optional[Dict[str, Any]]:
+def find_service_area_for_point(areas: List[Dict[str, Any]], lat: float, lng: float) -> Optional[Dict[str, Any]]:
     """
     Return the first service area whose polygon contains (lat, lng), or None.
 
@@ -113,9 +109,7 @@ def merge_vehicle_pricing_with_vehicle_types(
         return []
 
     pricing_by_name = {
-        row.get("vehicle_type"): row
-        for row in vehicle_pricing
-        if isinstance(row, dict) and row.get("vehicle_type")
+        row.get("vehicle_type"): row for row in vehicle_pricing if isinstance(row, dict) and row.get("vehicle_type")
     }
     result = []
     for vt in vehicle_types:
@@ -180,6 +174,12 @@ class FareBreakdown:
     surge_multiplier: Decimal
     driver_earnings: Decimal
     admin_earnings: Decimal
+    # Pre-surge distance/time fares (C4). surge multiplies ONLY distance+time,
+    # so these let the receipt itemise the surge delta as a real dollar figure
+    # instead of baking it into "Ride fare" behind an amount-less "Surge" line.
+    # Default 0 so existing FareBreakdown constructors are unaffected.
+    distance_fare_base: Decimal = Decimal("0")
+    time_fare_base: Decimal = Decimal("0")
 
 
 def calculate_fare(
@@ -201,6 +201,8 @@ def calculate_fare(
     minimum = _d(fare_info.get("minimum_fare", DEFAULT_FARE["minimum_fare"]))
     ap_fee = _d(airport_fee)
 
+    distance_fare_base = _round(per_km * _d(distance_km))
+    time_fare_base = _round(per_min * _d(duration_minutes))
     distance_fare = _round(per_km * _d(distance_km) * surge)
     time_fare = _round(per_min * _d(duration_minutes) * surge)
 
@@ -221,6 +223,8 @@ def calculate_fare(
         surge_multiplier=surge,
         driver_earnings=driver_earnings,
         admin_earnings=admin_earnings,
+        distance_fare_base=distance_fare_base,
+        time_fare_base=time_fare_base,
     )
 
 
@@ -239,8 +243,21 @@ def build_fare_breakdown_lines(
     """
     lines: List[Dict[str, Any]] = []
 
-    # Consolidated ride line — driver earns 100% of this amount (0% commission model)
-    ride_subtotal = _f(fb.base_fare + fb.distance_fare + fb.time_fare)
+    # C4: surge multiplies only distance+time, so split it out as a real dollar
+    # line rather than baking it into "Ride fare" behind an amount-less "Surge"
+    # line. The pre-surge ride fare + the surge delta sum back to the exact same
+    # total (base + surged distance + surged time), so the grand total is
+    # unchanged — only the disclosure improves.
+    surged_dt = fb.distance_fare + fb.time_fare
+    base_dt = fb.distance_fare_base + fb.time_fare_base
+    if fb.surge_multiplier > Decimal("1") and base_dt <= Decimal("0"):
+        # Older FareBreakdown without the pre-surge fields — derive from the
+        # multiplier (keeps totals exact via the subtraction below).
+        base_dt = _round(surged_dt / fb.surge_multiplier)
+    surge_delta = _round(surged_dt - base_dt) if fb.surge_multiplier > Decimal("1") else Decimal("0")
+
+    # Consolidated ride line (pre-surge) — driver earns 100% (0% commission model)
+    ride_subtotal = _f(fb.base_fare + surged_dt - surge_delta)
     lines.append(
         {
             "label": f"Ride fare ({round(distance_km, 1)} km)",
@@ -250,20 +267,16 @@ def build_fare_breakdown_lines(
     )
 
     if fb.airport_fee > Decimal("0"):
-        lines.append(
-            {"label": "Airport surcharge", "amount": _f(fb.airport_fee), "type": "fee"}
-        )
+        lines.append({"label": "Airport surcharge", "amount": _f(fb.airport_fee), "type": "fee"})
 
     if fb.booking_fee > Decimal("0"):
-        lines.append(
-            {"label": "Booking fee", "amount": _f(fb.booking_fee), "type": "fee"}
-        )
+        lines.append({"label": "Booking fee", "amount": _f(fb.booking_fee), "type": "fee"})
 
     if fb.surge_multiplier > Decimal("1"):
         lines.append(
             {
                 "label": f"Surge ({float(fb.surge_multiplier)}×)",
-                "amount": None,
+                "amount": _f(surge_delta),
                 "type": "modifier",
             }
         )
@@ -271,9 +284,7 @@ def build_fare_breakdown_lines(
     for fee in area_fees or []:
         val = fee.get("calculated_value", 0)
         if float(val) > 0:
-            lines.append(
-                {"label": fee.get("name", "Fee"), "amount": float(val), "type": "fee"}
-            )
+            lines.append({"label": fee.get("name", "Fee"), "amount": float(val), "type": "fee"})
 
     if tax_breakdown:
         for tax_name, info in tax_breakdown.items():
@@ -317,13 +328,11 @@ def recalculate_fare_for_distance(
         + _d(ride.get("booking_fee", 0))
         + _d(ride.get("airport_fee") or 0)
     )
-    new_driver_earnings = _round(
-        _d(ride.get("base_fare", 0)) + new_distance_fare + _d(ride.get("time_fare", 0))
-    )
+    new_driver_earnings = _round(_d(ride.get("base_fare", 0)) + new_distance_fare + _d(ride.get("time_fare", 0)))
 
     area_fees_total = _d(ride.get("area_fees_total", 0))
     if area_fees_total == 0:
-        for af in (ride.get("area_fees_breakdown") or []):
+        for af in ride.get("area_fees_breakdown") or []:
             if isinstance(af, dict):
                 area_fees_total += _d(af.get("calculated_value", 0))
     tax_amount = _d(ride.get("tax_amount", 0))
@@ -370,9 +379,7 @@ class FareService:
         if not vehicle_types:
             return []
 
-        all_areas = await self.db.get_rows(
-            "service_areas", {"is_active": True}, limit=100
-        )
+        all_areas = await self.db.get_rows("service_areas", {"is_active": True}, limit=100)
         matching_area = find_service_area_for_point(all_areas, lat, lng)
 
         if not matching_area:
@@ -386,9 +393,7 @@ class FareService:
             else _d(1)
         )
         vehicle_pricing = matching_area.get("vehicle_pricing") or []
-        vehicle_pricing_fares = merge_vehicle_pricing_with_vehicle_types(
-            vehicle_pricing, vehicle_types, surge
-        )
+        vehicle_pricing_fares = merge_vehicle_pricing_with_vehicle_types(vehicle_pricing, vehicle_types, surge)
         if vehicle_pricing_fares:
             return vehicle_pricing_fares
 
@@ -401,6 +406,4 @@ class FareService:
         if not fare_configs:
             return []
 
-        return merge_fare_configs_with_vehicle_types(
-            fare_configs, vehicle_types, surge
-        )
+        return merge_fare_configs_with_vehicle_types(fare_configs, vehicle_types, surge)

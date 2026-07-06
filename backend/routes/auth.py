@@ -112,6 +112,51 @@ api_router = APIRouter(prefix="/auth", tags=["Authentication"])
 _FAIL_KEY = "otp_fail:{}"
 _LOCK_KEY = "otp_lock:{}"
 
+# ── Per-destination-phone SMS SEND cap (C5) ─────────────────────────────
+# Distinct from the failure lockout above (which counts VERIFY failures). The
+# IP limiter is XFF-spoofable and there was no per-number send throttle, so one
+# spoofed header could SMS-bomb any victim number and burn Twilio spend. Keyed
+# on the phone so it survives IP rotation.
+_SEND_COUNT_KEY = "otp_sendc:{}"
+_SEND_INTERVAL_KEY = "otp_sendi:{}"
+_OTP_SEND_MAX_PER_HOUR = 5
+_OTP_SEND_WINDOW_SECONDS = 3600
+_OTP_SEND_MIN_INTERVAL_SECONDS = 30
+
+
+async def _enforce_otp_send_cap(phone: str) -> None:
+    """Throttle real OTP SMS per destination phone (a 30s min-interval + an
+    hourly cap). Fail-CLOSED on Redis errors per the OTP security policy:
+    briefly refusing a send beats allowing unbounded SMS during an outage."""
+    interval_key = _SEND_INTERVAL_KEY.format(phone)
+    count_key = _SEND_COUNT_KEY.format(phone)
+    try:
+        if await redis_get(interval_key):
+            raise HTTPException(
+                status_code=429,
+                detail="A code was just sent — please wait a moment before requesting another",
+                headers={"Retry-After": str(_OTP_SEND_MIN_INTERVAL_SECONDS)},
+            )
+        count = await redis_incr(count_key)
+        if count == 1:
+            await redis_expire(count_key, _OTP_SEND_WINDOW_SECONDS)
+        if count > _OTP_SEND_MAX_PER_HOUR:
+            logger.warning("OTP_SEND_CAP phone=...%s count=%s", phone[-4:], count)
+            raise HTTPException(
+                status_code=429,
+                detail="Too many code requests for this number — try again later",
+                headers={"Retry-After": str(_OTP_SEND_WINDOW_SECONDS)},
+            )
+        await redis_set(interval_key, "1", _OTP_SEND_MIN_INTERVAL_SECONDS)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Redis unavailable in OTP send cap: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail="Auth service temporarily unavailable, please try again",
+        ) from e
+
 
 async def _check_otp_lockout(phone: str) -> None:
     """Raise 429 if phone is currently locked out. Raises 503 on Redis errors (fail closed).
@@ -314,6 +359,12 @@ async def send_otp(request: Request, body: SendOTPRequest):
             status_code=503,
             message_key=ErrorKeys.SYSTEM_DATABASE,
         ) from e
+
+    # Per-destination-phone SMS send cap (C5) — only for real Twilio sends, so
+    # dev-bypass and reviewer accounts are unaffected. Enforced before the send
+    # so a bombing attempt costs no SMS.
+    if deliver_via_sms and twilio_configured:
+        await _enforce_otp_send_cap(phone)
 
     # Send OTP via SMS (Twilio when configured, console log otherwise).
     # Reviewer accounts skip SMS entirely — the code is pre-shared out of band.

@@ -96,10 +96,33 @@ def _is_otp_key(key: str) -> bool:
     return any(fragment in lower for fragment in _OTP_KEY_FRAGMENTS)
 
 
-# Default limiter — reads the real client IP from X-Forwarded-For when the
-# app sits behind a load balancer or CDN (Cloudflare, Fly.io, Railway). (P2-7)
+def get_real_client_ip(request: Request) -> str:
+    """Resolve the true client IP behind the CDN/proxy chain (C5).
+
+    slowapi's ``get_ipaddr`` trusts the LEFTMOST ``X-Forwarded-For`` entry,
+    which is fully client-supplied and therefore spoofable — a forged header
+    lets an attacker rotate the rate-limit key at will. Spinr sits behind
+    Cloudflare, which OVERWRITES ``CF-Connecting-IP`` with the real connecting
+    IP and ignores any client-supplied value, so it is authoritative. Prefer it,
+    then ``X-Real-IP`` (set by the platform edge), then fall back to
+    ``get_ipaddr`` for local dev / non-Cloudflare paths.
+
+    (Origin hosts must only accept traffic from Cloudflare for this to be
+    airtight against a direct-to-origin bypass — an infra/network control.)
+    """
+    cf_ip = request.headers.get("cf-connecting-ip")
+    if cf_ip:
+        return cf_ip.strip()
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip()
+    return get_ipaddr(request)
+
+
+# Default limiter — keyed on the authoritative client IP (CF-Connecting-IP when
+# behind Cloudflare) instead of the spoofable leftmost X-Forwarded-For. (P2-7, C5)
 default_limiter = Limiter(
-    key_func=get_ipaddr,
+    key_func=get_real_client_ip,
     default_limits=["100/minute", "1000/hour"],
     storage_uri=_rate_limit_storage_uri,
 )
@@ -132,8 +155,8 @@ def get_client_identifier(request: Request) -> str:
     except Exception:  # noqa: S110
         logger.warning("rate_limiter: get_rate_limit_key: body parse failed; falling back to IP", exc_info=True)
 
-    # Fallback to real IP (respects X-Forwarded-For behind proxies)
-    return f"ip:{get_ipaddr(request)}"
+    # Fallback to the authoritative client IP (CF-Connecting-IP when present).
+    return f"ip:{get_real_client_ip(request)}"
 
 
 def get_phone_based_key(request: Request) -> str:
@@ -145,8 +168,8 @@ def get_phone_based_key(request: Request) -> str:
         phone_hash = hashlib.sha256(phone.encode()).hexdigest()[:16]
         return f"phone:{phone_hash}"
 
-    # Fallback to real IP (respects X-Forwarded-For behind proxies)
-    return f"ip:{get_ipaddr(request)}"
+    # Fallback to the authoritative client IP (CF-Connecting-IP when present).
+    return f"ip:{get_real_client_ip(request)}"
 
 
 # ============================================================================

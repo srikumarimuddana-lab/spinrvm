@@ -216,6 +216,12 @@ cancel_ride_limit = default_limiter.limit("10/hour")
 # Ride read endpoints — generous ceiling covers 3 s polling without churn
 ride_read_limit = default_limiter.limit("120/minute")
 
+# Corporate guest bookings: each one fires 2-3 customer SMS, so this is an
+# SMS-cost/abuse bound as much as a booking bound. 30/hour comfortably covers
+# a busy showroom desk. (The /company + /api/company double-mount tracks
+# each prefix separately — accepted caveat, see server.py.)
+company_booking_limit = default_limiter.limit("30/hour")
+
 # Promo enumeration guard - max 20 per minute
 promo_available_limit = default_limiter.limit("20/minute")
 

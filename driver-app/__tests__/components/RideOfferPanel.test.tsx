@@ -86,4 +86,18 @@ describe('RideOfferPanel', () => {
     const { toJSON } = render(<RideOfferPanel {...defaultProps} incomingRide={null} />);
     expect(toJSON()).toBeNull();
   });
+
+  it('shows the Quiet ride badge when the rider requested a quiet ride', () => {
+    const { getByText } = render(
+      <RideOfferPanel {...defaultProps} incomingRide={{ ...mockRide, quiet_mode: true }} />,
+    );
+    expect(getByText('Quiet ride')).toBeTruthy();
+  });
+
+  it('does not show the Quiet ride badge when quiet_mode is off', () => {
+    const { queryByText } = render(
+      <RideOfferPanel {...defaultProps} incomingRide={{ ...mockRide, quiet_mode: false }} />,
+    );
+    expect(queryByText('Quiet ride')).toBeNull();
+  });
 });

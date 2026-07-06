@@ -82,6 +82,9 @@ export interface RideInfo {
     // Present on a dispatched offer (status driver_assigned). Typed explicitly
     // so consumers don't fall through to the `unknown` index signature.
     requires_wav?: boolean;
+    // Rider quiet-ride preference (migration 62). Rides along with the ride
+    // row so it stays visible on the active ride, not just the offer.
+    quiet_mode?: boolean;
     offer_expires_at?: string;
     created_at: string;
     [key: string]: unknown;
@@ -286,6 +289,10 @@ interface IncomingRide {
     // flag in the ride offer panel; non-WAV drivers should not receive
     // these offers at all (backend filters dispatch).
     requires_wav?: boolean;
+    // Rider requested a quiet ride (minimal conversation) — migration 62.
+    // Surfaced as a badge in the offer panel so the driver knows before
+    // accepting; purely informational, no dispatch filtering.
+    quiet_mode?: boolean;
     // Per-offer countdown sourced from the dispatch payload — overrides
     // the cached configuredCountdownSeconds so an admin-changed timeout
     // takes effect on the very next offer, not the next cold start.
@@ -741,6 +748,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                             payment_method: ride.payment_method ?? existing?.payment_method,
                             offer_expires_at: ride.offer_expires_at ?? existing?.offer_expires_at,
                             requires_wav: ride.requires_wav ?? existing?.requires_wav,
+                            quiet_mode: ride.quiet_mode ?? existing?.quiet_mode,
                             planned_route_polyline: (ride as any).planned_route_polyline ?? undefined,
                             service_area_polygon: (res.data as any).service_area_polygon ?? existing?.service_area_polygon ?? undefined,
                         },

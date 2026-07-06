@@ -14,6 +14,15 @@ from utils.rate_limiter import default_limiter, rate_limit_exceeded_handler
 
 # ── CSRF double-submit constants ─────────────────────────────────────
 _CSRF_COOKIE = "csrf_token"
+# Per-audience CSRF cookies: the admin dashboard and the company portal are the
+# same browser origin, so a single shared cookie name collides when both
+# sessions are active (whichever logged in last owns `csrf_token`, breaking the
+# other's writes). Each browser surface uses its own cookie name and the
+# double-submit header is validated against whichever one it matches. This does
+# not weaken the protection: an attacker still cannot read either cookie to
+# forge a matching header (SameSite=Strict also blocks cross-site sends).
+_CSRF_COOKIE_COMPANY = "csrf_token_company"
+_CSRF_COOKIES = (_CSRF_COOKIE, _CSRF_COOKIE_COMPANY)
 _CSRF_HEADER = "x-csrf-token"
 _CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 # Paths that have no established session yet — no CSRF cookie exists.
@@ -332,10 +341,13 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         if not request.headers.get("origin"):
             return await call_next(request)
 
-        csrf_cookie = request.cookies.get(_CSRF_COOKIE)
         csrf_header = request.headers.get(_CSRF_HEADER)
+        # Collect whichever per-audience CSRF cookies are present (admin uses
+        # `csrf_token`, the company portal uses `csrf_token_company`).
+        present_cookies = [(request.cookies.get(name)) for name in _CSRF_COOKIES]
+        present_cookies = [c for c in present_cookies if c]
 
-        if not csrf_cookie or not csrf_header:
+        if not present_cookies or not csrf_header:
             logger.warning("CSRF token missing: %s %s", request.method, path)
             return JSONResponse(
                 status_code=403,
@@ -344,7 +356,10 @@ class CSRFMiddleware(BaseHTTPMiddleware):
 
         import hmac as _hmac  # noqa: PLC0415
 
-        if not _hmac.compare_digest(csrf_cookie.encode(), csrf_header.encode()):
+        # Valid if the header matches ANY present CSRF cookie. Constant-time
+        # compare against each; the attacker can read none of them.
+        header_bytes = csrf_header.encode()
+        if not any(_hmac.compare_digest(c.encode(), header_bytes) for c in present_cookies):
             logger.warning(
                 "CSRF token mismatch: %s %s origin=%s",
                 request.method,

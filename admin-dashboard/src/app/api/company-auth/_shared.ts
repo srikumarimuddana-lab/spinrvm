@@ -14,6 +14,11 @@ export const BACKEND_URL = (() => {
 })();
 
 export const RT_COOKIE = "spinr_company_rt";
+// Per-audience CSRF cookie: the staff admin surface and the company portal are
+// the same browser origin, so a shared `csrf_token` cookie collides when both
+// sessions are active. The company portal uses its own name; the backend CSRF
+// middleware validates the X-CSRF-Token header against either cookie.
+export const CSRF_COOKIE = "csrf_token_company";
 // Middleware-visible presence marker: the access token (company_token) expires
 // in 15 min (rider TTL), but the refresh session lasts 30 days. This flag lets
 // the middleware load the /company-portal shell after access expiry so the
@@ -51,9 +56,10 @@ export function setCompanySession(
     path: "/api/company-auth",
     maxAge: SESSION_MAX_AGE,
   });
-  // Readable csrf_token cookie for the backend double-submit on direct
-  // /api/company/* writes (value echoed to the store as csrfToken).
-  res.cookies.set("csrf_token", csrf, {
+  // Company CSRF cookie for the backend double-submit on direct /api/company/*
+  // writes (value echoed to the store as csrfToken). Distinct name so it never
+  // collides with the staff admin's csrf_token cookie on the shared origin.
+  res.cookies.set(CSRF_COOKIE, csrf, {
     httpOnly: false,
     sameSite: "strict",
     secure: isProduction,
@@ -79,7 +85,7 @@ export function clearCompanySession(res: NextResponse, isProduction: boolean): v
     path: "/api/company-auth",
     maxAge: 0,
   });
-  res.cookies.set("csrf_token", "", {
+  res.cookies.set(CSRF_COOKIE, "", {
     httpOnly: false,
     sameSite: "strict",
     secure: isProduction,

@@ -191,6 +191,37 @@ class TestValidCsrf:
         )
         assert res.status_code == 200
 
+    def test_company_namespace_cookie_allowed(self, client: TestClient, valid_csrf_token: str):
+        """The company portal uses its own csrf_token_company cookie (staff and
+        portal share the origin) — a header matching it must validate."""
+        res = client.post(
+            "/api/v1/test",
+            headers={
+                "Origin": "https://example.com",
+                "X-CSRF-Token": valid_csrf_token,
+            },
+            cookies={"csrf_token_company": valid_csrf_token},
+        )
+        assert res.status_code == 200
+
+    def test_both_namespaces_present_header_matches_company(self, client: TestClient):
+        """Both sessions active in one browser: the header must validate against
+        whichever cookie it matches (here the company one), not just csrf_token —
+        this is the collision the per-audience cookie fixes."""
+        from core.csrf import generate_csrf_token
+
+        admin_tok = generate_csrf_token()
+        company_tok = generate_csrf_token()
+        res = client.post(
+            "/api/v1/test",
+            headers={
+                "Origin": "https://example.com",
+                "X-CSRF-Token": company_tok,
+            },
+            cookies={"csrf_token": admin_tok, "csrf_token_company": company_tok},
+        )
+        assert res.status_code == 200
+
 
 # ── Invalid CSRF ──────────────────────────────────────────────────────────────
 
@@ -213,6 +244,21 @@ class TestInvalidCsrf:
             "/api/v1/test",
             headers={"Origin": "https://example.com"},
             cookies={"csrf_token": valid_csrf_token},
+        )
+        assert res.status_code == 403
+
+    def test_company_cookie_present_wrong_header_rejected(self, client: TestClient):
+        """A header matching NEITHER present cookie is still rejected — the
+        per-audience acceptance doesn't weaken the double-submit check."""
+        from core.csrf import generate_csrf_token
+
+        res = client.post(
+            "/api/v1/test",
+            headers={
+                "Origin": "https://example.com",
+                "X-CSRF-Token": generate_csrf_token(),
+            },
+            cookies={"csrf_token_company": generate_csrf_token()},
         )
         assert res.status_code == 403
 

@@ -48,6 +48,15 @@ def _settings(**overrides):
 
 
 class TestSearchFaqs:
+    @pytest.fixture(autouse=True)
+    def _semantic_off(self):
+        # Pin semantic search OFF so these lexical tests are deterministic and
+        # don't depend on the process-wide settings cache.
+        with patch.object(
+            tools_support, "get_app_settings", AsyncMock(return_value={"ai_faq_semantic_enabled": False})
+        ):
+            yield
+
     @pytest.mark.anyio
     async def test_keyword_match_and_shape(self):
         get_rows = AsyncMock(return_value=FAQS)
@@ -55,8 +64,10 @@ class TestSearchFaqs:
             result, ok = await execute_tool("search_faqs", {"query": "can I schedule a ride for tomorrow"}, user=RIDER)
         assert ok
         assert result["results"][0]["question"].startswith("Can I schedule")
-        # audience filter is server-decided and sent to the DB query
-        assert get_rows.await_args.args[1]["audience"] == {"$in": ["both", "rider"]}
+        # audience filter is server-decided and sent to the DB query. (search_faqs
+        # also loads settings via get_rows, so target the faqs call explicitly.)
+        faqs_call = next(c for c in get_rows.await_args_list if c.args[0] == "faqs")
+        assert faqs_call.args[1]["audience"] == {"$in": ["both", "rider"]}
 
     @pytest.mark.anyio
     async def test_driver_audience_passed_through(self):
@@ -127,6 +138,78 @@ class TestSearchFaqs:
     def test_unrelated_terms_do_not_share_a_concept(self):
         # guardrail: distinct topics must not collapse into one concept token
         assert tools_support._match_tokens("surge") & tools_support._match_tokens("refund") == set()
+
+
+class TestSearchFaqsSemantic:
+    SETTINGS = {
+        "ai_faq_semantic_enabled": True,
+        "ai_embedding_provider": "openai",  # → model text-embedding-3-small
+        "ai_faq_semantic_min_score": 0.30,
+    }
+
+    def _faqs(self, with_embeddings=False):
+        rows = [
+            {"id": "a", "question": "How do I add a payment card?", "answer": "In Wallet.", "category": "payments"},
+            {"id": "b", "question": "When are payouts made?", "answer": "Weekly.", "category": "money"},
+        ]
+        if with_embeddings:
+            rows[0].update(embedding=[0.0, 1.0], embedding_model="text-embedding-3-small")
+            rows[1].update(embedding=[0.9, 0.1], embedding_model="text-embedding-3-small")
+        return rows
+
+    @pytest.mark.anyio
+    async def test_ranks_by_vector_similarity_with_no_lexical_overlap(self):
+        # query vector close to row b, far from row a; neither shares a keyword
+        # with "when do I get my earnings"
+        embed = AsyncMock(return_value=[[1.0, 0.0], [0.0, 1.0], [0.9, 0.1]])  # query, a, b
+        update = AsyncMock()
+        with patch.object(tools_support, "get_app_settings", AsyncMock(return_value=self.SETTINGS)), patch.object(
+            tools_support.db_supabase, "get_rows", AsyncMock(return_value=self._faqs())
+        ), patch.object(tools_support.embeddings, "embed_texts", embed), patch.object(
+            tools_support.db_supabase, "update_one", update
+        ):
+            result, ok = await execute_tool("search_faqs", {"query": "when do I get my earnings"}, user=RIDER)
+        assert ok
+        assert [r["question"] for r in result["results"]] == ["When are payouts made?"]
+        update.assert_awaited()  # freshly embedded rows were persisted
+
+    @pytest.mark.anyio
+    async def test_reuses_stored_embeddings_and_only_embeds_query(self):
+        embed = AsyncMock(return_value=[[0.9, 0.1]])  # only the query
+        update = AsyncMock()
+        with patch.object(tools_support, "get_app_settings", AsyncMock(return_value=self.SETTINGS)), patch.object(
+            tools_support.db_supabase, "get_rows", AsyncMock(return_value=self._faqs(with_embeddings=True))
+        ), patch.object(tools_support.embeddings, "embed_texts", embed), patch.object(
+            tools_support.db_supabase, "update_one", update
+        ):
+            result, ok = await execute_tool("search_faqs", {"query": "earnings schedule"}, user=RIDER)
+        assert ok
+        assert embed.await_args.args[0] == ["earnings schedule"]  # no rows re-embedded
+        update.assert_not_awaited()
+        assert result["results"][0]["question"] == "When are payouts made?"
+
+    @pytest.mark.anyio
+    async def test_embeddings_unavailable_falls_back_to_lexical(self):
+        with patch.object(tools_support, "get_app_settings", AsyncMock(return_value=self.SETTINGS)), patch.object(
+            tools_support.db_supabase, "get_rows", AsyncMock(return_value=self._faqs())
+        ), patch.object(tools_support.embeddings, "embed_texts", AsyncMock(return_value=None)):
+            result, ok = await execute_tool("search_faqs", {"query": "payouts"}, user=RIDER)
+        assert ok
+        # lexical still matches "payouts" against the payouts FAQ
+        assert result["results"][0]["question"] == "When are payouts made?"
+
+    @pytest.mark.anyio
+    async def test_below_floor_falls_back_to_lexical(self):
+        # all similarities below 0.30 → semantic yields nothing; lexical rescues
+        embed = AsyncMock(return_value=[[1.0, 0.0], [0.1, 0.99], [0.05, 0.99]])
+        with patch.object(tools_support, "get_app_settings", AsyncMock(return_value=self.SETTINGS)), patch.object(
+            tools_support.db_supabase, "get_rows", AsyncMock(return_value=self._faqs())
+        ), patch.object(tools_support.embeddings, "embed_texts", embed), patch.object(
+            tools_support.db_supabase, "update_one", AsyncMock()
+        ):
+            result, ok = await execute_tool("search_faqs", {"query": "payouts"}, user=RIDER)
+        assert ok
+        assert result["results"][0]["question"] == "When are payouts made?"
 
 
 class TestCompanyInfo:

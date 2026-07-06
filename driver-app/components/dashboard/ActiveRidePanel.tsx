@@ -536,6 +536,17 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           </View>
         ) : null}
 
+        {/* ── Quiet ride preference (whole trip) ──────────── */}
+        {!!(ride as any).quiet_mode ? (
+          <View style={styles.quietBanner}>
+            <Ionicons name="volume-mute" size={16} color="#8B5CF6" style={{ marginTop: 1 }} />
+            <View style={{ flex: 1 }}>
+              <Text allowFontScaling={false} style={styles.quietLabel}>Quiet ride requested</Text>
+              <Text style={styles.quietText}>The rider prefers minimal conversation.</Text>
+            </View>
+          </View>
+        ) : null}
+
         {/* ── OTP section (arrived_at_pickup) ─────────────── */}
         {rideState === 'arrived_at_pickup' ? (
           <View style={styles.otpCard}>
@@ -813,6 +824,18 @@ function createStyles(colors: ThemeColors) {
     },
     noteLabel: { fontSize: 11, fontWeight: '700', color: colors.primary, marginBottom: 2 },
     noteText: { fontSize: 14, color: colors.text, lineHeight: 19 },
+    quietBanner: {
+      flexDirection: 'row',
+      gap: 8,
+      alignItems: 'flex-start',
+      backgroundColor: '#8B5CF614',
+      borderRadius: 12,
+      paddingVertical: 10,
+      paddingHorizontal: 12,
+      marginBottom: 12,
+    },
+    quietLabel: { fontSize: 11, fontWeight: '700', color: '#8B5CF6', marginBottom: 2 },
+    quietText: { fontSize: 14, color: colors.text, lineHeight: 19 },
     ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2 },
     ratingText: { fontSize: 12, fontWeight: '600', color: colors.textDim },
     contactBtn: {

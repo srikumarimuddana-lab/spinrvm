@@ -6,6 +6,7 @@ import {
     TextInput,
     TouchableOpacity,
     KeyboardAvoidingView,
+    ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -66,7 +67,15 @@ export default function ReportSafetyScreen() {
                 style={styles.container}
                 behavior="padding"
             >
-                <View style={styles.content}>
+                {/* ScrollView (flexGrow:1) so the submit button (marginTop:auto)
+                    stays reachable when the keyboard raises on small screens
+                    instead of being pushed off-screen / behind the keyboard. */}
+                <ScrollView
+                    style={styles.container}
+                    contentContainerStyle={styles.content}
+                    keyboardShouldPersistTaps="handled"
+                    showsVerticalScrollIndicator={false}
+                >
                     <View style={styles.warningBox}>
                         <Ionicons name="warning" size={24} color="#F59E0B" />
                         <Text style={styles.warningText}>
@@ -96,7 +105,7 @@ export default function ReportSafetyScreen() {
                             {submitting ? 'Submitting...' : 'Submit Report'}
                         </Text>
                     </TouchableOpacity>
-                </View>
+                </ScrollView>
             </KeyboardAvoidingView>
         </SafeAreaView>
     );
@@ -136,7 +145,7 @@ function createStyles(colors: ThemeColors) {
         },
         content: {
             padding: 24,
-            flex: 1,
+            flexGrow: 1,
         },
         warningBox: {
             flexDirection: 'row',

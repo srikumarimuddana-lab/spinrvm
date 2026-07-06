@@ -203,6 +203,15 @@ export function middleware(request: NextRequest) {
     if (companyToken && isTokenValid(companyToken)) {
       return passThroughWithNonce(request, nonce);
     }
+    // The access token (company_token) expires in 15 min, but the refresh
+    // session lasts 30 days. When the access token is stale/absent but the
+    // company_session marker shows a refreshable session exists, load the shell
+    // so the client can silentRefresh — otherwise an idle reload would force a
+    // needless re-login. If the refresh fails, the client layout redirects.
+    const hasRefreshableSession = request.cookies.get("company_session")?.value === "1";
+    if (hasRefreshableSession) {
+      return passThroughWithNonce(request, nonce);
+    }
     const companyRedirect = request.nextUrl.clone();
     companyRedirect.pathname = "/company-login";
     companyRedirect.searchParams.set("next", pathname);

@@ -40,7 +40,11 @@ function CompanyLoginInner() {
 
     const normalizedPhone = () => {
         const digits = phone.replace(/\D/g, "");
-        return digits.length === 10 ? `+1${digits}` : phone.trim();
+        if (digits.length === 10) return `+1${digits}`;
+        // Common 11-digit forms like "+1 (306) 555-0123" / "1-306-555-0123":
+        // the backend send-otp only accepts strict +1XXXXXXXXXX.
+        if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+        return phone.trim();
     };
 
     const handleSend = async () => {

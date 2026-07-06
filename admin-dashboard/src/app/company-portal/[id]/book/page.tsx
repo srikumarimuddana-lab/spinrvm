@@ -221,7 +221,12 @@ export default function CompanyBookRidePage() {
         setError(null);
         try {
             const digits = customerPhone.replace(/\D/g, "");
-            const phone = digits.length === 10 ? `+1${digits}` : customerPhone.trim();
+            const phone =
+                digits.length === 10
+                    ? `+1${digits}`
+                    : digits.length === 11 && digits.startsWith("1")
+                      ? `+${digits}`
+                      : customerPhone.trim();
             const res = await createCompanyBooking(companyId, {
                 customer_name: customerName.trim(),
                 customer_phone: phone,

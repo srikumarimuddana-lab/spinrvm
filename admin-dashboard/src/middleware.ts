@@ -99,7 +99,7 @@ function isIpAllowed(request: NextRequest): boolean {
   return ALLOWED_IP_ENTRIES.some((entry) => clientIp.startsWith(entry));
 }
 
-const PUBLIC_PATHS = ["/login"];
+const PUBLIC_PATHS = ["/login", "/company-login"];
 const PUBLIC_PREFIXES = ["/register/", "/track/"];
 
 function isPublic(pathname: string): boolean {
@@ -195,6 +195,25 @@ export function middleware(request: NextRequest) {
   // Public page — no auth required
   if (isPublic(pathname)) {
     return passThroughWithNonce(request, nonce);
+  }
+
+  // ── Company portal (Spinr for Business) ────────────────────────────────────
+  // Company users hold RIDER tokens (phone OTP), never staff sessions — the
+  // portal is gated on its own company_token cookie and bounces to
+  // /company-login, keeping the two auth surfaces fully separate.
+  if (pathname === "/company-portal" || pathname.startsWith("/company-portal/")) {
+    const companyToken = request.cookies.get("company_token")?.value;
+    if (companyToken && isTokenValid(companyToken)) {
+      return passThroughWithNonce(request, nonce);
+    }
+    const companyRedirect = request.nextUrl.clone();
+    companyRedirect.pathname = "/company-login";
+    companyRedirect.searchParams.set("next", pathname);
+    const companyResponse = NextResponse.redirect(companyRedirect);
+    if (companyToken) {
+      companyResponse.cookies.set("company_token", "", { path: "/", maxAge: 0 });
+    }
+    return companyResponse;
   }
 
   const token = request.cookies.get("admin_token")?.value;

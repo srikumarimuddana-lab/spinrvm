@@ -198,6 +198,11 @@ class AppSettings(BaseModel):
     ai_max_tool_iterations: int = 6
     ai_daily_message_cap: int = 50
     ai_history_max_messages: int = 12
+    # FAQ response cache: replay a stored answer for identical, self-contained,
+    # impersonal opener questions (same or different user) so common FAQ turns
+    # skip the LLM entirely. Ships dark; TTL bounds FAQ-edit staleness.
+    ai_faq_cache_enabled: bool = False
+    ai_faq_cache_ttl_seconds: int = 3600
     # When true, escalate_to_support creates a Zoho ticket. Default is a
     # deep-link handoff only — the AI triggers no server-side side effects.
     ai_escalation_creates_ticket: bool = False

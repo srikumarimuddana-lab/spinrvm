@@ -97,6 +97,37 @@ class TestSearchFaqs:
         assert ok
         assert result["results"][0]["question"] == "Can I schedule a ride?"
 
+    @pytest.mark.anyio
+    async def test_synonym_reword_matches_via_concepts(self):
+        """A query sharing no literal word with the FAQ still matches when the
+        words are domain synonyms (earnings ↔ payouts)."""
+        faqs = [
+            {
+                "question": "When are payouts made?",
+                "answer": "Deposits arrive weekly to your bank.",
+                "category": "money",
+                "audience": "both",
+                "is_active": True,
+            }
+        ]
+        with patch.object(tools_support.db_supabase, "get_rows", AsyncMock(return_value=faqs)):
+            result, ok = await execute_tool("search_faqs", {"query": "when do I get my earnings"}, user=RIDER)
+        assert ok
+        assert result["results"] and result["results"][0]["question"] == "When are payouts made?"
+
+    @pytest.mark.anyio
+    async def test_plural_fallback_matches(self):
+        """Trailing-'s' plurals fold onto the concept (cancellations ↔
+        cancellation)."""
+        with patch.object(tools_support.db_supabase, "get_rows", AsyncMock(return_value=FAQS)):
+            result, ok = await execute_tool("search_faqs", {"query": "how do cancellations work"}, user=RIDER)
+        assert ok
+        assert result["results"] and result["results"][0]["question"] == "What is the cancellation fee?"
+
+    def test_unrelated_terms_do_not_share_a_concept(self):
+        # guardrail: distinct topics must not collapse into one concept token
+        assert tools_support._match_tokens("surge") & tools_support._match_tokens("refund") == set()
+
 
 class TestCompanyInfo:
     @pytest.mark.anyio

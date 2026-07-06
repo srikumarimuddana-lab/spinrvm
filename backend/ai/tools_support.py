@@ -179,7 +179,10 @@ async def _semantic_results(rows: list, query: str, settings: Dict[str, Any]):
     if fresh:
         _schedule_persist([(r, fresh[r["id"]]) for r in to_embed], model)  # deferred, not awaited
 
-    min_score = float(settings.get("ai_faq_semantic_min_score") or 0.30)
+    # Explicit None check — a configured floor of 0 (inspect all matches) must
+    # not be silently replaced by the default via truthiness.
+    raw_floor = settings.get("ai_faq_semantic_min_score")
+    min_score = 0.30 if raw_floor in (None, "") else float(raw_floor)
     scored, covered = [], 0
     for row in rows:
         vec = fresh.get(row.get("id")) or _stored_vector(row, model)
@@ -195,18 +198,27 @@ async def _semantic_results(rows: list, query: str, settings: Dict[str, Any]):
 
 async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
     audience = user.get("ai_audience", "rider")
+    settings = await get_app_settings()
+    semantic = bool(settings.get("ai_faq_semantic_enabled"))
+    # Only pull the (large JSONB) embedding vector when the semantic path will
+    # actually read it — lexical/off searches select display columns only.
+    columns = (
+        "id,question,answer,category,audience,embedding,embedding_model"
+        if semantic
+        else "id,question,answer,category,audience"
+    )
     rows = (
         await db_supabase.get_rows(
             "faqs",
             {"is_active": True, "audience": {"$in": ["both", audience]}},
             limit=200,
+            columns=columns,
         )
         or []
     )
-    settings = await get_app_settings()
 
     results = None
-    if settings.get("ai_faq_semantic_enabled"):
+    if semantic:
         sem = await _semantic_results(rows, query, settings)
         if sem is not None:
             sem_results, complete = sem

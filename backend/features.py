@@ -446,7 +446,15 @@ async def admin_close_ticket(ticket_id: str):
 @admin_support_router.get("/faqs")
 async def admin_get_faqs():
     """Get all FAQs (including inactive) for admin."""
-    faqs = await db_supabase.get_rows("faqs", None, limit=500, order="sort_order", desc=False)
+    # Exclude the semantic-search embedding vector from the admin list payload.
+    faqs = await db_supabase.get_rows(
+        "faqs",
+        None,
+        limit=500,
+        order="sort_order",
+        desc=False,
+        columns="id,question,answer,category,audience,sort_order,is_active,created_at,updated_at",
+    )
     return faqs
 
 

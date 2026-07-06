@@ -53,7 +53,15 @@ class NotificationRequest(BaseModel):
 @router.get("/faqs")
 async def admin_get_faqs():
     """Get all FAQ entries."""
-    faqs = await db_supabase.get_rows("faqs", order="created_at", desc=True, limit=500)
+    # Exclude the semantic-search embedding vector — the dashboard never shows
+    # it and it would bloat the list to multi-MB once vectors are populated.
+    faqs = await db_supabase.get_rows(
+        "faqs",
+        order="created_at",
+        desc=True,
+        limit=500,
+        columns="id,question,answer,category,audience,sort_order,is_active,created_at,updated_at",
+    )
     return faqs
 
 

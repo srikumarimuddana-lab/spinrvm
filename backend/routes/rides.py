@@ -812,6 +812,11 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     all_drivers = await db_supabase.get_rows(
         "drivers",
         _dispatch_filter,
+        # P1: project only what ranking/filtering reads — NOT "*". The full row
+        # carries encrypted PII (address, licence, vehicle details) that this hot
+        # path (up to 500 rows every dispatch + retry, every replica) never needs;
+        # the offer payload is built from the post-claim get_driver_by_id re-read.
+        columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id",
         limit=500,
     )
 
@@ -1035,7 +1040,12 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 }
                 if ride.get("requires_wav"):
                     _casc_filter["is_wav"] = True
-                _casc_pool = await db_supabase.get_rows("drivers", _casc_filter, limit=500)
+                _casc_pool = await db_supabase.get_rows(
+                    "drivers",
+                    _casc_filter,
+                    columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id",
+                    limit=500,
+                )
                 # Fix 4: Presence filter using _checked variant so a Redis outage
                 # (configured-but-unavailable) cannot silently empty the cascade pool.
                 # present_driver_ids_checked returns (set, reachable=False) on failure;
@@ -1144,12 +1154,19 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     if use_eta:
         try:
             maps_key = app_settings.get("google_maps_api_key", "")
-            eta_map = await batch_get_etas(
-                [d for d, _ in pre_filtered],
-                # ETA to the road-snapped pickup the driver actually drives to.
-                ride["pickup_nav_lat"] if ride.get("pickup_nav_lat") is not None else ride["pickup_lat"],
-                ride["pickup_nav_lng"] if ride.get("pickup_nav_lng") is not None else ride["pickup_lng"],
-                maps_key,
+            eta_map = await asyncio.wait_for(
+                batch_get_etas(
+                    [d for d, _ in pre_filtered],
+                    # ETA to the road-snapped pickup the driver actually drives to.
+                    ride["pickup_nav_lat"] if ride.get("pickup_nav_lat") is not None else ride["pickup_lat"],
+                    ride["pickup_nav_lng"] if ride.get("pickup_nav_lng") is not None else ride["pickup_lng"],
+                    maps_key,
+                ),
+                # P3: bound the external Distance-Matrix call to the dispatch
+                # budget — its own _MAPS_TIMEOUT is 3s, too long for the <2s
+                # offer clock. A TimeoutError is caught below → haversine
+                # ranking, so a slow Maps API can't blow the dispatch SLA.
+                timeout=1.2,
             )
             ranked = rank_by_eta_with_acceptance([(d, eta_map.get(d["id"], 9999)) for d, _ in pre_filtered])
         except Exception as e:
@@ -1924,6 +1941,9 @@ async def compute_ride_estimates(
             # 10 km matches the exact haversine gate in the loop below.
             "$and": dispatch_geo_bounds(body.pickup_lat, body.pickup_lng, 10.0),
         },
+        # P1: same projection as the dispatch pool — the estimate badge only
+        # needs id/user_id/lat/lng/vehicle_type_id/is_wav, never encrypted PII.
+        columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id",
         order="went_online_at",
         desc=True,
         limit=200,

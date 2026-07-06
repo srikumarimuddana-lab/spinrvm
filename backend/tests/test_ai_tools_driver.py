@@ -47,18 +47,36 @@ class TestApplicationStatus:
         flags = result["expiring_or_expired_documents"]
         assert any(f["document"] == "Criminal Record Check" and f["state"] == "expired" for f in flags)
 
+    @pytest.mark.anyio
+    async def test_active_driver_with_expired_doc_cannot_go_online(self):
+        # active status but expired CRC → go-online is blocked
+        row = {**DRIVER_ROW, "background_check_expiry_date": "2020-01-01T00:00:00Z"}
+        with _patch_driver(row):
+            result, ok = await execute_tool("get_driver_application_status", {}, user=DRIVER, audience="driver")
+        assert result["status"] == "active"
+        assert result["can_go_online"] is False
+
 
 class TestDocumentStatus:
     @pytest.mark.anyio
     async def test_maps_docs_and_hides_notes_when_approved(self):
         docs = [
-            {"document_type": "passport", "status": "approved", "uploaded_at": "2026-06-01T10:00:00Z",
-             "reviewer_notes": "internal note"},
-            {"document_type": "criminal_record_check", "status": "rejected",
-             "uploaded_at": "2026-06-02T10:00:00Z", "reviewer_notes": "CRC expired, upload a recent one"},
+            {
+                "document_type": "passport",
+                "status": "approved",
+                "uploaded_at": "2026-06-01T10:00:00Z",
+                "rejection_reason": "internal note",
+            },
+            {
+                "document_type": "criminal_record_check",
+                "status": "rejected",
+                "uploaded_at": "2026-06-02T10:00:00Z",
+                "rejection_reason": "CRC expired, upload a recent one",
+            },
         ]
-        with _patch_driver(DRIVER_ROW), patch.object(
-            tools_driver.db_supabase, "get_rows", AsyncMock(return_value=docs)
+        with (
+            _patch_driver(DRIVER_ROW),
+            patch.object(tools_driver.db_supabase, "get_rows", AsyncMock(return_value=docs)),
         ):
             result, ok = await execute_tool("get_document_status", {}, user=DRIVER, audience="driver")
         assert ok
@@ -68,10 +86,17 @@ class TestDocumentStatus:
 
     @pytest.mark.anyio
     async def test_never_returns_file_url(self):
-        docs = [{"document_type": "license_front", "status": "approved", "file_url": "https://secret/doc.jpg",
-                 "uploaded_at": "2026-06-01T10:00:00Z"}]
-        with _patch_driver(DRIVER_ROW), patch.object(
-            tools_driver.db_supabase, "get_rows", AsyncMock(return_value=docs)
+        docs = [
+            {
+                "document_type": "license_front",
+                "status": "approved",
+                "file_url": "https://secret/doc.jpg",
+                "uploaded_at": "2026-06-01T10:00:00Z",
+            }
+        ]
+        with (
+            _patch_driver(DRIVER_ROW),
+            patch.object(tools_driver.db_supabase, "get_rows", AsyncMock(return_value=docs)),
         ):
             result, ok = await execute_tool("get_document_status", {}, user=DRIVER, audience="driver")
         assert "secret" not in str(result)
@@ -84,8 +109,9 @@ class TestEarnings:
             {"driver_earnings": "12.50", "payment_status": "paid", "ride_completed_at": "2026-06-01T10:00:00Z"},
             {"driver_earnings": "7.25", "payment_status": "paid", "ride_completed_at": "2026-06-02T10:00:00Z"},
         ]
-        with _patch_driver(DRIVER_ROW), patch.object(
-            tools_driver.db_supabase, "get_rows", AsyncMock(return_value=rides)
+        with (
+            _patch_driver(DRIVER_ROW),
+            patch.object(tools_driver.db_supabase, "get_rows", AsyncMock(return_value=rides)),
         ):
             result, ok = await execute_tool("get_driver_earnings_summary", {}, user=DRIVER, audience="driver")
         assert ok and result["recent_trip_count"] == 2

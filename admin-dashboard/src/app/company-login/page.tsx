@@ -71,7 +71,10 @@ function CompanyLoginInner() {
                 user: result.user,
             });
 
-            const inviteToken = params.get("invite_token");
+            // Accept both param names: the portal surfaces web links as
+            // ?invite_token=, but the backend also mints app://join?token= deep
+            // links — honour `token` too so either lands the membership.
+            const inviteToken = params.get("invite_token") || params.get("token");
             if (inviteToken) {
                 try {
                     await acceptCompanyInvite(inviteToken);

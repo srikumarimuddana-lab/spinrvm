@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -82,7 +82,14 @@ export default function ReactivateAccountScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.content}>
+      {/* flexGrow:1 content container centers the card when there's room but
+          scrolls instead of clipping the buttons on small screens. */}
+      <ScrollView
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        bounces={false}
+      >
         <View style={styles.iconCircle}>
           <Ionicons name="refresh-circle-outline" size={48} color={colors.primary} />
         </View>
@@ -119,7 +126,7 @@ export default function ReactivateAccountScreen() {
         >
           <Text style={styles.secondaryBtnText}>Keep it deleted</Text>
         </TouchableOpacity>
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -127,7 +134,7 @@ export default function ReactivateAccountScreen() {
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.surface },
-    content: { flex: 1, paddingHorizontal: 28, justifyContent: 'center', alignItems: 'center' },
+    content: { flexGrow: 1, paddingHorizontal: 28, paddingVertical: 24, justifyContent: 'center', alignItems: 'center' },
     iconCircle: {
       width: 96,
       height: 96,

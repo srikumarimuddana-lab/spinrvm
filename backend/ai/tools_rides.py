@@ -10,7 +10,7 @@ import logging
 from typing import Any, Dict, Optional
 
 try:
-    from .tools import ToolSpec, register
+    from .tools import ToolSpec, register, register_ownership_verifier
 except ImportError:  # bare-import runtime (python -m backend.server puts backend/ on sys.path)
     from ai.tools import ToolSpec, register
 
@@ -85,6 +85,16 @@ async def _owned_ride(ride_id: str, user_id: str) -> Optional[Dict[str, Any]]:
     if not ride or ride.get("rider_id") != user_id:
         return None
     return ride
+
+
+async def _verify_ride_ownership(ride_id: str, user_id: str) -> bool:
+    """Central ownership gate (backend/ai/tools.py) for any tool arg declared
+    owned_id_args={'ride_id': 'ride'} — the handler's own _owned_ride check
+    stays as defense in depth."""
+    return await _owned_ride(ride_id, user_id) is not None
+
+
+register_ownership_verifier("ride", _verify_ride_ownership)
 
 
 async def get_active_ride(user: Dict[str, Any]) -> Dict[str, Any]:
@@ -205,6 +215,7 @@ register(
             "required": ["ride_id"],
         },
         handler=get_ride_details,
+        owned_id_args={"ride_id": "ride"},
     )
 )
 
@@ -222,5 +233,6 @@ register(
             "required": ["ride_id"],
         },
         handler=get_ride_receipt,
+        owned_id_args={"ride_id": "ride"},
     )
 )

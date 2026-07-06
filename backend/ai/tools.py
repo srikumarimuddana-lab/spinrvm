@@ -38,6 +38,45 @@ _JSON_TYPES: Dict[str, tuple] = {
 }
 
 
+# Identity arguments the model must NEVER supply. The caller's identity is
+# injected server-side from the authenticated session (execute_tool's ``user``)
+# and is the ONLY id a query may be scoped to — PIPEDA data-minimization: the
+# assistant can only ever read the signed-in user's own data. These names are
+# banned two ways: a tool may not even *declare* one (checked in register()),
+# and a live call carrying one is rejected (checked in execute_tool()).
+FORBIDDEN_ID_ARGS = frozenset(
+    {
+        "user_id",
+        "rider_id",
+        "driver_id",
+        "customer_id",
+        "account_id",
+        "owner_id",
+        "actor_id",
+        "admin_id",
+        "uid",
+        "user",
+        "rider",
+        "driver",
+    }
+)
+
+# Ownership verifiers for owned-resource id args (e.g. "ride"). Each returns
+# True only when ``resource_id`` belongs to ``user_id``. Domain modules register
+# theirs on import via register_ownership_verifier().
+OWNERSHIP_VERIFIERS: Dict[str, Callable[[str, str], Awaitable[bool]]] = {}
+
+
+def register_ownership_verifier(kind: str, fn: Callable[[str, str], Awaitable[bool]]) -> None:
+    OWNERSHIP_VERIFIERS[kind] = fn
+
+
+def _is_id_arg(name: str) -> bool:
+    """An argument that names an entity id — must be classified (owned/public)
+    or banned, never left unclassified."""
+    return name == "id" or name.endswith("_id") or name in FORBIDDEN_ID_ARGS
+
+
 @dataclass(frozen=True)
 class ToolSpec:
     name: str
@@ -47,6 +86,15 @@ class ToolSpec:
     audiences: frozenset = field(default_factory=lambda: frozenset({"rider"}))
     # Booking-flow tools are chat-only: the /mcp surface stays read-only.
     mcp_exposed: bool = True
+    # Data-scope contract. Every id-style argument MUST be classified so no tool
+    # can accept an id the caller doesn't own:
+    #   owned_id_args:  arg name -> owned-resource kind (ownership verified
+    #                   centrally against the caller before the handler runs)
+    #   public_id_args: arg names that reference non-user data (e.g. a vehicle
+    #                   type) and so need no ownership check
+    # An id-style arg that is neither classified nor banned fails registration.
+    owned_id_args: Dict[str, str] = field(default_factory=dict)
+    public_id_args: frozenset = field(default_factory=frozenset)
 
 
 TOOL_REGISTRY: Dict[str, ToolSpec] = {}
@@ -55,6 +103,20 @@ TOOL_REGISTRY: Dict[str, ToolSpec] = {}
 def register(spec: ToolSpec) -> ToolSpec:
     if spec.name in TOOL_REGISTRY:
         raise ValueError(f"duplicate tool name: {spec.name}")
+    # Enforce the data-scope contract at import time so a mis-scoped tool can
+    # never reach production: identity args are banned outright, and every other
+    # id-style arg must be declared owned (ownership-verified) or public.
+    for prop in spec.input_schema.get("properties") or {}:
+        if prop in FORBIDDEN_ID_ARGS:
+            raise ValueError(
+                f"tool {spec.name!r} declares forbidden identity arg {prop!r} — "
+                "the caller's identity is server-injected, never a tool argument"
+            )
+        if _is_id_arg(prop) and prop not in spec.owned_id_args and prop not in spec.public_id_args:
+            raise ValueError(
+                f"tool {spec.name!r} has unclassified id arg {prop!r} — add it to "
+                "owned_id_args (with a verifier) or public_id_args"
+            )
     TOOL_REGISTRY[spec.name] = spec
     return spec
 
@@ -179,12 +241,49 @@ async def execute_tool(
     if errors:
         return {"error": "; ".join(errors)}, False
 
+    call_args = args or {}
+
+    # Fail closed: no tool runs without an authenticated identity to scope to.
+    user_id = (user or {}).get("id")
+    if not user_id:
+        logger.error("ai tool blocked: no authenticated user id", extra={"tool": name})
+        return {"error": "not authorized"}, False
+
+    # The model may never supply an identity id — even if it smuggles one past
+    # the schema, the query is only ever scoped to the server-injected user.
+    forbidden = FORBIDDEN_ID_ARGS & set(call_args)
+    if forbidden:
+        logger.error(
+            "ai tool blocked: model supplied identity arg(s) %s",
+            sorted(forbidden),
+            extra={"tool": name, "user_id": user_id},
+        )
+        return {"error": "not permitted"}, False
+
+    # Owned-resource id args must belong to the caller BEFORE the handler runs.
+    # A foreign or missing id reads as "not found" — the model can never tell
+    # "not yours" from "does not exist".
+    for arg_name, kind in spec.owned_id_args.items():
+        if arg_name not in call_args:
+            continue
+        verifier = OWNERSHIP_VERIFIERS.get(kind)
+        if verifier is None:
+            logger.error("ai tool blocked: no ownership verifier for %r", kind, extra={"tool": name})
+            return {"error": f"{kind} not found"}, False
+        try:
+            owned = await asyncio.wait_for(verifier(str(call_args[arg_name]), user_id), timeout=TOOL_TIMEOUT_SECONDS)
+        except Exception:
+            logger.error("ai ownership check failed", exc_info=True, extra={"tool": name, "user_id": user_id})
+            return {"error": "the lookup failed — try again"}, False
+        if not owned:
+            return {"error": f"{kind} not found"}, False
+
     # Audience-aware handlers (e.g. FAQ search) read it from the user dict;
     # it stays server-decided either way.
     handler_user = {**user, "ai_audience": audience}
 
     try:
-        result = await asyncio.wait_for(spec.handler(handler_user, **(args or {})), timeout=TOOL_TIMEOUT_SECONDS)
+        result = await asyncio.wait_for(spec.handler(handler_user, **call_args), timeout=TOOL_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
         logger.error("ai tool timed out", extra={"tool": name, "user_id": user.get("id")})
         return {"error": "the lookup took too long — try again"}, False

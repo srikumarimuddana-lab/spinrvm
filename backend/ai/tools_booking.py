@@ -697,5 +697,8 @@ register(
         },
         handler=propose_ride_booking,
         mcp_exposed=False,
+        # vehicle_type_id references a public vehicle-type catalog row, not
+        # user-owned data — no ownership check needed.
+        public_id_args=frozenset({"vehicle_type_id"}),
     )
 )

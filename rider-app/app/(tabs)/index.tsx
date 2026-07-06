@@ -21,6 +21,7 @@ import { useAuthStore } from '@shared/store/authStore';
 import { useExitOnBackPress } from '@shared/hooks/useExitOnBackPress';
 import api from '@shared/api/client';
 import { useRideStore } from '../../store/rideStore';
+import { useBottomSheetGuard } from '../../hooks/useBottomSheetGuard';
 import { useAiChatStore } from '../../store/aiChatStore';
 import AppMap from '@shared/components/AppMap';
 import CarMarker, { resolveMarkerVariant } from '@shared/components/CarMarker';
@@ -81,19 +82,10 @@ export default function HomeScreen() {
 
   const mapRef = useRef<any>(null);
   const bottomSheetRef = useRef<BottomSheet>(null);
-  // On a fresh install the screen can mount before Reanimated's UI thread is
-  // warm and before the container reports a real height, so the bottom sheet's
-  // mount animation (animateOnMount) is computed against a 0-height container
-  // and the sheet never appears — until the app is killed and reopened warm.
-  // Imperatively snap to index 0 the first time the container measures a real
-  // height so the sheet reliably shows on the very first launch too.
-  const didInitSheet = useRef(false);
-  const handleContainerLayout = useCallback((e: { nativeEvent: { layout: { height: number } } }) => {
-    if (didInitSheet.current || e.nativeEvent.layout.height <= 0) return;
-    didInitSheet.current = true;
-    // Defer one frame so the sheet's own internal measurement has settled.
-    requestAnimationFrame(() => bottomSheetRef.current?.snapToIndex(0));
-  }, []);
+  // The sheet must never be off-screen on Home, but 0-height layout races
+  // (cold start, tab detach/re-attach) can silently resolve it to "closed".
+  // The guard hook snaps it back — see useBottomSheetGuard for the full story.
+  const { handleSheetChange, handleContainerLayout } = useBottomSheetGuard(bottomSheetRef);
   const lastFetchedAt = useRef<number>(0);
   const snapPoints = useMemo(() => ['28%', '45%'], []);
 
@@ -517,6 +509,7 @@ export default function HomeScreen() {
         <BottomSheet
           ref={bottomSheetRef}
           index={0}
+          onChange={handleSheetChange}
           snapPoints={snapPoints}
           backgroundStyle={styles.bottomSheetBg}
           handleIndicatorStyle={styles.sheetHandle}

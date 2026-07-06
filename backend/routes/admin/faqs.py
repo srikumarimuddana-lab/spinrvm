@@ -87,6 +87,12 @@ async def admin_update_faq(faq_id: str, faq: FaqUpdateRequest):
     if faq.is_active is not None:
         updates["is_active"] = faq.is_active
 
+    # Editing question/answer invalidates any stored semantic embedding — clear
+    # it so search re-embeds from the new text rather than the old wording.
+    if faq.question is not None or faq.answer is not None:
+        updates["embedding"] = None
+        updates["embedding_model"] = None
+
     if updates:
         updates["updated_at"] = datetime.now(timezone.utc).isoformat()
         await db_supabase.update_one("faqs", {"id": faq_id}, updates)

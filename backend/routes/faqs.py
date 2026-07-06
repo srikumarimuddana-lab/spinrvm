@@ -43,5 +43,8 @@ async def get_public_faqs(
         order="created_at",
         desc=True,
         limit=500,
+        # Exclude the semantic-search embedding vector (JSONB, thousands of
+        # floats) from public FAQ responses — clients only need display fields.
+        columns="id,question,answer,category,sort_order,is_active,created_at,updated_at,audience",
     )
     return faqs or []

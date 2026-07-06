@@ -195,7 +195,9 @@ class SettingsUpdateRequest(BaseModel):
     ai_faq_cache_enabled: Optional[bool] = None
     ai_faq_cache_ttl_seconds: Optional[int] = Field(default=None, ge=60, le=86400)
     ai_faq_semantic_enabled: Optional[bool] = None
-    ai_embedding_provider: Optional[str] = Field(default=None, pattern="^(openai|gemini)$")
+    # Allow "" (the unconfigured default the frontend sends back on every save)
+    # in addition to a real provider — otherwise an unrelated settings save 422s.
+    ai_embedding_provider: Optional[str] = Field(default=None, pattern="^(openai|gemini|)$")
     ai_embedding_model: Optional[str] = Field(default=None, max_length=120)
     ai_faq_semantic_min_score: Optional[float] = Field(default=None, ge=0, le=1)
     ai_escalation_creates_ticket: Optional[bool] = None

@@ -1238,6 +1238,9 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
             "rider_rating": (rider_user or {}).get("rating"),
             "rider_profile_image": (rider_user or {}).get("profile_image"),
             "requires_wav": bool(ride.get("requires_wav")),
+            # Rider-set preference (migration 62). Surfaced to the driver in the
+            # offer panel so they know a quiet ride was requested before accepting.
+            "quiet_mode": bool(ride.get("quiet_mode")),
             "countdown_seconds": offer_timeout,
             "offer_expires_at": _offer_expires_at,
             "surge_multiplier": _surge_mult if _surge_mult > 1.0 else None,

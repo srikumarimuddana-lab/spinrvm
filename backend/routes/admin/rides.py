@@ -931,6 +931,9 @@ async def admin_create_ride(
                 "duration_minutes": int(distance_km / 30 * 60) + 5,
                 "rider_name": rider_name,
                 "rider_rating": rider.get("rating") if rider else None,
+                # Rider-set quiet-ride preference (migration 62) — surfaced in the
+                # driver offer panel, same as the auto-dispatch path.
+                "quiet_mode": bool(ride_doc.get("quiet_mode")),
                 "countdown_seconds": _admin_timeout,
                 "offer_expires_at": _offer_expires_at,
             }

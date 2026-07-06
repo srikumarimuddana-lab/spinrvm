@@ -221,14 +221,16 @@ async def match_and_claim_driver(
         rows = _rows_from_res(res)
         return rows[0] if rows else None
 
-    try:
-        result = await run_sync(_call)
-        if result:
-            await invalidate_driver_cache(driver_id=result["id"])
-        return result
-    except Exception as exc:
-        logger.error(f"match_and_claim_driver RPC failed: {exc}", exc_info=True)
-        return None
+    # No try/except here on purpose: run_sync raises a typed DatabaseError on
+    # failure, and swallowing it into ``return None`` made a Supabase blip
+    # indistinguishable from a genuine "no drivers available" — callers would
+    # cancel the ride instead of surfacing a retryable 503 (CLAUDE.md: never
+    # soften DB/dispatch errors). None strictly means the RPC ran and found
+    # no eligible driver.
+    result = await run_sync(_call)
+    if result:
+        await invalidate_driver_cache(driver_id=result["id"])
+    return result
 
 
 async def claim_driver_atomic(driver_id: str) -> bool:

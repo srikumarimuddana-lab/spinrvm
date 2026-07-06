@@ -20,11 +20,72 @@ sys.path.insert(
 from services.dispatch_service import (  # noqa: E402
     DispatchService,
     _is_dispatchable_driver,
+    dispatch_geo_bounds,
     filter_and_rank_drivers,
     select_driver_by_algorithm,
 )
 
 # ── Pure helpers ──────────────────────────────────────────────────────────────
+
+
+class TestDispatchGeoBounds:
+    """Bounding-box clauses for the dispatch candidate SQL fetch.
+
+    Regression for the false-"no drivers" failure: an un-geo-filtered
+    LIMIT 500 could return only far-away drivers while the nearest sat in
+    row 501. The box must fully contain the search-radius circle so the
+    exact haversine gate downstream never loses an in-radius driver.
+    """
+
+    SASKATOON = (52.1332, -106.6700)
+
+    @staticmethod
+    def _box(clauses):
+        """Collapse the $and clause list into {(col, op): value}."""
+        out = {}
+        for clause in clauses:
+            for col, pred in clause.items():
+                for op, val in pred.items():
+                    out[(col, op)] = val
+        return out
+
+    def test_emits_two_sided_range_on_both_columns(self):
+        box = self._box(dispatch_geo_bounds(*self.SASKATOON, 10.0))
+        assert set(box) == {("lat", "$gte"), ("lat", "$lte"), ("lng", "$gte"), ("lng", "$lte")}
+        assert box[("lat", "$gte")] < self.SASKATOON[0] < box[("lat", "$lte")]
+        assert box[("lng", "$gte")] < self.SASKATOON[1] < box[("lng", "$lte")]
+
+    def test_box_contains_the_full_radius_circle(self):
+        # A driver exactly radius_km due north/south/east/west of the pickup
+        # must be inside the box, or the SQL pre-filter would drop drivers the
+        # haversine gate considers in-radius.
+        lat, lng = self.SASKATOON
+        radius = 10.0
+        box = self._box(dispatch_geo_bounds(lat, lng, radius))
+        lat_edge = radius / 110.574
+        lng_edge = radius / (111.320 * 0.6137)  # cos(52.1332°) ≈ 0.6137
+        assert box[("lat", "$gte")] <= lat - lat_edge
+        assert box[("lat", "$lte")] >= lat + lat_edge
+        assert box[("lng", "$gte")] <= lng - lng_edge
+        assert box[("lng", "$lte")] >= lng + lng_edge
+
+    def test_excludes_far_side_of_province(self):
+        # Regina is ~230 km from Saskatoon — far outside a 10 km box.
+        box = self._box(dispatch_geo_bounds(*self.SASKATOON, 10.0))
+        regina_lat, regina_lng = 50.4452, -104.6189
+        assert not (box[("lat", "$gte")] <= regina_lat <= box[("lat", "$lte")])
+        assert not (box[("lng", "$gte")] <= regina_lng <= box[("lng", "$lte")])
+
+    def test_excludes_default_zero_zero_location(self):
+        # Never-located drivers sit at the (0, 0) column default; the box must
+        # not fetch them (they are undispatchable anyway).
+        box = self._box(dispatch_geo_bounds(*self.SASKATOON, 10.0))
+        assert not (box[("lat", "$gte")] <= 0.0 <= box[("lat", "$lte")])
+        assert not (box[("lng", "$gte")] <= 0.0 <= box[("lng", "$lte")])
+
+    def test_polar_latitude_does_not_divide_by_zero(self):
+        clauses = dispatch_geo_bounds(90.0, 0.0, 10.0)
+        assert all(abs(v) != float("inf") for c in clauses for p in c.values() for v in p.values())
 
 
 class TestIsDispatchableDriver:

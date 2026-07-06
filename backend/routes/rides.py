@@ -32,6 +32,7 @@ try:
     from ..schemas import CreateRideRequest, DriverPublicView, Ride, RideRatingRequest
     from ..services import DispatchService
     from ..services.dispatch_service import (
+        dispatch_geo_bounds,
         filter_and_rank_drivers,
         rank_by_eta_with_acceptance,
     )
@@ -77,6 +78,7 @@ except ImportError:
     from schemas import CreateRideRequest, DriverPublicView, Ride, RideRatingRequest
     from services.dispatch_service import (
         DispatchService,
+        dispatch_geo_bounds,
         filter_and_rank_drivers,
         rank_by_eta_with_acceptance,
     )
@@ -616,6 +618,18 @@ async def create_demo_drivers(vehicle_type_id: str, lat: float, lng: float):
 # can't leave a ride re-dispatching (and re-querying drivers) forever.
 _MAX_DISPATCH_ATTEMPTS = 30
 
+# Escalating re-arm delays for dispatch ERRORS (DB blip mid-attempt): back off
+# 10s → 30s → 60s so a struggling dependency isn't hammered at a fixed cadence.
+# The healthy no-drivers re-poll stays at 10s — that path is waiting for supply,
+# not for a dependency to recover.
+_DISPATCH_ERROR_BACKOFF = (10, 30, 60)
+
+
+def _dispatch_error_delay(attempt: int) -> int:
+    """Delay before re-arming after a FAILED dispatch attempt (not the
+    no-drivers poll): 10s, 30s, then 60s for every later attempt."""
+    return _DISPATCH_ERROR_BACKOFF[min(max(attempt, 0), len(_DISPATCH_ERROR_BACKOFF) - 1)]
+
 
 async def _dispatch_retry(ride_id: str, delay: int = 10, *, attempt: int = 1) -> None:
     """Re-attempt dispatch after a delay. Stops if the ride left searching or the
@@ -634,11 +648,51 @@ async def _dispatch_retry(ride_id: str, delay: int = 10, *, attempt: int = 1) ->
         logger.info(f"[DISPATCH] retry {attempt} for ride {ride_id}")
         await match_driver_to_ride(ride_id, ride=ride, attempt=attempt)
     except Exception as e:
+        # Keep the chain alive on transient failures (DB blip, Redis hiccup):
+        # ending it here would strand the ride in `searching` until the
+        # stuck-ride sweeper cancels it. The attempt cap above bounds this;
+        # the escalating delay stops a broad outage becoming a retry storm.
         logger.error(f"[DISPATCH] retry failed for {ride_id}: {e}", exc_info=True)
+        spawn(_dispatch_retry(ride_id, delay=_dispatch_error_delay(attempt), attempt=attempt + 1))
 
 
 async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, attempt: int = 0):
-    """Dispatch a driver for ``ride_id``.
+    """Dispatch a driver for ``ride_id`` — recovery shell.
+
+    Runs one dispatch attempt and, if it raises, re-arms ``_dispatch_retry``
+    with escalating backoff (10s/30s/60s, bounded by the attempt cap). This is
+    the single recovery chokepoint for EVERY dispatch entry point — booking,
+    offer-timeout re-dispatch, and scheduled dispatch — so a transient failure
+    anywhere in an attempt can't strand the ride in ``searching`` until the
+    stuck-ride sweeper cancels it. Callers that catch exceptions around this
+    function will never see one; recovery is owned here.
+
+    If offers from this attempt are already pending when the failure hits
+    (e.g. a WS/notify error after the ride_offers insert), no retry is armed —
+    the offer-timeout handlers own progression from there, and re-arming would
+    over-offer beyond max_offers.
+    """
+    try:
+        await _match_driver_to_ride_attempt(ride_id, ride=ride, attempt=attempt)
+    except Exception:
+        logger.error(
+            f"[DISPATCH] attempt {attempt} failed mid-dispatch for ride {ride_id} — re-arming retry with backoff",
+            exc_info=True,
+        )
+        try:
+            _pending = await db_supabase.get_rows("ride_offers", {"ride_id": ride_id, "status": "pending"}, limit=1)
+        except Exception:
+            # Can't tell — prefer re-arming: _dispatch_retry re-checks ride
+            # status and claimed drivers are excluded, so a duplicate arm is
+            # near-idempotent, while NOT arming risks a stranded ride.
+            _pending = []
+        if not _pending:
+            spawn(_dispatch_retry(ride_id, delay=_dispatch_error_delay(attempt), attempt=attempt + 1))
+
+
+async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = None, attempt: int = 0):
+    """One dispatch attempt for ``ride_id`` (raises on mid-attempt failure;
+    the ``match_driver_to_ride`` shell owns recovery).
 
     ``ride`` may be passed when the caller already has the fresh row
     (e.g. straight after ``insert_ride``) so we skip a redundant
@@ -708,15 +762,36 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
     # their is_online flag was left on (e.g. status flipped server-side after
     # they toggled online). Without these, accept_ride blocks them at accept time
     # but they still receive — and can see — offers they can never fulfil.
+    # Bounding-box pre-filter. Without it the LIMIT 500 below is an
+    # *arbitrary* 500 of all online drivers province-wide — above 500
+    # candidates the nearest driver can sit in row 501 and dispatch reports a
+    # false "no drivers". The box is a superset of the search radius;
+    # filter_and_rank_drivers stays the exact haversine gate. Anchored on the
+    # same nav-snapped pickup that filter_and_rank_drivers ranks against.
+    #
+    # No dedicated (lat, lng) index — deliberate (PR #2028 review):
+    # idx_drivers_online_available_recency (migration 138, partial WHERE
+    # is_online AND is_available) already bounds this scan to the online
+    # fleet, so the box predicates only filter within that small walk; and
+    # drivers already carries a trigger-maintained PostGIS location_geog +
+    # partial GiST index (migration 170) — a future radius query should go
+    # through an RPC on that column rather than a second btree that every
+    # location heartbeat would have to maintain.
+    _box_lat = ride["pickup_nav_lat"] if ride.get("pickup_nav_lat") is not None else ride["pickup_lat"]
+    _box_lng = ride["pickup_nav_lng"] if ride.get("pickup_nav_lng") is not None else ride["pickup_lng"]
     _dispatch_filter: dict = {
         "is_online": True,
         "is_available": True,
         "is_verified": True,
         "status": "active",
         "vehicle_type_id": ride["vehicle_type_id"],
+        "$and": dispatch_geo_bounds(_box_lat, _box_lng, search_radius),
     }
     if ride.get("requires_wav"):
         _dispatch_filter["is_wav"] = True
+    # A transient Supabase failure here is NOT "no drivers" — it raises to the
+    # match_driver_to_ride recovery shell, which re-arms the retry chain with
+    # backoff instead of letting the ride strand until the sweeper cancels it.
     all_drivers = await db_supabase.get_rows(
         "drivers",
         _dispatch_filter,
@@ -725,8 +800,15 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
 
     logger.info(
         f"[DISPATCH] candidate pool (pre-filter): {len(all_drivers)} drivers "
-        f"matching vehicle_type_id + online + available"
+        f"matching vehicle_type_id + online + available within {search_radius}km box"
     )
+    if len(all_drivers) >= 500:
+        # Even inside the box the pool is truncated — the dropped rows are
+        # in-radius candidates, so ranking quality degrades. Surface it.
+        logger.warning(
+            f"[DISPATCH] candidate pool hit the 500-row cap inside the "
+            f"{search_radius}km box for ride {ride_id} — pool truncated"
+        )
 
     # Presence filter: only dispatch to drivers whose WebSocket heartbeat is
     # still alive (Uber/Lyft-style). Matches the filter applied in the rider-
@@ -930,6 +1012,9 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
                     "is_verified": True,
                     "status": "active",
                     "vehicle_type_id": {"$in": _casc_to},
+                    # Same geo box as the primary pool — an un-bounded LIMIT 500
+                    # here has the identical row-501 false-negative failure mode.
+                    "$and": dispatch_geo_bounds(_box_lat, _box_lng, search_radius),
                 }
                 if ride.get("requires_wav"):
                     _casc_filter["is_wav"] = True
@@ -1101,7 +1186,10 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, att
         logger.error(f"[DISPATCH] ride_offers insert failed: {e}", exc_info=True)
         for d, _ in claimed_drivers:
             await db_supabase.set_driver_available(d["id"], True)
-        return
+        # Re-raise after releasing the claims: no offers exist, so the
+        # recovery shell re-arms the retry chain instead of stranding the
+        # ride in `searching` (the old `return` armed nothing).
+        raise
     _metric_inc("spinr_dispatch_offer_sent_total", by=len(offer_rows))
 
     # ── Parallel enrichment (shared across all drivers) ───────────
@@ -1797,20 +1885,27 @@ async def compute_ride_estimates(
 
     polyline_task = spawn(_polyline_fetch()) if include_polyline else None
 
-    # Fetch nearby online+available drivers once. Order by went_online_at DESC
-    # so recently-toggled-online drivers fill the 200-row page first. Ghost
-    # drivers (is_available=True in DB but heartbeat expired) tend to carry
-    # stale went_online_at values and fall toward the tail, so they are less
-    # likely to crowd real drivers out of the cap before the presence filter
-    # below runs. This mitigates — but does not fully eliminate — the
-    # capped-page ghost leak; full elimination needs a geo-index (query by
-    # radius first) or a sweeper that writes is_available=False back on TTL
-    # expiry. Tracked as a follow-up.
+    # Fetch nearby online+available drivers once, geo-bounded to a box around
+    # the pickup (same dispatch_geo_bounds the dispatch path uses) so the
+    # 200-row cap applies to in-area drivers only — the rider's "X drivers"
+    # badge must be computed from the same pool dispatch would select from,
+    # not an arbitrary province-wide page. Order by went_online_at DESC so
+    # recently-toggled-online drivers fill the page first: ghost drivers
+    # (is_available=True in DB but heartbeat expired) tend to carry stale
+    # went_online_at values and fall toward the tail, so they are less likely
+    # to crowd real drivers out of the cap before the presence filter below.
+    # Scan cost is bounded by idx_drivers_online_available_recency
+    # (migration 138, partial WHERE is_online AND is_available, ordered by
+    # went_online_at DESC): the planner walks it in order and the lat/lng box
+    # only filters within that online-fleet-sized walk, so the geo predicates
+    # need no index of their own (see the dispatch-path note above).
     all_drivers = await db_supabase.get_rows(
         "drivers",
         {
             "is_online": True,
             "is_available": True,
+            # 10 km matches the exact haversine gate in the loop below.
+            "$and": dispatch_geo_bounds(body.pickup_lat, body.pickup_lng, 10.0),
         },
         order="went_online_at",
         desc=True,

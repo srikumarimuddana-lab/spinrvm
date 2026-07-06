@@ -1758,11 +1758,23 @@ async def get_nearby_drivers_public(
     # is_verified + status='active' prevent unverified / suspended / needs_review
     # drivers from appearing on the rider map even if their is_online flag is
     # stale.
+    try:
+        from ..services.dispatch_service import dispatch_geo_bounds
+    except ImportError:
+        from services.dispatch_service import dispatch_geo_bounds  # type: ignore
+
     query = {
         "is_online": True,
         "is_available": True,
         "is_verified": True,
         "status": "active",
+        # Geo-bound the fetch (same box the dispatch path uses) so the 100-row
+        # cap applies to in-area drivers only — otherwise, above 100 online
+        # drivers province-wide, the map shows an arbitrary 100 and nearby cars
+        # can be missing while far ones render. Scan bounded by the
+        # migration-138 partial index; see the no-geo-index rationale at the
+        # dispatch fetch in routes/rides.py.
+        "$and": dispatch_geo_bounds(lat, lng, radius),
     }
     if vehicle_type:
         query["vehicle_type_id"] = vehicle_type

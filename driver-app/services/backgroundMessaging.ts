@@ -134,6 +134,7 @@ export function registerBackgroundMessageHandlers(): void {
           rider_name: data.rider_name || undefined,
           rider_rating: toNum(data.rider_rating),
           requires_wav: data.requires_wav === 'true' || data.requires_wav === 'True',
+          quiet_mode: data.quiet_mode === 'true' || data.quiet_mode === 'True',
           countdown_seconds: toNum(data.countdown_seconds),
           offer_expires_at: data.offer_expires_at || undefined,
           surge_multiplier: surgeMultiplier,

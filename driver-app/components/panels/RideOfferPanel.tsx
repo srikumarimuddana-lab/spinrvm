@@ -38,6 +38,7 @@ interface IncomingRide {
     rider_rating?: number;
     rider_profile_image?: string;
     requires_wav?: boolean;
+    quiet_mode?: boolean;
     surge_multiplier?: number;
     incentives?: IncentiveItem[];
     total_bonus?: number;
@@ -253,8 +254,8 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                         </View>
                     </View>
 
-                    {/* Badges row: surge, wav, cash, payment */}
-                    {(hasSurge || incomingRide.requires_wav || incomingRide.payment_method === 'cash') && (
+                    {/* Badges row: surge, wav, quiet, cash, payment */}
+                    {(hasSurge || incomingRide.requires_wav || incomingRide.quiet_mode || incomingRide.payment_method === 'cash') && (
                         <View style={styles.badgesRow}>
                             {hasSurge && (
                                 <View style={[styles.badge, { backgroundColor: SURGE_ORANGE + '20' }]}>
@@ -268,6 +269,12 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                                 <View style={[styles.badge, { backgroundColor: '#3B82F620' }]}>
                                     <Ionicons name="accessibility" size={13} color="#3B82F6" />
                                     <Text style={[styles.badgeText, { color: '#3B82F6' }]}>WAV</Text>
+                                </View>
+                            )}
+                            {incomingRide.quiet_mode && (
+                                <View style={[styles.badge, { backgroundColor: '#8B5CF620' }]}>
+                                    <Ionicons name="volume-mute" size={13} color="#8B5CF6" />
+                                    <Text style={[styles.badgeText, { color: '#8B5CF6' }]}>Quiet ride</Text>
                                 </View>
                             )}
                             {incomingRide.payment_method === 'cash' && (

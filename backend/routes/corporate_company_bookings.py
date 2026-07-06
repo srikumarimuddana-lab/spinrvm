@@ -17,19 +17,28 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+
+try:
+    from ..utils.metrics import inc as _metric_inc
+    from ..utils.rate_limiter import company_booking_limit
+except ImportError:
+    from utils.metrics import inc as _metric_inc  # type: ignore
+    from utils.rate_limiter import company_booking_limit  # type: ignore
 from pydantic import BaseModel, Field, field_validator
 
 try:
     from .. import db_supabase
-    from ..dependencies.company_guard import require_company_member
+    from ..dependencies.company_guard import require_company_admin, require_company_member
     from ..features import compute_fare_estimate
     from ..services.company_booking_service import create_company_guest_booking
+    from ..utils.error_handling import db_error_text
     from ..validators import validate_phone
 except ImportError:
     import db_supabase  # type: ignore
-    from dependencies.company_guard import require_company_member  # type: ignore
+    from dependencies.company_guard import require_company_admin, require_company_member  # type: ignore
     from features import compute_fare_estimate  # type: ignore
     from services.company_booking_service import create_company_guest_booking  # type: ignore
+    from utils.error_handling import db_error_text  # type: ignore
     from validators import validate_phone  # type: ignore
 
 router = APIRouter(prefix="/company/{company_id}", tags=["Corporate Company Bookings"])
@@ -83,13 +92,19 @@ def _booking_row(ride: Dict[str, Any], member: Optional[Dict[str, Any]], guest: 
 
 
 @router.post("/bookings")
+@company_booking_limit
 async def create_booking(
+    request: Request,
     body: CompanyGuestBookingRequest,
     ctx: dict = Depends(require_company_member),
 ):
     """Book a ride for a customer on the company's dime (booker's allowance)."""
     result = await create_company_guest_booking(ctx["company_id"], ctx["member"], body)
     ride = result["ride"]
+    _metric_inc(
+        "spinr_corporate_guest_booking_total",
+        {"scheduled": "true" if ride.get("is_scheduled") else "false"},
+    )
     return {
         "success": True,
         "booking": _booking_row(ride, ctx["member"], result.get("guest_user")),
@@ -246,6 +261,140 @@ async def booking_fare_estimate(
         vehicle_type_id=vehicle_type_id,
         surge_override=Decimal("1"),
     )
+
+
+# ── Sections (company departments — grouping + reporting, migration 206) ──
+
+
+class SectionCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+    description: Optional[str] = Field(default=None, max_length=300)
+
+    @field_validator("name")
+    @classmethod
+    def _name_not_blank(cls, v: str) -> str:
+        # min_length=1 accepts a spaces-only string; the handler strips after
+        # validation, so without this a "   " name would persist as "" and
+        # squat the company's unique empty name. Reject blank-after-trim (422).
+        v = v.strip()
+        if not v:
+            raise ValueError("Section name cannot be blank")
+        return v
+
+
+class SectionUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    description: Optional[str] = Field(default=None, max_length=300)
+    status: Optional[str] = Field(default=None, pattern="^(active|archived)$")
+
+    @field_validator("name")
+    @classmethod
+    def _name_not_blank(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            raise ValueError("Section name cannot be blank")
+        return v
+
+
+@router.get("/sections")
+async def list_sections(ctx: dict = Depends(require_company_member)):
+    """Sections with live member counts. Member-readable — the bookings list
+    filter needs them; only owner/admin can mutate."""
+    sections = (
+        await db_supabase.get_rows(
+            "corporate_sections",
+            {"company_id": ctx["company_id"]},
+            order="created_at",
+            limit=200,
+        )
+        or []
+    )
+    members = (
+        await db_supabase.get_rows(
+            "corporate_members",
+            {"company_id": ctx["company_id"], "status": "active"},
+            columns="id,section_id",
+            limit=1000,
+        )
+        or []
+    )
+    counts: Dict[str, int] = {}
+    for m in members:
+        sid = m.get("section_id")
+        if sid:
+            counts[sid] = counts.get(sid, 0) + 1
+    return {
+        "sections": [{**s, "member_count": counts.get(s["id"], 0)} for s in sections],
+    }
+
+
+@router.post("/sections")
+async def create_section(body: SectionCreate, ctx: dict = Depends(require_company_admin)):
+    from datetime import datetime, timezone
+    from uuid import uuid4
+
+    row = {
+        "id": str(uuid4()),
+        "company_id": ctx["company_id"],
+        "name": body.name.strip(),
+        "description": (body.description or "").strip() or None,
+        "status": "active",
+        "created_by": ctx["user"]["id"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        inserted = await db_supabase.insert_one("corporate_sections", row)
+    except Exception as e:
+        msg = db_error_text(e)
+        if "duplicate" in msg or "unique" in msg or "23505" in msg:
+            raise HTTPException(status_code=409, detail="A section with this name already exists.") from e
+        raise
+    return inserted or row
+
+
+@router.patch("/sections/{section_id}")
+async def update_section(
+    section_id: str,
+    body: SectionUpdate,
+    ctx: dict = Depends(require_company_admin),
+):
+    existing = (
+        await db_supabase.get_rows("corporate_sections", {"id": section_id, "company_id": ctx["company_id"]}, limit=1)
+        or []
+    )
+    if not existing:
+        raise HTTPException(status_code=404, detail="Section not found")
+    patch = {k: v for k, v in body.model_dump(exclude_none=True).items()}
+    if "name" in patch:
+        patch["name"] = patch["name"].strip()
+    if not patch:
+        return existing[0]
+    try:
+        updated = await db_supabase.update_one("corporate_sections", {"id": section_id}, patch)
+    except Exception as e:
+        msg = db_error_text(e)
+        if "duplicate" in msg or "unique" in msg or "23505" in msg:
+            raise HTTPException(status_code=409, detail="A section with this name already exists.") from e
+        raise
+    return updated or {**existing[0], **patch}
+
+
+@router.delete("/sections/{section_id}")
+async def archive_section(section_id: str, ctx: dict = Depends(require_company_admin)):
+    """Archive (never hard-delete): history keeps its section attribution;
+    members' section_id stays until reassigned (the FK only nulls on a true
+    row delete, which we don't do)."""
+    existing = (
+        await db_supabase.get_rows("corporate_sections", {"id": section_id, "company_id": ctx["company_id"]}, limit=1)
+        or []
+    )
+    if not existing:
+        raise HTTPException(status_code=404, detail="Section not found")
+    updated = await db_supabase.update_one("corporate_sections", {"id": section_id}, {"status": "archived"})
+    return updated or {**existing[0], "status": "archived"}
 
 
 # Re-exported for server.py mounting alongside corporate_company_router.

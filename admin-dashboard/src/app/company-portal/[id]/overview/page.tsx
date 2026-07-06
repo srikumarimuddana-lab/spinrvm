@@ -3,14 +3,16 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import {
+import type {
     BillingSummary,
     CorporateMember,
     AllowanceRequestRow,
+} from "@/lib/api";
+import {
     getCompanyBillingSummary,
     listCompanyMembers,
     listCompanyAllowanceRequests,
-} from "@/lib/api";
+} from "@/lib/companyApi";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {

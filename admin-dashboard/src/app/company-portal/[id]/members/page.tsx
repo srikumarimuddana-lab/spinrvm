@@ -2,14 +2,16 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import {
+import type {
     CorporateMember,
     CorporateMemberRole,
     CorporateMemberStatus,
+} from "@/lib/api";
+import {
     inviteCompanyMember,
     listCompanyMembers,
     updateCompanyMember,
-} from "@/lib/api";
+} from "@/lib/companyApi";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -85,7 +87,15 @@ export default function MembersPage() {
                 email: inviteEmail.trim(),
                 role: inviteRole,
             });
-            setFeedback(`Invite sent — share: ${res.invite_url}`);
+            // The backend mints an app://join?token=… deep link (for the rider
+            // app). Desk employees follow a link in a browser, so surface a
+            // web link to the portal login that carries the same token.
+            const tokenMatch = /[?&]token=([^&]+)/.exec(res.invite_url ?? "");
+            const webLink =
+                tokenMatch && typeof window !== "undefined"
+                    ? `${window.location.origin}/company-login?invite_token=${tokenMatch[1]}`
+                    : res.invite_url;
+            setFeedback(`Invite sent — share this link: ${webLink}`);
             setInviteEmail("");
             await load();
         } catch (e) {

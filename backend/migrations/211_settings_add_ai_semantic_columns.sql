@@ -22,7 +22,7 @@
 -- single-row service-role config table (no per-user data), so no RLS block —
 -- consistent with migrations 145 and 208.
 --
--- Rollback (manual, not expected):
+-- Rollback: (manual, not expected)
 --   ALTER TABLE settings
 --     DROP COLUMN IF EXISTS ai_faq_semantic_enabled,
 --     DROP COLUMN IF EXISTS ai_embedding_provider,

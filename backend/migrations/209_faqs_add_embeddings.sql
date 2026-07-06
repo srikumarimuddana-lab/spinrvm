@@ -20,7 +20,7 @@
 -- RLS: faqs is public reference content (already readable; no per-user data),
 -- so no new policy is required — consistent with the existing faqs table.
 --
--- Rollback (manual, not expected):
+-- Rollback: (manual, not expected)
 --   ALTER TABLE faqs
 --     DROP COLUMN IF EXISTS embedding,
 --     DROP COLUMN IF EXISTS embedding_model;

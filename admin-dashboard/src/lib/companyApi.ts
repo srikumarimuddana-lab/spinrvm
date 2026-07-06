@@ -3,11 +3,23 @@
 // Same relative-URL/proxy contract as lib/api.ts, but bound to the
 // companyAuthStore rider session: 401s silent-refresh via the HttpOnly
 // refresh cookie and bounce to /company-login (never the staff /login).
-// lib/api.ts's request() delegates any /api/company/* or
-// /api/rider/work-profile* path here, so the existing portal pages keep
-// their imports untouched.
+// Portal pages import the company-session helpers below (NOT from @/lib/api,
+// whose identically-pathed helpers run on the staff admin session).
 
 import { useCompanyAuthStore, CompanyMembershipProfile } from "@/store/companyAuthStore";
+import type {
+    CorporateMember,
+    CorporateMemberRole,
+    CorporateMemberStatus,
+    CorporateAllowance,
+    AllowanceTypeValue,
+    AllowanceRequestRow,
+    CorporatePolicy,
+    AllowedDomainRow,
+    BillingSummary,
+    BillingStatement,
+    BillingTransactionsPage,
+} from "@/lib/api";
 
 const API_BASE = "";
 
@@ -32,8 +44,18 @@ export async function companyRequest<T>(path: string, options: RequestInit = {})
     if (res.status === 401) {
         const refreshed = await store.silentRefresh();
         if (refreshed) {
-            const newToken = useCompanyAuthStore.getState().token;
-            const retryHeaders = { ...headers, Authorization: `Bearer ${newToken}` };
+            // Rebuild BOTH auth headers from the refreshed store: the refresh
+            // rotated the csrf_token cookie + value, so reusing the stale
+            // X-CSRF-Token from `headers` would fail the backend double-submit
+            // on write retries (booking/cancel/section).
+            const refreshedStore = useCompanyAuthStore.getState();
+            const retryHeaders: Record<string, string> = {
+                ...headers,
+                Authorization: `Bearer ${refreshedStore.token}`,
+            };
+            if (!["GET", "HEAD", "OPTIONS"].includes(method) && refreshedStore.csrfToken) {
+                retryHeaders["X-CSRF-Token"] = refreshedStore.csrfToken;
+            }
             const retryRes = await fetch(url, { ...options, headers: retryHeaders });
             if (retryRes.ok) return retryRes.json() as T;
             if (retryRes.status !== 401) {
@@ -87,7 +109,11 @@ export interface CompanyOtpVerifyResult {
 }
 
 export const verifyCompanyOtp = async (phone: string, code: string): Promise<CompanyOtpVerifyResult> => {
-    const res = await fetch("/api/v1/auth/verify-otp", {
+    // LOCAL Next route (/api/company-auth/verify-otp) — proxies to the backend
+    // and STRIPS the 30-day refresh_token from the JSON body (it lives only in
+    // the HttpOnly spinr_company_rt cookie), so the long-lived credential never
+    // reaches JS. Mirrors the admin login route.
+    const res = await fetch("/api/company-auth/verify-otp", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone, code }),
@@ -98,6 +124,15 @@ export const verifyCompanyOtp = async (phone: string, code: string): Promise<Com
     }
     return body as CompanyOtpVerifyResult;
 };
+
+// Role-appropriate landing inside a company: owner/admin get the management
+// overview (which calls admin-only endpoints); a plain member gets the
+// booking flow (the overview would show empty/failed admin metrics for them).
+export function portalHome(companyId: string, role?: string): string {
+    return role === "owner" || role === "admin"
+        ? `/company-portal/${companyId}/overview`
+        : `/company-portal/${companyId}/book`;
+}
 
 export const getMyWorkProfiles = () =>
     companyRequest<CompanyMembershipProfile[]>("/api/rider/work-profile");
@@ -260,6 +295,118 @@ export const assignMemberSection = (companyId: string, memberId: string, section
         // "field not provided" under its exclude_none handling).
         body: JSON.stringify({ section_id: sectionId ?? "" }),
     });
+
+/* ── Company management (portal, COMPANY session) ──
+ *
+ * The /company/{id}/** endpoints are guarded by require_company_admin /
+ * require_company_member (rider JWT + membership). Portal pages MUST call
+ * these company-session versions — the identically-named helpers in @/lib/api
+ * run on the STAFF admin session and would 401 a company user to /login.
+ */
+
+export const listCompanyMembers = (companyId: string, status?: string) =>
+    companyRequest<CorporateMember[]>(
+        `/api/company/${companyId}/members${status ? `?status=${encodeURIComponent(status)}` : ""}`
+    );
+
+export const inviteCompanyMember = (
+    companyId: string,
+    body: { email: string; role: CorporateMemberRole; policy_override?: boolean }
+) =>
+    companyRequest<{ member: CorporateMember; invite_url: string }>(
+        `/api/company/${companyId}/members/invite`,
+        { method: "POST", body: JSON.stringify(body) }
+    );
+
+export const updateCompanyMember = (
+    companyId: string,
+    memberId: string,
+    body: { role?: CorporateMemberRole; status?: CorporateMemberStatus; policy_override?: boolean }
+) =>
+    companyRequest<CorporateMember>(`/api/company/${companyId}/members/${memberId}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+    });
+
+export const getMemberAllowance = (companyId: string, memberId: string) =>
+    companyRequest<CorporateAllowance | Record<string, never>>(
+        `/api/company/${companyId}/members/${memberId}/allowance`
+    );
+
+export const putMemberAllowance = (
+    companyId: string,
+    memberId: string,
+    body: {
+        type: AllowanceTypeValue;
+        amount?: number | null;
+        period_start?: string | null;
+        period_end?: string | null;
+        rollover?: boolean;
+        auto_approve_topup_amount?: number | null;
+        auto_approve_monthly_count?: number | null;
+    }
+) =>
+    companyRequest<CorporateAllowance>(`/api/company/${companyId}/members/${memberId}/allowance`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+    });
+
+export const listCompanyAllowanceRequests = (companyId: string, status = "pending") =>
+    companyRequest<AllowanceRequestRow[]>(
+        `/api/company/${companyId}/allowance-requests?status=${encodeURIComponent(status)}`
+    );
+
+export const decideAllowanceRequest = (
+    companyId: string,
+    requestId: string,
+    body: { approve: boolean; note?: string }
+) =>
+    companyRequest<AllowanceRequestRow>(
+        `/api/company/${companyId}/allowance-requests/${requestId}/decide`,
+        { method: "POST", body: JSON.stringify(body) }
+    );
+
+export const getCompanyPolicy = (companyId: string) =>
+    companyRequest<CorporatePolicy | Record<string, never>>(`/api/company/${companyId}/policy`);
+
+export const patchCompanyPolicy = (
+    companyId: string,
+    body: Partial<Omit<CorporatePolicy, "id" | "company_id">>
+) =>
+    companyRequest<CorporatePolicy>(`/api/company/${companyId}/policy`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+    });
+
+export const listAllowedDomains = (companyId: string) =>
+    companyRequest<AllowedDomainRow[]>(`/api/company/${companyId}/allowed-domains`);
+
+export const addAllowedDomain = (companyId: string, domain: string) =>
+    companyRequest<AllowedDomainRow>(`/api/company/${companyId}/allowed-domains`, {
+        method: "POST",
+        body: JSON.stringify({ domain }),
+    });
+
+export const removeAllowedDomain = (companyId: string, domain: string) =>
+    companyRequest<{ status: string }>(
+        `/api/company/${companyId}/allowed-domains/${encodeURIComponent(domain)}`,
+        { method: "DELETE" }
+    );
+
+export const getCompanyBillingSummary = (companyId: string, month?: string) =>
+    companyRequest<BillingSummary>(
+        `/api/company/${companyId}/billing/summary${month ? `?month=${encodeURIComponent(month)}` : ""}`
+    );
+
+export const getCompanyBillingStatement = (companyId: string, month: string) =>
+    companyRequest<BillingStatement>(
+        `/api/company/${companyId}/billing/statements/${encodeURIComponent(month)}`
+    );
+
+export const getCompanyBillingTransactions = (companyId: string, skip = 0, limit = 50) =>
+    companyRequest<BillingTransactionsPage>(
+        `/api/company/${companyId}/billing/transactions?skip=${skip}&limit=${limit}`
+    );
 
 export interface PortalVehicleType {
     id: string;

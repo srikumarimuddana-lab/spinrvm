@@ -12,6 +12,7 @@ import {
     verifyCompanyOtp,
     getMyWorkProfiles,
     acceptCompanyInvite,
+    portalHome,
 } from "@/lib/companyApi";
 
 /**
@@ -92,7 +93,8 @@ function CompanyLoginInner() {
             if (next && next.startsWith("/company-portal")) {
                 router.replace(next);
             } else if (memberships.length === 1) {
-                router.replace(`/company-portal/${memberships[0].company.id}/overview`);
+                // Role-appropriate landing: members can't see the admin overview.
+                router.replace(portalHome(memberships[0].company.id, memberships[0].membership.role));
             } else {
                 router.replace("/company-portal");
             }

@@ -99,7 +99,10 @@ function isIpAllowed(request: NextRequest): boolean {
   return ALLOWED_IP_ENTRIES.some((entry) => clientIp.startsWith(entry));
 }
 
-const PUBLIC_PATHS = ["/login", "/company-login"];
+// /company-login is handled explicitly before the admin IP allowlist (see
+// middleware()) so it stays reachable for external company users — it does
+// not go through isPublic().
+const PUBLIC_PATHS = ["/login"];
 const PUBLIC_PREFIXES = ["/register/", "/track/"];
 
 function isPublic(pathname: string): boolean {
@@ -184,23 +187,17 @@ export function middleware(request: NextRequest) {
     return handleTrackingHost(request);
   }
 
-  // ── Admin domain below ──────────────────────────────────────────────────────
-  // IP allowlist check — runs before auth so blocked IPs see 403, not /login
-  if (!isIpAllowed(request)) {
-    return new NextResponse("Forbidden", { status: 403 });
-  }
-
   const nonce = generateNonce();
 
-  // Public page — no auth required
-  if (isPublic(pathname)) {
+  // ── Company portal (Spinr for Business) — CUSTOMER-facing surface ───────────
+  // Handled BEFORE the admin IP allowlist: company employees are external
+  // users who must reach /company-login and /company-portal even when
+  // ADMIN_ALLOWED_IPS restricts the STAFF admin surface. Company users hold
+  // RIDER tokens (phone OTP), gated on their own company_token cookie, and
+  // bounce to /company-login — never the staff /login.
+  if (pathname === "/company-login") {
     return passThroughWithNonce(request, nonce);
   }
-
-  // ── Company portal (Spinr for Business) ────────────────────────────────────
-  // Company users hold RIDER tokens (phone OTP), never staff sessions — the
-  // portal is gated on its own company_token cookie and bounces to
-  // /company-login, keeping the two auth surfaces fully separate.
   if (pathname === "/company-portal" || pathname.startsWith("/company-portal/")) {
     const companyToken = request.cookies.get("company_token")?.value;
     if (companyToken && isTokenValid(companyToken)) {
@@ -214,6 +211,18 @@ export function middleware(request: NextRequest) {
       companyResponse.cookies.set("company_token", "", { path: "/", maxAge: 0 });
     }
     return companyResponse;
+  }
+
+  // ── Admin domain below ──────────────────────────────────────────────────────
+  // IP allowlist check — runs before auth so blocked IPs see 403, not /login.
+  // (The company surface above is intentionally exempt — see comment there.)
+  if (!isIpAllowed(request)) {
+    return new NextResponse("Forbidden", { status: 403 });
+  }
+
+  // Public page — no auth required
+  if (isPublic(pathname)) {
+    return passThroughWithNonce(request, nonce);
   }
 
   const token = request.cookies.get("admin_token")?.value;

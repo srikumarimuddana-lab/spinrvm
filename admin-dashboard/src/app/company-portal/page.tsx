@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Building2, ChevronRight, LogOut } from "lucide-react";
-import { getMyWorkProfiles } from "@/lib/companyApi";
+import { getMyWorkProfiles, portalHome } from "@/lib/companyApi";
 import { useCompanyAuthStore, CompanyMembershipProfile } from "@/store/companyAuthStore";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -28,7 +28,7 @@ export default function CompanyPortalLandingPage() {
                 setProfiles(rows);
                 setMemberships(rows);
                 if (rows.length === 1) {
-                    router.replace(`/company-portal/${rows[0].company.id}/overview`);
+                    router.replace(portalHome(rows[0].company.id, rows[0].membership.role));
                 }
             })
             .catch((e) => setError(e instanceof Error ? e.message : "Failed to load"))
@@ -62,7 +62,7 @@ export default function CompanyPortalLandingPage() {
                 {profiles.map((p) => (
                     <Link
                         key={p.company.id}
-                        href={`/company-portal/${p.company.id}/overview`}
+                        href={portalHome(p.company.id, p.membership.role)}
                         className="block"
                     >
                         <Card className="transition-colors hover:bg-muted/40">

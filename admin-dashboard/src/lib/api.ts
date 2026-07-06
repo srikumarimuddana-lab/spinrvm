@@ -4,7 +4,6 @@ const API_BASE = "";
 
 // Import Zustand store for token management
 import { useAuthStore } from "@/store/authStore";
-import { companyRequest } from "./companyApi";
 
 // ─── B-P1-8: typed rate-limit error ──────────────────────────────────
 // Mirrors shared/api/client.ts's RateLimitError so admin login,
@@ -59,14 +58,6 @@ const parseIntHeader = (header: string | null): number | null => {
 };
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-    // Company-portal delegation: /api/company/* and /api/rider/work-profile*
-    // authenticate with the RIDER-token session (companyAuthStore), not the
-    // staff session — and their 401s must bounce to /company-login, never
-    // /login. Routing here keeps the portal pages' existing imports intact.
-    if (path.startsWith("/api/company/") || path.startsWith("/api/rider/work-profile")) {
-        return companyRequest<T>(path, options);
-    }
-
     // Get token from Zustand store
     const store = useAuthStore.getState();
     const token = store.token;
@@ -1468,7 +1459,7 @@ export interface AllowanceRequestRow {
 
 export const listCompanyMembers = (companyId: string, status?: string) =>
     request<CorporateMember[]>(
-        `/api/company/${companyId}/members${status ? `?status=${encodeURIComponent(status)}` : ""}`
+        `/company/${companyId}/members${status ? `?status=${encodeURIComponent(status)}` : ""}`
     );
 
 export const inviteCompanyMember = (
@@ -1476,18 +1467,18 @@ export const inviteCompanyMember = (
     body: { email: string; role: CorporateMemberRole; policy_override?: boolean }
 ) =>
     request<{ member: CorporateMember; invite_url: string }>(
-        `/api/company/${companyId}/members/invite`,
+        `/company/${companyId}/members/invite`,
         { method: "POST", body: JSON.stringify(body) }
     );
 
 export const removeCompanyMember = (companyId: string, memberId: string) =>
-    request<CorporateMember>(`/api/company/${companyId}/members/${memberId}`, {
+    request<CorporateMember>(`/company/${companyId}/members/${memberId}`, {
         method: "DELETE",
     });
 
 export const getMemberAllowance = (companyId: string, memberId: string) =>
     request<CorporateAllowance | Record<string, never>>(
-        `/api/company/${companyId}/members/${memberId}/allowance`
+        `/company/${companyId}/members/${memberId}/allowance`
     );
 
 export const putMemberAllowance = (
@@ -1504,13 +1495,13 @@ export const putMemberAllowance = (
     }
 ) =>
     request<CorporateAllowance>(
-        `/api/company/${companyId}/members/${memberId}/allowance`,
+        `/company/${companyId}/members/${memberId}/allowance`,
         { method: "PUT", body: JSON.stringify(body) }
     );
 
 export const listCompanyAllowanceRequests = (companyId: string, status = "pending") =>
     request<AllowanceRequestRow[]>(
-        `/api/company/${companyId}/allowance-requests?status=${encodeURIComponent(status)}`
+        `/company/${companyId}/allowance-requests?status=${encodeURIComponent(status)}`
     );
 
 export const decideAllowanceRequest = (
@@ -1519,7 +1510,7 @@ export const decideAllowanceRequest = (
     body: { approve: boolean; note?: string }
 ) =>
     request<AllowanceRequestRow>(
-        `/api/company/${companyId}/allowance-requests/${requestId}/decide`,
+        `/company/${companyId}/allowance-requests/${requestId}/decide`,
         { method: "POST", body: JSON.stringify(body) }
     );
 
@@ -1529,7 +1520,7 @@ export const updateCompanyMember = (
     body: { role?: CorporateMemberRole; status?: CorporateMemberStatus; policy_override?: boolean }
 ) =>
     request<CorporateMember>(
-        `/api/company/${companyId}/members/${memberId}`,
+        `/company/${companyId}/members/${memberId}`,
         { method: "PATCH", body: JSON.stringify(body) }
     );
 
@@ -1553,13 +1544,13 @@ export interface CorporatePolicy {
 }
 
 export const getCompanyPolicy = (companyId: string) =>
-    request<CorporatePolicy | Record<string, never>>(`/api/company/${companyId}/policy`);
+    request<CorporatePolicy | Record<string, never>>(`/company/${companyId}/policy`);
 
 export const putCompanyPolicy = (
     companyId: string,
     body: Omit<CorporatePolicy, "id" | "company_id">
 ) =>
-    request<CorporatePolicy>(`/api/company/${companyId}/policy`, {
+    request<CorporatePolicy>(`/company/${companyId}/policy`, {
         method: "PUT",
         body: JSON.stringify(body),
     });
@@ -1568,7 +1559,7 @@ export const patchCompanyPolicy = (
     companyId: string,
     body: Partial<Omit<CorporatePolicy, "id" | "company_id">>
 ) =>
-    request<CorporatePolicy>(`/api/company/${companyId}/policy`, {
+    request<CorporatePolicy>(`/company/${companyId}/policy`, {
         method: "PATCH",
         body: JSON.stringify(body),
     });
@@ -1580,17 +1571,17 @@ export interface AllowedDomainRow {
 }
 
 export const listAllowedDomains = (companyId: string) =>
-    request<AllowedDomainRow[]>(`/api/company/${companyId}/allowed-domains`);
+    request<AllowedDomainRow[]>(`/company/${companyId}/allowed-domains`);
 
 export const addAllowedDomain = (companyId: string, domain: string) =>
-    request<AllowedDomainRow>(`/api/company/${companyId}/allowed-domains`, {
+    request<AllowedDomainRow>(`/company/${companyId}/allowed-domains`, {
         method: "POST",
         body: JSON.stringify({ domain }),
     });
 
 export const removeAllowedDomain = (companyId: string, domain: string) =>
     request<{ status: string }>(
-        `/api/company/${companyId}/allowed-domains/${encodeURIComponent(domain)}`,
+        `/company/${companyId}/allowed-domains/${encodeURIComponent(domain)}`,
         { method: "DELETE" }
     );
 
@@ -1661,12 +1652,12 @@ export interface BillingTransactionsPage {
 
 export const getCompanyBillingSummary = (companyId: string, month?: string) => {
     const qs = month ? `?month=${encodeURIComponent(month)}` : "";
-    return request<BillingSummary>(`/api/company/${companyId}/billing/summary${qs}`);
+    return request<BillingSummary>(`/company/${companyId}/billing/summary${qs}`);
 };
 
 export const getCompanyBillingStatement = (companyId: string, month: string) =>
     request<BillingStatement>(
-        `/api/company/${companyId}/billing/statements/${encodeURIComponent(month)}`
+        `/company/${companyId}/billing/statements/${encodeURIComponent(month)}`
     );
 
 export const getCompanyBillingTransactions = (
@@ -1675,7 +1666,7 @@ export const getCompanyBillingTransactions = (
     limit = 50
 ) =>
     request<BillingTransactionsPage>(
-        `/api/company/${companyId}/billing/transactions?skip=${skip}&limit=${limit}`
+        `/company/${companyId}/billing/transactions?skip=${skip}&limit=${limit}`
     );
 
 /* ── Cloud Messaging (merged with Notifications) ── */

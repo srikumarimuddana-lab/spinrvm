@@ -380,7 +380,15 @@ export default function CompanyBookRidePage() {
                                     <Input
                                         type="datetime-local"
                                         value={scheduledTime}
-                                        min={new Date(Date.now() + 15 * 60_000).toISOString().slice(0, 16)}
+                                        min={(() => {
+                                            // datetime-local is LOCAL wall-clock; toISOString() is
+                                            // UTC. Offset to local so the min isn't shifted by the
+                                            // browser's tz (e.g. +6h in Saskatchewan), which would
+                                            // block scheduling for the next several hours.
+                                            const d = new Date(Date.now() + 15 * 60_000);
+                                            d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+                                            return d.toISOString().slice(0, 16);
+                                        })()}
                                         onChange={(e) => setScheduledTime(e.target.value)}
                                     />
                                 )}

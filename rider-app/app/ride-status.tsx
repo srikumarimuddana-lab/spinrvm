@@ -10,6 +10,7 @@ import {
   Modal,
   TextInput,
   KeyboardAvoidingView,
+  ScrollView,
   Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -422,8 +423,16 @@ export default function RideStatusScreen() {
         <Text style={styles.mapText}>Map View</Text>
       </View>
 
-      {/* Bottom Sheet */}
+      {/* Bottom Sheet — scrollable so tall states (driver_arrived: OTP card +
+          driver card + note chip + cancel, plus the dev bar) can't clip off the
+          bottom of a small screen. flexShrink lets the sheet yield height to the
+          scroll area instead of overflowing. */}
       <View style={styles.bottomSheet}>
+        <ScrollView
+          contentContainerStyle={styles.bottomSheetContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
         {!currentRide ? (
           <View style={styles.statusContainer}>
             <ActivityIndicator size="large" color={colors.primary} />
@@ -493,6 +502,7 @@ export default function RideStatusScreen() {
             )}
           </>
         )}
+        </ScrollView>
       </View>
       <ConfirmSheet
         visible={confirmSheet.visible}
@@ -622,8 +632,12 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.surface,
       borderTopLeftRadius: 24,
       borderTopRightRadius: 24,
-      padding: 24,
       minHeight: 280,
+      flexShrink: 1,
+      overflow: 'hidden',
+    },
+    bottomSheetContent: {
+      padding: 24,
     },
     statusContainer: {
       alignItems: 'center',

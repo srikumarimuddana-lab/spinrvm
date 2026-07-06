@@ -52,6 +52,42 @@ def _tokenize(text: str) -> set:
     return {w for w in "".join(c.lower() if c.isalnum() else " " for c in text).split() if len(w) > 2}
 
 
+# Curated domain concept groups. A query and an FAQ that use *different* words
+# for the same idea ("earnings" vs "payouts") still collide because each maps to
+# the same concept token. Kept small and hand-verified — this is deliberately
+# NOT a general thesaurus (which would blur distinct topics and hurt ranking).
+# For truly novel phrasing, vector embeddings are the follow-up; this covers the
+# common rewordings offline, with zero provider cost.
+_SYNONYM_GROUPS: list[set] = [
+    {"payout", "payouts", "payment", "payments", "paid", "pay", "earnings", "earning", "deposit", "deposited"},
+    {"surge", "surges", "surging", "pricing", "multiplier", "peak"},
+    {"cancel", "cancels", "cancelled", "canceled", "cancelling", "cancellation"},
+    {"refund", "refunds", "refunded", "reimburse", "reimbursement"},
+    {"coverage", "cover", "covers", "area", "areas", "zone", "zones", "serve", "serves", "service"},
+    {"fare", "fares", "price", "prices", "cost", "costs", "charge", "charges", "rate", "rates"},
+    {"wallet", "balance", "credit", "credits", "funds"},
+    {"document", "documents", "license", "licence", "insurance", "registration", "abstract"},
+    {"promo", "promos", "promotion", "promotions", "coupon", "discount", "discounts", "code", "codes"},
+    {"tip", "tips", "tipping", "gratuity"},
+]
+
+_TERM_TO_CONCEPT: Dict[str, str] = {term: f"~c{idx}" for idx, group in enumerate(_SYNONYM_GROUPS) for term in group}
+
+
+def _match_tokens(text: str) -> set:
+    """Raw tokens plus a concept token for any domain term (with a trailing-'s'
+    plural fallback). Applied identically to the query and to FAQ text so
+    synonyms overlap. Concept tokens are namespaced (``~c#``) so they can never
+    collide with a real word."""
+    tokens = _tokenize(text)
+    concepts = set()
+    for t in tokens:
+        concept = _TERM_TO_CONCEPT.get(t) or (_TERM_TO_CONCEPT.get(t[:-1]) if t.endswith("s") else None)
+        if concept:
+            concepts.add(concept)
+    return tokens | concepts
+
+
 async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
     audience = user.get("ai_audience", "rider")
     rows = await db_supabase.get_rows(
@@ -59,13 +95,14 @@ async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
         {"is_active": True, "audience": {"$in": ["both", audience]}},
         limit=200,
     )
-    q_tokens = _tokenize(query)
+    q_tokens = _match_tokens(query)
     scored = []
     for row in rows or []:
         # Question matches count double — a query echoing the question is a
         # far stronger signal than the same words buried in an answer body.
-        question_overlap = len(q_tokens & _tokenize(row.get("question", "")))
-        body_overlap = len(q_tokens & _tokenize(f"{row.get('answer', '')} {row.get('category', '')}"))
+        # _match_tokens folds synonyms so a reworded query still overlaps.
+        question_overlap = len(q_tokens & _match_tokens(row.get("question", "")))
+        body_overlap = len(q_tokens & _match_tokens(f"{row.get('answer', '')} {row.get('category', '')}"))
         score = question_overlap * 2 + body_overlap
         if score:
             scored.append((score, row))

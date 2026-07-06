@@ -123,7 +123,7 @@ def register(spec: ToolSpec) -> ToolSpec:
 
 # Domain handler modules that self-register on import. Extended as handler
 # modules land (tools_rides, tools_money, tools_support, tools_booking).
-_DOMAIN_MODULES: tuple = ("tools_rides", "tools_account", "tools_support", "tools_booking")
+_DOMAIN_MODULES: tuple = ("tools_rides", "tools_account", "tools_support", "tools_booking", "tools_driver")
 
 _registry_loaded = False
 

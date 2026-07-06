@@ -99,6 +99,9 @@ function isIpAllowed(request: NextRequest): boolean {
   return ALLOWED_IP_ENTRIES.some((entry) => clientIp.startsWith(entry));
 }
 
+// /company-login is handled explicitly before the admin IP allowlist (see
+// middleware()) so it stays reachable for external company users — it does
+// not go through isPublic().
 const PUBLIC_PATHS = ["/login"];
 const PUBLIC_PREFIXES = ["/register/", "/track/"];
 
@@ -184,13 +187,47 @@ export function middleware(request: NextRequest) {
     return handleTrackingHost(request);
   }
 
+  const nonce = generateNonce();
+
+  // ── Company portal (Spinr for Business) — CUSTOMER-facing surface ───────────
+  // Handled BEFORE the admin IP allowlist: company employees are external
+  // users who must reach /company-login and /company-portal even when
+  // ADMIN_ALLOWED_IPS restricts the STAFF admin surface. Company users hold
+  // RIDER tokens (phone OTP), gated on their own company_token cookie, and
+  // bounce to /company-login — never the staff /login.
+  if (pathname === "/company-login") {
+    return passThroughWithNonce(request, nonce);
+  }
+  if (pathname === "/company-portal" || pathname.startsWith("/company-portal/")) {
+    const companyToken = request.cookies.get("company_token")?.value;
+    if (companyToken && isTokenValid(companyToken)) {
+      return passThroughWithNonce(request, nonce);
+    }
+    // The access token (company_token) expires in 15 min, but the refresh
+    // session lasts 30 days. When the access token is stale/absent but the
+    // company_session marker shows a refreshable session exists, load the shell
+    // so the client can silentRefresh — otherwise an idle reload would force a
+    // needless re-login. If the refresh fails, the client layout redirects.
+    const hasRefreshableSession = request.cookies.get("company_session")?.value === "1";
+    if (hasRefreshableSession) {
+      return passThroughWithNonce(request, nonce);
+    }
+    const companyRedirect = request.nextUrl.clone();
+    companyRedirect.pathname = "/company-login";
+    companyRedirect.searchParams.set("next", pathname);
+    const companyResponse = NextResponse.redirect(companyRedirect);
+    if (companyToken) {
+      companyResponse.cookies.set("company_token", "", { path: "/", maxAge: 0 });
+    }
+    return companyResponse;
+  }
+
   // ── Admin domain below ──────────────────────────────────────────────────────
-  // IP allowlist check — runs before auth so blocked IPs see 403, not /login
+  // IP allowlist check — runs before auth so blocked IPs see 403, not /login.
+  // (The company surface above is intentionally exempt — see comment there.)
   if (!isIpAllowed(request)) {
     return new NextResponse("Forbidden", { status: 403 });
   }
-
-  const nonce = generateNonce();
 
   // Public page — no auth required
   if (isPublic(pathname)) {

@@ -2,11 +2,13 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import {
+import type {
     AllowanceRequestRow,
+} from "@/lib/api";
+import {
     decideAllowanceRequest,
     listCompanyAllowanceRequests,
-} from "@/lib/api";
+} from "@/lib/companyApi";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";

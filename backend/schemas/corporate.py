@@ -206,6 +206,10 @@ class MemberUpdate(BaseModel):
     role: Optional[MemberRole] = None
     status: Optional[MemberStatus] = None
     policy_override: Optional[bool] = None
+    # Section assignment (migration 206). Empty string clears the section
+    # (None means "not provided" under exclude_none); the route validates
+    # the section belongs to the same company.
+    section_id: Optional[str] = None
 
 
 class AllowanceCreate(BaseModel):

@@ -471,6 +471,11 @@ async def auto_settle_guest_corporate(ride_id: str) -> Optional[PaymentResult]:
         # but the retry sweep must never settle an in-flight ride.
         return None
 
+    try:
+        from ..utils.metrics import inc as _metric_inc
+    except ImportError:
+        from utils.metrics import inc as _metric_inc  # type: ignore
+
     claimed = None
     for _claim_status in ("pending", "failed"):
         claimed = await db_supabase.update_one(
@@ -497,6 +502,10 @@ async def auto_settle_guest_corporate(ride_id: str) -> Optional[PaymentResult]:
             {"payment_status": "pending", "updated_at": datetime.now(timezone.utc).isoformat()},
         )
         return None
+    _metric_inc(
+        "spinr_payment_settlement_total",
+        {"outcome": "success" if result.success else "failed", "path": "corporate_guest_auto"},
+    )
     if not result.success:
         logger.error(
             "[PAYMENT] auto-settle failed for guest ride %s: %s (status %s)",

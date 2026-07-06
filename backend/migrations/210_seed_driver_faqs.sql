@@ -17,8 +17,8 @@
 --   AND category IN ('onboarding','documents','payments','troubleshooting')
 --   AND question IN (<the questions below>);
 
-INSERT INTO faqs (question, answer, category, audience, is_active, created_at)
-SELECT v.question, v.answer, v.category, 'driver', true, now()
+INSERT INTO faqs (id, question, answer, category, audience, is_active, created_at)
+SELECT gen_random_uuid()::text, v.question, v.answer, v.category, 'driver', true, now()
 FROM (
     VALUES
     (

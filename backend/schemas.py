@@ -203,6 +203,13 @@ class AppSettings(BaseModel):
     # skip the LLM entirely. Ships dark; TTL bounds FAQ-edit staleness.
     ai_faq_cache_enabled: bool = False
     ai_faq_cache_ttl_seconds: int = 3600
+    # Semantic FAQ search: embed the query + FAQ questions and rank by cosine so
+    # reworded questions with no shared keyword still match. Ships dark; falls
+    # back to lexical matching when off or when a row has no embedding.
+    ai_faq_semantic_enabled: bool = False
+    ai_embedding_provider: str = ""  # "" | openai | gemini
+    ai_embedding_model: str = ""  # blank → provider default
+    ai_faq_semantic_min_score: float = 0.30  # cosine floor to count as a match
     # When true, escalate_to_support creates a Zoho ticket. Default is a
     # deep-link handoff only — the AI triggers no server-side side effects.
     ai_escalation_creates_ticket: bool = False

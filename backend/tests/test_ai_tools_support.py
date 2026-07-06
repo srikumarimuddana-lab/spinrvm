@@ -7,6 +7,7 @@ open_support _client_action card contract, the conversation transcript on
 tickets, and the 911/SOS language on safety escalations.
 """
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -171,7 +172,10 @@ class TestSearchFaqsSemantic:
             result, ok = await execute_tool("search_faqs", {"query": "when do I get my earnings"}, user=RIDER)
         assert ok
         assert [r["question"] for r in result["results"]] == ["When are payouts made?"]
-        update.assert_awaited()  # freshly embedded rows were persisted
+        # Persistence is deferred (fire-and-forget) so the tool path never waits
+        # on it — drain the background task, then confirm it ran.
+        await asyncio.sleep(0.05)
+        update.assert_awaited()  # freshly embedded rows were persisted in the background
 
     @pytest.mark.anyio
     async def test_reuses_stored_embeddings_and_only_embeds_query(self):

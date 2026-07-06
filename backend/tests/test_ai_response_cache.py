@@ -200,6 +200,15 @@ class TestCacheStore:
         _, _, store_mock, _ = await _run(adapter)
         store_mock.assert_awaited_once()
 
+    @pytest.mark.anyio
+    async def test_generic_fallback_answer_not_stored(self):
+        # model produced no text → the generic "couldn't finish" fallback is
+        # served but must NOT be cached and replayed for the same question.
+        adapter = FakeAdapter([[_end()]])
+        frames, _, store_mock, _ = await _run(adapter)
+        assert any(n == "token" and "rephrase" in p.get("text", "") for n, p in frames)
+        store_mock.assert_not_awaited()
+
 
 class TestCacheEligibility:
     @pytest.mark.anyio

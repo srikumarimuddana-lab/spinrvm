@@ -237,6 +237,7 @@ async def run_chat_turn(
         return
 
     final_text = "".join(all_text).strip()
+    produced_real_text = bool(final_text)  # False → the generic fallback below
     if not final_text:
         final_text = "I couldn't finish that one — could you rephrase, or tap Contact Support?"
         yield "token", {"text": final_text}
@@ -250,7 +251,7 @@ async def run_chat_turn(
         provider=getattr(adapter, "provider", None),
         model=getattr(adapter, "model", None),
     )
-    if cache_eligible and response_cache.is_cacheable(
+    if cache_eligible and produced_real_text and response_cache.is_cacheable(
         admin_actor_id=admin_actor_id,
         prior_turns=prior_turns,
         used_tool_names=used_tool_names,

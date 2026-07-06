@@ -374,7 +374,15 @@ async def get_faqs(category: Optional[str] = None):
     query: Dict[str, Any] = {"is_active": True}
     if category:
         query["category"] = category
-    faqs = await db_supabase.get_rows("faqs", query, limit=200, order="sort_order", desc=False)
+    # Exclude the semantic-search embedding vector from the public payload.
+    faqs = await db_supabase.get_rows(
+        "faqs",
+        query,
+        limit=200,
+        order="sort_order",
+        desc=False,
+        columns="id,question,answer,category,sort_order,is_active,created_at,updated_at,audience",
+    )
     return faqs
 
 
@@ -438,7 +446,15 @@ async def admin_close_ticket(ticket_id: str):
 @admin_support_router.get("/faqs")
 async def admin_get_faqs():
     """Get all FAQs (including inactive) for admin."""
-    faqs = await db_supabase.get_rows("faqs", None, limit=500, order="sort_order", desc=False)
+    # Exclude the semantic-search embedding vector from the admin list payload.
+    faqs = await db_supabase.get_rows(
+        "faqs",
+        None,
+        limit=500,
+        order="sort_order",
+        desc=False,
+        columns="id,question,answer,category,audience,sort_order,is_active,created_at,updated_at",
+    )
     return faqs
 
 
@@ -474,8 +490,22 @@ async def admin_update_faq(faq_id: str, req: UpdateFaqRequest):
     if req.is_active is not None:
         update_data["is_active"] = req.is_active
 
+    # Editing the question/answer invalidates any stored semantic embedding —
+    # clear it so search re-embeds from the new text (stale vectors would keep
+    # matching the old wording).
+    if req.question is not None or req.answer is not None:
+        update_data["embedding"] = None
+        update_data["embedding_model"] = None
+
     await db_supabase.update_one("faqs", {"id": faq_id}, update_data)
-    return (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("faqs", {"id": faq_id}, limit=1))
+    return (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows(
+            "faqs",
+            {"id": faq_id},
+            limit=1,
+            columns="id,question,answer,category,sort_order,is_active,created_at,updated_at,audience",
+        )
+    )
 
 
 @admin_support_router.delete("/faqs/{faq_id}")

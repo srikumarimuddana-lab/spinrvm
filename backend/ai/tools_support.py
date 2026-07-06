@@ -10,14 +10,15 @@ without asking the user to repeat themselves. Safety topics always route
 to 911/SOS language — never just a ticket.
 """
 
+import asyncio
 import logging
 from typing import Any, Dict, Optional
 
 try:
-    from . import conversations
+    from . import conversations, embeddings
     from .tools import ToolSpec, register
 except ImportError:
-    from ai import conversations
+    from ai import conversations, embeddings
     from ai.tools import ToolSpec, register
 
 try:
@@ -52,39 +53,184 @@ def _tokenize(text: str) -> set:
     return {w for w in "".join(c.lower() if c.isalnum() else " " for c in text).split() if len(w) > 2}
 
 
-async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
-    audience = user.get("ai_audience", "rider")
-    rows = await db_supabase.get_rows(
-        "faqs",
-        {"is_active": True, "audience": {"$in": ["both", audience]}},
-        limit=200,
-    )
-    q_tokens = _tokenize(query)
+# Curated domain concept groups. A query and an FAQ that use *different* words
+# for the same idea ("earnings" vs "payouts") still collide because each maps to
+# the same concept token. Kept small and hand-verified — this is deliberately
+# NOT a general thesaurus (which would blur distinct topics and hurt ranking).
+# For truly novel phrasing, vector embeddings are the follow-up; this covers the
+# common rewordings offline, with zero provider cost.
+_SYNONYM_GROUPS: list[set] = [
+    {"payout", "payouts", "payment", "payments", "paid", "pay", "earnings", "earning", "deposit", "deposited"},
+    {"surge", "surges", "surging", "pricing", "multiplier", "peak"},
+    {"cancel", "cancels", "cancelled", "canceled", "cancelling", "cancellation"},
+    {"refund", "refunds", "refunded", "reimburse", "reimbursement"},
+    {"coverage", "cover", "covers", "area", "areas", "zone", "zones", "serve", "serves", "service"},
+    {"fare", "fares", "price", "prices", "cost", "costs", "charge", "charges", "rate", "rates"},
+    {"wallet", "balance", "credit", "credits", "funds"},
+    {"document", "documents", "license", "licence", "insurance", "registration", "abstract"},
+    {"promo", "promos", "promotion", "promotions", "coupon", "discount", "discounts", "code", "codes"},
+    {"tip", "tips", "tipping", "gratuity"},
+]
+
+_TERM_TO_CONCEPT: Dict[str, str] = {term: f"~c{idx}" for idx, group in enumerate(_SYNONYM_GROUPS) for term in group}
+
+
+def _match_tokens(text: str) -> set:
+    """Raw tokens plus a concept token for any domain term (with a trailing-'s'
+    plural fallback). Applied identically to the query and to FAQ text so
+    synonyms overlap. Concept tokens are namespaced (``~c#``) so they can never
+    collide with a real word."""
+    tokens = _tokenize(text)
+    concepts = set()
+    for t in tokens:
+        concept = _TERM_TO_CONCEPT.get(t) or (_TERM_TO_CONCEPT.get(t[:-1]) if t.endswith("s") else None)
+        if concept:
+            concepts.add(concept)
+    return tokens | concepts
+
+
+# How many un-embedded FAQ rows one search may (re)embed + persist inline.
+# Bounds first-call latency and write fan-out; remaining rows are embedded on
+# subsequent searches until steady state (all embedded → query-only embed call).
+_SEMANTIC_MAX_EMBED = 50
+_NO_MATCH = {
+    "results": [],
+    "note": "No matching help-centre article — say so plainly and offer escalate_to_support.",
+}
+
+
+def _faq_view(row: Dict[str, Any]) -> Dict[str, Any]:
+    return {"question": row.get("question"), "answer": row.get("answer"), "category": row.get("category")}
+
+
+def _lexical_results(rows: list, query: str) -> list:
+    q_tokens = _match_tokens(query)
     scored = []
-    for row in rows or []:
+    for row in rows:
         # Question matches count double — a query echoing the question is a
         # far stronger signal than the same words buried in an answer body.
-        question_overlap = len(q_tokens & _tokenize(row.get("question", "")))
-        body_overlap = len(q_tokens & _tokenize(f"{row.get('answer', '')} {row.get('category', '')}"))
+        # _match_tokens folds synonyms so a reworded query still overlaps.
+        question_overlap = len(q_tokens & _match_tokens(row.get("question", "")))
+        body_overlap = len(q_tokens & _match_tokens(f"{row.get('answer', '')} {row.get('category', '')}"))
         score = question_overlap * 2 + body_overlap
         if score:
             scored.append((score, row))
     scored.sort(key=lambda pair: pair[0], reverse=True)
-    if not scored:
-        return {
-            "results": [],
-            "note": "No matching help-centre article — say so plainly and offer escalate_to_support.",
-        }
-    return {
-        "results": [
-            {
-                "question": r.get("question"),
-                "answer": r.get("answer"),
-                "category": r.get("category"),
-            }
-            for _, r in scored[:5]
-        ]
-    }
+    return [_faq_view(r) for _, r in scored[:5]]
+
+
+def _stored_vector(row: Dict[str, Any], model: str):
+    vec = row.get("embedding")
+    if isinstance(vec, list) and vec and row.get("embedding_model") == model:
+        return vec
+    return None
+
+
+async def _persist_embedding(row: Dict[str, Any], vec: list, model: str) -> None:
+    """Best-effort — a write failure must never fail the search."""
+    try:
+        await db_supabase.update_one("faqs", {"id": row["id"]}, {"embedding": vec, "embedding_model": model})
+    except Exception:
+        logger.error("ai faq embedding persist failed", exc_info=True)
+
+
+def _schedule_persist(pairs: list, model: str) -> None:
+    """Fire-and-forget the embedding writes so the user-facing tool path never
+    blocks on Supabase — awaiting up to _SEMANTIC_MAX_EMBED writes inside the 5s
+    tool budget risked a timeout (Codex). Ranking already has the vectors in
+    memory, so persistence is pure background work."""
+
+    async def _run() -> None:
+        await asyncio.gather(*(_persist_embedding(r, v, model) for r, v in pairs))
+
+    task = asyncio.create_task(_run())
+    task.add_done_callback(lambda t: t.exception())  # swallow, avoid warnings
+
+
+def _merge_results(primary: list, secondary: list) -> list:
+    """Union two result lists, primary first, deduped by question, capped at 5."""
+    seen, out = set(), []
+    for r in (*primary, *secondary):
+        key = r.get("question")
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out[:5]
+
+
+async def _semantic_results(rows: list, query: str, settings: Dict[str, Any]):
+    """Rank FAQs by cosine similarity. Returns (results, complete) or None when
+    embeddings are unavailable (caller uses lexical). ``complete`` is False when
+    some rows had no vector this pass (cold rollout beyond the embed cap) — the
+    caller then merges lexical matches so an un-embedded but keyword-matching FAQ
+    is not dropped. An empty results list means nothing cleared the floor."""
+    model = embeddings.embedding_model_for(settings)
+    if not model or not rows:
+        return None
+
+    to_embed = [r for r in rows if _stored_vector(r, model) is None][:_SEMANTIC_MAX_EMBED]
+    vectors = await embeddings.embed_texts([query] + [r.get("question", "") for r in to_embed], settings)
+    if vectors is None:
+        return None
+
+    q_vec, new_vecs = vectors[0], vectors[1:]
+    fresh = {r["id"]: v for r, v in zip(to_embed, new_vecs, strict=True)}
+    if fresh:
+        _schedule_persist([(r, fresh[r["id"]]) for r in to_embed], model)  # deferred, not awaited
+
+    # Explicit None check — a configured floor of 0 (inspect all matches) must
+    # not be silently replaced by the default via truthiness.
+    raw_floor = settings.get("ai_faq_semantic_min_score")
+    min_score = 0.30 if raw_floor in (None, "") else float(raw_floor)
+    scored, covered = [], 0
+    for row in rows:
+        vec = fresh.get(row.get("id")) or _stored_vector(row, model)
+        if vec is None:
+            continue  # not embedded this pass — lexical merge covers it
+        covered += 1
+        sim = embeddings.cosine(q_vec, vec)
+        if sim >= min_score:
+            scored.append((sim, row))
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return [_faq_view(r) for _, r in scored[:5]], covered == len(rows)
+
+
+async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
+    audience = user.get("ai_audience", "rider")
+    settings = await get_app_settings()
+    semantic = bool(settings.get("ai_faq_semantic_enabled"))
+    # Only pull the (large JSONB) embedding vector when the semantic path will
+    # actually read it — lexical/off searches select display columns only.
+    columns = (
+        "id,question,answer,category,audience,embedding,embedding_model"
+        if semantic
+        else "id,question,answer,category,audience"
+    )
+    rows = (
+        await db_supabase.get_rows(
+            "faqs",
+            {"is_active": True, "audience": {"$in": ["both", audience]}},
+            limit=200,
+            columns=columns,
+        )
+        or []
+    )
+
+    results = None
+    if semantic:
+        sem = await _semantic_results(rows, query, settings)
+        if sem is not None:
+            sem_results, complete = sem
+            # When not every row was embedded yet, merge keyword matches so a
+            # relevant un-embedded FAQ can't be omitted by a semantic-only pass.
+            results = sem_results if complete else _merge_results(sem_results, _lexical_results(rows, query))
+    # None (embeddings unavailable) or empty (nothing above floor) → lexical.
+    if not results:
+        results = _lexical_results(rows, query)
+    if not results:
+        return dict(_NO_MATCH)
+    return {"results": results[:5]}
 
 
 async def get_company_info(user: Dict[str, Any]) -> Dict[str, Any]:

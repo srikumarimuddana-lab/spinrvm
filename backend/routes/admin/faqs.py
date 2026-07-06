@@ -53,7 +53,15 @@ class NotificationRequest(BaseModel):
 @router.get("/faqs")
 async def admin_get_faqs():
     """Get all FAQ entries."""
-    faqs = await db_supabase.get_rows("faqs", order="created_at", desc=True, limit=500)
+    # Exclude the semantic-search embedding vector — the dashboard never shows
+    # it and it would bloat the list to multi-MB once vectors are populated.
+    faqs = await db_supabase.get_rows(
+        "faqs",
+        order="created_at",
+        desc=True,
+        limit=500,
+        columns="id,question,answer,category,audience,sort_order,is_active,created_at,updated_at",
+    )
     return faqs
 
 
@@ -86,6 +94,12 @@ async def admin_update_faq(faq_id: str, faq: FaqUpdateRequest):
         updates["audience"] = faq.audience
     if faq.is_active is not None:
         updates["is_active"] = faq.is_active
+
+    # Editing question/answer invalidates any stored semantic embedding — clear
+    # it so search re-embeds from the new text rather than the old wording.
+    if faq.question is not None or faq.answer is not None:
+        updates["embedding"] = None
+        updates["embedding_model"] = None
 
     if updates:
         updates["updated_at"] = datetime.now(timezone.utc).isoformat()

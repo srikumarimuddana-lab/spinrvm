@@ -7,6 +7,7 @@ import {
   StyleSheet,
   ActivityIndicator,
   KeyboardAvoidingView,
+  ScrollView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -68,6 +69,19 @@ export default function LoginScreen() {
       behavior="padding"
       style={styles.container}
     >
+      {/* Body is wrapped in a ScrollView with a flexGrow:1 content container so
+          the brand row / welcome / input / button / terms center nicely when
+          there's spare height, but scroll instead of overflowing when height is
+          tight (small devices, or the keyboard raised). Without this, the
+          centered `content` block can't shrink and spills over the fixed brand
+          row and terms — the overlap seen on smaller iPhones. Mirrors otp.tsx. */}
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        bounces={false}
+      >
       <View style={[styles.topStrip, { paddingTop: insets.top }]}>
         <View style={styles.brandRow}>
           <View style={styles.logoCircle}>
@@ -169,6 +183,7 @@ export default function LoginScreen() {
           <Text style={styles.termsLink}>Privacy Policy</Text>
         </Text>
       </View>
+      </ScrollView>
 
     </KeyboardAvoidingView>
   );
@@ -177,6 +192,9 @@ export default function LoginScreen() {
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.surface },
+    // flexGrow (not flex) so the ScrollView fills the screen but grows past it
+    // to stay scrollable when content exceeds the viewport on small screens.
+    scrollContent: { flexGrow: 1 },
     topStrip: { backgroundColor: colors.surface, paddingHorizontal: 24, paddingBottom: 8 },
     brandRow: { flexDirection: 'row', alignItems: 'center', paddingTop: 12, gap: 10 },
     logoCircle: {
@@ -190,7 +208,7 @@ function createStyles(colors: ThemeColors) {
       paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8,
     },
     riderBadgeText: { fontSize: 12, fontWeight: '700', color: colors.primary },
-    content: { flex: 1, paddingHorizontal: 24, justifyContent: 'center' },
+    content: { flexGrow: 1, paddingHorizontal: 24, justifyContent: 'center' },
     welcomeSection: { marginBottom: 36 },
     greeting: { fontSize: 16, color: colors.textDim, marginBottom: 8, fontWeight: '500' },
     title: {

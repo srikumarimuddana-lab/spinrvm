@@ -53,6 +53,7 @@ CAD, hardcoded. See P0-5 scoping doc §9 for the multi-currency question.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
@@ -214,16 +215,20 @@ async def charge_ride(
             # requires_action, or a PI created at booking time).
             # Idempotency key guards against two replicas both confirming and
             # both charging when they simultaneously pass the DB claim race.
-            intent = stripe.PaymentIntent.confirm(
-                payment_intent_id,
-                api_key=stripe_secret,
-                idempotency_key=f"ride-confirm-{ride_id}-{amount_cents}",
+            intent = await asyncio.to_thread(
+                lambda: stripe.PaymentIntent.confirm(
+                    payment_intent_id,
+                    api_key=stripe_secret,
+                    idempotency_key=f"ride-confirm-{ride_id}-{amount_cents}",
+                )
             )
         else:
-            intent = stripe.PaymentIntent.create(
-                **params,
-                api_key=stripe_secret,
-                idempotency_key=idempotency_key,
+            intent = await asyncio.to_thread(
+                lambda: stripe.PaymentIntent.create(
+                    **params,
+                    api_key=stripe_secret,
+                    idempotency_key=idempotency_key,
+                )
             )
     except _StripeCardError as e:
         # Card explicitly declined (insufficient_funds, card_declined, etc.).
@@ -380,10 +385,12 @@ async def charge_ancillary_fee(
     }
 
     try:
-        intent = stripe.PaymentIntent.create(
-            **params,
-            api_key=stripe_secret,
-            idempotency_key=idempotency_key,
+        intent = await asyncio.to_thread(
+            lambda: stripe.PaymentIntent.create(
+                **params,
+                api_key=stripe_secret,
+                idempotency_key=idempotency_key,
+            )
         )
     except _StripeCardError as e:
         err = getattr(e, "error", None)
@@ -529,10 +536,12 @@ async def authorize_ride(
     }
 
     try:
-        intent = stripe.PaymentIntent.create(
-            **params,
-            api_key=secret,
-            idempotency_key=idempotency_key,
+        intent = await asyncio.to_thread(
+            lambda: stripe.PaymentIntent.create(
+                **params,
+                api_key=secret,
+                idempotency_key=idempotency_key,
+            )
         )
     except _StripeCardError as e:
         err = getattr(e, "error", None)
@@ -616,7 +625,7 @@ async def verify_authorization(
         return ChargeOutcome(status="unconfigured", error_message="Payment processing is not configured")
 
     try:
-        intent = stripe.PaymentIntent.retrieve(payment_intent_id, api_key=secret)
+        intent = await asyncio.to_thread(lambda: stripe.PaymentIntent.retrieve(payment_intent_id, api_key=secret))
     except _StripeBaseError as e:
         logger.error("Stripe error verifying auth ride=%s pi=%s: %s", ride_id, payment_intent_id, e)
         return ChargeOutcome(status="failed", payment_intent_id=payment_intent_id, error_message=str(e))
@@ -724,13 +733,15 @@ async def capture_ride(
 
     amount_cents = dollars_to_cents(amount)
     try:
-        intent = stripe.PaymentIntent.capture(
-            payment_intent_id,
-            amount_to_capture=amount_cents,
-            api_key=secret,
-            # Same PI + same captured amount must not double-capture if two
-            # replicas race past the DB claim; Stripe dedupes the identical key.
-            idempotency_key=f"ride-capture-{ride_id}-{amount_cents}",
+        intent = await asyncio.to_thread(
+            lambda: stripe.PaymentIntent.capture(
+                payment_intent_id,
+                amount_to_capture=amount_cents,
+                api_key=secret,
+                # Same PI + same captured amount must not double-capture if two
+                # replicas race past the DB claim; Stripe dedupes the identical key.
+                idempotency_key=f"ride-capture-{ride_id}-{amount_cents}",
+            )
         )
     except _StripeCardError as e:
         err = getattr(e, "error", None)
@@ -788,10 +799,12 @@ async def cancel_authorization(*, ride_id: str, payment_intent_id: str) -> bool:
     # Call Stripe directly (same pattern as capture_ride / authorize_ride in this
     # module) — there is no run_sync helper here.
     try:
-        stripe.PaymentIntent.cancel(
-            payment_intent_id,
-            api_key=secret,
-            idempotency_key=f"ride-cancelauth-{ride_id}-{payment_intent_id}",
+        await asyncio.to_thread(
+            lambda: stripe.PaymentIntent.cancel(
+                payment_intent_id,
+                api_key=secret,
+                idempotency_key=f"ride-cancelauth-{ride_id}-{payment_intent_id}",
+            )
         )
         return True
     except _StripeBaseError as e:

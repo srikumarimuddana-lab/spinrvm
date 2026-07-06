@@ -23,14 +23,14 @@ from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 try:
-    from . import conversations
+    from . import conversations, response_cache
     from .pii import scrub_pii
     from .prompts import build_system_prompt
     from .providers import get_adapter
     from .providers.base import AIConfigError
     from .tools import execute_tool, tool_defs_for
 except ImportError:
-    from ai import conversations
+    from ai import conversations, response_cache
     from ai.pii import scrub_pii
     from ai.prompts import build_system_prompt
     from ai.providers import get_adapter
@@ -124,6 +124,30 @@ async def run_chat_turn(
 
     history = await conversations.load_history(conversation["id"], int(settings.get("ai_history_max_messages") or 12))
 
+    # FAQ response cache — only first-message, non-admin turns are context-free
+    # enough to replay. load_history already includes the just-appended user
+    # row, so a fresh conversation has exactly one message (prior_turns == 0).
+    prior_turns = max(len(history) - 1, 0)
+    faq_cache_enabled = bool(settings.get("ai_faq_cache_enabled"))
+    faq_cache_ttl = int(settings.get("ai_faq_cache_ttl_seconds") or 3600)
+    cache_eligible = faq_cache_enabled and admin_actor_id is None and prior_turns == 0
+    if cache_eligible:
+        cached = await response_cache.get_cached(audience, scrubbed)
+        if cached is not None:
+            _metric_inc("spinr_ai_response_cache_total", {"outcome": "hit"})
+            yield "token", {"text": cached}
+            assistant_row = await conversations.append_message(
+                conversation, "assistant", cached, usage={"input_tokens": 0, "output_tokens": 0}, provider="cache"
+            )
+            _metric_inc("spinr_ai_chat_turns_total", {"outcome": "cached"})
+            yield "done", {
+                "message_id": assistant_row["id"],
+                "usage": {"input_tokens": 0, "output_tokens": 0},
+                "stop_reason": "end_turn",
+            }
+            return
+        _metric_inc("spinr_ai_response_cache_total", {"outcome": "miss"})
+
     try:
         adapter = await get_adapter()
     except AIConfigError as exc:
@@ -149,6 +173,7 @@ async def run_chat_turn(
     max_iterations = int(settings.get("ai_max_tool_iterations") or 6)
     all_text: List[str] = []
     used_tool_names: List[str] = []
+    emitted_client_action = False
     total_usage = {"input_tokens": 0, "output_tokens": 0}
 
     try:
@@ -183,6 +208,7 @@ async def run_chat_turn(
                 _metric_inc("spinr_ai_tool_calls_total", {"tool": tc.name, "ok": str(ok).lower()})
                 client_action = result.pop("_client_action", None) if isinstance(result, dict) else None
                 if client_action:
+                    emitted_client_action = True
                     if client_action.get("type") == "booking_proposal":
                         _metric_inc("spinr_ai_booking_proposals_total")
                     yield "action", client_action
@@ -211,6 +237,7 @@ async def run_chat_turn(
         return
 
     final_text = "".join(all_text).strip()
+    produced_real_text = bool(final_text)  # False → the generic fallback below
     if not final_text:
         final_text = "I couldn't finish that one — could you rephrase, or tap Contact Support?"
         yield "token", {"text": final_text}
@@ -224,6 +251,15 @@ async def run_chat_turn(
         provider=getattr(adapter, "provider", None),
         model=getattr(adapter, "model", None),
     )
+    if cache_eligible and produced_real_text and response_cache.is_cacheable(
+        admin_actor_id=admin_actor_id,
+        prior_turns=prior_turns,
+        used_tool_names=used_tool_names,
+        had_client_action=emitted_client_action,
+        text=final_text,
+    ):
+        await response_cache.store_cached(audience, scrubbed, final_text, faq_cache_ttl)
+        _metric_inc("spinr_ai_response_cache_total", {"outcome": "store"})
     _metric_inc("spinr_ai_chat_turns_total", {"outcome": "completed"})
     _metric_inc("spinr_ai_tokens_total", {"direction": "input"}, by=total_usage["input_tokens"])
     _metric_inc("spinr_ai_tokens_total", {"direction": "output"}, by=total_usage["output_tokens"])

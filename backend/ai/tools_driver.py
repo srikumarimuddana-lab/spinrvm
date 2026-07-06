@@ -1,0 +1,284 @@
+"""Driver self-service read tools for the AI assistant.
+
+Answers the highest-volume driver questions from the driver's OWN record:
+application/approval status, document review + CRC status, and payout/earnings.
+All read-only and scoped to the authenticated driver (resolved server-side from
+user_id — never a tool argument). Whitelisted fields only: no file URLs, no
+addresses, no PII beyond the driver's own document review notes.
+"""
+
+import logging
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Any, Dict, List, Optional
+
+try:
+    from .tools import ToolSpec, register
+except ImportError:
+    from ai.tools import ToolSpec, register
+
+try:
+    from .. import db_supabase
+except ImportError:
+    import db_supabase
+
+logger = logging.getLogger(__name__)
+
+_BOTH = frozenset({"driver"})
+
+# Human-readable meaning + next step per driver.status. The driver app and
+# onboarding use these values (see routes/drivers.py).
+_STATUS_SUMMARY = {
+    "pending": "Your application is submitted and waiting for our team to review your documents.",
+    "needs_review": "Your application needs another look — check your documents below for anything rejected or expired.",
+    "incomplete": "Your application is not finished — some required documents are still missing.",
+    "active": "Your account is approved. You can go online and start accepting rides.",
+    "rejected": "Your application was not approved. Contact support for the reason and next steps.",
+    "suspended": "Your account is currently suspended. Contact support to resolve it.",
+    "banned": "Your account has been deactivated. Contact support for details.",
+}
+
+# drivers-row expiry columns that gate going online, with a friendly label.
+# background_check == Criminal Record Check (CRC).
+_EXPIRY_FIELDS = {
+    "background_check_expiry_date": "Criminal Record Check",
+    "license_expiry_date": "Driver's licence",
+    "insurance_expiry_date": "Insurance",
+    "vehicle_inspection_expiry_date": "Vehicle inspection",
+    "work_eligibility_expiry_date": "Work eligibility",
+}
+
+
+async def _driver(user: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    return await db_supabase.get_driver_by_user_id_cached(user["id"])
+
+
+def _date_only(value: Any) -> Optional[str]:
+    return str(value)[:10] if value else None
+
+
+def _expiry_state(raw: Any) -> Optional[tuple]:
+    """(state, iso_date) for an expiry value, or None. state ∈ expired|expiring_soon."""
+    if not raw:
+        return None
+    try:
+        exp = datetime.fromisoformat(str(raw).replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+    days = (exp - datetime.now(timezone.utc).date()).days
+    if days < 0:
+        return "expired", exp.isoformat()
+    if days <= 30:
+        return "expiring_soon", exp.isoformat()
+    return None
+
+
+def _driver_row_expiry_flags(driver: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Expiry flags from the drivers-row legacy *_expiry_date columns."""
+    out: List[Dict[str, Any]] = []
+    for field, label in _EXPIRY_FIELDS.items():
+        state = _expiry_state(driver.get(field))
+        if state:
+            out.append({"document": label, "state": state[0], "expiry_date": state[1]})
+    return out
+
+
+def _doc_key(doc: Dict[str, Any]) -> Any:
+    """Group key for a driver_documents row — a re-upload for the same
+    requirement supersedes older rows for that key."""
+    return doc.get("requirement_id") or doc.get("requirement_key") or doc.get("document_type") or doc.get("id")
+
+
+def _latest_per_key(rows: list) -> list:
+    """Keep only the newest row per requirement (rows already sorted newest
+    first), dropping superseded / historical uploads."""
+    latest, out = set(), []
+    for r in rows or []:
+        k = _doc_key(r)
+        if k in latest:
+            continue
+        latest.add(k)
+        out.append(r)
+    return out
+
+
+def _doc_expiry_flags(latest_docs: list) -> List[Dict[str, Any]]:
+    """Expiry flags from the driver's current APPROVED uploads — mirrors the
+    go_online gate, which blocks on expired approved driver_documents even when
+    the legacy drivers-row column is empty/stale."""
+    out: List[Dict[str, Any]] = []
+    for d in latest_docs:
+        if d.get("status") != "approved":
+            continue
+        state = _expiry_state(d.get("expiry_date"))
+        if state:
+            label = d.get("document_type") or d.get("requirement_key") or "Document"
+            out.append({"document": label, "state": state[0], "expiry_date": state[1]})
+    return out
+
+
+def _merge_flags(*groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    seen, out = set(), []
+    for g in groups:
+        for f in g:
+            key = (f["document"], f["state"])
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(f)
+    return out
+
+
+async def _driver_documents(driver_id: str) -> list:
+    return await db_supabase.get_rows(
+        "driver_documents", {"driver_id": driver_id}, order="uploaded_at", desc=True, limit=50
+    )
+
+
+async def get_driver_application_status(user: Dict[str, Any]) -> Dict[str, Any]:
+    driver = await _driver(user)
+    if not driver:
+        return {
+            "status": "not_started",
+            "summary": "We don't have a driver application on file for this account yet. "
+            "Finish signing up in the driver app to get started.",
+        }
+    status = driver.get("status") or "pending"
+    latest_docs = _latest_per_key(await _driver_documents(driver["id"]))
+    # Combine drivers-row legacy expiry columns with the driver's current
+    # approved uploads — the go_online gate checks both, so the assistant must
+    # too, or it could tell an ineligible driver they can start driving.
+    flags = _merge_flags(_driver_row_expiry_flags(driver), _doc_expiry_flags(latest_docs))
+    has_expired = any(f["state"] == "expired" for f in flags)
+    return {
+        "status": status,
+        "is_verified": bool(driver.get("is_verified")),
+        "can_go_online": status == "active" and not has_expired,
+        "summary": _STATUS_SUMMARY.get(status, "Your application is being processed."),
+        "expiring_or_expired_documents": flags,
+    }
+
+
+async def get_document_status(user: Dict[str, Any]) -> Dict[str, Any]:
+    driver = await _driver(user)
+    if not driver:
+        return {"documents": [], "note": "No driver application on file yet — finish signing up in the driver app."}
+    # Live driver uploads live in driver_documents (the legacy `documents` table
+    # is not what the driver app writes). Collapse to the latest upload per
+    # requirement so a superseded rejected/expired row isn't shown next to the
+    # current approved one. Whitelisted fields only — never the document_url.
+    latest_docs = _latest_per_key(await _driver_documents(driver["id"]))
+    docs = []
+    for r in latest_docs:
+        status = r.get("status")  # pending | approved | rejected
+        entry = {
+            "document_type": r.get("document_type"),
+            "status": status,
+            "uploaded_on": _date_only(r.get("uploaded_at")),
+            "expires_on": _date_only(r.get("expiry_date")),
+        }
+        # Surface the rejection reason only when the driver must act on it.
+        if status == "rejected" and r.get("rejection_reason"):
+            entry["action_needed"] = r["rejection_reason"]
+        docs.append(entry)
+    return {
+        "documents": docs,
+        "expiring_or_expired": _merge_flags(_driver_row_expiry_flags(driver), _doc_expiry_flags(latest_docs)),
+        "note": (
+            "If a document you uploaded isn't listed, it may still be syncing — check back shortly. "
+            "Expired documents (including the Criminal Record Check) must be renewed before going online."
+        ),
+    }
+
+
+async def get_driver_earnings_summary(user: Dict[str, Any], limit: int = 10) -> Dict[str, Any]:
+    driver = await _driver(user)
+    if not driver:
+        return {"note": "No driver account on file yet."}
+    rows = await db_supabase.get_rows(
+        "rides",
+        {"driver_id": driver["id"], "status": "completed"},
+        order="ride_completed_at",
+        desc=True,
+        limit=limit,
+    )
+    total = Decimal("0")
+    trips = []
+    for r in rows or []:
+        earned = Decimal(str(r.get("driver_earnings") or "0"))
+        total += earned
+        trips.append(
+            {
+                "completed_on": _date_only(r.get("ride_completed_at")),
+                "earnings": str(earned),
+                "payment_status": r.get("payment_status"),
+            }
+        )
+    return {
+        "recent_trip_count": len(trips),
+        "recent_earnings_total": str(total),
+        "currency": "CAD",
+        "trips": trips,
+        "note": (
+            "Drivers keep 100% of the fare. This lists your most recent completed trips and what you "
+            "earned on each. For payout timing and bank-deposit questions, use the FAQ or contact support."
+        ),
+    }
+
+
+register(
+    ToolSpec(
+        name="get_driver_application_status",
+        description=(
+            "Call this when the driver asks about the status of their application, whether "
+            "they're approved/verified, when they can start driving, or asks you to activate "
+            "their account. Returns their current approval status and what it means."
+        ),
+        input_schema={"type": "object", "properties": {}, "required": []},
+        handler=get_driver_application_status,
+        audiences=_BOTH,
+        mcp_exposed=False,
+    )
+)
+
+register(
+    ToolSpec(
+        name="get_document_status",
+        description=(
+            "Call this when the driver asks whether a document was received or approved, what "
+            "documents are missing or rejected, or about their Criminal Record Check (CRC), "
+            "licence, insurance or inspection status/expiry. Returns their uploaded documents "
+            "with review status and any expiring/expired items."
+        ),
+        input_schema={"type": "object", "properties": {}, "required": []},
+        handler=get_document_status,
+        audiences=_BOTH,
+        mcp_exposed=False,
+    )
+)
+
+register(
+    ToolSpec(
+        name="get_driver_earnings_summary",
+        description=(
+            "Call this when the driver asks about their earnings or when/whether they were "
+            "paid for recent trips. Returns their most recent completed trips with per-trip "
+            "earnings and payment status."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20,
+                    "description": "How many recent trips (default 10).",
+                }
+            },
+            "required": [],
+        },
+        handler=get_driver_earnings_summary,
+        audiences=_BOTH,
+        mcp_exposed=False,
+    )
+)

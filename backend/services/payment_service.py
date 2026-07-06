@@ -29,9 +29,11 @@ except ImportError:
 try:
     from ..core.config import settings as app_config
     from ..features import send_push_notification
+    from ..utils.pii import area_only
 except ImportError:
     from core.config import settings as app_config  # type: ignore
     from features import send_push_notification  # type: ignore
+    from utils.pii import area_only  # type: ignore
 
 
 def _d(v) -> Decimal:
@@ -141,8 +143,13 @@ async def record_payment_event(
                 "driver_id": ride.get("driver_id") or "",
                 "surge_multiplier": str(ride.get("surge_multiplier") or "1.0"),
                 "payment_method": ride.get("payment_method") or "card",
-                "pickup_address": (ride.get("pickup_address") or "")[:200],
-                "dropoff_address": (ride.get("dropoff_address") or "")[:200],
+                # PIPEDA data minimization: financial_events is a 7-year
+                # tax/audit ledger that outlives the account-deletion scrub, so
+                # only the city-level area may be retained here — the exact
+                # address stays on the ride row under its own retention policy.
+                # Keys keep the legacy *_address names for reader compatibility.
+                "pickup_address": area_only(ride.get("pickup_address")) or "",
+                "dropoff_address": area_only(ride.get("dropoff_address")) or "",
             }
         )
     try:
@@ -250,8 +257,10 @@ async def settle_wallet(
                 "tip_amount": str(_round(_d(tip_amount))),
                 "driver_id": ride.get("driver_id") or "",
                 "surge_multiplier": str(ride.get("surge_multiplier") or "1.0"),
-                "pickup_address": (ride.get("pickup_address") or "")[:200],
-                "dropoff_address": (ride.get("dropoff_address") or "")[:200],
+                # City-level only (PIPEDA): wallet_transactions metadata is
+                # financial-ledger data retained past ride-row anonymization.
+                "pickup_address": area_only(ride.get("pickup_address")) or "",
+                "dropoff_address": area_only(ride.get("dropoff_address")) or "",
                 "discount_amount": str(_round(_d(ride.get("discount_amount") or 0))),
                 "promo_code": ride.get("promo_code") or "",
                 "grand_total": str(grand_total),

@@ -16,6 +16,7 @@ push / asyncio.create_task machinery in the tests.
 """
 
 import logging
+import math
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -64,6 +65,41 @@ def rank_by_eta_with_acceptance(
         result.append((driver, eta, effective))
     result.sort(key=lambda x: x[2])
     return result
+
+
+#: km per degree of latitude (WGS-84 mean); longitude shrinks by cos(lat).
+_KM_PER_DEG_LAT = 110.574
+_KM_PER_DEG_LNG_EQUATOR = 111.320
+
+
+def dispatch_geo_bounds(pickup_lat: float, pickup_lng: float, radius_km: float) -> List[Dict[str, Any]]:
+    """Lat/lng bounding-box clauses for the dispatch candidate query.
+
+    Returns a list of ``{col: {"$gte"/"$lte": val}}`` dicts suitable for a
+    ``get_rows`` ``$and`` filter, bounding a box that fully contains the
+    ``radius_km`` circle around the pickup. The box is a superset of the
+    circle — ``filter_and_rank_drivers`` remains the exact haversine gate —
+    so its only job is to keep the SQL candidate fetch geo-relevant: without
+    it, an un-geo-filtered ``LIMIT 500`` over all online drivers can return
+    500 rows from the far side of the province and report a false
+    "no drivers" while the nearest driver sits in row 501.
+
+    A 10% + 1 km margin absorbs the degree-conversion approximation and any
+    drift between the raw pin and the road-snapped ``pickup_nav_*`` point.
+    Drivers with the default (0, 0) location fall outside any Canadian box,
+    matching ``_is_dispatchable_driver`` which already excludes them.
+    Longitude wraparound at ±180° is ignored — out of scope for Canada.
+    """
+    padded_km = radius_km * 1.10 + 1.0
+    lat_delta = padded_km / _KM_PER_DEG_LAT
+    # Clamp cos(lat) so a corrupt polar latitude can't divide by ~zero.
+    lng_delta = padded_km / max(_KM_PER_DEG_LNG_EQUATOR * math.cos(math.radians(pickup_lat)), 1e-3)
+    return [
+        {"lat": {"$gte": pickup_lat - lat_delta}},
+        {"lat": {"$lte": pickup_lat + lat_delta}},
+        {"lng": {"$gte": pickup_lng - lng_delta}},
+        {"lng": {"$lte": pickup_lng + lng_delta}},
+    ]
 
 
 def _is_dispatchable_driver(driver: Dict[str, Any]) -> bool:

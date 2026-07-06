@@ -85,12 +85,17 @@ async def get_driver_application_status(user: Dict[str, Any]) -> Dict[str, Any]:
             "Finish signing up in the driver app to get started.",
         }
     status = driver.get("status") or "pending"
+    expiry_flags = _expiry_flags(driver)
+    # An expired required document (CRC, licence, insurance, inspection) blocks
+    # going online even for an otherwise-active driver — mirror the go_online
+    # gate so the assistant never tells an ineligible driver they can drive.
+    has_expired = any(f["state"] == "expired" for f in expiry_flags)
     return {
         "status": status,
         "is_verified": bool(driver.get("is_verified")),
-        "can_go_online": status == "active",
+        "can_go_online": status == "active" and not has_expired,
         "summary": _STATUS_SUMMARY.get(status, "Your application is being processed."),
-        "expiring_or_expired_documents": _expiry_flags(driver),
+        "expiring_or_expired_documents": expiry_flags,
     }
 
 
@@ -98,18 +103,24 @@ async def get_document_status(user: Dict[str, Any]) -> Dict[str, Any]:
     driver = await _driver(user)
     if not driver:
         return {"documents": [], "note": "No driver application on file yet — finish signing up in the driver app."}
-    rows = await db_supabase.get_rows("documents", {"driver_id": driver["id"]}, order="uploaded_at", desc=True, limit=50)
+    # Live driver uploads live in driver_documents (the legacy `documents` table
+    # is not what the driver app writes). Whitelisted fields only — never the
+    # document_url.
+    rows = await db_supabase.get_rows(
+        "driver_documents", {"driver_id": driver["id"]}, order="uploaded_at", desc=True, limit=50
+    )
     docs = []
     for r in rows or []:
+        status = r.get("status")  # pending | approved | rejected
         entry = {
             "document_type": r.get("document_type"),
-            "status": r.get("status"),  # pending_review | approved | rejected
+            "status": status,
             "uploaded_on": _date_only(r.get("uploaded_at")),
-            "expires_on": _date_only(r.get("expires_at")),
+            "expires_on": _date_only(r.get("expiry_date")),
         }
-        # Surface the reviewer's reason only when the driver must act on it.
-        if r.get("status") in ("rejected", "needs_review") and r.get("reviewer_notes"):
-            entry["action_needed"] = r["reviewer_notes"]
+        # Surface the rejection reason only when the driver must act on it.
+        if status == "rejected" and r.get("rejection_reason"):
+            entry["action_needed"] = r["rejection_reason"]
         docs.append(entry)
     return {
         "documents": docs,
@@ -198,7 +209,12 @@ register(
         input_schema={
             "type": "object",
             "properties": {
-                "limit": {"type": "integer", "minimum": 1, "maximum": 20, "description": "How many recent trips (default 10)."}
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20,
+                    "description": "How many recent trips (default 10).",
+                }
             },
             "required": [],
         },

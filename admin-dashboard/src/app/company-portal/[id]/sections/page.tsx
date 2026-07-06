@@ -14,7 +14,12 @@ import {
     listCompanySections,
     CompanySection,
 } from "@/lib/companyApi";
-import { listCompanyMembers, CorporateMember } from "@/lib/api";
+import type {
+    CorporateMember,
+} from "@/lib/api";
+import {
+    listCompanyMembers,
+} from "@/lib/companyApi";
 
 /**
  * Sections (departments) — grouping + reporting only; budgets stay

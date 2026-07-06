@@ -270,11 +270,32 @@ class SectionCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=80)
     description: Optional[str] = Field(default=None, max_length=300)
 
+    @field_validator("name")
+    @classmethod
+    def _name_not_blank(cls, v: str) -> str:
+        # min_length=1 accepts a spaces-only string; the handler strips after
+        # validation, so without this a "   " name would persist as "" and
+        # squat the company's unique empty name. Reject blank-after-trim (422).
+        v = v.strip()
+        if not v:
+            raise ValueError("Section name cannot be blank")
+        return v
+
 
 class SectionUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=80)
     description: Optional[str] = Field(default=None, max_length=300)
     status: Optional[str] = Field(default=None, pattern="^(active|archived)$")
+
+    @field_validator("name")
+    @classmethod
+    def _name_not_blank(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            raise ValueError("Section name cannot be blank")
+        return v
 
 
 @router.get("/sections")

@@ -2,14 +2,16 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import {
+import type {
     BillingStatement,
     BillingSummary,
     BillingTransactionsPage,
+} from "@/lib/api";
+import {
     getCompanyBillingStatement,
     getCompanyBillingSummary,
     getCompanyBillingTransactions,
-} from "@/lib/api";
+} from "@/lib/companyApi";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";

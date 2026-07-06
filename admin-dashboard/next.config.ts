@@ -79,6 +79,14 @@ const nextConfig: NextConfig = {
         source: "/api/admin/auth/:path*",
         destination: "/api/admin/auth/:path*",
       },
+      // Company-portal auth routes (set-cookie, verify-otp, refresh, logout)
+      // are Next.js API routes that manage HttpOnly cookies (spinr_company_rt)
+      // and strip the refresh_token from proxied bodies — they must NOT be
+      // proxied to the backend or company login/refresh silently breaks.
+      {
+        source: "/api/company-auth/:path*",
+        destination: "/api/company-auth/:path*",
+      },
       // Proxy everything else to backend
       {
         source: "/api/:path*",

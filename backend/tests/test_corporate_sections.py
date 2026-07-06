@@ -40,6 +40,23 @@ async def test_create_section_scopes_to_company():
     assert row["created_by"] == "user_admin"
 
 
+def test_blank_section_name_rejected_by_schema():
+    """Codex F11: min_length=1 accepts a spaces-only name; the field_validator
+    must reject it (422 at the API) so it never persists as ''."""
+    import pydantic
+
+    from backend.routes.corporate_company_bookings import SectionCreate, SectionUpdate
+
+    for blank in ("   ", "\t", "\n "):
+        with pytest.raises(pydantic.ValidationError):
+            SectionCreate(name=blank)
+        with pytest.raises(pydantic.ValidationError):
+            SectionUpdate(name=blank)
+    # Valid names trim and pass; SectionUpdate(name=None) is allowed (no-op).
+    assert SectionCreate(name="  Showroom ").name == "Showroom"
+    assert SectionUpdate(name=None).name is None
+
+
 @pytest.mark.anyio
 async def test_create_section_duplicate_name_is_409():
     from backend.routes.corporate_company_bookings import SectionCreate, create_section

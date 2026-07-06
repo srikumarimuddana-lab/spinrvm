@@ -69,6 +69,12 @@ async function writeCompanyCookie(token: string): Promise<void> {
     }
 }
 
+// MUTEX: concurrent silentRefresh callers (root layout on rehydrate + several
+// companyRequest 401s) must share ONE in-flight refresh. Without this the
+// second call presents an already-rotated refresh token; the backend's reuse
+// detection revokes the whole token family → instant logout.
+let _inflightRefresh: Promise<boolean> | null = null;
+
 export const useCompanyAuthStore = create<CompanyAuthState>()(
     persist(
         (set, get) => ({
@@ -93,33 +99,62 @@ export const useCompanyAuthStore = create<CompanyAuthState>()(
             setMemberships: (memberships) => set({ memberships }),
 
             silentRefresh: async () => {
-                // The rider refresh endpoint reads the HttpOnly refresh_token
-                // cookie; rotation re-sets it on the response. Must go through
-                // the /api/v1 catch-all proxy (NOT /api/auth/* — that prefix is
-                // pinned to the staff-auth Next route handlers).
-                try {
-                    const res = await fetch("/api/v1/auth/refresh", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                    });
-                    if (!res.ok) return false;
-                    const data = await res.json().catch(() => ({}));
-                    const newToken: string | undefined = data.token ?? data.access_token;
-                    if (!newToken) return false;
-                    await writeCompanyCookie(newToken);
-                    set({
-                        token: newToken,
-                        csrfToken: data.csrf_token ?? get().csrfToken,
-                        isAuthenticated: true,
-                        isLoading: false,
-                    });
-                    return true;
-                } catch {
-                    return false;
-                }
+                // Share one in-flight refresh across concurrent callers (mutex).
+                if (_inflightRefresh) return _inflightRefresh;
+
+                const doRefresh = async (): Promise<boolean> => {
+                    try {
+                        // LOCAL Next route (see /api/company-auth/refresh): reads
+                        // the HttpOnly spinr_company_rt cookie, proxies to the
+                        // backend server-side (so the CSRF middleware — which only
+                        // fires on browser-Origin requests — is skipped, letting
+                        // refresh work on a rehydrated load with no in-memory CSRF)
+                        // and strips the rotated refresh_token from the body.
+                        const res = await fetch("/api/company-auth/refresh", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                        });
+                        if (!res.ok) return false;
+                        const data = await res.json().catch(() => ({}));
+                        const newToken: string | undefined = data.token ?? data.access_token;
+                        if (!newToken) return false;
+                        await writeCompanyCookie(newToken);
+                        set({
+                            token: newToken,
+                            csrfToken: data.csrf_token ?? get().csrfToken,
+                            isAuthenticated: true,
+                            isLoading: false,
+                        });
+                        return true;
+                    } catch {
+                        return false;
+                    } finally {
+                        _inflightRefresh = null;
+                    }
+                };
+
+                _inflightRefresh = doRefresh();
+                return _inflightRefresh;
             },
 
             logout: async () => {
+                // Revoke the rider refresh token + clear the HttpOnly
+                // spinr_company_rt / csrf_token cookies server-side FIRST, so a
+                // shared desk machine can't silent-refresh a new session after
+                // sign-out. Then clear the middleware's company_token and local
+                // state. All best-effort — never block the local sign-out.
+                const { token } = get();
+                try {
+                    await fetch("/api/company-auth/logout", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                        },
+                    });
+                } catch {
+                    /* best-effort revoke */
+                }
                 try {
                     await fetch("/api/company-auth/set-cookie", { method: "DELETE" });
                 } catch {

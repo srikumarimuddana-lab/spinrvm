@@ -7,9 +7,47 @@ a synchronous `.execute()` that returns an APIResponse. See
 these marker-gated integration tests don't need the threadpool hop.
 """
 
+import re
+from pathlib import Path
+
 import pytest
 
 from db_supabase import supabase
+
+_MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
+
+
+def _migration_seq(path: Path) -> tuple:
+    head = path.name.split("_", 1)[0]
+    return (int(head) if head.isdigit() else 1_000_000, path.name)
+
+
+def test_actor_user_id_is_text_not_uuid():
+    """Regression: corporate_wallet_transactions.actor_user_id must be TEXT.
+
+    The admin manual wallet-adjust flow records a PLATFORM admin id ('admin-001',
+    a string) as the actor. A UUID column / UUID RPC parameter rejects it with
+    Postgres 22P02 (same failure class as kyb_reviewed_by). Migration 27 shipped
+    both as UUID; migration 214 widens the column and the p_actor_user_id RPC
+    parameter to TEXT. Guard against a re-narrowing of either.
+
+    Comments are stripped so rollback examples inside comment blocks (which name
+    the UUID type) don't count as live schema.
+    """
+    col_type = None
+    param_type = None
+    for sql in sorted(_MIGRATIONS_DIR.glob("*.sql"), key=_migration_seq):
+        live = "\n".join(line.split("--", 1)[0] for line in sql.read_text().splitlines())
+        for m in re.finditer(r"actor_user_id\s+(UUID|TEXT)", live, re.IGNORECASE):
+            col_type = m.group(1).upper()
+        for m in re.finditer(r"ALTER COLUMN\s+actor_user_id\s+TYPE\s+(UUID|TEXT)", live, re.IGNORECASE):
+            col_type = m.group(1).upper()
+        for m in re.finditer(r"p_actor_user_id\s+(UUID|TEXT)", live, re.IGNORECASE):
+            param_type = m.group(1).upper()
+
+    assert col_type == "TEXT", f"actor_user_id column resolved to {col_type}; admin ids are non-UUID strings"
+    assert param_type == "TEXT", f"p_actor_user_id RPC param resolved to {param_type}; admin ids are non-UUID strings"
+
 
 REQUIRED_TABLES = [
     "corporate_wallets",

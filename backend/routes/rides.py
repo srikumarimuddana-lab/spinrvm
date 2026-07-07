@@ -1687,7 +1687,11 @@ async def _batch_offer_timeout_handler(
         except Exception:
             miss_threshold = 3
 
-        for did in pending_ids:
+        # P2: each pending driver's release is independent (distinct driver,
+        # no cross-driver ordering), so run them concurrently instead of one
+        # serial chain of DB/WS round-trips. Sub-steps within a driver stay
+        # sequential (they have their own ordering).
+        async def _release_pending_driver(did: str) -> None:
             miss_count = await increment_miss_streak(did)
             await update_acceptance_rate(did, accepted=False)
 
@@ -1728,6 +1732,8 @@ async def _batch_offer_timeout_handler(
                     )
             except Exception as e:
                 logger.warning(f"Failed to send offer_expired WS to driver {did}: {e}")
+
+        await asyncio.gather(*(_release_pending_driver(did) for did in pending_ids))
 
         if rider_id:
             await manager.send_personal_message(

@@ -3,6 +3,14 @@
 --                + widen p_actor_user_id (UUID → TEXT) on the two
 --                  corporate money RPCs
 --
+-- migration-override-ok: this migration intentionally redefines
+-- corporate_wallet_apply_delta (first defined in 28) and
+-- corporate_allowance_apply_delta (first defined in 29) to widen the
+-- p_actor_user_id parameter UUID → TEXT. Bodies are copied verbatim from the
+-- current definition in migration 203 — the redefinition is the whole point of
+-- the fix, not an accidental collision (same pattern 203 used to add SECURITY
+-- DEFINER). See the DROP + CREATE OR REPLACE + re-grant sequence below.
+--
 -- Same bug class as migration 213 (kyb_reviewed_by). The admin manual
 -- wallet-adjust flow (POST /api/admin/corporate-accounts/{id}/wallet/adjust →
 -- corporate_wallet.py manual_adjust) records the PLATFORM admin as the actor:

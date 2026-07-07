@@ -95,7 +95,7 @@
   "devDependencies": {
     "@babel/core": "^7.25.2",
     "@playwright/test": "^1.48.0",
-    "@react-native/jest-preset": "0.85.2",
+    "@react-native/jest-preset": "0.86.0",
     "@testing-library/jest-native": "^5.4.3",
     "@testing-library/react-native": "^12.4.0",
     "@types/jest": "^29.5.14",

@@ -28,7 +28,7 @@ def test_actor_user_id_is_text_not_uuid():
     The admin manual wallet-adjust flow records a PLATFORM admin id ('admin-001',
     a string) as the actor. A UUID column / UUID RPC parameter rejects it with
     Postgres 22P02 (same failure class as kyb_reviewed_by). Migration 27 shipped
-    both as UUID; migration 209 widens the column and the p_actor_user_id RPC
+    both as UUID; migration 214 widens the column and the p_actor_user_id RPC
     parameter to TEXT. Guard against a re-narrowing of either.
 
     Comments are stripped so rollback examples inside comment blocks (which name
@@ -47,6 +47,7 @@ def test_actor_user_id_is_text_not_uuid():
 
     assert col_type == "TEXT", f"actor_user_id column resolved to {col_type}; admin ids are non-UUID strings"
     assert param_type == "TEXT", f"p_actor_user_id RPC param resolved to {param_type}; admin ids are non-UUID strings"
+
 
 REQUIRED_TABLES = [
     "corporate_wallets",

@@ -13,7 +13,7 @@ def test_kyb_reviewed_by_column_is_text_not_uuid():
 
     Platform-admin ids are strings (e.g. 'admin-001'), not users.id UUIDs, so a
     UUID column rejects the reviewer id with Postgres 22P02 and the approve/reject
-    endpoint 503s. Migration 27 shipped it as UUID; migration 208 widens it to TEXT.
+    endpoint 503s. Migration 27 shipped it as UUID; migration 213 widens it to TEXT.
     Guard against a re-narrowing.
     """
     # Walk migrations in order; the last DDL that (re)types kyb_reviewed_by wins.
@@ -23,6 +23,7 @@ def test_kyb_reviewed_by_column_is_text_not_uuid():
         r"kyb_reviewed_by\s+(UUID|TEXT)",  # ADD COLUMN ... kyb_reviewed_by <type>
         r"ALTER COLUMN\s+kyb_reviewed_by\s+TYPE\s+(UUID|TEXT)",  # widening
     )
+
     def _seq(path: Path) -> tuple:
         head = path.name.split("_", 1)[0]
         return (int(head) if head.isdigit() else 1_000_000, path.name)

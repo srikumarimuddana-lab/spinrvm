@@ -180,6 +180,11 @@ class AppSettings(BaseModel):
     # from the admin dashboard once a provider key is set. Effective within
     # the 60s settings TTL — no redeploy.
     ai_assistant_enabled: bool = False
+    # How the apps present AI entry points while ai_assistant_enabled is False:
+    #   coming_soon → keep the icon/tab, show a "coming soon" placeholder
+    #   hidden      → remove the icon/tab entirely
+    # Returned by /ai/config as `mode`; ignored while the assistant is enabled.
+    ai_disabled_mode: str = "coming_soon"
     # Mounts the /mcp streamable-HTTP server for external agent clients.
     # The in-app chat does NOT depend on this — tools run in-process.
     ai_mcp_enabled: bool = False

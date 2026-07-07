@@ -181,6 +181,7 @@ class SettingsUpdateRequest(BaseModel):
     # AI assistant (rider AI mode, backend/ai/) — provider/model swap at
     # runtime, keys masked like the Stripe/Twilio credentials above.
     ai_assistant_enabled: Optional[bool] = None
+    ai_disabled_mode: Optional[str] = Field(default=None, pattern="^(coming_soon|hidden)$")
     ai_mcp_enabled: Optional[bool] = None
     ai_provider: Optional[str] = Field(default=None, pattern="^(anthropic|openai|gemini|openrouter)$")
     ai_model: Optional[str] = Field(default=None, max_length=120)

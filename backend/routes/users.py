@@ -295,9 +295,44 @@ async def update_phone(request: UpdatePhoneRequest, current_user: dict = Depends
     return UserProfile(**updated_user)
 
 
+def _compress_profile_image(content: bytes, content_type: str) -> "tuple[bytes, str]":
+    """Resize + recompress a profile photo to a small, load-fast JPEG.
+
+    Profile photos render at avatar size, so a 512px square JPEG is ample and
+    keeps the stored file — and therefore every avatar/profile load and every
+    API response that carries the URL/base64 — tiny. The rider app already crops
+    to 1:1 before upload; this bounds the longest edge and drops EXIF/metadata
+    regardless of client. Returns (bytes, mime); on any processing error it
+    falls back to the original bytes so an upload never hard-fails on an odd
+    image.
+    """
+    try:
+        from io import BytesIO
+
+        from PIL import Image, ImageOps
+
+        img = Image.open(BytesIO(content))
+        img = ImageOps.exif_transpose(img)  # honour phone-camera rotation
+        # Flatten transparency onto white — JPEG has no alpha channel.
+        if img.mode in ("RGBA", "LA", "P"):
+            base = Image.new("RGB", img.size, (255, 255, 255))
+            rgba = img.convert("RGBA")
+            base.paste(rgba, mask=rgba.split()[-1])
+            img = base
+        else:
+            img = img.convert("RGB")
+        img.thumbnail((512, 512), Image.LANCZOS)
+        out = BytesIO()
+        img.save(out, format="JPEG", quality=82, optimize=True)
+        return out.getvalue(), "image/jpeg"
+    except Exception:
+        logger.warning("[profile-image] compression failed — storing original bytes", exc_info=True)
+        return content, content_type
+
+
 @api_router.put("/profile-image", response_model=UserProfile)
 async def upload_profile_image(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
-    """Upload a profile image for the current user (stored as base64 in database)."""
+    """Upload a profile image for the current user (resized to a small JPEG)."""
     # Validate file type
     allowed_types = ["image/jpeg", "image/png", "image/webp", "image/gif"]
     if file.content_type not in allowed_types:
@@ -311,19 +346,23 @@ async def upload_profile_image(file: UploadFile = File(...), current_user: dict 
     if len(content) > 5 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Image must be smaller than 5MB")
 
+    # Resize + recompress to a small avatar-sized JPEG so the stored file — and
+    # therefore every profile/avatar load — stays tiny and fast. CPU-bound work
+    # runs off the event loop. `content_type` is the post-compression type
+    # (image/jpeg on success) used for the extension, upload, and base64 below.
+    import asyncio
+
+    content, content_type = await asyncio.to_thread(_compress_profile_image, content, file.content_type)
+
     # Prefer object storage (Supabase Storage bucket `profile-photos`) so the
     # photo is a small URL rather than a base64 blob bloating every API
     # response that returns it. Fall back to an inline base64 data URI when
     # storage is unavailable/unconfigured so uploads never hard-fail (and dev
     # without a bucket still works). Both forms render in the apps unchanged.
-    _ext = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}.get(
-        file.content_type, "jpg"
-    )
+    _ext = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}.get(content_type, "jpg")
     object_path = f"{current_user['id']}/{uuid.uuid4()}.{_ext}"
     profile_value: Optional[str] = None
     try:
-        import asyncio
-
         sb = getattr(db_supabase, "supabase", None)
         if sb:
 
@@ -331,7 +370,7 @@ async def upload_profile_image(file: UploadFile = File(...), current_user: dict 
                 sb.storage.from_("profile-photos").upload(
                     file=content,
                     path=object_path,
-                    file_options={"content-type": file.content_type, "upsert": "true"},
+                    file_options={"content-type": content_type, "upsert": "true"},
                 )
                 res = sb.storage.from_("profile-photos").get_public_url(object_path)
                 return res if isinstance(res, str) else getattr(res, "public_url", None)
@@ -342,7 +381,7 @@ async def upload_profile_image(file: UploadFile = File(...), current_user: dict 
         profile_value = None
 
     if not profile_value:
-        profile_value = f"data:{file.content_type};base64,{base64.b64encode(content).decode('utf-8')}"
+        profile_value = f"data:{content_type};base64,{base64.b64encode(content).decode('utf-8')}"
 
     # Riders' profile photos are visible immediately; only driver photos
     # go to the admin review queue (identity/safety check before going online).

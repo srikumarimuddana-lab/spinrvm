@@ -196,6 +196,50 @@ async def _semantic_results(rows: list, query: str, settings: Dict[str, Any]):
     return [_faq_view(r) for _, r in scored[:5]], covered == len(rows)
 
 
+async def _current_area_scope(user: Dict[str, Any], audience: str) -> set:
+    """Service-area ids the user's current location belongs to — the resolved
+    area plus its ancestors. Prefers the device location sent with the turn; for
+    drivers falls back to their assigned area. Empty → only global FAQs show."""
+    area_id = None
+    loc = user.get("_client_location") or {}
+    lat, lng = loc.get("lat"), loc.get("lng")
+    if lat is not None and lng is not None:
+        try:
+            try:
+                from ..routes.fares import resolve_service_area_for_point
+            except ImportError:
+                from routes.fares import resolve_service_area_for_point
+            area = await resolve_service_area_for_point(float(lat), float(lng))
+            if area:
+                area_id = area.get("id")
+        except Exception:
+            logger.error("ai faq service-area resolve failed", exc_info=True)
+    if area_id is None and audience == "driver":
+        try:
+            driver = await db_supabase.get_driver_by_user_id_cached(user["id"])
+            if driver:
+                area_id = driver.get("service_area_id")
+        except Exception:
+            logger.error("ai faq driver-area lookup failed", exc_info=True)
+    try:
+        try:
+            from ..routes.fares import resolve_area_scope
+        except ImportError:
+            from routes.fares import resolve_area_scope
+        return await resolve_area_scope(area_id)
+    except Exception:
+        logger.error("ai faq area-scope lookup failed", exc_info=True)
+        return {area_id} if area_id else set()
+
+
+def _in_area_scope(row_area_ids, scope: set) -> bool:
+    """Global FAQs (no areas) always match; an area-tagged FAQ matches when it
+    shares an area with the user's scope (current area or an ancestor)."""
+    if not row_area_ids:
+        return True
+    return bool(set(row_area_ids) & scope)
+
+
 async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
     audience = user.get("ai_audience", "rider")
     settings = await get_app_settings()
@@ -203,9 +247,9 @@ async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
     # Only pull the (large JSONB) embedding vector when the semantic path will
     # actually read it — lexical/off searches select display columns only.
     columns = (
-        "id,question,answer,category,audience,embedding,embedding_model"
+        "id,question,answer,category,audience,service_area_ids,embedding,embedding_model"
         if semantic
-        else "id,question,answer,category,audience"
+        else "id,question,answer,category,audience,service_area_ids"
     )
     rows = (
         await db_supabase.get_rows(
@@ -216,6 +260,18 @@ async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
         )
         or []
     )
+    # Once any area-scoped FAQ exists for this audience, the answer to a given
+    # question depends on the asker's location — so this turn must NOT be
+    # replayed cross-user by the (audience, question) response cache. Flag it
+    # for the orchestrator. (Checked before the scope filter, on the full
+    # audience corpus, so a no-location user's global answer can't be cached
+    # and then wrongly served to a rider whose area has a specific FAQ.)
+    location_scoped = any(r.get("service_area_ids") for r in rows)
+
+    # Location scope: keep global FAQs (no service area) plus those tagged for
+    # the user's current area or any of its ancestor areas. Unknown → global only.
+    scope = await _current_area_scope(user, audience)
+    rows = [r for r in rows if _in_area_scope(r.get("service_area_ids"), scope)]
 
     results = None
     if semantic:
@@ -228,9 +284,11 @@ async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
     # None (embeddings unavailable) or empty (nothing above floor) → lexical.
     if not results:
         results = _lexical_results(rows, query)
-    if not results:
-        return dict(_NO_MATCH)
-    return {"results": results[:5]}
+    out = dict(_NO_MATCH) if not results else {"results": results[:5]}
+    if location_scoped:
+        # Meta flag, popped by the orchestrator — never serialized to the model.
+        out["_no_cache"] = True
+    return out
 
 
 async def get_company_info(user: Dict[str, Any]) -> Dict[str, Any]:

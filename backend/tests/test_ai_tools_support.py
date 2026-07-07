@@ -51,10 +51,11 @@ def _settings(**overrides):
 class TestSearchFaqs:
     @pytest.fixture(autouse=True)
     def _semantic_off(self):
-        # Pin semantic search OFF so these lexical tests are deterministic and
-        # don't depend on the process-wide settings cache.
-        with patch.object(
-            tools_support, "get_app_settings", AsyncMock(return_value={"ai_faq_semantic_enabled": False})
+        # Pin semantic search OFF and location resolution to global so these
+        # lexical tests are deterministic and don't hit the DB.
+        with (
+            patch.object(tools_support, "get_app_settings", AsyncMock(return_value={"ai_faq_semantic_enabled": False})),
+            patch.object(tools_support, "_current_area_scope", AsyncMock(return_value=set())),
         ):
             yield
 
@@ -164,10 +165,11 @@ class TestSearchFaqsSemantic:
         # with "when do I get my earnings"
         embed = AsyncMock(return_value=[[1.0, 0.0], [0.0, 1.0], [0.9, 0.1]])  # query, a, b
         update = AsyncMock()
-        with patch.object(tools_support, "get_app_settings", AsyncMock(return_value=self.SETTINGS)), patch.object(
-            tools_support.db_supabase, "get_rows", AsyncMock(return_value=self._faqs())
-        ), patch.object(tools_support.embeddings, "embed_texts", embed), patch.object(
-            tools_support.db_supabase, "update_one", update
+        with (
+            patch.object(tools_support, "get_app_settings", AsyncMock(return_value=self.SETTINGS)),
+            patch.object(tools_support.db_supabase, "get_rows", AsyncMock(return_value=self._faqs())),
+            patch.object(tools_support.embeddings, "embed_texts", embed),
+            patch.object(tools_support.db_supabase, "update_one", update),
         ):
             result, ok = await execute_tool("search_faqs", {"query": "when do I get my earnings"}, user=RIDER)
         assert ok
@@ -181,10 +183,13 @@ class TestSearchFaqsSemantic:
     async def test_reuses_stored_embeddings_and_only_embeds_query(self):
         embed = AsyncMock(return_value=[[0.9, 0.1]])  # only the query
         update = AsyncMock()
-        with patch.object(tools_support, "get_app_settings", AsyncMock(return_value=self.SETTINGS)), patch.object(
-            tools_support.db_supabase, "get_rows", AsyncMock(return_value=self._faqs(with_embeddings=True))
-        ), patch.object(tools_support.embeddings, "embed_texts", embed), patch.object(
-            tools_support.db_supabase, "update_one", update
+        with (
+            patch.object(tools_support, "get_app_settings", AsyncMock(return_value=self.SETTINGS)),
+            patch.object(
+                tools_support.db_supabase, "get_rows", AsyncMock(return_value=self._faqs(with_embeddings=True))
+            ),
+            patch.object(tools_support.embeddings, "embed_texts", embed),
+            patch.object(tools_support.db_supabase, "update_one", update),
         ):
             result, ok = await execute_tool("search_faqs", {"query": "earnings schedule"}, user=RIDER)
         assert ok
@@ -194,9 +199,11 @@ class TestSearchFaqsSemantic:
 
     @pytest.mark.anyio
     async def test_embeddings_unavailable_falls_back_to_lexical(self):
-        with patch.object(tools_support, "get_app_settings", AsyncMock(return_value=self.SETTINGS)), patch.object(
-            tools_support.db_supabase, "get_rows", AsyncMock(return_value=self._faqs())
-        ), patch.object(tools_support.embeddings, "embed_texts", AsyncMock(return_value=None)):
+        with (
+            patch.object(tools_support, "get_app_settings", AsyncMock(return_value=self.SETTINGS)),
+            patch.object(tools_support.db_supabase, "get_rows", AsyncMock(return_value=self._faqs())),
+            patch.object(tools_support.embeddings, "embed_texts", AsyncMock(return_value=None)),
+        ):
             result, ok = await execute_tool("search_faqs", {"query": "payouts"}, user=RIDER)
         assert ok
         # lexical still matches "payouts" against the payouts FAQ
@@ -206,10 +213,11 @@ class TestSearchFaqsSemantic:
     async def test_below_floor_falls_back_to_lexical(self):
         # all similarities below 0.30 → semantic yields nothing; lexical rescues
         embed = AsyncMock(return_value=[[1.0, 0.0], [0.1, 0.99], [0.05, 0.99]])
-        with patch.object(tools_support, "get_app_settings", AsyncMock(return_value=self.SETTINGS)), patch.object(
-            tools_support.db_supabase, "get_rows", AsyncMock(return_value=self._faqs())
-        ), patch.object(tools_support.embeddings, "embed_texts", embed), patch.object(
-            tools_support.db_supabase, "update_one", AsyncMock()
+        with (
+            patch.object(tools_support, "get_app_settings", AsyncMock(return_value=self.SETTINGS)),
+            patch.object(tools_support.db_supabase, "get_rows", AsyncMock(return_value=self._faqs())),
+            patch.object(tools_support.embeddings, "embed_texts", embed),
+            patch.object(tools_support.db_supabase, "update_one", AsyncMock()),
         ):
             result, ok = await execute_tool("search_faqs", {"query": "payouts"}, user=RIDER)
         assert ok
@@ -353,3 +361,137 @@ def test_support_tools_serve_both_audiences():
     assert expected <= driver
     # Ride-data tools stay rider-only.
     assert "get_active_ride" not in driver
+
+
+class TestAreaScopeFilter:
+    def test_global_faq_always_matches(self):
+        assert tools_support._in_area_scope(None, set()) is True
+        assert tools_support._in_area_scope([], {"a"}) is True
+
+    def test_tagged_faq_matches_on_intersection(self):
+        assert tools_support._in_area_scope(["sk"], {"sk", "ca"}) is True  # parent cascade
+        assert tools_support._in_area_scope(["sk"], {"ab"}) is False
+
+
+class TestSearchFaqsLocation:
+    SETTINGS = {"ai_faq_semantic_enabled": False}
+
+    def _rows(self):
+        return [
+            {
+                "id": "g",
+                "question": "How does surge pricing work?",
+                "answer": "Demand-based.",
+                "category": "pricing",
+                "service_area_ids": None,
+            },
+            {
+                "id": "sk",
+                "question": "What SGI insurance do I need?",
+                "answer": "SGI rideshare coverage.",
+                "category": "insurance",
+                "service_area_ids": ["area-sk"],
+            },
+        ]
+
+    def _patches(self, scope):
+        return (
+            patch.object(tools_support, "get_app_settings", AsyncMock(return_value=self.SETTINGS)),
+            patch.object(tools_support.db_supabase, "get_rows", AsyncMock(return_value=self._rows())),
+            patch.object(tools_support, "_current_area_scope", AsyncMock(return_value=scope)),
+        )
+
+    @pytest.mark.anyio
+    async def test_area_specific_shown_in_matching_area(self):
+        p1, p2, p3 = self._patches({"area-sk"})
+        with p1, p2, p3:
+            result, ok = await execute_tool("search_faqs", {"query": "SGI insurance"}, user=RIDER)
+        assert ok and any("SGI" in r["question"] for r in result["results"])
+
+    @pytest.mark.anyio
+    async def test_parent_area_cascades_to_child(self):
+        # FAQ tagged to parent 'area-sk'; user in child 'saskatoon' whose scope
+        # includes the parent → shown.
+        p1, p2, p3 = self._patches({"saskatoon", "area-sk"})
+        with p1, p2, p3:
+            result, ok = await execute_tool("search_faqs", {"query": "SGI insurance"}, user=RIDER)
+        assert ok and any("SGI" in r["question"] for r in result["results"])
+
+    @pytest.mark.anyio
+    async def test_area_specific_hidden_in_other_area(self):
+        p1, p2, p3 = self._patches({"area-ab"})  # elsewhere → SK-only FAQ filtered out
+        with p1, p2, p3:
+            result, ok = await execute_tool("search_faqs", {"query": "SGI insurance"}, user=RIDER)
+        assert ok and result["results"] == []
+
+    @pytest.mark.anyio
+    async def test_unknown_location_hides_area_faq_but_keeps_global(self):
+        p1, p2, p3 = self._patches(set())
+        with p1, p2, p3:
+            result, ok = await execute_tool("search_faqs", {"query": "surge pricing"}, user=RIDER)
+        assert ok
+        assert [r["question"] for r in result["results"]] == ["How does surge pricing work?"]
+
+    @pytest.mark.anyio
+    async def test_marks_no_cache_when_corpus_has_area_faqs(self):
+        # Codex (PR #2049): once any area-scoped FAQ exists for the audience, the
+        # answer is location-dependent — flag the turn so the cross-user response
+        # cache can't replay one area's answer (or a no-location global answer)
+        # to a rider in a different area. True even when the user has no location
+        # (empty scope) and only the global FAQ matched.
+        p1, p2, p3 = self._patches(set())
+        with p1, p2, p3:
+            result, _ = await execute_tool("search_faqs", {"query": "surge pricing"}, user=RIDER)
+        assert result.get("_no_cache") is True
+
+    @pytest.mark.anyio
+    async def test_no_cache_flag_absent_when_all_faqs_global(self):
+        rows = [
+            {
+                "id": "g",
+                "question": "How does surge pricing work?",
+                "answer": "Demand-based.",
+                "category": "pricing",
+                "service_area_ids": None,
+            },
+        ]
+        with (
+            patch.object(tools_support, "get_app_settings", AsyncMock(return_value=self.SETTINGS)),
+            patch.object(tools_support.db_supabase, "get_rows", AsyncMock(return_value=rows)),
+            patch.object(tools_support, "_current_area_scope", AsyncMock(return_value=set())),
+        ):
+            result, _ = await execute_tool("search_faqs", {"query": "surge pricing"}, user=RIDER)
+        assert "_no_cache" not in result
+
+
+class TestCurrentAreaScope:
+    @pytest.mark.anyio
+    async def test_rider_resolves_from_device_location(self):
+        user = {"id": "r", "_client_location": {"lat": 52.13, "lng": -106.67}}
+        with (
+            patch("backend.routes.fares.resolve_service_area_for_point", AsyncMock(return_value={"id": "saskatoon"})),
+            patch(
+                "backend.routes.fares.resolve_area_scope",
+                AsyncMock(side_effect=lambda a: {a, "area-sk"} if a else set()),
+            ),
+        ):
+            scope = await tools_support._current_area_scope(user, "rider")
+        assert scope == {"saskatoon", "area-sk"}  # includes the parent
+
+    @pytest.mark.anyio
+    async def test_driver_falls_back_to_assigned_area(self):
+        with (
+            patch.object(
+                tools_support.db_supabase,
+                "get_driver_by_user_id_cached",
+                AsyncMock(return_value={"service_area_id": "saskatoon"}),
+            ),
+            patch("backend.routes.fares.resolve_area_scope", AsyncMock(side_effect=lambda a: {a} if a else set())),
+        ):
+            scope = await tools_support._current_area_scope({"id": "d"}, "driver")
+        assert scope == {"saskatoon"}
+
+    @pytest.mark.anyio
+    async def test_rider_without_location_is_empty(self):
+        with patch("backend.routes.fares.resolve_area_scope", AsyncMock(return_value=set())):
+            assert await tools_support._current_area_scope({"id": "r"}, "rider") == set()

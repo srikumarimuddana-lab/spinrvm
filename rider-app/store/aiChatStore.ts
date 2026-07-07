@@ -74,6 +74,10 @@ interface AiChatState {
   isStreaming: boolean;
   toolStatus: string | null;
   enabled: boolean;
+  /** How to present the AI entry point while disabled: 'coming_soon' (show a
+   * "coming soon" hint) or 'hidden' (don't render the icon at all). 'enabled'
+   * while the assistant is on. */
+  mode: 'enabled' | 'coming_soon' | 'hidden';
   disclaimer: string;
   abortController: AbortController | null;
 
@@ -90,16 +94,19 @@ export const useAiChatStore = create<AiChatState>((set, get) => ({
   isStreaming: false,
   toolStatus: null,
   enabled: false,
+  mode: 'coming_soon',
   disclaimer: '',
   abortController: null,
 
   loadConfig: async () => {
     try {
-      const res = await api.get<{ enabled?: boolean; disclaimer?: string }>('/ai/config');
-      set({ enabled: !!res.data?.enabled, disclaimer: res.data?.disclaimer ?? '' });
+      const res = await api.get<{ enabled?: boolean; mode?: string; disclaimer?: string }>('/ai/config');
+      const enabled = !!res.data?.enabled;
+      const mode = (res.data?.mode as AiChatState['mode']) ?? (enabled ? 'enabled' : 'coming_soon');
+      set({ enabled, mode, disclaimer: res.data?.disclaimer ?? '' });
     } catch {
-      // Config failure just hides the entry points; nothing to surface.
-      set({ enabled: false });
+      // Config failure hides the AI entry points (safe default).
+      set({ enabled: false, mode: 'hidden' });
     }
   },
 

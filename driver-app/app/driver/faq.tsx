@@ -14,6 +14,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import * as Location from 'expo-location';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -57,7 +58,23 @@ export default function FaqScreen() {
 
     const fetchFaqs = async () => {
         try {
-            const res = await api.get<FaqItem[]>('/faqs?audience=driver');
+            // Attach last-known location (only when already permitted — no
+            // prompt) so region-specific FAQs, e.g. SGI insurance content
+            // scoped to Saskatchewan, appear for drivers operating there.
+            const params = new URLSearchParams({ audience: 'driver' });
+            try {
+                const { granted } = await Location.getForegroundPermissionsAsync();
+                if (granted) {
+                    const pos = await Location.getLastKnownPositionAsync({ maxAge: 5 * 60 * 1000 });
+                    if (pos) {
+                        params.set('lat', String(pos.coords.latitude));
+                        params.set('lng', String(pos.coords.longitude));
+                    }
+                }
+            } catch {
+                // Location is best-effort; fall back to global FAQs.
+            }
+            const res = await api.get<FaqItem[]>(`/faqs?${params.toString()}`);
             setFaqs(res.data || []);
         } catch (err) {
             console.log('FAQ fetch error:', err);

@@ -163,14 +163,27 @@ describe('sendMessage', () => {
 
 describe('config + history', () => {
   it('loadConfig gates the entry points', async () => {
-    mockApi.get.mockResolvedValueOnce({ data: { enabled: true, disclaimer: 'AI can be wrong.' }, status: 200 });
+    mockApi.get.mockResolvedValueOnce({
+      data: { enabled: true, mode: 'enabled', disclaimer: 'AI can be wrong.' },
+      status: 200,
+    });
     await useAiChatStore.getState().loadConfig();
     expect(useAiChatStore.getState().enabled).toBe(true);
+    expect(useAiChatStore.getState().mode).toBe('enabled');
     expect(useAiChatStore.getState().disclaimer).toBe('AI can be wrong.');
 
     mockApi.get.mockRejectedValueOnce(new Error('network'));
     await useAiChatStore.getState().loadConfig();
     expect(useAiChatStore.getState().enabled).toBe(false);
+    // config failure hides the entry point (safe default)
+    expect(useAiChatStore.getState().mode).toBe('hidden');
+  });
+
+  it('loadConfig passes through the disabled mode', async () => {
+    mockApi.get.mockResolvedValueOnce({ data: { enabled: false, mode: 'hidden' }, status: 200 });
+    await useAiChatStore.getState().loadConfig();
+    expect(useAiChatStore.getState().enabled).toBe(false);
+    expect(useAiChatStore.getState().mode).toBe('hidden');
   });
 
   it('loadHistory rehydrates the stored conversation', async () => {

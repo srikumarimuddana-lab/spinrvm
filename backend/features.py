@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # Money helpers — keep tax / fee arithmetic in Decimal so 5% GST + 6% PST
 # on values like $47.83 stays bit-exact and matches the receipt.
@@ -229,6 +229,10 @@ class CreateFaqRequest(BaseModel):
     answer: str
     category: str = "general"
     sort_order: int = 0
+    # Required, explicit choice — a silent 'both' default is how driver-only
+    # FAQs leaked into the rider app. None/[] service_area_ids = global.
+    audience: str = Field(..., pattern="^(rider|driver|both)$")
+    service_area_ids: Optional[List[str]] = None
 
 
 class UpdateFaqRequest(BaseModel):
@@ -237,6 +241,8 @@ class UpdateFaqRequest(BaseModel):
     category: Optional[str] = None
     sort_order: Optional[int] = None
     is_active: Optional[bool] = None
+    audience: Optional[str] = Field(default=None, pattern="^(rider|driver|both)$")
+    service_area_ids: Optional[List[str]] = None
 
 
 class ScheduleRideRequest(BaseModel):
@@ -369,21 +375,51 @@ async def get_ticket(ticket_id: str, current_user: dict = Depends(get_current_us
 
 
 @support_router.get("/faqs")
-async def get_faqs(category: Optional[str] = None):
-    """Get all active FAQs, optionally filtered by category."""
+async def get_faqs(
+    category: Optional[str] = None,
+    audience: Optional[str] = Query(None, pattern="^(rider|driver)$"),
+    service_area_id: Optional[str] = None,
+    lat: Optional[float] = None,
+    lng: Optional[float] = None,
+):
+    """Get active FAQs, optionally filtered by category, audience and location.
+
+    This is the live GET /faqs handler (registered before routes/faqs.py). It
+    MUST filter by audience — without it, driver-only FAQs surface in the rider
+    app. Location (service_area_id or lat+lng) scopes to global FAQs plus those
+    tagged for the caller's area or an ancestor area.
+    """
     query: Dict[str, Any] = {"is_active": True}
     if category:
         query["category"] = category
+    if audience:
+        query["audience"] = {"$in": ["both", audience]}
     # Exclude the semantic-search embedding vector from the public payload.
-    faqs = await db_supabase.get_rows(
-        "faqs",
-        query,
-        limit=200,
-        order="sort_order",
-        desc=False,
-        columns="id,question,answer,category,sort_order,is_active,created_at,updated_at,audience",
+    faqs = (
+        await db_supabase.get_rows(
+            "faqs",
+            query,
+            limit=200,
+            order="sort_order",
+            desc=False,
+            columns="id,question,answer,category,sort_order,is_active,created_at,updated_at,audience,service_area_ids",
+        )
+        or []
     )
-    return faqs
+
+    try:
+        from routes.fares import resolve_area_scope, resolve_service_area_for_point
+    except ImportError:
+        from .routes.fares import resolve_area_scope, resolve_service_area_for_point
+    area_id = service_area_id
+    if not area_id and lat is not None and lng is not None:
+        try:
+            area = await resolve_service_area_for_point(float(lat), float(lng))
+            area_id = area.get("id") if area else None
+        except Exception:
+            logger.error("public faq service-area resolve failed", exc_info=True)
+    scope = await resolve_area_scope(area_id)
+    return [f for f in faqs if not f.get("service_area_ids") or (set(f["service_area_ids"]) & scope)]
 
 
 # ============ Admin: Support Tickets ============
@@ -453,7 +489,7 @@ async def admin_get_faqs():
         limit=500,
         order="sort_order",
         desc=False,
-        columns="id,question,answer,category,audience,sort_order,is_active,created_at,updated_at",
+        columns="id,question,answer,category,audience,service_area_ids,sort_order,is_active,created_at,updated_at",
     )
     return faqs
 
@@ -467,6 +503,8 @@ async def admin_create_faq(req: CreateFaqRequest):
         "answer": req.answer,
         "category": req.category,
         "sort_order": req.sort_order,
+        "audience": req.audience,
+        "service_area_ids": req.service_area_ids,
         "is_active": True,
         "created_at": datetime.now(timezone.utc),
         "updated_at": datetime.now(timezone.utc),
@@ -489,6 +527,10 @@ async def admin_update_faq(faq_id: str, req: UpdateFaqRequest):
         update_data["sort_order"] = req.sort_order
     if req.is_active is not None:
         update_data["is_active"] = req.is_active
+    if req.audience is not None:
+        update_data["audience"] = req.audience
+    if "service_area_ids" in req.model_fields_set:
+        update_data["service_area_ids"] = req.service_area_ids
 
     # Editing the question/answer invalidates any stored semantic embedding —
     # clear it so search re-embeds from the new text (stale vectors would keep

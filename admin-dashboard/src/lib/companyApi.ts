@@ -91,7 +91,9 @@ export async function companyRequest<T>(path: string, options: RequestInit = {})
 /* ── Portal auth (phone OTP — rider identity) ── */
 
 export const sendCompanyOtp = async (phone: string): Promise<void> => {
-    const res = await fetch("/api/v1/auth/send-otp", {
+    // Portal auth namespace (App-Check-exempt on the backend; mobile keeps
+    // /api/v1/auth/* enforced). Routed via the catch-all /api proxy → backend.
+    const res = await fetch("/api/portal/auth/send-otp", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone }),

@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
     try {
       // Backend /auth/logout requires the bearer (get_current_user) and
       // revokes the refresh token from the body.
-      await fetch(`${BACKEND_URL}/api/v1/auth/logout`, {
+      await fetch(`${BACKEND_URL}/api/portal/auth/logout`, {
         method: "POST",
         headers: {
           ...forwardedHeaders(req),

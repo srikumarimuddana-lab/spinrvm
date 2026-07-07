@@ -65,6 +65,7 @@ export default function HomeScreen() {
   // not pop back into the login/OTP screens that sit beneath it in history.
   useExitOnBackPress();
   const aiEnabled = useAiChatStore((s) => s.enabled);
+  const aiMode = useAiChatStore((s) => s.mode);
   const loadAiConfig = useAiChatStore((s) => s.loadConfig);
   useEffect(() => {
     loadAiConfig();
@@ -572,17 +573,19 @@ function BottomSheetContent({
           <Ionicons name="search" size={22} color={colors.primary} />
           <Text style={styles.searchPlaceholder}>Where to?</Text>
         </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.aiButton}
-          onPress={handleAiPress}
-          activeOpacity={0.8}
-          accessibilityLabel="AI assistant"
-          accessibilityRole="button"
-        >
-          <View style={styles.aiIconGlow} />
-          <Ionicons name="sparkles" size={20} color="#FFFFFF" />
-          <Text style={styles.aiButtonText}>AI</Text>
-        </TouchableOpacity>
+        {aiMode !== 'hidden' && (
+          <TouchableOpacity
+            style={styles.aiButton}
+            onPress={handleAiPress}
+            activeOpacity={0.8}
+            accessibilityLabel="AI assistant"
+            accessibilityRole="button"
+          >
+            <View style={styles.aiIconGlow} />
+            <Ionicons name="sparkles" size={20} color="#FFFFFF" />
+            <Text style={styles.aiButtonText}>AI</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       <View style={styles.quickActions}>

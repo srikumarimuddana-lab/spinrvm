@@ -86,10 +86,66 @@ async def main(pickup_lat, pickup_lng):
         vt_name = vt_row.get("name") if vt_row else "UNKNOWN / orphan"
         print(f"  driver_id={d.get('id')}")
         print(f"    is_online={d.get('is_online')}  is_available={d.get('is_available')}")
+        # The /drivers/nearby (car pin) query additionally requires
+        # is_verified=True AND status='active'. A driver can be online +
+        # available but still hidden from the MAP if either of these is off,
+        # while /rides/estimate (which skips them) would still count them.
+        print(f"    is_verified={d.get('is_verified')}  status={d.get('status')}")
         print(f"    vehicle_type_id={vt_id}  -> {vt_name}")
         print(f"    lat={d.get('lat')}  lng={d.get('lng')}")
         if vt_id == xl_vt["id"]:
             xl_online.append(d)
+
+    section("2b. Redis presence (heartbeat) — the filter that hides 'online-in-admin' drivers")
+    print("Both /drivers/nearby (map pins) and /rides/estimate drop any driver")
+    print("whose Redis presence key is not live. Admin reads the durable is_online")
+    print("COLUMN instead, so a driver with a lapsed presence key shows ONLINE in")
+    print("admin but is invisible to riders. The key is set on Go Online + every WS")
+    print("heartbeat, and cleared on explicit Go Offline or a session revocation.")
+    print("A plain network drop is NOT cleared — it rides a 30s TTL — so a driver")
+    print("hidden here means their app stopped heartbeating for longer than the TTL")
+    print("(WS never established, backgrounded/killed, or dead network).")
+    print()
+    # Persisted for the section-3 XL verdict below: a driver missing from the
+    # presence set is hidden from /rides/estimate even when every DB filter
+    # passes, so section 3 must factor presence in — otherwise it prints the
+    # exact "NO presence key" + "will be counted" contradiction this tool exists
+    # to debug. presence_reachable is None when the check couldn't run,
+    # True/False from present_driver_ids_checked otherwise.
+    present: set = set()
+    presence_reachable = None
+    try:
+        from utils.driver_presence import present_driver_ids_checked
+        from utils.redis_client import _get_redis
+
+        _r = await _get_redis()
+        print(f"  REDIS configured/connected: {'yes' if _r is not None else 'NO (in-process dict fallback)'}")
+        if _r is None:
+            print("  ⚠️  With >1 backend replica (e.g. two Fly machines) and NO shared")
+            print("     Redis, presence lives in a PER-REPLICA dict: a driver whose WS")
+            print("     landed on machine A is invisible to rider requests served by")
+            print("     machine B. Set REDIS_URL / WS_REDIS_URL on every replica.")
+        online_ids = [d["id"] for d in online if d.get("id")]
+        present, reachable = await present_driver_ids_checked(online_ids)
+        presence_reachable = reachable
+        print(f"  presence store reachable: {reachable}")
+        if not reachable:
+            # Redis is configured but unavailable: present is an empty set that
+            # means "unknown", NOT "everyone offline". The rider endpoints fall
+            # back to DB state in this case (they do NOT hide drivers), so it
+            # would be wrong to flag every driver as hidden here.
+            print("  ⚠️  Presence store is configured but UNREACHABLE — presence is")
+            print("     UNKNOWN, not empty. /drivers/nearby + /rides/estimate fall back")
+            print("     to DB is_online here, so drivers are NOT hidden for this reason.")
+            print("     Fix Redis connectivity, then re-run to read real presence.")
+        else:
+            for d in online:
+                did = d.get("id")
+                here = did in present
+                tick = "✅ present" if here else "❌ NO presence key (hidden from riders)"
+                print(f"    driver_id={did}  is_online={d.get('is_online')}  ->  {tick}")
+    except Exception as _pres_exc:  # noqa: BLE001
+        print(f"  (presence check skipped: {_pres_exc})")
 
     if not xl_online:
         print(f"\n  ❌ No online driver has vehicle_type_id == {xl_vt['id']} (the XL id).")
@@ -105,6 +161,7 @@ async def main(pickup_lat, pickup_lng):
     section("3. Per XL driver — will the estimate endpoint count them?")
     print("Estimate endpoint filters (routes/rides.py:227-245):")
     print("  - is_online=True AND is_available=True")
+    print("  - live Redis presence key (unless the store is unreachable)")
     print("  - lat and lng both truthy")
     print("  - distance(pickup, driver) <= 10 km")
     print()
@@ -112,6 +169,11 @@ async def main(pickup_lat, pickup_lng):
         reasons = []
         if not d.get("is_available"):
             reasons.append("is_available=False  (stuck from prior ride? see drivers.py:1070/1113/1131)")
+        # Presence gate: only when the store was actually reachable. When it's
+        # unreachable (presence_reachable is False) the rider endpoints fall
+        # back to DB state, so absence from `present` is NOT a hide reason.
+        if presence_reachable and d.get("id") not in present:
+            reasons.append("NO presence key  (heartbeat lapsed — dispatch + /rides/estimate can't reach; see section 2b)")
         if d.get("lat") in (None, 0) or d.get("lng") in (None, 0):
             reasons.append("lat/lng missing or 0  (driver app hasn't posted a location update)")
         if pickup_lat is not None and pickup_lng is not None and d.get("lat") and d.get("lng"):

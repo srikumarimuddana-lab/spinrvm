@@ -260,6 +260,7 @@ async def heartbeat_task(
     conn_state: dict | None = None,
     *,
     user_id: str | None = None,
+    driver_id: str | None = None,
     claim_token_version: int = 0,
     firebase_auth_time: int | None = None,
 ):
@@ -287,10 +288,13 @@ async def heartbeat_task(
     failure is treated as "do not act" — see _read_token_version.
 
     Either path raises ``WebSocketDisconnect`` in the receive loop, which
-    clears Redis presence and triggers ``_handle_driver_ws_disconnect`` to
-    notify admins — but does NOT write ``is_online=False``. See the
-    presence sweeper for the reconciliation layer that actually flips
-    ``is_online`` when a driver stays unreachable past the grace window.
+    triggers ``_handle_driver_ws_disconnect`` to notify admins but does NOT
+    write ``is_online=False``. Presence handling differs by cause: a
+    revocation close clears the driver's presence key here immediately (it is
+    a deliberate server kill); a plain network drop is left for the 30s
+    presence TTL so a reconnect within the grace window doesn't hide the
+    driver from riders. The presence sweeper is the reconciliation layer that
+    flips ``is_online`` when a driver stays unreachable past the grace window.
     """
     loop = asyncio.get_event_loop()
     # Tolerate one missed ping window before giving up — HEARTBEAT_INTERVAL
@@ -315,6 +319,26 @@ async def heartbeat_task(
                     _revoked = stored_version is not None and stored_version > claim_token_version
                 if _revoked:
                     logger.info(f"WS heartbeat: session revoked for {connection_key}; closing")
+                    # Revocation is a DELIBERATE server-forced close (Sign out
+                    # everywhere / token-version bump / Firebase session
+                    # invalidation), not a flaky-network blip. Clear the driver's
+                    # presence key NOW rather than letting the 30s TTL lapse:
+                    # otherwise /drivers/nearby + dispatch would keep the revoked
+                    # driver reachable for up to 30s and could route an offer to a
+                    # socket that no longer exists. The involuntary-disconnect
+                    # grace only applies to network drops, which stay untouched.
+                    #
+                    # Ownership guard: if the driver already reconnected (a newer
+                    # socket registered under the same connection_key and called
+                    # mark_present), this stale heartbeat must NOT wipe the live
+                    # socket's presence key. Only clear when this websocket is
+                    # still the active connection for the key — same guard the
+                    # disconnect branch uses before its own cleanup.
+                    if driver_id and manager.active_connections.get(connection_key) is websocket:
+                        try:
+                            await clear_presence(driver_id)
+                        except Exception:  # noqa: S110 — presence best-effort; TTL still bounds it
+                            pass
                     try:
                         await websocket.send_json({"type": "session_revoked", "reason": "token_revoked"})
                     except Exception:  # noqa: S110 — socket may already be dead
@@ -644,6 +668,7 @@ async def websocket_endpoint(
                 connection_key,
                 conn_state,
                 user_id=user["id"],
+                driver_id=current_driver_id,
                 claim_token_version=claim_token_version,
                 firebase_auth_time=firebase_auth_time,
             )
@@ -1213,8 +1238,17 @@ async def websocket_endpoint(
             # was always tripping on the current socket and the offline flip never
             # ran on a clean disconnect.
             manager.disconnect(connection_key)
-            if current_driver_id:
-                await clear_presence(current_driver_id)
+            # Do NOT clear the Redis presence key on an involuntary disconnect.
+            # Presence carries a 30s TTL precisely so a flaky-network blip (socket
+            # drops, client reconnects seconds later) doesn't yank the driver out
+            # of the rider-facing /drivers/nearby + /rides/estimate results.
+            # Force-clearing here defeated that grace: every reconnect cycle wiped
+            # the key, so the driver flickered offline to riders while admin (which
+            # reads the durable is_online column) still showed them online. A truly
+            # dead app just lets the TTL lapse, and the presence sweeper reconciles
+            # is_online after the grace window. Explicit Go Offline still clears
+            # immediately (routes/drivers.py), and dispatch re-checks presence at
+            # offer time, so a dead socket cannot silently absorb a ride.
             await _handle_driver_ws_disconnect(connection_key, user)
     except Exception as e:
         logger.exception(
@@ -1223,8 +1257,9 @@ async def websocket_endpoint(
         )
         if connection_key and manager.active_connections.get(connection_key) is websocket:
             manager.disconnect(connection_key)
-            if current_driver_id:
-                await clear_presence(current_driver_id)
+            # Same as the clean-disconnect branch above: let presence lapse via its
+            # 30s TTL rather than force-clearing on an involuntary drop, so a
+            # network blip doesn't hide the driver from riders.
             await _handle_driver_ws_disconnect(connection_key, user)
         try:
             await websocket.close()

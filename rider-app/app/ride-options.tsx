@@ -146,6 +146,21 @@ function RideOptionsScreenContent() {
     });
     return () => { show.remove(); hide.remove(); };
   }, [promoSheetLift]);
+  // Reset the keyboard-lift every time the promo sheet opens. Without this a
+  // stale lift left over from a previous keyboard session (e.g. the sheet was
+  // closed by tapping a coupon row while the keyboard was still up, so
+  // keyboardWillHide raced the modal teardown) reopens the sheet floating
+  // marginBottom-px above the screen edge — the dark overlay shows through
+  // below it and the sheet looks detached from the bottom. On close, make sure
+  // the keyboard is dismissed so it can't strand a lift for next time.
+  useEffect(() => {
+    if (showPromoSheet) {
+      promoSheetLift.setValue(0);
+      setPromoKbVisible(false);
+    } else {
+      Keyboard.dismiss();
+    }
+  }, [showPromoSheet, promoSheetLift]);
   const [fareBreakdownOpen, setFareBreakdownOpen] = useState(false);
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean; title: string; message: string;
@@ -1082,18 +1097,27 @@ function RideOptionsScreenContent() {
               </View>
             ) : null}
 
-            {/* Available promos list */}
+            {/* Available promos list. Show the count so a rider knows there are
+                multiple offers to scroll through, not just the one on screen. */}
             {availablePromos.length > 0 && (
-              <Text style={[styles.promoSectionLabel, { color: colors.textDim }]}>Available Offers</Text>
+              <Text style={[styles.promoSectionLabel, { color: colors.textDim }]}>
+                Available Offers{availablePromos.length > 1 ? ` · ${availablePromos.length}` : ''}
+              </Text>
             )}
 
             {/* keyboardShouldPersistTaps: with the promo input focused, the
                 first tap on a list row otherwise only dismisses the keyboard
                 and the row press is swallowed. The list shrinks while the
-                keyboard is up so the lifted sheet never overflows the top. */}
+                keyboard is up so the lifted sheet never overflows the top.
+                minHeight keeps ~2 rows visible so a single offer never looks
+                stranded and multiple offers clearly read as a scrollable list;
+                the scroll indicator shows when there are more than fit. */}
             <ScrollView
-              showsVerticalScrollIndicator={false}
-              style={{ maxHeight: promoKbVisible ? 180 : 340 }}
+              showsVerticalScrollIndicator={availablePromos.length > 3}
+              style={{
+                maxHeight: promoKbVisible ? 200 : 320,
+                minHeight: availablePromos.length > 1 ? 148 : undefined,
+              }}
               keyboardShouldPersistTaps="handled"
             >
               {availablePromos.map((promo: any) => {

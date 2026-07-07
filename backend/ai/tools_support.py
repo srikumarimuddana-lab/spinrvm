@@ -260,6 +260,14 @@ async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
         )
         or []
     )
+    # Once any area-scoped FAQ exists for this audience, the answer to a given
+    # question depends on the asker's location — so this turn must NOT be
+    # replayed cross-user by the (audience, question) response cache. Flag it
+    # for the orchestrator. (Checked before the scope filter, on the full
+    # audience corpus, so a no-location user's global answer can't be cached
+    # and then wrongly served to a rider whose area has a specific FAQ.)
+    location_scoped = any(r.get("service_area_ids") for r in rows)
+
     # Location scope: keep global FAQs (no service area) plus those tagged for
     # the user's current area or any of its ancestor areas. Unknown → global only.
     scope = await _current_area_scope(user, audience)
@@ -276,9 +284,11 @@ async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
     # None (embeddings unavailable) or empty (nothing above floor) → lexical.
     if not results:
         results = _lexical_results(rows, query)
-    if not results:
-        return dict(_NO_MATCH)
-    return {"results": results[:5]}
+    out = dict(_NO_MATCH) if not results else {"results": results[:5]}
+    if location_scoped:
+        # Meta flag, popped by the orchestrator — never serialized to the model.
+        out["_no_cache"] = True
+    return out
 
 
 async def get_company_info(user: Dict[str, Any]) -> Dict[str, Any]:

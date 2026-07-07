@@ -53,9 +53,10 @@ class TestSearchFaqs:
     def _semantic_off(self):
         # Pin semantic search OFF and location resolution to global so these
         # lexical tests are deterministic and don't hit the DB.
-        with patch.object(
-            tools_support, "get_app_settings", AsyncMock(return_value={"ai_faq_semantic_enabled": False})
-        ), patch.object(tools_support, "_current_area_scope", AsyncMock(return_value=set())):
+        with (
+            patch.object(tools_support, "get_app_settings", AsyncMock(return_value={"ai_faq_semantic_enabled": False})),
+            patch.object(tools_support, "_current_area_scope", AsyncMock(return_value=set())),
+        ):
             yield
 
     @pytest.mark.anyio
@@ -377,10 +378,20 @@ class TestSearchFaqsLocation:
 
     def _rows(self):
         return [
-            {"id": "g", "question": "How does surge pricing work?", "answer": "Demand-based.",
-             "category": "pricing", "service_area_ids": None},
-            {"id": "sk", "question": "What SGI insurance do I need?", "answer": "SGI rideshare coverage.",
-             "category": "insurance", "service_area_ids": ["area-sk"]},
+            {
+                "id": "g",
+                "question": "How does surge pricing work?",
+                "answer": "Demand-based.",
+                "category": "pricing",
+                "service_area_ids": None,
+            },
+            {
+                "id": "sk",
+                "question": "What SGI insurance do I need?",
+                "answer": "SGI rideshare coverage.",
+                "category": "insurance",
+                "service_area_ids": ["area-sk"],
+            },
         ]
 
     def _patches(self, scope):
@@ -421,25 +432,62 @@ class TestSearchFaqsLocation:
         assert ok
         assert [r["question"] for r in result["results"]] == ["How does surge pricing work?"]
 
+    @pytest.mark.anyio
+    async def test_marks_no_cache_when_corpus_has_area_faqs(self):
+        # Codex (PR #2049): once any area-scoped FAQ exists for the audience, the
+        # answer is location-dependent — flag the turn so the cross-user response
+        # cache can't replay one area's answer (or a no-location global answer)
+        # to a rider in a different area. True even when the user has no location
+        # (empty scope) and only the global FAQ matched.
+        p1, p2, p3 = self._patches(set())
+        with p1, p2, p3:
+            result, _ = await execute_tool("search_faqs", {"query": "surge pricing"}, user=RIDER)
+        assert result.get("_no_cache") is True
+
+    @pytest.mark.anyio
+    async def test_no_cache_flag_absent_when_all_faqs_global(self):
+        rows = [
+            {
+                "id": "g",
+                "question": "How does surge pricing work?",
+                "answer": "Demand-based.",
+                "category": "pricing",
+                "service_area_ids": None,
+            },
+        ]
+        with (
+            patch.object(tools_support, "get_app_settings", AsyncMock(return_value=self.SETTINGS)),
+            patch.object(tools_support.db_supabase, "get_rows", AsyncMock(return_value=rows)),
+            patch.object(tools_support, "_current_area_scope", AsyncMock(return_value=set())),
+        ):
+            result, _ = await execute_tool("search_faqs", {"query": "surge pricing"}, user=RIDER)
+        assert "_no_cache" not in result
+
 
 class TestCurrentAreaScope:
     @pytest.mark.anyio
     async def test_rider_resolves_from_device_location(self):
         user = {"id": "r", "_client_location": {"lat": 52.13, "lng": -106.67}}
-        with patch("backend.routes.fares.resolve_service_area_for_point",
-                   AsyncMock(return_value={"id": "saskatoon"})), \
-             patch("backend.routes.fares.resolve_area_scope",
-                   AsyncMock(side_effect=lambda a: {a, "area-sk"} if a else set())):
+        with (
+            patch("backend.routes.fares.resolve_service_area_for_point", AsyncMock(return_value={"id": "saskatoon"})),
+            patch(
+                "backend.routes.fares.resolve_area_scope",
+                AsyncMock(side_effect=lambda a: {a, "area-sk"} if a else set()),
+            ),
+        ):
             scope = await tools_support._current_area_scope(user, "rider")
         assert scope == {"saskatoon", "area-sk"}  # includes the parent
 
     @pytest.mark.anyio
     async def test_driver_falls_back_to_assigned_area(self):
-        with patch.object(
-            tools_support.db_supabase, "get_driver_by_user_id_cached",
-            AsyncMock(return_value={"service_area_id": "saskatoon"}),
-        ), patch("backend.routes.fares.resolve_area_scope",
-                 AsyncMock(side_effect=lambda a: {a} if a else set())):
+        with (
+            patch.object(
+                tools_support.db_supabase,
+                "get_driver_by_user_id_cached",
+                AsyncMock(return_value={"service_area_id": "saskatoon"}),
+            ),
+            patch("backend.routes.fares.resolve_area_scope", AsyncMock(side_effect=lambda a: {a} if a else set())),
+        ):
             scope = await tools_support._current_area_scope({"id": "d"}, "driver")
         assert scope == {"saskatoon"}
 

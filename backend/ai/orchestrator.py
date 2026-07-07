@@ -195,6 +195,7 @@ async def run_chat_turn(
     all_text: List[str] = []
     used_tool_names: List[str] = []
     emitted_client_action = False
+    cache_disqualified = False
     total_usage = {"input_tokens": 0, "output_tokens": 0}
 
     try:
@@ -227,7 +228,15 @@ async def run_chat_turn(
             for tc, (result, ok) in zip(tool_calls, results, strict=True):
                 used_tool_names.append(tc.name)
                 _metric_inc("spinr_ai_tool_calls_total", {"tool": tc.name, "ok": str(ok).lower()})
-                client_action = result.pop("_client_action", None) if isinstance(result, dict) else None
+                if isinstance(result, dict):
+                    client_action = result.pop("_client_action", None)
+                    # A tool whose answer varies per user (e.g. area-scoped FAQ
+                    # search) marks the turn non-replayable so the cross-user
+                    # response cache never serves one area's answer to another.
+                    if result.pop("_no_cache", False):
+                        cache_disqualified = True
+                else:
+                    client_action = None
                 if client_action:
                     emitted_client_action = True
                     if client_action.get("type") == "booking_proposal":
@@ -275,6 +284,7 @@ async def run_chat_turn(
     if (
         cache_eligible
         and produced_real_text
+        and not cache_disqualified
         and response_cache.is_cacheable(
             admin_actor_id=admin_actor_id,
             prior_turns=prior_turns,

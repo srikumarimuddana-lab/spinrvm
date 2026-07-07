@@ -44,6 +44,21 @@ def test_topup_rejects_below_minimum(test_client, admin_override):
     assert resp.status_code == 422, resp.text
 
 
+def test_wallet_router_mounted_at_api_v1(test_client, admin_override):
+    """corporate_wallet_router must answer at its canonical /api/v1 path.
+
+    The admin dashboard now calls /api/v1/admin/corporate-accounts/{id}/wallet/...
+    to avoid the deprecated /api mount. A below-minimum amount exercises the route
+    without external mocks: 422 proves the route is mounted (validation ran); a 404
+    would mean the /api/v1 twin is missing.
+    """
+    resp = test_client.post(
+        "/api/v1/admin/corporate-accounts/c1/wallet/topup",
+        json={"amount": 50},
+    )
+    assert resp.status_code == 422, resp.text
+
+
 def test_topup_rejects_above_maximum(test_client, admin_override):
     resp = test_client.post(
         "/api/admin/corporate-accounts/c1/wallet/topup",

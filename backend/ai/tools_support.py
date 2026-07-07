@@ -196,6 +196,33 @@ async def _semantic_results(rows: list, query: str, settings: Dict[str, Any]):
     return [_faq_view(r) for _, r in scored[:5]], covered == len(rows)
 
 
+async def _current_service_area_id(user: Dict[str, Any], audience: str) -> Optional[str]:
+    """The service area the user is currently operating in, for location-scoped
+    FAQs. Prefers the device location sent with the turn; for drivers falls back
+    to their assigned service area. None → only global FAQs are shown."""
+    loc = user.get("_client_location") or {}
+    lat, lng = loc.get("lat"), loc.get("lng")
+    if lat is not None and lng is not None:
+        try:
+            try:
+                from ..routes.fares import resolve_service_area_for_point
+            except ImportError:
+                from routes.fares import resolve_service_area_for_point
+            area = await resolve_service_area_for_point(float(lat), float(lng))
+            if area:
+                return area.get("id")
+        except Exception:
+            logger.error("ai faq service-area resolve failed", exc_info=True)
+    if audience == "driver":
+        try:
+            driver = await db_supabase.get_driver_by_user_id_cached(user["id"])
+            if driver:
+                return driver.get("service_area_id")
+        except Exception:
+            logger.error("ai faq driver-area lookup failed", exc_info=True)
+    return None
+
+
 async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
     audience = user.get("ai_audience", "rider")
     settings = await get_app_settings()
@@ -203,9 +230,9 @@ async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
     # Only pull the (large JSONB) embedding vector when the semantic path will
     # actually read it — lexical/off searches select display columns only.
     columns = (
-        "id,question,answer,category,audience,embedding,embedding_model"
+        "id,question,answer,category,audience,service_area_id,embedding,embedding_model"
         if semantic
-        else "id,question,answer,category,audience"
+        else "id,question,answer,category,audience,service_area_id"
     )
     rows = (
         await db_supabase.get_rows(
@@ -216,6 +243,10 @@ async def search_faqs(user: Dict[str, Any], query: str) -> Dict[str, Any]:
         )
         or []
     )
+    # Location scope: keep global FAQs (no service area) plus those tagged for
+    # the user's current service area. Unknown location → global only.
+    area_id = await _current_service_area_id(user, audience)
+    rows = [r for r in rows if not r.get("service_area_id") or r.get("service_area_id") == area_id]
 
     results = None
     if semantic:

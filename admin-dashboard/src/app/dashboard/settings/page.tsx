@@ -445,7 +445,7 @@ export default function SettingsPage() {
                                             <div>
                                                 <Label>Enable AI assistant</Label>
                                                 <p className="text-xs text-muted-foreground">
-                                                    Kill switch for the rider AI mode + SupportScreen chat. Off hides all entry points.
+                                                    Kill switch for the rider AI mode + SupportScreen chat.
                                                 </p>
                                             </div>
                                             <Switch
@@ -453,6 +453,26 @@ export default function SettingsPage() {
                                                 onCheckedChange={(v) => update("ai_assistant_enabled", v)}
                                             />
                                         </div>
+                                        {!settings.ai_assistant_enabled && (
+                                            <div className="flex items-center justify-between rounded-lg border border-dashed p-3">
+                                                <div>
+                                                    <Label>While disabled, show</Label>
+                                                    <p className="text-xs text-muted-foreground">
+                                                        How the apps present AI entry points when the assistant is off.
+                                                    </p>
+                                                </div>
+                                                <Select
+                                                    value={settings.ai_disabled_mode || "coming_soon"}
+                                                    onValueChange={(v) => update("ai_disabled_mode", v)}
+                                                >
+                                                    <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value="coming_soon">Coming-soon placeholder</SelectItem>
+                                                        <SelectItem value="hidden">Hide the icon entirely</SelectItem>
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                        )}
                                         <div className="grid grid-cols-2 gap-4">
                                             <div className="space-y-2">
                                                 <Label>Provider</Label>

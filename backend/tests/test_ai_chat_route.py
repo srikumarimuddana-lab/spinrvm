@@ -160,7 +160,19 @@ class TestConfig:
         settings = {"ai_assistant_enabled": True, "ai_disclaimer": "AI can be wrong."}
         with patch("backend.routes.ai.get_app_settings", AsyncMock(return_value=settings)):
             resp = rider_client.get("/api/v1/ai/config")
-        assert resp.json() == {"enabled": True, "disclaimer": "AI can be wrong."}
+        assert resp.json() == {"enabled": True, "mode": "enabled", "disclaimer": "AI can be wrong."}
+
+    def test_disabled_reports_coming_soon_by_default(self, rider_client):
+        with patch("backend.routes.ai.get_app_settings", AsyncMock(return_value={"ai_assistant_enabled": False})):
+            resp = rider_client.get("/api/v1/ai/config")
+        body = resp.json()
+        assert body["enabled"] is False and body["mode"] == "coming_soon"
+
+    def test_disabled_hidden_mode_passed_through(self, rider_client):
+        settings = {"ai_assistant_enabled": False, "ai_disabled_mode": "hidden"}
+        with patch("backend.routes.ai.get_app_settings", AsyncMock(return_value=settings)):
+            resp = rider_client.get("/api/v1/ai/config")
+        assert resp.json()["mode"] == "hidden"
 
     def test_config_requires_auth(self, test_client):
         assert test_client.get("/api/v1/ai/config").status_code in (401, 403)

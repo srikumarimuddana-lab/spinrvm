@@ -223,18 +223,18 @@ function FaqsList() {
     const [loading, setLoading] = useState(true);
     const [dialogOpen, setDialogOpen] = useState(false);
     const [editing, setEditing] = useState<any>(null);
-    const [form, setForm] = useState({ question: "", answer: "", category: "" });
+    const [form, setForm] = useState({ question: "", answer: "", category: "", audience: "both" });
 
     const load = () => { setLoading(true); getFaqs().then(setFaqs).catch(() => setFaqs([])).finally(() => setLoading(false)); };
     useEffect(() => { load(); }, []);
 
-    const handleSave = async () => { try { if (editing) await updateFaq(editing.id, form); else await createFaq(form); setDialogOpen(false); setEditing(null); setForm({ question: "", answer: "", category: "" }); load(); } catch {} };
+    const handleSave = async () => { try { if (editing) await updateFaq(editing.id, form); else await createFaq(form); setDialogOpen(false); setEditing(null); setForm({ question: "", answer: "", category: "", audience: "both" }); load(); } catch {} };
 
     const { sorted, sort, toggle } = useTableSort(faqs);
 
     return (
         <div className="space-y-4">
-            <div className="flex justify-end"><Button size="sm" onClick={() => { setEditing(null); setForm({ question: "", answer: "", category: "" }); setDialogOpen(true); }}><Plus className="mr-1.5 h-3.5 w-3.5" />Add FAQ</Button></div>
+            <div className="flex justify-end"><Button size="sm" onClick={() => { setEditing(null); setForm({ question: "", answer: "", category: "", audience: "both" }); setDialogOpen(true); }}><Plus className="mr-1.5 h-3.5 w-3.5" />Add FAQ</Button></div>
             <Card><CardContent className="p-0">
                 {loading ? <div className="flex justify-center p-12"><div className="h-7 w-7 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>
                 : faqs.length === 0 ? <div className="text-center py-12 text-muted-foreground text-sm">No FAQs yet.</div>
@@ -242,7 +242,7 @@ function FaqsList() {
                     <TableBody>{sorted.map((f) => (
                         <TableRow key={f.id}><TableCell className="font-medium max-w-[280px] truncate text-sm">{f.question}</TableCell><TableCell className="text-xs text-muted-foreground">{f.category || "General"}</TableCell>
                             <TableCell className="text-right"><div className="flex justify-end gap-0.5">
-                                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setEditing(f); setForm({ question: f.question || "", answer: f.answer || "", category: f.category || "" }); setDialogOpen(true); }}><Pencil className="h-3.5 w-3.5" /></Button>
+                                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setEditing(f); setForm({ question: f.question || "", answer: f.answer || "", category: f.category || "", audience: f.audience || "both" }); setDialogOpen(true); }}><Pencil className="h-3.5 w-3.5" /></Button>
                                 <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => setFaqDeleteTarget(f.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
                             </div></TableCell>
                         </TableRow>
@@ -252,6 +252,7 @@ function FaqsList() {
                 <DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle className="text-base">{editing ? "Edit" : "Create"} FAQ</DialogTitle></DialogHeader>
                     <div className="space-y-3">
                         <div className="space-y-1.5"><Label className="text-xs">Category</Label><Input value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} placeholder="Rides, Payments..." /></div>
+                        <div className="space-y-1.5"><Label className="text-xs">Audience</Label><Select value={form.audience} onValueChange={(v) => setForm({ ...form, audience: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="both">Both apps</SelectItem><SelectItem value="rider">Rider app</SelectItem><SelectItem value="driver">Driver app</SelectItem></SelectContent></Select></div>
                         <div className="space-y-1.5"><Label className="text-xs">Question</Label><Input value={form.question} onChange={(e) => setForm({ ...form, question: e.target.value })} placeholder="How do I...?" /></div>
                         <div className="space-y-1.5"><Label className="text-xs">Answer</Label><Textarea value={form.answer} onChange={(e) => setForm({ ...form, answer: e.target.value })} placeholder="Answer..." rows={4} /></div>
                         <Button className="w-full" size="sm" onClick={handleSave}>{editing ? "Update" : "Create"}</Button>

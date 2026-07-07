@@ -111,8 +111,12 @@ async def _sse_with_pings(frames):
 @api_router.get("/config")
 async def ai_config(current_user: dict = Depends(get_current_user)):
     settings = await get_app_settings()
+    enabled = bool(settings.get("ai_assistant_enabled"))
     return {
-        "enabled": bool(settings.get("ai_assistant_enabled")),
+        "enabled": enabled,
+        # How the apps should present AI entry points while disabled:
+        # "coming_soon" (keep icon, show placeholder) | "hidden" (remove icon).
+        "mode": "enabled" if enabled else (settings.get("ai_disabled_mode") or "coming_soon"),
         "disclaimer": settings.get("ai_disclaimer", ""),
     }
 

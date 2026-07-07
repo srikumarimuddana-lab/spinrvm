@@ -164,3 +164,34 @@ async def test_get_vehicle_types_falls_back_to_fare_configs_when_no_jsonb():
         types = await get_vehicle_types(service_area_id="area_legacy")
 
     assert [vt["name"] for vt in types] == ["Premium"]
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_resolve_area_scope_walks_parent_chain():
+    """area_id plus its ancestors so parent-tagged FAQs cascade to sub-regions."""
+    from backend.routes.fares import resolve_area_scope
+
+    rows = [
+        {"id": "regina", "parent_service_area_id": "sk"},
+        {"id": "sk", "parent_service_area_id": None},
+    ]
+    with patch("backend.routes.fares.db_supabase.get_rows", AsyncMock(return_value=rows)):
+        scope = await resolve_area_scope("regina")
+    assert scope == {"regina", "sk"}
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_resolve_area_scope_degrades_loudly_on_lookup_failure(caplog):
+    """Codex (PR #2049): a failed lookup must be logged loudly, not silently
+    swallowed — it degrades to the exact area only, never a masked partial."""
+    import logging
+
+    from backend.routes.fares import resolve_area_scope
+
+    with patch("backend.routes.fares.db_supabase.get_rows", AsyncMock(side_effect=RuntimeError("db down"))):
+        with caplog.at_level(logging.ERROR):
+            scope = await resolve_area_scope("regina")
+    assert scope == {"regina"}
+    assert any("resolve_area_scope" in r.message for r in caplog.records)

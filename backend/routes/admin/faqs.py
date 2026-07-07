@@ -1,10 +1,10 @@
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 try:
     from ... import db_supabase
@@ -27,16 +27,23 @@ class FaqCreateRequest(BaseModel):
     question: str
     answer: str
     category: str = "general"
-    audience: str = "both"
+    # Required, explicit choice — no default. A silent 'both' default is how
+    # driver-only FAQs leaked into the rider app; force the author to pick.
+    audience: str = Field(..., pattern="^(rider|driver|both)$")
     is_active: bool = True
+    # None/[] = global (shown everywhere). One or more service_areas.id values
+    # scope the FAQ to users operating in those areas (or their sub-regions,
+    # via parent_service_area_id) — e.g. SGI content tagged to SK areas.
+    service_area_ids: Optional[List[str]] = None
 
 
 class FaqUpdateRequest(BaseModel):
     question: Optional[str] = None
     answer: Optional[str] = None
     category: Optional[str] = None
-    audience: Optional[str] = None
+    audience: Optional[str] = Field(default=None, pattern="^(rider|driver|both)$")
     is_active: Optional[bool] = None
+    service_area_ids: Optional[List[str]] = None
 
 
 class NotificationRequest(BaseModel):
@@ -60,7 +67,7 @@ async def admin_get_faqs():
         order="created_at",
         desc=True,
         limit=500,
-        columns="id,question,answer,category,audience,sort_order,is_active,created_at,updated_at",
+        columns="id,question,answer,category,audience,service_area_ids,sort_order,is_active,created_at,updated_at",
     )
     return faqs
 
@@ -68,16 +75,19 @@ async def admin_get_faqs():
 @router.post("/faqs")
 async def admin_create_faq(faq: FaqCreateRequest):
     """Create a new FAQ entry."""
+    # faqs.id is TEXT with no DB default — generate it here.
     doc = {
+        "id": str(uuid.uuid4()),
         "question": faq.question,
         "answer": faq.answer,
         "category": faq.category,
         "audience": faq.audience,
+        "service_area_ids": faq.service_area_ids,
         "is_active": faq.is_active,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     row = await db_supabase.insert_one("faqs", doc)
-    return {"faq_id": str(row.get("id") if row and isinstance(row, dict) else "")}
+    return {"faq_id": str(row.get("id") if row and isinstance(row, dict) else doc["id"])}
 
 
 @router.put("/faqs/{faq_id}")
@@ -94,6 +104,10 @@ async def admin_update_faq(faq_id: str, faq: FaqUpdateRequest):
         updates["audience"] = faq.audience
     if faq.is_active is not None:
         updates["is_active"] = faq.is_active
+    # Present in the payload (even as null/[]) → set it; null/[] clears the area
+    # scope back to global. Omitted → leave unchanged.
+    if "service_area_ids" in faq.model_fields_set:
+        updates["service_area_ids"] = faq.service_area_ids
 
     # Editing question/answer invalidates any stored semantic embedding — clear
     # it so search re-embeds from the new text rather than the old wording.

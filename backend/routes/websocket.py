@@ -26,7 +26,7 @@ try:
         verify_jwt_token,
     )
     from ..socket_manager import manager
-    from ..utils.driver_presence import clear_presence, mark_present
+    from ..utils.driver_presence import mark_present
     from ..utils.redis_client import redis_expire, redis_incr
 except ImportError:
     import db_supabase
@@ -38,7 +38,7 @@ except ImportError:
         verify_jwt_token,
     )
     from socket_manager import manager
-    from utils.driver_presence import clear_presence, mark_present
+    from utils.driver_presence import mark_present
     from utils.redis_client import redis_expire, redis_incr  # type: ignore
 
 db = db_supabase  # legacy alias
@@ -1213,8 +1213,17 @@ async def websocket_endpoint(
             # was always tripping on the current socket and the offline flip never
             # ran on a clean disconnect.
             manager.disconnect(connection_key)
-            if current_driver_id:
-                await clear_presence(current_driver_id)
+            # Do NOT clear the Redis presence key on an involuntary disconnect.
+            # Presence carries a 30s TTL precisely so a flaky-network blip (socket
+            # drops, client reconnects seconds later) doesn't yank the driver out
+            # of the rider-facing /drivers/nearby + /rides/estimate results.
+            # Force-clearing here defeated that grace: every reconnect cycle wiped
+            # the key, so the driver flickered offline to riders while admin (which
+            # reads the durable is_online column) still showed them online. A truly
+            # dead app just lets the TTL lapse, and the presence sweeper reconciles
+            # is_online after the grace window. Explicit Go Offline still clears
+            # immediately (routes/drivers.py), and dispatch re-checks presence at
+            # offer time, so a dead socket cannot silently absorb a ride.
             await _handle_driver_ws_disconnect(connection_key, user)
     except Exception as e:
         logger.exception(
@@ -1223,8 +1232,9 @@ async def websocket_endpoint(
         )
         if connection_key and manager.active_connections.get(connection_key) is websocket:
             manager.disconnect(connection_key)
-            if current_driver_id:
-                await clear_presence(current_driver_id)
+            # Same as the clean-disconnect branch above: let presence lapse via its
+            # 30s TTL rather than force-clearing on an involuntary drop, so a
+            # network blip doesn't hide the driver from riders.
             await _handle_driver_ws_disconnect(connection_key, user)
         try:
             await websocket.close()

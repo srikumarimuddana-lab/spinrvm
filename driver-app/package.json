@@ -91,8 +91,8 @@
     "cross-env": "^10.1.0",
     "eslint": "^9.8.0",
     "eslint-config-expo": "~10.0.0",
-    "jest": "^30.3.0",
-    "jest-expo": "~55.0.18",
+    "jest": "^30.4.2",
+    "jest-expo": "~57.0.1",
     "patch-package": "^8.0.1",
     "react-test-renderer": "19.2.3",
     "typescript": "~5.9.2"

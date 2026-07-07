@@ -327,7 +327,14 @@ async def heartbeat_task(
                     # driver reachable for up to 30s and could route an offer to a
                     # socket that no longer exists. The involuntary-disconnect
                     # grace only applies to network drops, which stay untouched.
-                    if driver_id:
+                    #
+                    # Ownership guard: if the driver already reconnected (a newer
+                    # socket registered under the same connection_key and called
+                    # mark_present), this stale heartbeat must NOT wipe the live
+                    # socket's presence key. Only clear when this websocket is
+                    # still the active connection for the key — same guard the
+                    # disconnect branch uses before its own cleanup.
+                    if driver_id and manager.active_connections.get(connection_key) is websocket:
                         try:
                             await clear_presence(driver_id)
                         except Exception:  # noqa: S110 — presence best-effort; TTL still bounds it

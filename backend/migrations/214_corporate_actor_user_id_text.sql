@@ -1,9 +1,9 @@
 -- ============================================================
--- Migration 209: corporate_wallet_transactions.actor_user_id → TEXT
+-- Migration 214: corporate_wallet_transactions.actor_user_id → TEXT
 --                + widen p_actor_user_id (UUID → TEXT) on the two
 --                  corporate money RPCs
 --
--- Same bug class as migration 208 (kyb_reviewed_by). The admin manual
+-- Same bug class as migration 213 (kyb_reviewed_by). The admin manual
 -- wallet-adjust flow (POST /api/admin/corporate-accounts/{id}/wallet/adjust →
 -- corporate_wallet.py manual_adjust) records the PLATFORM admin as the actor:
 -- current_admin["id"] is a string ('admin-001'), not a users.id UUID (admin
@@ -11,7 +11,7 @@
 -- Migration 27 declared corporate_wallet_transactions.actor_user_id as UUID and
 -- the RPCs took p_actor_user_id UUID, so an admin adjustment would fail with
 -- Postgres 22P02 "invalid input syntax for type uuid: 'admin-001'" — exactly the
--- error 208 fixed for KYB review.
+-- error 213 fixed for KYB review.
 --
 -- Fix: widen actor_user_id (and the RPC parameter) to TEXT. Consumer/company
 -- flows that pass a real users.id keep working — a UUID is a valid TEXT value.
@@ -44,7 +44,7 @@
 -- first apply; CREATE OR REPLACE on the new signatures is idempotent; the column
 -- ALTER is a no-op once actor_user_id is already TEXT.
 --
--- Rollback (only if no non-UUID actor id was written):
+-- Rollback: (only if no non-UUID actor id was written)
 --   -- restore the migration-203 UUID-signature definitions, then:
 --   ALTER TABLE corporate_wallet_transactions
 --       ALTER COLUMN actor_user_id TYPE UUID USING actor_user_id::uuid;

@@ -1,5 +1,5 @@
 -- ============================================================
--- Migration 208: corporate_accounts.kyb_reviewed_by → TEXT
+-- Migration 213: corporate_accounts.kyb_reviewed_by → TEXT
 --
 -- Bug: KYB review (POST /api/admin/corporate-accounts/{id}/kyb-review)
 -- failed with Postgres 22P02 "invalid input syntax for type uuid:
@@ -17,7 +17,7 @@
 -- Safe under live traffic: kyb_reviewed_by has only ever held NULL (no review
 -- ever succeeded — the write always errored), so the USING cast touches no rows.
 --
--- Rollback (only if no non-UUID id was written):
+-- Rollback: (only if no non-UUID id was written)
 --   ALTER TABLE corporate_accounts
 --       ALTER COLUMN kyb_reviewed_by TYPE UUID USING kyb_reviewed_by::uuid;
 -- ============================================================

@@ -86,10 +86,46 @@ async def main(pickup_lat, pickup_lng):
         vt_name = vt_row.get("name") if vt_row else "UNKNOWN / orphan"
         print(f"  driver_id={d.get('id')}")
         print(f"    is_online={d.get('is_online')}  is_available={d.get('is_available')}")
+        # The /drivers/nearby (car pin) query additionally requires
+        # is_verified=True AND status='active'. A driver can be online +
+        # available but still hidden from the MAP if either of these is off,
+        # while /rides/estimate (which skips them) would still count them.
+        print(f"    is_verified={d.get('is_verified')}  status={d.get('status')}")
         print(f"    vehicle_type_id={vt_id}  -> {vt_name}")
         print(f"    lat={d.get('lat')}  lng={d.get('lng')}")
         if vt_id == xl_vt["id"]:
             xl_online.append(d)
+
+    section("2b. Redis presence (heartbeat) — the filter that hides 'online-in-admin' drivers")
+    print("Both /drivers/nearby (map pins) and /rides/estimate drop any driver")
+    print("whose Redis presence key has expired/been cleared. Admin reads the")
+    print("durable is_online COLUMN instead, so a driver with a dead presence key")
+    print("shows ONLINE in admin but is invisible to riders. The key is set on")
+    print("Go Online + every WS heartbeat, and CLEARED on WS disconnect")
+    print("(routes/websocket.py clear_presence). A flapping WebSocket therefore")
+    print("keeps wiping presence seconds after each connect.")
+    print()
+    try:
+        from utils.driver_presence import present_driver_ids_checked
+        from utils.redis_client import _get_redis
+
+        _r = await _get_redis()
+        print(f"  REDIS configured/connected: {'yes' if _r is not None else 'NO (in-process dict fallback)'}")
+        if _r is None:
+            print("  ⚠️  With >1 backend replica (e.g. two Fly machines) and NO shared")
+            print("     Redis, presence lives in a PER-REPLICA dict: a driver whose WS")
+            print("     landed on machine A is invisible to rider requests served by")
+            print("     machine B. Set REDIS_URL / WS_REDIS_URL on every replica.")
+        online_ids = [d["id"] for d in online if d.get("id")]
+        present, reachable = await present_driver_ids_checked(online_ids)
+        print(f"  presence store reachable: {reachable}")
+        for d in online:
+            did = d.get("id")
+            here = did in present
+            tick = "✅ present" if here else "❌ NO presence key (hidden from riders)"
+            print(f"    driver_id={did}  is_online={d.get('is_online')}  ->  {tick}")
+    except Exception as _pres_exc:  # noqa: BLE001
+        print(f"  (presence check skipped: {_pres_exc})")
 
     if not xl_online:
         print(f"\n  ❌ No online driver has vehicle_type_id == {xl_vt['id']} (the XL id).")

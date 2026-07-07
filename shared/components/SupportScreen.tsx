@@ -15,6 +15,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import * as Location from 'expo-location';
 type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 import api from '@shared/api/client';
 import CustomAlert from '@shared/components/CustomAlert';
@@ -55,6 +56,26 @@ const WELCOME_MESSAGES: Record<Role, string> = {
   rider: "Hi! I'm Spinr's AI assistant. Ask me anything about your rides, payments, account, or how the app works.",
   driver: "Hi! I'm Spinr's AI assistant. Ask me anything about onboarding, payouts, documents, or how the app works.",
 };
+
+/** Reject cached fixes older than this so FAQ location scoping reflects where
+ * the user actually is. */
+const LOCATION_MAX_AGE_MS = 5 * 60 * 1000;
+
+/** Last-known device position, only when permission is already granted — the
+ * help screen never triggers a permission prompt. Null on any failure. Lets
+ * the public /faqs endpoint scope area-specific FAQs (e.g. SGI content) to the
+ * user's region without the client having to know its service area. */
+async function deviceLocation(): Promise<{ lat: number; lng: number } | null> {
+  try {
+    const { granted } = await Location.getForegroundPermissionsAsync();
+    if (!granted) return null;
+    const pos = await Location.getLastKnownPositionAsync({ maxAge: LOCATION_MAX_AGE_MS });
+    if (!pos) return null;
+    return { lat: pos.coords.latitude, lng: pos.coords.longitude };
+  } catch {
+    return null;
+  }
+}
 
 // ── AI assistant (server-side) ───────────────────────────────────────────────
 // All AI inference happens behind the authenticated backend (/ai/chat) —
@@ -100,6 +121,13 @@ export default function SupportScreen({
 
   const [activeTab, setActiveTab] = useState<Tab>(initialTab);
 
+  // AI kill switch: 'enabled' shows the AI Chat tab; 'coming_soon' shows it
+  // with a placeholder; 'hidden' removes it. Defaults to hidden until
+  // /ai/config resolves so a disabled assistant never flashes into view.
+  const [aiMode, setAiMode] = useState<'enabled' | 'coming_soon' | 'hidden'>('hidden');
+  const aiEnabled = aiMode === 'enabled';
+  const showChatTab = aiMode !== 'hidden';
+
   // FAQ — fetched from API filtered by audience.
   const [faqs, setFaqs] = useState<Faq[]>([]);
   const [faqsLoading, setFaqsLoading] = useState(true);
@@ -143,18 +171,55 @@ export default function SupportScreen({
 
   // ── Load FAQs + company info on mount ──
   useEffect(() => {
+    let cancelled = false;
     setFaqsLoading(true);
-    api
-      .get(`/faqs?audience=${encodeURIComponent(role)}`)
-      .then((r) => setFaqs(Array.isArray(r?.data) ? r.data : []))
-      .catch(() => setFaqs([]))
-      .finally(() => setFaqsLoading(false));
+    // Attach device location (when already permitted) so area-scoped FAQs for
+    // the user's region are included; without it the backend returns global
+    // FAQs only.
+    deviceLocation()
+      .then((loc) => {
+        const params = new URLSearchParams({ audience: role });
+        if (loc) {
+          params.set('lat', String(loc.lat));
+          params.set('lng', String(loc.lng));
+        }
+        return api.get(`/faqs?${params.toString()}`);
+      })
+      .then((r) => {
+        if (!cancelled) setFaqs(Array.isArray(r?.data) ? r.data : []);
+      })
+      .catch(() => {
+        if (!cancelled) setFaqs([]);
+      })
+      .finally(() => {
+        if (!cancelled) setFaqsLoading(false);
+      });
 
     api
       .get('/company-info')
-      .then((r) => setCompanyInfo(r?.data || {}))
+      .then((r) => !cancelled && setCompanyInfo(r?.data || {}))
       .catch((e) => console.warn('[Support] company-info fetch failed:', e?.message ?? e));
+
+    // AI availability drives whether the chat tab/CTA render.
+    api
+      .get<{ enabled?: boolean; mode?: string }>('/ai/config')
+      .then((r) => {
+        if (cancelled) return;
+        const enabled = !!r?.data?.enabled;
+        setAiMode((r?.data?.mode as 'enabled' | 'coming_soon' | 'hidden') ?? (enabled ? 'enabled' : 'coming_soon'));
+      })
+      .catch(() => !cancelled && setAiMode('hidden'));
+
+    return () => {
+      cancelled = true;
+    };
   }, [role]);
+
+  // If the assistant is fully hidden, never leave the user stranded on the
+  // chat tab (e.g. when opened via initialTab='chat').
+  useEffect(() => {
+    if (!showChatTab && activeTab === 'chat') setActiveTab('faq');
+  }, [showChatTab, activeTab]);
 
   const filteredFaqs = useMemo(() => {
     if (!faqSearch.trim()) return faqs;
@@ -286,7 +351,9 @@ export default function SupportScreen({
         {(
           [
             { key: 'faq', label: 'FAQ', icon: 'help-circle-outline' },
-            { key: 'chat', label: 'AI Chat', icon: 'sparkles-outline' },
+            ...(showChatTab
+              ? [{ key: 'chat', label: 'AI Chat', icon: 'sparkles-outline' }]
+              : []),
             { key: 'contact', label: 'Contact', icon: 'mail-outline' },
           ] as { key: Tab; label: string; icon: IoniconName }[]
         ).map((tab) => (
@@ -379,16 +446,18 @@ export default function SupportScreen({
             })
           )}
 
-          <TouchableOpacity
-            style={styles.stillNeedHelp}
-            onPress={() => setActiveTab('chat')}
-          >
-            <Ionicons name="sparkles" size={18} color={colors.primary} />
-            <Text style={styles.stillNeedHelpText}>
-              Still need help? Ask our AI assistant
-            </Text>
-            <Ionicons name="chevron-forward" size={16} color={colors.primary} />
-          </TouchableOpacity>
+          {aiEnabled && (
+            <TouchableOpacity
+              style={styles.stillNeedHelp}
+              onPress={() => setActiveTab('chat')}
+            >
+              <Ionicons name="sparkles" size={18} color={colors.primary} />
+              <Text style={styles.stillNeedHelpText}>
+                Still need help? Ask our AI assistant
+              </Text>
+              <Ionicons name="chevron-forward" size={16} color={colors.primary} />
+            </TouchableOpacity>
+          )}
 
           {(companyInfo.address ||
             companyInfo.phone ||
@@ -413,8 +482,25 @@ export default function SupportScreen({
         </ScrollView>
       )}
 
+      {/* AI Chat Tab — coming-soon placeholder while disabled (not hidden) */}
+      {activeTab === 'chat' && !aiEnabled && (
+        <View style={styles.comingSoon}>
+          <View style={styles.comingSoonIcon}>
+            <Ionicons name="sparkles" size={32} color={colors.primary} />
+          </View>
+          <Text style={styles.comingSoonTitle}>AI Assistant coming soon</Text>
+          <Text style={styles.comingSoonSub}>
+            In the meantime, browse the FAQ or reach us from the Contact tab.
+          </Text>
+          <TouchableOpacity style={styles.comingSoonBtn} onPress={() => setActiveTab('contact')}>
+            <Ionicons name="mail-outline" size={16} color={colors.primary} />
+            <Text style={styles.comingSoonBtnText}>Contact support</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* AI Chat Tab */}
-      {activeTab === 'chat' && (
+      {activeTab === 'chat' && aiEnabled && (
         <KeyboardAvoidingView
           style={{ flex: 1 }}
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -669,6 +755,42 @@ function createStyles(colors: ThemeColors) {
       marginTop: 2,
       textAlign: 'center',
     },
+
+    // Coming-soon (AI disabled)
+    comingSoon: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 32,
+      gap: 8,
+    },
+    comingSoonIcon: {
+      width: 64,
+      height: 64,
+      borderRadius: 32,
+      backgroundColor: `${colors.primary}15`,
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginBottom: 8,
+    },
+    comingSoonTitle: { fontSize: 17, fontWeight: '700', color: colors.text },
+    comingSoonSub: {
+      fontSize: 14,
+      color: colors.textDim,
+      textAlign: 'center',
+      lineHeight: 20,
+    },
+    comingSoonBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      marginTop: 12,
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      borderRadius: 20,
+      backgroundColor: `${colors.primary}15`,
+    },
+    comingSoonBtnText: { color: colors.primary, fontSize: 14, fontWeight: '600' },
 
     // Chat
     chatList: { padding: 16, paddingBottom: 8 },

@@ -11,6 +11,9 @@ being a correctness requirement.
 What this enforces:
     - rides.pickup/dropoff GPS scrubbed at 3 years (regulatory ceiling)
     - rides hard-deleted at 7 years (regulatory ceiling + PIPEDA)
+    - DSAR-deleted accounts HARD-DELETED at 7 years, with their financial_events
+      + driver footprint — NO earlier anonymization; records stay attributable
+      until then (Uber/Lyft model, migration 216). Was: anonymize at 30 days.
     - driver_location_history hard-deleted at 90 days
     - ride_messages hard-deleted at 90 days
     - refresh_tokens hard-deleted at expires_at + 30 days grace
@@ -94,9 +97,11 @@ async def run_retention_purge_tick(dry_run: bool = False) -> Optional[dict]:
         )
         return None
 
+    skipped_fk = data.get("dsar_users_skipped_fk") or 0
     logger.info(
         "retention_purge complete dry_run=%s rides_anon=%s rides_del=%s "
-        "loc_del=%s msgs_del=%s tokens_del=%s stripe_del=%s dsar_users=%s",
+        "loc_del=%s msgs_del=%s tokens_del=%s stripe_del=%s dsar_users=%s "
+        "dsar_skipped_fk=%s",
         data.get("dry_run"),
         data.get("rides_anonymized"),
         data.get("rides_deleted"),
@@ -105,7 +110,19 @@ async def run_retention_purge_tick(dry_run: bool = False) -> Optional[dict]:
         data.get("refresh_tokens_deleted"),
         data.get("stripe_events_deleted"),
         data.get("dsar_users_purged"),
+        skipped_fk,
     )
+    if skipped_fk:
+        # A DSAR account past its 7y window could not be hard-deleted because an
+        # unhandled RESTRICT FK still references it (Step H caught the violation
+        # and left the tombstone). That is a retention gap that must be seen, not
+        # buried in the Postgres log — surface it loudly for Compliance to fix by
+        # adding the offending table to Step H.
+        logger.error(
+            "retention_purge: %s DSAR account(s) skipped on a residual FK — "
+            "hard-delete blocked; add the offending table to purge_pii_retention Step H",
+            skipped_fk,
+        )
     return data
 
 

@@ -39,6 +39,12 @@ const TXN_COLORS: Record<string, string> = {
   quest_reward: '#F59E0B',
 };
 
+// Only actual ride transactions carry a ride id in reference_id and can open
+// the ride-details page. Rewards/top-ups/fare-splits (referral, bonus, top_up,
+// cashout, quest_reward, fare_split_*) reference a non-ride record, so opening
+// ride-details for them would render a broken/empty page.
+const RIDE_TXN_TYPES = new Set(['ride_payment', 'ride_refund']);
+
 export default function WalletScreen() {
   const router = useRouter();
   const { colors } = useTheme();
@@ -137,6 +143,9 @@ export default function WalletScreen() {
     const isCredit = amountNum > 0;
     const meta = item.metadata as WalletTransactionMeta | null | undefined;
     const hasRideDetails = item.type === 'ride_payment' && meta?.pickup_address;
+    // Only ride transactions link to ride-details; a referral/top-up/reward's
+    // reference_id is not a ride id.
+    const canOpenRide = RIDE_TXN_TYPES.has(item.type) && !!item.reference_id;
     const bookingId =
       meta?.ride_code || (item.reference_id ? item.reference_id.slice(0, 8).toUpperCase() : null);
 
@@ -145,8 +154,8 @@ export default function WalletScreen() {
     return (
       <TouchableOpacity
         style={styles.txnRow}
-        activeOpacity={item.reference_id ? 0.6 : 1}
-        onPress={item.reference_id ? () => router.push(`/ride-details?rideId=${item.reference_id}` as any) : undefined}
+        activeOpacity={canOpenRide ? 0.6 : 1}
+        onPress={canOpenRide ? () => router.push(`/ride-details?rideId=${item.reference_id}` as any) : undefined}
       >
         <View style={[styles.txnIcon, { backgroundColor: color + '15' }]}>
           <Ionicons name={icon as any} size={22} color={color} />
@@ -176,7 +185,7 @@ export default function WalletScreen() {
           <Text style={[styles.txnAmount, { color: isCredit ? '#10B981' : '#EF4444' }]}>
             {isCredit ? '+' : ''}{amountNum < 0 ? '-' : ''}${Math.abs(amountNum).toFixed(2)}
           </Text>
-          {item.reference_id && (
+          {canOpenRide && (
             <Ionicons name="chevron-forward" size={14} color={colors.border} style={{ marginTop: 2 }} />
           )}
         </View>

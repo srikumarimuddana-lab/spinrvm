@@ -814,7 +814,11 @@ function RootLayoutInner({
             <Stack.Screen name="otp" />
             <Stack.Screen name="profile-setup" options={{ headerShown: false }} />
 
-            <Stack.Screen name="(tabs)" options={{ animation: 'none' }} />
+            {/* gestureEnabled:false — the main app is the root once signed in;
+                an iOS edge-swipe here must NOT pop back to login/otp, which sit
+                below it in the stack (we push /otp so users can change their
+                number). The login screen also guards against this on focus. */}
+            <Stack.Screen name="(tabs)" options={{ animation: 'none', gestureEnabled: false }} />
 
             <Stack.Screen name="search-destination" options={{ animation: 'slide_from_bottom' }} />
             <Stack.Screen name="pick-on-map" options={{ animation: 'slide_from_bottom', headerShown: false }} />

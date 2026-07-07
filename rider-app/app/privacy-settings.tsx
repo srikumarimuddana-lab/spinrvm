@@ -175,6 +175,13 @@ export default function PrivacySettingsScreen() {
             colors={colors}
           />
           <SettingRow
+            icon="document-text-outline" iconColor="#6366F1" iconBg="#E0E7FF"
+            title={t('privacy.terms_of_service')}
+            subtitle={t('privacy.terms_of_service_subtitle')}
+            onPress={() => router.push('/legal?type=tos' as any)}
+            colors={colors}
+          />
+          <SettingRow
             icon="download-outline" iconColor="#6B7280" iconBg="#F3F4F6"
             title={t('privacy.download_data')}
             subtitle={t('privacy.download_data_subtitle')}

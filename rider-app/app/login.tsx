@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,9 +12,10 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import api from '@shared/api/client';
 import { showToast } from '../store/toastStore';
+import { useAuthStore } from '@shared/store/authStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -27,6 +28,18 @@ export default function LoginScreen() {
   const inputRef = useRef<TextInput>(null);
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+
+  // Login stays in the stack below /(tabs) after sign-in (we push /otp so the
+  // user can swipe back to change their number). Without this guard, an iOS
+  // edge-swipe from the tabs pops back to this screen. When login regains focus
+  // while already authenticated, bounce forward to the app.
+  useFocusEffect(
+    useCallback(() => {
+      if (useAuthStore.getState().token) {
+        router.replace('/(tabs)' as any);
+      }
+    }, [router]),
+  );
 
   const formatPhoneDisplay = (raw: string) => {
     const digits = raw.replace(/\D/g, '');

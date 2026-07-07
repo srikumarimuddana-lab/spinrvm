@@ -499,6 +499,7 @@ export default function HomeScreen() {
           <BottomSheetContent
             colors={colors}
             styles={styles}
+            aiMode={aiMode}
             showPromo={showPromo}
             setShowPromo={setShowPromo}
             handleSearchPress={handleSearchPress}
@@ -529,6 +530,7 @@ export default function HomeScreen() {
             <BottomSheetContent
               colors={colors}
               styles={styles}
+              aiMode={aiMode}
               showPromo={showPromo}
               setShowPromo={setShowPromo}
               handleSearchPress={handleSearchPress}
@@ -543,9 +545,10 @@ export default function HomeScreen() {
 }
 
 function BottomSheetContent({
-  colors, styles, showPromo, setShowPromo, handleSearchPress, handleAiPress, handleQuickAction,
+  colors, styles, aiMode, showPromo, setShowPromo, handleSearchPress, handleAiPress, handleQuickAction,
 }: {
   colors: ThemeColors; styles: any;
+  aiMode: 'enabled' | 'coming_soon' | 'hidden';
   showPromo: boolean; setShowPromo: (v: boolean) => void;
   handleSearchPress: () => void; handleAiPress: () => void; handleQuickAction: (type: string) => void;
 }) {

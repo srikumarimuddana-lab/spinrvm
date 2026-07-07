@@ -98,12 +98,13 @@ async def main(pickup_lat, pickup_lng):
 
     section("2b. Redis presence (heartbeat) — the filter that hides 'online-in-admin' drivers")
     print("Both /drivers/nearby (map pins) and /rides/estimate drop any driver")
-    print("whose Redis presence key has expired/been cleared. Admin reads the")
-    print("durable is_online COLUMN instead, so a driver with a dead presence key")
-    print("shows ONLINE in admin but is invisible to riders. The key is set on")
-    print("Go Online + every WS heartbeat, and CLEARED on WS disconnect")
-    print("(routes/websocket.py clear_presence). A flapping WebSocket therefore")
-    print("keeps wiping presence seconds after each connect.")
+    print("whose Redis presence key is not live. Admin reads the durable is_online")
+    print("COLUMN instead, so a driver with a lapsed presence key shows ONLINE in")
+    print("admin but is invisible to riders. The key is set on Go Online + every WS")
+    print("heartbeat, and cleared on explicit Go Offline or a session revocation.")
+    print("A plain network drop is NOT cleared — it rides a 30s TTL — so a driver")
+    print("hidden here means their app stopped heartbeating for longer than the TTL")
+    print("(WS never established, backgrounded/killed, or dead network).")
     print()
     try:
         from utils.driver_presence import present_driver_ids_checked
@@ -119,11 +120,21 @@ async def main(pickup_lat, pickup_lng):
         online_ids = [d["id"] for d in online if d.get("id")]
         present, reachable = await present_driver_ids_checked(online_ids)
         print(f"  presence store reachable: {reachable}")
-        for d in online:
-            did = d.get("id")
-            here = did in present
-            tick = "✅ present" if here else "❌ NO presence key (hidden from riders)"
-            print(f"    driver_id={did}  is_online={d.get('is_online')}  ->  {tick}")
+        if not reachable:
+            # Redis is configured but unavailable: present is an empty set that
+            # means "unknown", NOT "everyone offline". The rider endpoints fall
+            # back to DB state in this case (they do NOT hide drivers), so it
+            # would be wrong to flag every driver as hidden here.
+            print("  ⚠️  Presence store is configured but UNREACHABLE — presence is")
+            print("     UNKNOWN, not empty. /drivers/nearby + /rides/estimate fall back")
+            print("     to DB is_online here, so drivers are NOT hidden for this reason.")
+            print("     Fix Redis connectivity, then re-run to read real presence.")
+        else:
+            for d in online:
+                did = d.get("id")
+                here = did in present
+                tick = "✅ present" if here else "❌ NO presence key (hidden from riders)"
+                print(f"    driver_id={did}  is_online={d.get('is_online')}  ->  {tick}")
     except Exception as _pres_exc:  # noqa: BLE001
         print(f"  (presence check skipped: {_pres_exc})")
 

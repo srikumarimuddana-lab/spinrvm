@@ -1,4 +1,4 @@
-"""Presence must survive an *involuntary* WebSocket disconnect.
+"""Presence survives an *involuntary* WS disconnect, but not a forced kill.
 
 Background
 ----------
@@ -9,71 +9,136 @@ carries a 30s TTL (utils/driver_presence.PRESENCE_TTL) precisely so a flaky
 mobile connection — socket drops, client reconnects a couple of seconds later
 — does NOT yank the driver out of rider results for the length of the blip.
 
-The regression this pins
-------------------------
-The WebSocket disconnect handler used to call `clear_presence(driver_id)` on
-every involuntary `WebSocketDisconnect` / error. On a flapping connection that
-wiped the key seconds after each reconnect, so the driver flickered offline to
-riders while admin still showed them online (the reported "car online in admin
-but not in the rider app"). The fix removes `clear_presence` from the
-involuntary-disconnect branches and lets the TTL lapse (the presence sweeper
-reconciles `is_online` for genuinely-dead apps). The *explicit* Go Offline path
-in routes/drivers.py must still clear immediately.
+The regressions this pins
+-------------------------
+1. A plain `WebSocketDisconnect` / send-failure (network drop) must NOT clear
+   the presence key — let the TTL lapse so a reconnect rides through. This is
+   the fix for the reported "car online in admin but not in the rider app"
+   caused by a flapping socket wiping presence on every reconnect.
 
-Because the disconnect logic lives inline inside the large
-`websocket_endpoint` coroutine (not a separately-callable unit), these tests
-pin the contract at module level: the websocket module must not be able to
-clear presence, and the drivers module (Go Offline) still can.
+2. BUT a *revocation* close (Sign out everywhere / token-version bump /
+   Firebase session invalidation) is a deliberate server kill — it MUST clear
+   presence immediately, or `/drivers/nearby` + dispatch could keep the revoked
+   driver reachable for up to 30s and offer a ride to a socket that no longer
+   exists. That clear happens inside `heartbeat_task`.
+
+3. The explicit Go Offline handler (routes/drivers.py) must still clear
+   presence on the `is_online=False` branch.
 """
 
 from __future__ import annotations
 
+import asyncio
 import inspect
+import re
+from unittest.mock import AsyncMock, patch
+
+import pytest
 
 
-def test_websocket_module_does_not_clear_presence_on_disconnect():
-    """The websocket handler must NOT reference clear_presence anywhere.
+class TestHeartbeatRevocationClearsPresence:
+    """heartbeat_task force-closes a driver socket on session revocation — and
+    that path must clear the driver's presence key immediately."""
 
-    An involuntary WebSocketDisconnect/error must leave the presence key alone
-    so the 30s TTL can absorb a reconnect. If a future change re-imports or
-    re-invokes clear_presence in this module, that grace is defeated and this
-    test fails on purpose — routing the author back to this rationale.
-    """
+    @pytest.mark.asyncio
+    async def test_revocation_clears_driver_presence(self):
+        """Stored token_version (2) > claim (1) → revoked → presence cleared
+        for the driver id, session_revoked frame sent, socket closed."""
+        from backend.routes import websocket as ws_mod
+
+        ws = AsyncMock()
+        with (
+            patch.object(ws_mod, "_read_token_version", AsyncMock(return_value=2)),
+            patch.object(ws_mod, "clear_presence", AsyncMock()) as clear_mock,
+            patch.object(ws_mod.asyncio, "sleep", AsyncMock(return_value=None)),
+        ):
+            await asyncio.wait_for(
+                ws_mod.heartbeat_task(
+                    ws,
+                    "driver_u1",
+                    user_id="u1",
+                    driver_id="drv-1",
+                    claim_token_version=1,
+                ),
+                timeout=1.0,
+            )
+
+        clear_mock.assert_awaited_once_with("drv-1")
+        ws.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_network_drop_does_not_clear_presence(self):
+        """Not revoked (versions equal); the ping then fails to send (socket
+        died). That send-failure path is a network drop — presence must be left
+        for the TTL, NOT cleared."""
+        from backend.routes import websocket as ws_mod
+
+        ws = AsyncMock()
+        ping_seen = asyncio.Event()
+
+        async def maybe_break(payload):
+            if isinstance(payload, dict) and payload.get("type") == "ping":
+                ping_seen.set()
+                raise RuntimeError("simulated drop after ping")
+
+        ws.send_json.side_effect = maybe_break
+
+        with (
+            patch.object(ws_mod, "_read_token_version", AsyncMock(return_value=3)),
+            patch.object(ws_mod, "clear_presence", AsyncMock()) as clear_mock,
+            patch.object(ws_mod.asyncio, "sleep", AsyncMock(return_value=None)),
+        ):
+            await asyncio.wait_for(
+                ws_mod.heartbeat_task(
+                    ws,
+                    "driver_u2",
+                    user_id="u2",
+                    driver_id="drv-2",
+                    claim_token_version=3,
+                ),
+                timeout=1.0,
+            )
+
+        assert ping_seen.is_set()
+        clear_mock.assert_not_awaited()
+
+
+def test_involuntary_disconnect_branches_do_not_clear_presence():
+    """The WebSocketDisconnect / generic-Exception branches of the endpoint must
+    not clear presence — a plain network drop rides the 30s TTL. (Revocation is
+    handled in heartbeat_task, which is a different code region.)"""
     from backend.routes import websocket as ws_mod
 
-    # Not bound in the module namespace (import was dropped).
-    assert not hasattr(ws_mod, "clear_presence"), (
-        "clear_presence is bound in routes.websocket — an involuntary disconnect "
-        "could wipe the driver's presence key and hide them from riders during a "
-        "network blip. Let the 30s TTL lapse instead."
-    )
-
-    # And the source text of the endpoint doesn't call it either (guards against
-    # a fully-qualified call that wouldn't create a module-level binding).
-    source = inspect.getsource(ws_mod)
-    assert "clear_presence(" not in source, (
-        "routes.websocket calls clear_presence(...) — the involuntary-disconnect "
-        "branches must not clear presence; only explicit Go Offline may."
+    src = inspect.getsource(ws_mod.websocket_endpoint)
+    start = src.index("except WebSocketDisconnect")
+    end = src.index("finally:", start)  # both except blocks precede the finally
+    disconnect_region = src[start:end]
+    assert "clear_presence" not in disconnect_region, (
+        "An involuntary-disconnect branch clears presence — a network blip would "
+        "hide the driver from riders for the reconnect window. Only revocation "
+        "(heartbeat_task) and explicit Go Offline may clear."
     )
 
 
-def test_go_offline_path_still_clears_presence():
-    """The explicit Go Offline path (routes/drivers.py) MUST still clear the
-    presence key immediately — a driver who taps 'Go Offline' should drop out
-    of dispatch and rider results at once, not linger for the TTL window."""
+def test_go_offline_branch_still_clears_presence():
+    """The online/offline toggle in routes/drivers.py must clear presence on the
+    is_online=False branch specifically — not merely reference clear_presence
+    somewhere in the module (subscription/expiry paths also call it)."""
     from backend.routes import drivers as drv_mod
 
-    source = inspect.getsource(drv_mod)
-    assert "clear_presence(" in source, (
-        "routes.drivers no longer calls clear_presence — an explicit Go Offline "
-        "would leave a stale presence key for up to the 30s TTL."
+    src = inspect.getsource(drv_mod)
+    # Go Online marks present; the paired else (Go Offline) clears it.
+    assert "await mark_present(driver_id)" in src, "go-online mark_present call missing"
+    assert re.search(r"else:\s+await clear_presence\(driver_id\)", src), (
+        "the Go Offline branch (else of `if is_online:`) no longer clears the "
+        "driver's presence key"
     )
 
 
 def test_presence_ttl_is_the_grace_window():
-    """Sanity-pin the TTL the disconnect grace relies on. If this shrinks toward
-    the heartbeat interval the grace disappears; if it grows unbounded a dead app
-    lingers too long. 30s == 3x the 10s WS heartbeat (two missed pings)."""
+    """Sanity-pin the TTL the network-drop grace relies on: 30s == 3x the 10s WS
+    heartbeat (two missed pings). Shrinking it toward the heartbeat kills the
+    grace; growing it unbounded lets a dead app linger too long."""
     from backend.utils.driver_presence import PRESENCE_TTL
 
     assert PRESENCE_TTL == 30

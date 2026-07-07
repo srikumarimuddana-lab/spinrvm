@@ -106,3 +106,43 @@ class TestRuntimeEnforcement:
             result, ok = await execute_tool("get_ride_details", {"ride_id": "ride-1"}, user=RIDER)
         assert ok
         assert result["ride"]["id"] == "ride-1"
+
+
+class TestToolAudit:
+    """Layer-7 audit: every tool call is recorded PII-safely (arg names, not
+    values; never results)."""
+
+    def test_classify_outcome(self):
+        assert tools._classify_outcome({}, True) == "success"
+        assert tools._classify_outcome({"error": "not permitted"}, False) == "blocked"
+        assert tools._classify_outcome({"error": "ride not found"}, False) == "not_found"
+        assert tools._classify_outcome({"error": "the lookup took too long — try again"}, False) == "timeout"
+        assert tools._classify_outcome({"error": "boom"}, False) == "error"
+
+    @pytest.mark.anyio
+    async def test_successful_call_is_audited(self):
+        mine = {"id": "ride-1", "rider_id": "rider-1", "status": "completed", "driver_id": None}
+        user = {**RIDER, "_conversation_id": "conv-9"}
+        with patch.object(tools_rides.db_supabase, "get_ride", AsyncMock(return_value=mine)), patch.object(
+            tools, "_schedule_tool_audit"
+        ) as sched:
+            await execute_tool("get_ride_details", {"ride_id": "ride-1"}, user=user, audience="rider")
+        rec = sched.call_args[0][0]
+        assert rec["tool_name"] == "get_ride_details"
+        assert rec["user_id"] == "rider-1"
+        assert rec["audience"] == "rider"
+        assert rec["ok"] is True and rec["outcome"] == "success"
+        assert rec["arg_keys"] == ["ride_id"]  # NAME only, no value
+        assert rec["conversation_id"] == "conv-9"
+        assert isinstance(rec["latency_ms"], int)
+
+    @pytest.mark.anyio
+    async def test_blocked_call_audited_as_blocked_without_arg_values(self):
+        with patch.object(tools, "validate_args", return_value=[]), patch.object(
+            tools, "_schedule_tool_audit"
+        ) as sched:
+            await execute_tool("get_ride_history", {"rider_id": "victim-123"}, user=RIDER)
+        rec = sched.call_args[0][0]
+        assert rec["ok"] is False and rec["outcome"] == "blocked"
+        assert rec["arg_keys"] == ["rider_id"]  # the arg NAME is recorded
+        assert "victim-123" not in str(rec)  # the arg VALUE is never logged

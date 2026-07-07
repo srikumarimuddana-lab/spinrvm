@@ -20,8 +20,14 @@ Safety contract (see CLAUDE.md + plan):
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Tuple
+
+try:
+    from .. import db_supabase
+except ImportError:  # pragma: no cover — top-level run
+    import db_supabase
 
 logger = logging.getLogger(__name__)
 
@@ -218,17 +224,74 @@ def _cap_result(result: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+def _classify_outcome(result: Dict[str, Any], ok: bool) -> str:
+    """Bucket a tool result for the audit trail (no PII)."""
+    if ok:
+        return "success"
+    err = (result or {}).get("error", "") if isinstance(result, dict) else ""
+    if err in ("not authorized", "not permitted"):
+        return "blocked"
+    if err.endswith("not found"):
+        return "not_found"
+    if "took too long" in err:
+        return "timeout"
+    return "error"
+
+
+def _schedule_tool_audit(record: Dict[str, Any]) -> None:
+    """Fire-and-forget the audit write so it never adds latency to the tool
+    path. PIPEDA-safe: the record carries argument NAMES only, never values or
+    results (see migration 217). A write failure must never affect the chat."""
+
+    async def _run() -> None:
+        try:
+            await db_supabase.insert_one("ai_tool_audit", record)
+        except Exception:
+            logger.error("ai tool-audit write failed", exc_info=True, extra={"tool": record.get("tool_name")})
+
+    try:
+        task = asyncio.create_task(_run())
+        task.add_done_callback(lambda t: t.exception())
+    except RuntimeError:
+        # No running loop (e.g. sync test context) — skip; auditing is best-effort.
+        pass
+
+
 async def execute_tool(
     name: str, args: Dict[str, Any], *, user: Dict[str, Any], audience: str = "rider"
 ) -> Tuple[Dict[str, Any], bool]:
-    """Run one tool call. Returns (result, ok).
+    """Run one tool call and audit it. Returns (result, ok).
 
     ``audience`` is decided by the calling surface (chat route / MCP auth),
     never by the model. Never raises for model-recoverable problems —
     unknown tool, bad args, handler failure and timeout all come back as
     (error-result, False) so the chat turn keeps streaming. Real defects
     are logged loudly here.
+
+    Every call is recorded to ai_tool_audit (Layer 7 governance) — tool name,
+    user_id, audience, outcome, latency and argument KEY NAMES only (never
+    values/results — PIPEDA).
     """
+    start = time.perf_counter()
+    result, ok = await _execute_tool_inner(name, args, user=user, audience=audience)
+    _schedule_tool_audit(
+        {
+            "user_id": (user or {}).get("id"),
+            "audience": audience,
+            "tool_name": name,
+            "ok": ok,
+            "outcome": _classify_outcome(result, ok),
+            "latency_ms": int((time.perf_counter() - start) * 1000),
+            "arg_keys": sorted((args or {}).keys()),
+            "conversation_id": (user or {}).get("_conversation_id"),
+        }
+    )
+    return result, ok
+
+
+async def _execute_tool_inner(
+    name: str, args: Dict[str, Any], *, user: Dict[str, Any], audience: str = "rider"
+) -> Tuple[Dict[str, Any], bool]:
     ensure_registry_loaded()
     spec = TOOL_REGISTRY.get(name)
     if spec is None:

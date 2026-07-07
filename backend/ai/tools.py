@@ -275,7 +275,10 @@ async def execute_tool(
     start = time.perf_counter()
     result, ok = await _execute_tool_inner(name, args, user=user, audience=audience)
     outcome = _classify_outcome(result, ok)
-    arg_keys = sorted((args or {}).keys())
+    # A misbehaving provider can emit non-object tool arguments (e.g. a JSON
+    # list/string); collect key names only when we truly have a dict so the
+    # audit path never turns a model-recoverable bad-args result into a crash.
+    arg_keys = sorted(args.keys()) if isinstance(args, dict) else []
     _schedule_tool_audit(
         {
             "user_id": (user or {}).get("id"),
@@ -318,11 +321,7 @@ async def _execute_tool_inner(
     if audience not in spec.audiences:
         return {"error": f"tool not available: {name}"}, False
 
-    errors = validate_args(spec.input_schema, args or {})
-    if errors:
-        return {"error": "; ".join(errors)}, False
-
-    call_args = args or {}
+    call_args = args if isinstance(args, dict) else {}
 
     # Fail closed: no tool runs without an authenticated identity to scope to.
     user_id = (user or {}).get("id")
@@ -330,8 +329,12 @@ async def _execute_tool_inner(
         logger.error("ai tool blocked: no authenticated user id", extra={"tool": name})
         return {"error": "not authorized"}, False
 
-    # The model may never supply an identity id — even if it smuggles one past
-    # the schema, the query is only ever scoped to the server-injected user.
+    # The model may never supply an identity id. This runs BEFORE schema
+    # validation on purpose: for a real tool schema an identity key like
+    # rider_id is an *unknown* argument, so validate_args would reject it as a
+    # generic error and the security console would never see the attempt.
+    # Checking first classifies the smuggled id as "not permitted" (blocked) so
+    # the identity-theft attempt lands in ai_security_events.
     forbidden = FORBIDDEN_ID_ARGS & set(call_args)
     if forbidden:
         logger.error(
@@ -340,6 +343,10 @@ async def _execute_tool_inner(
             extra={"tool": name, "user_id": user_id},
         )
         return {"error": "not permitted"}, False
+
+    errors = validate_args(spec.input_schema, args if args is not None else {})
+    if errors:
+        return {"error": "; ".join(errors)}, False
 
     # Owned-resource id args must belong to the caller BEFORE the handler runs.
     # A foreign or missing id reads as "not found" — the model can never tell

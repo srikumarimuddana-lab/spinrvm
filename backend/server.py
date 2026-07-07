@@ -52,7 +52,6 @@ _API_ADMIN_ONLY_PATHS: frozenset[str] = frozenset(
     {
         "/api/admin/auth",
         "/api/admin/monitoring",
-        "/api/admin/corporate-accounts/wallet",  # corporate_wallet_router
     }
 )
 
@@ -306,6 +305,10 @@ v1_api_router.include_router(admin_documents_router)
 v1_api_router.include_router(drivers_router)
 v1_api_router.include_router(admin_router)
 v1_api_router.include_router(corporate_accounts_router)
+# Canonical /api/v1 twin for the corporate wallet admin routes
+# (/admin/corporate-accounts/{id}/wallet/...). Also mounted at /api below for
+# backward compat; the admin dashboard now calls the /api/v1 paths.
+v1_api_router.include_router(corporate_wallet_router)
 v1_api_router.include_router(users_router)
 v1_api_router.include_router(addresses_router)
 v1_api_router.include_router(payments_router)

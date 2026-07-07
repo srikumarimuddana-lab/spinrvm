@@ -26,7 +26,7 @@ try:
         verify_jwt_token,
     )
     from ..socket_manager import manager
-    from ..utils.driver_presence import mark_present
+    from ..utils.driver_presence import clear_presence, mark_present
     from ..utils.redis_client import redis_expire, redis_incr
 except ImportError:
     import db_supabase
@@ -38,7 +38,7 @@ except ImportError:
         verify_jwt_token,
     )
     from socket_manager import manager
-    from utils.driver_presence import mark_present
+    from utils.driver_presence import clear_presence, mark_present
     from utils.redis_client import redis_expire, redis_incr  # type: ignore
 
 db = db_supabase  # legacy alias
@@ -260,6 +260,7 @@ async def heartbeat_task(
     conn_state: dict | None = None,
     *,
     user_id: str | None = None,
+    driver_id: str | None = None,
     claim_token_version: int = 0,
     firebase_auth_time: int | None = None,
 ):
@@ -287,10 +288,13 @@ async def heartbeat_task(
     failure is treated as "do not act" — see _read_token_version.
 
     Either path raises ``WebSocketDisconnect`` in the receive loop, which
-    clears Redis presence and triggers ``_handle_driver_ws_disconnect`` to
-    notify admins — but does NOT write ``is_online=False``. See the
-    presence sweeper for the reconciliation layer that actually flips
-    ``is_online`` when a driver stays unreachable past the grace window.
+    triggers ``_handle_driver_ws_disconnect`` to notify admins but does NOT
+    write ``is_online=False``. Presence handling differs by cause: a
+    revocation close clears the driver's presence key here immediately (it is
+    a deliberate server kill); a plain network drop is left for the 30s
+    presence TTL so a reconnect within the grace window doesn't hide the
+    driver from riders. The presence sweeper is the reconciliation layer that
+    flips ``is_online`` when a driver stays unreachable past the grace window.
     """
     loop = asyncio.get_event_loop()
     # Tolerate one missed ping window before giving up — HEARTBEAT_INTERVAL
@@ -315,6 +319,19 @@ async def heartbeat_task(
                     _revoked = stored_version is not None and stored_version > claim_token_version
                 if _revoked:
                     logger.info(f"WS heartbeat: session revoked for {connection_key}; closing")
+                    # Revocation is a DELIBERATE server-forced close (Sign out
+                    # everywhere / token-version bump / Firebase session
+                    # invalidation), not a flaky-network blip. Clear the driver's
+                    # presence key NOW rather than letting the 30s TTL lapse:
+                    # otherwise /drivers/nearby + dispatch would keep the revoked
+                    # driver reachable for up to 30s and could route an offer to a
+                    # socket that no longer exists. The involuntary-disconnect
+                    # grace only applies to network drops, which stay untouched.
+                    if driver_id:
+                        try:
+                            await clear_presence(driver_id)
+                        except Exception:  # noqa: S110 — presence best-effort; TTL still bounds it
+                            pass
                     try:
                         await websocket.send_json({"type": "session_revoked", "reason": "token_revoked"})
                     except Exception:  # noqa: S110 — socket may already be dead
@@ -644,6 +661,7 @@ async def websocket_endpoint(
                 connection_key,
                 conn_state,
                 user_id=user["id"],
+                driver_id=current_driver_id,
                 claim_token_version=claim_token_version,
                 firebase_auth_time=firebase_auth_time,
             )

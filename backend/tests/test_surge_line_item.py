@@ -36,6 +36,28 @@ def test_surge_line_carries_real_dollar_amount():
     assert abs(float(total) - float(fb.base_fare + fb.distance_fare + fb.time_fare + fb.booking_fee)) < 0.011
 
 
+def test_surge_not_overstated_on_minimum_fare_ride():
+    """Codex-3: a short ride whose surged fare is still under the minimum must
+    NOT show the full raw surge delta — surge added only what pushed the bill
+    above the no-surge total (here: nothing)."""
+    tiny = {
+        "base_fare": 1.0,
+        "per_km_rate": 0.5,
+        "per_minute_rate": 0.1,
+        "booking_fee": 0.0,
+        "minimum_fare": 20.0,  # floor well above even the surged fare
+    }
+    fb = calculate_fare(tiny, distance_km=1.0, duration_minutes=2.0, surge=Decimal("2.0"))
+    # Surged subtotal (1 + 1.0 + 0.4 = 2.4) is far below the 20.0 minimum, so
+    # surge is fully absorbed by the floor.
+    assert float(fb.total_fare) == 20.0
+    lines = build_fare_breakdown_lines(fb, distance_km=1.0, duration_minutes=2)
+    surge_lines = [x for x in lines if x["type"] == "modifier" and x["label"].startswith("Surge")]
+    assert surge_lines and float(surge_lines[0]["amount"]) == 0.0, "surge under the floor added $0"
+    # Lines still sum to the (minimum) total.
+    assert abs(float(_lines_total(lines)) - 20.0) < 0.011
+
+
 def test_no_surge_line_when_multiplier_is_one():
     fb = calculate_fare(_FARE_INFO, distance_km=10.0, duration_minutes=15.0, surge=Decimal("1"))
     lines = build_fare_breakdown_lines(fb, distance_km=10.0, duration_minutes=15)

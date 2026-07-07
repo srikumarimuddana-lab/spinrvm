@@ -1238,6 +1238,9 @@ async def websocket_endpoint(
         # the tail of a trail. Best-effort — cleanup must not mask the
         # original disconnect, and the on-device buffer re-uploads via REST.
         if current_driver_id:
+            # P7: release the admin-location throttle slot so _admin_loc_last
+            # doesn't grow one entry per driver ever seen.
+            manager.forget_driver_location_throttle(current_driver_id)
             try:
                 await flush_driver_breadcrumbs(current_driver_id)
             except Exception:

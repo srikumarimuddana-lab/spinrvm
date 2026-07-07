@@ -317,7 +317,7 @@ def _invoice_period_end_iso(invoice: dict) -> str | None:
             end = period.get("end")
             if end:
                 return datetime.fromtimestamp(int(end), tz=timezone.utc).isoformat()
-    except Exception:
+    except Exception:  # noqa: S110 — best-effort period parse, fall through to None
         pass
     return None
 
@@ -368,7 +368,7 @@ def _event_to_plain_dict(event):
     if callable(fn):
         try:
             return fn()
-        except Exception:  # pragma: no cover — fall through to JSON
+        except Exception:  # noqa: S110  # pragma: no cover — fall through to JSON
             pass
     try:
         return json.loads(str(event))
@@ -614,14 +614,39 @@ async def stripe_webhook(request: Request):
                 await mark_stripe_event_processed(event_id)
                 return {"received": True, "underpaid": True, "event_id": event_id}
 
-            updated = await db_supabase.update_ride(
-                ride_id,
-                {
-                    "payment_status": "paid",
-                    "payment_intent_id": payment_intent_id,
-                    "paid_at": datetime.now(timezone.utc).isoformat(),
-                },
-            )
+            # C1: PaymentSheet / Google-Pay rides settle ONLY via this webhook —
+            # process_payment (settle_card) never runs — so they must get the
+            # SAME GST receipt + financial_events ledger row + driver tip credit
+            # here, mirroring _handle_ride_invoice_paid. Idempotent: do the
+            # bookkeeping only when the ride was NOT already settled in-app
+            # (payment_status paid/waived_admin/processing), so a process_payment
+            # ride that also emits this webhook isn't double-written.
+            _already_settled = ride.get("payment_status") in ("paid", "waived_admin", "processing")
+            _tip = Decimal(str(ride.get("tip_amount") or 0))
+            try:
+                from ..services.payment_service import (
+                    _tip_ride_update,
+                    record_payment_event,
+                    send_ride_receipt,
+                )
+            except ImportError:
+                from services.payment_service import (  # type: ignore
+                    _tip_ride_update,
+                    record_payment_event,
+                    send_ride_receipt,
+                )
+
+            _paid_fields: dict = {
+                "payment_status": "paid",
+                "payment_intent_id": payment_intent_id,
+                "paid_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if not _already_settled:
+                # Credit the stored tip to the driver exactly once — the delta
+                # model is idempotent with the /rate path that may also apply it.
+                _paid_fields.update(_tip_ride_update(ride, _tip))
+
+            updated = await db_supabase.update_ride(ride_id, _paid_fields)
             if updated is None:
                 logger.error(
                     f"Webhook payment_intent.succeeded: ride {ride_id} not found or 0 rows "
@@ -633,8 +658,31 @@ async def stripe_webhook(request: Request):
                     },
                 )
                 raise HTTPException(status_code=500, detail="Ride update failed — Stripe will retry")
-            else:
-                logger.info(f"Payment confirmed via webhook for ride {ride_id}")
+
+            logger.info(f"Payment confirmed via webhook for ride {ride_id}")
+            if not _already_settled:
+                await record_payment_event(
+                    ride_id=ride_id,
+                    user_id=ride.get("rider_id") or user_id or "",
+                    amount_cents=received_cents,
+                    payment_intent_id=payment_intent_id,
+                    ride=ride,
+                    tip_amount=_tip,
+                )
+                _rcpt_rider = ride.get("rider_id")
+                if _rcpt_rider:
+                    try:
+                        await send_ride_receipt(
+                            dict(updated) if isinstance(updated, dict) else dict(ride),
+                            _rcpt_rider,
+                            _tip,
+                        )
+                    except Exception:
+                        logger.error(
+                            "[webhook] GST receipt send failed for ride %s (payment recorded)",
+                            ride_id,
+                            exc_info=True,
+                        )
 
         if user_id:
             # Wrap push notification so a Firebase outage does not cause Stripe
@@ -797,7 +845,8 @@ async def stripe_webhook(request: Request):
             if rides:
                 ride = rides[0]
                 ride_id = ride["id"]
-                refunded_amount = Decimal(str(charge.get("amount_refunded", 0))) / Decimal("100")
+                refunded_cents = int(charge.get("amount_refunded", 0))
+                refunded_amount = Decimal(str(refunded_cents)) / Decimal("100")
                 refunded_amount = refunded_amount.quantize(_TWO_PLACES, rounding=ROUND_HALF_UP)
                 await db_supabase.update_one(
                     "rides",
@@ -808,8 +857,26 @@ async def stripe_webhook(request: Request):
                         "updated_at": datetime.now(timezone.utc).isoformat(),
                     },
                 )
+                # C3: write a compensating ledger row so the 7-year tax/audit
+                # ledger nets the refund out (it previously recorded none). Per
+                # policy the driver KEEPS their pay — driver_earnings is NOT
+                # clawed back — but the reversed rider-side GST/PST is captured
+                # here for remittance. Idempotent-ish: a duplicate charge.refunded
+                # delivery is deduped upstream by claim_stripe_event(event_id).
+                try:
+                    from ..services.payment_service import record_refund_event
+                except ImportError:
+                    from services.payment_service import record_refund_event  # type: ignore
+                await record_refund_event(
+                    ride_id=ride_id,
+                    user_id=ride.get("rider_id") or "",
+                    refund_cents=refunded_cents,
+                    payment_intent_id=payment_intent_id,
+                    ride=ride,
+                )
                 logger.info(
-                    f"Stripe refund: ride {ride_id} marked refunded (${refunded_amount:.2f})",
+                    f"Stripe refund: ride {ride_id} marked refunded (${refunded_amount:.2f}); "
+                    f"driver pay retained, ledger + GST reversal recorded",
                     extra={
                         "domain": "payments",
                         "ride_id": ride_id,

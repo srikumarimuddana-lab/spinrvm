@@ -35,6 +35,10 @@ _CSRF_EXEMPT_EXACT = frozenset(
         "/openapi.json",
         "/api/v1/auth/send-otp",
         "/api/v1/auth/verify-otp",
+        # Company-portal auth namespace mirrors the /api/v1/auth pre-auth
+        # exemptions (send-otp is a browser-Origin POST with no csrf cookie yet).
+        "/api/portal/auth/send-otp",
+        "/api/portal/auth/verify-otp",
         "/api/v1/auth/firebase",
         "/api/admin/auth/login",
         "/api/v1/stripe/webhook",
@@ -94,6 +98,24 @@ _APP_CHECK_EXEMPT_PREFIXES = (
     # and /stripe-account-session still requires the driver's JWT Bearer token.
     "/api/v1/drivers/stripe-embedded",
     "/api/v1/drivers/stripe-account-session",
+    # Company portal (Spinr for Business) is a browser Next.js app — like the
+    # admin dashboard it cannot attach an X-Firebase-AppCheck header. These are
+    # its surfaces, gated instead by the rider JWT + corporate membership:
+    #   /api/company/*           corporate data (require_company_admin/member)
+    #   /api/rider/work-profile  the caller's own memberships (rider JWT)
+    #   /api/portal/*            the portal's dedicated auth namespace (OTP /
+    #                            refresh / logout). Mobile keeps /api/v1/auth/*
+    #                            App-Check-enforced — only the browser portal
+    #                            uses /api/portal/auth/*.
+    "/api/company/",
+    "/api/rider/work-profile",
+    "/api/portal/",
+    # Low-sensitivity shared reads the portal's booking page needs (public
+    # vehicle list; JWT-gated Google Maps proxy). Exempted rather than
+    # duplicated under /api/portal — mobile still sends App Check, it is simply
+    # no longer required on these two read endpoints.
+    "/api/v1/vehicle-types",
+    "/api/v1/maps/",
 )
 
 

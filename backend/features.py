@@ -928,19 +928,22 @@ async def compute_fare_estimate(
     pins the multiplier — corporate-paid rides are always 1.0x (surge never
     applies to company-billed trips; see routes.rides._is_corporate_paid).
     """
-    fare_config = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("fare_configs", {"vehicle_type_id": vehicle_type_id}, limit=1)
+    # P5: the fare_config and service_areas reads are independent — gather them
+    # instead of two serial round-trips on the <300ms estimate path.
+    fare_config_rows, all_areas = await asyncio.gather(
+        db_supabase.get_rows("fare_configs", {"vehicle_type_id": vehicle_type_id}, limit=1),
+        db_supabase.get_rows("service_areas", {"is_active": True}, limit=100),
     )
+    fare_config = fare_config_rows[0] if fare_config_rows else None
     fare_info = fare_config if fare_config else dict(DEFAULT_FARE)
 
     # Resolve surge from the service area covering the pickup point
-    all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=100)
     surge = Decimal("1")
-    matched_area_id = None
+    matched_area = None
     for area in all_areas:
         poly = get_service_area_polygon(area)
         if poly and point_in_polygon(pickup_lat, pickup_lng, poly):
-            matched_area_id = area.get("id")
+            matched_area = area
             # Gate on the per-area surge master toggle, same as the main fare
             # builders (fare_service / routes.fares). Without this, a stale
             # surge_active flag or parked multiplier on a disabled area would
@@ -949,6 +952,7 @@ async def compute_fare_estimate(
             if area.get("surge_enabled") and area.get("surge_active") and area.get("surge_multiplier", 1.0) > 1.0:
                 surge = min(_fare_d(area["surge_multiplier"]), _fare_d(SURGE_CAP))
             break
+    matched_area_id = matched_area.get("id") if matched_area else None
     if surge_override is not None:
         surge = surge_override
 
@@ -964,6 +968,9 @@ async def compute_fare_estimate(
         distance_km,
         subtotal,
         _all_areas=all_areas,
+        # P5: reuse the pickup area we already resolved above — avoids
+        # calculate_all_fees re-running point-in-polygon over every area.
+        _matched_area=matched_area,
     )
 
     grand_total = round(subtotal + fees_result["fees_total"] + fees_result["tax_amount"], 2)

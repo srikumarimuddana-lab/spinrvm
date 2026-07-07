@@ -4228,7 +4228,10 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
                     .execute()
                 )
             )
-            for lid in loser_ids:
+
+            # P2: each loser is an independent driver — release + notify them
+            # concurrently instead of one serial chain of DB/WS round-trips.
+            async def _release_loser(lid: str) -> None:
                 await db_supabase.set_driver_available(lid, True)
                 await record_period_transition(lid, 1)
                 try:
@@ -4241,6 +4244,8 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
                         )
                 except Exception as e:
                     logger.warning(f"Failed to send ride_taken WS to loser driver {lid}: {e}")
+
+            await asyncio.gather(*(_release_loser(lid) for lid in loser_ids))
     except Exception as e:
         logger.error(f"[ACCEPT] batch offer cleanup failed for ride {ride_id}: {e}", exc_info=True)
 

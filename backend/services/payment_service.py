@@ -95,8 +95,13 @@ def _tip_ride_update(ride: dict, tip_amount: Decimal) -> dict:
     existing_tip = _round(_d(ride.get("tip_amount") or 0))
     tip_delta = tip_d - existing_tip
     fields: dict = {"tip_amount": _f(tip_d)}
-    if tip_delta > 0:
-        fields["driver_earnings"] = _f(_round(_d(ride.get("driver_earnings") or 0) + tip_delta))
+    # Apply the delta in BOTH directions (C3): a downward tip correction must
+    # claw the over-credit back out of driver_earnings, not just an increase —
+    # otherwise a reduced/removed tip leaves the driver overpaid. Clamp at 0 so
+    # a correction can never drive earnings negative.
+    if tip_delta != 0:
+        new_earnings = _round(_d(ride.get("driver_earnings") or 0) + tip_delta)
+        fields["driver_earnings"] = _f(max(new_earnings, _round(Decimal("0"))))
     return fields
 
 
@@ -168,6 +173,65 @@ async def record_payment_event(
     except Exception as ledger_err:
         logger.error(
             "[PAYMENT] financial_events write failed for ride %s pi=%s: %s",
+            ride_id,
+            payment_intent_id,
+            ledger_err,
+            exc_info=True,
+        )
+
+
+async def record_refund_event(
+    ride_id: str,
+    user_id: str,
+    refund_cents: int,
+    payment_intent_id: str | None = None,
+    *,
+    ride: dict | None = None,
+) -> None:
+    """Append a stripe_refund row to the financial_events ledger (C3).
+
+    A refund previously left NO ledger entry, so the 7-year tax/audit ledger
+    over-stated collected revenue + GST. This records the rider refund so
+    remittance nets out. Per policy the driver KEEPS their pay on a refund
+    (Spinr absorbs the payout), so ``driver_earnings`` is deliberately untouched
+    — but we capture the reversed rider-side tax (proportional to the refund
+    fraction) and note the retained driver amount for reconciliation.
+    ``delta_cents`` is NEGATIVE (money leaving). Never raises.
+    """
+    meta: Dict[str, Any] = {"source": "charge.refunded", "driver_pay_absorbed_by_platform": True}
+    if ride:
+        total = _round(_d(ride.get("grand_total") or ride.get("total_fare") or 0))
+        tax_total = _round(_d(ride.get("tax_amount") or 0))
+        refund_d = _round(_d(refund_cents) / Decimal("100"))
+        frac = min(refund_d / total, Decimal("1")) if total > Decimal("0") else Decimal("1")
+        meta.update(
+            {
+                "refund_amount": str(refund_d),
+                # Rider-side GST/PST reversed by this refund (remittance nets it out).
+                "tax_reversed": str(_round(tax_total * frac)),
+                "tax_breakdown": ride.get("tax_breakdown") or {},
+                "driver_id": ride.get("driver_id") or "",
+                # Driver keeps this — recorded so T4A/reconciliation can see the
+                # platform absorbed it rather than clawing it back.
+                "driver_earnings_retained": str(_round(_d(ride.get("driver_earnings") or 0))),
+            }
+        )
+    try:
+        await db_supabase.insert_one(
+            "financial_events",
+            {
+                "event_type": "stripe_refund",
+                "user_id": user_id,
+                "ride_id": ride_id,
+                "delta_cents": -abs(int(refund_cents)),
+                "ref": payment_intent_id,
+                "metadata": meta,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except Exception as ledger_err:
+        logger.error(
+            "[PAYMENT] refund financial_events write failed for ride %s pi=%s: %s",
             ride_id,
             payment_intent_id,
             ledger_err,

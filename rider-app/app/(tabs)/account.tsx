@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   StatusBar,
   Alert,
+  Modal,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -15,10 +16,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
-import * as ImagePicker from 'expo-image-picker';
 import { useAuthStore, type User } from '@shared/store/authStore';
 import api from '@shared/api/client';
-import { showToast } from '../../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useWorkProfileStore } from '../../store/workProfileStore';
@@ -28,21 +27,17 @@ const BLURHASH_PLACEHOLDER = 'LGF5]+Yk^6#M@-5c,1J5@[or[Q6.';
 export default function AccountScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { user, logout, updateProfileImage } = useAuthStore();
+  const { user, logout } = useAuthStore();
   const { profiles, workModeEnabled } = useWorkProfileStore();
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  // Account screen is view-only for the avatar — editing the photo lives in
+  // Edit Personal Info. Tapping the avatar opens a full-screen viewer.
+  const [showPhotoView, setShowPhotoView] = useState(false);
   const [companyInfo, setCompanyInfo] = useState<{
     name?: string; address?: string; phone?: string; email?: string; website?: string;
   }>({});
-
-  const showFeedback = (
-    title: string,
-    message: string,
-    variant: 'success' | 'danger' | 'warning' | 'info' = 'info',
-  ) => showToast(title, message, variant);
 
   useEffect(() => {
     api.get('/company-info')
@@ -64,36 +59,6 @@ export default function AccountScreen() {
       return () => { cancelled = true; };
     }, [])
   );
-
-  const launchCamera = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') return showFeedback('Permission Denied', 'Camera access is needed.', 'warning');
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.7,
-    });
-    if (!result.canceled && result.assets[0]) uploadPhoto(result.assets[0].uri);
-  };
-
-  const launchGallery = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') return showFeedback('Permission Denied', 'Library access is needed.', 'warning');
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.7,
-    });
-    if (!result.canceled && result.assets[0]) uploadPhoto(result.assets[0].uri);
-  };
-
-  const uploadPhoto = async (uri: string) => {
-    setIsUploadingPhoto(true);
-    try {
-      await updateProfileImage(uri);
-      showFeedback('Photo Updated', 'Your profile photo has been updated.', 'success');
-    } catch {
-      showFeedback('Upload Failed', 'Photo upload failed. Please try again.', 'danger');
-    } finally {
-      setIsUploadingPhoto(false);
-    }
-  };
 
   const ratingElements = (rating: number) => {
     const stars = [];
@@ -137,22 +102,14 @@ export default function AccountScreen() {
             </View>
           )}
 
+          {/* View-only: tap to see the photo full-screen. Editing the photo
+              lives in Edit Personal Info (profile-setup). */}
           <TouchableOpacity
             style={styles.avatarContainer}
-            onPress={() => {
-              Alert.alert('Update Photo', 'Choose how to update your profile photo.', [
-                { text: 'Take Photo', onPress: launchCamera },
-                { text: 'Library', onPress: launchGallery },
-                { text: 'Cancel', style: 'cancel' },
-              ]);
-            }}
-            activeOpacity={0.8}
+            onPress={() => { if (user?.profile_image) setShowPhotoView(true); }}
+            activeOpacity={user?.profile_image ? 0.8 : 1}
           >
-            {isUploadingPhoto ? (
-              <View style={[styles.avatarPlaceholder, { backgroundColor: 'rgba(255,255,255,0.2)' }]}>
-                <ActivityIndicator size="large" color="#fff" />
-              </View>
-            ) : user?.profile_image ? (
+            {user?.profile_image ? (
               <Image
                 source={{ uri: user.profile_image }}
                 style={styles.avatar}
@@ -165,9 +122,6 @@ export default function AccountScreen() {
                 <Ionicons name="person" size={40} color="#fff" />
               </View>
             )}
-            <View style={styles.cameraButton}>
-              <Ionicons name="camera" size={14} color={colors.primary} />
-            </View>
             {workModeEnabled && (
               <View style={styles.verifiedBadge}>
                 <Ionicons name="briefcase" size={16} color="#1D4ED8" />
@@ -312,33 +266,28 @@ export default function AccountScreen() {
               <MenuRow styles={styles} colors={colors} icon="bag-handle" iconColor="#F97316" iconBg="rgba(249, 115, 22, 0.1)" label="Lost & Found" onPress={() => router.push('/lost-and-found' as any)} />
               <View style={styles.cardDivider} />
               <MenuRow styles={styles} colors={colors} icon="help-circle" iconColor="#2563EB" iconBg="rgba(37, 99, 235, 0.1)" label="Help Center" onPress={() => router.push('/support' as any)} />
-              <View style={styles.cardDivider} />
-              {/* Privacy Policy / Request My Data / Delete Account live in
-                  Privacy & Settings (Safety & Privacy section above) — they
-                  were duplicated here and made this menu unwieldy. */}
-              <MenuRow styles={styles} colors={colors} icon="document-text" iconColor={colors.textDim} iconBg={colors.surfaceLight} label="Legal" onPress={() => router.push('/legal?type=tos' as any)} />
-              <View style={styles.cardDivider} />
-              <TouchableOpacity
-                style={styles.actionRow}
-                activeOpacity={0.7}
-                onPress={() => {
-                  Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
-                    { text: 'Cancel', style: 'cancel' },
-                    {
-                      text: 'Sign Out',
-                      style: 'destructive',
-                      onPress: async () => { await logout(); router.replace('/login' as any); },
-                    },
-                  ]);
-                }}
-              >
-                <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.05)' }]}>
-                  <Ionicons name="log-out" size={18} color="#EF4444" />
-                </View>
-                <Text style={[styles.actionText, { color: '#EF4444' }]}>Sign Out</Text>
-              </TouchableOpacity>
             </View>
           </View>
+
+          {/* Sign Out — standalone, centered (Legal / Privacy / Data / Delete
+              now live in Privacy & Settings). */}
+          <TouchableOpacity
+            style={styles.signOutButton}
+            activeOpacity={0.7}
+            onPress={() => {
+              Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Sign Out',
+                  style: 'destructive',
+                  onPress: async () => { await logout(); router.replace('/login' as any); },
+                },
+              ]);
+            }}
+          >
+            <Ionicons name="log-out-outline" size={18} color="#EF4444" />
+            <Text style={styles.signOutText}>Sign Out</Text>
+          </TouchableOpacity>
 
           {(companyInfo.address || companyInfo.phone || companyInfo.email || companyInfo.website) && (
             <View style={styles.companySection}>
@@ -351,6 +300,33 @@ export default function AccountScreen() {
           )}
         </View>
       </ScrollView>
+
+      {/* Full-screen profile photo viewer (view-only). */}
+      <Modal
+        visible={showPhotoView}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => setShowPhotoView(false)}
+      >
+        <TouchableOpacity
+          style={styles.photoViewerBackdrop}
+          activeOpacity={1}
+          onPress={() => setShowPhotoView(false)}
+        >
+          {user?.profile_image && (
+            <Image
+              source={{ uri: user.profile_image }}
+              style={styles.photoViewerImage}
+              contentFit="contain"
+              transition={150}
+            />
+          )}
+          <View style={styles.photoViewerClose}>
+            <Ionicons name="close" size={28} color="#fff" />
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -389,6 +365,17 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
     borderWidth: 4, borderColor: '#fff',
     backgroundColor: 'rgba(255,255,255,0.2)',
   },
+  photoViewerBackdrop: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.92)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  photoViewerImage: { width: '92%', height: '70%' },
+  photoViewerClose: { position: 'absolute', top: 56, right: 20 },
+  signOutButton: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    alignSelf: 'center', gap: 8, paddingVertical: 14, marginTop: 4,
+  },
+  signOutText: { fontSize: 15, fontWeight: '700', color: '#EF4444' },
   avatarPlaceholder: {
     width: 100, height: 100, borderRadius: 50,
     justifyContent: 'center', alignItems: 'center',

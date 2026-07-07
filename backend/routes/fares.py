@@ -171,6 +171,26 @@ async def resolve_service_area_for_point(
     return None
 
 
+async def resolve_area_scope(area_id: Optional[str]) -> set:
+    """Return ``area_id`` plus all of its ancestor service areas, following the
+    ``parent_service_area_id`` chain. Makes location-scoped FAQs cascade: content
+    tagged to a parent area also applies to its sub-regions. Empty set when
+    ``area_id`` is falsy; on lookup failure returns just ``{area_id}``."""
+    if not area_id:
+        return set()
+    try:
+        rows = await db_supabase.get_rows("service_areas", {}, columns="id,parent_service_area_id", limit=1000)
+    except Exception:
+        return {area_id}
+    parent = {r["id"]: r.get("parent_service_area_id") for r in (rows or [])}
+    scope: set = set()
+    cur = area_id
+    while cur and cur not in scope:
+        scope.add(cur)
+        cur = parent.get(cur)
+    return scope
+
+
 async def build_fares_for_area(matched_area, vehicle_types):
     """Build the fare estimate list for an already-matched service area.
 

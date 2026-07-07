@@ -154,3 +154,71 @@ async def admin_ai_user_messages(user_id: str, conversation_id: str, admin: dict
         raise HTTPException(status_code=404, detail="Conversation not found")
     await _audit(admin, "admin_ai_messages_viewed", user_id, {"conversation_id": conversation_id})
     return {"messages": messages}
+
+
+# Security console (Layer 7 — detection visibility). Reads the append-only
+# ai_security_events feed produced by the message threat scan (source=message)
+# and the tool-layer identity-arg block (source=tool). The rows are already
+# PIPEDA-safe (ids + signal tags only, never message text or tool args), so
+# there is nothing to scrub here.
+_VALID_SEVERITY = frozenset({"high", "critical"})
+_VALID_SOURCE = frozenset({"message", "tool"})
+
+
+@router.get("/ai/security-events")
+async def admin_ai_security_events(
+    admin: dict = Depends(get_admin_user),
+    severity: Optional[str] = None,
+    event_type: Optional[str] = None,
+    source: Optional[str] = None,
+    limit: int = 100,
+):
+    """Recent suspicious AI activity for the security console — most recent first,
+    with a rolled-up summary so an operator can spot a spike or a single abusive
+    account at a glance."""
+    _require_super_admin(admin)
+    if severity is not None and severity not in _VALID_SEVERITY:
+        raise HTTPException(status_code=422, detail="severity must be one of: high, critical")
+    if source is not None and source not in _VALID_SOURCE:
+        raise HTTPException(status_code=422, detail="source must be one of: message, tool")
+    limit = max(1, min(limit, 500))
+
+    filters: Dict[str, Any] = {}
+    if severity is not None:
+        filters["severity"] = severity
+    if event_type is not None:
+        filters["event_type"] = event_type
+    if source is not None:
+        filters["source"] = source
+
+    events = await db_supabase.get_rows(
+        "ai_security_events",
+        filters=filters or None,
+        order="created_at",
+        desc=True,
+        limit=limit,
+    )
+
+    by_type: Dict[str, int] = {}
+    by_severity: Dict[str, int] = {}
+    by_user: Dict[str, int] = {}
+    for ev in events:
+        by_type[ev.get("event_type")] = by_type.get(ev.get("event_type"), 0) + 1
+        by_severity[ev.get("severity")] = by_severity.get(ev.get("severity"), 0) + 1
+        uid = ev.get("user_id")
+        if uid:
+            by_user[uid] = by_user.get(uid, 0) + 1
+    top_users = [
+        {"user_id": uid, "count": n} for uid, n in sorted(by_user.items(), key=lambda kv: kv[1], reverse=True)[:10]
+    ]
+
+    await _audit(admin, "admin_ai_security_events_viewed", "-", {"count": len(events)})
+    return {
+        "events": events,
+        "summary": {
+            "total": len(events),
+            "by_type": by_type,
+            "by_severity": by_severity,
+            "top_users": top_users,
+        },
+    }

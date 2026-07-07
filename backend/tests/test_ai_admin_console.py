@@ -169,3 +169,76 @@ class TestReads:
             resp = super_admin_client.get("/api/v1/admin/ai/users/rider-1/conversations/other-users-conv/messages")
         assert resp.status_code == 404
         get_messages.assert_awaited_once_with("other-users-conv", "rider-1")
+
+
+SECURITY_EVENTS = [
+    {"id": "e1", "user_id": "rider-1", "event_type": "impersonation", "severity": "critical", "source": "message"},
+    {"id": "e2", "user_id": "rider-1", "event_type": "prompt_injection", "severity": "high", "source": "message"},
+    {"id": "e3", "user_id": "rider-2", "event_type": "tool_blocked", "severity": "critical", "source": "tool"},
+]
+
+
+class TestSecurityEvents:
+    def test_super_admin_only(self, plain_admin_client):
+        with patch("backend.routes.admin.ai_console.db_supabase.get_rows", AsyncMock(return_value=[])):
+            resp = plain_admin_client.get("/api/v1/admin/ai/security-events")
+        assert resp.status_code == 403
+
+    def test_returns_events_and_summary(self, super_admin_client):
+        get_rows = AsyncMock(return_value=SECURITY_EVENTS)
+        with (
+            patch("backend.routes.admin.ai_console.db_supabase.get_rows", get_rows),
+            patch("backend.routes.admin.ai_console.db_supabase.insert_one", AsyncMock()),
+        ):
+            resp = super_admin_client.get("/api/v1/admin/ai/security-events")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["events"]) == 3
+        summary = body["summary"]
+        assert summary["total"] == 3
+        assert summary["by_severity"] == {"critical": 2, "high": 1}
+        assert summary["by_type"]["impersonation"] == 1
+        # rider-1 has two events → ranked first in top_users
+        assert summary["top_users"][0] == {"user_id": "rider-1", "count": 2}
+        # most-recent-first ordering requested from the DB
+        assert get_rows.await_args.kwargs["order"] == "created_at"
+        assert get_rows.await_args.kwargs["desc"] is True
+
+    def test_filters_pushed_to_query(self, super_admin_client):
+        get_rows = AsyncMock(return_value=[])
+        with (
+            patch("backend.routes.admin.ai_console.db_supabase.get_rows", get_rows),
+            patch("backend.routes.admin.ai_console.db_supabase.insert_one", AsyncMock()),
+        ):
+            resp = super_admin_client.get(
+                "/api/v1/admin/ai/security-events?severity=critical&event_type=impersonation&source=tool&limit=25"
+            )
+        assert resp.status_code == 200
+        filters = get_rows.await_args.kwargs["filters"]
+        assert filters == {"severity": "critical", "event_type": "impersonation", "source": "tool"}
+        assert get_rows.await_args.kwargs["limit"] == 25
+
+    def test_invalid_severity_rejected(self, super_admin_client):
+        with patch("backend.routes.admin.ai_console.db_supabase.get_rows", AsyncMock(return_value=[])):
+            resp = super_admin_client.get("/api/v1/admin/ai/security-events?severity=bogus")
+        assert resp.status_code == 422
+
+    def test_limit_capped(self, super_admin_client):
+        get_rows = AsyncMock(return_value=[])
+        with (
+            patch("backend.routes.admin.ai_console.db_supabase.get_rows", get_rows),
+            patch("backend.routes.admin.ai_console.db_supabase.insert_one", AsyncMock()),
+        ):
+            super_admin_client.get("/api/v1/admin/ai/security-events?limit=99999")
+        assert get_rows.await_args.kwargs["limit"] == 500
+
+    def test_view_is_audited(self, super_admin_client):
+        audit = AsyncMock()
+        with (
+            patch("backend.routes.admin.ai_console.db_supabase.get_rows", AsyncMock(return_value=SECURITY_EVENTS)),
+            patch("backend.routes.admin.ai_console.db_supabase.insert_one", audit),
+        ):
+            super_admin_client.get("/api/v1/admin/ai/security-events")
+        row = audit.await_args.args[1]
+        assert row["action"] == "admin_ai_security_events_viewed"
+        assert row["details"]["count"] == 3

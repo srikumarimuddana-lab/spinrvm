@@ -106,6 +106,14 @@ async def main(pickup_lat, pickup_lng):
     print("hidden here means their app stopped heartbeating for longer than the TTL")
     print("(WS never established, backgrounded/killed, or dead network).")
     print()
+    # Persisted for the section-3 XL verdict below: a driver missing from the
+    # presence set is hidden from /rides/estimate even when every DB filter
+    # passes, so section 3 must factor presence in — otherwise it prints the
+    # exact "NO presence key" + "will be counted" contradiction this tool exists
+    # to debug. presence_reachable is None when the check couldn't run,
+    # True/False from present_driver_ids_checked otherwise.
+    present: set = set()
+    presence_reachable = None
     try:
         from utils.driver_presence import present_driver_ids_checked
         from utils.redis_client import _get_redis
@@ -119,6 +127,7 @@ async def main(pickup_lat, pickup_lng):
             print("     machine B. Set REDIS_URL / WS_REDIS_URL on every replica.")
         online_ids = [d["id"] for d in online if d.get("id")]
         present, reachable = await present_driver_ids_checked(online_ids)
+        presence_reachable = reachable
         print(f"  presence store reachable: {reachable}")
         if not reachable:
             # Redis is configured but unavailable: present is an empty set that
@@ -152,6 +161,7 @@ async def main(pickup_lat, pickup_lng):
     section("3. Per XL driver — will the estimate endpoint count them?")
     print("Estimate endpoint filters (routes/rides.py:227-245):")
     print("  - is_online=True AND is_available=True")
+    print("  - live Redis presence key (unless the store is unreachable)")
     print("  - lat and lng both truthy")
     print("  - distance(pickup, driver) <= 10 km")
     print()
@@ -159,6 +169,11 @@ async def main(pickup_lat, pickup_lng):
         reasons = []
         if not d.get("is_available"):
             reasons.append("is_available=False  (stuck from prior ride? see drivers.py:1070/1113/1131)")
+        # Presence gate: only when the store was actually reachable. When it's
+        # unreachable (presence_reachable is False) the rider endpoints fall
+        # back to DB state, so absence from `present` is NOT a hide reason.
+        if presence_reachable and d.get("id") not in present:
+            reasons.append("NO presence key  (heartbeat lapsed — dispatch + /rides/estimate can't reach; see section 2b)")
         if d.get("lat") in (None, 0) or d.get("lng") in (None, 0):
             reasons.append("lat/lng missing or 0  (driver app hasn't posted a location update)")
         if pickup_lat is not None and pickup_lng is not None and d.get("lat") and d.get("lng"):

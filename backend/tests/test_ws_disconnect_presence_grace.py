@@ -16,19 +16,23 @@ The regressions this pins
    the fix for the reported "car online in admin but not in the rider app"
    caused by a flapping socket wiping presence on every reconnect.
 
-2. BUT a *revocation* close (Sign out everywhere / token-version bump /
-   Firebase session invalidation) is a deliberate server kill — it MUST clear
-   presence immediately, or `/drivers/nearby` + dispatch could keep the revoked
-   driver reachable for up to 30s and offer a ride to a socket that no longer
-   exists. That clear happens inside `heartbeat_task`.
+2. A *revocation* close (Sign out everywhere / token-version bump / Firebase
+   session invalidation) is a deliberate server kill — it MUST clear presence
+   immediately (inside `heartbeat_task`), or `/drivers/nearby` + dispatch could
+   keep the revoked driver reachable for up to 30s and offer a ride to a socket
+   that no longer exists.
 
-3. The explicit Go Offline handler (routes/drivers.py) must still clear
+3. BUT that revocation clear must respect ownership: if the driver already
+   reconnected (a newer socket registered under the same connection_key and
+   called mark_present), the stale heartbeat must NOT wipe the live socket's
+   presence key.
+
+4. The explicit Go Offline handler (routes/drivers.py) must still clear
    presence on the `is_online=False` branch.
 """
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import re
 from unittest.mock import AsyncMock, patch
@@ -36,37 +40,62 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 
-class TestHeartbeatRevocationClearsPresence:
-    """heartbeat_task force-closes a driver socket on session revocation — and
-    that path must clear the driver's presence key immediately."""
+class TestHeartbeatRevocationPresence:
+    """heartbeat_task force-closes a driver socket on session revocation. That
+    path clears presence — but only when this socket still owns the key."""
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio
     async def test_revocation_clears_driver_presence(self):
         """Stored token_version (2) > claim (1) → revoked → presence cleared
         for the driver id, session_revoked frame sent, socket closed."""
         from backend.routes import websocket as ws_mod
 
         ws = AsyncMock()
-        with (
-            patch.object(ws_mod, "_read_token_version", AsyncMock(return_value=2)),
-            patch.object(ws_mod, "clear_presence", AsyncMock()) as clear_mock,
-            patch.object(ws_mod.asyncio, "sleep", AsyncMock(return_value=None)),
-        ):
-            await asyncio.wait_for(
-                ws_mod.heartbeat_task(
-                    ws,
-                    "driver_u1",
-                    user_id="u1",
-                    driver_id="drv-1",
-                    claim_token_version=1,
-                ),
-                timeout=1.0,
-            )
+        key = "driver_u1"
+        ws_mod.manager.active_connections[key] = ws  # this socket owns the key
+        try:
+            with (
+                patch.object(ws_mod, "_read_token_version", AsyncMock(return_value=2)),
+                patch.object(ws_mod, "clear_presence", AsyncMock()) as clear_mock,
+                patch.object(ws_mod.asyncio, "sleep", AsyncMock(return_value=None)),
+            ):
+                await ws_mod.heartbeat_task(
+                    ws, key, user_id="u1", driver_id="drv-1", claim_token_version=1
+                )
+        finally:
+            ws_mod.manager.active_connections.pop(key, None)
 
         clear_mock.assert_awaited_once_with("drv-1")
         ws.close.assert_awaited_once()
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio
+    async def test_stale_heartbeat_does_not_clear_presence_after_reconnect(self):
+        """The driver reconnected: a NEWER socket owns connection_key and has
+        already marked presence. This stale heartbeat detecting revocation of
+        the OLD token must close its own socket but NOT clear the live socket's
+        presence key."""
+        from backend.routes import websocket as ws_mod
+
+        old_ws = AsyncMock()
+        new_ws = AsyncMock()
+        key = "driver_u1"
+        ws_mod.manager.active_connections[key] = new_ws  # newer socket owns it
+        try:
+            with (
+                patch.object(ws_mod, "_read_token_version", AsyncMock(return_value=2)),
+                patch.object(ws_mod, "clear_presence", AsyncMock()) as clear_mock,
+                patch.object(ws_mod.asyncio, "sleep", AsyncMock(return_value=None)),
+            ):
+                await ws_mod.heartbeat_task(
+                    old_ws, key, user_id="u1", driver_id="drv-1", claim_token_version=1
+                )
+        finally:
+            ws_mod.manager.active_connections.pop(key, None)
+
+        clear_mock.assert_not_awaited()  # live socket's presence preserved
+        old_ws.close.assert_awaited_once()  # stale socket still closed
+
+    @pytest.mark.anyio
     async def test_network_drop_does_not_clear_presence(self):
         """Not revoked (versions equal); the ping then fails to send (socket
         died). That send-failure path is a network drop — presence must be left
@@ -74,11 +103,11 @@ class TestHeartbeatRevocationClearsPresence:
         from backend.routes import websocket as ws_mod
 
         ws = AsyncMock()
-        ping_seen = asyncio.Event()
+        ping_seen = {"v": False}
 
         async def maybe_break(payload):
             if isinstance(payload, dict) and payload.get("type") == "ping":
-                ping_seen.set()
+                ping_seen["v"] = True
                 raise RuntimeError("simulated drop after ping")
 
         ws.send_json.side_effect = maybe_break
@@ -88,18 +117,11 @@ class TestHeartbeatRevocationClearsPresence:
             patch.object(ws_mod, "clear_presence", AsyncMock()) as clear_mock,
             patch.object(ws_mod.asyncio, "sleep", AsyncMock(return_value=None)),
         ):
-            await asyncio.wait_for(
-                ws_mod.heartbeat_task(
-                    ws,
-                    "driver_u2",
-                    user_id="u2",
-                    driver_id="drv-2",
-                    claim_token_version=3,
-                ),
-                timeout=1.0,
+            await ws_mod.heartbeat_task(
+                ws, "driver_u2", user_id="u2", driver_id="drv-2", claim_token_version=3
             )
 
-        assert ping_seen.is_set()
+        assert ping_seen["v"]
         clear_mock.assert_not_awaited()
 
 

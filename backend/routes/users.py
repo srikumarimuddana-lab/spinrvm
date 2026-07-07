@@ -136,49 +136,28 @@ async def request_data_export(current_user: dict = Depends(get_current_user)):
     }
 
 
-async def _anonymise_rides(user_id: str) -> None:
-    """Strip PII from completed rides linked to a user (PIPEDA R-P2-46).
-
-    Ride records are retained for 7 years per Saskatchewan Transportation Act
-    but personal identifiers are removed immediately on deletion request.
-    Only 'completed' rides are anonymised — in_progress rides remain fully
-    linked for insurance period audit obligations.
-    Coordinates are rounded to 2 dp (~1 km precision); address text fields
-    are replaced with '[anonymized]'.
-    """
-    try:
-        rides = await db_supabase.get_rows(
-            "rides",
-            {"rider_id": user_id, "status": "completed"},
-            limit=5000,
-        )
-        for ride in rides:
-            updates: dict = {
-                "rider_id": None,
-                "pickup_address": "[anonymized]",
-                "dropoff_address": "[anonymized]",
-            }
-            for lat_field in ("pickup_lat", "dropoff_lat"):
-                if ride.get(lat_field) is not None:
-                    updates[lat_field] = round(float(ride[lat_field]), 2)
-            for lng_field in ("pickup_lng", "dropoff_lng"):
-                if ride.get(lng_field) is not None:
-                    updates[lng_field] = round(float(ride[lng_field]), 2)
-            await db_supabase.update_one("rides", {"id": ride["id"]}, updates)
-        logger.info(f"Anonymised {len(rides)} completed rides for deleted user {user_id}")
-    except Exception as e:
-        # Log but don't fail the deletion — ride anonymisation is best-effort;
-        # the account is still marked pending_deletion so the purge loop retries.
-        logger.error(f"Ride anonymisation failed for user {user_id}: {e}", exc_info=True)
+# NOTE: ride anonymization on deletion was intentionally removed — rides stay
+# fully attributable to the rider for the 7-year retention window and are then
+# hard-deleted by purge_pii_retention() (Uber/Lyft model). GPS coords still drop
+# at the separate 3-year ceiling inside that same purge.
 
 
 @api_router.delete("/account")
 async def delete_account_pipeda(current_user: dict = Depends(get_current_user)):
-    """R-P1-6 PIPEDA: Soft-delete account with a 30-day grace period (right to erasure)."""
-    user_id = current_user["id"]
-    logger.info(f"Account deletion (PIPEDA) requested for user {user_id}")
+    """Soft-delete / tombstone the account (Uber/Lyft model).
 
-    grace_period_end = (datetime.now(timezone.utc).replace(microsecond=0) + timedelta(days=30)).isoformat()
+    The account is LOCKED immediately (tokens revoked, status pending_deletion)
+    but records stay FULLY ATTRIBUTABLE — no anonymization — for the 7-year SK
+    Transportation Act / tax retention window. The daily purge hard-deletes the
+    account + its footprint once that window elapses; the rider can reactivate
+    by OTP login any time before then. PIPEDA erasure is satisfied via that
+    lawful-retention carve-out, not immediate deletion.
+    """
+    user_id = current_user["id"]
+    logger.info(f"Account deletion (soft/tombstone) requested for user {user_id}")
+
+    # 7-year retention ceiling (2557 days ≈ 7y). The purge compares against this.
+    grace_period_end = (datetime.now(timezone.utc).replace(microsecond=0) + timedelta(days=2557)).isoformat()
     now = datetime.now(timezone.utc).isoformat()
     try:
         # Bump token_version so every already-issued access token (and WebSocket
@@ -206,10 +185,9 @@ async def delete_account_pipeda(current_user: dict = Depends(get_current_user)):
             await redis_delete(f"session:{user_id}")
         except Exception:
             logger.error("Account deletion: session/refresh-token revocation failed (non-fatal)", exc_info=True)
-        # R-P2-46: strip PII from ride records immediately even though the account
-        # itself has a 30-day grace period.  Ride rows are retained for SK regulatory
-        # retention (7 years) but personal identifiers are removed now.
-        await _anonymise_rides(user_id)
+        # Rides are deliberately NOT anonymized — they stay linked to this rider
+        # (attributable) for the full 7-year retention, then are hard-deleted by
+        # the purge. Only the GPS coords drop at the separate 3-year ceiling.
         await log_admin_action(
             {"id": user_id, "role": "user"},
             action="dsar_deletion_requested",
@@ -220,7 +198,11 @@ async def delete_account_pipeda(current_user: dict = Depends(get_current_user)):
         logger.info(f"Account deletion scheduled for user {user_id} (grace period until {grace_period_end})")
         return {
             "success": True,
-            "message": "Account deletion scheduled. Your account will be permanently deleted after 30 days.",
+            "message": (
+                "Your account has been deactivated. Your ride records are kept to meet "
+                "regulatory requirements and are then permanently deleted — sign in again "
+                "anytime to reactivate."
+            ),
         }
     except Exception as e:
         logger.error(f"Account deletion failed for user {user_id}: {e}")
@@ -244,8 +226,8 @@ async def delete_account(current_user: dict = Depends(get_current_user)):
         await db_supabase.delete_many("driver_documents", {"driver_id": user_id})
         await db_supabase.delete_many("emergency_contacts", {"user_id": user_id})
         await db_supabase.delete_many("saved_addresses", {"user_id": user_id})
-        # R-P2-46: anonymise rides before unlinking user_id
-        await _anonymise_rides(user_id)
+        # Rides are kept attributable (no anonymization) — retained and then
+        # hard-deleted by the 7-year retention purge like every other account.
         # Soft-delete the user record
         await db_supabase.update_one("users", {"id": user_id}, {"deleted_at": now})
         await log_admin_action(

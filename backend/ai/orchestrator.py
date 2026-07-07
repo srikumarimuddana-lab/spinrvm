@@ -28,6 +28,7 @@ try:
     from .prompts import build_system_prompt
     from .providers import get_adapter
     from .providers.base import AIConfigError
+    from .threat import record_security_event, scan_message
     from .tools import execute_tool, tool_defs_for
 except ImportError:
     from ai import conversations, response_cache
@@ -118,6 +119,23 @@ async def run_chat_turn(
         yield "error", {"code": "not_found", "message": "Conversation not found."}
         return
 
+    # Threat tripwire — flag likely injection/jailbreak/impersonation attempts
+    # for the security console. Detection only (the tool layer blocks the harm);
+    # scans the raw message but records only signal tags, never the text.
+    threat_hit = scan_message(user_message)
+    if threat_hit:
+        signals = threat_hit["signals"]
+        etype = next((s for s in signals if s in ("impersonation", "data_exfiltration")), signals[0])
+        record_security_event(
+            user_id=user.get("id"),
+            audience=audience,
+            conversation_id=conversation["id"],
+            event_type=etype,
+            severity=threat_hit["severity"],
+            signals=signals,
+            source="message",
+        )
+
     scrubbed = scrub_pii(user_message)
     user_row = await conversations.append_message(conversation, "user", scrubbed)
     yield "meta", {"conversation_id": conversation["id"], "user_message_id": user_row["id"]}
@@ -140,11 +158,14 @@ async def run_chat_turn(
                 conversation, "assistant", cached, usage={"input_tokens": 0, "output_tokens": 0}, provider="cache"
             )
             _metric_inc("spinr_ai_chat_turns_total", {"outcome": "cached"})
-            yield "done", {
-                "message_id": assistant_row["id"],
-                "usage": {"input_tokens": 0, "output_tokens": 0},
-                "stop_reason": "end_turn",
-            }
+            yield (
+                "done",
+                {
+                    "message_id": assistant_row["id"],
+                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                    "stop_reason": "end_turn",
+                },
+            )
             return
         _metric_inc("spinr_ai_response_cache_total", {"outcome": "miss"})
 
@@ -251,12 +272,16 @@ async def run_chat_turn(
         provider=getattr(adapter, "provider", None),
         model=getattr(adapter, "model", None),
     )
-    if cache_eligible and produced_real_text and response_cache.is_cacheable(
-        admin_actor_id=admin_actor_id,
-        prior_turns=prior_turns,
-        used_tool_names=used_tool_names,
-        had_client_action=emitted_client_action,
-        text=final_text,
+    if (
+        cache_eligible
+        and produced_real_text
+        and response_cache.is_cacheable(
+            admin_actor_id=admin_actor_id,
+            prior_turns=prior_turns,
+            used_tool_names=used_tool_names,
+            had_client_action=emitted_client_action,
+            text=final_text,
+        )
     ):
         await response_cache.store_cached(audience, scrubbed, final_text, faq_cache_ttl)
         _metric_inc("spinr_ai_response_cache_total", {"outcome": "store"})

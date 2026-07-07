@@ -251,13 +251,21 @@ def build_fare_breakdown_lines(
     surged_dt = fb.distance_fare + fb.time_fare
     base_dt = fb.distance_fare_base + fb.time_fare_base
     if fb.surge_multiplier > Decimal("1") and base_dt <= Decimal("0"):
-        # Older FareBreakdown without the pre-surge fields — derive from the
-        # multiplier (keeps totals exact via the subtraction below).
+        # Older FareBreakdown without the pre-surge fields — derive from the multiplier.
         base_dt = _round(surged_dt / fb.surge_multiplier)
-    surge_delta = _round(surged_dt - base_dt) if fb.surge_multiplier > Decimal("1") else Decimal("0")
+    if fb.surge_multiplier > Decimal("1"):
+        # Show what surge ACTUALLY added to the price, not the raw distance/time
+        # delta: on a short ride the minimum fare can absorb some or all of the
+        # surge, so the real contribution is (surged total − unsurged total),
+        # both minimum-clamped. Prevents overstating surge on minimum-fare rides.
+        unsurged_total = max(fb.base_fare + base_dt + fb.booking_fee + fb.airport_fee, fb.minimum_fare)
+        surge_delta = max(Decimal("0"), _round(fb.total_fare - unsurged_total))
+    else:
+        surge_delta = Decimal("0")
 
-    # Consolidated ride line (pre-surge) — driver earns 100% (0% commission model)
-    ride_subtotal = _f(fb.base_fare + surged_dt - surge_delta)
+    # Consolidated ride line — absorbs the minimum-fare adjustment so ride +
+    # surge + booking + airport == total_fare exactly. Driver earns 100%.
+    ride_subtotal = _f(fb.total_fare - surge_delta - fb.booking_fee - fb.airport_fee)
     lines.append(
         {
             "label": f"Ride fare ({round(distance_km, 1)} km)",

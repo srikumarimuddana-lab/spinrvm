@@ -339,6 +339,14 @@ async def send_otp(request: Request, body: SendOTPRequest):
             message_key=ErrorKeys.SYSTEM_SERVICE_UNAVAILABLE,
         )
 
+    # Per-destination-phone SMS send cap (C5) — enforced BEFORE the stored OTP
+    # is replaced, so a throttled resend (429) doesn't wipe the still-valid code
+    # already on the user's phone (which would lock them out until the cap
+    # resets). Only real Twilio sends are capped; dev-bypass and reviewer
+    # accounts skip SMS and so skip the cap.
+    if deliver_via_sms and twilio_configured:
+        await _enforce_otp_send_cap(phone)
+
     otp_record = OTPRecord(
         phone=phone,
         code=hash_otp(otp_code),  # stored as SHA-256 hash (SEC-016)
@@ -360,14 +368,9 @@ async def send_otp(request: Request, body: SendOTPRequest):
             message_key=ErrorKeys.SYSTEM_DATABASE,
         ) from e
 
-    # Per-destination-phone SMS send cap (C5) — only for real Twilio sends, so
-    # dev-bypass and reviewer accounts are unaffected. Enforced before the send
-    # so a bombing attempt costs no SMS.
-    if deliver_via_sms and twilio_configured:
-        await _enforce_otp_send_cap(phone)
-
     # Send OTP via SMS (Twilio when configured, console log otherwise).
     # Reviewer accounts skip SMS entirely — the code is pre-shared out of band.
+    # (The per-phone send cap already ran above, before the OTP row was stored.)
     if deliver_via_sms:
         sms_result = await send_otp_sms(
             phone,

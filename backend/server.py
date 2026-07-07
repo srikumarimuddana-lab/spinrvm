@@ -340,6 +340,11 @@ v1_api_router.include_router(maps_router)
 app.include_router(v1_api_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api")
+# Company-portal auth namespace: the SAME auth handlers under an
+# App-Check-exempt path (see _APP_CHECK_EXEMPT_PREFIXES) so the browser portal —
+# which can't attach an X-Firebase-AppCheck header — can send OTP / verify /
+# refresh / logout, while mobile keeps /api/v1/auth/* App-Check-enforced.
+app.include_router(auth_router, prefix="/api/portal")
 
 # WebSocket routes — mounted at root so the path /ws/{client_type}/{client_id} is served directly
 app.include_router(websocket_router)

@@ -178,21 +178,19 @@ class _WSPubSub:
         if not self.active:
             return False
 
-        # Sequence and buffer for reconnect replays (2 round-trips:
-        # one INCR to get the seq, then a 3-op pipeline for the outbox).
+        # Durable path is 2 Redis round-trips (was 3): one INCR for the seq
+        # (its result builds seq_message, so it can't fold into a
+        # non-transactional pipeline), then ONE pipeline that both buffers the
+        # outbox AND publishes.
         seq_message: Any = message
+        buffered = False
         if durable:
             try:
                 seq = await self._redis.incr(f"spinr:ws:seq:{client_id}")
                 seq_message = {"seq": seq, "data": message}
-                outbox_key = f"spinr:ws:outbox:{client_id}"
-                pipe = self._redis.pipeline(transaction=False)
-                pipe.rpush(outbox_key, json.dumps(seq_message))
-                pipe.ltrim(outbox_key, -50, -1)
-                pipe.expire(outbox_key, 300)
-                await pipe.execute()
+                buffered = True
             except Exception as e:
-                logger.error(f"WS pub/sub: outbox sequence failed for {client_id}: {e}")
+                logger.error(f"WS pub/sub: seq incr failed for {client_id}: {e}")
                 seq_message = message
 
         try:
@@ -202,6 +200,23 @@ class _WSPubSub:
             # to fail silently if we swallowed this; log loudly.
             logger.error(f"WS pub/sub: could not serialise message for {client_id}: {e}")
             return False
+
+        if buffered:
+            # Outbox writes + PUBLISH in a single round-trip.
+            try:
+                outbox_key = f"spinr:ws:outbox:{client_id}"
+                pipe = self._redis.pipeline(transaction=False)
+                pipe.rpush(outbox_key, json.dumps(seq_message))
+                pipe.ltrim(outbox_key, -50, -1)
+                pipe.expire(outbox_key, 300)
+                pipe.publish(CHANNEL, body)
+                await pipe.execute()
+                return True
+            except Exception as e:
+                # Durability bookkeeping failed — still deliver via a bare
+                # publish below rather than dropping the event.
+                logger.error(f"WS pub/sub: durable pipeline failed for {client_id}, bare-publishing: {e}")
+
         try:
             await self._redis.publish(CHANNEL, body)
             return True

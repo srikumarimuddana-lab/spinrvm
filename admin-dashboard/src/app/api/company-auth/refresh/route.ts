@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
 
   let upstream: Response;
   try {
-    upstream = await fetch(`${BACKEND_URL}/api/v1/auth/refresh`, {
+    upstream = await fetch(`${BACKEND_URL}/api/portal/auth/refresh`, {
       method: "POST",
       headers: forwardedHeaders(req),
       // Backend reads the refresh token from cookie OR body; we hold it in a

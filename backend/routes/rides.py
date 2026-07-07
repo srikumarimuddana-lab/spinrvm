@@ -505,17 +505,37 @@ def _build_fare_breakdown(ride: dict) -> list[dict]:
     line-item structure.
     """
     lines: list[dict] = []
-    ride_fare = float(_d(ride.get("base_fare", 0)) + _d(ride.get("distance_fare", 0)) + _d(ride.get("time_fare", 0)))
-    if ride_fare > 0:
+    base = _d(ride.get("base_fare", 0))
+    dist_surged = _d(ride.get("distance_fare", 0))
+    time_surged = _d(ride.get("time_fare", 0))
+    booking = _d(ride.get("booking_fee", 0) or 0)
+    airport = _d(ride.get("airport_fee", 0) or 0)
+    surge = _d(ride.get("surge_multiplier") or 1)
+
+    # C4: disclose surge as a real dollar line on the actual bill surfaces
+    # (receipt / history / admin), matching the estimate — it was amount:None
+    # here. surge multiplies only distance+time; the pre-surge ride fare + the
+    # surge delta sum to the same total. Cap the delta at what surge actually
+    # added: if the minimum fare clamped the surged fare, surge contributed $0.
+    surge_delta = Decimal("0")
+    if surge > Decimal("1"):
+        surged_dt = dist_surged + time_surged
+        unsurged_dt = _round(surged_dt / surge)
+        surged_subtotal = base + surged_dt + booking + airport
+        total_fare = _d(ride.get("total_fare") or surged_subtotal)
+        min_clamped = (total_fare - surged_subtotal) > Decimal("0.005")
+        surge_delta = Decimal("0") if min_clamped else _round(surged_dt - unsurged_dt)
+
+    ride_fare_d = base + dist_surged + time_surged - surge_delta
+    if ride_fare_d > 0:
         dist_km = round(float(ride.get("distance_km") or 0), 1)
-        lines.append({"label": f"Ride fare ({dist_km} km)", "amount": _f(Decimal(str(ride_fare))), "type": "ride"})
-    if ride.get("airport_fee") and float(ride["airport_fee"]) > 0:
+        lines.append({"label": f"Ride fare ({dist_km} km)", "amount": _f(_round(ride_fare_d)), "type": "ride"})
+    if airport > 0:
         lines.append({"label": "Airport surcharge", "amount": ride["airport_fee"], "type": "fee"})
-    if ride.get("booking_fee") and float(ride["booking_fee"]) > 0:
+    if booking > 0:
         lines.append({"label": "Booking fee", "amount": ride["booking_fee"], "type": "fee"})
-    surge = float(ride.get("surge_multiplier") or 1)
-    if surge > 1:
-        lines.append({"label": f"Surge ({surge}×)", "amount": None, "type": "modifier"})
+    if surge > Decimal("1"):
+        lines.append({"label": f"Surge ({float(surge)}×)", "amount": _f(_round(surge_delta)), "type": "modifier"})
     for af in ride.get("area_fees_breakdown") or []:
         afv = af.get("calculated_value", 0)
         if float(afv) > 0:
@@ -531,6 +551,9 @@ def _build_fare_breakdown(ride: dict) -> list[dict]:
         # taxes. Cap the displayed discount at ride_fare so legacy rides with
         # an uncapped discount_amount still render a sane breakdown.
         raw_discount = float(ride["discount_amount"])
+        # Cap against the full (surged) ride fare — the driver's 100%-share base,
+        # which the promo discounts — not the pre-surge line shown above.
+        ride_fare = float(base + dist_surged + time_surged)
         capped_discount = min(raw_discount, ride_fare) if ride_fare > 0 else raw_discount
         lines.append({"label": promo_label, "amount": -capped_discount, "type": "discount"})
     if ride.get("tip_amount") and float(ride["tip_amount"]) > 0:
@@ -706,6 +729,23 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
         logger.error(f"[DISPATCH] match_driver_to_ride: ride {ride_id} not found")
         return
 
+    # C2: never dispatch a ride that is no longer searching. The offer-timeout
+    # re-dispatch path runs ~15 awaits after its own status check, so a driver
+    # accept can land in that window and flip the ride to driver_accepted;
+    # without this guard we would claim fresh drivers and emit phantom offers on
+    # an already-live ride (ride-state invariant violation) and needlessly pull
+    # available drivers offline. Every caller either passes a fresh searching
+    # ride (booking) or re-fetches after ensuring searching (scheduled flips
+    # scheduled→searching first; offer-timeout / decline re-dispatch re-fetch),
+    # so this only ever skips a genuinely stale (already-accepted) ride.
+    if ride.get("status") != RideStatus.SEARCHING:
+        logger.info(
+            "[DISPATCH] skipping dispatch for ride %s — status is %s, not searching",
+            ride_id,
+            ride.get("status"),
+        )
+        return
+
     # Refuse to dispatch a ride with missing coordinates — the driver-app
     # cannot render the map polyline and would either drop the offer or
     # plot (0,0) (Gulf of Guinea). Surfacing loudly per CLAUDE.md ("Do not
@@ -795,6 +835,11 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     all_drivers = await db_supabase.get_rows(
         "drivers",
         _dispatch_filter,
+        # P1: project only what ranking/filtering reads — NOT "*". The full row
+        # carries encrypted PII (address, licence, vehicle details) that this hot
+        # path (up to 500 rows every dispatch + retry, every replica) never needs;
+        # the offer payload is built from the post-claim get_driver_by_id re-read.
+        columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id",
         limit=500,
     )
 
@@ -1018,7 +1063,12 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                 }
                 if ride.get("requires_wav"):
                     _casc_filter["is_wav"] = True
-                _casc_pool = await db_supabase.get_rows("drivers", _casc_filter, limit=500)
+                _casc_pool = await db_supabase.get_rows(
+                    "drivers",
+                    _casc_filter,
+                    columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id",
+                    limit=500,
+                )
                 # Fix 4: Presence filter using _checked variant so a Redis outage
                 # (configured-but-unavailable) cannot silently empty the cascade pool.
                 # present_driver_ids_checked returns (set, reachable=False) on failure;
@@ -1127,12 +1177,19 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     if use_eta:
         try:
             maps_key = app_settings.get("google_maps_api_key", "")
-            eta_map = await batch_get_etas(
-                [d for d, _ in pre_filtered],
-                # ETA to the road-snapped pickup the driver actually drives to.
-                ride["pickup_nav_lat"] if ride.get("pickup_nav_lat") is not None else ride["pickup_lat"],
-                ride["pickup_nav_lng"] if ride.get("pickup_nav_lng") is not None else ride["pickup_lng"],
-                maps_key,
+            eta_map = await asyncio.wait_for(
+                batch_get_etas(
+                    [d for d, _ in pre_filtered],
+                    # ETA to the road-snapped pickup the driver actually drives to.
+                    ride["pickup_nav_lat"] if ride.get("pickup_nav_lat") is not None else ride["pickup_lat"],
+                    ride["pickup_nav_lng"] if ride.get("pickup_nav_lng") is not None else ride["pickup_lng"],
+                    maps_key,
+                ),
+                # P3: bound the external Distance-Matrix call to the dispatch
+                # budget — its own _MAPS_TIMEOUT is 3s, too long for the <2s
+                # offer clock. A TimeoutError is caught below → haversine
+                # ranking, so a slow Maps API can't blow the dispatch SLA.
+                timeout=1.2,
             )
             ranked = rank_by_eta_with_acceptance([(d, eta_map.get(d["id"], 9999)) for d, _ in pre_filtered])
         except Exception as e:
@@ -1633,7 +1690,11 @@ async def _batch_offer_timeout_handler(
         except Exception:
             miss_threshold = 3
 
-        for did in pending_ids:
+        # P2: each pending driver's release is independent (distinct driver,
+        # no cross-driver ordering), so run them concurrently instead of one
+        # serial chain of DB/WS round-trips. Sub-steps within a driver stay
+        # sequential (they have their own ordering).
+        async def _release_pending_driver(did: str) -> None:
             miss_count = await increment_miss_streak(did)
             await update_acceptance_rate(did, accepted=False)
 
@@ -1674,6 +1735,8 @@ async def _batch_offer_timeout_handler(
                     )
             except Exception as e:
                 logger.warning(f"Failed to send offer_expired WS to driver {did}: {e}")
+
+        await asyncio.gather(*(_release_pending_driver(did) for did in pending_ids))
 
         if rider_id:
             await manager.send_personal_message(
@@ -1910,6 +1973,9 @@ async def compute_ride_estimates(
             # 10 km matches the exact haversine gate in the loop below.
             "$and": dispatch_geo_bounds(body.pickup_lat, body.pickup_lng, 10.0),
         },
+        # P1: same projection as the dispatch pool — the estimate badge only
+        # needs id/user_id/lat/lng/vehicle_type_id/is_wav, never encrypted PII.
+        columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id",
         order="went_online_at",
         desc=True,
         limit=200,

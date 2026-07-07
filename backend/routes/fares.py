@@ -175,12 +175,22 @@ async def resolve_area_scope(area_id: Optional[str]) -> set:
     """Return ``area_id`` plus all of its ancestor service areas, following the
     ``parent_service_area_id`` chain. Makes location-scoped FAQs cascade: content
     tagged to a parent area also applies to its sub-regions. Empty set when
-    ``area_id`` is falsy; on lookup failure returns just ``{area_id}``."""
+    ``area_id`` is falsy.
+
+    On lookup failure this degrades to just ``{area_id}`` (exact-area FAQs still
+    resolve; only the parent cascade is lost) but logs loudly first — a silent
+    partial result would make parent-tagged content (e.g. province-level SK
+    FAQs) vanish while the request still looked successful."""
     if not area_id:
         return set()
     try:
         rows = await db_supabase.get_rows("service_areas", {}, columns="id,parent_service_area_id", limit=1000)
     except Exception:
+        logger.error(
+            "resolve_area_scope: service_areas lookup failed — parent cascade skipped",
+            exc_info=True,
+            extra={"area_id": area_id},
+        )
         return {area_id}
     parent = {r["id"]: r.get("parent_service_area_id") for r in (rows or [])}
     scope: set = set()

@@ -274,18 +274,36 @@ async def execute_tool(
     """
     start = time.perf_counter()
     result, ok = await _execute_tool_inner(name, args, user=user, audience=audience)
+    outcome = _classify_outcome(result, ok)
+    arg_keys = sorted((args or {}).keys())
     _schedule_tool_audit(
         {
             "user_id": (user or {}).get("id"),
             "audience": audience,
             "tool_name": name,
             "ok": ok,
-            "outcome": _classify_outcome(result, ok),
+            "outcome": outcome,
             "latency_ms": int((time.perf_counter() - start) * 1000),
-            "arg_keys": sorted((args or {}).keys()),
+            "arg_keys": arg_keys,
             "conversation_id": (user or {}).get("_conversation_id"),
         }
     )
+    # A tool blocked by the identity/scoping guards is a clear attack signal —
+    # surface it in the security feed, not just the audit trail.
+    if outcome == "blocked":
+        try:
+            from .threat import record_security_event
+        except ImportError:
+            from threat import record_security_event
+        record_security_event(
+            user_id=(user or {}).get("id"),
+            audience=audience,
+            conversation_id=(user or {}).get("_conversation_id"),
+            event_type="tool_blocked",
+            severity="critical",
+            signals=[name, *arg_keys],
+            source="tool",
+        )
     return result, ok
 
 

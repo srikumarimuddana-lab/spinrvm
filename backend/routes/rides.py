@@ -1973,9 +1973,15 @@ async def compute_ride_estimates(
             # 10 km matches the exact haversine gate in the loop below.
             "$and": dispatch_geo_bounds(body.pickup_lat, body.pickup_lng, 10.0),
         },
-        # P1: same projection as the dispatch pool — the estimate badge only
-        # needs id/user_id/lat/lng/vehicle_type_id/is_wav, never encrypted PII.
-        columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id",
+        # P1: same base projection as the dispatch pool — never encrypted PII.
+        # is_online + went_online_at/went_offline_at are REQUIRED here (the
+        # dispatch pool presence-filters directly and does not need them):
+        # _filter_reachable_drivers below composes presence with intent_online(d),
+        # and intent_online reads exactly those three columns. Omitting them made
+        # intent_online see every field as NULL -> bool(None) -> False for every
+        # driver, so the estimate dropped the entire pool and every vehicle type
+        # showed "No cars available" even with a live, in-range, present driver.
+        columns="id,user_id,lat,lng,rating,is_wav,acceptance_rate,destination_mode,destination_lat,destination_lng,vehicle_type_id,is_online,went_online_at,went_offline_at",
         order="went_online_at",
         desc=True,
         limit=200,

@@ -6,7 +6,6 @@ for business rides and expense management.
 """
 
 import logging
-from datetime import datetime
 from decimal import Decimal
 from typing import List, Optional
 
@@ -20,6 +19,7 @@ from db_supabase import (  # noqa: E402
     ensure_corporate_wallet,
     get_corporate_account_by_id,
     get_corporate_wallet_by_company,
+    get_rows,
     insert_corporate_account,
     update_corporate_stripe_customer_id,
     update_corporate_wallet_config,
@@ -86,14 +86,6 @@ class CorporateAccountUpdate(BaseModel):
     contact_phone: Optional[str] = Field(None)
     credit_limit: Optional[Decimal] = Field(None, ge=0)
     is_active: Optional[bool] = Field(None)
-
-
-class CorporateAccountResponse(CorporateAccountBase):
-    id: str
-    created_at: datetime
-    updated_at: datetime
-
-    model_config = ConfigDict(from_attributes=True)
 
 
 @router.get("", response_model=List[CorporateAccountDetailResponse])
@@ -299,7 +291,7 @@ async def admin_view_kyb_document(
     return Response(content=data, media_type=content_type or "application/octet-stream")
 
 
-@router.post("", response_model=CorporateAccountResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=CorporateAccountDetailResponse, status_code=status.HTTP_201_CREATED)
 async def create_corporate_account(
     request: Request,
     account: CorporateAccountCreate,
@@ -322,10 +314,10 @@ async def create_corporate_account(
         account.contact_phone = normalized_phone
 
     if account.name:
-        account.name = sanitize_string(account.name, max_length=200, raise_exception=True)
+        _, account.name = sanitize_string(account.name, max_length=200, raise_exception=True)
 
     if account.contact_name:
-        account.contact_name = sanitize_string(account.contact_name, max_length=100, raise_exception=True)
+        _, account.contact_name = sanitize_string(account.contact_name, max_length=100, raise_exception=True)
 
     try:
         created_account = await insert_corporate_account(account.model_dump())
@@ -353,7 +345,7 @@ async def create_corporate_account(
     return created_account
 
 
-@router.get("/{account_id}", response_model=CorporateAccountResponse)
+@router.get("/{account_id}", response_model=CorporateAccountDetailResponse)
 async def get_corporate_account(account_id: str, current_admin: dict = Depends(get_current_admin)):
     """
     Get a specific corporate account by ID.
@@ -383,7 +375,7 @@ async def get_corporate_account(account_id: str, current_admin: dict = Depends(g
         ) from e
 
 
-@router.put("/{account_id}", response_model=CorporateAccountResponse)
+@router.put("/{account_id}", response_model=CorporateAccountDetailResponse)
 async def update_corporate_account(
     account_id: str,
     account_update: CorporateAccountUpdate,
@@ -416,9 +408,9 @@ async def update_corporate_account(
                 valid, normalized_phone = validate_phone(value, raise_exception=True)
                 update_data[field] = normalized_phone
             elif field == "name" and value:
-                update_data[field] = sanitize_string(value, max_length=200, raise_exception=True)
+                _, update_data[field] = sanitize_string(value, max_length=200, raise_exception=True)
             elif field == "contact_name" and value:
-                update_data[field] = sanitize_string(value, max_length=100, raise_exception=True)
+                _, update_data[field] = sanitize_string(value, max_length=100, raise_exception=True)
             else:
                 update_data[field] = value
 

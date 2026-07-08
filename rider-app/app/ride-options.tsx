@@ -13,6 +13,7 @@ import {
   Animated,
   TextInput,
   Keyboard,
+  LayoutAnimation,
 } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
@@ -118,25 +119,37 @@ function RideOptionsScreenContent() {
   const [showPromoSheet, setShowPromoSheet] = useState(false);
   const [promoInput, setPromoInput] = useState('');
   const [promoError, setPromoError] = useState('');
-  // Promo sheet keyboard tracking (iOS only). The sheet stays FLUSH to the
-  // bottom edge — we deliberately do NOT lift it to ride the keyboard. The
-  // code input sits at the top of the sheet, well above the keyboard, so
-  // lifting is unnecessary; both a KeyboardAvoidingView and an animated
-  // marginBottom left the sheet hovering detached from the screen edge (the
-  // grey gap under the Done button). We only track whether the keyboard is up
-  // so the offers list can shrink and never overflow the sheet's top. Android
-  // resizes the window itself (softwareKeyboardLayoutMode: 'resize').
-  const [promoKbVisible, setPromoKbVisible] = useState(false);
+  // Promo sheet keyboard avoidance (iOS). The sheet is bottom-anchored, so a
+  // short sheet's input still sits low on screen — the keyboard would cover the
+  // input + Apply. Lift the sheet by the keyboard height WHILE the keyboard is
+  // up, and return to 0 (flush with the screen edge, no gap) the moment it
+  // hides. promoKbHeight is derived straight from the keyboard events (hide → 0)
+  // so it can never get stuck non-zero the way the old animated lift did — that
+  // stuck value was the grey-gap-under-Done bug. Android resizes the window
+  // itself (softwareKeyboardLayoutMode: 'resize'), so it stays 0 there.
+  const [promoKbHeight, setPromoKbHeight] = useState(0);
+  const promoKbVisible = promoKbHeight > 0;
   useEffect(() => {
     if (Platform.OS !== 'ios') return;
-    const show = Keyboard.addListener('keyboardWillShow', () => setPromoKbVisible(true));
-    const hide = Keyboard.addListener('keyboardWillHide', () => setPromoKbVisible(false));
+    const show = Keyboard.addListener('keyboardWillShow', (e) => {
+      LayoutAnimation.configureNext(
+        LayoutAnimation.create(e.duration || 250, LayoutAnimation.Types.keyboard, LayoutAnimation.Properties.opacity),
+      );
+      setPromoKbHeight(e.endCoordinates?.height ?? 0);
+    });
+    const hide = Keyboard.addListener('keyboardWillHide', (e) => {
+      LayoutAnimation.configureNext(
+        LayoutAnimation.create(e.duration || 200, LayoutAnimation.Types.keyboard, LayoutAnimation.Properties.opacity),
+      );
+      setPromoKbHeight(0);
+    });
     return () => { show.remove(); hide.remove(); };
   }, []);
-  // Dismiss the keyboard whenever the sheet closes so a focused input can't
-  // keep the keyboard up behind a dismissed sheet.
+  // Belt-and-suspenders: reset the lift when the sheet opens (guards any stale
+  // value) and dismiss the keyboard when it closes.
   useEffect(() => {
-    if (!showPromoSheet) Keyboard.dismiss();
+    if (showPromoSheet) setPromoKbHeight(0);
+    else Keyboard.dismiss();
   }, [showPromoSheet]);
   const [fareBreakdownOpen, setFareBreakdownOpen] = useState(false);
   const [confirmSheet, setConfirmSheet] = useState<{
@@ -1034,9 +1047,10 @@ function RideOptionsScreenContent() {
       {/* ═══ Promo selection modal ═══ */}
       <Modal visible={showPromoSheet} animationType="slide" transparent onRequestClose={() => setShowPromoSheet(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowPromoSheet(false)}>
-          {/* Sheet is anchored flush to the bottom by modalOverlay's
-              justifyContent:'flex-end' — no wrapper margin, so no grey gap
-              under the Done button. */}
+          {/* marginBottom lifts the sheet above the keyboard while typing
+              (promoKbHeight); it is 0 whenever the keyboard is hidden, so the
+              sheet sits flush with the screen edge — no grey gap under Done. */}
+          <View style={{ marginBottom: promoKbHeight }}>
           <TouchableOpacity activeOpacity={1} style={styles.promoSheet}>
             <View style={styles.paymentModalHandle} />
             <Text style={styles.paymentModalTitle}>Promo Code</Text>
@@ -1171,6 +1185,7 @@ function RideOptionsScreenContent() {
               <Text style={styles.paymentDoneBtnText}>Done</Text>
             </TouchableOpacity>
           </TouchableOpacity>
+          </View>
         </TouchableOpacity>
       </Modal>
 
@@ -1207,8 +1222,11 @@ function AnimatedVehicleCard({
   onPress: (i: number) => void; styles: any; colors: any; appliedPromo: any;
 }) {
   const scaleAnim = useRef(new Animated.Value(isSelected ? 1 : 0)).current;
-  // Separate value for the car image size: width/height are layout props, so
-  // this one can't ride the native driver like scaleAnim does.
+  // Car-image emphasis. Driven by a native SCALE transform (below) inside a
+  // fixed-size container, so it rides the native driver like scaleAnim — the
+  // old version animated width/height (useNativeDriver:false), which ran on the
+  // JS thread AND changed the row height, reflowing the whole list on every
+  // selection switch (the "shaking").
   const imageSizeAnim = useRef(new Animated.Value(isSelected ? 1 : 0)).current;
 
   useEffect(() => {
@@ -1218,15 +1236,16 @@ function AnimatedVehicleCard({
     }).start();
     Animated.spring(imageSizeAnim, {
       toValue: isSelected ? 1 : 0,
-      tension: 120, friction: 14, useNativeDriver: false,
+      tension: 120, friction: 14, useNativeDriver: true,
     }).start();
   }, [isSelected]);
 
   const scale = scaleAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.03] });
-  // Uber-scale car art: generous thumbnails on every row, and the selected
-  // option's image grows into a hero graphic (Lyft-style emphasis on top).
-  const imageWidth = imageSizeAnim.interpolate({ inputRange: [0, 1], outputRange: [88, 150] });
-  const imageHeight = imageSizeAnim.interpolate({ inputRange: [0, 1], outputRange: [58, 98] });
+  // Selected option's car art pops via a native-driver SCALE (transform only —
+  // no layout), so switching selection never changes row height and the list
+  // can't reflow. The fixed container (carImageContainer) reserves the layout
+  // box; the transform just draws bigger.
+  const imageScale = imageSizeAnim.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1.25] });
 
   // Every card shows its own discounted price (not just the selected one) —
   // computed per fare because percentage promos scale with each card's ride
@@ -1237,10 +1256,13 @@ function AnimatedVehicleCard({
   return (
     <Animated.View style={[
       { transform: [{ scale }] },
+      // Only non-layout props toggle on selection (shadow/elevation/zIndex/
+      // radius) — margins are NOT changed here, since toggling margin shifts the
+      // card + its siblings and was part of the switch "shake".
       isSelected && isAvailable && {
         shadowColor: '#000', shadowOffset: { width: 0, height: 3 },
         shadowOpacity: 0.12, shadowRadius: 8, elevation: 6,
-        zIndex: 10, marginHorizontal: 2, marginVertical: 3, borderRadius: 14,
+        zIndex: 10, borderRadius: 14,
       },
     ]}>
       <TouchableOpacity
@@ -1254,7 +1276,7 @@ function AnimatedVehicleCard({
         disabled={!isAvailable}>
         <Animated.View style={[
           styles.carImageContainer,
-          { width: imageWidth, height: imageHeight },
+          { transform: [{ scale: imageScale }] },
           !isAvailable && { opacity: 0.4 },
         ]}>
           {estimate.vehicle_type.image_url ? (
@@ -1495,6 +1517,10 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
     // Width/height are animated per-card (64×42 resting → 118×76 selected),
     // so the container only carries layout; the image/fallback fill it.
     carImageContainer: {
+      // Fixed layout box — the selected pop is a transform scale (no layout),
+      // so the row height is constant and the list never reflows on switch.
+      width: 96,
+      height: 64,
       marginRight: 12,
       justifyContent: 'center',
       alignItems: 'center',

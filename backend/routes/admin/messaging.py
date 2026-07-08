@@ -120,7 +120,13 @@ async def _count_audience(audience: str, particular_ids: list, service_area_id: 
     return 0
 
 
-async def _send_push_one(uid: str, title: str, description: str, target_app: str | None) -> bool:
+async def _send_push_one(uid: str, title: str, description: str, target_app: str | None, is_marketing: bool) -> bool:
+    if is_marketing:
+        try:
+            from ...utils.marketing_push import send_marketing_push
+        except ImportError:
+            from utils.marketing_push import send_marketing_push  # type: ignore
+        return await send_marketing_push(user_id=uid, title=title, body=description, target_app=target_app, log_id="cm")
     try:
         from ...features import send_push_notification
     except ImportError:
@@ -213,7 +219,7 @@ async def _fan_out(
     async def _one(row: dict) -> bool:
         async with sem:
             ok = False
-            if "push" in channels and await _send_push_one(row["id"], title, description, target_app):
+            if "push" in channels and await _send_push_one(row["id"], title, description, target_app, is_marketing):
                 ok = True
             if "email" in channels and await _send_email_one(row, title, description, is_marketing):
                 ok = True

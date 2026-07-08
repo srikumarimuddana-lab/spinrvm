@@ -125,7 +125,11 @@ function RideOptionsScreenContent() {
   // instead of JS-side Keyboard events, so there's no timing race to get stuck
   // on, and behavior is consistent between iOS and Android.
   const promoSheetRef = useRef<BottomSheet>(null);
-  const promoSnapPoints = useMemo(() => ['75%'], []);
+  // Dynamic sizing (no fixed snapPoints) so the sheet is only as tall as its
+  // content — 2 offers vs. 8 shouldn't both claim a fixed 75% and leave a
+  // huge empty gap under a short list. Capped at 80% of the screen so a long
+  // offer list scrolls instead of pushing off the top.
+  const promoMaxSheetHeight = SCREEN_HEIGHT * 0.8;
   const openPromoSheet = useCallback(() => {
     setPromoError('');
     promoSheetRef.current?.expand();
@@ -1033,13 +1037,13 @@ function RideOptionsScreenContent() {
       <BottomSheet
         ref={promoSheetRef}
         index={-1}
-        snapPoints={promoSnapPoints}
+        enableDynamicSizing
+        maxDynamicContentSize={promoMaxSheetHeight}
         enablePanDownToClose
-        enableDynamicSizing={false}
         backdropComponent={renderPromoBackdrop}
         backgroundStyle={styles.sheetBackground}
         handleIndicatorStyle={styles.sheetIndicator}
-        keyboardBehavior="interactive"
+        keyboardBehavior="extend"
         keyboardBlurBehavior="restore"
         android_keyboardInputMode="adjustResize"
         onClose={() => Keyboard.dismiss()}

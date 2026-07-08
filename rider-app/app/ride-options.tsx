@@ -13,7 +13,6 @@ import {
   Animated,
   TextInput,
   Keyboard,
-  LayoutAnimation,
 } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
@@ -129,28 +128,43 @@ function RideOptionsScreenContent() {
   // itself (softwareKeyboardLayoutMode: 'resize'), so it stays 0 there.
   const [promoKbHeight, setPromoKbHeight] = useState(0);
   const promoKbVisible = promoKbHeight > 0;
+  // iOS won't dismiss a Modal while its TextInput keyboard is still up — tapping
+  // Done then did nothing there (Android closes fine). When a close is requested
+  // with the keyboard up we set this flag, dismiss the keyboard, and perform the
+  // actual close in keyboardWillHide once the keyboard is on its way out.
+  const promoPendingCloseRef = useRef(false);
   useEffect(() => {
     if (Platform.OS !== 'ios') return;
     const show = Keyboard.addListener('keyboardWillShow', (e) => {
-      LayoutAnimation.configureNext(
-        LayoutAnimation.create(e.duration || 250, LayoutAnimation.Types.keyboard, LayoutAnimation.Properties.opacity),
-      );
       setPromoKbHeight(e.endCoordinates?.height ?? 0);
     });
-    const hide = Keyboard.addListener('keyboardWillHide', (e) => {
-      LayoutAnimation.configureNext(
-        LayoutAnimation.create(e.duration || 200, LayoutAnimation.Types.keyboard, LayoutAnimation.Properties.opacity),
-      );
+    const hide = Keyboard.addListener('keyboardWillHide', () => {
       setPromoKbHeight(0);
+      if (promoPendingCloseRef.current) {
+        promoPendingCloseRef.current = false;
+        setShowPromoSheet(false);
+      }
     });
     return () => { show.remove(); hide.remove(); };
   }, []);
-  // Belt-and-suspenders: reset the lift when the sheet opens (guards any stale
-  // value) and dismiss the keyboard when it closes.
+  // Reset the lift when the sheet opens (guards any stale value) and dismiss the
+  // keyboard when it closes.
   useEffect(() => {
     if (showPromoSheet) setPromoKbHeight(0);
     else Keyboard.dismiss();
   }, [showPromoSheet]);
+  // Single close path for the promo sheet. On iOS with the keyboard up, defer
+  // the Modal close to keyboardWillHide (see promoPendingCloseRef) so it isn't
+  // swallowed; otherwise close immediately.
+  const closePromoSheet = useCallback(() => {
+    if (Platform.OS === 'ios' && promoKbHeight > 0) {
+      promoPendingCloseRef.current = true;
+      Keyboard.dismiss();
+    } else {
+      Keyboard.dismiss();
+      setShowPromoSheet(false);
+    }
+  }, [promoKbHeight]);
   const [fareBreakdownOpen, setFareBreakdownOpen] = useState(false);
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean; title: string; message: string;
@@ -518,7 +532,7 @@ function RideOptionsScreenContent() {
       applyPromo(match);
       setPromoInput('');
       setPromoError('');
-      setShowPromoSheet(false);
+      closePromoSheet();
     } else {
       setPromoError('Code not found or has expired');
     }
@@ -1046,7 +1060,7 @@ function RideOptionsScreenContent() {
 
       {/* ═══ Promo selection modal ═══ */}
       <Modal visible={showPromoSheet} animationType="slide" transparent onRequestClose={() => setShowPromoSheet(false)}>
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowPromoSheet(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={closePromoSheet}>
           {/* marginBottom lifts the sheet above the keyboard while typing
               (promoKbHeight); it is 0 whenever the keyboard is hidden, so the
               sheet sits flush with the screen edge — no grey gap under Done. */}
@@ -1127,7 +1141,7 @@ function RideOptionsScreenContent() {
                         return;
                       }
                       applyPromo(promo);
-                      setShowPromoSheet(false);
+                      closePromoSheet();
                     }}
                     activeOpacity={0.75}
                   >
@@ -1171,7 +1185,7 @@ function RideOptionsScreenContent() {
             {appliedPromo && (
               <TouchableOpacity
                 style={styles.promoRemoveRow}
-                onPress={() => { applyPromo(null); setShowPromoSheet(false); }}
+                onPress={() => { applyPromo(null); closePromoSheet(); }}
               >
                 <Ionicons name="close-circle-outline" size={18} color="#EF4444" />
                 <Text style={styles.promoRemoveText}>Remove applied code</Text>
@@ -1180,7 +1194,7 @@ function RideOptionsScreenContent() {
 
             <TouchableOpacity
               style={styles.paymentDoneBtn}
-              onPress={() => { Keyboard.dismiss(); setShowPromoSheet(false); }}
+              onPress={closePromoSheet}
             >
               <Text style={styles.paymentDoneBtnText}>Done</Text>
             </TouchableOpacity>
@@ -1241,11 +1255,12 @@ function AnimatedVehicleCard({
   }, [isSelected]);
 
   const scale = scaleAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.03] });
-  // Selected option's car art pops via a native-driver SCALE (transform only —
-  // no layout), so switching selection never changes row height and the list
-  // can't reflow. The fixed container (carImageContainer) reserves the layout
-  // box; the transform just draws bigger.
-  const imageScale = imageSizeAnim.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1.25] });
+  // Car art keeps the original sizes — selected is the full 150×98 hero,
+  // unselected the 88×58 thumbnail — but the growth is a native-driver SCALE
+  // (transform only, no layout). The container reserves the MAX (150×98) box so
+  // the row height is constant; the transform scales DOWN to 0.59 for unselected.
+  // Nothing reflows on selection switch, so it's smooth with no shake.
+  const imageScale = imageSizeAnim.interpolate({ inputRange: [0, 1], outputRange: [0.59, 1] });
 
   // Every card shows its own discounted price (not just the selected one) —
   // computed per fare because percentage promos scale with each card's ride
@@ -1517,10 +1532,11 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
     // Width/height are animated per-card (64×42 resting → 118×76 selected),
     // so the container only carries layout; the image/fallback fill it.
     carImageContainer: {
-      // Fixed layout box — the selected pop is a transform scale (no layout),
-      // so the row height is constant and the list never reflows on switch.
-      width: 96,
-      height: 64,
+      // Fixed layout box at the MAX (selected) car size — the pop is a transform
+      // scale (no layout), so the row height is constant and the list never
+      // reflows on switch. Unselected rows scale the image down to the thumbnail.
+      width: 150,
+      height: 98,
       marginRight: 12,
       justifyContent: 'center',
       alignItems: 'center',

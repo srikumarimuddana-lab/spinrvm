@@ -117,14 +117,31 @@ function RideOptionsScreenContent() {
   const [promoInput, setPromoInput] = useState('');
   const [promoError, setPromoError] = useState('');
   // Promo sheet is a real @gorhom/bottom-sheet instance (same lib as the main
-  // vehicle sheet below), not an RN <Modal>. That fixes both iOS bugs the old
-  // Modal + manual keyboardWillShow/Hide tracking never fully solved: the sheet
-  // wouldn't reliably close while its TextInput keyboard was still up, and a
-  // stale keyboard-height value left a grey gap under the sheet. The library
-  // drives keyboard avoidance and open/close off the native keyboard frame
-  // instead of JS-side Keyboard events, so there's no timing race to get stuck
-  // on, and behavior is consistent between iOS and Android.
+  // vehicle sheet below), not an RN <Modal>. keyboardBehavior="interactive"
+  // (below) floats the sheet above the keyboard by putting it into a
+  // "temporary position" — on iOS, calling .close() while it's still in that
+  // temporary position (keyboard not yet fully dismissed) corrupts the
+  // sheet's internal layout state and crashes on the next touch/drag. Gate
+  // our own close calls behind the keyboard actually finishing its hide
+  // animation, same idea as the old Modal-era pending-close pattern, just
+  // scoped to this one race instead of also driving positioning by hand.
   const promoSheetRef = useRef<BottomSheet>(null);
+  const promoKeyboardVisibleRef = useRef(false);
+  const promoPendingCloseRef = useRef(false);
+  useEffect(() => {
+    if (Platform.OS !== 'ios') return;
+    const show = Keyboard.addListener('keyboardWillShow', () => {
+      promoKeyboardVisibleRef.current = true;
+    });
+    const hide = Keyboard.addListener('keyboardWillHide', () => {
+      promoKeyboardVisibleRef.current = false;
+      if (promoPendingCloseRef.current) {
+        promoPendingCloseRef.current = false;
+        promoSheetRef.current?.close();
+      }
+    });
+    return () => { show.remove(); hide.remove(); };
+  }, []);
   // Dynamic sizing (no fixed snapPoints) so the sheet is only as tall as its
   // content — 2 offers vs. 8 shouldn't both claim a fixed 75% and leave a
   // huge empty gap under a short list. Capped at 80% of the screen so a long
@@ -135,10 +152,22 @@ function RideOptionsScreenContent() {
     promoSheetRef.current?.expand();
   }, []);
   const closePromoSheet = useCallback(() => {
-    promoSheetRef.current?.close();
+    if (Platform.OS === 'ios' && promoKeyboardVisibleRef.current) {
+      promoPendingCloseRef.current = true;
+      Keyboard.dismiss();
+    } else {
+      promoSheetRef.current?.close();
+    }
   }, []);
   const renderPromoBackdrop = useCallback((props: any) => (
-    <BottomSheetBackdrop {...props} appearsOnIndex={0} disappearsOnIndex={-1} pressBehavior="close" opacity={0.4} />
+    <BottomSheetBackdrop
+      {...props}
+      appearsOnIndex={0}
+      disappearsOnIndex={-1}
+      pressBehavior="close"
+      opacity={0.4}
+      onPress={() => Keyboard.dismiss()}
+    />
   ), []);
   const [fareBreakdownOpen, setFareBreakdownOpen] = useState(false);
   const [confirmSheet, setConfirmSheet] = useState<{
@@ -1040,10 +1069,17 @@ function RideOptionsScreenContent() {
         enableDynamicSizing
         maxDynamicContentSize={promoMaxSheetHeight}
         enablePanDownToClose
+        enableBlurKeyboardOnGesture
         backdropComponent={renderPromoBackdrop}
         backgroundStyle={styles.sheetBackground}
         handleIndicatorStyle={styles.sheetIndicator}
-        keyboardBehavior="extend"
+        // "interactive" floats the whole sheet up above the keyboard (same
+        // height, repositioned) instead of growing it — "extend" was a no-op
+        // here since dynamic sizing only ever produces a single detent, so it
+        // left the keyboard covering the input. Now that the sheet is
+        // content-sized (not a fixed 75%), floating it up no longer risks
+        // pushing it past the top of the screen.
+        keyboardBehavior="interactive"
         keyboardBlurBehavior="restore"
         android_keyboardInputMode="adjustResize"
         onClose={() => Keyboard.dismiss()}

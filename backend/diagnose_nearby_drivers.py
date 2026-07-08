@@ -192,47 +192,45 @@ async def main(pickup_lat, pickup_lng):
         else:
             print("    ✅ will be counted by /rides/estimate for XL")
 
-    section("4. Service areas × XL fare_config coverage")
-    print("If the rider's pickup is inside a service area that has fare_configs,")
-    print("the /rides/estimate endpoint only returns vehicle types that have an")
-    print("active fare_config row for that area (routes/fares.py:61-85).")
+    section("4. Service area PRICING (vehicle_pricing → fare_configs → EMPTY)")
+    print("Pricing for a MATCHED area (services/fare_service.build_fares_for_area):")
+    print("  1. service_areas.vehicle_pricing JSONB — what the admin Service Areas editor")
+    print("     writes, keyed by vehicle-type NAME. Authoritative.")
+    print("  2. legacy fare_configs rows (keyed by vehicle_type_id) — only if no vehicle_pricing.")
+    print("  3. NEITHER -> the estimate returns [] = NO vehicle types for pickups in this area.")
+    print("DEFAULT fares apply ONLY when the pickup matches NO area at all (fares.py:345).")
+    print("So '0 fare_configs' is normal and not the thing to worry about — vehicle_pricing is.")
+    print("NOTE: once an area has a boundary, an in-area pickup with no pricing shows NOTHING")
+    print("(and an out-of-all-areas pickup gets a 400 OUTSIDE_SERVICE_AREA).")
     print()
     areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=100)
     if not areas:
-        print("  (no active service areas — estimate will use default fares for all vehicle types)")
+        print("  (no active service areas — estimate uses default fares for all vehicle types)")
     else:
         for a in areas:
-            fares = await db_supabase.get_rows(
-                "fare_configs",
-                {
-                    "service_area_id": a["id"],
-                    "vehicle_type_id": xl_vt["id"],
-                    "is_active": True,
-                },
-                limit=10,
-            )
-            tick = "✅" if fares else "❌"
             name = a.get("name") or a.get("id")
-            print(f"  {tick} service_area '{name}': {len(fares)} active XL fare_config row(s)")
-            if not fares:
-                # Also show what IS configured so the user can see the gap
-                all_area_fares = await db_supabase.get_rows(
-                    "fare_configs",
-                    {
-                        "service_area_id": a["id"],
-                        "is_active": True,
-                    },
-                    limit=20,
-                )
-                if all_area_fares:
-                    configured_names = []
-                    for f in all_area_fares:
-                        v = vt_by_id.get(f.get("vehicle_type_id"))
-                        configured_names.append(v.get("name") if v else f"orphan:{f.get('vehicle_type_id')}")
-                    print(f"       (this area has fare_configs only for: {', '.join(configured_names)})")
-                    print("       → pickups inside this area will NOT see the XL tile.")
-                else:
-                    print("       (this area has zero fare_configs — falls through to defaults, XL should still show)")
+            vp = a.get("vehicle_pricing") or []
+            vp_names = sorted(
+                {row.get("vehicle_type") for row in vp if isinstance(row, dict) and row.get("vehicle_type")}
+            ) if isinstance(vp, list) else []
+            fcs = await db_supabase.get_rows(
+                "fare_configs", {"service_area_id": a["id"], "is_active": True}, limit=50
+            )
+            fc_names = sorted(
+                {
+                    (vt_by_id.get(f.get("vehicle_type_id")) or {}).get("name") or f"orphan:{f.get('vehicle_type_id')}"
+                    for f in (fcs or [])
+                }
+            )
+            if vp_names:
+                mark = "✅" if "XL" in vp_names else "⚠️ "
+                print(f"  {mark} '{name}': vehicle_pricing set for {vp_names} (authoritative){' — no XL' if 'XL' not in vp_names else ''}")
+            elif fc_names:
+                print(f"  ⚠️  '{name}': no vehicle_pricing; legacy fare_configs for {fc_names}")
+            else:
+                print(f"  ❌ '{name}': NO vehicle_pricing AND NO fare_configs")
+                print("       → an in-area pickup gets EMPTY fares (no vehicle types shown).")
+                print(f"       → set pricing in Admin → Service Areas → {name} → vehicle pricing.")
 
     section("4b. Service area boundaries — the green map zone + point-in-area match")
     print("The rider-app draws the green coverage zone from /service-areas -> polygon")

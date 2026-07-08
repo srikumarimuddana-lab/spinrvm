@@ -234,6 +234,37 @@ async def main(pickup_lat, pickup_lng):
                 else:
                     print("       (this area has zero fare_configs — falls through to defaults, XL should still show)")
 
+    section("4b. Service area boundaries — the green map zone + point-in-area match")
+    print("The rider-app draws the green coverage zone from /service-areas -> polygon")
+    print("(normalized by get_service_area_polygon). The SAME polygon decides whether a")
+    print("pickup 'matches' an area for area-specific fares/surge (point_in_polygon).")
+    print("An empty polygon => NO green zone AND pickups never match the area (they fall")
+    print("through to default fares).")
+    print()
+    try:
+        from geo_utils import get_service_area_polygon, point_in_polygon
+    except Exception as _geo_exc:  # noqa: BLE001
+        print(f"  (boundary check skipped: {_geo_exc})")
+    else:
+        for a in (areas or []):
+            poly = get_service_area_polygon(a)
+            name = a.get("name") or a.get("id")
+            if len(poly) >= 3:
+                inside = ""
+                if pickup_lat is not None and pickup_lng is not None:
+                    inside = (
+                        "  — pickup INSIDE ✅"
+                        if point_in_polygon(pickup_lat, pickup_lng, poly)
+                        else "  — pickup OUTSIDE"
+                    )
+                print(f"  ✅ '{name}': boundary has {len(poly)} points (renders green){inside}")
+            else:
+                print(f"  ❌ '{name}': NO boundary polygon — no green zone; pickups never match this area")
+        print()
+        print("  If Regina shows ❌ above: draw + save its boundary in Admin → Service Areas.")
+        print("  That renders the green zone AND lets pickups match Regina for area-specific")
+        print("  fare_configs / surge (also add Regina fare_configs — see section 4).")
+
     section("Done")
 
 

@@ -11,11 +11,10 @@ import {
   Platform,
   Modal,
   Animated,
-  TextInput,
   Keyboard,
 } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
-import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
+import BottomSheet, { BottomSheetScrollView, BottomSheetBackdrop, BottomSheetTextInput } from '@gorhom/bottom-sheet';
 import CustomToggle from '../components/CustomToggle';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -115,56 +114,28 @@ function RideOptionsScreenContent() {
   const [mapReady, setMapReady] = useState(false);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [tempDate, setTempDate] = useState(new Date(Date.now() + 30 * 60000));
-  const [showPromoSheet, setShowPromoSheet] = useState(false);
   const [promoInput, setPromoInput] = useState('');
   const [promoError, setPromoError] = useState('');
-  // Promo sheet keyboard avoidance (iOS). The sheet is bottom-anchored, so a
-  // short sheet's input still sits low on screen — the keyboard would cover the
-  // input + Apply. Lift the sheet by the keyboard height WHILE the keyboard is
-  // up, and return to 0 (flush with the screen edge, no gap) the moment it
-  // hides. promoKbHeight is derived straight from the keyboard events (hide → 0)
-  // so it can never get stuck non-zero the way the old animated lift did — that
-  // stuck value was the grey-gap-under-Done bug. Android resizes the window
-  // itself (softwareKeyboardLayoutMode: 'resize'), so it stays 0 there.
-  const [promoKbHeight, setPromoKbHeight] = useState(0);
-  const promoKbVisible = promoKbHeight > 0;
-  // iOS won't dismiss a Modal while its TextInput keyboard is still up — tapping
-  // Done then did nothing there (Android closes fine). When a close is requested
-  // with the keyboard up we set this flag, dismiss the keyboard, and perform the
-  // actual close in keyboardWillHide once the keyboard is on its way out.
-  const promoPendingCloseRef = useRef(false);
-  useEffect(() => {
-    if (Platform.OS !== 'ios') return;
-    const show = Keyboard.addListener('keyboardWillShow', (e) => {
-      setPromoKbHeight(e.endCoordinates?.height ?? 0);
-    });
-    const hide = Keyboard.addListener('keyboardWillHide', () => {
-      setPromoKbHeight(0);
-      if (promoPendingCloseRef.current) {
-        promoPendingCloseRef.current = false;
-        setShowPromoSheet(false);
-      }
-    });
-    return () => { show.remove(); hide.remove(); };
+  // Promo sheet is a real @gorhom/bottom-sheet instance (same lib as the main
+  // vehicle sheet below), not an RN <Modal>. That fixes both iOS bugs the old
+  // Modal + manual keyboardWillShow/Hide tracking never fully solved: the sheet
+  // wouldn't reliably close while its TextInput keyboard was still up, and a
+  // stale keyboard-height value left a grey gap under the sheet. The library
+  // drives keyboard avoidance and open/close off the native keyboard frame
+  // instead of JS-side Keyboard events, so there's no timing race to get stuck
+  // on, and behavior is consistent between iOS and Android.
+  const promoSheetRef = useRef<BottomSheet>(null);
+  const promoSnapPoints = useMemo(() => ['75%'], []);
+  const openPromoSheet = useCallback(() => {
+    setPromoError('');
+    promoSheetRef.current?.expand();
   }, []);
-  // Reset the lift when the sheet opens (guards any stale value) and dismiss the
-  // keyboard when it closes.
-  useEffect(() => {
-    if (showPromoSheet) setPromoKbHeight(0);
-    else Keyboard.dismiss();
-  }, [showPromoSheet]);
-  // Single close path for the promo sheet. On iOS with the keyboard up, defer
-  // the Modal close to keyboardWillHide (see promoPendingCloseRef) so it isn't
-  // swallowed; otherwise close immediately.
   const closePromoSheet = useCallback(() => {
-    if (Platform.OS === 'ios' && promoKbHeight > 0) {
-      promoPendingCloseRef.current = true;
-      Keyboard.dismiss();
-    } else {
-      Keyboard.dismiss();
-      setShowPromoSheet(false);
-    }
-  }, [promoKbHeight]);
+    promoSheetRef.current?.close();
+  }, []);
+  const renderPromoBackdrop = useCallback((props: any) => (
+    <BottomSheetBackdrop {...props} appearsOnIndex={0} disappearsOnIndex={-1} pressBehavior="close" opacity={0.4} />
+  ), []);
   const [fareBreakdownOpen, setFareBreakdownOpen] = useState(false);
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean; title: string; message: string;
@@ -739,7 +710,7 @@ function RideOptionsScreenContent() {
           {/* Promo row — always visible */}
           <TouchableOpacity
             style={[styles.promoEntryRow, appliedPromo && styles.promoEntryRowActive]}
-            onPress={() => { setPromoError(''); setShowPromoSheet(true); }}
+            onPress={openPromoSheet}
             activeOpacity={0.75}
           >
             <View style={[styles.promoEntryIcon, appliedPromo && { backgroundColor: '#D1FAE5' }]}>
@@ -1058,147 +1029,141 @@ function RideOptionsScreenContent() {
         </TouchableOpacity>
       </Modal>
 
-      {/* ═══ Promo selection modal ═══ */}
-      <Modal visible={showPromoSheet} animationType="slide" transparent onRequestClose={() => setShowPromoSheet(false)}>
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={closePromoSheet}>
-          {/* marginBottom lifts the sheet above the keyboard while typing
-              (promoKbHeight); it is 0 whenever the keyboard is hidden, so the
-              sheet sits flush with the screen edge — no grey gap under Done. */}
-          <View style={{ marginBottom: promoKbHeight }}>
-          <TouchableOpacity activeOpacity={1} style={styles.promoSheet}>
-            <View style={styles.paymentModalHandle} />
-            <Text style={styles.paymentModalTitle}>Promo Code</Text>
+      {/* ═══ Promo selection sheet ═══ */}
+      <BottomSheet
+        ref={promoSheetRef}
+        index={-1}
+        snapPoints={promoSnapPoints}
+        enablePanDownToClose
+        enableDynamicSizing={false}
+        backdropComponent={renderPromoBackdrop}
+        backgroundStyle={styles.sheetBackground}
+        handleIndicatorStyle={styles.sheetIndicator}
+        keyboardBehavior="interactive"
+        keyboardBlurBehavior="restore"
+        android_keyboardInputMode="adjustResize"
+        onClose={() => Keyboard.dismiss()}
+      >
+        <BottomSheetScrollView
+          contentContainerStyle={styles.promoSheetContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={availablePromos.length > 3}
+        >
+          <Text style={styles.paymentModalTitle}>Promo Code</Text>
 
-            {/* Manual code entry */}
-            <View style={styles.promoInputRow}>
-              <View style={[styles.promoInputWrap, promoError ? { borderColor: '#EF4444' } : {}]}>
-                <Ionicons name="pricetag-outline" size={16} color={colors.textDim} style={{ marginLeft: 12 }} />
-                <TextInput
-                  style={[styles.promoInputField, { color: colors.text }]}
-                  placeholder="Enter code"
-                  placeholderTextColor={colors.textDim}
-                  value={promoInput}
-                  onChangeText={t => { setPromoInput(t); setPromoError(''); }}
-                  autoCapitalize="characters"
-                  autoCorrect={false}
-                  returnKeyType="done"
-                  onSubmitEditing={handleManualPromo}
-                />
-              </View>
-              <TouchableOpacity
-                style={[styles.promoApplyBtn, { backgroundColor: promoInput.trim() ? colors.primary : colors.border }]}
-                onPress={handleManualPromo}
-                disabled={!promoInput.trim()}
-              >
-                <Text style={styles.promoApplyText}>Apply</Text>
-              </TouchableOpacity>
+          {/* Manual code entry */}
+          <View style={styles.promoInputRow}>
+            <View style={[styles.promoInputWrap, promoError ? { borderColor: '#EF4444' } : {}]}>
+              <Ionicons name="pricetag-outline" size={16} color={colors.textDim} style={{ marginLeft: 12 }} />
+              <BottomSheetTextInput
+                style={[styles.promoInputField, { color: colors.text }]}
+                placeholder="Enter code"
+                placeholderTextColor={colors.textDim}
+                value={promoInput}
+                onChangeText={t => { setPromoInput(t); setPromoError(''); }}
+                autoCapitalize="characters"
+                autoCorrect={false}
+                returnKeyType="done"
+                onSubmitEditing={handleManualPromo}
+              />
             </View>
-            {promoError ? (
-              <View style={styles.promoErrorRow}>
-                <Ionicons name="alert-circle-outline" size={14} color="#EF4444" />
-                <Text style={styles.promoErrorText}>{promoError}</Text>
-              </View>
-            ) : null}
-
-            {/* Available promos list. Show the count so a rider knows there are
-                multiple offers to scroll through, not just the one on screen. */}
-            {availablePromos.length > 0 && (
-              <Text style={[styles.promoSectionLabel, { color: colors.textDim }]}>
-                Available Offers{availablePromos.length > 1 ? ` · ${availablePromos.length}` : ''}
-              </Text>
-            )}
-
-            {/* keyboardShouldPersistTaps: with the promo input focused, the
-                first tap on a list row otherwise only dismisses the keyboard
-                and the row press is swallowed. The list shrinks while the
-                keyboard is up so the lifted sheet never overflows the top.
-                minHeight keeps ~2 rows visible so a single offer never looks
-                stranded and multiple offers clearly read as a scrollable list;
-                the scroll indicator shows when there are more than fit. */}
-            <ScrollView
-              showsVerticalScrollIndicator={availablePromos.length > 3}
-              style={{
-                maxHeight: promoKbVisible ? 200 : 320,
-                minHeight: availablePromos.length > 1 ? 148 : undefined,
-              }}
-              keyboardShouldPersistTaps="handled"
+            <TouchableOpacity
+              style={[styles.promoApplyBtn, { backgroundColor: promoInput.trim() ? colors.primary : colors.border }]}
+              onPress={handleManualPromo}
+              disabled={!promoInput.trim()}
             >
-              {availablePromos.map((promo: any) => {
-                const isSelected = appliedPromo?.promo_id === promo.promo_id || appliedPromo?.code === promo.code;
-                const isIneligible = promo.eligible === false;
-                const discountLabel = promo.free_ride
-                  ? 'Free ride'
-                  : promo.discount_type === 'percentage'
-                    ? `${promo.discount_value}% off${promo.max_discount ? ` · max $${promo.max_discount}` : ''}`
-                    : `$${Number(promo.discount_value).toFixed(2)} off`;
-                return (
-                  <TouchableOpacity
-                    key={promo.promo_id || promo.code}
-                    style={[styles.promoRow, isSelected && styles.promoRowSelected, isIneligible && { opacity: 0.45 }]}
-                    onPress={() => {
-                      if (isIneligible) {
-                        showToast('Not eligible', promo.ineligible_reason || 'This promo cannot be applied to this ride', 'warning');
-                        return;
-                      }
-                      applyPromo(promo);
-                      closePromoSheet();
-                    }}
-                    activeOpacity={0.75}
-                  >
-                    <View style={[styles.promoRowIcon, { backgroundColor: isSelected ? '#D1FAE5' : isIneligible ? '#F3F4F6' : '#F0FDF4' }]}>
-                      <Ionicons name="pricetag" size={18} color={isSelected ? '#059669' : isIneligible ? '#9CA3AF' : '#10B981'} />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                        <Text style={[styles.promoRowCode, isIneligible && { color: '#9CA3AF' }]}>{promo.code}</Text>
-                        <View style={[styles.promoSavingPill, isIneligible && { backgroundColor: '#F3F4F6' }]}>
-                          <Text style={[styles.promoSavingPillText, isIneligible && { color: '#9CA3AF' }]}>{discountLabel}</Text>
-                        </View>
-                      </View>
-                      {promo.description ? (
-                        <Text style={styles.promoRowDesc}>{promo.description}</Text>
-                      ) : null}
-                      {isIneligible && promo.min_ride_fare > 0 && (
-                        <Text style={{ fontSize: 11, color: '#EF4444', marginTop: 2 }}>Min. fare ${Number(promo.min_ride_fare).toFixed(2)}</Text>
-                      )}
-                    </View>
-                    {isSelected
-                      ? <Ionicons name="checkmark-circle" size={22} color="#059669" />
-                      : isIneligible
-                        ? <Ionicons name="lock-closed" size={16} color="#9CA3AF" />
-                        : <Ionicons name="chevron-forward" size={16} color={colors.border} />}
-                  </TouchableOpacity>
-                );
-              })}
-
-              {availablePromos.length === 0 && (
-                <View style={styles.promoEmpty}>
-                  <View style={styles.promoEmptyIcon}>
-                    <Ionicons name="gift-outline" size={28} color={colors.textDim} />
-                  </View>
-                  <Text style={styles.promoEmptyTitle}>No offers right now</Text>
-                  <Text style={styles.promoEmptyText}>Enter a code above if you have one</Text>
-                </View>
-              )}
-            </ScrollView>
-
-            {/* No Done button by design: the sheet closes as soon as a coupon
-                row is tapped, Apply is pressed, or the area outside the sheet is
-                tapped (all via closePromoSheet). Removing an applied code just
-                clears it and keeps the sheet open so another can be picked. */}
-            {appliedPromo && (
-              <TouchableOpacity
-                style={styles.promoRemoveRow}
-                onPress={() => applyPromo(null)}
-              >
-                <Ionicons name="close-circle-outline" size={18} color="#EF4444" />
-                <Text style={styles.promoRemoveText}>Remove applied code</Text>
-              </TouchableOpacity>
-            )}
-          </TouchableOpacity>
+              <Text style={styles.promoApplyText}>Apply</Text>
+            </TouchableOpacity>
           </View>
-        </TouchableOpacity>
-      </Modal>
+          {promoError ? (
+            <View style={styles.promoErrorRow}>
+              <Ionicons name="alert-circle-outline" size={14} color="#EF4444" />
+              <Text style={styles.promoErrorText}>{promoError}</Text>
+            </View>
+          ) : null}
+
+          {/* Available promos list. Show the count so a rider knows there are
+              multiple offers to scroll through, not just the one on screen. */}
+          {availablePromos.length > 0 && (
+            <Text style={[styles.promoSectionLabel, { color: colors.textDim }]}>
+              Available Offers{availablePromos.length > 1 ? ` · ${availablePromos.length}` : ''}
+            </Text>
+          )}
+
+          {availablePromos.map((promo: any) => {
+            const isSelected = appliedPromo?.promo_id === promo.promo_id || appliedPromo?.code === promo.code;
+            const isIneligible = promo.eligible === false;
+            const discountLabel = promo.free_ride
+              ? 'Free ride'
+              : promo.discount_type === 'percentage'
+                ? `${promo.discount_value}% off${promo.max_discount ? ` · max $${promo.max_discount}` : ''}`
+                : `$${Number(promo.discount_value).toFixed(2)} off`;
+            return (
+              <TouchableOpacity
+                key={promo.promo_id || promo.code}
+                style={[styles.promoRow, isSelected && styles.promoRowSelected, isIneligible && { opacity: 0.45 }]}
+                onPress={() => {
+                  if (isIneligible) {
+                    showToast('Not eligible', promo.ineligible_reason || 'This promo cannot be applied to this ride', 'warning');
+                    return;
+                  }
+                  applyPromo(promo);
+                  closePromoSheet();
+                }}
+                activeOpacity={0.75}
+              >
+                <View style={[styles.promoRowIcon, { backgroundColor: isSelected ? '#D1FAE5' : isIneligible ? '#F3F4F6' : '#F0FDF4' }]}>
+                  <Ionicons name="pricetag" size={18} color={isSelected ? '#059669' : isIneligible ? '#9CA3AF' : '#10B981'} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Text style={[styles.promoRowCode, isIneligible && { color: '#9CA3AF' }]}>{promo.code}</Text>
+                    <View style={[styles.promoSavingPill, isIneligible && { backgroundColor: '#F3F4F6' }]}>
+                      <Text style={[styles.promoSavingPillText, isIneligible && { color: '#9CA3AF' }]}>{discountLabel}</Text>
+                    </View>
+                  </View>
+                  {promo.description ? (
+                    <Text style={styles.promoRowDesc}>{promo.description}</Text>
+                  ) : null}
+                  {isIneligible && promo.min_ride_fare > 0 && (
+                    <Text style={{ fontSize: 11, color: '#EF4444', marginTop: 2 }}>Min. fare ${Number(promo.min_ride_fare).toFixed(2)}</Text>
+                  )}
+                </View>
+                {isSelected
+                  ? <Ionicons name="checkmark-circle" size={22} color="#059669" />
+                  : isIneligible
+                    ? <Ionicons name="lock-closed" size={16} color="#9CA3AF" />
+                    : <Ionicons name="chevron-forward" size={16} color={colors.border} />}
+              </TouchableOpacity>
+            );
+          })}
+
+          {availablePromos.length === 0 && (
+            <View style={styles.promoEmpty}>
+              <View style={styles.promoEmptyIcon}>
+                <Ionicons name="gift-outline" size={28} color={colors.textDim} />
+              </View>
+              <Text style={styles.promoEmptyTitle}>No offers right now</Text>
+              <Text style={styles.promoEmptyText}>Enter a code above if you have one</Text>
+            </View>
+          )}
+
+          {/* No Done button by design: the sheet closes as soon as a coupon
+              row is tapped, Apply is pressed, the backdrop is tapped, or it's
+              swiped down (all via closePromoSheet / enablePanDownToClose).
+              Removing an applied code just clears it and keeps the sheet open
+              so another can be picked. */}
+          {appliedPromo && (
+            <TouchableOpacity
+              style={styles.promoRemoveRow}
+              onPress={() => applyPromo(null)}
+            >
+              <Ionicons name="close-circle-outline" size={18} color="#EF4444" />
+              <Text style={styles.promoRemoveText}>Remove applied code</Text>
+            </TouchableOpacity>
+          )}
+        </BottomSheetScrollView>
+      </BottomSheet>
 
       {/* ═══ Schedule picker ═══ */}
       <SchedulePicker
@@ -1978,14 +1943,10 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
     },
 
     // ── Promo sheet ──
-    promoSheet: {
-      backgroundColor: colors.surface,
-      borderTopLeftRadius: 24,
-      borderTopRightRadius: 24,
+    promoSheetContent: {
       paddingHorizontal: 20,
       paddingBottom: Math.max(insets.bottom, 16) + 8,
-      paddingTop: 12,
-      maxHeight: '85%',
+      paddingTop: 4,
     },
     promoInputRow: {
       flexDirection: 'row',

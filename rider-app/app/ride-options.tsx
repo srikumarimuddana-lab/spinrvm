@@ -1182,22 +1182,19 @@ function RideOptionsScreenContent() {
               )}
             </ScrollView>
 
+            {/* No Done button by design: the sheet closes as soon as a coupon
+                row is tapped, Apply is pressed, or the area outside the sheet is
+                tapped (all via closePromoSheet). Removing an applied code just
+                clears it and keeps the sheet open so another can be picked. */}
             {appliedPromo && (
               <TouchableOpacity
                 style={styles.promoRemoveRow}
-                onPress={() => { applyPromo(null); closePromoSheet(); }}
+                onPress={() => applyPromo(null)}
               >
                 <Ionicons name="close-circle-outline" size={18} color="#EF4444" />
                 <Text style={styles.promoRemoveText}>Remove applied code</Text>
               </TouchableOpacity>
             )}
-
-            <TouchableOpacity
-              style={styles.paymentDoneBtn}
-              onPress={closePromoSheet}
-            >
-              <Text style={styles.paymentDoneBtnText}>Done</Text>
-            </TouchableOpacity>
           </TouchableOpacity>
           </View>
         </TouchableOpacity>

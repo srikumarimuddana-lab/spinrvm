@@ -118,49 +118,26 @@ function RideOptionsScreenContent() {
   const [showPromoSheet, setShowPromoSheet] = useState(false);
   const [promoInput, setPromoInput] = useState('');
   const [promoError, setPromoError] = useState('');
-  // Promo sheet keyboard tracking. KeyboardAvoidingView inside an RN Modal
-  // miscomputes its frame on iOS and left the sheet hovering mid-screen, so
-  // the sheet rides the keyboard explicitly instead: marginBottom animates to
-  // the keyboard height while it's up and back to 0 (flush with the screen
-  // edge) when it hides. Android needs none of this — the window itself
-  // resizes (softwareKeyboardLayoutMode: 'resize' in app.config.ts).
-  const promoSheetLift = useRef(new Animated.Value(0)).current;
+  // Promo sheet keyboard tracking (iOS only). The sheet stays FLUSH to the
+  // bottom edge — we deliberately do NOT lift it to ride the keyboard. The
+  // code input sits at the top of the sheet, well above the keyboard, so
+  // lifting is unnecessary; both a KeyboardAvoidingView and an animated
+  // marginBottom left the sheet hovering detached from the screen edge (the
+  // grey gap under the Done button). We only track whether the keyboard is up
+  // so the offers list can shrink and never overflow the sheet's top. Android
+  // resizes the window itself (softwareKeyboardLayoutMode: 'resize').
   const [promoKbVisible, setPromoKbVisible] = useState(false);
   useEffect(() => {
     if (Platform.OS !== 'ios') return;
-    const show = Keyboard.addListener('keyboardWillShow', (e) => {
-      setPromoKbVisible(true);
-      Animated.timing(promoSheetLift, {
-        toValue: e.endCoordinates.height,
-        duration: e.duration || 220,
-        useNativeDriver: false, // margin is a layout prop
-      }).start();
-    });
-    const hide = Keyboard.addListener('keyboardWillHide', (e) => {
-      setPromoKbVisible(false);
-      Animated.timing(promoSheetLift, {
-        toValue: 0,
-        duration: e.duration || 180,
-        useNativeDriver: false,
-      }).start();
-    });
+    const show = Keyboard.addListener('keyboardWillShow', () => setPromoKbVisible(true));
+    const hide = Keyboard.addListener('keyboardWillHide', () => setPromoKbVisible(false));
     return () => { show.remove(); hide.remove(); };
-  }, [promoSheetLift]);
-  // Reset the keyboard-lift every time the promo sheet opens. Without this a
-  // stale lift left over from a previous keyboard session (e.g. the sheet was
-  // closed by tapping a coupon row while the keyboard was still up, so
-  // keyboardWillHide raced the modal teardown) reopens the sheet floating
-  // marginBottom-px above the screen edge — the dark overlay shows through
-  // below it and the sheet looks detached from the bottom. On close, make sure
-  // the keyboard is dismissed so it can't strand a lift for next time.
+  }, []);
+  // Dismiss the keyboard whenever the sheet closes so a focused input can't
+  // keep the keyboard up behind a dismissed sheet.
   useEffect(() => {
-    if (showPromoSheet) {
-      promoSheetLift.setValue(0);
-      setPromoKbVisible(false);
-    } else {
-      Keyboard.dismiss();
-    }
-  }, [showPromoSheet, promoSheetLift]);
+    if (!showPromoSheet) Keyboard.dismiss();
+  }, [showPromoSheet]);
   const [fareBreakdownOpen, setFareBreakdownOpen] = useState(false);
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean; title: string; message: string;
@@ -1057,11 +1034,9 @@ function RideOptionsScreenContent() {
       {/* ═══ Promo selection modal ═══ */}
       <Modal visible={showPromoSheet} animationType="slide" transparent onRequestClose={() => setShowPromoSheet(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowPromoSheet(false)}>
-          {/* marginBottom rides the keyboard (see promoSheetLift): sheet
-              bottom sits exactly on the keyboard top while typing — Done and
-              the offers stay reachable — and returns flush to the screen
-              edge the moment the keyboard hides. */}
-          <Animated.View style={{ marginBottom: promoSheetLift }}>
+          {/* Sheet is anchored flush to the bottom by modalOverlay's
+              justifyContent:'flex-end' — no wrapper margin, so no grey gap
+              under the Done button. */}
           <TouchableOpacity activeOpacity={1} style={styles.promoSheet}>
             <View style={styles.paymentModalHandle} />
             <Text style={styles.paymentModalTitle}>Promo Code</Text>
@@ -1196,7 +1171,6 @@ function RideOptionsScreenContent() {
               <Text style={styles.paymentDoneBtnText}>Done</Text>
             </TouchableOpacity>
           </TouchableOpacity>
-          </Animated.View>
         </TouchableOpacity>
       </Modal>
 

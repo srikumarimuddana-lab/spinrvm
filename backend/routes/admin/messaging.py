@@ -19,9 +19,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-_AUDIENCES = Literal[
-    "customers", "drivers", "particular_customer", "particular_driver", "all"
-]
+_AUDIENCES = Literal["customers", "drivers", "particular_customer", "particular_driver", "all"]
 
 
 class CloudMessageRequest(BaseModel):
@@ -346,9 +344,15 @@ async def admin_cloud_message_audience_preview(
     recipients = await _resolve_recipients(audience, [], area, need_contact=False)
     out: Dict[str, Any] = {"audience": audience, "audience_total": len(recipients)}
     try:
-        out["email_opted_in"] = await db_supabase.count_documents("marketing_preferences", {"email_opt_in": True})
-        out["sms_opted_in"] = await db_supabase.count_documents("marketing_preferences", {"sms_opt_in": True})
-        out["push_opted_in"] = await db_supabase.count_documents("marketing_preferences", {"push_opt_in": True})
+        out["email_opted_in"] = await db_supabase.count_documents(
+            "marketing_preferences", {"email_opt_in": True}, id_column="user_id"
+        )
+        out["sms_opted_in"] = await db_supabase.count_documents(
+            "marketing_preferences", {"sms_opt_in": True}, id_column="user_id"
+        )
+        out["push_opted_in"] = await db_supabase.count_documents(
+            "marketing_preferences", {"push_opt_in": True}, id_column="user_id"
+        )
     except Exception:
         logger.error("audience-preview consent counts failed", exc_info=True)
         out["email_opted_in"] = out["sms_opted_in"] = out["push_opted_in"] = None

@@ -1520,6 +1520,43 @@ async def _deliver_push_now(
         return False
 
 
+def _record_inbox_notification(user_id: str, title: str, body: str, data: Dict[str, str] | None) -> None:
+    """Fire-and-forget: persist this push to the user's in-app notification
+    inbox (the ``notifications`` table read by GET /notifications).
+
+    This is the single choke point every push flows through, so wiring the
+    inbox write in here — rather than at each of the ~25 call sites — is what
+    makes ride/wallet/lost-and-found/admin/etc. notifications show up on the
+    Notifications page at all. Runs as a background task: never blocks or
+    raises into the caller, and must not add latency to time-critical
+    (dispatch/safety) push delivery.
+    """
+
+    async def _write() -> None:
+        try:
+            notification_type = (data or {}).get("type") or "general"
+            await db.insert_one(
+                "notifications",
+                {
+                    "id": str(uuid.uuid4()),
+                    "user_id": user_id,
+                    "title": title,
+                    "body": body,
+                    "type": notification_type,
+                    "data": data or {},
+                    "is_read": False,
+                },
+            )
+        except Exception:
+            logger.error(f"push: failed to record in-app notification for user {user_id}", exc_info=True)
+
+    try:
+        from .utils.background import spawn
+    except ImportError:  # pragma: no cover
+        from utils.background import spawn  # type: ignore
+    spawn(_write())
+
+
 async def send_push_notification(
     user_id: str,
     title: str,
@@ -1546,7 +1583,13 @@ async def send_push_notification(
     offer/SOS is never silently dropped (the retry loop re-reads the user at
     send time). Normal (informational) pushes are best-effort: a lookup error
     surfaces to the caller rather than being masked.
+
+    Every call also writes an in-app notification-inbox row (best-effort,
+    non-blocking) regardless of whether device delivery succeeds — the
+    underlying event (ride completed, wallet credited, ...) already happened,
+    so the Notifications page must reflect it even without a live device token.
     """
+    _record_inbox_notification(user_id, title, body, data)
     time_critical = priority in ("dispatch", "safety")
 
     # The whole immediate path (users lookup + token select + send) is guarded:

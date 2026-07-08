@@ -246,24 +246,40 @@ async def main(pickup_lat, pickup_lng):
     except Exception as _geo_exc:  # noqa: BLE001
         print(f"  (boundary check skipped: {_geo_exc})")
     else:
+        print("Public /service-areas (what the rider app draws) ONLY returns rows that are")
+        print("is_active=true AND parent_service_area_id IS NULL AND is_airport!=true. A")
+        print("boundary drawn on an airport/child/inactive/duplicate row won't render even")
+        print("with a valid polygon — the 'public' column below shows if the row qualifies.")
+        print()
         for a in (areas or []):
             poly = get_service_area_polygon(a)
             name = a.get("name") or a.get("id")
+            raw = a.get("polygon")
+            raw_kind = "list" if isinstance(raw, list) else ("geojson-dict" if isinstance(raw, dict) else type(raw).__name__)
+            is_public = bool(a.get("is_active")) and not a.get("parent_service_area_id") and not a.get("is_airport")
+            flags = (
+                f"active={a.get('is_active')} airport={a.get('is_airport')} "
+                f"parent={'yes' if a.get('parent_service_area_id') else 'no'} "
+                f"public={'YES' if is_public else 'NO (hidden from rider app)'}"
+            )
             if len(poly) >= 3:
                 inside = ""
                 if pickup_lat is not None and pickup_lng is not None:
                     inside = (
-                        "  — pickup INSIDE ✅"
+                        "  pickup INSIDE ✅"
                         if point_in_polygon(pickup_lat, pickup_lng, poly)
-                        else "  — pickup OUTSIDE"
+                        else "  pickup OUTSIDE"
                     )
-                print(f"  ✅ '{name}': boundary has {len(poly)} points (renders green){inside}")
+                mark = "✅" if is_public else "⚠️ "
+                print(f"  {mark} '{name}': {len(poly)}-pt boundary (raw={raw_kind}) | {flags}{inside}")
             else:
-                print(f"  ❌ '{name}': NO boundary polygon — no green zone; pickups never match this area")
+                print(f"  ❌ '{name}': NO parseable boundary (raw={raw_kind}) | {flags}")
         print()
-        print("  If Regina shows ❌ above: draw + save its boundary in Admin → Service Areas.")
-        print("  That renders the green zone AND lets pickups match Regina for area-specific")
-        print("  fare_configs / surge (also add Regina fare_configs — see section 4).")
+        print("  Regina should read: a ≥3-pt boundary, raw=list or geojson-dict, public=YES.")
+        print("  - boundary ❌ / raw=NoneType → the draw didn't persist; redraw + Save.")
+        print("  - boundary ✅ but public=NO → you drew it on an airport/child/inactive row;")
+        print("    move the boundary onto the top-level active Regina row.")
+        print("  - boundary ✅ and public=YES but still not green → stale rider app; reload it.")
 
     section("Done")
 

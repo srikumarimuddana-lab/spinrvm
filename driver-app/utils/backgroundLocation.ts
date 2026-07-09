@@ -1,6 +1,7 @@
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import * as SecureStore from 'expo-secure-store';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import SpinrConfig from '@shared/config/spinr.config';
 import { getAppCheckToken, initFirebaseServices } from '@shared/services/firebase';
@@ -13,6 +14,8 @@ import { getAppCheckToken, initFirebaseServices } from '@shared/services/firebas
 const API_URL = SpinrConfig.backendUrl;
 
 const TASK_NAME = 'spinr-background-location';
+const BG_LOCATION_QUEUE_KEY = 'spinr_bg_location_queue';
+const BG_LOCATION_QUEUE_MAX_POINTS = 1000;
 
 // ── Geofence-based killed-app recovery ─────────────────────────────────
 // When the user force-swipes the app, Expo's foreground service is killed
@@ -31,6 +34,40 @@ const TRIP_ACTIVE_KEY = 'spinr_bg_trip_active';
 type LocationTaskData = {
   locations: Location.LocationObject[];
 };
+
+type BackgroundLocationPoint = {
+  lat: number;
+  lng: number;
+  speed: number | null;
+  heading: number | null;
+  accuracy: number | null;
+  timestamp: string;
+  tracking_phase: 'background';
+};
+
+async function loadQueuedBackgroundPoints(): Promise<BackgroundLocationPoint[]> {
+  try {
+    const raw = await AsyncStorage.getItem(BG_LOCATION_QUEUE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveQueuedBackgroundPoints(points: BackgroundLocationPoint[]): Promise<void> {
+  const capped = points.slice(-BG_LOCATION_QUEUE_MAX_POINTS);
+  try {
+    if (capped.length === 0) {
+      await AsyncStorage.removeItem(BG_LOCATION_QUEUE_KEY);
+    } else {
+      await AsyncStorage.setItem(BG_LOCATION_QUEUE_KEY, JSON.stringify(capped));
+    }
+  } catch (e) {
+    console.warn('[BgLocation] Failed to persist offline queue:', e);
+  }
+}
 
 /**
  * Get a valid access token for the background task.
@@ -105,15 +142,12 @@ export async function getBackgroundAuthToken(): Promise<string | null> {
   }
 }
 
-TaskManager.defineTask<LocationTaskData>(TASK_NAME, async ({ data, error }) => {
+export async function handleBackgroundLocationTask({ data, error }: { data?: LocationTaskData; error?: { message?: string } | null }): Promise<void> {
   if (error) {
     console.error('[BgLocation] Task error:', error.message);
     return;
   }
   if (!data?.locations?.length) return;
-
-  const token = await getBackgroundAuthToken();
-  if (!token || !API_URL) return;
 
   // Filter out spoofed/mock locations
   const trusted = data.locations.filter((loc) => {
@@ -124,15 +158,23 @@ TaskManager.defineTask<LocationTaskData>(TASK_NAME, async ({ data, error }) => {
   });
   if (!trusted.length) return;
 
-  const points = trusted.map((loc) => ({
+  const points: BackgroundLocationPoint[] = trusted.map((loc) => ({
     lat: loc.coords.latitude,
     lng: loc.coords.longitude,
-    speed: loc.coords.speed,
-    heading: loc.coords.heading,
-    accuracy: loc.coords.accuracy,
+    speed: loc.coords.speed ?? null,
+    heading: loc.coords.heading ?? null,
+    accuracy: loc.coords.accuracy ?? null,
     timestamp: new Date(loc.timestamp).toISOString(),
     tracking_phase: 'background',
   }));
+  const queued = await loadQueuedBackgroundPoints();
+  const pointsToUpload = [...queued, ...points].slice(-BG_LOCATION_QUEUE_MAX_POINTS);
+
+  const token = await getBackgroundAuthToken();
+  if (!token || !API_URL) {
+    await saveQueuedBackgroundPoints(pointsToUpload);
+    return;
+  }
 
   try {
     // App Check is enforced on /api/* in production. Initialize it (idempotent;
@@ -141,20 +183,27 @@ TaskManager.defineTask<LocationTaskData>(TASK_NAME, async ({ data, error }) => {
     // go stale while the task logs the points as sent.
     await initFirebaseServices();
     const appCheckToken = await getAppCheckToken();
-    await fetch(`${API_URL}/api/v1/drivers/location-batch`, {
+    const resp = await fetch(`${API_URL}/api/v1/drivers/location-batch`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
         ...(appCheckToken ? { 'X-Firebase-AppCheck': appCheckToken } : {}),
       },
-      body: JSON.stringify({ points }),
+      body: JSON.stringify({ points: pointsToUpload }),
     });
-    console.log(`[BgLocation] Sent ${points.length} points`);
+    if (!resp.ok) {
+      throw new Error(`location-batch ${resp.status}`);
+    }
+    await saveQueuedBackgroundPoints([]);
+    console.log(`[BgLocation] Sent ${pointsToUpload.length} points`);
   } catch (e) {
     console.warn('[BgLocation] Upload failed:', e);
+    await saveQueuedBackgroundPoints(pointsToUpload);
   }
-});
+}
+
+TaskManager.defineTask<LocationTaskData>(TASK_NAME, handleBackgroundLocationTask);
 
 export interface BgLocationConfig {
   timeInterval?: number;

@@ -19,9 +19,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-_AUDIENCES = Literal[
-    "customers", "drivers", "particular_customer", "particular_driver", "all"
-]
+_AUDIENCES = Literal["customers", "drivers", "particular_customer", "particular_driver", "all"]
 
 
 class CloudMessageRequest(BaseModel):
@@ -122,13 +120,24 @@ async def _count_audience(audience: str, particular_ids: list, service_area_id: 
     return 0
 
 
-async def _send_push_one(uid: str, title: str, description: str, target_app: str | None) -> bool:
+async def _send_push_one(
+    uid: str, title: str, description: str, target_app: str | None, is_marketing: bool, msg_type: str
+) -> bool:
+    push_data = {"type": msg_type}
+    if is_marketing:
+        try:
+            from ...utils.marketing_push import send_marketing_push
+        except ImportError:
+            from utils.marketing_push import send_marketing_push  # type: ignore
+        return await send_marketing_push(
+            user_id=uid, title=title, body=description, data=push_data, target_app=target_app, log_id="cm"
+        )
     try:
         from ...features import send_push_notification
     except ImportError:
         from features import send_push_notification  # type: ignore
     try:
-        return bool(await send_push_notification(uid, title, description, target_app=target_app))
+        return bool(await send_push_notification(uid, title, description, data=push_data, target_app=target_app))
     except Exception:
         logger.error("cloud message: push send raised", exc_info=True)
         return False
@@ -190,6 +199,7 @@ async def _fan_out(
     channels: list,
     is_marketing: bool,
     target_app: str | None,
+    msg_type: str,
 ) -> None:
     """Fan-out across every selected channel concurrently and persist stats.
 
@@ -215,7 +225,9 @@ async def _fan_out(
     async def _one(row: dict) -> bool:
         async with sem:
             ok = False
-            if "push" in channels and await _send_push_one(row["id"], title, description, target_app):
+            if "push" in channels and await _send_push_one(
+                row["id"], title, description, target_app, is_marketing, msg_type
+            ):
                 ok = True
             if "email" in channels and await _send_email_one(row, title, description, is_marketing):
                 ok = True
@@ -323,6 +335,7 @@ async def admin_send_cloud_message(
             channels=channels,
             is_marketing=is_marketing,
             target_app=target_app,
+            msg_type=msg_type,
         )
         response.status_code = 202
 
@@ -346,9 +359,15 @@ async def admin_cloud_message_audience_preview(
     recipients = await _resolve_recipients(audience, [], area, need_contact=False)
     out: Dict[str, Any] = {"audience": audience, "audience_total": len(recipients)}
     try:
-        out["email_opted_in"] = await db_supabase.count_documents("marketing_preferences", {"email_opt_in": True})
-        out["sms_opted_in"] = await db_supabase.count_documents("marketing_preferences", {"sms_opt_in": True})
-        out["push_opted_in"] = await db_supabase.count_documents("marketing_preferences", {"push_opt_in": True})
+        out["email_opted_in"] = await db_supabase.count_documents(
+            "marketing_preferences", {"email_opt_in": True}, id_column="user_id"
+        )
+        out["sms_opted_in"] = await db_supabase.count_documents(
+            "marketing_preferences", {"sms_opt_in": True}, id_column="user_id"
+        )
+        out["push_opted_in"] = await db_supabase.count_documents(
+            "marketing_preferences", {"push_opt_in": True}, id_column="user_id"
+        )
     except Exception:
         logger.error("audience-preview consent counts failed", exc_info=True)
         out["email_opted_in"] = out["sms_opted_in"] = out["push_opted_in"] = None

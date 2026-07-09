@@ -19,6 +19,7 @@ Run:
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -419,6 +420,200 @@ class TestNativePushDelivery:
         msg_arg = mock_messaging.Message.call_args
         assert msg_arg is not None
         assert msg_arg.kwargs.get("token") == android_token or (msg_arg.args and android_token in str(msg_arg.args))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Every send_push_notification() call must also write a row to the
+# `notifications` table (the in-app Notifications page). This is the one
+# choke point every ride/wallet/lost-and-found/admin push flows through, so
+# fixing the inbox write here — instead of at each of the ~25 call sites —
+# is what makes those events show up on the Notifications page at all.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestPushRecordsInboxNotification:
+    """Pins the in-app notification-inbox side effect of send_push_notification.
+
+    Code under test: backend/features.py::_record_inbox_notification, called
+    from send_push_notification.
+    """
+
+    async def test_successful_push_writes_notifications_row(self):
+        """A push that reaches the device also gets an inbox row so it still
+        shows up on the Notifications page."""
+        import sys
+        from unittest.mock import MagicMock
+
+        mock_messaging = MagicMock()
+        mock_messaging.send = MagicMock(return_value="projects/spinr/messages/ok")
+        mock_firebase = MagicMock()
+        mock_firebase.messaging = mock_messaging
+
+        user_row = {"id": USER_ID, "fcm_token_rider": "ios-token"}
+        insert_mock = AsyncMock(return_value={"id": "notif-abc"})
+
+        with (
+            patch.dict(sys.modules, {"firebase_admin": mock_firebase, "firebase_admin.messaging": mock_messaging}),
+            patch("backend.features.db_supabase.find_one", AsyncMock(return_value=user_row)),
+            patch("backend.features.db_supabase.insert_one", insert_mock),
+        ):
+            from backend import features as features_mod
+
+            result = await features_mod.send_push_notification(
+                user_id=USER_ID,
+                title="Ride completed",
+                body="Thanks for riding with Spinr",
+                data={"type": "ride_completed", "ride_id": "r1"},
+                target_app="rider",
+            )
+            await asyncio.sleep(0)  # let the fire-and-forget inbox write run
+
+        assert result is True
+        insert_mock.assert_awaited_once()
+        table, doc = insert_mock.call_args.args
+        assert table == "notifications"
+        assert doc["user_id"] == USER_ID
+        assert doc["title"] == "Ride completed"
+        assert doc["type"] == "ride_completed"
+        assert doc["data"] == {"type": "ride_completed", "ride_id": "r1"}
+        assert doc["is_read"] is False
+
+    async def test_push_without_type_key_defaults_to_general(self):
+        """Callers that pass no ``data`` (or omit "type") still get an inbox
+        row — bucketed as "general" rather than dropped."""
+        user_row = {"id": USER_ID}  # no token → delivery itself is a no-op
+        insert_mock = AsyncMock(return_value={"id": "notif-xyz"})
+
+        with (
+            patch("backend.features.db_supabase.find_one", AsyncMock(return_value=user_row)),
+            patch("backend.features.db_supabase.insert_one", insert_mock),
+        ):
+            from backend import features as features_mod
+
+            result = await features_mod.send_push_notification(
+                user_id=USER_ID,
+                title="Welcome to Spinr",
+                body="Thanks for signing up",
+            )
+            await asyncio.sleep(0)
+
+        assert result is False  # no token on file — delivery itself fails
+        insert_mock.assert_awaited_once()
+        _, doc = insert_mock.call_args.args
+        assert doc["type"] == "general"
+
+    async def test_failed_insert_does_not_raise(self):
+        """A broken notifications-table write must never surface to the push
+        caller — it's a best-effort side effect, not part of the delivery
+        contract."""
+        user_row = {"id": USER_ID}
+        insert_mock = AsyncMock(side_effect=RuntimeError("db down"))
+
+        with (
+            patch("backend.features.db_supabase.find_one", AsyncMock(return_value=user_row)),
+            patch("backend.features.db_supabase.insert_one", insert_mock),
+        ):
+            from backend import features as features_mod
+
+            result = await features_mod.send_push_notification(
+                user_id=USER_ID,
+                title="Welcome to Spinr",
+                body="Thanks for signing up",
+            )
+            await asyncio.sleep(0)
+
+        assert result is False
+        insert_mock.assert_awaited_once()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Transient push types (per-candidate dispatch offers, silent Live Activity
+# ticks) must NOT get a durable inbox row — codex review r3548013232.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestTransientPushTypesSkipInbox:
+    """Pins _TRANSIENT_NOTIFICATION_TYPES in backend/features.py.
+
+    A dispatch offer (type=new_ride_assignment) fires once per candidate
+    driver and carries pickup/dropoff address + lat/lng; a driver who timed
+    out or declined shouldn't have that address data surviving in their
+    inbox. Live Activity ticks (type=live_activity) are silent/data-only and
+    fire repeatedly through a ride — never meant to be durable history.
+    """
+
+    async def test_dispatch_offer_is_not_recorded_to_inbox(self):
+        user_row = {"id": USER_ID, "fcm_token_driver": "android-fcm-driver-token"}
+        insert_mock = AsyncMock(return_value={"id": "notif-should-not-happen"})
+
+        with (
+            patch("backend.features.db_supabase.find_one", AsyncMock(return_value=user_row)),
+            patch("backend.features._deliver_push_now", AsyncMock(return_value=True)),
+            patch("backend.features.db_supabase.insert_one", insert_mock),
+        ):
+            from backend import features as features_mod
+
+            result = await features_mod.send_push_notification(
+                user_id=USER_ID,
+                title="$12.50 ride offer",
+                body="Booking r1 • A → B",
+                data={"type": "new_ride_assignment", "ride_id": "r1", "pickup_address": "8th St E"},
+                priority="dispatch",
+                target_app="driver",
+            )
+            await asyncio.sleep(0)
+
+        assert result is True
+        insert_mock.assert_not_called()
+
+    async def test_live_activity_tick_is_not_recorded_to_inbox(self):
+        user_row = {"id": USER_ID, "fcm_token_rider": "ios-token"}
+        insert_mock = AsyncMock(return_value={"id": "notif-should-not-happen"})
+
+        with (
+            patch("backend.features.db_supabase.find_one", AsyncMock(return_value=user_row)),
+            patch("backend.features._deliver_push_now", AsyncMock(return_value=True)),
+            patch("backend.features.db_supabase.insert_one", insert_mock),
+        ):
+            from backend import features as features_mod
+
+            result = await features_mod.send_push_notification(
+                user_id=USER_ID,
+                title="Your driver is arriving",
+                body="",
+                data={"type": "live_activity", "event": "driver_arriving", "ride_id": "r1"},
+                target_app="rider",
+            )
+            await asyncio.sleep(0)
+
+        assert result is True
+        insert_mock.assert_not_called()
+
+    async def test_ordinary_ride_update_is_still_recorded(self):
+        """Control case: a non-transient type is unaffected by the skip-list."""
+        user_row = {"id": USER_ID, "fcm_token_rider": "ios-token"}
+        insert_mock = AsyncMock(return_value={"id": "notif-ok"})
+
+        with (
+            patch("backend.features.db_supabase.find_one", AsyncMock(return_value=user_row)),
+            patch("backend.features._deliver_push_now", AsyncMock(return_value=True)),
+            patch("backend.features.db_supabase.insert_one", insert_mock),
+        ):
+            from backend import features as features_mod
+
+            result = await features_mod.send_push_notification(
+                user_id=USER_ID,
+                title="Ride Started! ▶️",
+                body="Your ride has started.",
+                data={"type": "ride_started", "ride_id": "r1"},
+                target_app="rider",
+            )
+            await asyncio.sleep(0)
+
+        assert result is True
+        insert_mock.assert_awaited_once()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

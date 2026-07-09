@@ -34,3 +34,5 @@ def test_portal_preauth_is_csrf_exempt():
     # send-otp is a browser-Origin POST with no csrf cookie yet.
     assert "/api/portal/auth/send-otp" in _CSRF_EXEMPT_EXACT
     assert "/api/portal/auth/verify-otp" in _CSRF_EXEMPT_EXACT
+    assert "/api/portal/auth/send-email-otp" in _CSRF_EXEMPT_EXACT
+    assert "/api/portal/auth/verify-email-otp" in _CSRF_EXEMPT_EXACT

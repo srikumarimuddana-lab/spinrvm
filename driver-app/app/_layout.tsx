@@ -57,6 +57,12 @@ import {
   getAppCheckToken,
 } from '@shared/services/firebase';
 import { setAppCheckTokenProvider } from '@shared/api/client';
+
+// Register App Check token retrieval at module load so early startup requests
+// (driver active-ride hydration and login OTP) wait for Firebase App Check
+// instead of racing ahead without X-Firebase-AppCheck.
+setAppCheckTokenProvider(getAppCheckToken);
+
 // Notifee — rich notifications (heads-up + full-screen intent + Accept/Decline
 // action buttons). Lazy-required because the native module isn't linked in
 // Expo Go / web; we treat the import failure the same as Expo Go: no-op.
@@ -330,7 +336,6 @@ function RootLayout() {
         // registration is deferred to a separate effect that waits for
         // an authenticated session (below).
         await initFirebaseServices();
-        setAppCheckTokenProvider(getAppCheckToken);
         await requestNotificationPermission();
 
         captureMessage('driver-app cold start', 'log');

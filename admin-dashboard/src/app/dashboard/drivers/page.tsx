@@ -380,20 +380,6 @@ export default function DriversPage() {
     };
     const boolInputValue = (v: any) => (v === true ? "true" : v === false ? "false" : "");
     const fromBoolInput = (v: any) => (v === "true" ? true : v === "false" ? false : null);
-    const setWorkAuthorizationStatus = (status: string) => {
-        const next: Record<string, any> = { ...editForm, work_authorization_status: status === "unknown" ? "" : status };
-        if (status === "citizen") {
-            next.is_citizen = "true";
-            next.is_permanent_resident = "false";
-        } else if (status === "permanent_resident") {
-            next.is_permanent_resident = "true";
-            next.is_citizen = "false";
-        } else if (["expiring", "indefinite", "unknown", ""].includes(status)) {
-            next.is_permanent_resident = "false";
-            next.is_citizen = "false";
-        }
-        setEditForm(next);
-    };
     const startEditing = () => {
         if (!selected) return;
         setEditForm({
@@ -1064,7 +1050,7 @@ export default function DriversPage() {
                                                 <EditField label="Authority Approved At" value={ef("regulatory_authority_approved_at")} onChange={v => setEf("regulatory_authority_approved_at", v)} type="datetime-local" />
                                                 <div>
                                                     <label className="text-[11px] text-muted-foreground mb-1 block">Work Authorization Status</label>
-                                                    <Select value={ef("work_authorization_status") || "unknown"} onValueChange={setWorkAuthorizationStatus}>
+                                                    <Select value={ef("work_authorization_status") || "unknown"} onValueChange={v => setEf("work_authorization_status", v === "unknown" ? "" : v)}>
                                                         <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
                                                         <SelectContent>
                                                             <SelectItem value="unknown">Unknown</SelectItem>

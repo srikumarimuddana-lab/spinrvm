@@ -1041,6 +1041,22 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
         new_last = driver_updates.get("last_name", existing.get("last_name")) or ""
         driver_updates["name"] = f"{new_first} {new_last}".strip()
 
+    # Keep import/compliance flags consistent when admins edit the normalized
+    # work authorization status manually. Explicit boolean updates still win,
+    # but choosing "citizen" or "permanent_resident" should not leave the
+    # separate flags stale.
+    if "work_authorization_status" in driver_updates:
+        status = str(driver_updates.get("work_authorization_status") or "").strip().lower()
+        if status == "citizen":
+            driver_updates.setdefault("is_citizen", True)
+            driver_updates.setdefault("is_permanent_resident", False)
+        elif status == "permanent_resident":
+            driver_updates.setdefault("is_permanent_resident", True)
+            driver_updates.setdefault("is_citizen", False)
+        elif status in {"expiring", "indefinite", "unknown", ""}:
+            driver_updates.setdefault("is_permanent_resident", False)
+            driver_updates.setdefault("is_citizen", False)
+
     user_id = existing.get("user_id")
     # email/gender exist ONLY on `users`, so they cannot be persisted without a
     # linked account row — surface loudly rather than silently dropping them.

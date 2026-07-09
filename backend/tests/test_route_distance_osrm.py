@@ -53,7 +53,12 @@ def _client_factory(resp=None, exc=None, capture=None):
 
 def _trip(n=6):
     return [
-        {"lat": 50.45 - i * 0.001, "lng": -104.62 - i * 0.001, "tracking_phase": "trip_in_progress", "accuracy": 8}
+        {
+            "lat": 50.45 - i * 0.001,
+            "lng": -104.62 - i * 0.001,
+            "tracking_phase": "trip_in_progress",
+            "accuracy": 8,
+        }
         for i in range(n)
     ]
 
@@ -79,16 +84,33 @@ def test_osrm_radius_clamped_and_defaulted():
     assert rd._osrm_radius({"accuracy": "bad"}) == "20"  # non-numeric -> default
 
 
+def test_osrm_timestamp_accepts_iso_seconds_and_expo_millis():
+    assert rd._osrm_timestamp({"timestamp": "2026-07-09T12:34:56Z"}) == 1783600496
+    assert rd._osrm_timestamp({"timestamp": 1783600496}) == 1783600496
+    assert rd._osrm_timestamp({"timestamp": 1783600496000}) == 1783600496
+    assert rd._osrm_timestamp({"timestamp": "bad"}) is None
+
+
+def test_osrm_bearing_uses_heading_when_available():
+    assert rd._osrm_bearing({"heading": 361.2}) == "1,45"
+    assert rd._osrm_bearing({"bearing": 90}) == "90,45"
+    assert rd._osrm_bearing({"course": "bad"}) == ""
+
+
 # ── _compute_via_osrm (distance + geometry) ───────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_osrm_returns_distance_and_geometry():
+    trip = _trip(6)
+    for i, p in enumerate(trip):
+        p["timestamp"] = f"2026-07-09T12:00:{i:02d}Z"
+        p["heading"] = 180 + i
     capture = {}
     with patch.object(
         rd.httpx, "AsyncClient", _client_factory(resp=_FakeResp(payload=_osrm_payload()), capture=capture)
     ):
-        result = await rd._compute_via_osrm(_trip(6), "http://osrm:5000/")
+        result = await rd._compute_via_osrm(trip, "http://osrm:5000/")
 
     assert result is not None
     distance_km, polyline = result
@@ -99,8 +121,24 @@ async def test_osrm_returns_distance_and_geometry():
     # requests geometry, and uses lng,lat order + /match/v1/driving
     assert capture["params"]["overview"] == "full"
     assert capture["params"]["geometries"] == "geojson"
+    assert capture["params"]["gaps"] == "split"
+    assert capture["params"]["timestamps"] == "1783598400;1783598401;1783598402;1783598403;1783598404;1783598405"
+    assert capture["params"]["bearings"] == "180,45;181,45;182,45;183,45;184,45;185,45"
     assert "/match/v1/driving/" in capture["url"]
     assert "-104.62,50.45" in capture["url"]
+
+
+@pytest.mark.asyncio
+async def test_osrm_omits_optional_hints_when_unavailable():
+    capture = {}
+    with patch.object(
+        rd.httpx, "AsyncClient", _client_factory(resp=_FakeResp(payload=_osrm_payload()), capture=capture)
+    ):
+        result = await rd._compute_via_osrm(_trip(6), "http://osrm:5000/")
+
+    assert result is not None
+    assert "timestamps" not in capture["params"]
+    assert "bearings" not in capture["params"]
 
 
 @pytest.mark.asyncio

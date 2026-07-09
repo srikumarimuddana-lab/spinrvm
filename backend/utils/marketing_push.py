@@ -29,6 +29,7 @@ async def send_marketing_push(
     user_id: str,
     title: str,
     body: str,
+    data: dict | None = None,
     target_app: str | None = None,
     log_id: str = "-",
 ) -> bool:
@@ -44,7 +45,7 @@ async def send_marketing_push(
         import features  # type: ignore
 
     try:
-        return bool(await features.send_push_notification(user_id, title, body, target_app=target_app))
+        return bool(await features.send_push_notification(user_id, title, body, data=data, target_app=target_app))
     except Exception:
         logger.error("[MARKETING] push send raised log_id=%s", log_id, exc_info=True)
         return False

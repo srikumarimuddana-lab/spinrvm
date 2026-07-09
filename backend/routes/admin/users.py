@@ -87,7 +87,9 @@ async def admin_get_users(
 
     if search:
         # Basic contains-match on phone / email / first_name; callers typically
-        # pass partial phone digits or email substrings.
+        # pass partial phone digits or email substrings. `id` is included so
+        # pasting a rider/driver UUID (e.g. from a support ticket) still finds
+        # the exact user even though it never matches name/contact fields.
         term = search.strip()
         if term:
             filters["$or"] = [
@@ -95,6 +97,7 @@ async def admin_get_users(
                 {"email": {"$regex": re.escape(term), "$options": "i"}},
                 {"first_name": {"$regex": re.escape(term), "$options": "i"}},
                 {"last_name": {"$regex": re.escape(term), "$options": "i"}},
+                {"id": {"$regex": re.escape(term), "$options": "i"}},
             ]
     users = await db_supabase.get_rows(
         "users",

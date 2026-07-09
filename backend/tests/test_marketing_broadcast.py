@@ -6,6 +6,9 @@ Covers:
   NOT send_transactional_email
 - non-marketing email fan-out routes through send_transactional_email
 - marketing SMS fan-out routes through send_marketing_sms
+- marketing push fan-out routes through send_marketing_push (consent-gated),
+  NOT the raw features.send_push_notification
+- non-marketing push fan-out still uses the raw send path (unchanged)
 """
 
 from __future__ import annotations
@@ -71,7 +74,7 @@ async def test_marketing_email_fanout_uses_marketing_sender():
     ):
         await m._fan_out(
             "msg1", recipients, title="T", description="D",
-            channels=["email"], is_marketing=True, target_app="rider",
+            channels=["email"], is_marketing=True, target_app="rider", msg_type="info",
         )
     mk.assert_awaited_once()
     assert mk.call_args.kwargs["to"] == "a@b.com"
@@ -88,7 +91,7 @@ async def test_non_marketing_email_fanout_uses_transactional_sender():
     ):
         await m._fan_out(
             "msg2", recipients, title="T", description="D",
-            channels=["email"], is_marketing=False, target_app=None,
+            channels=["email"], is_marketing=False, target_app=None, msg_type="info",
         )
     tx.assert_awaited_once()
     assert tx.call_args.kwargs["email_type"] == "broadcast"
@@ -103,7 +106,44 @@ async def test_marketing_sms_fanout_uses_marketing_sms():
     ):
         await m._fan_out(
             "msg3", recipients, title="T", description="D",
-            channels=["sms"], is_marketing=True, target_app="rider",
+            channels=["sms"], is_marketing=True, target_app="rider", msg_type="info",
         )
     mk.assert_awaited_once()
     assert mk.call_args.kwargs["to"] == "+13065551234"
+
+
+async def test_marketing_push_fanout_uses_marketing_push():
+    """A promo/marketing push must be gated by consent, same as email/SMS —
+    it must NOT reach every rider regardless of push_opt_in."""
+    recipients = [{"id": "u1"}]
+    with (
+        patch("utils.marketing_push.send_marketing_push", AsyncMock(return_value=True)) as mk,
+        patch("features.send_push_notification", AsyncMock(return_value=True)) as raw,
+        patch("db_supabase.update_one", AsyncMock(return_value=None)),
+    ):
+        await m._fan_out(
+            "msg4", recipients, title="T", description="D",
+            channels=["push"], is_marketing=True, target_app="rider", msg_type="promotion",
+        )
+    mk.assert_awaited_once()
+    assert mk.call_args.kwargs["user_id"] == "u1"
+    assert mk.call_args.kwargs["data"] == {"type": "promotion"}
+    raw.assert_not_called()  # marketing push must never bypass the consent gate
+
+
+async def test_non_marketing_push_fanout_uses_raw_send():
+    """Operational pushes (ride updates, safety) are unaffected by the
+    marketing consent gate."""
+    recipients = [{"id": "u1"}]
+    with (
+        patch("utils.marketing_push.send_marketing_push", AsyncMock(return_value=True)) as mk,
+        patch("features.send_push_notification", AsyncMock(return_value=True)) as raw,
+        patch("db_supabase.update_one", AsyncMock(return_value=None)),
+    ):
+        await m._fan_out(
+            "msg5", recipients, title="T", description="D",
+            channels=["push"], is_marketing=False, target_app="rider", msg_type="alert",
+        )
+    raw.assert_awaited_once()
+    assert raw.call_args.kwargs["data"] == {"type": "alert"}
+    mk.assert_not_called()

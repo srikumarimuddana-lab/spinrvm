@@ -34,7 +34,7 @@ import { cn, formatDate } from "@/lib/utils";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import {
     getCloudMessages, sendCloudMessage, getCloudMessageStats,
-    deleteCloudMessage, getUsers, getDrivers, getServiceAreas,
+    deleteCloudMessage, adminSearchUsers, adminSearchDrivers, getServiceAreas,
     getCloudMessageAudiencePreview, getMarketingSuppressions,
     addMarketingSuppression, deleteMarketingSuppression,
 } from "@/lib/api";
@@ -175,22 +175,23 @@ export default function CloudMessagingPage() {
         }
     };
 
-    // Fetch users/drivers for multi-select
+    // Fetch users/drivers for multi-select. Uses the server-side typeahead
+    // endpoints (POST /drivers/search, /users/search) so a target not among
+    // the most-recently-created 50 rows can still be found — a plain list
+    // fetch only ever returns that first page.
     const fetchUserOptions = useCallback(async (type: "customer" | "driver", query: string) => {
         setUserSearchLoading(true);
         try {
-            const data = type === "customer" ? await getUsers() : await getDrivers();
+            const data = type === "customer"
+                ? await adminSearchUsers({ search: query, role: "rider", limit: 50 })
+                : await adminSearchDrivers({ search: query, limit: 50 });
             const opts: UserOption[] = (data || []).map((u: any) => ({
                 id: type === "driver" ? (u.user_id || u.id) : u.id,
                 label: `${u.first_name || ""} ${u.last_name || ""}`.trim() || u.email || u.phone || u.id,
                 email: u.email,
                 phone: u.phone,
             }));
-            const q = query.toLowerCase();
-            const filtered = q
-                ? opts.filter((o) => o.label.toLowerCase().includes(q) || o.email?.toLowerCase().includes(q) || o.phone?.includes(q) || o.id.toLowerCase().includes(q))
-                : opts.slice(0, 50);
-            setUserOptions(filtered);
+            setUserOptions(opts);
         } catch {
             setUserOptions([]);
         } finally {

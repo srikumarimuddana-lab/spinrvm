@@ -640,6 +640,25 @@ class TestAdminGetDrivers:
 
         assert isinstance(result, list)
 
+    def test_search_matches_user_id_uuid(self):
+        """A pasted user_id UUID must resolve a driver even when it doesn't
+        substring-match phone/plate/driver_code/name — codex review r3548013237."""
+        from backend.routes.admin import drivers as admin_drivers
+
+        captured_filters = {}
+
+        def get_rows_side(table, filters=None, **kw):
+            if table == "drivers":
+                captured_filters.update(filters or {})
+                return []
+            return []  # no name/contact match on the users side
+
+        with patch("backend.routes.admin.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side)):
+            asyncio.run(admin_drivers.admin_get_drivers(search="uid-driver-target"))
+
+        or_clauses = captured_filters.get("$or", [])
+        assert any(c.get("user_id", {}).get("$regex") == "uid\\-driver\\-target" for c in or_clauses)
+
 
 class TestAdminSearchDrivers:
     def test_delegates_to_admin_get_drivers(self):

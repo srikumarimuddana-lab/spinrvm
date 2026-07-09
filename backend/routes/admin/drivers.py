@@ -205,10 +205,14 @@ async def admin_get_drivers(
 
             # Match driver rows by phone/plate directly OR by user_id from user search above.
             # `name` is not a column on drivers — it's derived from the joined users row.
+            # user_id is matched directly too (not just via the users $or above) so
+            # pasting a driver's user_id UUID finds them even if it doesn't happen
+            # to substring-match phone/email/name.
             filters["$or"] = [
                 {"phone": {"$regex": re.escape(term), "$options": "i"}},
                 {"license_plate": {"$regex": re.escape(term), "$options": "i"}},
                 {"driver_code": {"$regex": re.escape(term), "$options": "i"}},
+                {"user_id": {"$regex": re.escape(term), "$options": "i"}},
             ]
             if matching_uids:
                 filters["$or"].append({"user_id": {"$in": matching_uids}})

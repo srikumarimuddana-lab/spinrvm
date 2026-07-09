@@ -575,12 +575,16 @@ async def get_rows(
     return await run_sync(_fn)
 
 
-async def count_documents(table: str, filters: Optional[Dict[str, Any]] = None) -> int:
+async def count_documents(table: str, filters: Optional[Dict[str, Any]] = None, id_column: str = "id") -> int:
+    """Count rows matching filters. ``id_column`` must name a real column on
+    ``table`` — most tables use the default "id", but a few (e.g.
+    marketing_preferences) key on something else (user_id) and have no id
+    column at all."""
     if not supabase:
         return 0
 
     def _fn():
-        q = supabase.table(table).select("id", count="exact")
+        q = supabase.table(table).select(id_column, count="exact")
         q = _apply_filters(q, filters)
         q = q.limit(1)
         res = q.execute()

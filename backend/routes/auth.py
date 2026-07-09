@@ -287,7 +287,12 @@ def _make_auth_response(
 
 
 @api_router.post("/send-otp")
-@limiter.limit("3/minute")
+# 6/minute: 3/minute proved too tight in production — the key is per client IP
+# (CF-Connecting-IP), and carrier CGNAT can put several riders behind one IP;
+# a single user retrying + resending also burns 3 fast. SMS cost/abuse is still
+# bounded by the per-destination-phone send cap (_enforce_otp_send_cap) and the
+# verify-side 5-fail/hour lockout, so the per-IP window can afford headroom.
+@limiter.limit("6/minute")
 async def send_otp(request: Request, body: SendOTPRequest):
     phone = body.phone.strip()
     # Validate phone using E.164 format validator (raises HTTPException on failure)

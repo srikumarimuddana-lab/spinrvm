@@ -212,6 +212,10 @@ class ServiceAreaUpdateRequest(BaseModel):
     show_demand_heatmap: Optional[bool] = None
     vehicle_pricing: Optional[List[Dict[str, Any]]] = None
     province: Optional[str] = None
+    regulatory_authority: Optional[str] = None
+    regulatory_region: Optional[str] = None
+    regulatory_requirements_url: Optional[str] = None
+    regulatory_notes: Optional[str] = None
     max_pickup_radius_km: Optional[float] = Field(default=None, ge=0.1, le=200)
     surge_source: Optional[str] = None
     insurance_fee_percent: Optional[float] = Field(default=None, ge=0, le=100)
@@ -541,6 +545,10 @@ async def admin_update_service_area(
         "name",
         "city",
         "province",
+        "regulatory_authority",
+        "regulatory_region",
+        "regulatory_requirements_url",
+        "regulatory_notes",
         "is_active",
         "parent_service_area_id",
         "is_airport",

@@ -1006,6 +1006,19 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
         "vehicle_inspection_expiry_date",
         "background_check_expiry_date",
         "work_eligibility_expiry_date",
+        "date_of_birth",
+        "license_class",
+        "sgi_approved",
+        "sgi_approved_at",
+        "regulatory_authority",
+        "regulatory_region",
+        "regulatory_authority_approved",
+        "regulatory_authority_approved_at",
+        "work_authorization_status",
+        "is_permanent_resident",
+        "is_citizen",
+        "decals_sent",
+        "decals_sent_at",
     }
     allowed = user_fields | driver_fields
     filtered = {k: v for k, v in updates.items() if k in allowed}

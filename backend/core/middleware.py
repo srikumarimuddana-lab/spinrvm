@@ -158,7 +158,13 @@ class FirebaseAppCheckMiddleware(BaseHTTPMiddleware):
 
         if not token:
             if self._enforce:
-                logger.warning("App Check: missing token for {} req_id={}", path, request_id)
+                # DEBUG, not WARNING: a missing App Check token is an expected,
+                # high-volume rejection (e.g. a client polling before Firebase
+                # App Check has minted a token). The 401 access-log line still
+                # captures volume; per CLAUDE.md, expected/degraded paths must
+                # not spam WARNING. A genuine attack pattern surfaces via the
+                # 401 rate, not this per-request line.
+                logger.debug("App Check: missing token for {} req_id={}", path, request_id)
                 return JSONResponse(
                     status_code=401,
                     content={"detail": "App Check token required"},

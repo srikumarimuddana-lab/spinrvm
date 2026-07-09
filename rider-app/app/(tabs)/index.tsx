@@ -19,7 +19,7 @@ import Constants from 'expo-constants';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { useAuthStore } from '@shared/store/authStore';
 import { useExitOnBackPress } from '@shared/hooks/useExitOnBackPress';
-import api from '@shared/api/client';
+import api, { isAppCheckTokenReady } from '@shared/api/client';
 import { useRideStore } from '../../store/rideStore';
 import { useBottomSheetGuard } from '../../hooks/useBottomSheetGuard';
 import { useAiChatStore } from '../../store/aiChatStore';
@@ -161,9 +161,14 @@ export default function HomeScreen() {
   const fetchHomeData = useCallback(async () => {
     await refreshLocation(true);
     fetchSavedAddresses();
-    api.get('/notifications?limit=1').then((res: any) => {
-      setUnreadNotifCount(res.data?.unread_count ?? 0);
-    }).catch(() => {});
+    // /api/v1/notifications is App-Check-enforced in prod; polling before the
+    // App Check token is minted 401s. Skip until ready — useFocusEffect re-runs
+    // this, so the badge loads on the next focus once App Check is up.
+    if (await isAppCheckTokenReady()) {
+      api.get('/notifications?limit=1').then((res: any) => {
+        setUnreadNotifCount(res.data?.unread_count ?? 0);
+      }).catch(() => {});
+    }
   }, [refreshLocation, fetchSavedAddresses]);
 
   useFocusEffect(

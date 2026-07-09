@@ -207,6 +207,25 @@ async function appCheckHeader(): Promise<Record<string, string>> {
   }
 }
 
+/**
+ * True if an App Check token is currently obtainable — or if App Check is not
+ * wired into this build (e.g. dev, where backend enforcement is off anyway).
+ *
+ * Background pollers that hit App-Check-ENFORCED /api/v1 endpoints on a
+ * focus/interval (e.g. the notification-badge poll) can gate on this to avoid
+ * firing before Firebase App Check has minted a token — which would 401 under
+ * enforcement and spam the backend logs. The poll simply skips that tick; its
+ * next focus/interval run picks it up once the token is ready.
+ */
+export async function isAppCheckTokenReady(): Promise<boolean> {
+  if (!_appCheckTokenProvider) return true; // App Check not configured here
+  try {
+    return (await _appCheckTokenProvider()) != null;
+  } catch {
+    return false;
+  }
+}
+
 // ── Phase 4 (P1-9): outgoing W3C traceparent header ─────────────────
 // Callers that have started a trace span (e.g. screen-level RUM) can
 // register the active trace ID here; the request methods forward it as

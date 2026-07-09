@@ -77,8 +77,12 @@ class DeprecatedRootPathMiddleware(BaseHTTPMiddleware):
                 deprecated = True
                 break
 
-        # Check deprecated /api/ paths that are also at /api/v1/
-        if not deprecated:
+        # Check deprecated /api/ paths that are also at /api/v1/.
+        # Exclude /api/admin/*: those are App-Check-EXEMPT, but their /api/v1/admin
+        # twin is App-Check-ENFORCED (core/middleware.py), so a browser client
+        # (admin dashboard) cannot migrate to it. Flagging them is pure noise, not
+        # an actionable deprecation signal, so we neither log nor header them.
+        if not deprecated and not path.startswith("/api/admin/"):
             for prefix in _DEPRECATED_API_PREFIXES:
                 if path == prefix or path.startswith(prefix + "/"):
                     # Make sure this is not an /api/-only path (no /api/v1/ twin)

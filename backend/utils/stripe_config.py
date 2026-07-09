@@ -28,7 +28,7 @@ def configure_stripe() -> None:
     stripe.api_version = STRIPE_API_VERSION
 
     if hasattr(stripe, "default_http_client") and stripe.default_http_client is None:
-        stripe.default_http_client = stripe.http_client.RequestsClient(
+        stripe.default_http_client = stripe.new_default_http_client(
             timeout=STRIPE_TIMEOUT,
         )
     logger.info(

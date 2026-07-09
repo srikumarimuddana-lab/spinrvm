@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_ipaddr, get_remote_address
+from slowapi.util import get_ipaddr
 
 try:
     from core.config import settings
@@ -364,11 +364,15 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) 
         headers["RateLimit-Remaining"] = "0"
         headers["RateLimit-Reset"] = str(retry_after)
 
+    # Log the same IP the limiter keys on (CF-Connecting-IP behind Cloudflare),
+    # not the raw socket peer — behind Fly/Railway the peer is the platform
+    # proxy's private address, which misleads triage into thinking all clients
+    # share one bucket.
     logger.warning(
         f"Rate limit exceeded | "
         f"Path: {request.url.path} | "
         f"Method: {request.method} | "
-        f"IP: {get_remote_address(request)} | "
+        f"IP: {get_real_client_ip(request)} | "
         f"Limit: {limit_amount} | "
         f"Retry-After: {retry_after}s"
     )

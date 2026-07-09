@@ -230,3 +230,32 @@ After import:
 | `document file not found` | `file_path` is wrong or file missing | Fix folder/file path |
 | `requirement_key is not configured` | Service Area Documents tab lacks that key | Add the document key in Service Areas first |
 | `could not parse date` | Date format unsupported | Convert to `YYYY-MM-DD` |
+
+## 9. Re-running after a partial failure
+
+The commit phase runs in order: users → drivers → file uploads → documents.
+If a run dies partway (network blip, storage error), simply re-run the same
+command:
+
+- Drivers already created by a previous run (matched on
+  `legacy_import_metadata.old_driver_id` + `source`) are **skipped with a
+  warning**, not treated as conflicts.
+- Documents already inserted for those drivers (matched on
+  `requirement_key` + `side`) are also skipped, so the re-run only fills in
+  what is missing.
+- **Caveat**: a failure between the `users` and `drivers` inserts leaves user
+  rows without driver rows. Those still surface as
+  `matching user or driver already exists` errors — delete the orphaned
+  `users` rows (they have `role = 'driver'` and no matching `drivers` row)
+  before re-running.
+
+## 10. Ambiguous dates
+
+Dates like `03/04/25` parse differently day-first vs month-first. The importer
+warns (`date parses differently day-first vs month-first`) on any such value —
+including document expiry dates, which gate `go_online`. Confirm the source
+sheet's format and convert to `YYYY-MM-DD` before `--commit`.
+
+Document `status` values are validated against the review flow's set
+(`pending`, `approved`, `rejected`); anything else is a hard error so imported
+documents can't land in states the admin UI never shows.

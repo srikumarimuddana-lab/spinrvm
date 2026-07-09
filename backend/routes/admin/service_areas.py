@@ -140,6 +140,14 @@ def _coerce_airport_fields(is_airport: Optional[bool], airport_fee: Optional[flo
 class ServiceAreaCreateRequest(BaseModel):
     name: str
     city: str = ""
+    # province + regulatory_* are sent by the admin create form (migration 223).
+    # They must be declared here or Pydantic silently drops them and new areas
+    # land with NULL regulatory metadata despite the admin filling the form.
+    province: Optional[str] = None
+    regulatory_authority: Optional[str] = None
+    regulatory_region: Optional[str] = None
+    regulatory_requirements_url: Optional[str] = None
+    regulatory_notes: Optional[str] = None
     geojson: Optional[Any] = None
     polygon: Optional[Any] = None
     is_active: bool = True
@@ -413,6 +421,11 @@ async def admin_create_service_area(area: ServiceAreaCreateRequest, admin: dict 
         "id": str(uuid.uuid4()),
         "name": area.name,
         "city": area.city,
+        "province": area.province,
+        "regulatory_authority": area.regulatory_authority,
+        "regulatory_region": area.regulatory_region,
+        "regulatory_requirements_url": area.regulatory_requirements_url,
+        "regulatory_notes": area.regulatory_notes,
         "polygon": polygon,
         "is_active": area.is_active,
         "parent_service_area_id": area.parent_service_area_id,

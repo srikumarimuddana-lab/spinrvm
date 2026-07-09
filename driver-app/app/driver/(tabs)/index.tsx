@@ -21,7 +21,7 @@ import { CarMarker, resolveMarkerVariant, type CarMarkerVariant } from '../../..
 import { SOSButton } from '@shared/components/SOSButton';
 import { useLanguageStore } from '../../../store/languageStore';
 import { showToast } from '../../../hooks/useToast';
-import api from '@shared/api/client';
+import api, { isAppCheckTokenReady } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
@@ -122,7 +122,11 @@ function DriverDashboard() {
   const [unreadNotifCount, setUnreadNotifCount] = useState(0);
   useEffect(() => {
     let cancelled = false;
-    const fetchUnread = () => {
+    const fetchUnread = async () => {
+      // /api/v1/notifications is App-Check-enforced in prod; polling before the
+      // App Check token is minted 401s. Skip until ready — the 60s interval
+      // retries, so the badge loads once App Check is up.
+      if (!(await isAppCheckTokenReady())) return;
       api.get('/notifications?limit=1').then((res: any) => {
         if (!cancelled) setUnreadNotifCount(res.data?.unread_count ?? 0);
       }).catch(() => {});

@@ -68,11 +68,17 @@ import {
   getAppCheckToken,
 } from '@shared/services/firebase';
 import { setAppCheckTokenProvider } from '@shared/api/client';
+
 import { handleScheduledRideReminderFCM } from '../hooks/useScheduledRideReminder';
 import { useRideStatusNotification } from '../hooks/useRideStatusNotification';
 import ConfirmSheet from '../components/ConfirmSheet';
 import type { ConfirmSheetButton } from '../components/ConfirmSheet';
 import Toast from '../components/Toast';
+
+// Register App Check token retrieval at module load so early startup requests
+// (public settings, active-ride hydration, and login OTP) wait for Firebase
+// App Check instead of racing ahead without X-Firebase-AppCheck.
+setAppCheckTokenProvider(getAppCheckToken);
 
 
 function routeFromNotificationData(data: Record<string, string> | undefined) {
@@ -298,7 +304,6 @@ function RootLayout() {
 
         await useRideStore.getState().hydrateActiveRide();
         await initFirebaseServices();
-        setAppCheckTokenProvider(getAppCheckToken);
         await requestNotificationPermission();
         captureMessage('rider-app cold start', 'log');
 

@@ -39,6 +39,8 @@ _CSRF_EXEMPT_EXACT = frozenset(
         # exemptions (send-otp is a browser-Origin POST with no csrf cookie yet).
         "/api/portal/auth/send-otp",
         "/api/portal/auth/verify-otp",
+        "/api/portal/auth/send-email-otp",
+        "/api/portal/auth/verify-email-otp",
         "/api/v1/auth/firebase",
         "/api/admin/auth/login",
         "/api/v1/stripe/webhook",

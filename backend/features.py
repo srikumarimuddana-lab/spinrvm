@@ -1520,6 +1520,24 @@ async def _deliver_push_now(
         return False
 
 
+_TRANSIENT_NOTIFICATION_TYPES = frozenset(
+    {
+        # Per-candidate dispatch offer: fires once per driver considered for a
+        # ride (several times per ride) and its data payload carries pickup/
+        # dropoff addresses + lat/lng. A driver who timed out or declined
+        # doesn't need that offer's address details surviving in their inbox
+        # indefinitely, and a busy dispatch window would otherwise spam the
+        # Notifications page with one row per offered driver.
+        "new_ride_assignment",
+        # Silent/data-only Live Activity tick (iOS Live Activity + Android
+        # equivalent) — fires repeatedly through a ride's progress. Notifee/
+        # the OS renders it from `data`; it was never meant to be a durable
+        # inbox entry.
+        "live_activity",
+    }
+)
+
+
 def _record_inbox_notification(user_id: str, title: str, body: str, data: Dict[str, str] | None) -> None:
     """Fire-and-forget: persist this push to the user's in-app notification
     inbox (the ``notifications`` table read by GET /notifications).
@@ -1530,11 +1548,16 @@ def _record_inbox_notification(user_id: str, title: str, body: str, data: Dict[s
     Notifications page at all. Runs as a background task: never blocks or
     raises into the caller, and must not add latency to time-critical
     (dispatch/safety) push delivery.
+
+    Transient, high-frequency push types (see _TRANSIENT_NOTIFICATION_TYPES)
+    are skipped — they're not meant to be durable inbox history.
     """
+    notification_type = (data or {}).get("type") or "general"
+    if notification_type in _TRANSIENT_NOTIFICATION_TYPES:
+        return
 
     async def _write() -> None:
         try:
-            notification_type = (data or {}).get("type") or "general"
             await db.insert_one(
                 "notifications",
                 {

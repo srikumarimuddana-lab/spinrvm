@@ -366,12 +366,73 @@ export default function DriversPage() {
     };
     const confirmReview = async () => { if (!reviewingDoc) return; await handleReviewDoc(reviewingDoc.id, reviewingDoc.action, reviewReason || undefined, reviewExpiry || undefined); setReviewingDoc(null); };
 
-    const startEditing = () => { if (!selected) return; setEditForm({ first_name: selected.first_name || "", last_name: selected.last_name || "", email: selected.email || "", phone: selected.phone || "", city: selected.city || "", service_area_id: selected.service_area_id || "", vehicle_type_id: selected.vehicle_type_id || "", vehicle_make: selected.vehicle_make || "", vehicle_model: selected.vehicle_model || "", vehicle_color: selected.vehicle_color || "", vehicle_year: selected.vehicle_year || "", license_plate: selected.license_plate || "", vehicle_vin: selected.vehicle_vin || "" }); setEditing(true); };
+    const dateInputValue = (v: any) => {
+        if (!v) return "";
+        const d = new Date(v);
+        return Number.isNaN(d.getTime()) ? String(v).slice(0, 10) : d.toISOString().slice(0, 10);
+    };
+    const datetimeLocalValue = (v: any) => {
+        if (!v) return "";
+        const d = new Date(v);
+        if (Number.isNaN(d.getTime())) return String(v).slice(0, 16);
+        const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+        return local.toISOString().slice(0, 16);
+    };
+    const boolInputValue = (v: any) => (v === true ? "true" : v === false ? "false" : "");
+    const fromBoolInput = (v: any) => (v === "true" ? true : v === "false" ? false : null);
+    const startEditing = () => {
+        if (!selected) return;
+        setEditForm({
+            first_name: selected.first_name || "",
+            last_name: selected.last_name || "",
+            email: selected.email || "",
+            phone: selected.phone || "",
+            city: selected.city || "",
+            service_area_id: selected.service_area_id || "",
+            vehicle_type_id: selected.vehicle_type_id || "",
+            vehicle_make: selected.vehicle_make || "",
+            vehicle_model: selected.vehicle_model || "",
+            vehicle_color: selected.vehicle_color || "",
+            vehicle_year: selected.vehicle_year || "",
+            license_plate: selected.license_plate || "",
+            vehicle_vin: selected.vehicle_vin || "",
+            date_of_birth: dateInputValue(selected.date_of_birth),
+            license_class: selected.license_class || "",
+            regulatory_authority: selected.regulatory_authority || (selected.sgi_approved != null ? "SGI" : ""),
+            regulatory_region: selected.regulatory_region || "",
+            regulatory_authority_approved: boolInputValue(selected.regulatory_authority_approved ?? selected.sgi_approved),
+            regulatory_authority_approved_at: datetimeLocalValue(selected.regulatory_authority_approved_at || selected.sgi_approved_at),
+            work_authorization_status: selected.work_authorization_status || "",
+            is_permanent_resident: boolInputValue(selected.is_permanent_resident),
+            is_citizen: boolInputValue(selected.is_citizen),
+            decals_sent: boolInputValue(selected.decals_sent),
+            decals_sent_at: datetimeLocalValue(selected.decals_sent_at),
+        });
+        setEditing(true);
+    };
 
     const saveEdits = async () => {
         if (!selected) return;
         const changes: Record<string, any> = {};
-        for (const [k, v] of Object.entries(editForm)) { if (v !== (selected[k] || "")) changes[k] = v; }
+        const boolFields = new Set(["regulatory_authority_approved", "is_permanent_resident", "is_citizen", "decals_sent"]);
+        const dateFields = new Set(["date_of_birth"]);
+        const datetimeFields = new Set(["regulatory_authority_approved_at", "decals_sent_at"]);
+        const normalized: Record<string, any> = {};
+        for (const [k, v] of Object.entries(editForm)) {
+            if (boolFields.has(k)) normalized[k] = fromBoolInput(v);
+            else if (dateFields.has(k)) normalized[k] = v || null;
+            else normalized[k] = v === "" ? null : v;
+        }
+        for (const [k, v] of Object.entries(normalized)) {
+            const current = boolFields.has(k)
+                ? (selected[k] ?? null)
+                : dateFields.has(k)
+                    ? (dateInputValue(selected[k]) || null)
+                    : datetimeFields.has(k)
+                        ? (datetimeLocalValue(selected[k]) || null)
+                        : (selected[k] ?? null);
+            if (v !== current) changes[k] = v;
+        }
         if (Object.keys(changes).length === 0) { setEditing(false); return; }
         setSaving(true);
         try { await updateDriver(selected.id, changes); const updated = { ...selected, ...changes }; setSelected(updated); setDrivers(prev => prev.map(d => d.id === selected.id ? { ...d, ...changes } : d)); setEditing(false); } catch (e: any) { toast({ title: "Failed to save driver", description: e?.message || "Unknown error", variant: "destructive" }); } finally { setSaving(false); }
@@ -976,6 +1037,49 @@ export default function DriversPage() {
                                                     <DetailField icon={FileText} label="VIN" value={selected.vehicle_vin || "\u2014"} mono />
                                                 </div>
                                             </>
+                                        )}
+                                    </DetailSection>
+                                    <DetailSection title="Compliance & Import Data" icon={ShieldCheck}>
+                                        {editing ? (
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                <EditField label="Date of Birth" value={ef("date_of_birth")} onChange={v => setEf("date_of_birth", v)} type="date" />
+                                                <EditField label="License Class" value={ef("license_class")} onChange={v => setEf("license_class", v)} />
+                                                <EditField label="Regulatory Authority" value={ef("regulatory_authority")} onChange={v => setEf("regulatory_authority", v)} />
+                                                <EditField label="Regulatory Region" value={ef("regulatory_region")} onChange={v => setEf("regulatory_region", v)} />
+                                                <EditBooleanField label="Authority Approved" value={ef("regulatory_authority_approved")} onChange={v => setEf("regulatory_authority_approved", v)} />
+                                                <EditField label="Authority Approved At" value={ef("regulatory_authority_approved_at")} onChange={v => setEf("regulatory_authority_approved_at", v)} type="datetime-local" />
+                                                <div>
+                                                    <label className="text-[11px] text-muted-foreground mb-1 block">Work Authorization Status</label>
+                                                    <Select value={ef("work_authorization_status") || "unknown"} onValueChange={v => setEf("work_authorization_status", v === "unknown" ? "" : v)}>
+                                                        <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                                                        <SelectContent>
+                                                            <SelectItem value="unknown">Unknown</SelectItem>
+                                                            <SelectItem value="expiring">Expiring</SelectItem>
+                                                            <SelectItem value="indefinite">Indefinite</SelectItem>
+                                                            <SelectItem value="permanent_resident">Permanent resident</SelectItem>
+                                                            <SelectItem value="citizen">Citizen</SelectItem>
+                                                        </SelectContent>
+                                                    </Select>
+                                                </div>
+                                                <EditBooleanField label="Permanent Resident" value={ef("is_permanent_resident")} onChange={v => setEf("is_permanent_resident", v)} />
+                                                <EditBooleanField label="Citizen" value={ef("is_citizen")} onChange={v => setEf("is_citizen", v)} />
+                                                <EditBooleanField label="Decals Sent" value={ef("decals_sent")} onChange={v => setEf("decals_sent", v)} />
+                                                <EditField label="Decals Sent At" value={ef("decals_sent_at")} onChange={v => setEf("decals_sent_at", v)} type="datetime-local" />
+                                            </div>
+                                        ) : (
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                                <DetailField icon={CalendarRange} label="Date of Birth" value={selected.date_of_birth ? fmtDate(selected.date_of_birth) : "—"} />
+                                                <DetailField icon={FileText} label="License Class" value={selected.license_class || "—"} />
+                                                <DetailField icon={ShieldCheck} label="Regulatory Authority" value={selected.regulatory_authority || (selected.sgi_approved != null ? "SGI" : "—")} />
+                                                <DetailField icon={MapPin} label="Regulatory Region" value={selected.regulatory_region || "—"} />
+                                                <DetailField icon={ShieldCheck} label="Authority Approved" value={(selected.regulatory_authority_approved ?? selected.sgi_approved) === true ? "Yes" : (selected.regulatory_authority_approved ?? selected.sgi_approved) === false ? "No" : "Unknown"} />
+                                                <DetailField icon={Clock} label="Authority Approved At" value={(selected.regulatory_authority_approved_at || selected.sgi_approved_at) ? new Date(selected.regulatory_authority_approved_at || selected.sgi_approved_at).toLocaleString("en-CA") : "—"} />
+                                                <DetailField icon={FileText} label="Work Authorization" value={selected.work_authorization_status ? selected.work_authorization_status.replace(/_/g, " ") : "Unknown"} />
+                                                <DetailField icon={Shield} label="Permanent Resident" value={selected.is_permanent_resident === true ? "Yes" : selected.is_permanent_resident === false ? "No" : "Unknown"} />
+                                                <DetailField icon={Shield} label="Citizen" value={selected.is_citizen === true ? "Yes" : selected.is_citizen === false ? "No" : "Unknown"} />
+                                                <DetailField icon={CheckCircle} label="Decals Sent" value={selected.decals_sent === true ? "Yes" : selected.decals_sent === false ? "No" : "Unknown"} />
+                                                <DetailField icon={Clock} label="Decals Sent At" value={selected.decals_sent_at ? new Date(selected.decals_sent_at).toLocaleString("en-CA") : "—"} />
+                                            </div>
                                         )}
                                     </DetailSection>
                                     <DetailSection title="Vehicle Change History" icon={FileText}>
@@ -2325,6 +2429,22 @@ function EditField({ label, value, onChange, type = "text" }: { label: string; v
     return <div><label className="text-[11px] text-muted-foreground mb-1 block">{label}</label><Input type={type} value={value} onChange={e => onChange(e.target.value)} className="h-9 text-sm" /></div>;
 }
 
+function EditBooleanField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+    return (
+        <div>
+            <label className="text-[11px] text-muted-foreground mb-1 block">{label}</label>
+            <Select value={value || "unknown"} onValueChange={v => onChange(v === "unknown" ? "" : v)}>
+                <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                    <SelectItem value="unknown">Unknown</SelectItem>
+                    <SelectItem value="true">Yes</SelectItem>
+                    <SelectItem value="false">No</SelectItem>
+                </SelectContent>
+            </Select>
+        </div>
+    );
+}
+
 type DocSummary = {
     expiry?: string;
     docStatus: "approved" | "pending" | "rejected" | "missing";
@@ -2427,4 +2547,3 @@ function DocCard({ d, docBusy, onPreview, onReview }: { d: any; docBusy: string 
         </div>
     );
 }
-

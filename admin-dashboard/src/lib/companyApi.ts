@@ -107,7 +107,7 @@ export const sendCompanyOtp = async (phone: string): Promise<void> => {
 export interface CompanyOtpVerifyResult {
     token: string;
     csrf_token?: string;
-    user: { id: string; phone?: string; first_name?: string; last_name?: string };
+    user: { id: string; phone?: string; email?: string; first_name?: string; last_name?: string };
 }
 
 export const verifyCompanyOtp = async (phone: string, code: string): Promise<CompanyOtpVerifyResult> => {
@@ -119,6 +119,36 @@ export const verifyCompanyOtp = async (phone: string, code: string): Promise<Com
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone, code }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        throw new Error(body.detail?.message ?? body.detail ?? body.message ?? "Invalid code");
+    }
+    return body as CompanyOtpVerifyResult;
+};
+
+/* ── Portal auth (work email OTP — company identity) ── */
+
+export const sendCompanyEmailOtp = async (email: string): Promise<void> => {
+    const res = await fetch("/api/portal/auth/send-email-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail?.message ?? body.detail ?? body.message ?? "Could not send code");
+    }
+};
+
+export const verifyCompanyEmailOtp = async (
+    email: string,
+    code: string
+): Promise<CompanyOtpVerifyResult> => {
+    const res = await fetch("/api/company-auth/verify-email-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, code }),
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {

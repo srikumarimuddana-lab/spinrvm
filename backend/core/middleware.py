@@ -118,6 +118,17 @@ _APP_CHECK_EXEMPT_PREFIXES = (
     # no longer required on these two read endpoints.
     "/api/v1/vehicle-types",
     "/api/v1/maps/",
+    # Public mobile bootstrap config. It contains publishable/client config only
+    # (settings.py filters to Maps/Stripe publishable keys + tracking base URL),
+    # so startup must not deadlock behind the App Check configuration it helps
+    # the apps discover.
+    "/api/v1/settings",
+    # OTP login must stay reachable when App Check native modules are unavailable
+    # or not yet attested (Expo Go/debug builds, newly registered devices). The
+    # handlers keep their own OTP throttling/lockout and do not expose data
+    # without possession of the SMS code.
+    "/api/v1/auth/send-otp",
+    "/api/v1/auth/verify-otp",
 )
 
 

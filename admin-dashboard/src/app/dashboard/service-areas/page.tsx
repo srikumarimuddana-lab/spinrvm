@@ -14,6 +14,13 @@ import { useRequireModule } from "@/hooks/useRequireModule";
 
 const GeofenceMap = lazy(() => import("@/components/geofence-map"));
 
+const regulatoryDefaultsForProvince = (province: string) => {
+  if (province === "SK") return { authority: "SGI", region: "SK" };
+  if (province === "AB") return { authority: "Alberta TNC / municipal licensing", region: "AB" };
+  if (province === "ON") return { authority: "Municipal vehicle-for-hire / PTC licensing", region: "ON" };
+  return { authority: "Provincial / municipal authority", region: province || "" };
+};
+
 const CITY_PRESETS: Record<string, { city: string; province: string; center: { lat: number; lng: number }; polygon: { lat: number; lng: number }[] }> = {
   saskatoon: { city: "Saskatoon", province: "SK", center: { lat: 52.13, lng: -106.67 }, polygon: [{ lat: 52.19, lng: -106.75 }, { lat: 52.19, lng: -106.55 }, { lat: 52.08, lng: -106.55 }, { lat: 52.08, lng: -106.75 }] },
   regina: { city: "Regina", province: "SK", center: { lat: 50.45, lng: -104.62 }, polygon: [{ lat: 50.50, lng: -104.72 }, { lat: 50.50, lng: -104.52 }, { lat: 50.40, lng: -104.52 }, { lat: 50.40, lng: -104.72 }] },
@@ -84,6 +91,8 @@ export default function ServiceAreasPage() {
   // Create form
   const [createForm, setCreateForm] = useState({
     name: "", city: "", province: "SK", preset: "",
+    regulatory_authority: regulatoryDefaultsForProvince("SK").authority, regulatory_region: regulatoryDefaultsForProvince("SK").region,
+    regulatory_requirements_url: "", regulatory_notes: "",
     polygon: [] as any[], polygonText: "",
     is_active: true, is_airport: false,
   });
@@ -122,6 +131,8 @@ export default function ServiceAreasPage() {
       setCreateForm({
         ...createForm, preset: key, name: createForm.name || p.city,
         city: p.city, province: p.province,
+        regulatory_authority: regulatoryDefaultsForProvince(p.province).authority,
+        regulatory_region: regulatoryDefaultsForProvince(p.province).region,
         polygon: p.polygon, polygonText: polygonToText(p.polygon),
       });
       setMapKey(k => k + 1);
@@ -133,6 +144,10 @@ export default function ServiceAreasPage() {
     try {
       await createServiceArea({
         name: createForm.name, city: createForm.city, province: createForm.province,
+        regulatory_authority: createForm.regulatory_authority || regulatoryDefaultsForProvince(createForm.province).authority,
+        regulatory_region: createForm.regulatory_region || regulatoryDefaultsForProvince(createForm.province).region,
+        regulatory_requirements_url: createForm.regulatory_requirements_url || "",
+        regulatory_notes: createForm.regulatory_notes || "",
         geojson: { type: "Polygon", coordinates: [createForm.polygon.map(p => [p.lng, p.lat])] },
         is_active: createForm.is_active, is_airport: createForm.is_airport,
         // Defaults
@@ -143,7 +158,7 @@ export default function ServiceAreasPage() {
         max_pickup_radius_km: 5.0, currency: 'CAD',
       });
       setShowCreate(false);
-      setCreateForm({ name: "", city: "", province: "SK", preset: "", polygon: [], polygonText: "", is_active: true, is_airport: false });
+      setCreateForm({ name: "", city: "", province: "SK", preset: "", regulatory_authority: regulatoryDefaultsForProvince("SK").authority, regulatory_region: regulatoryDefaultsForProvince("SK").region, regulatory_requirements_url: "", regulatory_notes: "", polygon: [], polygonText: "", is_active: true, is_airport: false });
       crudToast.created("Service area");
       load();
     } catch (e) { crudToast.error("create service area", e); }
@@ -239,7 +254,7 @@ export default function ServiceAreasPage() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-600 mb-1">Province</label>
-              <select className="w-full border rounded-xl px-4 py-2.5 text-sm" value={createForm.province} onChange={e => setCreateForm({...createForm, province: e.target.value})}>
+              <select className="w-full border rounded-xl px-4 py-2.5 text-sm" value={createForm.province} onChange={e => { const province = e.target.value; const defaults = regulatoryDefaultsForProvince(province); setCreateForm({...createForm, province, regulatory_authority: defaults.authority, regulatory_region: defaults.region}); }}>
                 {['SK','AB','MB','ON','BC','QC','NS','NB','PE','NL','NT','YT','NU'].map(p => <option key={p} value={p}>{p}</option>)}
               </select>
             </div>
@@ -562,6 +577,10 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
     name: area.name || "",
     city: area.city || "",
     province: area.province || "SK",
+    regulatory_authority: area.regulatory_authority || regulatoryDefaultsForProvince(area.province || "SK").authority,
+    regulatory_region: area.regulatory_region || area.province || "SK",
+    regulatory_requirements_url: area.regulatory_requirements_url || "",
+    regulatory_notes: area.regulatory_notes || "",
     max_pickup_radius_km: area.max_pickup_radius_km || 5,
     is_active: area.is_active !== false,
     driver_matching_algorithm: area.driver_matching_algorithm || "nearest",
@@ -605,6 +624,10 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
       name: form.name,
       city: form.city,
       province: form.province,
+      regulatory_authority: form.regulatory_authority,
+      regulatory_region: form.regulatory_region || form.province,
+      regulatory_requirements_url: form.regulatory_requirements_url,
+      regulatory_notes: form.regulatory_notes,
       max_pickup_radius_km: parseFloat(String(form.max_pickup_radius_km)) || 5,
       is_active: form.is_active,
       driver_matching_algorithm: form.driver_matching_algorithm,
@@ -657,9 +680,29 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
         </div>
         <div>
           <label className="block text-xs font-semibold text-gray-500 mb-1">Province</label>
-          <select className="w-full border rounded-lg px-3 py-2 text-sm" value={form.province} onChange={e => setForm({ ...form, province: e.target.value })}>
+          <select className="w-full border rounded-lg px-3 py-2 text-sm" value={form.province} onChange={e => {
+            const province = e.target.value;
+            const defaults = regulatoryDefaultsForProvince(province);
+            setForm({ ...form, province, regulatory_authority: form.regulatory_authority || defaults.authority, regulatory_region: form.regulatory_region || defaults.region });
+          }}>
             {['SK','AB','MB','ON','BC','QC','NS','NB','PE','NL','NT','YT','NU'].map(p => <option key={p} value={p}>{p}</option>)}
           </select>
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 mb-1">Regulatory Authority</label>
+          <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.regulatory_authority} onChange={e => setForm({ ...form, regulatory_authority: e.target.value })} placeholder="e.g. SGI, Calgary Livery, Toronto PTC" />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 mb-1">Regulatory Region</label>
+          <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.regulatory_region} onChange={e => setForm({ ...form, regulatory_region: e.target.value })} placeholder="e.g. SK, AB, Calgary, Toronto" />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 mb-1">Requirements URL</label>
+          <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.regulatory_requirements_url} onChange={e => setForm({ ...form, regulatory_requirements_url: e.target.value })} placeholder="Official local requirements link" />
+        </div>
+        <div className="md:col-span-3">
+          <label className="block text-xs font-semibold text-gray-500 mb-1">Regulatory Notes</label>
+          <textarea className="w-full border rounded-lg px-3 py-2 text-sm min-h-[80px]" value={form.regulatory_notes} onChange={e => setForm({ ...form, regulatory_notes: e.target.value })} placeholder="Summarize local driver approval/licensing rules for this service area" />
         </div>
         <div>
           <label className="block text-xs font-semibold text-gray-500 mb-1">Pickup Radius (km)</label>

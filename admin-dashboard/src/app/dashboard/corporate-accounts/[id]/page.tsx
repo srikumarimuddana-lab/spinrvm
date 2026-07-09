@@ -7,9 +7,11 @@ import {
     CorporateAccount,
     CompanyStatus,
     CorporateWallet,
+    SizeTier,
     changeCompanyStatus,
     getCorporateAccount,
     getCorporateWallet,
+    updateCorporateAccount,
     updateWalletConfig,
     walletAdjust,
 } from "@/lib/api";
@@ -17,6 +19,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
     AlertDialog,
@@ -29,11 +32,27 @@ import {
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog";
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select";
+import {
     ArrowLeft,
     Building2,
     CheckCircle2,
     FileText,
     PauseCircle,
+    Pencil,
     PlayCircle,
     ShieldCheck,
     Users,
@@ -41,6 +60,20 @@ import {
     XCircle,
 } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
+
+const SIZE_TIER_LABELS: Record<SizeTier, string> = {
+    smb: "SMB",
+    mid_market: "Mid-Market",
+    enterprise: "Enterprise",
+};
+
+interface ProfileFormData {
+    legal_name: string;
+    business_number: string;
+    tax_region: string;
+    billing_email: string;
+    size_tier: SizeTier;
+}
 
 const STATUS_PILL_CLASSES: Record<CompanyStatus, string> = {
     pending_verification: "bg-yellow-100 text-yellow-800 hover:bg-yellow-100",
@@ -111,6 +144,15 @@ export default function CompanyDetailPage() {
     const [transitioning, setTransitioning] = useState(false);
     const [wallet, setWallet] = useState<CorporateWallet | null>(null);
     const [walletBusy, setWalletBusy] = useState(false);
+    const [isEditProfileOpen, setIsEditProfileOpen] = useState(false);
+    const [profileForm, setProfileForm] = useState<ProfileFormData>({
+        legal_name: "",
+        business_number: "",
+        tax_region: "",
+        billing_email: "",
+        size_tier: "smb",
+    });
+    const [profileSaving, setProfileSaving] = useState(false);
 
     const load = useCallback(async () => {
         if (!id) return;
@@ -188,6 +230,39 @@ export default function CompanyDetailPage() {
             toast({ title: "Failed to toggle auto top-up", description: e?.message, variant: "destructive" });
         } finally {
             setWalletBusy(false);
+        }
+    };
+
+    const handleOpenEditProfile = () => {
+        if (!company) return;
+        setProfileForm({
+            legal_name: company.legal_name ?? "",
+            business_number: company.business_number ?? "",
+            tax_region: company.tax_region ?? "",
+            billing_email: company.billing_email ?? "",
+            size_tier: company.size_tier,
+        });
+        setIsEditProfileOpen(true);
+    };
+
+    const handleSaveProfile = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!id) return;
+        setProfileSaving(true);
+        try {
+            const updated = await updateCorporateAccount(id, {
+                legal_name: profileForm.legal_name.trim() || null,
+                business_number: profileForm.business_number.trim() || null,
+                tax_region: profileForm.tax_region.trim() || null,
+                billing_email: profileForm.billing_email.trim() || null,
+                size_tier: profileForm.size_tier,
+            });
+            setCompany(updated);
+            setIsEditProfileOpen(false);
+        } catch (e: any) {
+            toast({ title: "Failed to save profile", description: e?.message, variant: "destructive" });
+        } finally {
+            setProfileSaving(false);
         }
     };
 
@@ -303,7 +378,17 @@ export default function CompanyDetailPage() {
             </div>
 
             <Card>
-                <CardContent className="grid grid-cols-1 gap-6 p-6 md:grid-cols-2">
+                <CardContent className="p-6 space-y-4">
+                    <div className="flex items-center justify-between">
+                        <h2 className="font-semibold flex items-center gap-2">
+                            <Building2 className="h-4 w-4 text-muted-foreground" />
+                            Company Profile
+                        </h2>
+                        <Button variant="outline" size="sm" onClick={handleOpenEditProfile}>
+                            <Pencil className="mr-2 h-3 w-3" /> Edit Profile
+                        </Button>
+                    </div>
+                    <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
                     <div className="space-y-1">
                         <Label className="text-xs uppercase text-muted-foreground">
                             Business Number
@@ -341,6 +426,7 @@ export default function CompanyDetailPage() {
                             Last Updated
                         </Label>
                         <p className="text-sm">{formatDate(company.updated_at)}</p>
+                    </div>
                     </div>
                 </CardContent>
             </Card>
@@ -499,6 +585,98 @@ export default function CompanyDetailPage() {
                     </CardContent>
                 </Card>
             )}
+
+            <Dialog open={isEditProfileOpen} onOpenChange={setIsEditProfileOpen}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Edit Company Profile</DialogTitle>
+                        <DialogDescription>
+                            Legal and billing details for {company.name}.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <form onSubmit={handleSaveProfile} className="space-y-4">
+                        <div className="space-y-2">
+                            <Label htmlFor="legal_name">Legal Name</Label>
+                            <Input
+                                id="legal_name"
+                                value={profileForm.legal_name}
+                                onChange={(e) =>
+                                    setProfileForm({ ...profileForm, legal_name: e.target.value })
+                                }
+                                placeholder="e.g. Acme Corporation Inc."
+                            />
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <Label htmlFor="business_number">Business Number</Label>
+                                <Input
+                                    id="business_number"
+                                    value={profileForm.business_number}
+                                    onChange={(e) =>
+                                        setProfileForm({ ...profileForm, business_number: e.target.value })
+                                    }
+                                    placeholder="123456789RT0001"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="tax_region">Tax Region</Label>
+                                <Input
+                                    id="tax_region"
+                                    value={profileForm.tax_region}
+                                    onChange={(e) =>
+                                        setProfileForm({ ...profileForm, tax_region: e.target.value })
+                                    }
+                                    placeholder="e.g. SK"
+                                />
+                            </div>
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="billing_email">Billing Email</Label>
+                            <Input
+                                id="billing_email"
+                                type="email"
+                                value={profileForm.billing_email}
+                                onChange={(e) =>
+                                    setProfileForm({ ...profileForm, billing_email: e.target.value })
+                                }
+                                placeholder="billing@acme.com"
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="size_tier">Size Tier</Label>
+                            <Select
+                                value={profileForm.size_tier}
+                                onValueChange={(v) =>
+                                    setProfileForm({ ...profileForm, size_tier: v as SizeTier })
+                                }
+                            >
+                                <SelectTrigger id="size_tier">
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {(Object.keys(SIZE_TIER_LABELS) as SizeTier[]).map((tier) => (
+                                        <SelectItem key={tier} value={tier}>
+                                            {SIZE_TIER_LABELS[tier]}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        <DialogFooter className="pt-4">
+                            <Button
+                                type="button"
+                                variant="outline"
+                                onClick={() => setIsEditProfileOpen(false)}
+                            >
+                                Cancel
+                            </Button>
+                            <Button type="submit" disabled={profileSaving}>
+                                {profileSaving ? "Saving..." : "Save Profile"}
+                            </Button>
+                        </DialogFooter>
+                    </form>
+                </DialogContent>
+            </Dialog>
 
             <AlertDialog
                 open={pendingTransition !== null}

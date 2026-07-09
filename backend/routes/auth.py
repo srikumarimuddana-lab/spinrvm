@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import hmac
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -6,7 +8,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, Field
 from slowapi.util import get_remote_address
 
 try:
@@ -34,6 +36,7 @@ try:
     from ..sms_service import send_otp_sms
     from ..utils.audit_logger import log_user_action as _audit_log_user
     from ..utils.crypto import hash_otp
+    from ..utils.email_provider import send_transactional_email
     from ..utils.error_handling import (
         ErrorCode,
         SpinrException,
@@ -80,6 +83,7 @@ except ImportError:
     from sms_service import send_otp_sms
     from utils.audit_logger import log_user_action as _audit_log_user
     from utils.crypto import hash_otp
+    from utils.email_provider import send_transactional_email
     from utils.error_handling import (
         ErrorCode,
         SpinrException,
@@ -106,6 +110,17 @@ db = db_supabase  # legacy alias
 
 logger = logging.getLogger(__name__)
 api_router = APIRouter(prefix="/auth", tags=["Authentication"])
+_CORPORATE_EMAIL_OTP_TABLE = "corporate_email_otp_records"
+
+
+class CompanyEmailOtpSendRequest(BaseModel):
+    email: EmailStr
+
+
+class CompanyEmailOtpVerifyRequest(BaseModel):
+    email: EmailStr
+    code: str = Field(..., min_length=4, max_length=6, pattern=r"^\d{4,6}$")
+
 
 # ── OTP brute-force lockout (SEC-008) ───────────────────────────────────
 # Redis key prefixes; falls back to in-process dict when REDIS_URL unset.
@@ -417,6 +432,269 @@ async def send_otp(request: Request, body: SendOTPRequest):
         logger.error("audit_log write failed for otp_sent", exc_info=True)
 
     return response
+
+
+def _normalize_company_email(email: str) -> str:
+    return (email or "").strip().lower()
+
+
+def _email_log_id(email: str) -> str:
+    digest = hashlib.sha256(_normalize_company_email(email).encode()).hexdigest()[:16]
+    return f"email_sha256:{digest}"
+
+
+def _synthetic_phone_for_company_email(email: str) -> str:
+    digest = hashlib.sha256(_normalize_company_email(email).encode()).hexdigest()[:32]
+    return f"email:{digest}"
+
+
+async def _latest_company_email_otp(email: str) -> Optional[Dict[str, Any]]:
+    rows = await db_supabase.get_rows(
+        _CORPORATE_EMAIL_OTP_TABLE,
+        {"email": email, "verified": False},
+        order="created_at",
+        desc=True,
+        limit=1,
+    )
+    return rows[0] if rows else None
+
+
+async def _find_user_by_email(email: str) -> Optional[Dict[str, Any]]:
+    rows = await db_supabase.get_rows("users", {"email": email}, limit=1)
+    return rows[0] if rows else None
+
+
+async def _activate_pending_company_invites(email: str, user_id: str) -> None:
+    invites = await db_supabase.get_rows(
+        "corporate_members",
+        {"invited_email": email, "status": "invited"},
+        limit=100,
+    )
+    for invite in invites:
+        member_id = invite.get("id")
+        if not member_id:
+            continue
+        await db_supabase.accept_member_invite(member_id=member_id, user_id=user_id)
+
+
+async def _issue_company_email_session(
+    *,
+    request: Request,
+    response: Response,
+    email: str,
+) -> AuthResponse:
+    try:
+        existing_user = await _find_user_by_email(email)
+    except Exception as e:
+        logger.error("company email auth: user lookup failed for %s", _email_log_id(email), exc_info=True)
+        raise SpinrException(
+            message="Service temporarily unavailable, please try again",
+            error_code=ErrorCode.DATABASE_ERROR,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_DATABASE,
+        ) from e
+
+    session_id = str(uuid.uuid4())
+    user_agent = request.headers.get("user-agent", "")
+    client_ip = get_remote_address(request)
+
+    if existing_user:
+        status = str(existing_user.get("status") or "").lower()
+        if status == "deleted" or existing_user.get("deleted_at"):
+            raise HTTPException(status_code=410, detail="ERR_ACCOUNT_DELETED")
+        if status == "pending_deletion":
+            raise HTTPException(status_code=403, detail="ERR_ACCOUNT_DELETED")
+        user = dict(existing_user)
+        try:
+            await db_supabase.update_one("users", {"id": user["id"]}, {"current_session_id": session_id})
+            user["current_session_id"] = session_id
+        except Exception as e:
+            logger.error("company email auth: session update failed for user_id=%s", user.get("id"), exc_info=True)
+            raise SpinrException(
+                message="Service temporarily unavailable, please try again",
+                error_code=ErrorCode.DATABASE_ERROR,
+                status_code=503,
+                message_key=ErrorKeys.SYSTEM_DATABASE,
+            ) from e
+        is_new_user = False
+    else:
+        user = {
+            "id": str(uuid.uuid4()),
+            "phone": _synthetic_phone_for_company_email(email),
+            "email": email,
+            "role": "rider",
+            "is_rider": True,
+            "is_driver": False,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "profile_complete": False,
+            "current_session_id": session_id,
+            "token_version": 0,
+        }
+        try:
+            created = await db_supabase.create_user(user)
+            if created:
+                user = {**user, **created}
+        except Exception as e:
+            logger.error("company email auth: user create failed for %s", _email_log_id(email), exc_info=True)
+            raise SpinrException(
+                message="Could not create user account, please try again",
+                error_code=ErrorCode.DATABASE_ERROR,
+                status_code=503,
+                message_key=ErrorKeys.SYSTEM_DATABASE,
+            ) from e
+        is_new_user = True
+
+    await redis_set(
+        f"session:{user['id']}",
+        session_id,
+        ttl=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
+    await _activate_pending_company_invites(email, user["id"])
+
+    access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    token = create_jwt_token(
+        user["id"],
+        email,
+        session_id=session_id,
+        token_version=int(user.get("token_version") or 0),
+    )
+    refresh_raw, _, refresh_expires_at = await issue_refresh_token(
+        user["id"], audience="rider", user_agent=user_agent, ip=client_ip
+    )
+    csrf = generate_csrf_token()
+    set_csrf_cookie(
+        response,
+        csrf,
+        secure=settings.ENV == "production",
+        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
+    return _make_auth_response(
+        response,
+        token,
+        refresh_raw,
+        UserProfile(**user),
+        is_new_user=is_new_user,
+        access_expires_at=access_expires_at,
+        refresh_expires_at=refresh_expires_at,
+        csrf_token=csrf,
+        admin_ttl_minutes=15,
+    )
+
+
+@api_router.post("/send-email-otp")
+@limiter.limit("3/minute")
+async def send_company_email_otp(request: Request, body: CompanyEmailOtpSendRequest):
+    email = _normalize_company_email(str(body.email))
+    otp_code = generate_otp()
+    otp_row = {
+        "id": str(uuid.uuid4()),
+        "email": email,
+        "code_hash": hash_otp(otp_code),
+        "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=OTP_EXPIRY_MINUTES)).isoformat(),
+        "verified": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    try:
+        await db_supabase.delete_many(_CORPORATE_EMAIL_OTP_TABLE, {"email": email})
+        await db_supabase.insert_one(_CORPORATE_EMAIL_OTP_TABLE, otp_row)
+    except Exception as e:
+        logger.error("company email auth: OTP persist failed for %s", _email_log_id(email), exc_info=True)
+        raise SpinrException(
+            message="Could not store verification code, please try again",
+            error_code=ErrorCode.DATABASE_ERROR,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_DATABASE,
+        ) from e
+
+    sent = await send_transactional_email(
+        to=email,
+        subject="Your Spinr for Business verification code",
+        text=f"Your Spinr for Business verification code is {otp_code}. It expires in {OTP_EXPIRY_MINUTES} minutes.",
+        html=(
+            "<p>Your Spinr for Business verification code is "
+            f"<strong>{otp_code}</strong>.</p>"
+            f"<p>It expires in {OTP_EXPIRY_MINUTES} minutes.</p>"
+        ),
+        log_id=_email_log_id(email),
+        email_type="corporate_email_otp",
+    )
+    if not sent:
+        try:
+            await db_supabase.delete_many(_CORPORATE_EMAIL_OTP_TABLE, {"id": otp_row["id"]})
+        except Exception:
+            logger.error("company email auth: failed-code cleanup failed for %s", _email_log_id(email), exc_info=True)
+        raise HTTPException(status_code=502, detail="Could not send verification code")
+
+    return {"success": True, "message": "Verification code sent"}
+
+
+@api_router.post("/verify-email-otp", response_model=AuthResponse)
+@limiter.limit("5/minute")
+async def verify_company_email_otp(
+    request: Request,
+    response: Response,
+    body: CompanyEmailOtpVerifyRequest,
+):
+    email = _normalize_company_email(str(body.email))
+    code = body.code.strip()
+
+    try:
+        otp_record = await _latest_company_email_otp(email)
+    except Exception as e:
+        logger.error("company email auth: OTP lookup failed for %s", _email_log_id(email), exc_info=True)
+        raise SpinrException(
+            message="Service temporarily unavailable, please try again",
+            error_code=ErrorCode.DATABASE_ERROR,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_DATABASE,
+        ) from e
+
+    if not otp_record or not hmac.compare_digest(str(otp_record.get("code_hash", "")), hash_otp(code)):
+        raise SpinrException(
+            message="ERR_OTP_INVALID",
+            error_code=ErrorCode.AUTH_OTP_INVALID,
+            status_code=400,
+            message_key=ErrorKeys.AUTH_OTP_INVALID,
+            action_hint="Re-enter the verification code",
+        )
+
+    expires_at = otp_record.get("expires_at")
+    if isinstance(expires_at, str):
+        try:
+            expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        except ValueError:
+            logger.error("company email auth: invalid OTP expires_at for %s", _email_log_id(email), exc_info=True)
+            raise SpinrException(
+                message="Internal error processing verification code",
+                error_code=ErrorCode.INTERNAL_ERROR,
+                status_code=500,
+                message_key=ErrorKeys.SYSTEM_INTERNAL,
+            ) from None
+    if not expires_at:
+        raise SpinrException(
+            message="Internal error processing verification code",
+            error_code=ErrorCode.INTERNAL_ERROR,
+            status_code=500,
+            message_key=ErrorKeys.SYSTEM_INTERNAL,
+        )
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) > expires_at:
+        raise SpinrException(
+            message="ERR_OTP_EXPIRED",
+            error_code=ErrorCode.AUTH_OTP_EXPIRED,
+            status_code=400,
+            message_key=ErrorKeys.AUTH_OTP_EXPIRED,
+            action_hint="Request a new code",
+        )
+
+    await db_supabase.update_one(
+        _CORPORATE_EMAIL_OTP_TABLE,
+        {"id": otp_record["id"]},
+        {"verified": True},
+    )
+    return await _issue_company_email_session(request=request, response=response, email=email)
 
 
 @api_router.post("/verify-otp", response_model=AuthResponse)

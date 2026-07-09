@@ -1299,7 +1299,7 @@ export interface CorporateAccount {
 }
 
 export const getCorporateAccounts = () =>
-    request<CorporateAccount[]>("/api/v1/admin/corporate-accounts");
+    request<CorporateAccount[]>("/api/admin/corporate-accounts");
 
 export const listCorporateAccounts = (opts: {
     status?: CompanyStatus;
@@ -1316,42 +1316,42 @@ export const listCorporateAccounts = (opts: {
     if (opts.limit != null) p.set("limit", String(opts.limit));
     const qs = p.toString();
     return request<CorporateAccount[]>(
-        `/api/v1/admin/corporate-accounts${qs ? `?${qs}` : ""}`
+        `/api/admin/corporate-accounts${qs ? `?${qs}` : ""}`
     );
 };
 
 export const reviewKyb = (id: string, decision: { approve: boolean; note?: string }) =>
-    request<CorporateAccount>(`/api/v1/admin/corporate-accounts/${id}/kyb-review`, {
+    request<CorporateAccount>(`/api/admin/corporate-accounts/${id}/kyb-review`, {
         method: "POST",
         body: JSON.stringify(decision),
     });
 
 export const getCorporateAccount = (id: string) =>
-    request<CorporateAccount>(`/api/v1/admin/corporate-accounts/${id}`);
+    request<CorporateAccount>(`/api/admin/corporate-accounts/${id}`);
 
 export const changeCompanyStatus = (
     id: string,
     transition: { status: CompanyStatus; reason?: string }
 ) =>
-    request<CorporateAccount>(`/api/v1/admin/corporate-accounts/${id}/status`, {
+    request<CorporateAccount>(`/api/admin/corporate-accounts/${id}/status`, {
         method: "POST",
         body: JSON.stringify(transition),
     });
 
 export const createCorporateAccount = (data: any) =>
-    request<CorporateAccount>("/api/v1/admin/corporate-accounts", {
+    request<CorporateAccount>("/api/admin/corporate-accounts", {
         method: "POST",
         body: JSON.stringify(data),
     });
 
 export const updateCorporateAccount = (id: string, data: any) =>
-    request<CorporateAccount>(`/api/v1/admin/corporate-accounts/${id}`, {
+    request<CorporateAccount>(`/api/admin/corporate-accounts/${id}`, {
         method: "PUT",
         body: JSON.stringify(data),
     });
 
 export const deleteCorporateAccount = (id: string) =>
-    request<any>(`/api/v1/admin/corporate-accounts/${id}`, { method: "DELETE" });
+    request<any>(`/api/admin/corporate-accounts/${id}`, { method: "DELETE" });
 
 /* ── Corporate Wallet ─────────────────────── */
 export interface WalletTxn {
@@ -1390,11 +1390,11 @@ export type WalletConfigPatch = Partial<
 >;
 
 export const getCorporateWallet = (companyId: string) =>
-    request<CorporateWallet>(`/api/v1/admin/corporate-accounts/${companyId}/wallet`);
+    request<CorporateWallet>(`/api/admin/corporate-accounts/${companyId}/wallet`);
 
 export const updateWalletConfig = (companyId: string, patch: WalletConfigPatch) =>
     request<CorporateWallet>(
-        `/api/v1/admin/corporate-accounts/${companyId}/wallet/config`,
+        `/api/admin/corporate-accounts/${companyId}/wallet/config`,
         { method: "PUT", body: JSON.stringify(patch) }
     );
 
@@ -1403,7 +1403,7 @@ export const walletTopupIntent = (
     body: { amount: number; payment_method_id?: string }
 ) =>
     request<{ payment_intent_id: string; client_secret: string }>(
-        `/api/v1/admin/corporate-accounts/${companyId}/wallet/topup`,
+        `/api/admin/corporate-accounts/${companyId}/wallet/topup`,
         { method: "POST", body: JSON.stringify(body) }
     );
 
@@ -1412,7 +1412,7 @@ export const walletAdjust = (
     body: { amount: number; notes: string }
 ) =>
     request<{ transaction_id: string; balance_after: string }>(
-        `/api/v1/admin/corporate-accounts/${companyId}/wallet/adjust`,
+        `/api/admin/corporate-accounts/${companyId}/wallet/adjust`,
         { method: "POST", body: JSON.stringify(body) }
     );
 

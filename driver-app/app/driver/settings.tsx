@@ -20,6 +20,7 @@ import { ScreenHeader } from '../../components/ScreenHeader';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLanguageStore } from '../../store/languageStore';
 import { useNavStore } from '../../store/navStore';
+import { useAlertPrefsStore } from '../../store/alertPrefsStore';
 import { languages, Language } from '../../i18n';
 import api from '@shared/api/client';
 import {
@@ -47,9 +48,14 @@ export default function SettingsScreen() {
     const [deleteInput, setDeleteInput] = useState('');
     const [exportingData, setExportingData] = useState(false);
 
+    // Sound & haptics are device behaviours → device-local AsyncStorage
+    // (alertPrefsStore), not notification_preferences on the server.
+    const { soundEffects, vibration, setSoundEffects, setVibration, loadAlertPrefs } = useAlertPrefsStore();
+
     useEffect(() => {
         loadLanguage();
         loadNavApp();
+        loadAlertPrefs();
     }, []);
 
     // Preference states (local)
@@ -57,8 +63,6 @@ export default function SettingsScreen() {
     const [rideAlerts, setRideAlerts] = useState(true);
     const [earningsSummary, setEarningsSummary] = useState(true);
     const [promotions, setPromotions] = useState(false);
-    const [soundEffects, setSoundEffects] = useState(true);
-    const [vibration, setVibration] = useState(true);
 
     // Marketing consent (CASL): express opt-in → DEFAULTS OFF. Backed by
     // /marketing/preferences (separate from notification_preferences above:
@@ -112,12 +116,10 @@ export default function SettingsScreen() {
         // keep the defaults set above in that case.
         const prefs: any = prefsResponse;
         if (prefs == null) return;
-        if (prefs.push_notifications != null) setPushNotifications(Boolean(prefs.push_notifications));
-        if (prefs.ride_alerts != null) setRideAlerts(Boolean(prefs.ride_alerts));
+        if (prefs.push_enabled != null) setPushNotifications(Boolean(prefs.push_enabled));
+        if (prefs.ride_updates != null) setRideAlerts(Boolean(prefs.ride_updates));
         if (prefs.earnings_summary != null) setEarningsSummary(Boolean(prefs.earnings_summary));
         if (prefs.promotions != null) setPromotions(Boolean(prefs.promotions));
-        if (prefs.sound_effects != null) setSoundEffects(Boolean(prefs.sound_effects));
-        if (prefs.vibration != null) setVibration(Boolean(prefs.vibration));
     }, [prefsResponse]);
 
     const savePreference = (key: string, value: boolean, revert: () => void) => {
@@ -240,9 +242,9 @@ export default function SettingsScreen() {
                 <View style={styles.section}>
                     <Text style={styles.sectionTitle}>{t('settings.notifications')}</Text>
                     <View style={styles.card}>
-                        {renderToggle(t('settings.pushNotifications'), t('settings.pushNotificationsDesc'), pushNotifications, handleToggle('push_notifications', setPushNotifications), 'notifications', colors.primary)}
+                        {renderToggle(t('settings.pushNotifications'), t('settings.pushNotificationsDesc'), pushNotifications, handleToggle('push_enabled', setPushNotifications), 'notifications', colors.primary)}
                         <View style={styles.cardDivider} />
-                        {renderToggle(t('settings.rideAlerts'), t('settings.rideAlertsDesc'), rideAlerts, handleToggle('ride_alerts', setRideAlerts), 'car', colors.orange)}
+                        {renderToggle(t('settings.rideAlerts'), t('settings.rideAlertsDesc'), rideAlerts, handleToggle('ride_updates', setRideAlerts), 'car', colors.orange)}
                         <View style={styles.cardDivider} />
                         {renderToggle(t('settings.earningsSummary'), t('settings.earningsSummaryDesc'), earningsSummary, handleToggle('earnings_summary', setEarningsSummary), 'wallet', colors.gold)}
                         <View style={styles.cardDivider} />
@@ -264,9 +266,9 @@ export default function SettingsScreen() {
                 <View style={styles.section}>
                     <Text style={styles.sectionTitle}>{t('settings.sectionSound')}</Text>
                     <View style={styles.card}>
-                        {renderToggle(t('settings.soundEffects'), t('settings.soundEffectsDesc'), soundEffects, handleToggle('sound_effects', setSoundEffects), 'volume-high', colors.primary)}
+                        {renderToggle(t('settings.soundEffects'), t('settings.soundEffectsDesc'), soundEffects, setSoundEffects, 'volume-high', colors.primary)}
                         <View style={styles.cardDivider} />
-                        {renderToggle(t('settings.vibration'), t('settings.vibrationDesc'), vibration, handleToggle('vibration', setVibration), 'phone-portrait', colors.orange)}
+                        {renderToggle(t('settings.vibration'), t('settings.vibrationDesc'), vibration, setVibration, 'phone-portrait', colors.orange)}
                     </View>
                 </View>
 

@@ -8,8 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useCompanyAuthStore } from "@/store/companyAuthStore";
 import {
-    sendCompanyOtp,
-    verifyCompanyOtp,
+    sendCompanyEmailOtp,
+    verifyCompanyEmailOtp,
     getMyWorkProfiles,
     acceptCompanyInvite,
     portalHome,
@@ -18,9 +18,9 @@ import {
 /**
  * Company-portal login (Spinr for Business).
  *
- * Company staff sign in with the SAME phone-OTP identity as the rider app —
- * their corporate membership (invite / email-domain match) is what grants
- * portal access, so there are no separate business passwords to manage.
+ * Company staff sign in with a work-email OTP. Their corporate membership
+ * (invite / email-domain match) is what grants portal access, so there are no
+ * separate business passwords to manage.
  *
  * `?invite_token=` deep links accept a member invitation right after OTP
  * verification, closing the "employee never installed the app" gap in the
@@ -32,26 +32,19 @@ function CompanyLoginInner() {
     const completeLogin = useCompanyAuthStore((s) => s.completeLogin);
     const setMemberships = useCompanyAuthStore((s) => s.setMemberships);
 
-    const [step, setStep] = useState<"phone" | "code">("phone");
-    const [phone, setPhone] = useState("");
+    const [step, setStep] = useState<"email" | "code">("email");
+    const [email, setEmail] = useState("");
     const [code, setCode] = useState("");
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
-    const normalizedPhone = () => {
-        const digits = phone.replace(/\D/g, "");
-        if (digits.length === 10) return `+1${digits}`;
-        // Common 11-digit forms like "+1 (306) 555-0123" / "1-306-555-0123":
-        // the backend send-otp only accepts strict +1XXXXXXXXXX.
-        if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
-        return phone.trim();
-    };
+    const normalizedEmail = () => email.trim().toLowerCase();
 
     const handleSend = async () => {
         setBusy(true);
         setError(null);
         try {
-            await sendCompanyOtp(normalizedPhone());
+            await sendCompanyEmailOtp(normalizedEmail());
             setStep("code");
         } catch (e) {
             setError(e instanceof Error ? e.message : "Could not send code");
@@ -64,7 +57,7 @@ function CompanyLoginInner() {
         setBusy(true);
         setError(null);
         try {
-            const result = await verifyCompanyOtp(normalizedPhone(), code.trim());
+            const result = await verifyCompanyEmailOtp(normalizedEmail(), code.trim());
             await completeLogin({
                 token: result.token,
                 csrfToken: result.csrf_token ?? null,
@@ -90,7 +83,7 @@ function CompanyLoginInner() {
 
             if (memberships.length === 0) {
                 setError(
-                    "This phone number has no company memberships. Ask your company admin for an invite link."
+                    "This work email has no company memberships. Ask your company admin for an invite link."
                 );
                 setBusy(false);
                 return;
@@ -120,24 +113,30 @@ function CompanyLoginInner() {
                     </div>
                     <CardTitle className="text-xl">Spinr for Business</CardTitle>
                     <p className="text-sm text-muted-foreground">
-                        {step === "phone"
-                            ? "Sign in with your phone number to manage your company's rides."
-                            : `Enter the code we texted to ${phone}.`}
+                        {step === "email"
+                            ? "Sign in with your work email to manage company rides."
+                            : `Enter the code we emailed to ${normalizedEmail()}.`}
                     </p>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                    {step === "phone" ? (
+                    {step === "email" ? (
                         <>
                             <Input
-                                type="tel"
-                                inputMode="tel"
-                                placeholder="(306) 555-0123"
-                                value={phone}
-                                autoFocus
-                                onChange={(e) => setPhone(e.target.value)}
-                                onKeyDown={(e) => e.key === "Enter" && !busy && phone && handleSend()}
+                                type="email"
+                                inputMode="email"
+                                placeholder="name@company.com"
+                                value={email}
+                                autoComplete="email"
+                                onChange={(e) => setEmail(e.target.value)}
+                                onKeyDown={(e) =>
+                                    e.key === "Enter" && !busy && normalizedEmail() && handleSend()
+                                }
                             />
-                            <Button className="w-full" onClick={handleSend} disabled={busy || !phone.trim()}>
+                            <Button
+                                className="w-full"
+                                onClick={handleSend}
+                                disabled={busy || !normalizedEmail()}
+                            >
                                 {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                                 Send code
                             </Button>
@@ -150,7 +149,6 @@ function CompanyLoginInner() {
                                 placeholder="4-digit code"
                                 maxLength={6}
                                 value={code}
-                                autoFocus
                                 onChange={(e) => setCode(e.target.value)}
                                 onKeyDown={(e) => e.key === "Enter" && !busy && code && handleVerify()}
                             />
@@ -162,12 +160,12 @@ function CompanyLoginInner() {
                                 type="button"
                                 className="w-full text-center text-xs text-muted-foreground hover:underline"
                                 onClick={() => {
-                                    setStep("phone");
+                                    setStep("email");
                                     setCode("");
                                     setError(null);
                                 }}
                             >
-                                Use a different number
+                                Use a different email
                             </button>
                         </>
                     )}
@@ -175,8 +173,7 @@ function CompanyLoginInner() {
                         <p className="rounded bg-red-50 p-3 text-sm text-red-700">{error}</p>
                     )}
                     <p className="text-center text-xs text-muted-foreground">
-                        Employees use the same sign-in as the Spinr rider app. Your company
-                        membership controls what you can see here.
+                        Your company membership controls what you can see here.
                     </p>
                 </CardContent>
             </Card>

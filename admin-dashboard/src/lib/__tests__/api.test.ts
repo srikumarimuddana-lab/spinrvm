@@ -62,6 +62,9 @@ import {
   getSettings,
   updateSettings,
   RateLimitError,
+  listCompanyMembers,
+  inviteCompanyMember,
+  listCompanyAllowanceRequests,
 } from '../api';
 
 describe('api.ts contract tests', () => {
@@ -147,6 +150,41 @@ describe('api.ts contract tests', () => {
     expect(init.method).toBe('PUT');
     const body = JSON.parse(init.body as string);
     expect(body.free_cancel_window_seconds).toBe(120);
+  });
+
+  it('company members — GET routes through /api/company proxy', async () => {
+    mockFetch.mockReturnValueOnce(okResponse([]));
+
+    await listCompanyMembers('company-123').catch(() => {});
+
+    const [url] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/company/company-123/members');
+  });
+
+  it('company member invite — POST routes through /api/company proxy', async () => {
+    mockFetch.mockReturnValueOnce(okResponse({ member: {}, invite_url: 'https://join.test/i' }));
+
+    await inviteCompanyMember('company-123', {
+      email: 'employee@acme.test',
+      role: 'member',
+    }).catch(() => {});
+
+    const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/company/company-123/members/invite');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({
+      email: 'employee@acme.test',
+      role: 'member',
+    });
+  });
+
+  it('company allowance requests — GET routes through /api/company proxy', async () => {
+    mockFetch.mockReturnValueOnce(okResponse([]));
+
+    await listCompanyAllowanceRequests('company-123', 'all').catch(() => {});
+
+    const [url] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/company/company-123/allowance-requests?status=all');
   });
 
   // ─── B-P1-8: typed RateLimitError on 429 ────────────────────────────

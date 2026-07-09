@@ -26,7 +26,10 @@ export default function SettingsScreen() {
 
   const [pushEnabled, setPushEnabled] = useState(true);
   const [emailEnabled, setEmailEnabled] = useState(true);
-  const [smsEnabled, setSmsEnabled] = useState(true);
+  // SMS defaults OFF to match the server default (get_preferences returns
+  // sms_enabled: False when no row exists) — a true default here caused an
+  // ON→OFF flash on first load.
+  const [smsEnabled, setSmsEnabled] = useState(false);
   const [showLangModal, setShowLangModal] = useState(false);
   const handleDarkModeToggle = (value: boolean) => {
     setTheme(value ? 'dark' : 'light');

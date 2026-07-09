@@ -67,12 +67,40 @@ def _app_with_auth_router() -> FastAPI:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+@pytest.fixture
+def enabled_limiter():
+    """Re-enable the default limiter for the slowapi-window contract tests.
+
+    conftest's autouse ``reset_rate_limiters`` fixture sets
+    ``default_limiter.enabled = False`` before every test so unrelated tests
+    can't trip 429s — but these two tests exist precisely to exercise the
+    slowapi window path, so they must opt back in. Storage was already reset
+    by the autouse fixture, so the window starts clean. Both dual-import
+    module identities are toggled to mirror conftest's own loop.
+    """
+    import importlib
+
+    limiters = []
+    for rl_mod_path in ("backend.utils.rate_limiter", "utils.rate_limiter"):
+        try:
+            rl_mod = importlib.import_module(rl_mod_path)
+        except (ImportError, ModuleNotFoundError):
+            continue
+        limiter = getattr(rl_mod, "default_limiter", None)
+        if limiter is not None:
+            limiter.enabled = True
+            limiters.append(limiter)
+    yield
+    for limiter in limiters:
+        limiter.enabled = False
+
+
 class TestSlowapi429ResponseShape:
     """Pins the response shape for slowapi-tripped 429s. /auth/logout is
     rate-limited to 3/minute; the 4th call in the same window must
     return the documented headers + body."""
 
-    def test_429_emits_retry_after_and_ratelimit_headers(self):
+    def test_429_emits_retry_after_and_ratelimit_headers(self, enabled_limiter):
         app = _app_with_auth_router()
         client = TestClient(app)
 
@@ -93,7 +121,7 @@ class TestSlowapi429ResponseShape:
         assert r.headers.get("RateLimit-Remaining") == "0"
         assert r.headers.get("RateLimit-Reset") == "60"
 
-    def test_429_body_carries_retry_after_and_limit_fields(self):
+    def test_429_body_carries_retry_after_and_limit_fields(self, enabled_limiter):
         """The body is the fallback for clients running through proxies
         that strip arbitrary headers (some corporate WAFs do exactly
         this). RateLimitError client-side falls back to body fields

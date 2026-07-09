@@ -65,7 +65,16 @@ export default function LoginScreen() {
         showToast('Code Not Sent', 'Could not send verification code. Please try again.', 'danger');
       }
     } catch (error: any) {
-      showToast('Connection Error', error.response?.data?.detail || 'Unable to reach server. Please check your connection.', 'danger');
+      // A response with a detail means the server answered (e.g. 503
+      // "Verification is temporarily unavailable") — don't mislabel that as a
+      // connectivity problem or users report "can't reach server" while the
+      // backend is up and saying exactly what's wrong.
+      const detail = error.response?.data?.detail;
+      if (detail) {
+        showToast('Sign-in Unavailable', detail, 'danger');
+      } else {
+        showToast('Connection Error', 'Unable to reach server. Please check your connection.', 'danger');
+      }
     } finally {
       setLoading(false);
     }

@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Tuple
 try:
     from ..db_supabase import (  # type: ignore
         accept_member_invite,
+        create_active_member,
         find_companies_by_email_domain,
         get_corporate_account_by_id,
         get_member_by_invite_token,
@@ -28,6 +29,7 @@ try:
 except ImportError:
     from db_supabase import (  # type: ignore
         accept_member_invite,
+        create_active_member,
         find_companies_by_email_domain,
         get_corporate_account_by_id,
         get_member_by_invite_token,
@@ -129,3 +131,50 @@ async def join_via_domain(
     )
     updated = await accept_member_invite(member_id=member["id"], user_id=user_id)
     return updated or member
+
+
+async def bootstrap_owner(
+    *,
+    company_id: str,
+    email: str,
+    user_id: str | None = None,
+    invited_by: str | None = None,
+) -> Tuple[Dict[str, Any], str | None]:
+    """Seed a brand-new company with its first (owner) member.
+
+    Closes the owner-bootstrap gap: previously a freshly created company had
+    ZERO members and the first coordinator had to be reached by a manually
+    delivered invite link. Two modes:
+
+    * ``user_id`` provided (self-serve signup — the authenticated,
+      email-verified creator): insert a directly-ACTIVE owner membership.
+      Returns ``(member, None)`` — no invite link needed.
+    * ``user_id`` absent (staff-created company with an ``owner_email``):
+      fall back to the normal invite flow with role='owner'. Returns
+      ``(member, invite_url)`` for delivery.
+
+    Idempotent for the active path: if the user already holds an active
+    membership in this company (e.g. a retried signup request), the existing
+    row is returned instead of violating corp_members_company_user_unique.
+    """
+    if user_id:
+        existing = await list_active_memberships_for_user(user_id)
+        for m in existing:
+            if m.get("company_id") == company_id:
+                return m, None
+        member = await create_active_member(
+            company_id=company_id,
+            user_id=user_id,
+            email=email,
+            role="owner",
+            invited_by=invited_by or user_id,
+        )
+        return member, None
+
+    member, invite_url = await invite_member(
+        company_id=company_id,
+        email=email,
+        role="owner",
+        invited_by=invited_by or "staff",
+    )
+    return member, invite_url

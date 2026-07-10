@@ -222,12 +222,12 @@ class TestWebhookActivation:
             patch("stripe.Webhook.construct_event", return_value=self._webhook_event()),
             patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
             patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
-            patch("backend.routes.drivers._activate_subscription", activate_mock),
+            patch("backend.routes.drivers.subscriptions._activate_subscription", activate_mock),
             patch("backend.routes.webhooks.db_supabase.find_one", AsyncMock(return_value=find_return)),
             patch("backend.routes.webhooks.db_supabase.update_one", update_mock),
         ]
         if cancel_mock is not None:
-            patches.append(patch("backend.routes.drivers._cancel_stripe_subscription", cancel_mock))
+            patches.append(patch("backend.routes.drivers.subscriptions._cancel_stripe_subscription", cancel_mock))
         import contextlib
 
         with contextlib.ExitStack() as stack:
@@ -353,7 +353,7 @@ class TestVerifySession:
                 AsyncMock(return_value={"stripe_secret_key": "sk_test_123"}),
             ),
             patch("stripe.checkout.Session.retrieve", return_value=mock_session),
-            patch("backend.routes.drivers._activate_subscription", AsyncMock()),
+            patch("backend.routes.drivers.subscriptions._activate_subscription", AsyncMock()),
         ):
             result = await verify_subscription_session("cs_test_123", current_user)
 
@@ -557,7 +557,7 @@ class TestCancelSubscriptionEndpoint:
         with (
             patch("backend.db_supabase.get_rows") as mock_get_rows,
             patch("backend.db_supabase.update_one") as update_mock,
-            patch("backend.routes.drivers._cancel_stripe_subscription") as cancel_mock,
+            patch("backend.routes.drivers.subscriptions._cancel_stripe_subscription") as cancel_mock,
         ):
             mock_get_rows.side_effect = self._rows
             cancel_mock.side_effect = Exception("stripe down")
@@ -574,7 +574,7 @@ class TestCancelSubscriptionEndpoint:
         with (
             patch("backend.db_supabase.get_rows") as mock_get_rows,
             patch("backend.db_supabase.update_one") as update_mock,
-            patch("backend.routes.drivers._cancel_stripe_subscription", AsyncMock()),
+            patch("backend.routes.drivers.subscriptions._cancel_stripe_subscription", AsyncMock()),
         ):
             mock_get_rows.side_effect = self._rows
 
@@ -723,8 +723,8 @@ class TestActivationPeriodAndVerifySuperseded:
             patch("backend.db_supabase.update_one", AsyncMock()),
             patch("backend.settings_loader.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk"})),
             patch("stripe.checkout.Session.retrieve", return_value=session),
-            patch("backend.routes.drivers._activate_subscription", AsyncMock()),
-            patch("backend.routes.drivers._cancel_stripe_subscription", cancel_mock),
+            patch("backend.routes.drivers.subscriptions._activate_subscription", AsyncMock()),
+            patch("backend.routes.drivers.subscriptions._cancel_stripe_subscription", cancel_mock),
         ):
             result = await verify_subscription_session("cs_x", {"id": "user-123"})
 
@@ -754,7 +754,7 @@ class TestActivationAtomicClaim:
         with (
             patch("backend.db_supabase.find_one", find_mock),
             patch("backend.db_supabase.update_one", update_mock),
-            patch("backend.routes.drivers.send_push_notification", push_mock),
+            patch("backend.routes.drivers._deps.send_push_notification", push_mock),
         ):
             await drv._activate_subscription("s1", "plan-1")
 
@@ -816,7 +816,7 @@ class TestSubscriptionPaymentsLedger:
             patch("backend.db_supabase.find_one", find_mock),
             patch("backend.db_supabase.get_rows", AsyncMock(return_value=[])),
             patch("backend.db_supabase.update_one", AsyncMock()),
-            patch("backend.routes.drivers._record_subscription_payment", record_mock),
+            patch("backend.routes.drivers.subscriptions._record_subscription_payment", record_mock),
         ):
             await drv._activate_subscription("s1", "p1")
         record_mock.assert_awaited_once()
@@ -837,7 +837,7 @@ class TestSubscriptionPaymentsLedger:
             patch("backend.db_supabase.find_one", find_mock),
             patch("backend.db_supabase.get_rows", AsyncMock(return_value=[])),
             patch("backend.db_supabase.update_one", AsyncMock()),
-            patch("backend.routes.drivers._record_subscription_payment", record_mock),
+            patch("backend.routes.drivers.subscriptions._record_subscription_payment", record_mock),
         ):
             await drv._activate_subscription("s1", "p1")
         # Recurring is recorded by invoice.paid, not here.
@@ -981,7 +981,7 @@ class TestRecurringIntervalAndModeLedger:
             patch("backend.db_supabase.find_one", find_mock),
             patch("backend.db_supabase.get_rows", AsyncMock(return_value=[])),
             patch("backend.db_supabase.update_one", AsyncMock()),
-            patch("backend.routes.drivers._record_subscription_payment", record_mock),
+            patch("backend.routes.drivers.subscriptions._record_subscription_payment", record_mock),
         ):
             await drv._activate_subscription("s1", "p1", "payment")
         record_mock.assert_awaited_once()
@@ -1002,7 +1002,7 @@ class TestRecurringIntervalAndModeLedger:
             patch("backend.db_supabase.find_one", find_mock),
             patch("backend.db_supabase.get_rows", AsyncMock(return_value=[])),
             patch("backend.db_supabase.update_one", AsyncMock()),
-            patch("backend.routes.drivers._record_subscription_payment", record_mock),
+            patch("backend.routes.drivers.subscriptions._record_subscription_payment", record_mock),
         ):
             await drv._activate_subscription("s1", "p1", "subscription")
         record_mock.assert_not_awaited()
@@ -1109,10 +1109,10 @@ class TestVehicleTypeEnforcement:
                 "backend.settings_loader.get_app_settings",
                 AsyncMock(return_value={"require_driver_subscription": True}),
             ),
-            patch("backend.routes.drivers.clear_presence", AsyncMock()),
+            patch("backend.routes.drivers._deps.clear_presence", AsyncMock()),
             patch("backend.routes.drivers.set_presence", AsyncMock()),
-            patch("backend.routes.drivers.record_period_transition", AsyncMock()),
-            patch("backend.routes.drivers.manager", MagicMock()),
+            patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager", MagicMock()),
         ):
             try:
                 await update_driver_status(
@@ -1347,12 +1347,12 @@ class TestExpiryWarning3Day:
             patch("backend.db_supabase.get_rows", AsyncMock(return_value=[sub])),
             patch("backend.db_supabase.find_one", AsyncMock(return_value=driver)),
             patch("backend.db_supabase.update_one", update_mock),
-            patch("backend.routes.drivers.send_push_notification", push_mock),
+            patch("backend.routes.drivers._deps.send_push_notification", push_mock),
             patch(
                 "backend.settings_loader.get_app_settings",
                 AsyncMock(return_value={"require_driver_subscription": False}),
             ),
-            patch("backend.routes.drivers.asyncio.sleep", AsyncMock(side_effect=Exception("stop"))),
+            patch("backend.routes.drivers._deps.asyncio.sleep", AsyncMock(side_effect=Exception("stop"))),
         ):
             try:
                 await drv.check_expiring_subscriptions()
@@ -1391,12 +1391,12 @@ class TestExpiryWarning3Day:
             patch("backend.db_supabase.get_rows", AsyncMock(return_value=[sub])),
             patch("backend.db_supabase.find_one", AsyncMock(return_value=driver)),
             patch("backend.db_supabase.update_one", AsyncMock()),
-            patch("backend.routes.drivers.send_push_notification", push_mock),
+            patch("backend.routes.drivers._deps.send_push_notification", push_mock),
             patch(
                 "backend.settings_loader.get_app_settings",
                 AsyncMock(return_value={"require_driver_subscription": False}),
             ),
-            patch("backend.routes.drivers.asyncio.sleep", AsyncMock(side_effect=Exception("stop"))),
+            patch("backend.routes.drivers._deps.asyncio.sleep", AsyncMock(side_effect=Exception("stop"))),
         ):
             try:
                 await drv.check_expiring_subscriptions()

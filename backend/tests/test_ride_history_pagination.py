@@ -176,8 +176,8 @@ async def test_fetch_ride_history_page_uses_stable_cursor_query():
     fake_supabase = _FakeSupabase(rows)
 
     with (
-        patch("backend.routes.rides.db_supabase.supabase", fake_supabase),
-        patch("backend.routes.rides.db_supabase.run_sync", _run_sync_now),
+        patch("backend.routes.rides._deps.db_supabase.supabase", fake_supabase),
+        patch("backend.routes.rides._deps.db_supabase.run_sync", _run_sync_now),
     ):
         result = await _rides_module._fetch_ride_history_page(
             rider_id="user-1",
@@ -207,8 +207,8 @@ async def test_get_ride_history_returns_next_cursor_when_extra_row_exists():
     ]
 
     with (
-        patch("backend.routes.rides._fetch_ride_history_page", AsyncMock(return_value=mock_rides)),
-        patch("backend.routes.rides.get_app_settings", AsyncMock(return_value={})),
+        patch("backend.routes.rides.queries._fetch_ride_history_page", AsyncMock(return_value=mock_rides)),
+        patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
     ):
         result = await _rides_module.get_ride_history(
             request=_MOCK_REQUEST,

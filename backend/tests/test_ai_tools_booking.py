@@ -239,7 +239,7 @@ PROMOS = [
 
 def _patch_estimates(payload=None, error: Exception | None = None):
     mock = AsyncMock(side_effect=error) if error else AsyncMock(return_value=payload)
-    return patch("backend.routes.rides.compute_ride_estimates", mock)
+    return patch("backend.routes.rides.estimates.compute_ride_estimates", mock)
 
 
 def _patch_promos(promos=None, error: Exception | None = None):

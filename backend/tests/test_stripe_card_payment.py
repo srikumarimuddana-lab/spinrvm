@@ -70,14 +70,14 @@ def _base_patches(*, rider=None, charge_outcome=None):
         )
     _rider = rider if rider is not None else _FAKE_RIDER_WITH_PM
     return {
-        "backend.routes.rides.db_supabase.get_ride": AsyncMock(return_value=_FAKE_RIDE),
+        "backend.routes.rides._deps.db_supabase.get_ride": AsyncMock(return_value=_FAKE_RIDE),
         # db = db_supabase alias — patching db_supabase.update_one covers both
-        "backend.routes.rides.db_supabase.update_one": AsyncMock(return_value=MagicMock(modified_count=1)),
-        "backend.routes.rides.db.update_one": AsyncMock(return_value=MagicMock(modified_count=1)),
-        "backend.routes.rides.db_supabase.update_ride": AsyncMock(return_value=None),
-        "backend.routes.rides.db_supabase.get_user_by_id": AsyncMock(return_value=_rider),
-        "backend.routes.rides.db_supabase.get_driver_by_id": AsyncMock(return_value=None),
-        "backend.routes.rides.manager.send_personal_message": AsyncMock(return_value=None),
+        "backend.routes.rides._deps.db_supabase.update_one": AsyncMock(return_value=MagicMock(modified_count=1)),
+        "backend.routes.rides._deps.db.update_one": AsyncMock(return_value=MagicMock(modified_count=1)),
+        "backend.routes.rides._deps.db_supabase.update_ride": AsyncMock(return_value=None),
+        "backend.routes.rides._deps.db_supabase.get_user_by_id": AsyncMock(return_value=_rider),
+        "backend.routes.rides._deps.db_supabase.get_driver_by_id": AsyncMock(return_value=None),
+        "backend.routes.rides._deps.manager.send_personal_message": AsyncMock(return_value=None),
         # Intercept charge_ride at the module-level alias in rides.py so we never
         # touch stripe_charge.py or the real Stripe SDK.
         "backend.services.payment_service.charge_ride": AsyncMock(return_value=charge_outcome),
@@ -90,7 +90,7 @@ async def _call(*, ride=None, rider=None, charge_outcome=None, tip="0"):
 
     patches = _base_patches(rider=rider, charge_outcome=charge_outcome)
     if ride is not None:
-        patches["backend.routes.rides.db_supabase.get_ride"] = AsyncMock(return_value=ride)
+        patches["backend.routes.rides._deps.db_supabase.get_ride"] = AsyncMock(return_value=ride)
 
     patchers = {t: patch(t, m) for t, m in patches.items()}
     started = {t: p.start() for t, p in patchers.items()}
@@ -115,7 +115,7 @@ async def test_success_marks_ride_paid_and_emits_ws():
     assert result["success"] is True
     assert float(result["charged_amount"]) == pytest.approx(20.00, abs=0.01)
 
-    update_ride = mocks["backend.routes.rides.db_supabase.update_ride"]
+    update_ride = mocks["backend.routes.rides._deps.db_supabase.update_ride"]
     paid_calls = [c for c in update_ride.call_args_list if c.args[1].get("payment_status") == "paid"]
     assert paid_calls, "expected update_ride call with payment_status='paid'"
 

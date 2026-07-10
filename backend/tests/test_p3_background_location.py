@@ -64,7 +64,7 @@ class TestUpdateLocationBatch:
         db_updates = []
 
         with patch(
-            "backend.routes.drivers.db_supabase.update_one",
+            "backend.routes.drivers._deps.db_supabase.update_one",
             AsyncMock(side_effect=lambda t, q, d: db_updates.append((t, q, d))),
         ):
             result = await update_location_batch(

@@ -781,14 +781,14 @@ async def stripe_webhook(request: Request):
 
         if subscription_id and data_object.get("payment_status") == "paid":
             try:
-                from ..routes.drivers import _activate_subscription  # type: ignore
+                from ..routes.drivers import subscriptions as _drv_subs  # type: ignore
             except ImportError:
-                from routes.drivers import _activate_subscription  # type: ignore
+                from routes.drivers import subscriptions as _drv_subs  # type: ignore
 
             # Pass the session's actual mode so one-off vs recurring ledger
             # recording is decided by what was created, not the plan's current
             # stripe_price_id.
-            await _activate_subscription(subscription_id, plan_id, data_object.get("mode"))
+            await _drv_subs._activate_subscription(subscription_id, plan_id, data_object.get("mode"))
 
             # Re-read: _activate_subscription is a no-op for a row that was
             # superseded by a newer checkout (or otherwise non-pending). Only
@@ -816,10 +816,10 @@ async def stripe_webhook(request: Request):
                 # isn't billed for a plan they already replaced.
                 if stripe_subscription_id:
                     try:
-                        from ..routes.drivers import _cancel_stripe_subscription  # type: ignore
+                        from ..routes.drivers import subscriptions as _drv_subs  # type: ignore
                     except ImportError:
-                        from routes.drivers import _cancel_stripe_subscription  # type: ignore
-                    await _cancel_stripe_subscription(stripe_subscription_id)
+                        from routes.drivers import subscriptions as _drv_subs  # type: ignore
+                    await _drv_subs._cancel_stripe_subscription(stripe_subscription_id)
                 logger.warning(
                     "[WEBHOOK] checkout.session.completed for non-active row %s "
                     "(superseded?) — not linking; cancelled orphan Stripe sub %s",
@@ -1233,17 +1233,9 @@ async def stripe_webhook(request: Request):
                 # recurring renewals. Deduped on the unique stripe_invoice_id
                 # index, so a replay is a no-op.
                 try:
-                    from ..routes.drivers import (  # type: ignore
-                        _compute_subscription_tax,
-                        _record_subscription_payment,
-                        _send_subscription_invoice_email,
-                    )
+                    from ..routes.drivers import subscriptions as _drv_subs  # type: ignore
                 except ImportError:
-                    from routes.drivers import (  # type: ignore
-                        _compute_subscription_tax,
-                        _record_subscription_payment,
-                        _send_subscription_invoice_email,
-                    )
+                    from routes.drivers import subscriptions as _drv_subs  # type: ignore
                 # amount_paid is the authoritative charged amount; it can be a
                 # legitimate 0 (100% coupon / trial), which is falsy, so test
                 # for None rather than truthiness before falling back.
@@ -1266,12 +1258,12 @@ async def stripe_webhook(request: Request):
 
                 # Compute tax breakdown from the driver's service-area config.
                 _plan_price = Decimal(str((_inv_plan or {}).get("price") or _inv_amount or 0))
-                _wh_tax = await _compute_subscription_tax(row.get("driver_id"), _plan_price)
+                _wh_tax = await _drv_subs._compute_subscription_tax(row.get("driver_id"), _plan_price)
 
                 # Use the actual Stripe-charged amount as the authoritative ledger
                 # figure — _wh_tax["total"] is computed from the plan price and may
                 # differ from _inv_amount when a coupon or proration is applied.
-                await _record_subscription_payment(
+                await _drv_subs._record_subscription_payment(
                     driver_id=row.get("driver_id"),
                     subscription_id=row["id"],
                     plan_id=row.get("plan_id"),
@@ -1296,7 +1288,7 @@ async def stripe_webhook(request: Request):
                     import asyncio as _asyncio
 
                     _asyncio.create_task(
-                        _send_subscription_invoice_email(
+                        _drv_subs._send_subscription_invoice_email(
                             driver_id=row.get("driver_id"),
                             plan_name=row.get("plan_name") or "Spinr Pass",
                             duration_label=_inv_dur,

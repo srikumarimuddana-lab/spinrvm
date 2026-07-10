@@ -45,12 +45,12 @@ async def test_no_double_accept(client, ride_id, driver_1_headers, driver_2_head
     accepted_ride = {**ride, "status": "driver_accepted", "driver_id": "driver_001"}
 
     with (
-        patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),
-        patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=ride)),
-        patch("backend.routes.drivers.db.update_one", AsyncMock(side_effect=[accepted_ride, None])),
-        patch("backend.routes.drivers.db.find_one", AsyncMock(return_value=accepted_ride)),
-        patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
-        patch("backend.routes.drivers.send_push_notification", AsyncMock()),
+        patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+        patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.drivers._deps.db.update_one", AsyncMock(side_effect=[accepted_ride, None])),
+        patch("backend.routes.drivers._deps.db.find_one", AsyncMock(return_value=accepted_ride)),
+        patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+        patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
     ):
         # Call the handler directly (same pattern as test_ride_accept_flow.py)
         # so patches on the module-level DB functions are reliably applied.
@@ -81,7 +81,7 @@ async def test_cannot_complete_from_driver_assigned(ride_id):
     }
 
     with patch(
-        "backend.routes.drivers.db_supabase.get_rows",
+        "backend.routes.drivers._deps.db_supabase.get_rows",
         AsyncMock(side_effect=[[driver], [ride]]),
     ):
         [exc] = await asyncio.gather(
@@ -164,14 +164,14 @@ async def test_full_ride_lifecycle():
         return guard_ok  # accept_ride checks guard.modified_count == 0
 
     with (
-        patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
-        patch("backend.routes.drivers.db_supabase.update_ride", AsyncMock(side_effect=fake_update_ride)),
-        patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(side_effect=fake_update_one)),
-        patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=ride)),
-        patch("backend.routes.drivers.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
-        patch("backend.routes.drivers.db_supabase.find_one", AsyncMock(return_value=ride)),
-        patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
-        patch("backend.routes.drivers.send_push_notification", AsyncMock()),
+        patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+        patch("backend.routes.drivers._deps.db_supabase.update_ride", AsyncMock(side_effect=fake_update_ride)),
+        patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(side_effect=fake_update_one)),
+        patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.drivers._deps.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
+        patch("backend.routes.drivers._deps.db_supabase.find_one", AsyncMock(return_value=ride)),
+        patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+        patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
     ):
         # Step 1: Accept ride – driver_assigned → driver_accepted
         await drv_mod.accept_ride(ride_id=ride_id, current_user={"id": user_driver_id})

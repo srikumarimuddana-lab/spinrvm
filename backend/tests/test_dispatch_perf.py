@@ -29,8 +29,8 @@ def test_dispatch_retry_stops_at_attempt_cap():
     from backend.routes import rides
 
     with (
-        patch("backend.routes.rides.db_supabase.get_ride", AsyncMock()) as get_ride,
-        patch("backend.routes.rides.match_driver_to_ride", AsyncMock()) as match,
+        patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock()) as get_ride,
+        patch("backend.routes.rides.matching.match_driver_to_ride", AsyncMock()) as match,
     ):
         asyncio.run(rides._dispatch_retry("r1", delay=0, attempt=rides._MAX_DISPATCH_ATTEMPTS + 1))
 
@@ -43,8 +43,8 @@ def test_dispatch_retry_continues_below_cap_and_threads_attempt():
 
     searching = {"id": "r1", "status": "searching"}
     with (
-        patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=searching)),
-        patch("backend.routes.rides.match_driver_to_ride", AsyncMock()) as match,
+        patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=searching)),
+        patch("backend.routes.rides.matching.match_driver_to_ride", AsyncMock()) as match,
     ):
         asyncio.run(rides._dispatch_retry("r1", delay=0, attempt=3))
 

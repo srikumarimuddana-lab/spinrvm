@@ -154,10 +154,10 @@ def _patch_estimate_deps():
     Both are mocked here so the test never touches Supabase.
     """
     return {
-        "routes.rides.get_fares_for_location": AsyncMock(return_value=[_surged_fare_info(1.5)]),
-        "routes.rides.calculate_airport_fee": AsyncMock(return_value={"airport_fee": 0.0}),
-        "routes.rides.db_supabase.get_rows": AsyncMock(return_value=[]),
-        "routes.rides.get_app_settings": AsyncMock(return_value={}),
+        "routes.rides._deps.get_fares_for_location": AsyncMock(return_value=[_surged_fare_info(1.5)]),
+        "routes.rides._deps.calculate_airport_fee": AsyncMock(return_value={"airport_fee": 0.0}),
+        "routes.rides._deps.db_supabase.get_rows": AsyncMock(return_value=[]),
+        "routes.rides._deps.get_app_settings": AsyncMock(return_value={}),
     }
 
 
@@ -316,26 +316,26 @@ def _patch_create_ride_deps(*, captured: dict, surge: float = 1.5):
         "services.corporate_policy_service.evaluate_policy_for_ride": AsyncMock(return_value=_policy_pass),
         # Top-level import in routes.rides — also stubbed there for the
         # work_profile path that calls evaluate_policy_for_ride directly.
-        "routes.rides.evaluate_policy_for_ride": AsyncMock(return_value=_policy_pass),
-        "routes.rides.db_supabase.find_one": AsyncMock(
+        "routes.rides._deps.evaluate_policy_for_ride": AsyncMock(return_value=_policy_pass),
+        "routes.rides._deps.db_supabase.find_one": AsyncMock(
             return_value={"id": "rider_1", "status": "active", "stripe_customer_id": "cus_1"}
         ),
-        "routes.rides.db.find_one": AsyncMock(
+        "routes.rides._deps.db.find_one": AsyncMock(
             return_value={"id": "rider_1", "status": "active", "stripe_customer_id": "cus_1"}
         ),
-        "routes.rides.db_supabase.get_rows": AsyncMock(side_effect=_ride_get_rows_side_effect),
-        "routes.rides._fares_for_location_impl": AsyncMock(return_value=[_surged_fare_info(surge)]),
-        "routes.rides.calculate_airport_fee": AsyncMock(return_value={"airport_fee": 0.0}),
-        "routes.rides.calculate_all_fees": AsyncMock(
+        "routes.rides._deps.db_supabase.get_rows": AsyncMock(side_effect=_ride_get_rows_side_effect),
+        "routes.rides._deps._fares_for_location_impl": AsyncMock(return_value=[_surged_fare_info(surge)]),
+        "routes.rides._deps.calculate_airport_fee": AsyncMock(return_value={"airport_fee": 0.0}),
+        "routes.rides._deps.calculate_all_fees": AsyncMock(
             return_value={"fees_total": 0, "tax_amount": 0, "fees": [], "tax_breakdown": {}}
         ),
-        "routes.rides.db_supabase.insert_ride": _capture_insert,
-        "routes.rides.db_supabase.get_ride": AsyncMock(return_value=None),
-        "routes.rides.match_driver_to_ride": AsyncMock(return_value=None),
-        "routes.rides.db_supabase.list_active_memberships_for_user": AsyncMock(return_value=[membership]),
-        "routes.rides.db_supabase.get_member_allowance": AsyncMock(return_value=allowance),
-        "routes.rides.db_supabase.get_corporate_policy": AsyncMock(return_value={}),
-        "routes.rides.db_supabase.get_corporate_wallet_by_company": AsyncMock(
+        "routes.rides._deps.db_supabase.insert_ride": _capture_insert,
+        "routes.rides._deps.db_supabase.get_ride": AsyncMock(return_value=None),
+        "routes.rides.matching.match_driver_to_ride": AsyncMock(return_value=None),
+        "routes.rides._deps.db_supabase.list_active_memberships_for_user": AsyncMock(return_value=[membership]),
+        "routes.rides._deps.db_supabase.get_member_allowance": AsyncMock(return_value=allowance),
+        "routes.rides._deps.db_supabase.get_corporate_policy": AsyncMock(return_value={}),
+        "routes.rides._deps.db_supabase.get_corporate_wallet_by_company": AsyncMock(
             return_value={"id": _WALLET_ID, "balance": 500.0}
         ),
     }

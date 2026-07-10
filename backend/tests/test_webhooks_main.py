@@ -729,7 +729,7 @@ class TestStripeWebhookCheckoutSession:
             patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
             patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
             patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
-            patch("routes.drivers._activate_subscription", mock_activate, create=True),
+            patch("routes.drivers.subscriptions._activate_subscription", mock_activate, create=True),
         ):
             try:
                 result = asyncio.run(wh.stripe_webhook(request=self._mock_req()))
@@ -1603,7 +1603,7 @@ class TestStripeWebhookInvoiceLedger:
             patch("backend.routes.webhooks.db_supabase.find_one", find_mock),
             patch("backend.routes.webhooks.db_supabase.update_one", AsyncMock()),
             patch("backend.routes.webhooks.send_push_notification", AsyncMock()),
-            patch("backend.routes.drivers._record_subscription_payment", record_mock),
+            patch("backend.routes.drivers.subscriptions._record_subscription_payment", record_mock),
         ):
             result = asyncio.run(wh.stripe_webhook(request=self._req()))
 
@@ -1668,7 +1668,7 @@ class TestStripeWebhookInvoiceRecovery:
             patch("backend.routes.webhooks.db_supabase.find_one", find_mock),
             patch("backend.routes.webhooks.db_supabase.update_one", AsyncMock()),
             patch.object(stripe.Subscription, "retrieve", return_value=sub_obj),
-            patch("backend.routes.drivers._record_subscription_payment", record_mock),
+            patch("backend.routes.drivers.subscriptions._record_subscription_payment", record_mock),
         ):
             result = asyncio.run(wh.stripe_webhook(request=self._req()))
 

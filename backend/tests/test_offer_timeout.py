@@ -39,10 +39,10 @@ class TestOfferTimeoutHandler:
             update_calls.append((table, filt, patch_doc))
 
         with (
-            patch("backend.routes.rides.asyncio.sleep", new_callable=AsyncMock),
-            patch("backend.routes.rides.db") as mock_db,
-            patch("backend.routes.rides.manager") as mock_manager,  # noqa: F841
-            patch("backend.routes.rides.match_driver_to_ride", new_callable=AsyncMock) as mock_redispatch,
+            patch("backend.routes.rides._deps.asyncio.sleep", new_callable=AsyncMock),
+            patch("backend.routes.rides._deps.db") as mock_db,
+            patch("backend.routes.rides._deps.manager") as mock_manager,  # noqa: F841
+            patch("backend.routes.rides.matching.match_driver_to_ride", new_callable=AsyncMock) as mock_redispatch,
         ):
             # Flat API: db.find_one("rides", {...})
             mock_db.find_one = AsyncMock(return_value=ride_still_assigned)
@@ -80,10 +80,10 @@ class TestOfferTimeoutHandler:
             "status": "driver_accepted",  # past assignment
         }
         with (
-            patch("backend.routes.rides.asyncio.sleep", new_callable=AsyncMock),
-            patch("backend.routes.rides.db") as mock_db,
-            patch("backend.routes.rides.manager") as mock_manager,  # noqa: F841
-            patch("backend.routes.rides.match_driver_to_ride", new_callable=AsyncMock) as mock_redispatch,
+            patch("backend.routes.rides._deps.asyncio.sleep", new_callable=AsyncMock),
+            patch("backend.routes.rides._deps.db") as mock_db,
+            patch("backend.routes.rides._deps.manager") as mock_manager,  # noqa: F841
+            patch("backend.routes.rides.matching.match_driver_to_ride", new_callable=AsyncMock) as mock_redispatch,
         ):
             # Flat API
             mock_db.find_one = AsyncMock(return_value=progressed_ride)
@@ -106,9 +106,9 @@ class TestOfferTimeoutHandler:
             "status": "driver_assigned",
         }
         with (
-            patch("backend.routes.rides.asyncio.sleep", new_callable=AsyncMock),
-            patch("backend.routes.rides.db") as mock_db,
-            patch("backend.routes.rides.match_driver_to_ride", new_callable=AsyncMock) as mock_redispatch,
+            patch("backend.routes.rides._deps.asyncio.sleep", new_callable=AsyncMock),
+            patch("backend.routes.rides._deps.db") as mock_db,
+            patch("backend.routes.rides.matching.match_driver_to_ride", new_callable=AsyncMock) as mock_redispatch,
         ):
             # Flat API
             mock_db.find_one = AsyncMock(return_value=different_driver_ride)
@@ -125,9 +125,9 @@ class TestOfferTimeoutHandler:
     async def test_noop_if_ride_gone(self):
         """Ride deleted/not found → handler does nothing."""
         with (
-            patch("backend.routes.rides.asyncio.sleep", new_callable=AsyncMock),
-            patch("backend.routes.rides.db") as mock_db,
-            patch("backend.routes.rides.match_driver_to_ride", new_callable=AsyncMock) as mock_redispatch,
+            patch("backend.routes.rides._deps.asyncio.sleep", new_callable=AsyncMock),
+            patch("backend.routes.rides._deps.db") as mock_db,
+            patch("backend.routes.rides.matching.match_driver_to_ride", new_callable=AsyncMock) as mock_redispatch,
         ):
             # Flat API
             mock_db.find_one = AsyncMock(return_value=None)
@@ -182,13 +182,13 @@ class TestDispatchHardening:
         send_personal_mock = AsyncMock()
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=bad_ride)),
-            patch("backend.routes.rides.db_supabase.get_rows", get_rows_mock),
-            patch("backend.routes.rides.db_supabase.update_ride", update_ride_mock),
-            patch("backend.routes.rides.manager.send_personal_message", send_personal_mock),
-            patch("backend.routes.rides.send_push_notification", AsyncMock()),
-            patch("backend.routes.rides.get_app_settings", AsyncMock(return_value={})),
-            patch("backend.routes.rides.asyncio.create_task", create_task_mock),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=bad_ride)),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", get_rows_mock),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", update_ride_mock),
+            patch("backend.routes.rides._deps.manager.send_personal_message", send_personal_mock),
+            patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+            patch("backend.routes.rides._deps.asyncio.create_task", create_task_mock),
         ):
             await rides_mod.match_driver_to_ride(ride_id=self._RIDE_BASE["id"])
 
@@ -210,15 +210,15 @@ class TestDispatchHardening:
         get_rows_mock = AsyncMock(return_value=[])
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=self._RIDE_BASE)),
-            patch("backend.routes.rides.db_supabase.get_rows", get_rows_mock),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=self._RIDE_BASE)),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", get_rows_mock),
             patch(
-                "backend.routes.rides.dispatch.resolve_matching_config",
+                "backend.routes.rides._shared.dispatch.resolve_matching_config",
                 AsyncMock(return_value=("nearest", 4.0, 10.0, 3, False)),
             ),
-            patch("backend.routes.rides.get_app_settings", AsyncMock(return_value={})),
-            patch("backend.routes.rides.spawn", MagicMock()),
-            patch("backend.routes.rides.asyncio.create_task", MagicMock()),
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+            patch("backend.routes.rides._deps.spawn", MagicMock()),
+            patch("backend.routes.rides._deps.asyncio.create_task", MagicMock()),
         ):
             await rides_mod.match_driver_to_ride(ride_id=self._RIDE_BASE["id"])
 
@@ -242,31 +242,31 @@ class TestDispatchHardening:
         send_personal_mock = AsyncMock()
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=self._RIDE_BASE)),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[self._DRIVER])),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=self._RIDE_BASE)),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[self._DRIVER])),
             patch(
-                "backend.routes.rides.dispatch.resolve_matching_config",
+                "backend.routes.rides._shared.dispatch.resolve_matching_config",
                 AsyncMock(return_value=("nearest", 4.0, 10.0, 3, True)),
             ),
-            patch("backend.routes.rides.db_supabase.match_and_claim_driver", AsyncMock(return_value=None)),
-            patch("backend.routes.rides.db_supabase.claim_driver_atomic", AsyncMock(return_value=True)),
-            patch("backend.routes.rides.db_supabase.update_ride", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.match_and_claim_driver", AsyncMock(return_value=None)),
+            patch("backend.routes.rides._deps.db_supabase.claim_driver_atomic", AsyncMock(return_value=True)),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
             patch(
-                "backend.routes.rides.db_supabase.get_driver_by_id",
+                "backend.routes.rides._deps.db_supabase.get_driver_by_id",
                 AsyncMock(return_value={**self._DRIVER, "is_online": True}),
             ),
             patch(
-                "backend.routes.rides.db_supabase.get_user_by_id",
+                "backend.routes.rides._deps.db_supabase.get_user_by_id",
                 AsyncMock(return_value={"first_name": "Test", "last_name": "Rider"}),
             ),
-            patch("backend.routes.rides.manager.send_personal_message", send_personal_mock),
-            patch("backend.routes.rides.send_push_notification", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.send_personal_message", send_personal_mock),
+            patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
             patch(
-                "backend.routes.rides.get_app_settings",
+                "backend.routes.rides._deps.get_app_settings",
                 AsyncMock(return_value={"ride_offer_timeout_seconds": 22}),
             ),
-            patch("backend.routes.rides.record_period_transition", AsyncMock()),
-            patch("backend.routes.rides.asyncio.create_task", MagicMock()),
+            patch("backend.routes.rides._deps.record_period_transition", AsyncMock()),
+            patch("backend.routes.rides._deps.asyncio.create_task", MagicMock()),
         ):
             await rides_mod.match_driver_to_ride(ride_id=self._RIDE_BASE["id"])
 
@@ -293,12 +293,12 @@ class TestDispatchHardening:
         send_personal_mock = AsyncMock()
 
         with (
-            patch("backend.routes.rides.asyncio.sleep", new_callable=AsyncMock),
-            patch("backend.routes.rides.db") as mock_db,
-            patch("backend.routes.rides.match_driver_to_ride", new_callable=AsyncMock),
-            patch("backend.routes.rides.manager.send_personal_message", send_personal_mock),
-            patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=driver_row)),
-            patch("backend.routes.rides.record_period_transition", AsyncMock()),
+            patch("backend.routes.rides._deps.asyncio.sleep", new_callable=AsyncMock),
+            patch("backend.routes.rides._deps.db") as mock_db,
+            patch("backend.routes.rides.matching.match_driver_to_ride", new_callable=AsyncMock),
+            patch("backend.routes.rides._deps.manager.send_personal_message", send_personal_mock),
+            patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=driver_row)),
+            patch("backend.routes.rides._deps.record_period_transition", AsyncMock()),
         ):
             mock_db.find_one = AsyncMock(return_value=ride)
             mock_db.update_one = AsyncMock()

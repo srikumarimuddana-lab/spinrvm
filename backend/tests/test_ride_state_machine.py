@@ -23,7 +23,7 @@ class TestRequireRideInState:
 
     async def _patched_db(self, find_results):
         """
-        Return a context manager that patches backend.routes.drivers.db
+        Return a context manager that patches backend.routes.drivers._deps.db
         so find_one returns results in the order given.
 
         The production code calls the flat Supabase API:
@@ -38,7 +38,7 @@ class TestRequireRideInState:
         ride = {"id": "r1", "driver_id": "d1", "status": "in_progress"}
         mock_db = await self._patched_db([ride])
 
-        with patch("backend.routes.drivers.db", mock_db):
+        with patch("backend.routes.drivers._deps.db", mock_db):
             from backend.routes.drivers import (
                 COMPLETE_FROM_STATES,
                 _require_ride_in_state,
@@ -56,7 +56,7 @@ class TestRequireRideInState:
             ]
         )
 
-        with patch("backend.routes.drivers.db", mock_db):
+        with patch("backend.routes.drivers._deps.db", mock_db):
             from backend.routes.drivers import (
                 COMPLETE_FROM_STATES,
                 _require_ride_in_state,
@@ -79,7 +79,7 @@ class TestRequireRideInState:
             ]
         )
 
-        with patch("backend.routes.drivers.db", mock_db):
+        with patch("backend.routes.drivers._deps.db", mock_db):
             from backend.routes.drivers import (
                 COMPLETE_FROM_STATES,
                 _require_ride_in_state,
@@ -93,7 +93,7 @@ class TestRequireRideInState:
     async def test_raises_404_when_ride_does_not_exist(self):
         mock_db = await self._patched_db([None, None])
 
-        with patch("backend.routes.drivers.db", mock_db):
+        with patch("backend.routes.drivers._deps.db", mock_db):
             from backend.routes.drivers import (
                 COMPLETE_FROM_STATES,
                 _require_ride_in_state,
@@ -108,7 +108,7 @@ class TestRequireRideInState:
         ride = {"id": "r1", "driver_id": "d1", "status": "driver_assigned"}
         mock_db = await self._patched_db([ride])
 
-        with patch("backend.routes.drivers.db", mock_db):
+        with patch("backend.routes.drivers._deps.db", mock_db):
             from backend.routes.drivers import (
                 ARRIVE_FROM_STATES,
                 _require_ride_in_state,
@@ -122,7 +122,7 @@ class TestRequireRideInState:
         ride = {"id": "r1", "driver_id": "d1", "status": "driver_arrived"}
         mock_db = await self._patched_db([ride])
 
-        with patch("backend.routes.drivers.db", mock_db):
+        with patch("backend.routes.drivers._deps.db", mock_db):
             from backend.routes.drivers import (
                 ARRIVE_FROM_STATES,
                 _require_ride_in_state,
@@ -140,7 +140,7 @@ class TestRequireRideInState:
             ]
         )
 
-        with patch("backend.routes.drivers.db", mock_db):
+        with patch("backend.routes.drivers._deps.db", mock_db):
             from backend.routes.drivers import (
                 START_FROM_STATES,
                 _require_ride_in_state,
@@ -177,7 +177,7 @@ class TestCancelStateGuardRider:
             ]
         )
 
-        with patch("backend.routes.rides.db", mock_db):
+        with patch("backend.routes.rides._deps.db", mock_db):
             from backend.routes.rides import _require_ride_in_state_rider
             from backend.utils.error_handling import SpinrException
 
@@ -193,7 +193,7 @@ class TestCancelStateGuardRider:
         mock_db = MagicMock()
         mock_db.find_one = AsyncMock(side_effect=[ride])
 
-        with patch("backend.routes.drivers.db", mock_db):
+        with patch("backend.routes.drivers._deps.db", mock_db):
             from backend.routes.drivers import (
                 COMPLETE_FROM_STATES,
                 _require_ride_in_state,
@@ -207,7 +207,7 @@ class TestCancelStateGuardRider:
         ride = {"id": "r1", "rider_id": "u1", "status": "searching"}
         mock_db = await self._patched_rides_db([ride])
 
-        with patch("backend.routes.rides.db", mock_db):
+        with patch("backend.routes.rides._deps.db", mock_db):
             from backend.routes.rides import _require_ride_in_state_rider
 
             result = await _require_ride_in_state_rider("r1", "u1", self.CANCEL_ALLOWED)
@@ -218,7 +218,7 @@ class TestCancelStateGuardRider:
         ride = {"id": "r1", "rider_id": "u1", "status": "driver_assigned"}
         mock_db = await self._patched_rides_db([ride])
 
-        with patch("backend.routes.rides.db", mock_db):
+        with patch("backend.routes.rides._deps.db", mock_db):
             from backend.routes.rides import _require_ride_in_state_rider
 
             result = await _require_ride_in_state_rider("r1", "u1", self.CANCEL_ALLOWED)
@@ -233,7 +233,7 @@ class TestCancelStateGuardRider:
             ]
         )
 
-        with patch("backend.routes.rides.db", mock_db):
+        with patch("backend.routes.rides._deps.db", mock_db):
             from backend.routes.rides import _require_ride_in_state_rider
             from backend.utils.error_handling import SpinrException
 
@@ -303,12 +303,12 @@ class TestCompleteRideAtomicGuard:
             return []  # driver_location_history → no GPS recalculation
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
-            patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(side_effect=fake_update_one)),
-            patch("backend.routes.drivers.db_supabase.set_driver_available", AsyncMock()) as set_available,
-            patch("backend.routes.drivers.record_period_transition", AsyncMock()) as period_transition,
-            patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()) as ws_send,
-            patch("backend.routes.drivers.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(side_effect=fake_update_one)),
+            patch("backend.routes.drivers._deps.db_supabase.set_driver_available", AsyncMock()) as set_available,
+            patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()) as period_transition,
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()) as ws_send,
+            patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
         ):
             with pytest.raises(RideStateError):
                 await drv.complete_ride(ride_id="r1", current_user={"id": "u1"})

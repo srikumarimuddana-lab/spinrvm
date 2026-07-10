@@ -169,12 +169,12 @@ async def create_company_guest_booking(
     # Lazy import: routes.rides imports many services at module load; the
     # reverse edge stays function-local to avoid an import cycle.
     try:
-        from ..routes.rides import _insert_ride_with_code, _prep_and_dispatch
+        from ..routes.rides import booking as _rides_booking
     except ImportError:
-        from routes.rides import _insert_ride_with_code, _prep_and_dispatch  # type: ignore
+        from routes.rides import booking as _rides_booking  # type: ignore
 
     try:
-        fresh_ride, _reused = await _insert_ride_with_code(ride_data, guest_user["id"])
+        fresh_ride, _reused = await _rides_booking._insert_ride_with_code(ride_data, guest_user["id"])
     except HTTPException as e:
         if e.status_code == 409:
             # rides_one_active_per_rider: this customer phone already has an
@@ -188,7 +188,7 @@ async def create_company_guest_booking(
 
     if not is_deferred:
         spawn(
-            _prep_and_dispatch(
+            _rides_booking._prep_and_dispatch(
                 fresh_ride.get("id") or ride_data["id"],
                 fresh_ride,
                 pickup_lat=payload.pickup_lat,

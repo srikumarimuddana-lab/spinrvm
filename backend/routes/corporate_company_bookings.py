@@ -9,9 +9,12 @@ The pickup OTP is deliberately NEVER returned to the booker: it goes to the
 customer by SMS only, so a desk employee cannot proxy-start the trip
 (meter-start fraud). The tracking URL is safe to share — the public resolver
 is PII-scrubbed and expires 24h after mint.
-"""
 
-from __future__ import annotations
+NOTE: no `from __future__ import annotations` — string annotations resolved
+through slowapi's @company_booking_limit wrapper globals silently downgraded
+the POST /bookings pydantic body to a QUERY param, 422ing every real booking
+(same failure mode documented in corporate_signup.py; auth.py precedent).
+"""
 
 from datetime import datetime
 from typing import Any, Dict, List, Optional

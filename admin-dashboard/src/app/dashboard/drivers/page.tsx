@@ -191,19 +191,29 @@ export default function DriversPage() {
         }
     }, [subPaymentsLoaded]);
 
+    // Request-id guard: the LMS lookup can be slow, so a response that
+    // arrives after the admin switched drivers (or triggered a newer
+    // refresh) must be discarded — otherwise driver A's training data
+    // renders in driver B's drawer. The ref also bumps on drawer close /
+    // driver change (see the selected?.id effect) to invalidate in-flight
+    // requests even when no new one starts.
+    const trainingReqRef = useRef(0);
     const loadDriverTraining = useCallback(async (driverId: string, refresh = false) => {
         if (!refresh && trainingLoaded === driverId) return;
+        const reqId = ++trainingReqRef.current;
         setTrainingLoading(true);
         setTrainingError(null);
         try {
             const res = await getDriverTraining(driverId, refresh);
+            if (reqId !== trainingReqRef.current) return;
             setTraining(res);
             setTrainingLoaded(driverId);
         } catch (e: any) {
+            if (reqId !== trainingReqRef.current) return;
             setTraining(null);
             setTrainingError(e?.message || "Failed to load training data from the LMS");
         } finally {
-            setTrainingLoading(false);
+            if (reqId === trainingReqRef.current) setTrainingLoading(false);
         }
     }, [trainingLoaded]);
 
@@ -324,12 +334,19 @@ export default function DriversPage() {
             setPayoutSummary(null);
             setDriverSubPayments([]);
             setSubPaymentsLoaded(null);
+            trainingReqRef.current++; // invalidate any in-flight LMS request
             setTraining(null);
             setTrainingLoaded(null);
             setTrainingError(null);
             return;
         }
         setDetailTab("overview");
+        // Switching directly A → B: drop A's training data and invalidate
+        // any in-flight LMS request so it can't render under driver B.
+        trainingReqRef.current++;
+        setTraining(null);
+        setTrainingLoaded(null);
+        setTrainingError(null);
         // Live-stats compute Rating / Rides / Earnings / Accept Rate from
         // the rides table on demand because three of the four denormalised
         // columns on the drivers row are unreliable (see backend comment in

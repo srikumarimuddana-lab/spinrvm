@@ -229,6 +229,23 @@ async def record_kyb_decision(
     return await run_sync(_fn)
 
 
+async def kyb_object_exists(*, path: str) -> bool:
+    """True if the object was actually uploaded to the private kyb-documents
+    bucket. Guards /kyb/submit: a client must not be able to point
+    kyb_document_url at a path that was never uploaded (or someone else's)."""
+    folder, _, filename = path.rpartition("/")
+
+    def _fn():
+        return supabase.storage.from_("kyb-documents").list(folder)
+
+    entries = await run_sync(_fn) or []
+    for e in entries:
+        name = e.get("name") if isinstance(e, dict) else getattr(e, "name", None)
+        if name == filename:
+            return True
+    return False
+
+
 async def set_kyb_document(*, company_id: str, path: str) -> Optional[Dict[str, Any]]:
     """Persist the uploaded KYB document's storage key + submission time.
 

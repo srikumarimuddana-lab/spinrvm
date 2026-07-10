@@ -8,7 +8,7 @@ import {
     Flame, Building2, LifeBuoy, HelpCircle,
     LogOut, Menu, X, ChevronLeft, ChevronRight,
     Sun, Moon, Shield, ShieldAlert, Cloud, Trophy, TrendingUp, Activity,
-    Inbox, Clock, Headphones, BarChart3, Send, Sparkles, Gift,
+    Inbox, Clock, Headphones, BarChart3, Send, Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useState, useEffect } from "react";
@@ -59,7 +59,8 @@ const NAV_GROUPS: NavGroup[] = [
             { href: "/dashboard/heatmap", label: "Heat Map", icon: Flame, module: "heatmap" },
             { href: "/dashboard/analytics", label: "Analytics", icon: LayoutDashboard, module: "dashboard" },
             { href: "/dashboard/driver-offers", label: "Driver Offers", icon: Send, module: "dashboard" },
-            { href: "/dashboard/referrals", label: "Referrals", icon: Gift, module: "drivers" },
+            // Referrals now live inside Earnings & Payouts → Referrals tab
+            // (finance context), so no standalone sidebar entry.
             { href: "/dashboard/forecast", label: "Demand Forecast", icon: TrendingUp, module: "dashboard" },
         ],
     },

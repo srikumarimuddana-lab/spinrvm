@@ -7,7 +7,7 @@ import {
 } from "@/components/ui/select";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency, formatDate, statusColor } from "@/lib/utils";
-import Link from "next/link";
+import ReferralsPanel from "@/components/referrals-panel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,7 @@ import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
-import { Download, Car, CreditCard, Users, TrendingUp, TrendingDown, DollarSign, UserPlus, Clock, MapPin, X, GitCompareArrows, Wallet, CheckCircle, AlertTriangle, Percent, Receipt, UserCheck, XCircle, Ticket, Zap, Landmark, Undo2, Filter, Hourglass, Activity, Gift, ArrowRight, Search, Radar, Flag } from "lucide-react";
+import { Download, Car, CreditCard, Users, TrendingUp, TrendingDown, DollarSign, UserPlus, Clock, MapPin, X, GitCompareArrows, Wallet, CheckCircle, AlertTriangle, Percent, Receipt, UserCheck, XCircle, Ticket, Zap, Landmark, Undo2, Filter, Hourglass, Activity, Gift, Search, Radar, Flag } from "lucide-react";
 import { getPayouts, getPayoutStats, getPayoutsOverview, retryPayout, bulkRetryPayouts, closePayoutPeriod, type PayoutsOverview } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
@@ -83,28 +83,11 @@ export default function EarningsPage() {
             {tab === "payouts" && <PayoutsTab />}
             {tab === "referrals" && canSeeReferrals && (
                 <div className="pt-1">
-                    {/* Referral analytics now live on the dedicated Referrals hub
-                        (one place, no divergence). This tab links there instead of
-                        duplicating the full leaderboard. */}
-                    <Card className="border-border/50">
-                        <CardContent className="p-6 flex items-center gap-4">
-                            <div className="w-11 h-11 rounded-xl bg-muted flex items-center justify-center shrink-0">
-                                <Gift className="h-5 w-5 text-violet-600 dark:text-violet-400" />
-                            </div>
-                            <div className="min-w-0 flex-1">
-                                <p className="font-semibold">Referral analytics moved to the Referrals hub</p>
-                                <p className="text-sm text-muted-foreground mt-0.5">
-                                    Redemption funnel, payouts, trends, and top referrers — filterable by service area, date, and rider/driver.
-                                </p>
-                            </div>
-                            <Link
-                                href="/dashboard/referrals"
-                                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-semibold shrink-0 hover:opacity-90 transition"
-                            >
-                                Open Referrals <ArrowRight className="h-4 w-4" />
-                            </Link>
-                        </CardContent>
-                    </Card>
+                    {/* Full referral program, inlined here (no link-out) so the
+                        redemption funnel, payouts, trends, and top referrers live
+                        right in Earnings. Same ReferralsPanel the standalone page
+                        renders — one source, no divergence. */}
+                    <ReferralsPanel />
                 </div>
             )}
         </div>

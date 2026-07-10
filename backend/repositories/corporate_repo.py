@@ -269,14 +269,91 @@ async def set_kyb_document(*, company_id: str, path: str) -> Optional[Dict[str, 
 
 
 async def get_corporate_wallet_by_company(company_id: str) -> Optional[Dict[str, Any]]:
-    """Return the master wallet row for a company, or None."""
+    """Return the MASTER wallet row for a company, or None.
+
+    M5.3 sequencing-gate fix: since migration 226 a company may hold section
+    wallets too, so the lookup filters section_id IS NULL — without it,
+    .limit(1) returns a non-deterministic row (fare settlement, allowance
+    reset, billing all read through this function).
+    """
 
     def _fn():
-        res = supabase.table("corporate_wallets").select("*").eq("company_id", company_id).limit(1).execute()
+        res = (
+            supabase.table("corporate_wallets")
+            .select("*")
+            .eq("company_id", company_id)
+            .is_("section_id", "null")
+            .limit(1)
+            .execute()
+        )
         return _rows_from_res(res)
 
     rows = await run_sync(_fn)
     return rows[0] if rows else None
+
+
+# Explicit alias: new Phase-5 code should say what it means.
+get_master_wallet = get_corporate_wallet_by_company
+
+
+async def get_section_wallet(*, company_id: str, section_id: str) -> Optional[Dict[str, Any]]:
+    """Return one section's wallet row, or None (not auto-created)."""
+
+    def _fn():
+        res = (
+            supabase.table("corporate_wallets")
+            .select("*")
+            .eq("company_id", company_id)
+            .eq("section_id", section_id)
+            .limit(1)
+            .execute()
+        )
+        return _rows_from_res(res)
+
+    rows = await run_sync(_fn)
+    return rows[0] if rows else None
+
+
+async def ensure_section_wallet(*, company_id: str, section_id: str) -> Dict[str, Any]:
+    """Idempotently create a section's wallet (balance 0, floor 0 per Q9 —
+    the floor is enforced by the wallet RPCs, not a column). The partial
+    unique index corp_wallets_section_unique makes a concurrent double-create
+    raise instead of duplicating."""
+    existing = await get_section_wallet(company_id=company_id, section_id=section_id)
+    if existing:
+        return existing
+
+    def _insert():
+        res = (
+            supabase.table("corporate_wallets")
+            .insert(
+                {
+                    "company_id": company_id,
+                    "section_id": section_id,
+                    "balance": 0,
+                    "currency": "CAD",
+                    # Section wallets never auto-topup from the company card and
+                    # never extend credit (Q9): hard floor at 0.
+                    "auto_topup_enabled": False,
+                    "soft_negative_floor": 0,
+                }
+            )
+            .execute()
+        )
+        return _single_row_from_res(res)
+
+    created = await run_sync(_insert)
+    return created or {}
+
+
+async def list_company_wallets(company_id: str) -> List[Dict[str, Any]]:
+    """All wallet rows for a company (master + sections)."""
+
+    def _fn():
+        res = supabase.table("corporate_wallets").select("*").eq("company_id", company_id).execute()
+        return _rows_from_res(res)
+
+    return await run_sync(_fn)
 
 
 async def update_corporate_stripe_customer_id(*, company_id: str, stripe_customer_id: str) -> None:
@@ -291,10 +368,21 @@ async def update_corporate_stripe_customer_id(*, company_id: str, stripe_custome
 
 
 async def ensure_corporate_wallet(*, company_id: str) -> Dict[str, Any]:
-    """Idempotently create the master wallet for a company. Returns the row."""
+    """Idempotently create the MASTER wallet for a company. Returns the row.
+
+    M5.3: the existence check filters section_id IS NULL — otherwise a
+    pre-existing SECTION wallet would count as proof the master exists and
+    the master would never be created (funds would have nowhere to land)."""
 
     def _select():
-        res = supabase.table("corporate_wallets").select("*").eq("company_id", company_id).limit(1).execute()
+        res = (
+            supabase.table("corporate_wallets")
+            .select("*")
+            .eq("company_id", company_id)
+            .is_("section_id", "null")
+            .limit(1)
+            .execute()
+        )
         return _rows_from_res(res)
 
     existing = await run_sync(_select)
@@ -364,14 +452,22 @@ async def create_kyb_upload_url(*, company_id: str, content_type: str, ttl_secon
 
 
 async def list_wallets_needing_autotopup() -> List[Dict[str, Any]]:
-    """Return wallets where auto_topup_enabled and balance < threshold.
+    """Return MASTER wallets where auto_topup_enabled and balance < threshold.
 
     Threshold is filtered in Python because supabase-py doesn't support
-    cross-column comparisons in .filter().
+    cross-column comparisons in .filter(). Section wallets are excluded
+    (M5.3): they are funded by allocation/head top-up, never by charging the
+    company card in a background loop.
     """
 
     def _fn():
-        return supabase.table("corporate_wallets").select("*").eq("auto_topup_enabled", True).execute()
+        return (
+            supabase.table("corporate_wallets")
+            .select("*")
+            .eq("auto_topup_enabled", True)
+            .is_("section_id", "null")
+            .execute()
+        )
 
     res = await run_sync(_fn)
     rows = _rows_from_res(res)

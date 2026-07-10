@@ -59,3 +59,50 @@ async def require_company_member(
                 "member": m,
             }
     raise HTTPException(status_code=403, detail="not a company member")
+
+
+async def require_section_head(
+    company_id: str = Path(..., description="Corporate account ID"),
+    section_id: str = Path(..., description="Section ID"),
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """Company admin OR the section's designated head (Q11: headship is the
+    section's head_member_id attribute — a single member of any role — not a
+    role value). Section-wallet management (Stripe top-ups, ledger reads) and
+    own-section allowance writes hang off this guard.
+
+    Returns the member ctx plus the section row and an ``is_head`` flag so
+    handlers can distinguish "admin acting on any section" from "head acting
+    on their own".
+    """
+    try:
+        from ..db_supabase import get_rows  # type: ignore
+    except ImportError:
+        from db_supabase import get_rows  # type: ignore
+
+    memberships = await list_active_memberships_for_user(current_user["id"])
+    membership = next((m for m in memberships if m.get("company_id") == company_id), None)
+    if not membership:
+        raise HTTPException(status_code=403, detail="not a company member")
+
+    sections = await get_rows("corporate_sections", {"id": section_id, "company_id": company_id}, limit=1)
+    if not sections:
+        # Cross-company probes read as absence, not permission (matches the
+        # section-CRUD endpoints' 404-on-foreign-tenant behavior).
+        raise HTTPException(status_code=404, detail="Section not found")
+    section = sections[0]
+
+    is_admin = membership.get("role") in _ADMIN_ROLES
+    is_head = bool(section.get("head_member_id")) and section.get("head_member_id") == membership.get("id")
+    if not (is_admin or is_head):
+        raise HTTPException(status_code=403, detail="not this section's head")
+
+    return {
+        "user": current_user,
+        "company_id": company_id,
+        "role": membership["role"],
+        "member_id": membership.get("id"),
+        "member": membership,
+        "section": section,
+        "is_head": is_head,
+    }

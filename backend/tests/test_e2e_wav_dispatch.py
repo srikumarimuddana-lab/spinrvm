@@ -157,26 +157,26 @@ class TestWAVDispatchQuery:
             return [wav_driver]
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=wav_ride)),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(side_effect=_capture_get_rows)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=wav_ride)),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(side_effect=_capture_get_rows)),
             patch(
-                "backend.routes.rides.dispatch.resolve_matching_config",
+                "backend.routes.rides._shared.dispatch.resolve_matching_config",
                 AsyncMock(return_value=("nearest", 4.0, 10.0, 3, True)),
             ),
-            patch("backend.routes.rides.db_supabase.update_ride", AsyncMock()),
-            patch("backend.routes.rides.db_supabase.claim_driver_atomic", AsyncMock(return_value=True)),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.claim_driver_atomic", AsyncMock(return_value=True)),
             patch(
-                "backend.routes.rides.db_supabase.get_driver_by_id",
+                "backend.routes.rides._deps.db_supabase.get_driver_by_id",
                 AsyncMock(return_value={**wav_driver, "is_online": True}),
             ),
             patch(
-                "backend.routes.rides.db_supabase.get_user_by_id",
+                "backend.routes.rides._deps.db_supabase.get_user_by_id",
                 AsyncMock(return_value={"first_name": "Test", "last_name": "Rider"}),
             ),
-            patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
-            patch("backend.routes.rides.send_push_notification", AsyncMock()),
-            patch("backend.routes.rides.get_app_settings", AsyncMock(return_value={"offer_timeout_seconds": 15})),
-            patch("backend.routes.rides.asyncio.create_task", MagicMock()),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={"offer_timeout_seconds": 15})),
+            patch("backend.routes.rides._deps.asyncio.create_task", MagicMock()),
         ):
             try:
                 await rides_mod.match_driver_to_ride(ride_id=RIDE_ID)
@@ -203,26 +203,26 @@ class TestWAVDispatchQuery:
             return [std_driver]
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=standard_ride)),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(side_effect=_capture_get_rows)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=standard_ride)),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(side_effect=_capture_get_rows)),
             patch(
-                "backend.routes.rides.dispatch.resolve_matching_config",
+                "backend.routes.rides._shared.dispatch.resolve_matching_config",
                 AsyncMock(return_value=("nearest", 4.0, 10.0, 3, True)),
             ),
-            patch("backend.routes.rides.db_supabase.update_ride", AsyncMock()),
-            patch("backend.routes.rides.db_supabase.claim_driver_atomic", AsyncMock(return_value=True)),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.claim_driver_atomic", AsyncMock(return_value=True)),
             patch(
-                "backend.routes.rides.db_supabase.get_driver_by_id",
+                "backend.routes.rides._deps.db_supabase.get_driver_by_id",
                 AsyncMock(return_value={**std_driver, "is_online": True}),
             ),
             patch(
-                "backend.routes.rides.db_supabase.get_user_by_id",
+                "backend.routes.rides._deps.db_supabase.get_user_by_id",
                 AsyncMock(return_value={"first_name": "Test", "last_name": "Rider"}),
             ),
-            patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
-            patch("backend.routes.rides.send_push_notification", AsyncMock()),
-            patch("backend.routes.rides.get_app_settings", AsyncMock(return_value={"offer_timeout_seconds": 15})),
-            patch("backend.routes.rides.asyncio.create_task", MagicMock()),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={"offer_timeout_seconds": 15})),
+            patch("backend.routes.rides._deps.asyncio.create_task", MagicMock()),
         ):
             try:
                 await rides_mod.match_driver_to_ride(ride_id=RIDE_ID)

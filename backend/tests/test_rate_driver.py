@@ -126,11 +126,11 @@ async def test_rate_driver_calls_update_one_with_correct_rolling_average():
     update_one_mock = AsyncMock(return_value={})
 
     with (
-        patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=base_ride)),
-        patch("backend.routes.rides.db_supabase.update_ride", AsyncMock(return_value=base_ride)),
-        patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
-        patch("backend.routes.rides.db_supabase.update_one", update_one_mock),
-        patch("backend.routes.rides.send_push_notification", AsyncMock()),
+        patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=base_ride)),
+        patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock(return_value=base_ride)),
+        patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+        patch("backend.routes.rides._deps.db_supabase.update_one", update_one_mock),
+        patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
     ):
         result = await _rides_module.rate_driver(
             "ride-abc",
@@ -164,11 +164,11 @@ async def test_rate_driver_first_rating_sets_score():
     update_one_mock = AsyncMock(return_value={})
 
     with (
-        patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=base_ride)),
-        patch("backend.routes.rides.db_supabase.update_ride", AsyncMock(return_value=base_ride)),
-        patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
-        patch("backend.routes.rides.db_supabase.update_one", update_one_mock),
-        patch("backend.routes.rides.send_push_notification", AsyncMock()),
+        patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=base_ride)),
+        patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock(return_value=base_ride)),
+        patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+        patch("backend.routes.rides._deps.db_supabase.update_one", update_one_mock),
+        patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
     ):
         result = await _rides_module.rate_driver(
             "ride-new",
@@ -203,11 +203,11 @@ async def test_rate_driver_tip_with_null_ride_fields():
     update_one_mock = AsyncMock(return_value={})
 
     with (
-        patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=base_ride)),
-        patch("backend.routes.rides.db_supabase.update_ride", update_ride_mock),
-        patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
-        patch("backend.routes.rides.db_supabase.update_one", update_one_mock),
-        patch("backend.routes.rides.send_push_notification", AsyncMock()),
+        patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=base_ride)),
+        patch("backend.routes.rides._deps.db_supabase.update_ride", update_ride_mock),
+        patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+        patch("backend.routes.rides._deps.db_supabase.update_one", update_one_mock),
+        patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
     ):
         result = await _rides_module.rate_driver(
             "ride-tip",

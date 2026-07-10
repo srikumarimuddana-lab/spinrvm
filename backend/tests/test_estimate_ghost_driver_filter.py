@@ -7,7 +7,7 @@ driver_count returned by the estimate endpoint. This produced counts
 like "2 drivers nearby" when only 1 was actually reachable by dispatch.
 
 These tests exercise the real production helper
-``backend.routes.rides._filter_reachable_drivers``. Only the presence
+``backend.routes.rides.estimates._filter_reachable_drivers``. Only the presence
 store is mocked (at its source module, which the helper's inline import
 resolves to); ``intent_online`` runs for real.
 """

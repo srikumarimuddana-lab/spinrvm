@@ -158,8 +158,8 @@ class TestGetMyDriver:
     def test_returns_driver_profile(self):
         from backend.routes import drivers as drv
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[_driver()])):
-            with patch("backend.routes.drivers._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])):
+            with patch("backend.routes.drivers._shared._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)):
                 result = asyncio.run(drv.get_my_driver(current_user={"id": USER_ID}))
 
         assert result["id"] == DRIVER_ID
@@ -170,7 +170,7 @@ class TestGetMyDriver:
 
         from backend.routes import drivers as drv
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[])):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[])):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(drv.get_my_driver(current_user={"id": USER_ID}))
         assert exc.value.status_code == 404
@@ -188,11 +188,11 @@ class TestUpdateMyDriver:
         driver = _driver(is_verified=True)
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),
-            patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(return_value=driver)),
-            patch("backend.routes.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
-            patch("backend.routes.drivers._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
-            patch("backend.routes.drivers._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(return_value=driver)),
+            patch("backend.routes.drivers._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("backend.routes.drivers._shared._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+            patch("backend.routes.drivers._shared._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
         ):
             req = drv.UpdateDriverProfileRequest(preferred_language="fr")
             result = asyncio.run(drv.update_my_driver(body=req, current_user={"id": USER_ID}))
@@ -204,7 +204,7 @@ class TestUpdateMyDriver:
         # An empty request (no fields) exits early with {"success": True}.
         from backend.routes import drivers as drv
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[])):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[])):
             req = drv.UpdateDriverProfileRequest()
             result = asyncio.run(drv.update_my_driver(body=req, current_user={"id": USER_ID}))
         assert result == {"success": True}
@@ -232,7 +232,7 @@ class TestGetDriverBalance:
                 return payouts
             return []
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)):
             result = asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
 
         assert result["total_earnings"] == "20.00"
@@ -262,7 +262,7 @@ class TestGetDriverBalance:
                 return payouts
             return []
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)):
             result = asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
 
         # 100 earned - (30 + 10 + 5 deducted) = 55; reversed/failed excluded.
@@ -285,7 +285,7 @@ class TestGetDriverBalance:
                 raise RuntimeError("supabase H2 GOAWAY")
             return []
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_mock)):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
         assert exc.value.status_code == 503
@@ -295,7 +295,7 @@ class TestGetDriverBalance:
 
         from backend.routes import drivers as drv
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[])):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[])):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(drv.get_driver_balance(current_user={"id": USER_ID}))
         assert exc.value.status_code == 404
@@ -321,7 +321,7 @@ class TestGetDriverEarnings:
         from backend.routes import drivers as drv
 
         rides = [{"driver_earnings": 15.0, "tip_amount": 1.0, "distance_km": 5.0, "duration_minutes": 10}]
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=self._setup(rides))):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=self._setup(rides))):
             result = asyncio.run(drv.get_driver_earnings(period="week", current_user={"id": USER_ID}))
         assert result["period"] == "week"
         assert result["total_rides"] == 1
@@ -330,7 +330,7 @@ class TestGetDriverEarnings:
     def test_today_period(self):
         from backend.routes import drivers as drv
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=self._setup([]))):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=self._setup([]))):
             result = asyncio.run(drv.get_driver_earnings(period="today", current_user={"id": USER_ID}))
         assert result["period"] == "today"
         assert result["total_rides"] == 0
@@ -338,7 +338,7 @@ class TestGetDriverEarnings:
     def test_day_period_alias(self):
         from backend.routes import drivers as drv
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=self._setup([]))):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=self._setup([]))):
             result = asyncio.run(drv.get_driver_earnings(period="day", current_user={"id": USER_ID}))
         assert result["period"] == "day"
 
@@ -346,21 +346,21 @@ class TestGetDriverEarnings:
         from backend.routes import drivers as drv
 
         rides = [{"driver_earnings": 300.0, "tip_amount": 20.0, "distance_km": 80.0, "duration_minutes": 200}]
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=self._setup(rides))):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=self._setup(rides))):
             result = asyncio.run(drv.get_driver_earnings(period="month", current_user={"id": USER_ID}))
         assert result["period"] == "month"
 
     def test_all_period_no_date_filter(self):
         from backend.routes import drivers as drv
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=self._setup([]))):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=self._setup([]))):
             result = asyncio.run(drv.get_driver_earnings(period="all", current_user={"id": USER_ID}))
         assert result["period"] == "all"
 
     def test_unknown_period_fallback(self):
         from backend.routes import drivers as drv
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=self._setup([]))):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=self._setup([]))):
             result = asyncio.run(drv.get_driver_earnings(period="quarter", current_user={"id": USER_ID}))
         assert result["period"] == "quarter"
 
@@ -371,7 +371,7 @@ class TestGetDriverEarnings:
             {"driver_earnings": 20.0, "tip_amount": 0.0, "distance_km": 5.0, "duration_minutes": 10},
             {"driver_earnings": 10.0, "tip_amount": 0.0, "distance_km": 3.0, "duration_minutes": 5},
         ]
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=self._setup(rides))):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=self._setup(rides))):
             result = asyncio.run(drv.get_driver_earnings(period="week", current_user={"id": USER_ID}))
         assert result["average_per_ride"] == "15.00"
 
@@ -398,7 +398,7 @@ class TestGetDriverDailyEarnings:
         def get_rows_side_effect(table, filters=None, **kw):
             return [_driver()] if table == "drivers" else rides
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)):
             result = asyncio.run(drv.get_driver_daily_earnings(days=7, current_user={"id": USER_ID}))
 
         assert isinstance(result, list)
@@ -408,7 +408,7 @@ class TestGetDriverDailyEarnings:
 
         from backend.routes import drivers as drv
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[])):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[])):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(drv.get_driver_daily_earnings(days=7, current_user={"id": USER_ID}))
         assert exc.value.status_code == 404
@@ -427,9 +427,9 @@ class TestUpdateLocationBatch:
         driver = _driver()
 
         with (
-            patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(return_value=driver)),
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),
-            patch("backend.routes.drivers.mark_present", AsyncMock()),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(return_value=driver)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+            patch("backend.routes.drivers._deps.mark_present", AsyncMock()),
         ):
             result = asyncio.run(drv.update_location_batch(batch=points, current_user={"id": USER_ID}))
 
@@ -442,9 +442,9 @@ class TestUpdateLocationBatch:
         driver = _driver()
 
         with (
-            patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(return_value=driver)),
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),
-            patch("backend.routes.drivers.mark_present", AsyncMock()),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(return_value=driver)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+            patch("backend.routes.drivers._deps.mark_present", AsyncMock()),
         ):
             result = asyncio.run(drv.update_location_batch(batch=batch, current_user={"id": USER_ID}))
 
@@ -469,9 +469,9 @@ class TestUpdateLocationBatch:
         offline_driver = _driver(is_online=False)
 
         with (
-            patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(return_value=offline_driver)),
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[offline_driver])),
-            patch("backend.routes.drivers.mark_present", AsyncMock()) as mp,
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(return_value=offline_driver)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[offline_driver])),
+            patch("backend.routes.drivers._deps.mark_present", AsyncMock()) as mp,
         ):
             asyncio.run(drv.update_location_batch(batch=points, current_user={"id": USER_ID}))
 
@@ -501,8 +501,8 @@ class TestGetActiveRide:
             return []
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
-            patch("backend.routes.drivers.db_supabase.get_user_by_id", AsyncMock(return_value=rider)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers._deps.db_supabase.get_user_by_id", AsyncMock(return_value=rider)),
         ):
             result = asyncio.run(drv.get_active_ride(current_user={"id": USER_ID}))
 
@@ -519,7 +519,7 @@ class TestGetActiveRide:
                 return [_driver()]
             return []
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)):
             result = asyncio.run(drv.get_active_ride(current_user={"id": USER_ID}))
 
         assert result["ride"] is None
@@ -529,7 +529,7 @@ class TestGetActiveRide:
 
         from backend.routes import drivers as drv
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[])):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[])):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(drv.get_active_ride(current_user={"id": USER_ID}))
         assert exc.value.status_code == 404
@@ -550,8 +550,8 @@ class TestGetRideHistory:
             return [_driver()] if table == "drivers" else rides
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
-            patch("backend.routes.drivers.db_supabase.count_documents", AsyncMock(return_value=2)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers._deps.db_supabase.count_documents", AsyncMock(return_value=2)),
         ):
             result = asyncio.run(drv.get_ride_history(limit=20, offset=0, current_user={"id": USER_ID}))
 
@@ -581,9 +581,9 @@ class TestGetRideHistory:
             return []
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
             patch(
-                "backend.routes.drivers.db_supabase.count_documents",
+                "backend.routes.drivers._deps.db_supabase.count_documents",
                 AsyncMock(side_effect=count_documents_side_effect),
             ),
         ):
@@ -601,7 +601,7 @@ class TestGetRideHistory:
 
         from backend.routes import drivers as drv
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[])):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[])):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(drv.get_ride_history(limit=20, offset=0, current_user={"id": USER_ID}))
         assert exc.value.status_code == 404
@@ -627,11 +627,11 @@ class TestArriveAtPickup:
             return []
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
-            patch("backend.routes.drivers.db.update_one", AsyncMock(return_value={"id": RIDE_ID})),
-            patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
-            patch("backend.routes.drivers.manager.broadcast_ride_status", AsyncMock()),
-            patch("backend.routes.drivers.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers._deps.db.update_one", AsyncMock(return_value={"id": RIDE_ID})),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
         ):
             result = asyncio.run(drv.arrive_at_pickup(ride_id=RIDE_ID, current_user={"id": USER_ID}))
 
@@ -651,8 +651,8 @@ class TestArriveAtPickup:
             return [ride]
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
-            patch("backend.routes.drivers.db.update_one", AsyncMock(return_value=None)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers._deps.db.update_one", AsyncMock(return_value=None)),
         ):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(drv.arrive_at_pickup(ride_id=RIDE_ID, current_user={"id": USER_ID}))
@@ -666,7 +666,7 @@ class TestArriveAtPickup:
         def get_rows_side_effect(table, filters=None, **kw):
             return [_driver()] if table == "drivers" else []
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(drv.arrive_at_pickup(ride_id=RIDE_ID, current_user={"id": USER_ID}))
         assert exc.value.status_code == 404
@@ -687,12 +687,12 @@ class TestStartRide:
             return [_driver()] if table == "drivers" else [ride]
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
-            patch("backend.routes.drivers.db.update_one", AsyncMock(return_value={"id": RIDE_ID})),
-            patch("backend.routes.drivers.record_period_transition", AsyncMock()),
-            patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
-            patch("backend.routes.drivers.manager.broadcast_ride_status", AsyncMock()),
-            patch("backend.routes.drivers.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers._deps.db.update_one", AsyncMock(return_value={"id": RIDE_ID})),
+            patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
         ):
             result = asyncio.run(drv.start_ride(ride_id=RIDE_ID, current_user={"id": USER_ID}))
 
@@ -709,8 +709,8 @@ class TestStartRide:
             return [_driver()] if table == "drivers" else [ride]
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
-            patch("backend.routes.drivers.db.update_one", AsyncMock(return_value=None)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers._deps.db.update_one", AsyncMock(return_value=None)),
         ):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(drv.start_ride(ride_id=RIDE_ID, current_user={"id": USER_ID}))
@@ -739,16 +739,16 @@ class TestCompleteRide:
             return []
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
-            patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(return_value=completed)),
-            patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=completed)),
-            patch("backend.routes.drivers.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
-            patch("backend.routes.drivers.record_period_transition", AsyncMock()),
-            patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
-            patch("backend.routes.drivers.manager.broadcast_ride_status", AsyncMock()),
-            patch("backend.routes.drivers.manager.broadcast_to_admins", AsyncMock()),
-            patch("backend.routes.drivers.send_push_notification", AsyncMock()),
-            patch("backend.routes.drivers._generate_and_store_ride_snapshot", AsyncMock()),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(return_value=completed)),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=completed)),
+            patch("backend.routes.drivers._deps.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
+            patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_to_admins", AsyncMock()),
+            patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers._shared._generate_and_store_ride_snapshot", AsyncMock()),
         ):
             result = asyncio.run(drv.complete_ride(ride_id=RIDE_ID, current_user={"id": USER_ID}))
 
@@ -816,16 +816,16 @@ class TestCompleteRide:
             return []
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
-            patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(side_effect=fake_update_one)),
-            patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=completed)),
-            patch("backend.routes.drivers.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
-            patch("backend.routes.drivers.record_period_transition", AsyncMock()),
-            patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
-            patch("backend.routes.drivers.manager.broadcast_ride_status", AsyncMock()),
-            patch("backend.routes.drivers.manager.broadcast_to_admins", AsyncMock()),
-            patch("backend.routes.drivers.send_push_notification", AsyncMock()),
-            patch("backend.routes.drivers._generate_and_store_ride_snapshot", AsyncMock()),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(side_effect=fake_update_one)),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=completed)),
+            patch("backend.routes.drivers._deps.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
+            patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_to_admins", AsyncMock()),
+            patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers._shared._generate_and_store_ride_snapshot", AsyncMock()),
         ):
             asyncio.run(drv.complete_ride(ride_id=RIDE_ID, current_user={"id": USER_ID}))
 
@@ -880,16 +880,16 @@ class TestCompleteRide:
             return road
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
-            patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(side_effect=fake_update_one)),
-            patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=completed)),
-            patch("backend.routes.drivers.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
-            patch("backend.routes.drivers.record_period_transition", AsyncMock()),
-            patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
-            patch("backend.routes.drivers.manager.broadcast_ride_status", AsyncMock()),
-            patch("backend.routes.drivers.manager.broadcast_to_admins", AsyncMock()),
-            patch("backend.routes.drivers.send_push_notification", AsyncMock()),
-            patch("backend.routes.drivers._generate_and_store_ride_snapshot", AsyncMock()),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(side_effect=fake_update_one)),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=completed)),
+            patch("backend.routes.drivers._deps.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
+            patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_to_admins", AsyncMock()),
+            patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers._shared._generate_and_store_ride_snapshot", AsyncMock()),
             patch("utils.route_distance.compute_road_route", fake_route),
         ):
             asyncio.run(drv.complete_ride(ride_id=RIDE_ID, current_user={"id": USER_ID}))
@@ -912,7 +912,7 @@ class TestCompleteRide:
         def get_rows_side_effect(table, filters=None, **kw):
             return [_driver()] if table == "drivers" else [ride]
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)):
             with pytest.raises((RideStateError, Exception)) as exc:
                 asyncio.run(drv.complete_ride(ride_id=RIDE_ID, current_user={"id": USER_ID}))
         assert hasattr(exc.value, "status_code") and exc.value.status_code in (409, 400, 422)
@@ -925,7 +925,7 @@ class TestCompleteRide:
         def get_rows_side_effect(table, filters=None, **kw):
             return [_driver()] if table == "drivers" else []
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(drv.complete_ride(ride_id=RIDE_ID, current_user={"id": USER_ID}))
         assert exc.value.status_code == 404
@@ -947,15 +947,15 @@ class TestCancelRide:
             return [_driver()] if table == "drivers" else []
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
-            patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(side_effect=[ride, cancelled])),
-            patch("backend.routes.drivers.db_supabase.update_ride", AsyncMock(return_value=cancelled)),
-            patch("backend.routes.drivers.db_supabase.set_driver_available", AsyncMock()),
-            patch("backend.routes.drivers.record_period_transition", AsyncMock()),
-            patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
-            patch("backend.routes.drivers.manager.broadcast_ride_status", AsyncMock()),
-            patch("backend.routes.drivers.manager.broadcast_to_admins", AsyncMock()),
-            patch("backend.routes.drivers.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(side_effect=[ride, cancelled])),
+            patch("backend.routes.drivers._deps.db_supabase.update_ride", AsyncMock(return_value=cancelled)),
+            patch("backend.routes.drivers._deps.db_supabase.set_driver_available", AsyncMock()),
+            patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_to_admins", AsyncMock()),
+            patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
         ):
             result = asyncio.run(drv.cancel_ride(ride_id=RIDE_ID, reason="test", current_user={"id": USER_ID}))
 
@@ -971,8 +971,8 @@ class TestCancelRide:
             return [_driver()] if table == "drivers" else []
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
-            patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
         ):
             with pytest.raises((RideStateError, Exception)) as exc:
                 asyncio.run(drv.cancel_ride(ride_id=RIDE_ID, reason="", current_user={"id": USER_ID}))
@@ -989,10 +989,10 @@ class TestDeclineRide:
         from backend.routes import drivers as drv
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
-            patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(return_value={"id": RIDE_ID})),
-            patch("backend.routes.drivers.record_period_transition", AsyncMock()),
-            patch("backend.routes.drivers.db.insert_one", AsyncMock()),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(return_value={"id": RIDE_ID})),
+            patch("backend.routes.drivers._deps.record_period_transition", AsyncMock()),
+            patch("backend.routes.drivers._deps.db.insert_one", AsyncMock()),
         ):
             result = asyncio.run(drv.decline_ride(ride_id=RIDE_ID, current_user={"id": USER_ID}))
 
@@ -1002,9 +1002,9 @@ class TestDeclineRide:
         from backend.routes import drivers as drv
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
-            patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(return_value=None)),
-            patch("backend.routes.drivers.db.insert_one", AsyncMock()),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(return_value=None)),
+            patch("backend.routes.drivers._deps.db.insert_one", AsyncMock()),
         ):
             result = asyncio.run(drv.decline_ride(ride_id=RIDE_ID, current_user={"id": USER_ID}))
 
@@ -1022,9 +1022,9 @@ class TestRateRider:
         from backend.schemas import RideRatingRequest
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
-            patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=_ride("completed"))),
-            patch("backend.routes.drivers.db_supabase.update_ride", AsyncMock(return_value=_ride("completed"))),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=_ride("completed"))),
+            patch("backend.routes.drivers._deps.db_supabase.update_ride", AsyncMock(return_value=_ride("completed"))),
         ):
             req = RideRatingRequest(rating=5, comment="Great rider!")
             result = asyncio.run(drv.rate_rider(ride_id=RIDE_ID, rating_data=req, current_user={"id": USER_ID}))
@@ -1044,9 +1044,9 @@ class TestRateRider:
         other_ride = _ride("completed", driver_id="some_other_driver")
         update_mock = AsyncMock(return_value=other_ride)
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
-            patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=other_ride)),
-            patch("backend.routes.drivers.db_supabase.update_ride", update_mock),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=other_ride)),
+            patch("backend.routes.drivers._deps.db_supabase.update_ride", update_mock),
         ):
             req = RideRatingRequest(rating=1, comment="not my ride")
             with pytest.raises(HTTPException) as exc:
@@ -1063,9 +1063,9 @@ class TestRateRider:
         from backend.schemas import RideRatingRequest
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
-            patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=None)),
-            patch("backend.routes.drivers.db_supabase.update_ride", AsyncMock()),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=None)),
+            patch("backend.routes.drivers._deps.db_supabase.update_ride", AsyncMock()),
         ):
             req = RideRatingRequest(rating=5, comment="ok")
             with pytest.raises(HTTPException) as exc:
@@ -1084,8 +1084,8 @@ class TestDestinationMode:
         from backend.routes import drivers as drv
 
         with (
-            patch("backend.routes.drivers.db.find_one", AsyncMock(return_value=_driver())),
-            patch("backend.routes.drivers.db.update_one", AsyncMock(return_value=_driver())),
+            patch("backend.routes.drivers._deps.db.find_one", AsyncMock(return_value=_driver())),
+            patch("backend.routes.drivers._deps.db.update_one", AsyncMock(return_value=_driver())),
         ):
             req = drv.SetDestinationRequest(address="200 Broadway", lat=52.15, lng=-106.65)
             result = asyncio.run(drv.set_destination_mode(req=req, current_user={"id": USER_ID}))
@@ -1097,7 +1097,7 @@ class TestDestinationMode:
 
         from backend.routes import drivers as drv
 
-        with patch("backend.routes.drivers.db.find_one", AsyncMock(return_value=None)):
+        with patch("backend.routes.drivers._deps.db.find_one", AsyncMock(return_value=None)):
             with pytest.raises(HTTPException) as exc:
                 req = drv.SetDestinationRequest(address="200 Broadway", lat=52.15, lng=-106.65)
                 asyncio.run(drv.set_destination_mode(req=req, current_user={"id": USER_ID}))
@@ -1107,8 +1107,8 @@ class TestDestinationMode:
         from backend.routes import drivers as drv
 
         with (
-            patch("backend.routes.drivers.db.find_one", AsyncMock(return_value=_driver())),
-            patch("backend.routes.drivers.db.update_one", AsyncMock(return_value=_driver())),
+            patch("backend.routes.drivers._deps.db.find_one", AsyncMock(return_value=_driver())),
+            patch("backend.routes.drivers._deps.db.update_one", AsyncMock(return_value=_driver())),
         ):
             result = asyncio.run(drv.clear_destination_mode(current_user={"id": USER_ID}))
 
@@ -1120,7 +1120,7 @@ class TestDestinationMode:
         driver = _driver(
             destination_mode=True, destination_address="200 Broadway", destination_lat=52.15, destination_lng=-106.65
         )
-        with patch("backend.routes.drivers.db.find_one", AsyncMock(return_value=driver)):
+        with patch("backend.routes.drivers._deps.db.find_one", AsyncMock(return_value=driver)):
             result = asyncio.run(drv.get_destination_mode(current_user={"id": USER_ID}))
 
         assert result["destination_mode"] is True
@@ -1145,7 +1145,7 @@ class TestGetBankAccount:
                 return [bank]
             return []
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)):
             result = asyncio.run(drv.get_bank_account(current_user={"id": USER_ID}))
 
         assert result["has_bank_account"] is True
@@ -1156,7 +1156,7 @@ class TestGetBankAccount:
         def get_rows_side_effect(table, filters=None, **kw):
             return [_driver()] if table == "drivers" else []
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)):
             result = asyncio.run(drv.get_bank_account(current_user={"id": USER_ID}))
 
         assert result["has_bank_account"] is False
@@ -1182,7 +1182,7 @@ class TestGetSubscriptionPlans:
                 return plans
             return []
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)):
             result = asyncio.run(drv.get_subscription_plans(current_user={"id": USER_ID}))
 
         assert "plans" in result
@@ -1201,7 +1201,7 @@ class TestGetSubscriptionPlans:
                 return [area]
             return []
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)):
             result = asyncio.run(drv.get_subscription_plans(current_user={"id": USER_ID}))
 
         assert result["free_mode"] is True
@@ -1217,7 +1217,7 @@ class TestGetCurrentSubscription:
     def test_no_driver_returns_no_subscription(self):
         from backend.routes import drivers as drv
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[])):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[])):
             result = asyncio.run(drv.get_current_subscription(current_user={"id": USER_ID}))
 
         assert result["has_subscription"] is False
@@ -1243,8 +1243,8 @@ class TestGetCurrentSubscription:
             return []
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
-            patch("backend.routes.drivers.db_supabase.count_documents", AsyncMock(return_value=0)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers._deps.db_supabase.count_documents", AsyncMock(return_value=0)),
         ):
             result = asyncio.run(drv.get_current_subscription(current_user={"id": USER_ID}))
 
@@ -1259,7 +1259,7 @@ class TestGetCurrentSubscription:
                 return [_driver()]
             return []  # no subscription
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)):
             result = asyncio.run(drv.get_current_subscription(current_user={"id": USER_ID}))
 
         assert result["has_subscription"] is False
@@ -1290,8 +1290,8 @@ class TestGetCurrentSubscription:
 
         update = AsyncMock(return_value=sub)
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
-            patch("backend.routes.drivers.db_supabase.update_one", update),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", update),
         ):
             result = asyncio.run(drv.get_current_subscription(current_user={"id": USER_ID}))
 
@@ -1321,11 +1321,11 @@ class TestStripeOnboarding:
 
         with (
             patch(
-                "backend.routes.drivers.db_supabase.get_rows",
+                "backend.routes.drivers._deps.db_supabase.get_rows",
                 AsyncMock(return_value=[_driver(stripe_account_id="acct_123")]),
             ),
             patch(
-                "backend.routes.drivers.db_supabase.get_user_by_id",
+                "backend.routes.drivers._deps.db_supabase.get_user_by_id",
                 AsyncMock(return_value={"id": USER_ID, "email": "drv@example.com"}),
             ),
             patch(
@@ -1333,7 +1333,7 @@ class TestStripeOnboarding:
                 AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
                 create=True,
             ),
-            patch("backend.routes.drivers.stripe.AccountLink.create", _account_link_create),
+            patch("backend.routes.drivers._deps.stripe.AccountLink.create", _account_link_create),
         ):
             return asyncio.run(drv.onboard_stripe(current_user={"id": USER_ID}))
 
@@ -1394,11 +1394,11 @@ class TestStripeEmbeddedOnboarding:
 
         with (
             patch(
-                "backend.routes.drivers.db_supabase.get_rows",
+                "backend.routes.drivers._deps.db_supabase.get_rows",
                 AsyncMock(return_value=[_driver(stripe_account_id="acct_123")]),
             ),
             patch(
-                "backend.routes.drivers.db_supabase.get_user_by_id",
+                "backend.routes.drivers._deps.db_supabase.get_user_by_id",
                 AsyncMock(return_value={"id": USER_ID, "email": "drv@example.com"}),
             ),
             patch(
@@ -1406,7 +1406,7 @@ class TestStripeEmbeddedOnboarding:
                 AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
                 create=True,
             ),
-            patch("backend.routes.drivers.stripe.AccountSession.create", _session_create),
+            patch("backend.routes.drivers._deps.stripe.AccountSession.create", _session_create),
         ):
             result = asyncio.run(drv.stripe_account_session(current_user={"id": USER_ID}))
 
@@ -1421,11 +1421,11 @@ class TestStripeEmbeddedOnboarding:
 
         with (
             patch(
-                "backend.routes.drivers.db_supabase.get_rows",
+                "backend.routes.drivers._deps.db_supabase.get_rows",
                 AsyncMock(return_value=[_driver()]),
             ),
             patch(
-                "backend.routes.drivers.db_supabase.get_user_by_id",
+                "backend.routes.drivers._deps.db_supabase.get_user_by_id",
                 AsyncMock(return_value={"id": USER_ID, "email": "drv@example.com"}),
             ),
             patch(
@@ -1529,7 +1529,7 @@ class TestStripeSyncStatus:
 
         with (
             patch(
-                "backend.routes.drivers.db_supabase.get_rows",
+                "backend.routes.drivers._deps.db_supabase.get_rows",
                 AsyncMock(return_value=[_driver(stripe_account_id="acct_1")]),
             ),
             patch(
@@ -1560,7 +1560,7 @@ class TestStripeSyncStatus:
 
         with (
             patch(
-                "backend.routes.drivers.db_supabase.get_rows",
+                "backend.routes.drivers._deps.db_supabase.get_rows",
                 AsyncMock(return_value=[_driver()]),
             ),
             patch(
@@ -1583,7 +1583,7 @@ class TestStripeSyncStatus:
 
         with (
             patch(
-                "backend.routes.drivers.db_supabase.get_rows",
+                "backend.routes.drivers._deps.db_supabase.get_rows",
                 AsyncMock(return_value=[_driver(stripe_account_id="acct_1")]),
             ),
             patch(
@@ -1656,10 +1656,10 @@ class TestDriverReferral:
 
         terms = {"rides": 10, "referrer": Decimal("10.00"), "referee": Decimal("0")}
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=self._get_rows_side_effect())),
-            patch("backend.routes.drivers.db_supabase.count_documents", AsyncMock(return_value=3)),
-            patch("backend.routes.drivers.resolve_referral_terms", AsyncMock(return_value=terms)),
-            patch("backend.routes.drivers.paid_referral_earnings", AsyncMock(return_value=None)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=self._get_rows_side_effect())),
+            patch("backend.routes.drivers._deps.db_supabase.count_documents", AsyncMock(return_value=3)),
+            patch("backend.routes.drivers._deps.resolve_referral_terms", AsyncMock(return_value=terms)),
+            patch("backend.routes.drivers._deps.paid_referral_earnings", AsyncMock(return_value=None)),
         ):
             result = asyncio.run(drv.get_driver_referral_info(current_user={"id": USER_ID}))
 
@@ -1674,9 +1674,9 @@ class TestDriverReferral:
 
         terms = {"rides": 10, "referrer": Decimal("10.00"), "referee": Decimal("0")}
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=self._get_rows_side_effect())),
-            patch("backend.routes.drivers.db_supabase.count_documents", AsyncMock(return_value=12)),
-            patch("backend.routes.drivers.resolve_referral_terms", AsyncMock(return_value=terms)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=self._get_rows_side_effect())),
+            patch("backend.routes.drivers._deps.db_supabase.count_documents", AsyncMock(return_value=12)),
+            patch("backend.routes.drivers._deps.resolve_referral_terms", AsyncMock(return_value=terms)),
         ):
             result = asyncio.run(drv.get_referred_drivers(limit=50, offset=0, current_user={"id": USER_ID}))
 

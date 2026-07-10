@@ -79,11 +79,11 @@ async def test_cascade_fires_when_no_exact_type_drivers(mock_supabase_client):
         patch("backend.db_supabase.get_rows", get_rows_mock),
         patch("backend.db_supabase.find_one", find_one_mock),
         patch(
-            "backend.routes.rides.filter_and_rank_drivers",
+            "backend.routes.rides._deps.filter_and_rank_drivers",
             side_effect=lambda ride, drivers, *a, **kw: [(d, 1.0) for d in drivers],
         ),
-        patch("backend.routes.rides._dispatch_retry", new_callable=AsyncMock),
-        patch("backend.routes.rides.asyncio.create_task", return_value=MagicMock()),
+        patch("backend.routes.rides.matching._dispatch_retry", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.asyncio.create_task", return_value=MagicMock()),
         patch("backend.routes.rides._send_offer_to_driver", new_callable=AsyncMock),
         patch(
             "backend.utils.driver_presence.present_driver_ids_checked",

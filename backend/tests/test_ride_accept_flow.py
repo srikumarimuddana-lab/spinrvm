@@ -111,14 +111,14 @@ class TestAcceptRideFlipsStatus:
         send_push_mock = AsyncMock()
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_ride", get_ride_mock),
-            patch("backend.routes.drivers.db_supabase.get_rows", get_rows_mock),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", get_ride_mock),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", get_rows_mock),
             # accept_ride calls db.update_one (db is aliased to db_supabase)
-            patch("backend.routes.drivers.db.update_one", update_one_mock),
-            patch("backend.routes.drivers.db.find_one", find_one_mock),
-            patch("backend.routes.drivers.manager.send_personal_message", send_ws_mock),
-            patch("backend.routes.drivers.manager.broadcast_ride_status", AsyncMock()),
-            patch("backend.routes.drivers.send_push_notification", send_push_mock),
+            patch("backend.routes.drivers._deps.db.update_one", update_one_mock),
+            patch("backend.routes.drivers._deps.db.find_one", find_one_mock),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", send_ws_mock),
+            patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.drivers._deps.send_push_notification", send_push_mock),
         ):
             result = asyncio.run(
                 drivers_mod.accept_ride(
@@ -174,14 +174,14 @@ class TestAcceptRideFlipsStatus:
         period_mock = AsyncMock()
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=pre_ride)),
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[_driver_row()])),
-            patch("backend.routes.drivers.db.update_one", AsyncMock(return_value=guard_ok)),
-            patch("backend.routes.drivers.db.find_one", AsyncMock(return_value=post_ride)),
-            patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
-            patch("backend.routes.drivers.manager.broadcast_ride_status", AsyncMock()),
-            patch("backend.routes.drivers.send_push_notification", AsyncMock()),
-            patch("backend.routes.drivers.record_period_transition", period_mock),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=pre_ride)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver_row()])),
+            patch("backend.routes.drivers._deps.db.update_one", AsyncMock(return_value=guard_ok)),
+            patch("backend.routes.drivers._deps.db.find_one", AsyncMock(return_value=post_ride)),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers._deps.record_period_transition", period_mock),
         ):
             asyncio.run(
                 drivers_mod.accept_ride(
@@ -226,13 +226,13 @@ class TestAcceptRideFlipsStatus:
         update_one_mock = AsyncMock(return_value=post_ride)
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=pre_ride)),
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
-            patch("backend.routes.drivers.db.update_one", update_one_mock),
-            patch("backend.routes.drivers.db.find_one", AsyncMock(return_value=post_ride)),
-            patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
-            patch("backend.routes.drivers.manager.broadcast_ride_status", AsyncMock()),
-            patch("backend.routes.drivers.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=pre_ride)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.drivers._deps.db.update_one", update_one_mock),
+            patch("backend.routes.drivers._deps.db.find_one", AsyncMock(return_value=post_ride)),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
         ):
             result = asyncio.run(
                 drivers_mod.accept_ride(
@@ -257,16 +257,16 @@ class TestAcceptRideFlipsStatus:
         pre_ride = _ride_row("driver_assigned", driver_id=DRIVER_ID)
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=pre_ride)),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=pre_ride)),
             patch(
-                "backend.routes.drivers.db_supabase.get_rows",
+                "backend.routes.drivers._deps.db_supabase.get_rows",
                 AsyncMock(return_value=[_driver_row()]),
             ),
-            patch("backend.routes.drivers.db.update_one", AsyncMock(return_value=None)),
-            patch("backend.routes.drivers.db.find_one", AsyncMock(return_value=pre_ride)),
-            patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
-            patch("backend.routes.drivers.manager.broadcast_ride_status", AsyncMock()),
-            patch("backend.routes.drivers.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers._deps.db.update_one", AsyncMock(return_value=None)),
+            patch("backend.routes.drivers._deps.db.find_one", AsyncMock(return_value=pre_ride)),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
         ):
             with pytest.raises((HTTPException, SpinrException)) as excinfo:
                 asyncio.run(
@@ -296,15 +296,15 @@ class TestGetRideReturnsAcceptedStatus:
 
         with (
             patch(
-                "backend.routes.rides.db_supabase.get_ride",
+                "backend.routes.rides._deps.db_supabase.get_ride",
                 AsyncMock(return_value=dict(post_ride)),
             ),
             patch(
-                "backend.routes.rides.db_supabase.get_rows",
+                "backend.routes.rides._deps.db_supabase.get_rows",
                 AsyncMock(return_value=[]),  # caller is the rider, not a driver
             ),
             patch(
-                "backend.routes.rides.db_supabase.get_driver_by_id",
+                "backend.routes.rides._deps.db_supabase.get_driver_by_id",
                 AsyncMock(return_value=driver),
             ),
         ):

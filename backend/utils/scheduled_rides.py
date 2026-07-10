@@ -130,15 +130,15 @@ async def _dispatch_scheduled_ride(ride: dict):
                 from decimal import Decimal as _Decimal
 
                 try:
-                    from ..routes.rides import _preauthorize_ride_card
+                    from ..routes.rides import booking as _rides_booking
                 except ImportError:
-                    from routes.rides import _preauthorize_ride_card  # type: ignore
+                    from routes.rides import booking as _rides_booking  # type: ignore
 
                 _rider_row = await db.get_user_by_id(rider_id) if rider_id else None
                 _grand = claimed.get("grand_total")
                 if _grand is None:
                     _grand = claimed.get("total_fare") or 0
-                _preauth = await _preauthorize_ride_card(
+                _preauth = await _rides_booking._preauthorize_ride_card(
                     ride_id=ride_id,
                     rider_id=rider_id,
                     grand_total=_Decimal(str(_grand)),
@@ -198,16 +198,16 @@ async def _dispatch_scheduled_ride(ride: dict):
         # Import and run driver matching. We do NOT pass ride= so the dispatch
         # path re-fetches the freshly-claimed 'searching' row.
         try:
-            from routes.rides import match_driver_to_ride, ride_search_timeout
+            from routes.rides import matching as _rides_matching
         except ImportError:
-            from ..routes.rides import match_driver_to_ride, ride_search_timeout
+            from ..routes.rides import matching as _rides_matching
 
-        await match_driver_to_ride(ride_id)
+        await _rides_matching.match_driver_to_ride(ride_id)
 
         # Arm the no-drivers-found timeout exactly as the live booking path does,
         # so a scheduled ride that finds no driver auto-cancels instead of
         # hanging in 'searching' indefinitely.
-        asyncio.create_task(ride_search_timeout(ride_id))
+        asyncio.create_task(_rides_matching.ride_search_timeout(ride_id))
 
         # Notify rider
         if rider_id:

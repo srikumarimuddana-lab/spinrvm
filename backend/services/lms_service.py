@@ -91,6 +91,9 @@ async def get_training_by_phone(phone: str, force_refresh: bool = False) -> dict
 
     base_url, api_key = await _lms_credentials()
 
+    # PIPEDA: never log the response body or the stringified exception —
+    # the request URL carries the phone number and the LMS error body may
+    # echo it (or driver name/email). Status code + exception type only.
     try:
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
             resp = await client.get(
@@ -101,15 +104,21 @@ async def get_training_by_phone(phone: str, force_refresh: bool = False) -> dict
             resp.raise_for_status()
             payload = resp.json()
     except httpx.HTTPStatusError as e:
-        logger.error(
-            "[lms_service] LMS API returned %s: %s",
-            e.response.status_code,
-            e.response.text[:500],
-        )
+        logger.error("[lms_service] LMS API returned HTTP %s", e.response.status_code)
         raise LMSUpstreamError(f"LMS API error (HTTP {e.response.status_code})") from e
     except httpx.HTTPError as e:
-        logger.error("[lms_service] LMS API request failed: %s", e)
+        logger.error("[lms_service] LMS API request failed: %s", type(e).__name__)
         raise LMSUpstreamError("Failed to reach the LMS API") from e
+    except ValueError as e:  # resp.json() — 200 with a non-JSON body
+        logger.error("[lms_service] LMS API returned a non-JSON 200 response")
+        raise LMSUpstreamError("LMS returned a non-JSON response") from e
+
+    # An application-level failure (success != true) is an outage, not
+    # "driver has no training record" — surface it instead of caching it
+    # or letting the route report not_found_in_lms.
+    if not isinstance(payload, dict) or payload.get("success") is not True:
+        logger.error("[lms_service] LMS API returned an unsuccessful payload")
+        raise LMSUpstreamError("LMS returned an unsuccessful or malformed response")
 
     await redis_set(cache_key, json.dumps(payload), ttl=_CACHE_TTL_SECONDS)
     return payload

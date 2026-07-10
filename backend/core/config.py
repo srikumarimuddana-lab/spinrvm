@@ -189,6 +189,10 @@ class Settings(BaseSettings):
     # skipped.
     CORPORATE_OPS_EMAIL: Optional[str] = None
 
+    # Company-portal web origin — used to compose browser-facing links
+    # (member invite emails: {PORTAL_BASE_URL}/company-login?invite_token=…).
+    PORTAL_BASE_URL: str = "https://admin-spinr.spinr.ca"
+
     @model_validator(mode="after")
     def _hash_admin_password(self) -> "Settings":
         """Hash ADMIN_PASSWORD with bcrypt at startup (A-P3-1).

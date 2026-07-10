@@ -140,3 +140,21 @@ def test_allowance_request_rate_limit_returns_409(test_client, rider_override):
             json={"amount": 100, "reason": "client dinner"},
         )
     assert resp.status_code == 409
+
+
+def test_work_profile_exposes_company_status(test_client, rider_override):
+    # M2.4: the portal gates non-active companies onto /verification — that
+    # gate is driven by company.status in this response.
+    with (
+        patch(
+            "routes.corporate_rider.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"id": "m1", "company_id": "c1", "role": "owner"}]),
+        ),
+        patch(
+            "routes.corporate_rider.get_corporate_account_by_id",
+            AsyncMock(return_value={"id": "c1", "name": "Acme", "status": "pending_verification"}),
+        ),
+    ):
+        resp = test_client.get("/rider/work-profile")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()[0]["company"]["status"] == "pending_verification"

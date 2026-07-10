@@ -28,7 +28,9 @@ export interface CompanyMembershipProfile {
         section_id?: string | null;
         policy_override?: boolean;
     };
-    company: { id: string; name: string };
+    // company.status (M2.4): pending_verification | active | suspended |
+    // closed — non-active companies gate onto the portal verification page.
+    company: { id: string; name: string; status?: string | null };
 }
 
 export interface CompanyPortalUser {

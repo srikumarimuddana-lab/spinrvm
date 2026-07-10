@@ -121,10 +121,10 @@ async def _call_create_ride(body, current_surge: float = 1.0):
 
     try:
         with (
-            patch("backend.routes.rides.db_supabase.find_one", AsyncMock(return_value=None)),
-            patch("backend.routes.rides.db.find_one", AsyncMock(return_value=rider_row)),
+            patch("backend.routes.rides._deps.db_supabase.find_one", AsyncMock(return_value=None)),
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=rider_row)),
             patch(
-                "backend.routes.rides.db_supabase.get_rows",
+                "backend.routes.rides._deps.db_supabase.get_rows",
                 AsyncMock(
                     side_effect=[
                         [],  # no active ride
@@ -133,20 +133,20 @@ async def _call_create_ride(body, current_surge: float = 1.0):
                     ]
                 ),
             ),
-            patch("backend.routes.rides._fares_for_location_impl", AsyncMock(return_value=[_fare_info(current_surge)])),
-            patch("backend.routes.rides.calculate_airport_fee", AsyncMock(return_value={"airport_fee": 0.0})),
+            patch("backend.routes.rides._deps._fares_for_location_impl", AsyncMock(return_value=[_fare_info(current_surge)])),
+            patch("backend.routes.rides._deps.calculate_airport_fee", AsyncMock(return_value={"airport_fee": 0.0})),
             patch(
-                "backend.routes.rides.calculate_all_fees",
+                "backend.routes.rides._deps.calculate_all_fees",
                 AsyncMock(return_value={"fees_total": 0.0, "tax_amount": 0.0}),
             ),
-            patch("backend.routes.rides.db_supabase.insert_ride", AsyncMock(side_effect=_capture)),
-            patch("backend.routes.rides.match_driver_to_ride", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.insert_ride", AsyncMock(side_effect=_capture)),
+            patch("backend.routes.rides.matching.match_driver_to_ride", AsyncMock()),
             patch(
-                "backend.routes.rides.db_supabase.get_ride",
+                "backend.routes.rides._deps.db_supabase.get_ride",
                 AsyncMock(return_value={"id": RIDE_ID, "status": "searching"}),
             ),
-            patch("backend.routes.rides.asyncio.create_task", lambda coro: coro.close()),
-            patch("backend.routes.rides.validate_ride_location", return_value=None),
+            patch("backend.routes.rides._deps.asyncio.create_task", lambda coro: coro.close()),
+            patch("backend.routes.rides._deps.validate_ride_location", return_value=None),
         ):
             await rides_mod.create_ride(request=_request(), body=body, current_user={"id": RIDER_ID})
         return inserted[0] if inserted else None, None

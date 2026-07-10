@@ -59,14 +59,14 @@ class TestSOSRiderTrigger:
 
         insert_mock = AsyncMock()
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=_active_ride())),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=_active_ride())),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
             patch(
-                "backend.routes.rides.db_supabase.get_user_by_id",
+                "backend.routes.rides._deps.db_supabase.get_user_by_id",
                 AsyncMock(return_value={"first_name": "Test", "last_name": "Rider"}),
             ),
-            patch("backend.routes.rides.db_supabase.insert_one", insert_mock),
-            patch("backend.routes.rides.manager.broadcast_to_admins", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.insert_one", insert_mock),
+            patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
         ):
             result = await rides_mod.trigger_emergency(
                 ride_id=RIDE_ID,
@@ -89,11 +89,11 @@ class TestSOSRiderTrigger:
 
         admin_broadcast_mock = AsyncMock()
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=_active_ride())),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
-            patch("backend.routes.rides.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
-            patch("backend.routes.rides.db_supabase.insert_one", AsyncMock()),
-            patch("backend.routes.rides.manager.broadcast_to_admins", admin_broadcast_mock),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=_active_ride())),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.rides._deps.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
+            patch("backend.routes.rides._deps.db_supabase.insert_one", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.broadcast_to_admins", admin_broadcast_mock),
         ):
             await rides_mod.trigger_emergency(
                 ride_id=RIDE_ID,
@@ -112,11 +112,11 @@ class TestSOSRiderTrigger:
 
         insert_mock = AsyncMock()
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=_active_ride())),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
-            patch("backend.routes.rides.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
-            patch("backend.routes.rides.db_supabase.insert_one", insert_mock),
-            patch("backend.routes.rides.manager.broadcast_to_admins", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=_active_ride())),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.rides._deps.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
+            patch("backend.routes.rides._deps.db_supabase.insert_one", insert_mock),
+            patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
         ):
             await rides_mod.trigger_emergency(
                 ride_id=RIDE_ID,
@@ -141,12 +141,12 @@ class TestSOSDriverTrigger:
         insert_mock = AsyncMock()
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=_active_ride())),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=_active_ride())),
             # get_rows returns the driver row when queried by user_id
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[driver_row])),
-            patch("backend.routes.rides.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
-            patch("backend.routes.rides.db_supabase.insert_one", insert_mock),
-            patch("backend.routes.rides.manager.broadcast_to_admins", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[driver_row])),
+            patch("backend.routes.rides._deps.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
+            patch("backend.routes.rides._deps.db_supabase.insert_one", insert_mock),
+            patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
         ):
             await rides_mod.trigger_emergency(
                 ride_id=RIDE_ID,
@@ -172,9 +172,9 @@ class TestSOSAuthGuards:
         ride = _active_ride()  # rider_id = RIDER_ID, driver_id = DRIVER_ID
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
             # get_rows returns empty list — requester is not this ride's driver
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
         ):
             with pytest.raises(HTTPException) as exc:
                 await rides_mod.trigger_emergency(
@@ -190,7 +190,7 @@ class TestSOSAuthGuards:
 
         from backend.routes import rides as rides_mod
 
-        with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=None)):
+        with patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=None)):
             with pytest.raises(HTTPException) as exc:
                 await rides_mod.trigger_emergency(
                     ride_id="nonexistent_ride",
@@ -215,11 +215,11 @@ class TestSOSBroadcastResiliency:
         broadcast_mock = AsyncMock(side_effect=RuntimeError("WS pool unavailable"))
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=_active_ride())),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
-            patch("backend.routes.rides.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
-            patch("backend.routes.rides.db_supabase.insert_one", insert_mock),
-            patch("backend.routes.rides.manager.broadcast_to_admins", broadcast_mock),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=_active_ride())),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.rides._deps.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
+            patch("backend.routes.rides._deps.db_supabase.insert_one", insert_mock),
+            patch("backend.routes.rides._deps.manager.broadcast_to_admins", broadcast_mock),
         ):
             # Must not raise even though broadcast failed
             result = await rides_mod.trigger_emergency(

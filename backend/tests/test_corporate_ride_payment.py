@@ -90,27 +90,27 @@ def _get_rows_side_effect(*args, **kwargs):
 
 def _mock_create_ride_deps(*, memberships=None, allowance=None, policy=None):
     return {
-        "routes.rides.db_supabase.find_one": AsyncMock(
+        "routes.rides._deps.db_supabase.find_one": AsyncMock(
             return_value={"id": "rider_1", "status": "active", "stripe_customer_id": None}
         ),
-        "routes.rides.db_supabase.get_rows": AsyncMock(side_effect=_get_rows_side_effect),
-        "routes.rides._fares_for_location_impl": AsyncMock(return_value=[_fake_fare_info()]),
-        "routes.rides.calculate_airport_fee": AsyncMock(return_value={"airport_fee": 0.0}),
-        "routes.rides.calculate_all_fees": AsyncMock(
+        "routes.rides._deps.db_supabase.get_rows": AsyncMock(side_effect=_get_rows_side_effect),
+        "routes.rides._deps._fares_for_location_impl": AsyncMock(return_value=[_fake_fare_info()]),
+        "routes.rides._deps.calculate_airport_fee": AsyncMock(return_value={"airport_fee": 0.0}),
+        "routes.rides._deps.calculate_all_fees": AsyncMock(
             return_value={"fees_total": 0, "tax_amount": 0, "fees": [], "tax_breakdown": {}}
         ),
-        "routes.rides.db_supabase.insert_ride": AsyncMock(return_value=None),
-        "routes.rides.db_supabase.get_ride": AsyncMock(return_value=None),
-        "routes.rides.match_driver_to_ride": AsyncMock(return_value=None),
-        "routes.rides.db_supabase.list_active_memberships_for_user": AsyncMock(
+        "routes.rides._deps.db_supabase.insert_ride": AsyncMock(return_value=None),
+        "routes.rides._deps.db_supabase.get_ride": AsyncMock(return_value=None),
+        "routes.rides.matching.match_driver_to_ride": AsyncMock(return_value=None),
+        "routes.rides._deps.db_supabase.list_active_memberships_for_user": AsyncMock(
             return_value=memberships if memberships is not None else []
         ),
-        "routes.rides.db_supabase.get_member_allowance": AsyncMock(return_value=allowance or {}),
-        "routes.rides.db_supabase.get_corporate_policy": AsyncMock(return_value=policy or {}),
-        "routes.rides.db_supabase.get_corporate_wallet_by_company": AsyncMock(
+        "routes.rides._deps.db_supabase.get_member_allowance": AsyncMock(return_value=allowance or {}),
+        "routes.rides._deps.db_supabase.get_corporate_policy": AsyncMock(return_value=policy or {}),
+        "routes.rides._deps.db_supabase.get_corporate_wallet_by_company": AsyncMock(
             return_value={"id": _WALLET_ID, "balance": 500.0}
         ),
-        "routes.rides.db.find_one": AsyncMock(
+        "routes.rides._deps.db.find_one": AsyncMock(
             return_value={"id": "rider_1", "status": "active", "stripe_customer_id": None}
         ),
     }
@@ -140,7 +140,7 @@ def test_personal_ride_skips_corporate_block(test_client, rider_override):
     finally:
         for p in patchers:
             p.stop()
-    mocks["routes.rides.db_supabase.list_active_memberships_for_user"].assert_not_called()
+    mocks["routes.rides._deps.db_supabase.list_active_memberships_for_user"].assert_not_called()
 
 
 def test_work_profile_without_membership_returns_400(test_client, rider_override):
@@ -210,7 +210,7 @@ def test_work_profile_tags_ride_as_company_allowance(test_client, rider_override
         inserted_data.update(data)
         return None
 
-    deps["routes.rides.db_supabase.insert_ride"] = _capture_insert
+    deps["routes.rides._deps.db_supabase.insert_ride"] = _capture_insert
     patchers, _ = _apply_all_patches(deps)
     body = {**_BASE_RIDE_BODY, "work_profile": True, "corporate_account_id": _CORP_COMPANY_ID}
     try:
@@ -249,18 +249,18 @@ def _mock_process_payment_deps(*, allowance, membership=None):
             "policy_override": False,
         }
     return {
-        "routes.rides.db_supabase.get_ride": AsyncMock(return_value=_fake_corporate_ride()),
-        "routes.rides.db.update_one": AsyncMock(return_value=MagicMock(modified_count=1)),
-        "routes.rides.db_supabase.list_active_memberships_for_user": AsyncMock(return_value=[membership]),
-        "routes.rides.db_supabase.get_member_allowance": AsyncMock(return_value=allowance),
-        "routes.rides.db_supabase.get_corporate_wallet_by_company": AsyncMock(
+        "routes.rides._deps.db_supabase.get_ride": AsyncMock(return_value=_fake_corporate_ride()),
+        "routes.rides._deps.db.update_one": AsyncMock(return_value=MagicMock(modified_count=1)),
+        "routes.rides._deps.db_supabase.list_active_memberships_for_user": AsyncMock(return_value=[membership]),
+        "routes.rides._deps.db_supabase.get_member_allowance": AsyncMock(return_value=allowance),
+        "routes.rides._deps.db_supabase.get_corporate_wallet_by_company": AsyncMock(
             return_value={"id": _WALLET_ID, "balance": 1000.0}
         ),
-        "routes.rides.db_supabase.get_corporate_policy": AsyncMock(return_value={}),
-        "routes.rides.db_supabase.insert_one": AsyncMock(return_value=None),
-        "routes.rides.db_supabase.update_ride": AsyncMock(return_value=None),
-        "routes.rides.db_supabase.get_user_by_id": AsyncMock(return_value=None),
-        "routes.rides.db_supabase.get_driver_by_id": AsyncMock(return_value=None),
+        "routes.rides._deps.db_supabase.get_corporate_policy": AsyncMock(return_value={}),
+        "routes.rides._deps.db_supabase.insert_one": AsyncMock(return_value=None),
+        "routes.rides._deps.db_supabase.update_ride": AsyncMock(return_value=None),
+        "routes.rides._deps.db_supabase.get_user_by_id": AsyncMock(return_value=None),
+        "routes.rides._deps.db_supabase.get_driver_by_id": AsyncMock(return_value=None),
         "routes.rides.corporate_allowance_service.apply_rollback": AsyncMock(return_value={"transaction_id": "t1"}),
         "routes.rides.corporate_wallet_service.apply_adjustment": AsyncMock(return_value={"transaction_id": "t2"}),
     }
@@ -278,11 +278,11 @@ def test_personal_ride_skips_corporate_payment_branch(test_client, rider_overrid
         "tip_amount": 0,
     }
     with (
-        patch("routes.rides.db_supabase.get_ride", AsyncMock(return_value=wallet_ride)),
-        patch("routes.rides.db.update_one", AsyncMock(return_value=MagicMock(modified_count=1))),
-        patch("routes.rides.db_supabase.update_ride", AsyncMock(return_value=None)),
-        patch("routes.rides.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
-        patch("routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=None)),
+        patch("routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=wallet_ride)),
+        patch("routes.rides._deps.db.update_one", AsyncMock(return_value=MagicMock(modified_count=1))),
+        patch("routes.rides._deps.db_supabase.update_ride", AsyncMock(return_value=None)),
+        patch("routes.rides._deps.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
+        patch("routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=None)),
         patch(
             "routes.wallet.get_or_create_wallet",
             AsyncMock(return_value={"id": "w1", "balance": 100.0, "is_active": True}),
@@ -328,8 +328,8 @@ def test_company_allowance_debits_allowance_fully_when_sufficient(test_client, r
 
     mocks["routes.rides.corporate_wallet_service.apply_adjustment"].assert_not_called()
 
-    mocks["routes.rides.db_supabase.insert_one"].assert_called()
-    insert_call = mocks["routes.rides.db_supabase.insert_one"].call_args
+    mocks["routes.rides._deps.db_supabase.insert_one"].assert_called()
+    insert_call = mocks["routes.rides._deps.db_supabase.insert_one"].call_args
     assert insert_call.args[0] == "ride_payment_sources"
     row = insert_call.args[1]
     assert row["allowance_debit_amount"] == pytest.approx(25.0)
@@ -363,7 +363,7 @@ def test_company_allowance_splits_when_allowance_partial(test_client, rider_over
     assert adj_kwargs["amount"] == pytest.approx(-15.0)
     assert _RIDE_ID in adj_kwargs["notes"]
 
-    row = mocks["routes.rides.db_supabase.insert_one"].call_args.args[1]
+    row = mocks["routes.rides._deps.db_supabase.insert_one"].call_args.args[1]
     assert row["allowance_debit_amount"] == pytest.approx(10.0)
     assert row["master_fallback_amount"] == pytest.approx(15.0)
 
@@ -377,7 +377,7 @@ def test_company_allowance_debit_and_flag_on_allowance_only_policy(test_client, 
         "used": 100,
     }
     deps = _mock_process_payment_deps(allowance=allowance)
-    deps["routes.rides.db_supabase.get_corporate_policy"] = AsyncMock(
+    deps["routes.rides._deps.db_supabase.get_corporate_policy"] = AsyncMock(
         return_value={"allowed_payment_source": "allowance_only"}
     )
     patchers, mocks = _apply_all_patches(deps)
@@ -393,7 +393,7 @@ def test_company_allowance_debit_and_flag_on_allowance_only_policy(test_client, 
 
     mocks["routes.rides.corporate_wallet_service.apply_adjustment"].assert_called_once()
 
-    insert_calls = mocks["routes.rides.db_supabase.insert_one"].call_args_list
+    insert_calls = mocks["routes.rides._deps.db_supabase.insert_one"].call_args_list
     tables = [c.args[0] for c in insert_calls]
     assert "corporate_policy_evaluations" in tables
 
@@ -422,7 +422,7 @@ def test_company_allowance_unlimited_covers_full_fare(test_client, rider_overrid
 
     mocks["routes.rides.corporate_allowance_service.apply_rollback"].assert_called_once()
     mocks["routes.rides.corporate_wallet_service.apply_adjustment"].assert_not_called()
-    row = mocks["routes.rides.db_supabase.insert_one"].call_args.args[1]
+    row = mocks["routes.rides._deps.db_supabase.insert_one"].call_args.args[1]
     assert row["master_fallback_amount"] == pytest.approx(0.0)
 
 
@@ -430,7 +430,7 @@ def test_company_allowance_missing_membership_returns_400(test_client, rider_ove
     """No matching membership for the ride's company → 400."""
     allowance = {"id": _ALLOWANCE_ID, "type": "fixed_recurring", "amount": 200, "used": 0}
     deps = _mock_process_payment_deps(allowance=allowance)
-    deps["routes.rides.db_supabase.list_active_memberships_for_user"] = AsyncMock(return_value=[])
+    deps["routes.rides._deps.db_supabase.list_active_memberships_for_user"] = AsyncMock(return_value=[])
     patchers, _ = _apply_all_patches(deps)
     try:
         resp = test_client.post(

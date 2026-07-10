@@ -149,12 +149,12 @@ class TestRequestPayout:
         # get_app_settings is imported locally inside request_payout, so patch
         # it at the settings_loader module level where it's defined.
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
             patch(
-                "backend.routes.drivers.db_supabase.insert_one",
+                "backend.routes.drivers._deps.db_supabase.insert_one",
                 AsyncMock(side_effect=lambda t, r: inserted.append(r) or r),
             ),
-            patch("backend.routes.drivers.get_driver_balance", AsyncMock(side_effect=_mock_balance)),
+            patch("backend.routes.drivers.earnings.get_driver_balance", AsyncMock(side_effect=_mock_balance)),
             patch("backend.settings_loader.get_app_settings", AsyncMock(return_value={})),  # no Stripe key
         ):
             result = await request_payout(
@@ -230,7 +230,7 @@ class TestRequestPayout:
             }
         )
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[])):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[])):
             with pytest.raises(HTTPException) as exc_info:
                 await request_payout(req=req, request=mock_request, current_user={"id": "ghost-driver"})
 
@@ -261,7 +261,7 @@ class TestGetPayoutHistory:
                 return [driver]
             return payouts
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)):
             result = await get_payout_history(
                 limit=20,
                 offset=0,
@@ -276,7 +276,7 @@ class TestGetPayoutHistory:
 
         from backend.routes.drivers import get_payout_history
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[])):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[])):
             with pytest.raises(HTTPException) as exc_info:
                 await get_payout_history(
                     limit=20,
@@ -313,9 +313,9 @@ class TestGetT4ASummary:
             return rides
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
             patch(
-                "backend.routes.drivers.db_supabase.get_rides_for_driver", AsyncMock(side_effect=_get_rides_for_driver)
+                "backend.routes.drivers._deps.db_supabase.get_rides_for_driver", AsyncMock(side_effect=_get_rides_for_driver)
             ),
         ):
             result = await get_t4a_summary(year=2025, current_user={"id": DRIVER_USER_ID})
@@ -330,7 +330,7 @@ class TestGetT4ASummary:
 
         from backend.routes.drivers import get_t4a_summary
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[])):
+        with patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[])):
             with pytest.raises(HTTPException) as exc_info:
                 await get_t4a_summary(year=2025, current_user={"id": "ghost"})
 
@@ -343,8 +343,8 @@ class TestGetT4ASummary:
         driver = {**_driver_row(), "gst_registered": True, "gst_bn": "123456789RT0001"}
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),
-            patch("backend.routes.drivers.db_supabase.get_rides_for_driver", AsyncMock(return_value=[])),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+            patch("backend.routes.drivers._deps.db_supabase.get_rides_for_driver", AsyncMock(return_value=[])),
         ):
             result = await get_t4a_summary(year=2025, current_user={"id": DRIVER_USER_ID})
 
@@ -358,8 +358,8 @@ class TestGetT4ASummary:
         driver = _driver_row(gst_bn=None)  # no gst_registered; gst_bn absent
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),
-            patch("backend.routes.drivers.db_supabase.get_rides_for_driver", AsyncMock(return_value=[])),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+            patch("backend.routes.drivers._deps.db_supabase.get_rides_for_driver", AsyncMock(return_value=[])),
         ):
             result = await get_t4a_summary(year=2025, current_user={"id": DRIVER_USER_ID})
 
@@ -388,13 +388,13 @@ class TestUpdateDriverGstFields:
         import contextlib
 
         stack = contextlib.ExitStack()
-        stack.enter_context(patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])))
-        stack.enter_context(patch("backend.routes.drivers.db_supabase.update_one", update_mock))
+        stack.enter_context(patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])))
+        stack.enter_context(patch("backend.routes.drivers._deps.db_supabase.update_one", update_mock))
         stack.enter_context(
-            patch("backend.routes.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=driver))
+            patch("backend.routes.drivers._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=driver))
         )
-        stack.enter_context(patch("backend.routes.drivers._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)))
-        stack.enter_context(patch("backend.routes.drivers._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)))
+        stack.enter_context(patch("backend.routes.drivers._shared._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)))
+        stack.enter_context(patch("backend.routes.drivers._shared._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)))
         return stack
 
     @pytest.mark.anyio

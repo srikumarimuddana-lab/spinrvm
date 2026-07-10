@@ -27,10 +27,10 @@ class TestGetRideMessages:
         ]
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
             # First call: driver lookup (user is the rider → no driver row)
             # Second call: ride_messages fetch
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(side_effect=[[], messages_data])),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(side_effect=[[], messages_data])),
         ):
             from backend.routes.rides import get_ride_messages
 
@@ -42,8 +42,8 @@ class TestGetRideMessages:
         ride = {"id": "ride_1", "rider_id": "user_1", "driver_id": "driver_1"}
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
         ):
             from backend.routes.rides import get_ride_messages
 
@@ -52,7 +52,7 @@ class TestGetRideMessages:
             assert exc_info.value.status_code == 403
 
     async def test_ride_not_found_returns_404(self):
-        with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=None)):
+        with patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=None)):
             from backend.routes.rides import get_ride_messages
 
             with pytest.raises(HTTPException) as exc_info:
@@ -68,9 +68,9 @@ class TestSendRideMessage:
         driver_row = {"id": "driver_1", "user_id": "user_driver_1"}
 
         with (
-            patch("backend.routes.rides.db.find_one", AsyncMock(side_effect=[ride, None, driver_row])),
-            patch("backend.routes.rides.db.insert_one", AsyncMock(return_value=None)),
-            patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(side_effect=[ride, None, driver_row])),
+            patch("backend.routes.rides._deps.db.insert_one", AsyncMock(return_value=None)),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
         ):
             from backend.routes.rides import SendMessageRequest, send_ride_message
 
@@ -85,7 +85,7 @@ class TestSendRideMessage:
         ride = {"id": "ride_1", "rider_id": "user_1", "driver_id": "driver_1", "status": "in_progress"}
 
         with (
-            patch("backend.routes.rides.db.find_one", AsyncMock(side_effect=[ride, None])),
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(side_effect=[ride, None])),
         ):
             from backend.routes.rides import SendMessageRequest, send_ride_message
 
@@ -95,7 +95,7 @@ class TestSendRideMessage:
             assert exc_info.value.status_code == 403
 
     async def test_ride_not_found_returns_404(self):
-        with patch("backend.routes.rides.db.find_one", AsyncMock(return_value=None)):
+        with patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=None)):
             from backend.routes.rides import SendMessageRequest, send_ride_message
 
             body = SendMessageRequest(text="Hello")
@@ -109,9 +109,9 @@ class TestSendRideMessage:
         driver_row = {"id": "driver_1", "user_id": "user_driver_1"}
 
         with (
-            patch("backend.routes.rides.db.find_one", AsyncMock(side_effect=[ride, driver_row])),
-            patch("backend.routes.rides.db.insert_one", AsyncMock(return_value=None)),
-            patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(side_effect=[ride, driver_row])),
+            patch("backend.routes.rides._deps.db.insert_one", AsyncMock(return_value=None)),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
         ):
             from backend.routes.rides import SendMessageRequest, send_ride_message
 
@@ -132,9 +132,9 @@ class TestSendRideMessage:
             ws_calls.append((channel, message))
 
         with (
-            patch("backend.routes.rides.db.find_one", AsyncMock(side_effect=[ride, driver_row])),
-            patch("backend.routes.rides.db.insert_one", AsyncMock(return_value=None)),
-            patch("backend.routes.rides.manager.send_personal_message", AsyncMock(side_effect=_capture_ws)),
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(side_effect=[ride, driver_row])),
+            patch("backend.routes.rides._deps.db.insert_one", AsyncMock(return_value=None)),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock(side_effect=_capture_ws)),
         ):
             from backend.routes.rides import SendMessageRequest, send_ride_message
 
@@ -189,12 +189,12 @@ class TestChatPushNotifications:
             find_sequence.append(driver_row)
 
         with (
-            patch("backend.routes.rides.db.find_one", AsyncMock(side_effect=find_sequence)),
-            patch("backend.routes.rides.db.insert_one", AsyncMock()),
-            patch("backend.routes.rides.manager.send_personal_message", AsyncMock(side_effect=_ws)),
-            patch("backend.routes.rides.send_push_notification", AsyncMock(side_effect=_push)),
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(side_effect=find_sequence)),
+            patch("backend.routes.rides._deps.db.insert_one", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock(side_effect=_ws)),
+            patch("backend.routes.rides._deps.send_push_notification", AsyncMock(side_effect=_push)),
             # Use ensure_future so the coroutine actually executes on the running loop.
-            patch("backend.routes.rides.asyncio.create_task", side_effect=asyncio.ensure_future),
+            patch("backend.routes.rides._deps.asyncio.create_task", side_effect=asyncio.ensure_future),
         ):
             await send_ride_message(
                 "ride_1",

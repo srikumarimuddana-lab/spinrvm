@@ -90,16 +90,16 @@ class TestTriggerEmergency:
         active_ride = ride if ride is not None else _ride()
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=active_ride)),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
-            patch("backend.routes.rides.db_supabase.insert_one", AsyncMock(side_effect=_insert)),
-            patch("backend.routes.rides.manager.broadcast_to_admins", AsyncMock(side_effect=_broadcast_to_admins)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=active_ride)),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.rides._deps.db_supabase.insert_one", AsyncMock(side_effect=_insert)),
+            patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock(side_effect=_broadcast_to_admins)),
             patch(
-                "backend.routes.rides.db_supabase.get_user_by_id",
+                "backend.routes.rides._deps.db_supabase.get_user_by_id",
                 AsyncMock(return_value={"first_name": "Test", "last_name": "User"}),
             ),
-            patch("backend.routes.rides.get_app_settings", AsyncMock(return_value={})),
-            patch("backend.routes.rides.send_sms", AsyncMock(side_effect=_send_sms)),
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+            patch("backend.routes.rides._deps.send_sms", AsyncMock(side_effect=_send_sms)),
         ):
             result = await rides_mod.trigger_emergency(
                 ride_id=RIDE_ID,
@@ -145,8 +145,8 @@ class TestTriggerEmergency:
         from backend.routes import rides as rides_mod
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=_ride())),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=_ride())),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await rides_mod.trigger_emergency(
@@ -162,7 +162,7 @@ class TestTriggerEmergency:
 
         from backend.routes import rides as rides_mod
 
-        with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=None)):
+        with patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=None)):
             with pytest.raises(HTTPException) as exc_info:
                 await rides_mod.trigger_emergency(
                     ride_id="nonexistent-ride",

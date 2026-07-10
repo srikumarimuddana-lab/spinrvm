@@ -94,11 +94,11 @@ class TestSelfAcceptGuard:
 
         with (
             patch(
-                "backend.routes.drivers.db_supabase.get_rows",
+                "backend.routes.drivers._deps.db_supabase.get_rows",
                 AsyncMock(return_value=[_driver_row(user_id=DRIVER_USER_ID)]),
             ),
             patch(
-                "backend.routes.drivers.db_supabase.get_ride",
+                "backend.routes.drivers._deps.db_supabase.get_ride",
                 AsyncMock(return_value=ride),
             ),
         ):
@@ -118,7 +118,7 @@ class TestSelfAcceptGuard:
         from backend.routes import drivers as drv_mod
 
         with patch(
-            "backend.routes.drivers.db_supabase.get_rows",
+            "backend.routes.drivers._deps.db_supabase.get_rows",
             AsyncMock(return_value=[]),
         ):
             with pytest.raises(HTTPException) as exc_info:
@@ -146,23 +146,23 @@ class TestSelfAcceptGuard:
 
         with (
             patch(
-                "backend.routes.drivers.db_supabase.get_rows",
+                "backend.routes.drivers._deps.db_supabase.get_rows",
                 AsyncMock(return_value=[_driver_row(user_id=DRIVER_USER_ID)]),
             ),
             patch(
-                "backend.routes.drivers.db_supabase.get_ride",
+                "backend.routes.drivers._deps.db_supabase.get_ride",
                 AsyncMock(return_value=ride),
             ),
             patch(
-                "backend.routes.drivers.db.update_one",
+                "backend.routes.drivers._deps.db.update_one",
                 AsyncMock(side_effect=_capture_update),
             ),
             patch(
-                "backend.routes.drivers.db_supabase.update_ride",
+                "backend.routes.drivers._deps.db_supabase.update_ride",
                 AsyncMock(return_value=updated_ride),
             ),
-            patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
-            patch("backend.routes.drivers.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
         ):
             # Should not raise — driver and rider are different users
             try:
@@ -345,7 +345,7 @@ class TestDriverEarningsIsolation:
             return []
 
         with patch(
-            "backend.routes.drivers.db_supabase.get_rows",
+            "backend.routes.drivers._deps.db_supabase.get_rows",
             AsyncMock(side_effect=_capture_get_rows),
         ):
             _result = await drv_mod.get_driver_earnings(
@@ -368,7 +368,7 @@ class TestDriverEarningsIsolation:
         from backend.routes import drivers as drv_mod
 
         with patch(
-            "backend.routes.drivers.db_supabase.get_rows",
+            "backend.routes.drivers._deps.db_supabase.get_rows",
             AsyncMock(return_value=[]),  # no driver row for this user
         ):
             with pytest.raises(HTTPException) as exc_info:
@@ -411,7 +411,7 @@ class TestDriverEarningsIsolation:
             return []
 
         with patch(
-            "backend.routes.drivers.db_supabase.get_rows",
+            "backend.routes.drivers._deps.db_supabase.get_rows",
             AsyncMock(side_effect=_capture_get_rows),
         ):
             result = await drv_mod.get_driver_earnings(

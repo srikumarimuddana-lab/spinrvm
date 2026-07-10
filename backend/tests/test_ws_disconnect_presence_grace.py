@@ -146,12 +146,13 @@ def test_go_offline_branch_still_clears_presence():
     """The online/offline toggle in routes/drivers.py must clear presence on the
     is_online=False branch specifically — not merely reference clear_presence
     somewhere in the module (subscription/expiry paths also call it)."""
-    from backend.routes import drivers as drv_mod
+    from backend.routes.drivers import status as drv_status
 
-    src = inspect.getsource(drv_mod)
+    src = inspect.getsource(drv_status)
     # Go Online marks present; the paired else (Go Offline) clears it.
-    assert "await mark_present(driver_id)" in src, "go-online mark_present call missing"
-    assert re.search(r"else:\s+await clear_presence\(driver_id\)", src), (
+    # (presence helpers are reached via the _deps seam since the god-file split)
+    assert "await _deps.mark_present(driver_id)" in src, "go-online mark_present call missing"
+    assert re.search(r"else:\s+await _deps\.clear_presence\(driver_id\)", src), (
         "the Go Offline branch (else of `if is_online:`) no longer clears the "
         "driver's presence key"
     )

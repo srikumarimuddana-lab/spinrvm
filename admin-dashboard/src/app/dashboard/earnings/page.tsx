@@ -329,19 +329,18 @@ function CeoMetricsHeader({
                     <MetricCard icon={XCircle}  label="Cancelled Trips"     metric={m?.cancelled_trips}      format={fmtCount} loading={loading} />
                 </div>
 
-                {/* Ride funnel — a created_at cohort of the rides requested in
-                    this window, followed through to outcome. Reads top-to-bottom:
-                    price searches → requested → searched for a driver →
-                    travelled, then the three cancellation outcomes. `Travelled`
-                    is cohort-based, so it differs from the completion-date
-                    "Completed Trips" KPI above — same window, different lens. */}
+                {/* Ride funnel — semantics documented on the ride_funnel type
+                    in lib/api.ts and in migration 227. Eight cards: the four
+                    progression steps, then the four cancellation outcomes
+                    (rider / driver / system / after-start), which together
+                    with Travelled account for every requested ride. */}
                 <div className="mt-6">
                     <div className="flex items-center gap-2 mb-3">
                         <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
                             Ride funnel
                         </h3>
                         <span className="text-[11px] text-muted-foreground">
-                            of rides requested this window
+                            of rides requested this window · scheduled rides count on booking, and progress once dispatched
                         </span>
                     </div>
                     <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -351,6 +350,7 @@ function CeoMetricsHeader({
                         <MetricCard icon={Flag}          label="Travelled"             metric={fn?.completed}             format={fmtCount} accent="text-emerald-600 dark:text-emerald-400" loading={loading} />
                         <MetricCard icon={XCircle}       label="Rider Cancelled"       metric={fn?.rider_cancelled}       format={fmtCount} accent="text-amber-600 dark:text-amber-400" loading={loading} />
                         <MetricCard icon={XCircle}       label="Driver Cancelled"      metric={fn?.driver_cancelled}      format={fmtCount} accent="text-red-600 dark:text-red-400" loading={loading} />
+                        <MetricCard icon={XCircle}       label="System / No Driver"    metric={fn?.system_cancelled}      format={fmtCount} loading={loading} />
                         <MetricCard icon={AlertTriangle} label="Cancelled After Start" metric={fn?.cancelled_after_start} format={fmtCount} accent="text-red-600 dark:text-red-400" loading={loading} />
                     </div>
                 </div>

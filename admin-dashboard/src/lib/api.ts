@@ -923,10 +923,11 @@ export interface EarningsOverview {
         previous: { rider: number; driver: number; system: number };
     };
     /** Ops funnel — created_at cohort of rides requested in the window,
-     *  each as a current/previous MetricWithDelta. Reads top-to-bottom:
-     *  price searches → requested → reached searching → travelled →
-     *  cancels. `completed` here is cohort-based, so it differs from the
-     *  completion-date "Completed Trips" KPI above. */
+     *  each as a current/previous MetricWithDelta. Semantics (cohort basis,
+     *  cancelled_by attribution, reached-searching definition) live in
+     *  migration 227_earnings_overview_funnel_agg.sql. The cancel splits
+     *  share attribution with cancellation_breakdown — the two widgets
+     *  always reconcile. */
     ride_funnel: {
         price_searches: MetricWithDelta;
         requested: MetricWithDelta;
@@ -934,6 +935,8 @@ export interface EarningsOverview {
         completed: MetricWithDelta;
         rider_cancelled: MetricWithDelta;
         driver_cancelled: MetricWithDelta;
+        /** Admin/system/no-driver + unattributed — count − rider − driver. */
+        system_cancelled: MetricWithDelta;
         cancelled_after_start: MetricWithDelta;
     };
     daily_series: Array<{

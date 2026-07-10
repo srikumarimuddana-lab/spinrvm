@@ -195,7 +195,9 @@ export function middleware(request: NextRequest) {
   // ADMIN_ALLOWED_IPS restricts the STAFF admin surface. Company users hold
   // RIDER tokens (phone OTP), gated on their own company_token cookie, and
   // bounce to /company-login — never the staff /login.
-  if (pathname === "/company-login") {
+  if (pathname === "/company-login" || pathname === "/company-signup") {
+    // /company-signup is the self-serve company registration wizard — public
+    // like the login page (it runs its own email-OTP verification inline).
     return passThroughWithNonce(request, nonce);
   }
   if (pathname === "/company-portal" || pathname.startsWith("/company-portal/")) {

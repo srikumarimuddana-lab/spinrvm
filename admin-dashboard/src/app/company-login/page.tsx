@@ -175,6 +175,11 @@ function CompanyLoginInner() {
                     <p className="text-center text-xs text-muted-foreground">
                         Your company membership controls what you can see here.
                     </p>
+                    <p className="text-center text-xs">
+                        <a href="/company-signup" className="text-emerald-700 hover:underline">
+                            New to Spinr for Business? Register your company
+                        </a>
+                    </p>
                 </CardContent>
             </Card>
         </div>

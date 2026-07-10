@@ -166,6 +166,40 @@ export function portalHome(companyId: string, role?: string): string {
         : `/company-portal/${companyId}/book`;
 }
 
+/* ── Self-serve company signup (M1.5) ── */
+
+export interface CompanySignupPayload {
+    name: string;
+    legal_name: string;
+    business_number: string;
+    industry?: string | null;
+    contact_name: string;
+    contact_phone?: string | null;
+    address_line1: string;
+    address_line2?: string | null;
+    city: string;
+    province: string;
+    postal_code: string;
+    terms_accepted: boolean;
+    terms_version: string;
+}
+
+export interface CompanySignupResult {
+    success: boolean;
+    company: { id: string; name: string; status: string };
+    member: { id: string; role: string };
+    message: string;
+}
+
+// Authenticated-first: the caller has already completed the email-OTP login,
+// so companyRequest attaches the bearer + CSRF token. Identity (work email)
+// comes from the session server-side — it is deliberately NOT in the payload.
+export const registerCompany = (payload: CompanySignupPayload) =>
+    companyRequest<CompanySignupResult>("/api/portal/companies/signup", {
+        method: "POST",
+        body: JSON.stringify(payload),
+    });
+
 export const getMyWorkProfiles = () =>
     companyRequest<CompanyMembershipProfile[]>("/api/rider/work-profile");
 

@@ -68,6 +68,9 @@ _CREDENTIAL_FIELDS = frozenset(
         # bundle_id are identifiers left visible (same treatment as
         # twilio_account_sid); only the PEM is the secret.
         "apns_p8_key",
+        # Driver LMS integration shared secret (x-api-key header) — the base
+        # URL stays visible; only the key is the secret.
+        "lms_api_key",
     }
 )
 
@@ -210,6 +213,11 @@ class SettingsUpdateRequest(BaseModel):
     apns_team_id: Optional[str] = Field(default=None, max_length=20)
     apns_bundle_id: Optional[str] = Field(default=None, max_length=200)
     apns_p8_key: Optional[str] = None
+    # Driver LMS (training platform) integration — services/lms_service.py.
+    # base_url is plain; api_key is a credential (masked, in
+    # _CREDENTIAL_FIELDS) matching SPINR_INTEGRATION_API_KEY on the LMS.
+    lms_api_base_url: Optional[str] = Field(default=None, max_length=300)
+    lms_api_key: Optional[str] = None
 
 
 @router.get("/settings")

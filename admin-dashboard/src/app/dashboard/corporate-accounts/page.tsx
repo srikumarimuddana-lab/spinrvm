@@ -89,15 +89,23 @@ export default function CorporateAccountsPage() {
     const [currentAccount, setCurrentAccount] = useState<any>(null);
     const [formLoading, setFormLoading] = useState(false);
 
-    // Form state
-    const [formData, setFormData] = useState({
+    // Form state (M1.6: rich B2B fields land at create time; owner_email
+    // seeds the company's first owner member — create-only, not a column)
+    const emptyForm = {
         name: "",
         contact_name: "",
         contact_email: "",
         contact_phone: "",
         credit_limit: 0,
-        is_active: true
-    });
+        is_active: true,
+        legal_name: "",
+        business_number: "",
+        tax_region: "",
+        size_tier: "",
+        industry: "",
+        owner_email: ""
+    };
+    const [formData, setFormData] = useState(emptyForm);
 
     // Reset page on filter changes; search is debounced below.
     useEffect(() => { setPage(0); }, [statusFilter]);
@@ -136,14 +144,7 @@ export default function CorporateAccountsPage() {
 
     const handleOpenCreate = () => {
         setCurrentAccount(null);
-        setFormData({
-            name: "",
-            contact_name: "",
-            contact_email: "",
-            contact_phone: "",
-            credit_limit: 0,
-            is_active: true
-        });
+        setFormData(emptyForm);
         setIsDialogOpen(true);
     };
 
@@ -155,7 +156,13 @@ export default function CorporateAccountsPage() {
             contact_email: account.contact_email || "",
             contact_phone: account.contact_phone || "",
             credit_limit: account.credit_limit || 0,
-            is_active: account.is_active
+            is_active: account.is_active,
+            legal_name: (account as any).legal_name || "",
+            business_number: (account as any).business_number || "",
+            tax_region: (account as any).tax_region || "",
+            size_tier: (account as any).size_tier || "",
+            industry: (account as any).industry || "",
+            owner_email: "" // create-only; never edited
         });
         setIsDialogOpen(true);
     };
@@ -169,10 +176,38 @@ export default function CorporateAccountsPage() {
         e.preventDefault();
         setFormLoading(true);
         try {
+            // Empty optional strings → omitted (backend validators reject "").
+            const { owner_email, ...rest } = formData;
+            const payload: Record<string, unknown> = { ...rest };
+            for (const k of ["legal_name", "business_number", "tax_region", "size_tier", "industry"]) {
+                if (!(payload[k] as string)?.trim()) delete payload[k];
+            }
             if (currentAccount) {
-                await updateCorporateAccount(currentAccount.id, formData);
+                await updateCorporateAccount(currentAccount.id, payload);
             } else {
-                await createCorporateAccount(formData);
+                if (owner_email.trim()) payload.owner_email = owner_email.trim();
+                const created = (await createCorporateAccount(payload)) as CorporateAccount & {
+                    owner_invite_url?: string | null;
+                    owner_bootstrap_error?: boolean;
+                };
+                if (created.owner_bootstrap_error) {
+                    toast({
+                        title: "Company created, but the owner invite failed",
+                        description: "Re-invite the owner from the company's Members page.",
+                        variant: "destructive",
+                    });
+                } else if (created.owner_invite_url) {
+                    const webLink = created.owner_invite_url.replace(
+                        /^app:\/\/join\?token=/,
+                        `${window.location.origin}/company-login?invite_token=`
+                    );
+                    try {
+                        await navigator.clipboard.writeText(webLink);
+                        toast({ title: "Owner invited", description: "Invite link copied to clipboard." });
+                    } catch {
+                        toast({ title: "Owner invited", description: webLink });
+                    }
+                }
             }
             setIsDialogOpen(false);
             fetchAccounts();
@@ -406,6 +441,77 @@ export default function CorporateAccountsPage() {
                                 />
                             </div>
                         </div>
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <Label htmlFor="legal_name">Legal Name</Label>
+                                <Input
+                                    id="legal_name"
+                                    value={formData.legal_name}
+                                    onChange={(e) => setFormData({ ...formData, legal_name: e.target.value })}
+                                    placeholder="Acme Corporation Inc."
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="business_number">CRA Business Number</Label>
+                                <Input
+                                    id="business_number"
+                                    value={formData.business_number}
+                                    onChange={(e) => setFormData({ ...formData, business_number: e.target.value })}
+                                    placeholder="123456789RT0001"
+                                />
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-4">
+                            <div className="space-y-2">
+                                <Label htmlFor="tax_region">Tax Region</Label>
+                                <Input
+                                    id="tax_region"
+                                    value={formData.tax_region}
+                                    onChange={(e) => setFormData({ ...formData, tax_region: e.target.value })}
+                                    placeholder="SK"
+                                    maxLength={2}
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="size_tier">Size Tier</Label>
+                                <select
+                                    id="size_tier"
+                                    className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+                                    value={formData.size_tier}
+                                    onChange={(e) => setFormData({ ...formData, size_tier: e.target.value })}
+                                >
+                                    <option value="">—</option>
+                                    <option value="smb">SMB</option>
+                                    <option value="mid_market">Mid-market</option>
+                                    <option value="enterprise">Enterprise</option>
+                                </select>
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="industry">Industry</Label>
+                                <Input
+                                    id="industry"
+                                    value={formData.industry}
+                                    onChange={(e) => setFormData({ ...formData, industry: e.target.value })}
+                                    placeholder="Automotive"
+                                />
+                            </div>
+                        </div>
+                        {!currentAccount && (
+                            <div className="space-y-2">
+                                <Label htmlFor="owner_email">Owner Email (optional)</Label>
+                                <Input
+                                    id="owner_email"
+                                    type="email"
+                                    value={formData.owner_email}
+                                    onChange={(e) => setFormData({ ...formData, owner_email: e.target.value })}
+                                    placeholder="owner@acme.com"
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    Invites this person as the company&apos;s first owner — they manage
+                                    members and bookings from the business portal.
+                                </p>
+                            </div>
+                        )}
                         <div className="flex items-center justify-between space-x-2 pt-2">
                             <Label htmlFor="is_active">Account Active Status</Label>
                             <Switch

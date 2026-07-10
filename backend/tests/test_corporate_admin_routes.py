@@ -153,3 +153,33 @@ def test_create_rejects_invalid_business_number(test_client, admin_override):
         json={"name": "Acme Corp", "business_number": "12345"},
     )
     assert resp.status_code == 422
+
+
+def test_update_persists_rich_b2b_fields(test_client, admin_override):
+    # Regression (M1.6): the route-local CorporateAccountUpdate was thin, so
+    # legal_name/business_number/tax_region sent by the admin detail page were
+    # silently DROPPED (pydantic extra='ignore') and never persisted.
+    existing = corporate_account_row("active", id="c1")
+    updated = corporate_account_row("active", id="c1", legal_name="Acme Corporation Inc.")
+    mock_update = AsyncMock(return_value=updated)
+    with (
+        patch("routes.corporate_accounts.get_corporate_account_by_id", AsyncMock(return_value=existing)),
+        patch("routes.corporate_accounts.db_update_corporate_account", mock_update),
+    ):
+        resp = test_client.put(
+            "/api/admin/corporate-accounts/c1",
+            json={
+                "legal_name": "Acme Corporation Inc.",
+                "business_number": "123456789rt0001",
+                "tax_region": "sk",
+                "size_tier": "enterprise",
+                "industry": "Automotive",
+            },
+        )
+    assert resp.status_code == 200, resp.text
+    sent = mock_update.call_args[0][1]
+    assert sent["legal_name"] == "Acme Corporation Inc."
+    assert sent["business_number"] == "123456789RT0001"
+    assert sent["tax_region"] == "SK"
+    assert sent["size_tier"] == "enterprise"
+    assert sent["industry"] == "Automotive"

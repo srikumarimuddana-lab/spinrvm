@@ -8,6 +8,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { useAlertPrefsStore } from '../../store/alertPrefsStore';
 
 interface IncentiveItem {
     name: string;
@@ -85,7 +86,7 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
 
     useEffect(() => {
         if (incomingRide) {
-            if (Platform.OS !== 'web') {
+            if (Platform.OS !== 'web' && useAlertPrefsStore.getState().vibration) {
                 Vibration.vibrate([0, 80, 60, 80]);
             }
             Animated.spring(slideAnim, {
@@ -120,7 +121,7 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
     const quest = incomingRide.quest_hint;
 
     const vibrateForActionTap = () => {
-        if (Platform.OS !== 'web') {
+        if (Platform.OS !== 'web' && useAlertPrefsStore.getState().vibration) {
             Vibration.vibrate(35);
         }
     };

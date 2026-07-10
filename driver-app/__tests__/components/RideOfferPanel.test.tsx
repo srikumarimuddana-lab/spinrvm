@@ -100,4 +100,29 @@ describe('RideOfferPanel', () => {
     );
     expect(queryByText('Quiet ride')).toBeNull();
   });
+
+  describe('vibration preference (Settings → Sound & Haptics)', () => {
+    const { Vibration } = require('react-native');
+    const { useAlertPrefsStore } = require('../../store/alertPrefsStore');
+    let vibrateSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      vibrateSpy = jest.spyOn(Vibration, 'vibrate').mockImplementation(() => {});
+    });
+    afterEach(() => {
+      vibrateSpy.mockRestore();
+      useAlertPrefsStore.setState({ vibration: true });
+    });
+
+    it('vibrates on an incoming offer when the pref is ON (default)', () => {
+      render(<RideOfferPanel {...defaultProps} />);
+      expect(vibrateSpy).toHaveBeenCalled();
+    });
+
+    it('does not vibrate on an incoming offer when the pref is OFF', () => {
+      useAlertPrefsStore.setState({ vibration: false });
+      render(<RideOfferPanel {...defaultProps} />);
+      expect(vibrateSpy).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -65,27 +65,27 @@ class TestCardCancellationFeeCharge:
         update_ride_mock = AsyncMock()
 
         with (
-            patch("backend.routes.rides.db.find_one", AsyncMock(return_value=ride_arrived)),
-            patch("backend.routes.rides.get_app_settings", AsyncMock(return_value=SETTINGS)),
-            patch("backend.routes.rides.db_supabase.get_user_by_id", AsyncMock(return_value=_rider_user())),
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=ride_arrived)),
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value=SETTINGS)),
+            patch("backend.routes.rides._deps.db_supabase.get_user_by_id", AsyncMock(return_value=_rider_user())),
             patch(
-                "backend.routes.rides.charge_ancillary_fee",
+                "backend.routes.rides._deps.charge_ancillary_fee",
                 AsyncMock(
                     return_value=ChargeOutcome(
                         status="succeeded", payment_intent_id="pi_test_ok", charged_amount=Decimal("4.50")
                     )
                 ),
             ) as charge_mock,
-            patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=_driver())),
-            patch("backend.routes.rides.db.update_one", AsyncMock()),
-            patch("backend.routes.rides.db.insert_one", AsyncMock()) as insert_one_mock,
-            patch("backend.routes.rides.db_supabase.update_ride", update_ride_mock),
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride_cancelled)),
-            patch("backend.routes.rides.db_supabase.set_driver_available", AsyncMock()),
-            patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
-            patch("backend.routes.rides.manager.broadcast_ride_status", AsyncMock()),
-            patch("backend.routes.rides.manager.broadcast_to_admins", AsyncMock()),
-            patch("backend.routes.rides.send_push_notification", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=_driver())),
+            patch("backend.routes.rides._deps.db.update_one", AsyncMock()),
+            patch("backend.routes.rides._deps.db.insert_one", AsyncMock()) as insert_one_mock,
+            patch("backend.routes.rides._deps.db_supabase.update_ride", update_ride_mock),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride_cancelled)),
+            patch("backend.routes.rides._deps.db_supabase.set_driver_available", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
+            patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
         ):
             fn = getattr(rides_mod.cancel_ride_rider, "__wrapped__", rides_mod.cancel_ride_rider)
             result = await fn(
@@ -129,27 +129,27 @@ class TestCardCancellationFeeCharge:
         update_ride_mock = AsyncMock()
 
         with (
-            patch("backend.routes.rides.db.find_one", AsyncMock(return_value=ride_arrived)),
-            patch("backend.routes.rides.get_app_settings", AsyncMock(return_value=SETTINGS)),
-            patch("backend.routes.rides.db_supabase.get_user_by_id", AsyncMock(return_value=_rider_user())),
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=ride_arrived)),
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value=SETTINGS)),
+            patch("backend.routes.rides._deps.db_supabase.get_user_by_id", AsyncMock(return_value=_rider_user())),
             patch(
-                "backend.routes.rides.charge_ancillary_fee",
+                "backend.routes.rides._deps.charge_ancillary_fee",
                 AsyncMock(
                     return_value=ChargeOutcome(
                         status="declined", decline_code="insufficient_funds", error_message="Card declined"
                     )
                 ),
             ),
-            patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=_driver())),
-            patch("backend.routes.rides.db.update_one", AsyncMock()),
-            patch("backend.routes.rides.db.insert_one", AsyncMock()),
-            patch("backend.routes.rides.db_supabase.update_ride", update_ride_mock),
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride_cancelled)),
-            patch("backend.routes.rides.db_supabase.set_driver_available", AsyncMock()),
-            patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
-            patch("backend.routes.rides.manager.broadcast_ride_status", AsyncMock()),
-            patch("backend.routes.rides.manager.broadcast_to_admins", AsyncMock()),
-            patch("backend.routes.rides.send_push_notification", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=_driver())),
+            patch("backend.routes.rides._deps.db.update_one", AsyncMock()),
+            patch("backend.routes.rides._deps.db.insert_one", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", update_ride_mock),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride_cancelled)),
+            patch("backend.routes.rides._deps.db_supabase.set_driver_available", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
+            patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
         ):
             fn = getattr(rides_mod.cancel_ride_rider, "__wrapped__", rides_mod.cancel_ride_rider)
             result = await fn(
@@ -183,27 +183,27 @@ class TestCardCancellationFeeCharge:
         update_ride_mock = AsyncMock()
 
         with (
-            patch("backend.routes.rides.db.find_one", AsyncMock(return_value=ride_arrived)),
-            patch("backend.routes.rides.get_app_settings", AsyncMock(return_value=SETTINGS)),
-            patch("backend.routes.rides.db_supabase.get_user_by_id", AsyncMock(return_value=_rider_user())),
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=ride_arrived)),
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value=SETTINGS)),
+            patch("backend.routes.rides._deps.db_supabase.get_user_by_id", AsyncMock(return_value=_rider_user())),
             patch(
-                "backend.routes.rides.charge_ancillary_fee",
+                "backend.routes.rides._deps.charge_ancillary_fee",
                 AsyncMock(
                     return_value=ChargeOutcome(
                         status="requires_action", payment_intent_id="pi_test_3ds", client_secret="secret_x"
                     )
                 ),
             ),
-            patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=_driver())),
-            patch("backend.routes.rides.db.update_one", AsyncMock()),
-            patch("backend.routes.rides.db.insert_one", AsyncMock()),
-            patch("backend.routes.rides.db_supabase.update_ride", update_ride_mock),
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride_cancelled)),
-            patch("backend.routes.rides.db_supabase.set_driver_available", AsyncMock()),
-            patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
-            patch("backend.routes.rides.manager.broadcast_ride_status", AsyncMock()),
-            patch("backend.routes.rides.manager.broadcast_to_admins", AsyncMock()),
-            patch("backend.routes.rides.send_push_notification", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=_driver())),
+            patch("backend.routes.rides._deps.db.update_one", AsyncMock()),
+            patch("backend.routes.rides._deps.db.insert_one", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", update_ride_mock),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride_cancelled)),
+            patch("backend.routes.rides._deps.db_supabase.set_driver_available", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
+            patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
         ):
             fn = getattr(rides_mod.cancel_ride_rider, "__wrapped__", rides_mod.cancel_ride_rider)
             result = await fn(
@@ -229,23 +229,23 @@ class TestCardCancellationFeeCharge:
         update_ride_mock = AsyncMock()
 
         with (
-            patch("backend.routes.rides.db.find_one", AsyncMock(return_value=ride_arrived)),
-            patch("backend.routes.rides.get_app_settings", AsyncMock(return_value=SETTINGS)),
-            patch("backend.routes.rides.db_supabase.get_user_by_id", AsyncMock(return_value=_rider_user())),
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=ride_arrived)),
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value=SETTINGS)),
+            patch("backend.routes.rides._deps.db_supabase.get_user_by_id", AsyncMock(return_value=_rider_user())),
             patch(
-                "backend.routes.rides.charge_ancillary_fee",
+                "backend.routes.rides._deps.charge_ancillary_fee",
                 AsyncMock(return_value=ChargeOutcome(status="unconfigured", error_message="not configured")),
             ),
-            patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=_driver())),
-            patch("backend.routes.rides.db.update_one", AsyncMock()),
-            patch("backend.routes.rides.db.insert_one", AsyncMock()),
-            patch("backend.routes.rides.db_supabase.update_ride", update_ride_mock),
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride_cancelled)),
-            patch("backend.routes.rides.db_supabase.set_driver_available", AsyncMock()),
-            patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
-            patch("backend.routes.rides.manager.broadcast_ride_status", AsyncMock()),
-            patch("backend.routes.rides.manager.broadcast_to_admins", AsyncMock()),
-            patch("backend.routes.rides.send_push_notification", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=_driver())),
+            patch("backend.routes.rides._deps.db.update_one", AsyncMock()),
+            patch("backend.routes.rides._deps.db.insert_one", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", update_ride_mock),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride_cancelled)),
+            patch("backend.routes.rides._deps.db_supabase.set_driver_available", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
+            patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
         ):
             fn = getattr(rides_mod.cancel_ride_rider, "__wrapped__", rides_mod.cancel_ride_rider)
             result = await fn(
@@ -271,19 +271,19 @@ class TestCardCancellationFeeCharge:
         update_ride_mock = AsyncMock()
 
         with (
-            patch("backend.routes.rides.db.find_one", AsyncMock(return_value=ride_arrived)),
-            patch("backend.routes.rides.get_app_settings", AsyncMock(return_value=SETTINGS)),
-            patch("backend.routes.rides.charge_ancillary_fee", AsyncMock()) as charge_mock,
-            patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=_driver())),
-            patch("backend.routes.rides.db.update_one", AsyncMock()),
-            patch("backend.routes.rides.db.insert_one", AsyncMock()),
-            patch("backend.routes.rides.db_supabase.update_ride", update_ride_mock),
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride_cancelled)),
-            patch("backend.routes.rides.db_supabase.set_driver_available", AsyncMock()),
-            patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
-            patch("backend.routes.rides.manager.broadcast_ride_status", AsyncMock()),
-            patch("backend.routes.rides.manager.broadcast_to_admins", AsyncMock()),
-            patch("backend.routes.rides.send_push_notification", AsyncMock()),
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=ride_arrived)),
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value=SETTINGS)),
+            patch("backend.routes.rides._deps.charge_ancillary_fee", AsyncMock()) as charge_mock,
+            patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=_driver())),
+            patch("backend.routes.rides._deps.db.update_one", AsyncMock()),
+            patch("backend.routes.rides._deps.db.insert_one", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", update_ride_mock),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride_cancelled)),
+            patch("backend.routes.rides._deps.db_supabase.set_driver_available", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.broadcast_to_admins", AsyncMock()),
+            patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
         ):
             fn = getattr(rides_mod.cancel_ride_rider, "__wrapped__", rides_mod.cancel_ride_rider)
             result = await fn(

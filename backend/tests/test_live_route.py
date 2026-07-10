@@ -40,8 +40,8 @@ def _patches(ride, *, driver_pos, compute, capture):
         return compute
 
     return (
-        patch("backend.routes.rides.db_supabase.get_ride", _get_ride),
-        patch("backend.routes.rides.db_supabase.get_rows", _get_rows),
+        patch("backend.routes.rides._deps.db_supabase.get_ride", _get_ride),
+        patch("backend.routes.rides._deps.db_supabase.get_rows", _get_rows),
         patch("utils.route_distance.compute_route", _compute_route),
     )
 

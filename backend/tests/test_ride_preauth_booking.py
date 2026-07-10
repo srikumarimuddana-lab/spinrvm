@@ -36,10 +36,10 @@ def _outcome(**kw):
 
 
 def _patch_authorize(*returns):
-    """Patch routes.rides.authorize_ride with a sequence of ChargeOutcomes
+    """Patch routes.rides._deps.authorize_ride with a sequence of ChargeOutcomes
     (one per call — buffered hold, then optional fare-only retry)."""
     return patch(
-        "backend.routes.rides.authorize_ride",
+        "backend.routes.rides._deps.authorize_ride",
         AsyncMock(side_effect=list(returns)),
     )
 
@@ -170,8 +170,8 @@ class TestPreauthorizeRideCard:
 def _patch_verify(outcome, *, existing_rows=None):
     """Patch verify_authorization and the PI-reuse lookup (db_supabase.get_rows)."""
     return [
-        patch("backend.routes.rides.verify_authorization", AsyncMock(return_value=outcome)),
-        patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=existing_rows or [])),
+        patch("backend.routes.rides._deps.verify_authorization", AsyncMock(return_value=outcome)),
+        patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=existing_rows or [])),
     ]
 
 

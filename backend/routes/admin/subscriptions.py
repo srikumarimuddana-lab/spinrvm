@@ -739,9 +739,9 @@ async def admin_resend_subscription_invoice(
     except ImportError:
         from utils.subscription_invoice import build_invoice_email_kwargs  # type: ignore
     try:
-        from ..drivers import _send_subscription_invoice_email
+        from ..drivers import subscriptions as _drv_subs
     except ImportError:
-        from routes.drivers import _send_subscription_invoice_email  # type: ignore
+        from routes.drivers import subscriptions as _drv_subs  # type: ignore
 
     payment = await db_supabase.find_one("subscription_payments", {"id": payment_id})
     if not payment:
@@ -766,7 +766,7 @@ async def admin_resend_subscription_invoice(
             detail="Invoice was just resent — please wait a minute before retrying.",
         )
 
-    sent = await _send_subscription_invoice_email(**kwargs)
+    sent = await _drv_subs._send_subscription_invoice_email(**kwargs)
     if not sent:
         await redis_delete(_cooldown_key)  # delivery failed → don't hold the cooldown against a retry
     await log_admin_action(

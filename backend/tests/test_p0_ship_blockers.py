@@ -101,17 +101,17 @@ class TestDriverCancelNotifiesRider:
             push_calls.append({"user_id": user_id, "title": title, "body": body, "data": data})
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[_driver_row()])),
-            patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=accepted)),
-            patch("backend.routes.drivers.db_supabase.update_ride", AsyncMock(return_value=cancelled)),
-            patch("backend.routes.drivers.db_supabase.set_driver_available", AsyncMock()),
-            patch("backend.routes.drivers.manager.send_personal_message", AsyncMock(side_effect=_capture_ws)),
-            patch("backend.routes.drivers.send_push_notification", AsyncMock(side_effect=_capture_push)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver_row()])),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=accepted)),
+            patch("backend.routes.drivers._deps.db_supabase.update_ride", AsyncMock(return_value=cancelled)),
+            patch("backend.routes.drivers._deps.db_supabase.set_driver_available", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock(side_effect=_capture_ws)),
+            patch("backend.routes.drivers._deps.send_push_notification", AsyncMock(side_effect=_capture_push)),
         ):
             # get_ride is called twice — once before and once after the update.
             # Reset side_effect so the second call returns the cancelled row.
             with patch(
-                "backend.routes.drivers.db_supabase.get_ride",
+                "backend.routes.drivers._deps.db_supabase.get_ride",
                 AsyncMock(side_effect=[accepted, cancelled]),
             ):
                 result = await drv_mod.cancel_ride(
@@ -148,8 +148,8 @@ class TestDriverCancelNotifiesRider:
         in_progress = _ride(status="in_progress", driver_id=DRIVER_ID)
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[_driver_row()])),
-            patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=in_progress)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver_row()])),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=in_progress)),
         ):
             with pytest.raises(Exception) as exc_info:
                 await drv_mod.cancel_ride(
@@ -198,11 +198,11 @@ class TestNoDriversAvailableTimeout:
             push_calls.append({"user_id": user_id, "title": title, "body": body, "data": data})
 
         with (
-            patch("backend.routes.rides.asyncio.sleep", AsyncMock()),  # fast-forward
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=searching)),
-            patch("backend.routes.rides.db_supabase.update_ride", AsyncMock(side_effect=_capture_update)),
-            patch("backend.routes.rides.manager.send_personal_message", AsyncMock(side_effect=_capture_ws)),
-            patch("backend.routes.rides.send_push_notification", AsyncMock(side_effect=_capture_push)),
+            patch("backend.routes.rides._deps.asyncio.sleep", AsyncMock()),  # fast-forward
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=searching)),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock(side_effect=_capture_update)),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock(side_effect=_capture_ws)),
+            patch("backend.routes.rides._deps.send_push_notification", AsyncMock(side_effect=_capture_push)),
         ):
             await rides_mod.ride_search_timeout(RIDE_ID, timeout_seconds=1)
 
@@ -229,11 +229,11 @@ class TestNoDriversAvailableTimeout:
         ws_mock = AsyncMock()
 
         with (
-            patch("backend.routes.rides.asyncio.sleep", AsyncMock()),
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=matched)),
-            patch("backend.routes.rides.db_supabase.update_ride", update_mock),
-            patch("backend.routes.rides.manager.send_personal_message", ws_mock),
-            patch("backend.routes.rides.send_push_notification", AsyncMock()),
+            patch("backend.routes.rides._deps.asyncio.sleep", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=matched)),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", update_mock),
+            patch("backend.routes.rides._deps.manager.send_personal_message", ws_mock),
+            patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
         ):
             await rides_mod.ride_search_timeout(RIDE_ID, timeout_seconds=1)
 
@@ -282,8 +282,8 @@ class TestDuplicateRideRequestGuardHandler:
         fake_request.client = MagicMock(host="127.0.0.1")
 
         with (
-            patch("backend.routes.rides.db.find_one", AsyncMock(return_value=rider_row)),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[active])),
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=rider_row)),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[active])),
         ):
             with pytest.raises((HTTPException, SpinrException)) as exc_info:
                 await rides_mod.create_ride(request=fake_request, body=body, current_user={"id": RIDER_ID})
@@ -318,8 +318,8 @@ class TestDuplicateRideRequestGuardHandler:
         insert_mock = AsyncMock()
 
         with (
-            patch("backend.routes.rides.db_supabase.find_one", AsyncMock(return_value=original)),
-            patch("backend.routes.rides.db_supabase.insert_ride", insert_mock),
+            patch("backend.routes.rides._deps.db_supabase.find_one", AsyncMock(return_value=original)),
+            patch("backend.routes.rides._deps.db_supabase.insert_ride", insert_mock),
         ):
             result = await rides_mod.create_ride(request=fake_request, body=body, current_user={"id": RIDER_ID})
 
@@ -348,12 +348,12 @@ class TestDuplicateRideRequestGuard:
         active = _ride(status="searching")
 
         with (
-            patch("backend.routes.rides.db_supabase.find_one", AsyncMock(return_value=None)),
+            patch("backend.routes.rides._deps.db_supabase.find_one", AsyncMock(return_value=None)),
             patch(
-                "backend.routes.rides.db.find_one",
+                "backend.routes.rides._deps.db.find_one",
                 AsyncMock(return_value={"id": RIDER_ID, "status": "active", "stripe_customer_id": "cus_x"}),
             ),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[active])),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[active])),
             patch("backend.dependencies.get_current_user", lambda: {"id": RIDER_ID}),
         ):
             r = test_client.post(
@@ -386,7 +386,7 @@ class TestDuplicateRideRequestGuard:
         existing = _ride(status="searching")
 
         with (
-            patch("backend.routes.rides.db_supabase.find_one", AsyncMock(return_value=existing)),
+            patch("backend.routes.rides._deps.db_supabase.find_one", AsyncMock(return_value=existing)),
             patch("backend.dependencies.get_current_user", lambda: {"id": RIDER_ID}),
         ):
             r = test_client.post(
@@ -439,7 +439,7 @@ class TestSurgeBoundaryConsistency:
         original = _ride(status="searching", grand_total=27.75, surge_multiplier=1.5)
 
         with (
-            patch("backend.routes.rides.db_supabase.find_one", AsyncMock(return_value=original)),
+            patch("backend.routes.rides._deps.db_supabase.find_one", AsyncMock(return_value=original)),
             patch("backend.dependencies.get_current_user", lambda: {"id": RIDER_ID}),
         ):
             r = test_client.post(
@@ -564,9 +564,9 @@ class TestCreateRideHonorsEstimateToken:
             return {**row, "id": "ride_new_001"}
 
         with (
-            patch("backend.routes.rides.db.find_one", AsyncMock(return_value=rider_row)),
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=rider_row)),
             patch(
-                "backend.routes.rides.db_supabase.get_rows",
+                "backend.routes.rides._deps.db_supabase.get_rows",
                 AsyncMock(
                     side_effect=[
                         [],  # no active ride
@@ -575,19 +575,19 @@ class TestCreateRideHonorsEstimateToken:
                     ]
                 ),
             ),
-            patch("backend.routes.rides._fares_for_location_impl", AsyncMock(return_value=[fare_info])),
-            patch("backend.routes.rides.calculate_airport_fee", AsyncMock(return_value={"airport_fee": 0.0})),
+            patch("backend.routes.rides._deps._fares_for_location_impl", AsyncMock(return_value=[fare_info])),
+            patch("backend.routes.rides._deps.calculate_airport_fee", AsyncMock(return_value={"airport_fee": 0.0})),
             patch(
-                "backend.routes.rides.calculate_all_fees",
+                "backend.routes.rides._deps.calculate_all_fees",
                 AsyncMock(return_value={"fees_total": 0.0, "tax_amount": 0.0}),
             ),
-            patch("backend.routes.rides.db_supabase.insert_ride", AsyncMock(side_effect=_capture_insert)),
-            patch("backend.routes.rides.match_driver_to_ride", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.insert_ride", AsyncMock(side_effect=_capture_insert)),
+            patch("backend.routes.rides.matching.match_driver_to_ride", AsyncMock()),
             patch(
-                "backend.routes.rides.db_supabase.get_ride",
+                "backend.routes.rides._deps.db_supabase.get_ride",
                 AsyncMock(return_value={"id": "ride_new_001", "status": "searching"}),
             ),
-            patch("backend.routes.rides.asyncio.create_task", lambda coro: coro.close()),
+            patch("backend.routes.rides._deps.asyncio.create_task", lambda coro: coro.close()),
         ):
             await rides_mod.create_ride(request=fake_request, body=body, current_user={"id": RIDER_ID})
 
@@ -635,14 +635,14 @@ class TestPaymentFailureAtComplete:
         update_one_mock.modified_count = 1
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=completed)),
-            patch("backend.routes.rides.db.update_one", AsyncMock(return_value=update_one_mock)),
-            patch("backend.routes.rides.db_supabase.update_ride", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=completed)),
+            patch("backend.routes.rides._deps.db.update_one", AsyncMock(return_value=update_one_mock)),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
             # settle_wallet now debits atomically via the wallet_pay_for_ride RPC
             # (returns the new balance) instead of a read-compute-write.
             patch("backend.db_supabase.wallet_pay_for_ride", AsyncMock(return_value=Decimal("79.50"))),
             patch(
-                "backend.routes.rides.db_supabase.get_user_by_id",
+                "backend.routes.rides._deps.db_supabase.get_user_by_id",
                 AsyncMock(return_value={"id": RIDER_ID, "email": "r@s.ca"}),
             ),
             patch("backend.routes.wallet.get_or_create_wallet", AsyncMock(return_value=wallet)),
@@ -678,9 +678,9 @@ class TestPaymentFailureAtComplete:
             update_ride_calls.append((ride_id, patch))
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=completed)),
-            patch("backend.routes.rides.db.update_one", AsyncMock(return_value=update_one_mock)),
-            patch("backend.routes.rides.db_supabase.update_ride", AsyncMock(side_effect=_capture_update)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=completed)),
+            patch("backend.routes.rides._deps.db.update_one", AsyncMock(return_value=update_one_mock)),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock(side_effect=_capture_update)),
             # The atomic RPC raises ValueError('insufficient_funds') when the
             # balance can't cover the charge; settle_wallet must release the lock.
             patch(
@@ -737,10 +737,10 @@ class TestPaymentFailureAtComplete:
         )
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=completed)),
-            patch("backend.routes.rides.db_supabase.update_ride", AsyncMock(side_effect=_capture_update)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=completed)),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock(side_effect=_capture_update)),
             patch(
-                "backend.routes.rides.db_supabase.get_user_by_id",
+                "backend.routes.rides._deps.db_supabase.get_user_by_id",
                 AsyncMock(return_value={"id": RIDER_ID, "email": "r@s.ca", "stripe_customer_id": "cus_test"}),
             ),
             patch("backend.services.payment_service.charge_ride", AsyncMock(return_value=declined_outcome)),
@@ -1026,7 +1026,7 @@ class TestProcessPaymentHTTP:
         # decomposition) — patch charge_ride and db access there, and keep the
         # rides-module db patched for the handler's own pre-reads/guards.
         with (
-            patch.object(rides_mod, "db_supabase", mock_db),
+            patch.object(rides_mod._deps, "db_supabase", mock_db),
             patch("backend.services.payment_service.db_supabase", mock_db),
             patch("backend.services.payment_service.charge_ride", AsyncMock(return_value=outcome)),
         ):
@@ -1058,7 +1058,7 @@ class TestProcessPaymentHTTP:
         # decomposition) — patch charge_ride and db access there, and keep the
         # rides-module db patched for the handler's own pre-reads/guards.
         with (
-            patch.object(rides_mod, "db_supabase", mock_db),
+            patch.object(rides_mod._deps, "db_supabase", mock_db),
             patch("backend.services.payment_service.db_supabase", mock_db),
             patch("backend.services.payment_service.charge_ride", AsyncMock(return_value=outcome)),
         ):
@@ -1091,7 +1091,7 @@ class TestProcessPaymentHTTP:
         # decomposition) — patch charge_ride and db access there, and keep the
         # rides-module db patched for the handler's own pre-reads/guards.
         with (
-            patch.object(rides_mod, "db_supabase", mock_db),
+            patch.object(rides_mod._deps, "db_supabase", mock_db),
             patch("backend.services.payment_service.db_supabase", mock_db),
             patch("backend.services.payment_service.charge_ride", AsyncMock(return_value=outcome)),
         ):

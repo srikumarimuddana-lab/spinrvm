@@ -40,7 +40,7 @@ async def test_data_export_uses_two_waves_of_parallel_reads():
 
     with (
         patch.object(drivers_module.db_supabase, "get_rows", get_rows_mock),
-        patch.object(drivers_module, "send_email", send_email_mock),
+        patch.object(drivers_module._deps, "send_email", send_email_mock),
     ):
         await drivers_module._build_and_email_data_export("user-1", "x@x.com")
 
@@ -79,7 +79,7 @@ async def test_data_export_skips_wave2_for_rider_only_account():
 
     with (
         patch.object(drivers_module.db_supabase, "get_rows", get_rows_mock),
-        patch.object(drivers_module, "send_email", send_email_mock),
+        patch.object(drivers_module._deps, "send_email", send_email_mock),
     ):
         await drivers_module._build_and_email_data_export("user-1", "rider@x.com")
 

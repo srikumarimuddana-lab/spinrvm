@@ -84,7 +84,7 @@ def _starlette_request(method="GET", path="/"):
 async def test_require_ride_in_state_rider_wrong_state():
     from backend.utils.error_handling import SpinrException
 
-    with patch("backend.routes.rides.db") as mock_db:
+    with patch("backend.routes.rides._deps.db") as mock_db:
         mock_db.find_one = AsyncMock(
             side_effect=[
                 None,  # not in allowed states
@@ -106,7 +106,7 @@ async def test_require_ride_in_state_rider_wrong_state():
 async def test_require_ride_in_state_rider_not_found():
     from backend.utils.error_handling import RideNotFoundException
 
-    with patch("backend.routes.rides.db") as mock_db:
+    with patch("backend.routes.rides._deps.db") as mock_db:
         mock_db.find_one = AsyncMock(return_value=None)
         with pytest.raises(RideNotFoundException):
             from backend.routes.rides import _require_ride_in_state_rider
@@ -158,13 +158,13 @@ async def test_estimate_ride_returns_estimates():
     ]
 
     with (
-        patch("backend.routes.rides.validate_ride_location"),
-        patch("backend.routes.rides.calculate_distance", return_value=5.0),
-        patch("backend.routes.rides.get_fares_for_location", new_callable=AsyncMock, return_value=fake_fares),
-        patch("backend.routes.rides.db_supabase") as mock_db,
-        patch("backend.routes.rides.calculate_airport_fee", new_callable=AsyncMock, return_value={"airport_fee": 0.0}),
-        patch("backend.routes.rides.sign_estimate_token", return_value="tok"),
-        patch("backend.routes.rides.get_app_settings", new_callable=AsyncMock, return_value={}),
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.calculate_distance", return_value=5.0),
+        patch("backend.routes.rides._deps.get_fares_for_location", new_callable=AsyncMock, return_value=fake_fares),
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.calculate_airport_fee", new_callable=AsyncMock, return_value={"airport_fee": 0.0}),
+        patch("backend.routes.rides._deps.sign_estimate_token", return_value="tok"),
+        patch("backend.routes.rides._deps.get_app_settings", new_callable=AsyncMock, return_value={}),
     ):
         mock_db.get_rows = AsyncMock(return_value=[])
         mock_db.get_service_area_for_point = AsyncMock(return_value=None)
@@ -203,13 +203,13 @@ async def test_estimate_ride_includes_nearby_drivers():
     }
 
     with (
-        patch("backend.routes.rides.validate_ride_location"),
-        patch("backend.routes.rides.calculate_distance", return_value=2.0),
-        patch("backend.routes.rides.get_fares_for_location", new_callable=AsyncMock, return_value=fake_fares),
-        patch("backend.routes.rides.db_supabase") as mock_db,
-        patch("backend.routes.rides.calculate_airport_fee", new_callable=AsyncMock, return_value={"airport_fee": 0.0}),
-        patch("backend.routes.rides.sign_estimate_token", return_value="tok2"),
-        patch("backend.routes.rides.get_app_settings", new_callable=AsyncMock, return_value={}),
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.calculate_distance", return_value=2.0),
+        patch("backend.routes.rides._deps.get_fares_for_location", new_callable=AsyncMock, return_value=fake_fares),
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.calculate_airport_fee", new_callable=AsyncMock, return_value={"airport_fee": 0.0}),
+        patch("backend.routes.rides._deps.sign_estimate_token", return_value="tok2"),
+        patch("backend.routes.rides._deps.get_app_settings", new_callable=AsyncMock, return_value={}),
     ):
         # First get_rows call fetches service_areas (return empty to skip geofence),
         # second fetches nearby drivers.
@@ -254,14 +254,14 @@ async def test_estimate_ride_allows_dropoff_matched_by_polygon_fallback():
     }
 
     with (
-        patch("backend.routes.rides.validate_ride_location"),
-        patch("backend.routes.rides.calculate_distance", return_value=5.0),
-        patch("backend.routes.rides.get_fares_for_location", new_callable=AsyncMock, return_value=fake_fares),
-        patch("backend.routes.rides.db_supabase") as mock_db,
-        patch("backend.routes.rides.calculate_airport_fee", new_callable=AsyncMock, return_value={"airport_fee": 0.0}),
-        patch("backend.routes.rides.calculate_all_fees", new_callable=AsyncMock, return_value={}),
-        patch("backend.routes.rides.sign_estimate_token", return_value="tok"),
-        patch("backend.routes.rides.get_app_settings", new_callable=AsyncMock, return_value={}),
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.calculate_distance", return_value=5.0),
+        patch("backend.routes.rides._deps.get_fares_for_location", new_callable=AsyncMock, return_value=fake_fares),
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.calculate_airport_fee", new_callable=AsyncMock, return_value={"airport_fee": 0.0}),
+        patch("backend.routes.rides._deps.calculate_all_fees", new_callable=AsyncMock, return_value={}),
+        patch("backend.routes.rides._deps.sign_estimate_token", return_value="tok"),
+        patch("backend.routes.rides._deps.get_app_settings", new_callable=AsyncMock, return_value={}),
     ):
         # Simulates production rows where the PostGIS geography column is empty
         # or stale even though the admin-visible polygon contains both points.
@@ -287,7 +287,7 @@ async def test_get_active_ride_no_ride():
 
     req = _starlette_request()
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_rows = AsyncMock(return_value=[])
 
         result = await get_active_ride(request=req, current_user=_USER)
@@ -303,7 +303,7 @@ async def test_get_active_ride_with_unpaid_ride():
     req = _starlette_request()
     unpaid = _ride(status="completed", payment_status="pending", driver_id=None)
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_rows = AsyncMock(side_effect=[[unpaid], []])
         mock_db.get_driver_by_id = AsyncMock(return_value=None)
         mock_db.get_user_by_id = AsyncMock(return_value=None)
@@ -323,7 +323,7 @@ async def test_get_active_ride_with_driver_info():
     driver_row = {"id": _DRIVER_ID, "user_id": "driver-user", "rating": 4.9, "total_rides": 50}
     user_row = {"id": "driver-user", "first_name": "John", "last_name": "Doe"}
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_rows = AsyncMock(side_effect=[[], [active]])
         mock_db.get_driver_by_id = AsyncMock(return_value=driver_row)
         mock_db.get_user_by_id = AsyncMock(return_value=user_row)
@@ -346,7 +346,7 @@ async def test_get_ride_history_returns_completed_rides():
     for i, r in enumerate(completed):
         r["id"] = f"ride-{i}"
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_rows = AsyncMock(return_value=completed)
         mock_db.find_one = AsyncMock(return_value=None)
 
@@ -365,7 +365,7 @@ async def test_get_ride_history_cursor_pagination():
     # simulates that by returning only rides older than the cursor.
     rides_after_cursor = [{"id": f"r-{i}", "status": "completed", "driver_id": _DRIVER_ID} for i in range(2, 5)]
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_rows = AsyncMock(return_value=rides_after_cursor)
         mock_db.find_one = AsyncMock(return_value={"id": "r-1", "created_at": "2024-01-02T00:00:00Z"})
 
@@ -388,7 +388,7 @@ async def test_get_ride_history_filters_cancelled_without_driver():
         {"id": "r-3", "status": "cancelled", "driver_id": _DRIVER_ID},  # included
     ]
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_rows = AsyncMock(return_value=rides)
         mock_db.find_one = AsyncMock(return_value=None)
 
@@ -410,7 +410,7 @@ async def test_get_ride_not_found():
 
     req = _starlette_request()
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=None)
         mock_db.get_rows = AsyncMock(return_value=[])
 
@@ -427,11 +427,11 @@ async def test_get_ride_unauthorized():
     req = _starlette_request()
     ride = _ride(rider_id="other-rider")
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=ride)
         mock_db.get_rows = AsyncMock(return_value=[])  # no driver match
 
-        with patch("backend.routes.rides.get_app_settings", new_callable=AsyncMock, return_value={}):
+        with patch("backend.routes.rides._deps.get_app_settings", new_callable=AsyncMock, return_value={}):
             with pytest.raises(HTTPException) as exc:
                 await get_ride(request=req, ride_id=_RIDE_ID, current_user={"id": "intruder"})
 
@@ -445,12 +445,12 @@ async def test_get_ride_rider_view_searching():
     req = _starlette_request()
     ride = _ride(status="searching", rider_id=_RIDER_ID, driver_id=None)
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=ride)
         mock_db.get_rows = AsyncMock(return_value=[])
         mock_db.get_driver_by_id = AsyncMock(return_value=None)
 
-        with patch("backend.routes.rides.get_app_settings", new_callable=AsyncMock, return_value={}):
+        with patch("backend.routes.rides._deps.get_app_settings", new_callable=AsyncMock, return_value={}):
             result = await get_ride(request=req, ride_id=_RIDE_ID, current_user=_USER)
 
     assert result["id"] == _RIDE_ID
@@ -471,14 +471,14 @@ async def test_get_ride_driver_assigned_sets_offer_expiry():
 
     mock_driver = {"id": _DRIVER_ID, "user_id": "drv-user", "name": "Jane"}
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=ride)
         mock_db.get_rows = AsyncMock(return_value=[])
         mock_db.get_driver_by_id = AsyncMock(return_value=mock_driver)
         mock_db.get_user_by_id = AsyncMock(return_value={"profile_image": ""})
 
         with patch(
-            "backend.routes.rides.get_app_settings",
+            "backend.routes.rides._deps.get_app_settings",
             new_callable=AsyncMock,
             return_value={"ride_offer_timeout_seconds": "15"},
         ):
@@ -498,12 +498,12 @@ async def test_add_tip_success():
     req = _starlette_request(method="POST", path="/rides/ride-abc/tip")
     completed_ride = _ride(status="completed", driver_earnings=14.00, tip_amount=None)
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=completed_ride)
         mock_db.update_ride = AsyncMock()
         mock_db.get_driver_by_id = AsyncMock(return_value=None)
 
-        with patch("backend.routes.rides.manager") as mock_manager:
+        with patch("backend.routes.rides._deps.manager") as mock_manager:
             mock_manager.send_personal_message = AsyncMock()
 
             result = await add_tip(
@@ -525,7 +525,7 @@ async def test_add_tip_ride_not_found():
 
     req = _starlette_request(method="POST", path="/rides/no-ride/tip")
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=None)
 
         with pytest.raises(HTTPException) as exc:
@@ -548,7 +548,7 @@ async def test_add_tip_wrong_rider():
     req = _starlette_request(method="POST", path="/rides/ride-abc/tip")
     ride = _ride(status="completed", rider_id="other-rider")
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=ride)
 
         with pytest.raises(HTTPException) as exc:
@@ -571,7 +571,7 @@ async def test_add_tip_not_completed():
     req = _starlette_request(method="POST", path="/rides/ride-abc/tip")
     ride = _ride(status="in_progress")
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=ride)
 
         with pytest.raises(HTTPException) as exc:
@@ -594,7 +594,7 @@ async def test_add_tip_duplicate():
     req = _starlette_request(method="POST", path="/rides/ride-abc/tip")
     ride = _ride(status="completed", tip_amount=3.00)  # already tipped
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=ride)
 
         with pytest.raises(HTTPException) as exc:
@@ -615,7 +615,7 @@ async def test_add_tip_duplicate():
 async def test_record_payment_event_success():
     from backend.routes.rides import _record_payment_event
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.insert_one = AsyncMock()
         await _record_payment_event(_RIDE_ID, _RIDER_ID, 1500, "pi_test")
     mock_db.insert_one.assert_called_once()
@@ -626,7 +626,7 @@ async def test_record_payment_event_swallows_error():
     """Ledger write failure must not propagate."""
     from backend.routes.rides import _record_payment_event
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.insert_one = AsyncMock(side_effect=Exception("DB error"))
         # Should not raise
         await _record_payment_event(_RIDE_ID, _RIDER_ID, 1500, "pi_test")
@@ -641,7 +641,7 @@ async def test_process_payment_ride_not_found():
 
     from backend.routes.rides import ProcessPaymentRequest, process_payment
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=None)
 
         with pytest.raises(HTTPException) as exc:
@@ -659,7 +659,7 @@ async def test_process_payment_wrong_rider():
 
     from backend.routes.rides import ProcessPaymentRequest, process_payment
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=_ride(rider_id="other"))
 
         with pytest.raises(HTTPException) as exc:
@@ -675,7 +675,7 @@ async def test_process_payment_wrong_rider():
 async def test_process_payment_already_paid():
     from backend.routes.rides import ProcessPaymentRequest, process_payment
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=_ride(status="completed", payment_status="paid"))
 
         result = await process_payment(
@@ -693,7 +693,7 @@ async def test_process_payment_wrong_status():
 
     from backend.routes.rides import ProcessPaymentRequest, process_payment
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=_ride(status="in_progress"))
 
         with pytest.raises(HTTPException) as exc:
@@ -713,7 +713,7 @@ async def test_process_payment_no_payment_method():
 
     rider_user = {"id": _RIDER_ID, "stripe_customer_id": "cus_1", "default_payment_method": None}
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=_ride(status="completed", payment_method_id=None))
         mock_db.get_user_by_id = AsyncMock(return_value=rider_user)
         mock_db.update_ride = AsyncMock()
@@ -744,10 +744,10 @@ async def test_process_payment_succeeded():
     mock_email_mod.send_receipt_email = AsyncMock(return_value=True)
 
     with (
-        patch("backend.routes.rides.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
         patch("backend.services.payment_service.charge_ride", new_callable=AsyncMock, return_value=mock_outcome),
-        patch("backend.routes.rides.manager") as mock_manager,
-        patch("backend.routes.rides.send_push_notification", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.manager") as mock_manager,
+        patch("backend.routes.rides._deps.send_push_notification", new_callable=AsyncMock),
         patch.dict(sys.modules, {"utils.email_receipt": mock_email_mod}),
     ):
         mock_db.get_ride = AsyncMock(return_value=_ride(status="completed", payment_method_id="pm_1"))
@@ -782,9 +782,9 @@ async def test_process_payment_declined():
     mock_outcome.error_message = "Insufficient funds"
 
     with (
-        patch("backend.routes.rides.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
         patch("backend.services.payment_service.charge_ride", new_callable=AsyncMock, return_value=mock_outcome),
-        patch("backend.routes.rides.send_push_notification", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.send_push_notification", new_callable=AsyncMock),
     ):
         mock_db.get_ride = AsyncMock(return_value=_ride(status="completed", payment_method_id="pm_1"))
         mock_db.get_user_by_id = AsyncMock(return_value=rider_user)
@@ -816,7 +816,7 @@ async def test_process_payment_requires_action():
     mock_outcome.payment_intent_id = "pi_3ds"
 
     with (
-        patch("backend.routes.rides.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
         patch("backend.services.payment_service.charge_ride", new_callable=AsyncMock, return_value=mock_outcome),
     ):
         mock_db.get_ride = AsyncMock(return_value=_ride(status="completed", payment_method_id="pm_1"))
@@ -846,10 +846,10 @@ async def test_ride_search_timeout_cancels_searching_ride():
     searching_ride = _ride(status="searching", rider_id=_RIDER_ID)
 
     with (
-        patch("backend.routes.rides.asyncio.sleep", new_callable=AsyncMock),
-        patch("backend.routes.rides.db_supabase") as mock_db,
-        patch("backend.routes.rides.manager") as mock_manager,
-        patch("backend.routes.rides.send_push_notification", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.asyncio.sleep", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.manager") as mock_manager,
+        patch("backend.routes.rides._deps.send_push_notification", new_callable=AsyncMock),
     ):
         mock_db.get_ride = AsyncMock(return_value=searching_ride)
         mock_db.update_ride = AsyncMock()
@@ -869,8 +869,8 @@ async def test_ride_search_timeout_skips_non_searching_ride():
     completed_ride = _ride(status="completed")
 
     with (
-        patch("backend.routes.rides.asyncio.sleep", new_callable=AsyncMock),
-        patch("backend.routes.rides.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.asyncio.sleep", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
     ):
         mock_db.get_ride = AsyncMock(return_value=completed_ride)
         mock_db.update_ride = AsyncMock()
@@ -903,9 +903,9 @@ async def test_create_ride_banned_user():
     )
 
     with (
-        patch("backend.routes.rides.validate_ride_location"),
-        patch("backend.routes.rides.db") as mock_db,
-        patch("backend.routes.rides.db_supabase") as mock_supabase,
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.db") as mock_db,
+        patch("backend.routes.rides._deps.db_supabase") as mock_supabase,
     ):
         mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "banned"})
         mock_supabase.find_one = AsyncMock(return_value=None)
@@ -937,9 +937,9 @@ async def test_create_ride_suspended_user():
     )
 
     with (
-        patch("backend.routes.rides.validate_ride_location"),
-        patch("backend.routes.rides.db") as mock_db,
-        patch("backend.routes.rides.db_supabase") as mock_supabase,
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.db") as mock_db,
+        patch("backend.routes.rides._deps.db_supabase") as mock_supabase,
     ):
         mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "suspended"})
         mock_supabase.find_one = AsyncMock(return_value=None)
@@ -971,12 +971,12 @@ async def test_create_ride_card_no_stripe_customer():
     )
 
     with (
-        patch("backend.routes.rides.validate_ride_location"),
-        patch("backend.routes.rides.db") as mock_db,
-        patch("backend.routes.rides.db_supabase") as mock_supabase,
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.db") as mock_db,
+        patch("backend.routes.rides._deps.db_supabase") as mock_supabase,
         # Stripe configured → card-on-file requirement is enforced.
         patch(
-            "backend.routes.rides.get_app_settings",
+            "backend.routes.rides._deps.get_app_settings",
             AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
         ),
     ):
@@ -1013,9 +1013,9 @@ async def test_create_ride_existing_active_ride():
     )
 
     with (
-        patch("backend.routes.rides.validate_ride_location"),
-        patch("backend.routes.rides.db") as mock_db,
-        patch("backend.routes.rides.db_supabase") as mock_supabase,
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.db") as mock_db,
+        patch("backend.routes.rides._deps.db_supabase") as mock_supabase,
     ):
         mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active", "stripe_customer_id": "cus_1"})
         # No existing idempotency ride, but there IS an active ride
@@ -1057,12 +1057,12 @@ async def test_create_ride_card_without_payment_method_id_rejected():
     )
 
     with (
-        patch("backend.routes.rides.validate_ride_location"),
-        patch("backend.routes.rides.db") as mock_db,
-        patch("backend.routes.rides.db_supabase") as mock_supabase,
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.db") as mock_db,
+        patch("backend.routes.rides._deps.db_supabase") as mock_supabase,
         # Stripe configured → the card-on-file requirement is enforced.
         patch(
-            "backend.routes.rides.get_app_settings",
+            "backend.routes.rides._deps.get_app_settings",
             AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
         ),
     ):
@@ -1104,11 +1104,11 @@ async def test_create_ride_card_demo_mode_skips_card_requirement():
     )
 
     with (
-        patch("backend.routes.rides.validate_ride_location"),
-        patch("backend.routes.rides.db") as mock_db,
-        patch("backend.routes.rides.db_supabase") as mock_supabase,
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.db") as mock_db,
+        patch("backend.routes.rides._deps.db_supabase") as mock_supabase,
         # Stripe NOT configured → demo mode, card requirement is skipped.
-        patch("backend.routes.rides.get_app_settings", AsyncMock(return_value={})),
+        patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
     ):
         mock_db.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "active"})
         mock_supabase.find_one = AsyncMock(return_value=None)
@@ -1145,11 +1145,11 @@ async def test_create_ride_work_profile_without_corporate_account_still_requires
     )
 
     with (
-        patch("backend.routes.rides.validate_ride_location"),
-        patch("backend.routes.rides.db") as mock_db,
-        patch("backend.routes.rides.db_supabase") as mock_supabase,
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.db") as mock_db,
+        patch("backend.routes.rides._deps.db_supabase") as mock_supabase,
         patch(
-            "backend.routes.rides.get_app_settings",
+            "backend.routes.rides._deps.get_app_settings",
             AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
         ),
     ):
@@ -1187,11 +1187,11 @@ async def test_create_ride_corporate_work_profile_exempt_from_card_requirement()
     )
 
     with (
-        patch("backend.routes.rides.validate_ride_location"),
-        patch("backend.routes.rides.db") as mock_db,
-        patch("backend.routes.rides.db_supabase") as mock_supabase,
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.db") as mock_db,
+        patch("backend.routes.rides._deps.db_supabase") as mock_supabase,
         patch(
-            "backend.routes.rides.get_app_settings",
+            "backend.routes.rides._deps.get_app_settings",
             AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
         ),
     ):
@@ -1230,11 +1230,11 @@ async def test_create_ride_corporate_tag_without_work_profile_still_requires_car
     )
 
     with (
-        patch("backend.routes.rides.validate_ride_location"),
-        patch("backend.routes.rides.db") as mock_db,
-        patch("backend.routes.rides.db_supabase") as mock_supabase,
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.db") as mock_db,
+        patch("backend.routes.rides._deps.db_supabase") as mock_supabase,
         patch(
-            "backend.routes.rides.get_app_settings",
+            "backend.routes.rides._deps.get_app_settings",
             AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
         ),
     ):
@@ -1256,7 +1256,7 @@ async def test_match_driver_to_ride_no_ride():
     """Early-return when ride not found."""
     from backend.routes.rides import match_driver_to_ride
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=None)
         # Should return without error
         await match_driver_to_ride("no-such-ride")
@@ -1278,10 +1278,10 @@ async def test_match_driver_to_ride_no_drivers():
     )
 
     with (
-        patch("backend.routes.rides.db_supabase") as mock_db,
-        patch("backend.routes.rides.dispatch") as mock_dispatch,
-        patch("backend.routes.rides.get_app_settings", new_callable=AsyncMock, return_value={}),
-        patch("backend.routes.rides.filter_and_rank_drivers", return_value=[]),
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._shared.dispatch") as mock_dispatch,
+        patch("backend.routes.rides._deps.get_app_settings", new_callable=AsyncMock, return_value={}),
+        patch("backend.routes.rides._deps.filter_and_rank_drivers", return_value=[]),
     ):
         mock_db.get_ride = AsyncMock(return_value=ride)
         mock_db.get_rows = AsyncMock(return_value=[])
@@ -1319,18 +1319,18 @@ async def test_match_driver_to_ride_assigns_driver():
     }
 
     with (
-        patch("backend.routes.rides.db_supabase") as mock_db,
-        patch("backend.routes.rides.dispatch") as mock_dispatch,
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._shared.dispatch") as mock_dispatch,
         patch(
-            "backend.routes.rides.get_app_settings",
+            "backend.routes.rides._deps.get_app_settings",
             new_callable=AsyncMock,
             return_value={"ride_offer_timeout_seconds": "15"},
         ),
-        patch("backend.routes.rides.filter_and_rank_drivers", return_value=[(driver, 1.5)]),
-        patch("backend.routes.rides.record_period_transition", new_callable=AsyncMock),
-        patch("backend.routes.rides.manager") as mock_manager,
-        patch("backend.routes.rides.send_push_notification", new_callable=AsyncMock),
-        patch("backend.routes.rides.asyncio.create_task"),
+        patch("backend.routes.rides._deps.filter_and_rank_drivers", return_value=[(driver, 1.5)]),
+        patch("backend.routes.rides._deps.record_period_transition", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.manager") as mock_manager,
+        patch("backend.routes.rides._deps.send_push_notification", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.asyncio.create_task"),
     ):
         mock_db.get_ride = AsyncMock(return_value=ride)
         mock_db.get_rows = AsyncMock(return_value=[driver])
@@ -1359,11 +1359,11 @@ async def test_offer_timeout_handler_releases_driver():
     ride = _ride(status="driver_assigned", driver_id=_DRIVER_ID, rider_id=_RIDER_ID)
 
     with (
-        patch("backend.routes.rides.asyncio.sleep", new_callable=AsyncMock),
-        patch("backend.routes.rides.db") as mock_db,
-        patch("backend.routes.rides.record_period_transition", new_callable=AsyncMock),
-        patch("backend.routes.rides.manager") as mock_manager,
-        patch("backend.routes.rides.match_driver_to_ride", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.asyncio.sleep", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.db") as mock_db,
+        patch("backend.routes.rides._deps.record_period_transition", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.manager") as mock_manager,
+        patch("backend.routes.rides.matching.match_driver_to_ride", new_callable=AsyncMock),
     ):
         mock_db.find_one = AsyncMock(return_value=ride)
         mock_db.update_one = AsyncMock()
@@ -1382,8 +1382,8 @@ async def test_offer_timeout_handler_no_op_when_accepted():
     accepted_ride = _ride(status="driver_accepted", driver_id=_DRIVER_ID)
 
     with (
-        patch("backend.routes.rides.asyncio.sleep", new_callable=AsyncMock),
-        patch("backend.routes.rides.db") as mock_db,
+        patch("backend.routes.rides._deps.asyncio.sleep", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.db") as mock_db,
     ):
         mock_db.find_one = AsyncMock(return_value=accepted_ride)
         mock_db.update_one = AsyncMock()
@@ -1417,8 +1417,8 @@ async def test_rate_driver_success():
     driver = {"id": _DRIVER_ID, "user_id": "drv-user", "rating": 4.8, "total_ratings": 10}
 
     with (
-        patch("backend.routes.rides.db_supabase") as mock_db,
-        patch("backend.routes.rides.send_push_notification", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.send_push_notification", new_callable=AsyncMock),
     ):
         mock_db.get_ride = AsyncMock(return_value=completed)
         mock_db.update_ride = AsyncMock()
@@ -1441,7 +1441,7 @@ async def test_rate_driver_not_found():
     from backend.routes.rides import rate_driver
     from backend.schemas import RideRatingRequest
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=None)
 
         with pytest.raises(HTTPException) as exc:
@@ -1461,7 +1461,7 @@ async def test_rate_driver_not_completed():
     from backend.routes.rides import rate_driver
     from backend.schemas import RideRatingRequest
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=_ride(status="in_progress"))
 
         with pytest.raises(HTTPException) as exc:
@@ -1484,8 +1484,8 @@ async def test_rate_driver_with_tip():
     driver = {"id": _DRIVER_ID, "user_id": "drv-user", "rating": 4.8, "total_ratings": 10}
 
     with (
-        patch("backend.routes.rides.db_supabase") as mock_db,
-        patch("backend.routes.rides.send_push_notification", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.send_push_notification", new_callable=AsyncMock),
     ):
         mock_db.get_ride = AsyncMock(return_value=completed)
         mock_db.update_ride = AsyncMock()
@@ -1516,11 +1516,11 @@ async def test_cancel_ride_rider_searching():
     cancelled = _ride(status="cancelled", driver_id=None)
 
     with (
-        patch("backend.routes.rides.db") as mock_db,
-        patch("backend.routes.rides.db_supabase") as mock_supabase,
-        patch("backend.routes.rides.get_app_settings", new_callable=AsyncMock, return_value={}),
-        patch("backend.routes.rides.manager") as mock_manager,
-        patch("backend.routes.rides.send_push_notification", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.db") as mock_db,
+        patch("backend.routes.rides._deps.db_supabase") as mock_supabase,
+        patch("backend.routes.rides._deps.get_app_settings", new_callable=AsyncMock, return_value={}),
+        patch("backend.routes.rides._deps.manager") as mock_manager,
+        patch("backend.routes.rides._deps.send_push_notification", new_callable=AsyncMock),
     ):
         # _require_ride_in_state_rider: find_one returns searching ride twice (allowed check + fallback)
         mock_db.find_one = AsyncMock(return_value=searching)
@@ -1554,12 +1554,12 @@ async def test_cancel_ride_rider_driver_arrived_fee():
     driver = {"id": _DRIVER_ID, "user_id": "drv-user"}
 
     with (
-        patch("backend.routes.rides.db") as mock_db,
-        patch("backend.routes.rides.db_supabase") as mock_supabase,
-        patch("backend.routes.rides.get_app_settings", new_callable=AsyncMock, return_value={}),
-        patch("backend.routes.rides.manager") as mock_manager,
-        patch("backend.routes.rides.send_push_notification", new_callable=AsyncMock),
-        patch("backend.routes.rides.record_period_transition", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.db") as mock_db,
+        patch("backend.routes.rides._deps.db_supabase") as mock_supabase,
+        patch("backend.routes.rides._deps.get_app_settings", new_callable=AsyncMock, return_value={}),
+        patch("backend.routes.rides._deps.manager") as mock_manager,
+        patch("backend.routes.rides._deps.send_push_notification", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.record_period_transition", new_callable=AsyncMock),
     ):
         # _require_ride_in_state_rider: find_one returns arrived ride
         mock_db.find_one = AsyncMock(side_effect=[arrived, wallet])
@@ -1594,8 +1594,8 @@ async def test_add_stop_mid_trip_success():
     ride = _ride(status="in_progress", stops=[])
 
     with (
-        patch("backend.routes.rides.db") as mock_db,
-        patch("backend.routes.rides.manager") as mock_manager,
+        patch("backend.routes.rides._deps.db") as mock_db,
+        patch("backend.routes.rides._deps.manager") as mock_manager,
     ):
         mock_db.find_one = AsyncMock(return_value=ride)
         mock_db.update_one = AsyncMock()
@@ -1617,7 +1617,7 @@ async def test_add_stop_mid_trip_not_found():
 
     from backend.routes.rides import AddStopMidTripRequest, add_stop_mid_trip
 
-    with patch("backend.routes.rides.db") as mock_db:
+    with patch("backend.routes.rides._deps.db") as mock_db:
         mock_db.find_one = AsyncMock(return_value=None)
 
         with pytest.raises(HTTPException) as exc:
@@ -1637,8 +1637,8 @@ async def test_remove_stop_mid_trip_success():
     ride = _ride(status="in_progress", stops=[{"address": "S1", "lat": 52.1, "lng": -106.6}])
 
     with (
-        patch("backend.routes.rides.db") as mock_db,
-        patch("backend.routes.rides.manager") as mock_manager,
+        patch("backend.routes.rides._deps.db") as mock_db,
+        patch("backend.routes.rides._deps.manager") as mock_manager,
     ):
         mock_db.find_one = AsyncMock(return_value=ride)
         mock_db.update_one = AsyncMock()
@@ -1662,7 +1662,7 @@ async def test_remove_stop_mid_trip_invalid_index():
 
     ride = _ride(status="in_progress", stops=[])
 
-    with patch("backend.routes.rides.db") as mock_db:
+    with patch("backend.routes.rides._deps.db") as mock_db:
         mock_db.find_one = AsyncMock(return_value=ride)
 
         with pytest.raises(HTTPException) as exc:
@@ -1691,10 +1691,10 @@ async def test_match_driver_no_claim_returns_early():
     driver = {"id": _DRIVER_ID, "user_id": "drv-user", "lat": 52.1, "lng": -106.6}
 
     with (
-        patch("backend.routes.rides.db_supabase") as mock_db,
-        patch("backend.routes.rides.dispatch") as mock_dispatch,
-        patch("backend.routes.rides.get_app_settings", new_callable=AsyncMock, return_value={}),
-        patch("backend.routes.rides.filter_and_rank_drivers", return_value=[(driver, 1.0)]),
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._shared.dispatch") as mock_dispatch,
+        patch("backend.routes.rides._deps.get_app_settings", new_callable=AsyncMock, return_value={}),
+        patch("backend.routes.rides._deps.filter_and_rank_drivers", return_value=[(driver, 1.0)]),
     ):
         mock_db.get_ride = AsyncMock(return_value=ride)
         mock_db.get_rows = AsyncMock(return_value=[driver])
@@ -1725,11 +1725,11 @@ async def test_match_driver_offline_after_claim():
     driver = {"id": _DRIVER_ID, "user_id": "drv-user", "lat": 52.1, "lng": -106.6}
 
     with (
-        patch("backend.routes.rides.db_supabase") as mock_db,
-        patch("backend.routes.rides.dispatch") as mock_dispatch,
-        patch("backend.routes.rides.get_app_settings", new_callable=AsyncMock, return_value={}),
-        patch("backend.routes.rides.filter_and_rank_drivers", return_value=[(driver, 1.0)]),
-        patch("backend.routes.rides.match_driver_to_ride", new_callable=AsyncMock),  # prevent recursion
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._shared.dispatch") as mock_dispatch,
+        patch("backend.routes.rides._deps.get_app_settings", new_callable=AsyncMock, return_value={}),
+        patch("backend.routes.rides._deps.filter_and_rank_drivers", return_value=[(driver, 1.0)]),
+        patch("backend.routes.rides.matching.match_driver_to_ride", new_callable=AsyncMock),  # prevent recursion
     ):
         mock_db.get_ride = AsyncMock(return_value=ride)
         mock_db.get_rows = AsyncMock(return_value=[driver])
@@ -1755,7 +1755,7 @@ async def test_get_chat_status_not_found():
 
     from backend.routes.rides import get_chat_status
 
-    with patch("backend.routes.rides.db") as mock_db:
+    with patch("backend.routes.rides._deps.db") as mock_db:
         mock_db.find_one = AsyncMock(return_value=None)
         with pytest.raises(HTTPException) as exc:
             await get_chat_status(ride_id=_RIDE_ID, current_user=_USER)
@@ -1766,7 +1766,7 @@ async def test_get_chat_status_not_found():
 async def test_get_chat_status_cancelled():
     from backend.routes.rides import get_chat_status
 
-    with patch("backend.routes.rides.db") as mock_db:
+    with patch("backend.routes.rides._deps.db") as mock_db:
         mock_db.find_one = AsyncMock(return_value=_ride(status="cancelled"))
         result = await get_chat_status(ride_id=_RIDE_ID, current_user=_USER)
     assert result["available"] is False
@@ -1776,7 +1776,7 @@ async def test_get_chat_status_cancelled():
 async def test_get_chat_status_active():
     from backend.routes.rides import get_chat_status
 
-    with patch("backend.routes.rides.db") as mock_db:
+    with patch("backend.routes.rides._deps.db") as mock_db:
         mock_db.find_one = AsyncMock(return_value=_ride(status="in_progress"))
         result = await get_chat_status(ride_id=_RIDE_ID, current_user=_USER)
     assert result["available"] is True
@@ -1791,7 +1791,7 @@ async def test_get_chat_status_completed_recent():
 
     recent = datetime.now(timezone.utc).isoformat()
     ride = _ride(status="completed", ride_completed_at=recent)
-    with patch("backend.routes.rides.db") as mock_db:
+    with patch("backend.routes.rides._deps.db") as mock_db:
         mock_db.find_one = AsyncMock(return_value=ride)
         result = await get_chat_status(ride_id=_RIDE_ID, current_user=_USER)
     assert result["available"] is True
@@ -1821,7 +1821,7 @@ async def test_get_ride_messages_not_found():
 
     from backend.routes.rides import get_ride_messages
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=None)
         with pytest.raises(HTTPException) as exc:
             await get_ride_messages(ride_id=_RIDE_ID, current_user=_USER)
@@ -1835,7 +1835,7 @@ async def test_get_ride_messages_not_authorized():
     from backend.routes.rides import get_ride_messages
 
     ride = _ride(rider_id="other-rider")
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=ride)
         mock_db.get_rows = AsyncMock(return_value=[])  # no driver match
         with pytest.raises(HTTPException) as exc:
@@ -1849,7 +1849,7 @@ async def test_get_ride_messages_success():
 
     ride = _ride(rider_id=_RIDER_ID)
     msgs = [{"id": "m1", "text": "hi", "sender": "rider", "timestamp": "2025-01-01T00:00:00+00:00"}]
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=ride)
         mock_db.get_rows = AsyncMock(side_effect=[[], msgs])  # first=drivers (empty), second=messages
         result = await get_ride_messages(ride_id=_RIDE_ID, current_user=_USER)
@@ -1866,7 +1866,7 @@ async def test_send_ride_message_not_found():
 
     from backend.routes.rides import SendMessageRequest, send_ride_message
 
-    with patch("backend.routes.rides.db") as mock_db:
+    with patch("backend.routes.rides._deps.db") as mock_db:
         mock_db.find_one = AsyncMock(return_value=None)
         with pytest.raises(HTTPException) as exc:
             await send_ride_message(
@@ -1883,7 +1883,7 @@ async def test_send_ride_message_cancelled():
 
     from backend.routes.rides import SendMessageRequest, send_ride_message
 
-    with patch("backend.routes.rides.db") as mock_db:
+    with patch("backend.routes.rides._deps.db") as mock_db:
         mock_db.find_one = AsyncMock(return_value=_ride(status="cancelled"))
         with pytest.raises(HTTPException) as exc:
             await send_ride_message(
@@ -1900,7 +1900,7 @@ async def test_send_ride_message_success_rider():
 
     ride = _ride(status="in_progress", rider_id=_RIDER_ID, driver_id=_DRIVER_ID)
     driver_row = {"id": _DRIVER_ID, "user_id": "drv-user-01"}
-    with patch("backend.routes.rides.db") as mock_db, patch("backend.routes.rides.manager") as mock_manager:
+    with patch("backend.routes.rides._deps.db") as mock_db, patch("backend.routes.rides._deps.manager") as mock_manager:
         # find_one: ride, then current user's driver(None=rider), then target driver for WS
         mock_db.find_one = AsyncMock(side_effect=[ride, None, driver_row])
         mock_db.insert_one = AsyncMock(return_value={"id": "new-msg"})
@@ -1920,7 +1920,7 @@ async def test_send_ride_message_success_rider():
 async def test_get_scheduled_rides():
     from backend.routes.rides import get_scheduled_rides
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_rides_for_user = MagicMock(return_value=[_ride(status="scheduled")])
         result = await get_scheduled_rides(current_user=_USER)
     assert isinstance(result, list)
@@ -1934,7 +1934,7 @@ async def test_cancel_scheduled_ride_not_found():
     from backend.routes.rides import cancel_scheduled_ride
     from backend.utils.error_handling import RideNotFoundException
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_rows = AsyncMock(return_value=[])
         with pytest.raises(RideNotFoundException):
             await cancel_scheduled_ride(ride_id=_RIDE_ID, current_user=_USER)
@@ -1945,7 +1945,7 @@ async def test_cancel_scheduled_ride_already_cancelled():
     from backend.routes.rides import cancel_scheduled_ride
     from backend.utils.error_handling import SpinrException
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_rows = AsyncMock(return_value=[_ride(status="cancelled")])
         with pytest.raises(SpinrException):
             await cancel_scheduled_ride(ride_id=_RIDE_ID, current_user=_USER)
@@ -1957,9 +1957,9 @@ async def test_cancel_scheduled_ride_success():
 
     ride = _ride(status="scheduled")
     with (
-        patch("backend.routes.rides.db_supabase") as mock_db,
-        patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
-        patch("backend.routes.rides.manager.broadcast_ride_status", AsyncMock()),
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
+        patch("backend.routes.rides._deps.manager.broadcast_ride_status", AsyncMock()),
     ):
         mock_db.get_rows = AsyncMock(return_value=[ride])
         # C1: pre-dispatch cancel goes through an atomic status-filtered
@@ -1978,7 +1978,7 @@ async def test_simulate_driver_arrival_prod_blocked():
 
     from backend.routes.rides import simulate_driver_arrival
 
-    with patch("backend.routes.rides._settings") as mock_settings:
+    with patch("backend.routes.rides._deps._settings") as mock_settings:
         mock_settings.ENV = "production"
         with pytest.raises(HTTPException) as exc:
             await simulate_driver_arrival(ride_id=_RIDE_ID, current_user=_USER)
@@ -1990,7 +1990,7 @@ async def test_simulate_driver_arrival_success():
     from backend.routes.rides import simulate_driver_arrival
 
     updated = _ride(status="driver_arrived", pickup_otp="1234")
-    with patch("backend.routes.rides._settings") as mock_settings, patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps._settings") as mock_settings, patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_settings.ENV = "development"
         mock_db.get_ride = AsyncMock(return_value=_ride(rider_id=_RIDER_ID))
         mock_db.update_ride = AsyncMock()
@@ -2021,7 +2021,7 @@ async def test_rider_start_ride_success():
     driver_user = {"id": _RIDER_ID, "is_driver": True}
     driver_row = {"id": _DRIVER_ID}
     ride = _ride(status="driver_arrived", driver_id=_DRIVER_ID)
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=ride)
         mock_db.get_rows = AsyncMock(return_value=[driver_row])
         mock_db.update_ride = AsyncMock()
@@ -2038,7 +2038,7 @@ async def test_rider_complete_ride_not_found():
 
     from backend.routes.rides import rider_complete_ride
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=None)
         with pytest.raises(HTTPException) as exc:
             await rider_complete_ride(ride_id=_RIDE_ID, current_user=_USER)
@@ -2051,7 +2051,7 @@ async def test_rider_complete_ride_wrong_rider():
 
     from backend.routes.rides import rider_complete_ride
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=_ride(rider_id="other"))
         with pytest.raises(HTTPException) as exc:
             await rider_complete_ride(ride_id=_RIDE_ID, current_user=_USER)
@@ -2063,7 +2063,7 @@ async def test_rider_complete_ride_success():
     from backend.routes.rides import rider_complete_ride
 
     ride = _ride(status="completed", rider_id=_RIDER_ID)
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=ride)
         result = await rider_complete_ride(ride_id=_RIDE_ID, current_user=_USER)
     assert result["status"] == "completed"
@@ -2078,7 +2078,7 @@ async def test_get_ride_receipt_not_found():
 
     from backend.routes.rides import get_ride_receipt
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=None)
         with pytest.raises(HTTPException) as exc:
             await get_ride_receipt(ride_id=_RIDE_ID, current_user=_USER)
@@ -2091,7 +2091,7 @@ async def test_get_ride_receipt_wrong_rider():
 
     from backend.routes.rides import get_ride_receipt
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=_ride(rider_id="other"))
         with pytest.raises(HTTPException) as exc:
             await get_ride_receipt(ride_id=_RIDE_ID, current_user=_USER)
@@ -2104,7 +2104,7 @@ async def test_get_ride_receipt_not_completed():
 
     from backend.routes.rides import get_ride_receipt
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=_ride(status="in_progress", rider_id=_RIDER_ID))
         with pytest.raises(HTTPException) as exc:
             await get_ride_receipt(ride_id=_RIDE_ID, current_user=_USER)
@@ -2125,7 +2125,7 @@ async def test_get_ride_receipt_success():
     )
     driver_row = {"id": _DRIVER_ID, "user_id": "drv-user"}
     driver_user = {"first_name": "Bob", "last_name": "Smith"}
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=ride)
         mock_db.get_driver_by_id = AsyncMock(return_value=driver_row)
         mock_db.get_user_by_id = AsyncMock(return_value=driver_user)
@@ -2144,7 +2144,7 @@ async def test_trigger_emergency_not_found():
 
     from backend.routes.rides import EmergencyRequest, trigger_emergency
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=None)
         with pytest.raises(HTTPException) as exc:
             await trigger_emergency(
@@ -2162,7 +2162,7 @@ async def test_trigger_emergency_not_authorized():
     from backend.routes.rides import EmergencyRequest, trigger_emergency
 
     ride = _ride(rider_id="other-rider")
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=ride)
         mock_db.get_rows = AsyncMock(return_value=[])
         with pytest.raises(HTTPException) as exc:
@@ -2180,10 +2180,10 @@ async def test_trigger_emergency_success():
 
     ride = _ride(rider_id=_RIDER_ID)
     with (
-        patch("backend.routes.rides.db_supabase") as mock_db,
-        patch("backend.routes.rides.manager") as mock_manager,
-        patch("backend.routes.rides.get_app_settings", new_callable=AsyncMock, return_value={}),
-        patch("backend.routes.rides.send_sms", new_callable=AsyncMock, return_value={"success": True}),
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.manager") as mock_manager,
+        patch("backend.routes.rides._deps.get_app_settings", new_callable=AsyncMock, return_value={}),
+        patch("backend.routes.rides._deps.send_sms", new_callable=AsyncMock, return_value={"success": True}),
     ):
         mock_db.get_ride = AsyncMock(return_value=ride)
         mock_db.get_rows = AsyncMock(
@@ -2213,7 +2213,7 @@ async def test_safety_checkin_response_not_found():
 
     from backend.routes.rides import safety_checkin_response
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_rows = AsyncMock(return_value=[])
         with pytest.raises(HTTPException) as exc:
             await safety_checkin_response(ride_id=_RIDE_ID, current_user=_USER)
@@ -2226,7 +2226,7 @@ async def test_safety_checkin_response_not_in_progress():
 
     from backend.routes.rides import safety_checkin_response
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_rows = AsyncMock(return_value=[_ride(status="completed")])
         with pytest.raises(HTTPException) as exc:
             await safety_checkin_response(ride_id=_RIDE_ID, current_user=_USER)
@@ -2238,7 +2238,7 @@ async def test_safety_checkin_response_success():
     from backend.routes.rides import safety_checkin_response
 
     with (
-        patch("backend.routes.rides.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
         patch("backend.utils.redis_client.redis_set", new_callable=AsyncMock),
     ):
         mock_db.get_rows = AsyncMock(return_value=[_ride(status="in_progress")])
@@ -2265,9 +2265,9 @@ async def test_create_ride_banned_user_v2():
         vehicle_type_id="vt-1",
     )
     with (
-        patch("backend.routes.rides.validate_ride_location"),
-        patch("backend.routes.rides.db_supabase") as mock_db,
-        patch("backend.routes.rides.db") as mock_ddb,
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.db") as mock_ddb,
     ):
         mock_db.find_one = AsyncMock(return_value=None)  # idempotency key check
         mock_ddb.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "banned"})
@@ -2296,9 +2296,9 @@ async def test_create_ride_suspended_user_v2():
         vehicle_type_id="vt-1",
     )
     with (
-        patch("backend.routes.rides.validate_ride_location"),
-        patch("backend.routes.rides.db_supabase") as mock_db,
-        patch("backend.routes.rides.db") as mock_ddb,
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.db") as mock_ddb,
     ):
         mock_db.find_one = AsyncMock(return_value=None)
         mock_ddb.find_one = AsyncMock(return_value={"id": _RIDER_ID, "status": "suspended"})
@@ -2328,12 +2328,12 @@ async def test_create_ride_no_stripe_customer():
         payment_method="card",
     )
     with (
-        patch("backend.routes.rides.validate_ride_location"),
-        patch("backend.routes.rides.db_supabase") as mock_db,
-        patch("backend.routes.rides.db") as mock_ddb,
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.db") as mock_ddb,
         # Stripe configured → card-on-file requirement is enforced.
         patch(
-            "backend.routes.rides.get_app_settings",
+            "backend.routes.rides._deps.get_app_settings",
             AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
         ),
     ):
@@ -2368,8 +2368,8 @@ async def test_create_ride_idempotency_key_existing():
     req.scope["headers"] = [(b"idempotency-key", b"idem-abc")]
 
     with (
-        patch("backend.routes.rides.validate_ride_location"),
-        patch("backend.routes.rides.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
     ):
         mock_db.find_one = AsyncMock(return_value=existing)
         result = await create_ride(request=req, body=body, current_user=_USER)
@@ -2405,10 +2405,10 @@ async def test_create_ride_rejects_unpriced_requested_vehicle_type():
     }
 
     with (
-        patch("backend.routes.rides.validate_ride_location"),
-        patch("backend.routes.rides.db_supabase") as mock_db,
-        patch("backend.routes.rides.db") as mock_ddb,
-        patch("backend.routes.rides._fares_for_location_impl", new_callable=AsyncMock, return_value=[configured_fare]),
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.db") as mock_ddb,
+        patch("backend.routes.rides._deps._fares_for_location_impl", new_callable=AsyncMock, return_value=[configured_fare]),
     ):
         mock_db.find_one = AsyncMock(return_value=None)
         mock_db.get_rows = AsyncMock(return_value=[])
@@ -2456,18 +2456,18 @@ async def test_create_ride_full_happy_path():
     inserted_ride = {**_ride(status="searching"), "id": _RIDE_ID}
 
     with (
-        patch("backend.routes.rides.validate_ride_location"),
-        patch("backend.routes.rides.db_supabase") as mock_db,
-        patch("backend.routes.rides.db") as mock_ddb,
-        patch("backend.routes.rides._fares_for_location_impl", new_callable=AsyncMock, return_value=[fare_info]),
-        patch("backend.routes.rides.calculate_airport_fee", new_callable=AsyncMock, return_value={"airport_fee": 0.0}),
+        patch("backend.routes.rides._deps.validate_ride_location"),
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+        patch("backend.routes.rides._deps.db") as mock_ddb,
+        patch("backend.routes.rides._deps._fares_for_location_impl", new_callable=AsyncMock, return_value=[fare_info]),
+        patch("backend.routes.rides._deps.calculate_airport_fee", new_callable=AsyncMock, return_value={"airport_fee": 0.0}),
         patch(
-            "backend.routes.rides.calculate_all_fees",
+            "backend.routes.rides._deps.calculate_all_fees",
             new_callable=AsyncMock,
             return_value={"fees_total": 0, "tax_amount": 0, "fees": [], "tax_breakdown": {}},
         ),
-        patch("backend.routes.rides.match_driver_to_ride", new_callable=AsyncMock),
-        patch("backend.routes.rides.manager") as mock_manager,
+        patch("backend.routes.rides.matching.match_driver_to_ride", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.manager") as mock_manager,
     ):
         mock_db.find_one = AsyncMock(return_value=None)  # no idempotency match
         mock_db.get_rows = AsyncMock(return_value=[])  # always empty (no active ride, no corp members, etc.)
@@ -2515,7 +2515,7 @@ async def test_get_ride_driver_assigned_enrichment():
         "lng": -106.6,
         "photo_url": None,
     }
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=ride)
         mock_db.get_rows = AsyncMock(return_value=[{"id": _DRIVER_ID}])  # is_driver check
         mock_db.get_driver_by_id = AsyncMock(return_value=driver_row)
@@ -2539,7 +2539,7 @@ async def test_get_ride_with_driver_accepted_at():
         driver_id=None,
         driver_accepted_at="2026-01-01T12:00:00+00:00",
     )
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=ride)
         mock_db.get_rows = AsyncMock(return_value=[])
         result = await get_ride(
@@ -2562,7 +2562,7 @@ async def test_get_ride_history_with_cursor():
     # The DB layer applies the `created_at < cursor_ts` filter, so the mock
     # simulates that by returning only rides older than the cursor.
     rides_after_cursor = [_ride(status="completed", **{"id": f"r-{i}", "driver_id": _DRIVER_ID}) for i in range(2, 5)]
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_rows = AsyncMock(return_value=rides_after_cursor)
         mock_db.find_one = AsyncMock(return_value={"id": "r-1", "created_at": "2024-01-02T00:00:00Z"})
         result = await get_ride_history(
@@ -2606,9 +2606,9 @@ async def test_process_payment_card_succeeded():
     mock_db = _mock_db_for_payment(ride)
 
     with (
-        patch("backend.routes.rides.db_supabase", mock_db),
+        patch("backend.routes.rides._deps.db_supabase", mock_db),
         patch("backend.services.payment_service.charge_ride", new_callable=AsyncMock, return_value=outcome),
-        patch("backend.routes.rides.manager") as mock_manager,
+        patch("backend.routes.rides._deps.manager") as mock_manager,
         patch("utils.email_receipt.send_receipt_email", new_callable=AsyncMock, return_value=True),
     ):
         mock_manager.send_personal_message = AsyncMock()
@@ -2633,7 +2633,7 @@ async def test_process_payment_card_requires_action():
     mock_db = _mock_db_for_payment(ride)
 
     with (
-        patch("backend.routes.rides.db_supabase", mock_db),
+        patch("backend.routes.rides._deps.db_supabase", mock_db),
         patch("backend.services.payment_service.charge_ride", new_callable=AsyncMock, return_value=outcome),
     ):
         with pytest.raises(HTTPException) as exc:
@@ -2659,9 +2659,9 @@ async def test_process_payment_card_declined():
     mock_db = _mock_db_for_payment(ride)
 
     with (
-        patch("backend.routes.rides.db_supabase", mock_db),
+        patch("backend.routes.rides._deps.db_supabase", mock_db),
         patch("backend.services.payment_service.charge_ride", new_callable=AsyncMock, return_value=outcome),
-        patch("backend.routes.rides.send_push_notification", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.send_push_notification", new_callable=AsyncMock),
     ):
         with pytest.raises(HTTPException) as exc:
             await process_payment(
@@ -2684,7 +2684,7 @@ async def test_process_payment_card_unconfigured():
     mock_db = _mock_db_for_payment(ride)
 
     with (
-        patch("backend.routes.rides.db_supabase", mock_db),
+        patch("backend.routes.rides._deps.db_supabase", mock_db),
         patch("backend.services.payment_service.charge_ride", new_callable=AsyncMock, return_value=outcome),
         patch("utils.email_receipt.send_receipt_email", new_callable=AsyncMock, return_value=False),
     ):
@@ -2709,9 +2709,9 @@ async def test_process_payment_card_failed():
     mock_db = _mock_db_for_payment(ride)
 
     with (
-        patch("backend.routes.rides.db_supabase", mock_db),
+        patch("backend.routes.rides._deps.db_supabase", mock_db),
         patch("backend.services.payment_service.charge_ride", new_callable=AsyncMock, return_value=outcome),
-        patch("backend.routes.rides.send_push_notification", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.send_push_notification", new_callable=AsyncMock),
     ):
         with pytest.raises(HTTPException) as exc:
             await process_payment(
@@ -2732,7 +2732,7 @@ async def test_get_share_trip_link_not_found():
 
     from backend.routes.rides import get_share_trip_link
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=None)
         with pytest.raises(HTTPException) as exc:
             await get_share_trip_link(ride_id=_RIDE_ID, current_user=_USER)
@@ -2745,7 +2745,7 @@ async def test_get_share_trip_link_wrong_rider():
 
     from backend.routes.rides import get_share_trip_link
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=_ride(rider_id="other"))
         with pytest.raises(HTTPException) as exc:
             await get_share_trip_link(ride_id=_RIDE_ID, current_user=_USER)
@@ -2758,7 +2758,7 @@ async def test_get_share_trip_link_completed():
 
     from backend.routes.rides import get_share_trip_link
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(return_value=_ride(status="completed", rider_id=_RIDER_ID))
         with pytest.raises(HTTPException) as exc:
             await get_share_trip_link(ride_id=_RIDE_ID, current_user=_USER)
@@ -2769,7 +2769,7 @@ async def test_get_share_trip_link_completed():
 async def test_get_share_trip_link_success_new_token():
     from backend.routes.rides import get_share_trip_link
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_ride = AsyncMock(
             return_value=_ride(status="in_progress", rider_id=_RIDER_ID, shared_trip_token=None)
         )
@@ -2788,7 +2788,7 @@ async def test_share_trip_with_contact_not_found():
 
     from backend.routes.rides import ShareTripWithContactRequest, share_trip_with_contact
 
-    with patch("backend.routes.rides.db") as mock_db:
+    with patch("backend.routes.rides._deps.db") as mock_db:
         mock_db.find_one = AsyncMock(return_value=None)
         with pytest.raises(HTTPException) as exc:
             await share_trip_with_contact(
@@ -2805,7 +2805,7 @@ async def test_share_trip_with_contact_wrong_rider():
 
     from backend.routes.rides import ShareTripWithContactRequest, share_trip_with_contact
 
-    with patch("backend.routes.rides.db") as mock_db:
+    with patch("backend.routes.rides._deps.db") as mock_db:
         mock_db.find_one = AsyncMock(return_value=_ride(rider_id="other"))
         with pytest.raises(HTTPException) as exc:
             await share_trip_with_contact(
@@ -2822,7 +2822,7 @@ async def test_share_trip_with_contact_completed():
 
     from backend.routes.rides import ShareTripWithContactRequest, share_trip_with_contact
 
-    with patch("backend.routes.rides.db") as mock_db:
+    with patch("backend.routes.rides._deps.db") as mock_db:
         mock_db.find_one = AsyncMock(return_value=_ride(status="completed", rider_id=_RIDER_ID))
         with pytest.raises(HTTPException) as exc:
             await share_trip_with_contact(
@@ -2842,8 +2842,8 @@ async def test_share_trip_with_contact_success():
     contact_user = {"id": "contact-usr"}
 
     with (
-        patch("backend.routes.rides.db") as mock_db,
-        patch("backend.routes.rides.send_push_notification", new_callable=AsyncMock),
+        patch("backend.routes.rides._deps.db") as mock_db,
+        patch("backend.routes.rides._deps.send_push_notification", new_callable=AsyncMock),
     ):
         mock_db.find_one = AsyncMock(side_effect=[ride, contact_user, rider_user])
         mock_db.update_one = AsyncMock()
@@ -2865,7 +2865,7 @@ async def test_track_shared_ride_not_found():
 
     from backend.routes.rides import track_shared_ride
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_rows = AsyncMock(return_value=[])
         with pytest.raises(HTTPException) as exc:
             await track_shared_ride(share_token="abc123")
@@ -2877,7 +2877,7 @@ async def test_track_shared_ride_completed():
     from backend.routes.rides import track_shared_ride
 
     ride = _ride(status="completed", shared_trip_token_created_at=None)
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_rows = AsyncMock(return_value=[ride])
         result = await track_shared_ride(share_token="abc123")
     assert result["status"] == "completed"
@@ -2897,7 +2897,7 @@ async def test_track_shared_ride_active():
         "vehicle_model": "Camry",
         "vehicle_color": "Blue",
     }
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
         mock_db.get_rows = AsyncMock(return_value=[ride])
         mock_db.get_driver_by_id = AsyncMock(return_value=driver_row)
         mock_db.get_user_by_id = AsyncMock(return_value={"profile_image": ""})
@@ -2913,7 +2913,7 @@ async def test_get_shared_contacts_success():
     from backend.routes.rides import get_shared_contacts
 
     ride = _ride(rider_id=_RIDER_ID, shared_with=[{"name": "Bob", "phone": "+1306"}])
-    with patch("backend.routes.rides.db") as mock_db:
+    with patch("backend.routes.rides._deps.db") as mock_db:
         mock_db.find_one = AsyncMock(return_value=ride)
         result = await get_shared_contacts(ride_id=_RIDE_ID, current_user=_USER)
     assert len(result["contacts"]) == 1
@@ -2938,8 +2938,8 @@ async def test_process_payment_wallet_success():
     mock_db = _mock_db_for_payment(ride)
 
     with (
-        patch("backend.routes.rides.db_supabase", mock_db),
-        patch("backend.routes.rides.db") as mock_ddb,
+        patch("backend.routes.rides._deps.db_supabase", mock_db),
+        patch("backend.routes.rides._deps.db") as mock_ddb,
         patch("backend.routes.wallet.get_or_create_wallet", new_callable=AsyncMock, return_value=wallet),
         patch("backend.routes.wallet._record_transaction", new_callable=AsyncMock),
         patch("utils.email_receipt.send_receipt_email", new_callable=AsyncMock, return_value=False),
@@ -2971,7 +2971,7 @@ async def test_process_payment_wallet_suspended():
     mock_db = _mock_db_for_payment(ride)
 
     with (
-        patch("backend.routes.rides.db_supabase", mock_db),
+        patch("backend.routes.rides._deps.db_supabase", mock_db),
         patch("backend.routes.wallet.get_or_create_wallet", new_callable=AsyncMock, return_value=wallet),
     ):
         with pytest.raises(HTTPException) as exc:
@@ -3001,7 +3001,7 @@ async def test_process_payment_wallet_insufficient_balance():
     mock_db = _mock_db_for_payment(ride)
 
     with (
-        patch("backend.routes.rides.db_supabase", mock_db),
+        patch("backend.routes.rides._deps.db_supabase", mock_db),
         patch("backend.routes.wallet.get_or_create_wallet", new_callable=AsyncMock, return_value=wallet),
     ):
         with pytest.raises(HTTPException) as exc:
@@ -3026,7 +3026,7 @@ async def test_process_payment_guard_row_none():
     mock_db = _mock_db_for_payment(ride)
     mock_db.update_one = AsyncMock(return_value=None)  # guard returns None
 
-    with patch("backend.routes.rides.db_supabase", mock_db):
+    with patch("backend.routes.rides._deps.db_supabase", mock_db):
         result = await process_payment(
             ride_id=_RIDE_ID,
             req=ProcessPaymentRequest(),
@@ -3057,9 +3057,9 @@ async def test_process_payment_card_succeeded_with_driver():
     )
 
     with (
-        patch("backend.routes.rides.db_supabase", mock_db),
+        patch("backend.routes.rides._deps.db_supabase", mock_db),
         patch("backend.services.payment_service.charge_ride", new_callable=AsyncMock, return_value=outcome),
-        patch("backend.routes.rides.manager") as mock_manager,
+        patch("backend.routes.rides._deps.manager") as mock_manager,
         patch("utils.email_receipt.send_receipt_email", new_callable=AsyncMock, return_value=True),
     ):
         mock_manager.send_personal_message = AsyncMock()
@@ -3091,7 +3091,7 @@ async def test_process_payment_company_allowance_no_company_id():
     )
     mock_db = _mock_db_for_payment(ride)
 
-    with patch("backend.routes.rides.db_supabase", mock_db):
+    with patch("backend.routes.rides._deps.db_supabase", mock_db):
         with pytest.raises(HTTPException) as exc:
             await process_payment(
                 ride_id=_RIDE_ID,
@@ -3119,7 +3119,7 @@ async def test_process_payment_company_allowance_no_membership():
     mock_db = _mock_db_for_payment(ride)
     mock_db.list_active_memberships_for_user = AsyncMock(return_value=[])
 
-    with patch("backend.routes.rides.db_supabase", mock_db):
+    with patch("backend.routes.rides._deps.db_supabase", mock_db):
         with pytest.raises(HTTPException) as exc:
             await process_payment(
                 ride_id=_RIDE_ID,
@@ -3160,7 +3160,7 @@ async def test_process_payment_company_allowance_unlimited_happy_path():
     mock_policy_eval = MagicMock(return_value={"pass": True, "failed_rules": []})
 
     with (
-        patch("backend.routes.rides.db_supabase", mock_db),
+        patch("backend.routes.rides._deps.db_supabase", mock_db),
         patch("backend.routes.rides.corporate_allowance_service", mock_allowance_svc),
         patch("backend.routes.rides.corporate_wallet_service", mock_wallet_svc),
         patch("backend.routes.rides.evaluate_policy", mock_policy_eval),
@@ -3206,7 +3206,7 @@ async def test_process_payment_company_allowance_capped_with_master():
     mock_policy_eval = MagicMock(return_value={"pass": True, "failed_rules": []})
 
     with (
-        patch("backend.routes.rides.db_supabase", mock_db),
+        patch("backend.routes.rides._deps.db_supabase", mock_db),
         patch("backend.routes.rides.corporate_allowance_service", mock_allowance_svc),
         patch("backend.routes.rides.corporate_wallet_service", mock_wallet_svc),
         patch("backend.routes.rides.evaluate_policy", mock_policy_eval),
@@ -3252,7 +3252,7 @@ async def test_process_payment_company_allowance_master_debit_fails():
     mock_wallet_svc.apply_adjustment = AsyncMock(side_effect=Exception("wallet debit failed"))
 
     with (
-        patch("backend.routes.rides.db_supabase", mock_db),
+        patch("backend.routes.rides._deps.db_supabase", mock_db),
         patch("backend.routes.rides.corporate_allowance_service", mock_allowance_svc),
         patch("backend.routes.rides.corporate_wallet_service", mock_wallet_svc),
     ):

@@ -70,28 +70,28 @@ async def test_match_driver_to_ride_counts_offers_sent():
     before = _counter_total("spinr_dispatch_offer_sent_total")
 
     with (
-        patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=_ride())),
-        patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+        patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=_ride())),
+        patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
         patch(
-            "backend.routes.rides.dispatch.resolve_matching_config",
+            "backend.routes.rides._shared.dispatch.resolve_matching_config",
             AsyncMock(return_value=("nearest", 4.0, 10.0, 3, False)),
         ),
-        patch("backend.routes.rides.db_supabase.update_ride", AsyncMock()),
-        patch("backend.routes.rides.db_supabase.claim_driver_atomic", AsyncMock(return_value=True)),
-        patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=_driver())),
+        patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
+        patch("backend.routes.rides._deps.db_supabase.claim_driver_atomic", AsyncMock(return_value=True)),
+        patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=_driver())),
         patch(
-            "backend.routes.rides.db_supabase.get_user_by_id",
+            "backend.routes.rides._deps.db_supabase.get_user_by_id",
             AsyncMock(return_value={"first_name": "Test", "last_name": "Rider"}),
         ),
         # ride_offers insert + incentives lookup both go through run_sync.
         patch(
-            "backend.routes.rides.db_supabase.run_sync",
+            "backend.routes.rides._deps.db_supabase.run_sync",
             AsyncMock(return_value=SimpleNamespace(data=[])),
         ),
-        patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
-        patch("backend.routes.rides.send_push_notification", AsyncMock()),
-        patch("backend.routes.rides.get_app_settings", AsyncMock(return_value={"offer_timeout_seconds": 15})),
-        patch("backend.routes.rides.asyncio.create_task", MagicMock()),
+        patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
+        patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
+        patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={"offer_timeout_seconds": 15})),
+        patch("backend.routes.rides._deps.asyncio.create_task", MagicMock()),
     ):
         try:
             await rides_mod.match_driver_to_ride(ride_id=RIDE_ID)
@@ -147,14 +147,14 @@ async def test_accept_ride_counts_accept_and_observes_latency():
     count_before = cell_before["count"] if cell_before else 0
 
     with (
-        patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=pre_ride)),
-        patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
-        patch("backend.routes.drivers.db.update_one", AsyncMock(return_value={"id": RIDE_ID})),
-        patch("backend.routes.drivers.db.find_one", AsyncMock(return_value=post_ride)),
-        patch("backend.routes.drivers.db_supabase.run_sync", AsyncMock(side_effect=_run_sync)),
-        patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
-        patch("backend.routes.drivers.manager.broadcast_ride_status", AsyncMock()),
-        patch("backend.routes.drivers.send_push_notification", AsyncMock()),
+        patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=pre_ride)),
+        patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver()])),
+        patch("backend.routes.drivers._deps.db.update_one", AsyncMock(return_value={"id": RIDE_ID})),
+        patch("backend.routes.drivers._deps.db.find_one", AsyncMock(return_value=post_ride)),
+        patch("backend.routes.drivers._deps.db_supabase.run_sync", AsyncMock(side_effect=_run_sync)),
+        patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+        patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+        patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
     ):
         await drivers_mod.accept_ride(ride_id=RIDE_ID, current_user={"id": DRIVER_USER_ID})
 

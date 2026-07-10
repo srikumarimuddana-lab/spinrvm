@@ -69,18 +69,18 @@ async def test_candidate_fetch_failure_schedules_retry():
     update_ride_mock = AsyncMock()
 
     with (
-        patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=_RIDE)),
+        patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=_RIDE)),
         patch(
-            "backend.routes.rides.db_supabase.get_rows",
+            "backend.routes.rides._deps.db_supabase.get_rows",
             AsyncMock(side_effect=DatabaseError(details={"original": "H2 GOAWAY"})),
         ),
-        patch("backend.routes.rides.db_supabase.update_ride", update_ride_mock),
+        patch("backend.routes.rides._deps.db_supabase.update_ride", update_ride_mock),
         patch(
-            "backend.routes.rides.dispatch.resolve_matching_config",
+            "backend.routes.rides._shared.dispatch.resolve_matching_config",
             AsyncMock(return_value=("nearest", 4.0, 10.0, 3, False)),
         ),
-        patch("backend.routes.rides.get_app_settings", AsyncMock(return_value={})),
-        patch("backend.routes.rides.spawn", spawn_mock),
+        patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+        patch("backend.routes.rides._deps.spawn", spawn_mock),
     ):
         await rides_mod.match_driver_to_ride(ride_id=_RIDE["id"])
 
@@ -99,12 +99,12 @@ async def test_dispatch_retry_rearms_after_failed_attempt():
     spawn_mock = MagicMock()
 
     with (
-        patch("backend.routes.rides.asyncio.sleep", AsyncMock()),
+        patch("backend.routes.rides._deps.asyncio.sleep", AsyncMock()),
         patch(
-            "backend.routes.rides.db_supabase.get_ride",
+            "backend.routes.rides._deps.db_supabase.get_ride",
             AsyncMock(side_effect=DatabaseError(details={"original": "connection reset"})),
         ),
-        patch("backend.routes.rides.spawn", spawn_mock),
+        patch("backend.routes.rides._deps.spawn", spawn_mock),
     ):
         await rides_mod._dispatch_retry(_RIDE["id"], delay=0, attempt=3)
 
@@ -135,10 +135,10 @@ async def test_post_fetch_failure_rearms_with_backoff():
     spawn_mock = MagicMock()
 
     with (
-        patch.object(rides_mod, "_match_driver_to_ride_attempt", AsyncMock(side_effect=RuntimeError("mid-claim boom"))),
-        patch.object(rides_mod, "_dispatch_retry", retry_mock),
-        patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])),  # no pending offers
-        patch("backend.routes.rides.spawn", spawn_mock),
+        patch.object(rides_mod.matching, "_match_driver_to_ride_attempt", AsyncMock(side_effect=RuntimeError("mid-claim boom"))),
+        patch.object(rides_mod.matching, "_dispatch_retry", retry_mock),
+        patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),  # no pending offers
+        patch("backend.routes.rides._deps.spawn", spawn_mock),
     ):
         await rides_mod.match_driver_to_ride(ride_id=_RIDE["id"], attempt=1)
 
@@ -158,8 +158,8 @@ async def test_no_rearm_when_offers_already_pending():
         patch.object(
             rides_mod, "_match_driver_to_ride_attempt", AsyncMock(side_effect=RuntimeError("post-offer boom"))
         ),
-        patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[{"id": "offer_1"}])),
-        patch("backend.routes.rides.spawn", spawn_mock),
+        patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[{"id": "offer_1"}])),
+        patch("backend.routes.rides._deps.spawn", spawn_mock),
     ):
         await rides_mod.match_driver_to_ride(ride_id=_RIDE["id"], attempt=0)
 
@@ -175,9 +175,9 @@ async def test_dispatch_retry_respects_attempt_cap():
     get_ride_mock = AsyncMock()
 
     with (
-        patch("backend.routes.rides.asyncio.sleep", AsyncMock()),
-        patch("backend.routes.rides.db_supabase.get_ride", get_ride_mock),
-        patch("backend.routes.rides.spawn", spawn_mock),
+        patch("backend.routes.rides._deps.asyncio.sleep", AsyncMock()),
+        patch("backend.routes.rides._deps.db_supabase.get_ride", get_ride_mock),
+        patch("backend.routes.rides._deps.spawn", spawn_mock),
     ):
         await rides_mod._dispatch_retry(_RIDE["id"], delay=0, attempt=rides_mod._MAX_DISPATCH_ATTEMPTS + 1)
 

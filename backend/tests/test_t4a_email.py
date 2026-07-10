@@ -70,9 +70,9 @@ class TestEmailT4ASummary:
 
         bg = BackgroundTasks()
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[_driver_row()])),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver_row()])),
             patch(
-                "backend.routes.drivers.db_supabase.get_rides_for_driver",
+                "backend.routes.drivers._deps.db_supabase.get_rides_for_driver",
                 AsyncMock(return_value=[_ride_row()]),
             ),
         ):
@@ -111,9 +111,9 @@ class TestEmailEarningsExport:
 
         bg = BackgroundTasks()
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[_driver_row()])),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver_row()])),
             patch(
-                "backend.routes.drivers.db_supabase.get_rides_for_driver",
+                "backend.routes.drivers._deps.db_supabase.get_rides_for_driver",
                 AsyncMock(return_value=[_ride_row()]),
             ),
         ):
@@ -153,8 +153,8 @@ class TestEmailBackgroundTasks:
 
         summary = {"year": 2025, "total_earnings": "70.00", "total_trips": 3}
         with (
-            patch("backend.routes.drivers.generate_t4a_pdf", return_value=b"%PDF-1.4 fake"),
-            patch("backend.routes.drivers.send_email", AsyncMock(return_value=True)) as send,
+            patch("backend.routes.drivers._deps.generate_t4a_pdf", return_value=b"%PDF-1.4 fake"),
+            patch("backend.routes.drivers._deps.send_email", AsyncMock(return_value=True)) as send,
         ):
             await _email_t4a_document(DRIVER_USER_ID, DRIVER_EMAIL, 2025, summary)
 
@@ -170,7 +170,7 @@ class TestEmailBackgroundTasks:
         from backend.routes.drivers import _email_earnings_csv
 
         csv_data = "Year,Total Earnings\n2025,70.00"
-        with patch("backend.routes.drivers.send_email", AsyncMock(return_value=True)) as send:
+        with patch("backend.routes.drivers._deps.send_email", AsyncMock(return_value=True)) as send:
             await _email_earnings_csv(DRIVER_USER_ID, DRIVER_EMAIL, 2025, csv_data)
 
         send.assert_awaited_once()
@@ -184,8 +184,8 @@ class TestEmailBackgroundTasks:
         from backend.routes.drivers import _email_t4a_document
 
         with (
-            patch("backend.routes.drivers.generate_t4a_pdf", side_effect=RuntimeError("bad font")),
-            patch("backend.routes.drivers.send_email", AsyncMock(return_value=True)) as send,
+            patch("backend.routes.drivers._deps.generate_t4a_pdf", side_effect=RuntimeError("bad font")),
+            patch("backend.routes.drivers._deps.send_email", AsyncMock(return_value=True)) as send,
         ):
             # Must not raise.
             await _email_t4a_document(DRIVER_USER_ID, DRIVER_EMAIL, 2025, {"year": 2025})
@@ -196,6 +196,6 @@ class TestEmailBackgroundTasks:
         """A provider failure must not escape the background task (already off-request)."""
         from backend.routes.drivers import _email_earnings_csv
 
-        with patch("backend.routes.drivers.send_email", AsyncMock(side_effect=RuntimeError("ses down"))):
+        with patch("backend.routes.drivers._deps.send_email", AsyncMock(side_effect=RuntimeError("ses down"))):
             # Must not raise.
             await _email_earnings_csv(DRIVER_USER_ID, DRIVER_EMAIL, 2025, "Year\n2025")

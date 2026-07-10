@@ -67,7 +67,7 @@ def test_admin_resend_invoice_emails_and_audits(admin_client):
         patch("backend.db_supabase.find_one", new=AsyncMock(return_value=_PAYMENT)),
         patch("utils.subscription_invoice.build_invoice_email_kwargs", new=AsyncMock(return_value=kwargs)),
         patch("utils.redis_client.redis_set_nx", new=AsyncMock(return_value=True)),
-        patch("routes.drivers._send_subscription_invoice_email", new=AsyncMock(return_value=True)) as send,
+        patch("routes.drivers.subscriptions._send_subscription_invoice_email", new=AsyncMock(return_value=True)) as send,
         patch("routes.admin.subscriptions.log_admin_action", new=AsyncMock(return_value="aud-1")) as log,
     ):
         resp = admin_client.post("/api/admin/subscription/payments/pay_1/resend-invoice")
@@ -85,7 +85,7 @@ def test_admin_resend_invoice_502_on_delivery_failure(admin_client):
         patch("utils.subscription_invoice.build_invoice_email_kwargs", new=AsyncMock(return_value=kwargs)),
         patch("utils.redis_client.redis_set_nx", new=AsyncMock(return_value=True)),
         patch("utils.redis_client.redis_delete", new=AsyncMock()) as rdel,
-        patch("routes.drivers._send_subscription_invoice_email", new=AsyncMock(return_value=False)),
+        patch("routes.drivers.subscriptions._send_subscription_invoice_email", new=AsyncMock(return_value=False)),
         patch("routes.admin.subscriptions.log_admin_action", new=AsyncMock(return_value="aud-1")),
     ):
         resp = admin_client.post("/api/admin/subscription/payments/pay_1/resend-invoice")
@@ -103,7 +103,7 @@ def test_admin_resend_invoice_429_on_cooldown(admin_client):
             "utils.subscription_invoice.build_invoice_email_kwargs", new=AsyncMock(return_value={"driver_id": "drv_1"})
         ),
         patch("utils.redis_client.redis_set_nx", new=AsyncMock(return_value=False)),
-        patch("routes.drivers._send_subscription_invoice_email", new=AsyncMock(return_value=True)) as send,
+        patch("routes.drivers.subscriptions._send_subscription_invoice_email", new=AsyncMock(return_value=True)) as send,
     ):
         resp = admin_client.post("/api/admin/subscription/payments/pay_1/resend-invoice")
     assert resp.status_code == 429

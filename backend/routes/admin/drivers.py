@@ -1006,6 +1006,19 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
         "vehicle_inspection_expiry_date",
         "background_check_expiry_date",
         "work_eligibility_expiry_date",
+        "date_of_birth",
+        "license_class",
+        "sgi_approved",
+        "sgi_approved_at",
+        "regulatory_authority",
+        "regulatory_region",
+        "regulatory_authority_approved",
+        "regulatory_authority_approved_at",
+        "work_authorization_status",
+        "is_permanent_resident",
+        "is_citizen",
+        "decals_sent",
+        "decals_sent_at",
     }
     allowed = user_fields | driver_fields
     filtered = {k: v for k, v in updates.items() if k in allowed}
@@ -1027,6 +1040,22 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
         new_first = driver_updates.get("first_name", existing.get("first_name")) or ""
         new_last = driver_updates.get("last_name", existing.get("last_name")) or ""
         driver_updates["name"] = f"{new_first} {new_last}".strip()
+
+    # Keep import/compliance flags consistent when admins edit the normalized
+    # work authorization status manually. Explicit boolean updates still win,
+    # but choosing "citizen" or "permanent_resident" should not leave the
+    # separate flags stale.
+    if "work_authorization_status" in driver_updates:
+        status = str(driver_updates.get("work_authorization_status") or "").strip().lower()
+        if status == "citizen":
+            driver_updates.setdefault("is_citizen", True)
+            driver_updates.setdefault("is_permanent_resident", False)
+        elif status == "permanent_resident":
+            driver_updates.setdefault("is_permanent_resident", True)
+            driver_updates.setdefault("is_citizen", False)
+        elif status in {"expiring", "indefinite", "unknown", ""}:
+            driver_updates.setdefault("is_permanent_resident", False)
+            driver_updates.setdefault("is_citizen", False)
 
     user_id = existing.get("user_id")
     # email/gender exist ONLY on `users`, so they cannot be persisted without a

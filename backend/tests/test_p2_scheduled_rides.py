@@ -70,7 +70,7 @@ class TestGetScheduledRides:
 
         rides = [_scheduled_ride(), _scheduled_ride(id="ride-002")]
 
-        with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=rides)) as get_rows:
+        with patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=rides)) as get_rows:
             result = await rides_mod.get_scheduled_rides(
                 current_user={"id": RIDER_ID},
             )
@@ -85,7 +85,7 @@ class TestGetScheduledRides:
     async def test_returns_empty_list_when_no_scheduled_rides(self):
         from backend.routes import rides as rides_mod
 
-        with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])):
+        with patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])):
             result = await rides_mod.get_scheduled_rides(
                 current_user={"id": RIDER_ID},
             )
@@ -119,10 +119,10 @@ class TestCancelScheduledRide:
             return {**ride, **update}
 
         with (
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[ride])),
-            patch("backend.routes.rides.db_supabase.update_one", AsyncMock(side_effect=_update_one)),
-            patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
-            patch("backend.routes.rides.manager.broadcast_ride_status", AsyncMock()) as ws_broadcast,
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[ride])),
+            patch("backend.routes.rides._deps.db_supabase.update_one", AsyncMock(side_effect=_update_one)),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides._deps.manager.broadcast_ride_status", AsyncMock()) as ws_broadcast,
         ):
             result = await rides_mod.cancel_scheduled_ride(
                 ride_id=RIDE_ID,
@@ -152,10 +152,10 @@ class TestCancelScheduledRide:
         delegate = AsyncMock(return_value={"success": True, "cancellation_fee": 0})
 
         with (
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[ride])),
-            patch("backend.routes.rides.db_supabase.update_one", AsyncMock()) as update_one,
-            patch("backend.routes.rides.db_supabase.update_ride", AsyncMock()) as update_ride,
-            patch.object(rides_mod, "cancel_ride_rider", delegate),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[ride])),
+            patch("backend.routes.rides._deps.db_supabase.update_one", AsyncMock()) as update_one,
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()) as update_ride,
+            patch.object(rides_mod.cancellation, "cancel_ride_rider", delegate),
         ):
             result = await rides_mod.cancel_scheduled_ride(
                 ride_id=RIDE_ID,
@@ -181,10 +181,10 @@ class TestCancelScheduledRide:
         delegate = AsyncMock(return_value={"success": True, "cancellation_fee": 0})
 
         with (
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[ride])),
-            patch("backend.routes.rides.db_supabase.update_one", AsyncMock(return_value=None)),
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=live_ride)),
-            patch.object(rides_mod, "cancel_ride_rider", delegate),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[ride])),
+            patch("backend.routes.rides._deps.db_supabase.update_one", AsyncMock(return_value=None)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=live_ride)),
+            patch.object(rides_mod.cancellation, "cancel_ride_rider", delegate),
         ):
             result = await rides_mod.cancel_scheduled_ride(
                 ride_id=RIDE_ID,
@@ -213,10 +213,10 @@ class TestCancelScheduledRide:
             return ride
 
         with (
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[ride])),
-            patch("backend.routes.rides.db_supabase.find_one", AsyncMock(side_effect=_find_one)),
-            patch("backend.routes.rides.db_supabase.update_one", AsyncMock()) as update_one,
-            patch("backend.routes.rides.db_supabase.update_ride", AsyncMock()) as update_ride,
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[ride])),
+            patch("backend.routes.rides._deps.db_supabase.find_one", AsyncMock(side_effect=_find_one)),
+            patch("backend.routes.rides._deps.db_supabase.update_one", AsyncMock()) as update_one,
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()) as update_ride,
         ):
             with pytest.raises((HTTPException, SpinrException)) as exc_info:
                 await rides_mod.cancel_scheduled_ride(
@@ -236,7 +236,7 @@ class TestCancelScheduledRide:
         from backend.routes import rides as rides_mod
         from backend.utils.error_handling import SpinrException
 
-        with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])):
+        with patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])):
             with pytest.raises((HTTPException, SpinrException)) as exc_info:
                 await rides_mod.cancel_scheduled_ride(
                     ride_id=RIDE_ID,
@@ -253,7 +253,7 @@ class TestCancelScheduledRide:
 
         ride = _scheduled_ride(status="cancelled")
 
-        with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[ride])):
+        with patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[ride])):
             with pytest.raises((HTTPException, SpinrException)) as exc_info:
                 await rides_mod.cancel_scheduled_ride(
                     ride_id=RIDE_ID,
@@ -273,7 +273,7 @@ class TestCancelScheduledRide:
 
         ride = _scheduled_ride(status="completed")
 
-        with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[ride])):
+        with patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[ride])):
             with pytest.raises((HTTPException, SpinrException)) as exc_info:
                 await rides_mod.cancel_scheduled_ride(
                     ride_id=RIDE_ID,

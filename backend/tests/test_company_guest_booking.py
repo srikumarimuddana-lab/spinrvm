@@ -173,8 +173,8 @@ def _booking_patches(
         _CBS + "find_or_create_guest_by_phone": AsyncMock(return_value=(guest, has_app)),
         _CBS + "compute_fare_estimate": AsyncMock(return_value=fare or _fare_dict()),
         _CBS + "evaluate_policy_for_ride": AsyncMock(return_value=policy_result or _policy_result()),
-        "backend.routes.rides._insert_ride_with_code": AsyncMock(side_effect=_insert),
-        "backend.routes.rides._prep_and_dispatch": MagicMock(name="prep"),
+        "backend.routes.rides.booking._insert_ride_with_code": AsyncMock(side_effect=_insert),
+        "backend.routes.rides.booking._prep_and_dispatch": MagicMock(name="prep"),
         _CBS + "spawn": MagicMock(name="spawn"),
     }
 
@@ -283,7 +283,7 @@ async def test_active_ride_conflict_is_reworded_409():
     from backend.services.company_booking_service import create_company_guest_booking
 
     deps = _booking_patches()
-    deps["backend.routes.rides._insert_ride_with_code"] = AsyncMock(
+    deps["backend.routes.rides.booking._insert_ride_with_code"] = AsyncMock(
         side_effect=HTTPException(status_code=409, detail="You already have an active ride")
     )
     patchers, _ = _start_patches(deps)

@@ -1,4 +1,4 @@
--- 215_faqs_service_area.sql
+-- 229_faqs_service_area.sql
 --
 -- Adds an optional, multi-valued service-area scope to faqs so a single FAQ can
 -- be location-specific to one OR MORE service areas (e.g. one SGI /

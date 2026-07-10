@@ -215,9 +215,34 @@ async def record_kyb_decision(
         "status": new_status,
         "kyb_reviewed_at": datetime.now(timezone.utc).isoformat(),
         "kyb_reviewed_by": reviewer_id,
+        # 'approved' | 'rejected' (migration 225) — lets the portal distinguish
+        # KYB-rejected (may resubmit) from staff-suspended (may not).
+        "kyb_last_decision": "approved" if approved else "rejected",
     }
     if note:
-        patch["kyb_review_note"] = note  # column added in a follow-up migration if desired
+        patch["kyb_review_note"] = note  # column exists since migration 225
+
+    def _fn():
+        res = supabase.table("corporate_accounts").update(patch).eq("id", company_id).execute()
+        return _single_row_from_res(res)
+
+    return await run_sync(_fn)
+
+
+async def set_kyb_document(*, company_id: str, path: str) -> Optional[Dict[str, Any]]:
+    """Persist the uploaded KYB document's storage key + submission time.
+
+    FIXES the never-persisted-URL bug: create_kyb_upload_url returned a path
+    but nothing ever wrote it to corporate_accounts.kyb_document_url, so
+    GET /{id}/kyb/view read a column no code populated. Stores the RAW
+    storage key (kyb/{company_id}/{uuid}.ext) — the private-bucket object is
+    only reachable via the backend's signed streaming endpoint, never a
+    public URL.
+    """
+    patch = {
+        "kyb_document_url": path,
+        "kyb_submitted_at": datetime.now(timezone.utc).isoformat(),
+    }
 
     def _fn():
         res = supabase.table("corporate_accounts").update(patch).eq("id", company_id).execute()

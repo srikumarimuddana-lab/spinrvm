@@ -2282,7 +2282,7 @@ async def admin_get_earnings_overview(
     # 10k dispute windows into Python.
     import asyncio  # noqa: PLC0415
 
-    current_agg, previous_agg, current_ref, previous_ref = await asyncio.gather(
+    current_agg, previous_agg, current_ref, previous_ref, current_funnel, previous_funnel = await asyncio.gather(
         db_supabase.rpc(
             "admin_earnings_overview_agg",
             {"p_start": start.isoformat(), "p_end": end.isoformat(), "p_service_area_id": service_area_id},
@@ -2297,6 +2297,16 @@ async def admin_get_earnings_overview(
         ),
         db_supabase.rpc(
             "admin_earnings_refunds",
+            {"p_start": prev_start.isoformat(), "p_end": prev_end.isoformat(), "p_service_area_id": service_area_id},
+        ),
+        # Ops funnel — created_at cohort (requested → searching → travelled →
+        # cancels) + price searches. See migration 227_ride_funnel_agg_fn.sql.
+        db_supabase.rpc(
+            "admin_ride_funnel_agg",
+            {"p_start": start.isoformat(), "p_end": end.isoformat(), "p_service_area_id": service_area_id},
+        ),
+        db_supabase.rpc(
+            "admin_ride_funnel_agg",
             {"p_start": prev_start.isoformat(), "p_end": prev_end.isoformat(), "p_service_area_id": service_area_id},
         ),
     )
@@ -2342,6 +2352,21 @@ async def admin_get_earnings_overview(
     prev_refund_amt = _f(prev_ref_obj, "refund_amount")
     cur_refund_count = _i(cur_ref_obj, "refund_count")
     prev_refund_count = _i(prev_ref_obj, "refund_count")
+
+    # Ops funnel — created_at cohort counts, each as a current/previous
+    # MetricWithDelta so the frontend reuses the same MetricCard as the rest.
+    cur_fn = _obj(current_funnel)
+    prev_fn = _obj(previous_funnel)
+    _FUNNEL_KEYS = (
+        "price_searches",
+        "requested",
+        "reached_searching",
+        "completed",
+        "rider_cancelled",
+        "driver_cancelled",
+        "cancelled_after_start",
+    )
+    ride_funnel = {k: _metric(_i(cur_fn, k), _i(prev_fn, k)) for k in _FUNNEL_KEYS}
 
     # Cancellation rate: cancelled / (completed + cancelled). Same
     # formula the ops cancellation-rate KPI uses across the codebase.
@@ -2443,6 +2468,7 @@ async def admin_get_earnings_overview(
                 "system": prev_cx["count"] - prev_cx["rider_cancels"] - prev_cx["driver_cancels"],
             },
         },
+        "ride_funnel": ride_funnel,
         "daily_series": daily_series,
     }
 

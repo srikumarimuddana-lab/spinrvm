@@ -81,6 +81,84 @@ async def test_put_inserts_row_with_earnings_summary_when_none_exists():
     assert written["user_id"] == _USER["id"]
 
 
+async def test_push_suppressed_when_user_opted_out():
+    """send_push_notification must honor push_enabled=false for informational
+    pushes (the toggle previously saved the flag but nothing read it)."""
+    try:
+        import features
+    except ImportError:  # pragma: no cover
+        from backend import features  # type: ignore
+
+    deliver = AsyncMock(return_value=True)
+    with (
+        patch.object(features, "_record_inbox_notification"),
+        patch.object(features, "_deliver_push_now", deliver),
+        patch.object(
+            features.db,
+            "get_rows",
+            AsyncMock(return_value=[{"user_id": _USER["id"], "push_enabled": False}]),
+        ),
+        patch.object(features.db, "find_one", AsyncMock()) as find_one,
+    ):
+        result = await features.send_push_notification(_USER["id"], "t", "b")
+
+    assert result is False
+    deliver.assert_not_awaited()
+    find_one.assert_not_awaited()  # suppressed before the token lookup
+
+
+async def test_push_opt_out_does_not_block_dispatch_or_safety():
+    """Ride offers and SOS alerts are time-critical and bypass the preference."""
+    try:
+        import features
+    except ImportError:  # pragma: no cover
+        from backend import features  # type: ignore
+
+    for priority in ("dispatch", "safety"):
+        deliver = AsyncMock(return_value=True)
+        with (
+            patch.object(features, "_record_inbox_notification"),
+            patch.object(features, "_deliver_push_now", deliver),
+            patch.object(
+                features.db,
+                "get_rows",
+                AsyncMock(return_value=[{"user_id": _USER["id"], "push_enabled": False}]),
+            ),
+            patch.object(
+                features.db,
+                "find_one",
+                AsyncMock(return_value={"id": _USER["id"], "fcm_token": "tok"}),
+            ),
+        ):
+            result = await features.send_push_notification(_USER["id"], "t", "b", priority=priority)
+        assert result is True
+        deliver.assert_awaited_once()
+
+
+async def test_push_preference_lookup_failure_fails_open():
+    """A prefs-table hiccup must not start dropping pushes."""
+    try:
+        import features
+    except ImportError:  # pragma: no cover
+        from backend import features  # type: ignore
+
+    deliver = AsyncMock(return_value=True)
+    with (
+        patch.object(features, "_record_inbox_notification"),
+        patch.object(features, "_deliver_push_now", deliver),
+        patch.object(features.db, "get_rows", AsyncMock(side_effect=RuntimeError("db down"))),
+        patch.object(
+            features.db,
+            "find_one",
+            AsyncMock(return_value={"id": _USER["id"], "fcm_token": "tok"}),
+        ),
+    ):
+        result = await features.send_push_notification(_USER["id"], "t", "b")
+
+    assert result is True
+    deliver.assert_awaited_once()
+
+
 async def test_model_accepts_every_field_the_apps_send():
     """The client vocabulary must stay in sync with the model — this is the
     contract-drift guard. If a client-side key is added, it must be added here

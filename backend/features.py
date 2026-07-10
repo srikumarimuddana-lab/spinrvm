@@ -1615,6 +1615,27 @@ async def send_push_notification(
     _record_inbox_notification(user_id, title, body, data)
     time_critical = priority in ("dispatch", "safety")
 
+    # Honor the user's push opt-out (Settings / Privacy → Push Notifications)
+    # for informational pushes. Dispatch offers and SOS/safety alerts bypass
+    # the preference: they're time-critical and tied to an action the user
+    # explicitly took (going online, triggering SOS). Fail-open on a lookup
+    # error — the preference is a delivery filter, so a prefs-table hiccup
+    # must not start dropping pushes; the error still surfaces at error level.
+    if not time_critical:
+        try:
+            pref_rows = await db.get_rows("notification_preferences", {"user_id": user_id}, limit=1)
+            if pref_rows and pref_rows[0].get("push_enabled") is False:
+                logger.info(
+                    f"push: suppressed by push_enabled=false for user {user_id} "
+                    f"(priority={priority}); inbox row still recorded"
+                )
+                return False
+        except Exception:
+            logger.error(
+                f"push: preference lookup failed for user {user_id} — sending anyway (deliberate fail-open)",
+                exc_info=True,
+            )
+
     # The whole immediate path (users lookup + token select + send) is guarded:
     # for a time-critical push a transient Supabase read hiccup must fall back
     # to the retry queue, NOT escape — dispatch fires this fire-and-forget, so a

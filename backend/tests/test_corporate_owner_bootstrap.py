@@ -54,7 +54,20 @@ async def test_staff_path_falls_back_to_owner_invite():
     assert invite_url is not None and "token=" in invite_url
     kwargs = mock_invite.await_args.kwargs
     assert kwargs["role"] == "owner"
-    assert kwargs["invited_by"] == "admin-001"
+    # 'admin-001' is not UUID-castable — corporate_members.invited_by is a
+    # UUID column, so non-UUID staff actors are stored as NULL (audit log
+    # keeps the attribution).
+    assert kwargs["invited_by"] is None
+
+
+@pytest.mark.asyncio
+async def test_staff_path_preserves_uuid_invited_by():
+    actor = "6fa459ea-ee8a-3ca4-894e-db77e160355e"
+    invited = {"id": "m2", "company_id": "c1", "role": "owner", "status": "invited"}
+    with patch.object(svc, "insert_corporate_member_invite", AsyncMock(return_value=invited)) as mock_invite:
+        await svc.bootstrap_owner(company_id="c1", email="owner@acme.com", invited_by=actor)
+
+    assert mock_invite.await_args.kwargs["invited_by"] == actor
 
 
 @pytest.mark.asyncio

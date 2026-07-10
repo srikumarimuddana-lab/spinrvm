@@ -15,7 +15,7 @@ from fastapi import (  # noqa: F401
     HTTPException,
     UploadFile,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 try:
     from ... import db_supabase
@@ -73,6 +73,14 @@ _CREDENTIAL_FIELDS = frozenset(
         "lms_api_key",
     }
 )
+
+# Fields only super_admin may CHANGE (not just reveal). The LMS base URL
+# receives lms_api_key on every training lookup, so a settings-module admin
+# who could repoint it would exfiltrate the secret (reveal is super_admin-
+# only) and gain direct access to the LMS's driver PII — plus backend SSRF.
+# Changing either half of the pair therefore requires the same privilege as
+# the credential-reveal flow.
+_SUPER_ADMIN_ONLY_FIELDS = frozenset({"lms_api_base_url", "lms_api_key"})
 
 
 def _mask_credentials(settings: Dict[str, Any]) -> Dict[str, Any]:
@@ -216,8 +224,23 @@ class SettingsUpdateRequest(BaseModel):
     # Driver LMS (training platform) integration — services/lms_service.py.
     # base_url is plain; api_key is a credential (masked, in
     # _CREDENTIAL_FIELDS) matching SPINR_INTEGRATION_API_KEY on the LMS.
+    # Changing either field is super_admin-only (_SUPER_ADMIN_ONLY_FIELDS).
     lms_api_base_url: Optional[str] = Field(default=None, max_length=300)
     lms_api_key: Optional[str] = None
+
+    @field_validator("lms_api_base_url")
+    @classmethod
+    def _lms_base_url_scheme(cls, v: Optional[str]) -> Optional[str]:
+        """The LMS API key rides on every request to this host — require TLS
+        so it can't be sniffed in transit (plain http allowed only for
+        localhost during development)."""
+        if not v:
+            return v
+        if v.startswith("https://"):
+            return v
+        if v.startswith(("http://localhost", "http://127.0.0.1")):
+            return v
+        raise ValueError("lms_api_base_url must use https:// (http:// is allowed only for localhost)")
 
 
 @router.get("/settings")
@@ -289,6 +312,20 @@ async def admin_update_settings(settings: SettingsUpdateRequest, admin: dict = D
         v = update_fields.get(field)
         if isinstance(v, str) and v.endswith("*****"):
             update_fields.pop(field, None)
+
+    # Privilege gate for fields whose CHANGE is equivalent to a credential
+    # reveal (see _SUPER_ADMIN_ONLY_FIELDS). The frontend ships the full
+    # settings object on every save, so only reject when the value actually
+    # differs from what is stored — an unrelated save by a non-super-admin
+    # must keep working.
+    if admin.get("role") != "super_admin":
+        current = existing or {}
+        for field in _SUPER_ADMIN_ONLY_FIELDS:
+            if field in update_fields and (update_fields[field] or "") != (current.get(field) or ""):
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Only super admins can change {field}",
+                )
 
     payload = {
         "id": "app_settings",

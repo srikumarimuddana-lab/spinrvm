@@ -183,6 +183,12 @@ class Settings(BaseSettings):
     # loop goes stale.  Leave unset in development; required in production.
     ALERT_WEBHOOK_URL: Optional[str] = None
 
+    # Corporate ops inbox — notified on self-serve company signups (new KYB
+    # queue entries). Optional: when unset the signup still succeeds and the
+    # staff KYB queue remains the source of truth; only the courtesy email is
+    # skipped.
+    CORPORATE_OPS_EMAIL: Optional[str] = None
+
     @model_validator(mode="after")
     def _hash_admin_password(self) -> "Settings":
         """Hash ADMIN_PASSWORD with bcrypt at startup (A-P3-1).

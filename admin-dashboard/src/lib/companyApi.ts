@@ -200,6 +200,42 @@ export const registerCompany = (payload: CompanySignupPayload) =>
         body: JSON.stringify(payload),
     });
 
+/* ── KYB verification (M2.5) ── */
+
+export interface CompanyKybState {
+    state: "not_submitted" | "under_review" | "rejected" | "suspended" | "approved" | "closed";
+    submitted_at?: string | null;
+    reviewed_at?: string | null;
+    review_note?: string | null;
+    can_resubmit: boolean;
+}
+
+export const getCompanyKyb = (companyId: string) =>
+    companyRequest<CompanyKybState>(`/api/company/${companyId}/kyb`);
+
+export const getKybUploadUrl = (companyId: string, contentType: string) =>
+    companyRequest<{ signed_url: string; path: string; expires_at: string }>(
+        `/api/company/${companyId}/kyb/upload-url`,
+        { method: "POST", body: JSON.stringify({ content_type: contentType }) }
+    );
+
+// Raw PUT to the short-lived signed URL — goes straight to storage, not the
+// backend, so companyRequest (auth headers/CSRF) is deliberately not used.
+export async function uploadKybFile(signedUrl: string, file: File): Promise<void> {
+    const res = await fetch(signedUrl, {
+        method: "PUT",
+        headers: { "Content-Type": file.type },
+        body: file,
+    });
+    if (!res.ok) throw new Error("Upload failed — please try again.");
+}
+
+export const submitKybDocument = (companyId: string, path: string) =>
+    companyRequest<{ success: boolean; state: string; submitted_at?: string; resubmitted: boolean }>(
+        `/api/company/${companyId}/kyb/submit`,
+        { method: "POST", body: JSON.stringify({ path }) }
+    );
+
 export const getMyWorkProfiles = () =>
     companyRequest<CompanyMembershipProfile[]>("/api/rider/work-profile");
 

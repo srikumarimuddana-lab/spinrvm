@@ -1,5 +1,5 @@
 # backend/tests/test_corporate_admin_routes.py
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from backend.tests._factories import corporate_account_row
 
@@ -183,3 +183,110 @@ def test_update_persists_rich_b2b_fields(test_client, admin_override):
     assert sent["tax_region"] == "SK"
     assert sent["size_tier"] == "enterprise"
     assert sent["industry"] == "Automotive"
+
+
+# ── M2.3: staff KYB confirm + decision emails + view fallback ────────────────
+
+
+def test_kyb_document_confirm_persists_path(test_client, admin_override):
+    updated = corporate_account_row("pending_verification", id="c1")
+    updated["kyb_submitted_at"] = "2026-07-10T00:00:00Z"
+    with (
+        patch("db_supabase.kyb_object_exists", AsyncMock(return_value=True)),
+        patch("db_supabase.set_kyb_document", AsyncMock(return_value=updated)) as m_set,
+    ):
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/kyb-document",
+            json={"path": "kyb/c1/doc.pdf"},
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["submitted_at"] == "2026-07-10T00:00:00Z"
+    m_set.assert_awaited_once_with(company_id="c1", path="kyb/c1/doc.pdf")
+
+
+def test_kyb_document_confirm_rejects_foreign_prefix(test_client, admin_override):
+    resp = test_client.post(
+        "/api/admin/corporate-accounts/c1/kyb-document",
+        json={"path": "kyb/OTHER/doc.pdf"},
+    )
+    assert resp.status_code == 400
+
+
+def test_kyb_document_confirm_requires_uploaded_object(test_client, admin_override):
+    with patch("db_supabase.kyb_object_exists", AsyncMock(return_value=False)):
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/kyb-document",
+            json={"path": "kyb/c1/ghost.pdf"},
+        )
+    assert resp.status_code == 400
+
+
+def _kyb_review_mocks(approved_row):
+    return (
+        patch("db_supabase.record_kyb_decision", AsyncMock(return_value=approved_row)),
+        patch("routes.corporate_accounts.ensure_corporate_wallet", AsyncMock(return_value={})),
+        patch("routes.corporate_accounts.get_app_settings", AsyncMock(return_value={})),
+        patch("utils.email_provider.send_transactional_email", AsyncMock(return_value=True)),
+    )
+
+
+def test_kyb_review_approve_sends_decision_email(test_client, admin_override):
+    row = corporate_account_row("active", id="c1", contact_email="owner@acme.com")
+    p_dec, p_wallet, p_settings, p_mail = _kyb_review_mocks(row)
+    with p_dec, p_wallet, p_settings, p_mail as m_mail:
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/kyb-review",
+            json={"approve": True},
+        )
+    assert resp.status_code == 200, resp.text
+    kwargs = m_mail.await_args.kwargs
+    assert kwargs["to"] == "owner@acme.com"
+    assert "approved" in kwargs["subject"].lower()
+
+
+def test_kyb_review_reject_email_includes_note(test_client, admin_override):
+    row = corporate_account_row("suspended", id="c1", contact_email="owner@acme.com")
+    p_dec, p_wallet, p_settings, p_mail = _kyb_review_mocks(row)
+    with p_dec, p_wallet, p_settings, p_mail as m_mail:
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/kyb-review",
+            json={"approve": False, "note": "BN mismatch"},
+        )
+    assert resp.status_code == 200, resp.text
+    kwargs = m_mail.await_args.kwargs
+    assert "BN mismatch" in kwargs["text"]
+
+
+def test_kyb_review_email_failure_does_not_fail_review(test_client, admin_override):
+    row = corporate_account_row("active", id="c1", contact_email="owner@acme.com")
+    with (
+        patch("db_supabase.record_kyb_decision", AsyncMock(return_value=row)),
+        patch("routes.corporate_accounts.ensure_corporate_wallet", AsyncMock(return_value={})),
+        patch("routes.corporate_accounts.get_app_settings", AsyncMock(return_value={})),
+        patch(
+            "utils.email_provider.send_transactional_email",
+            AsyncMock(side_effect=RuntimeError("ses down")),
+        ),
+    ):
+        resp = test_client.post(
+            "/api/admin/corporate-accounts/c1/kyb-review",
+            json={"approve": True},
+        )
+    assert resp.status_code == 200  # decision recorded; email is best-effort
+
+
+def test_kyb_view_accepts_raw_storage_key(test_client, admin_override):
+    # set_kyb_document stores raw keys (kyb/{id}/{uuid}.ext); the view
+    # endpoint must resolve them (legacy full URLs keep working via regex).
+    account = corporate_account_row("pending_verification", id="c1")
+    account["kyb_document_url"] = "kyb/c1/doc.pdf"
+    fake_storage = MagicMock()
+    fake_storage.storage.from_.return_value.download.return_value = b"%PDF-1.4"
+    with (
+        patch("routes.corporate_accounts.get_rows", AsyncMock(return_value=[account])),
+        patch("supabase_client.supabase", fake_storage),
+    ):
+        resp = test_client.get("/api/admin/corporate-accounts/c1/kyb/view")
+    assert resp.status_code == 200, resp.text
+    assert resp.content == b"%PDF-1.4"
+    fake_storage.storage.from_.return_value.download.assert_called_once_with("kyb/c1/doc.pdf")

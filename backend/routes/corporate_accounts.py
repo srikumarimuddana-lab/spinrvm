@@ -249,6 +249,51 @@ async def kyb_upload_url(
     return await create_kyb_upload_url(company_id=normalized_id, content_type=body.content_type)
 
 
+class KYBDocumentConfirm(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(..., min_length=1, max_length=300)
+
+
+@router.post("/{company_id}/kyb-document")
+async def kyb_document_confirm(
+    company_id: str,
+    body: KYBDocumentConfirm,
+    current_admin: dict = Depends(get_current_admin),
+):
+    """Staff-side upload confirmation (M2.3): persist the uploaded document's
+    storage key onto the account. Completes the previously half-wired flow
+    where kyb-upload-url returned a path that nothing ever recorded, leaving
+    /kyb/view reading an always-NULL kyb_document_url."""
+    _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
+
+    path = body.path.strip()
+    if ".." in path or not path.startswith(f"kyb/{normalized_id}/"):
+        raise HTTPException(status_code=400, detail="Invalid document path.")
+
+    from db_supabase import kyb_object_exists, set_kyb_document
+
+    if not await kyb_object_exists(path=path):
+        raise HTTPException(status_code=400, detail="Upload not found — upload the document first.")
+
+    row = await set_kyb_document(company_id=normalized_id, path=path)
+    if not row:
+        raise HTTPException(status_code=404, detail="Corporate account not found")
+
+    try:
+        await log_admin_action(
+            admin=current_admin,
+            action="kyb_document_confirmed",
+            resource="corporate_account",
+            resource_id=str(normalized_id),
+            details={},
+        )
+    except Exception:
+        logger.error(f"Audit log failed for kyb_document_confirm {normalized_id}", exc_info=True)
+
+    return {"success": True, "submitted_at": row.get("kyb_submitted_at")}
+
+
 @router.post("/{company_id}/kyb-review", response_model=CorporateAccountDetailResponse)
 async def kyb_review(
     company_id: str,
@@ -298,6 +343,38 @@ async def kyb_review(
                 )
                 await update_corporate_stripe_customer_id(company_id=normalized_id, stripe_customer_id=customer.id)
 
+    # M2.3: notify the company of the decision — best-effort; the portal's
+    # verification page (derived state + review note) is the durable signal.
+    notify_to = row.get("contact_email") or row.get("billing_email")
+    if notify_to:
+        try:
+            from utils.email_provider import send_transactional_email
+
+            if decision.approve:
+                subject = "Your Spinr for Business account is approved"
+                text = (
+                    f"Good news — {row.get('name')} has been verified and your "
+                    "Spinr for Business account is now active.\n\n"
+                    "Sign in to the business portal to invite your team and start booking rides."
+                )
+            else:
+                subject = "Your Spinr for Business application needs attention"
+                text = (
+                    f"We reviewed the verification documents for {row.get('name')} "
+                    "and couldn't approve them yet."
+                    + (f"\n\nReviewer note: {decision.note}" if decision.note else "")
+                    + "\n\nSign in to the business portal to view the details and resubmit."
+                )
+            await send_transactional_email(
+                to=notify_to,
+                subject=subject,
+                text=text,
+                log_id=str(normalized_id),
+                email_type="corporate_kyb_decision",
+            )
+        except Exception:
+            logger.error("kyb_review: decision email failed for company %s", normalized_id, exc_info=True)
+
     try:
         await log_admin_action(
             admin=current_admin,
@@ -343,6 +420,11 @@ async def admin_view_kyb_document(
 
     m = _re.search(r"/storage/v1/object/(?:sign|public)/kyb-documents/([^?#]+)", stored_url)
     storage_key = m.group(1) if m else None
+    # M2.3 fallback: set_kyb_document stores the RAW storage key
+    # (kyb/{company_id}/{uuid}.ext), not a full URL — accept it directly.
+    # Legacy full-URL rows keep resolving via the regex above.
+    if not storage_key and stored_url.startswith("kyb/") and ".." not in stored_url:
+        storage_key = stored_url
 
     if not storage_key:
         raise HTTPException(status_code=404, detail="No KYB document on file")

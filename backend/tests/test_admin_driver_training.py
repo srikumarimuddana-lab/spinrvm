@@ -283,3 +283,66 @@ async def test_get_training_by_phone_upstream_http_error():
 async def test_get_training_by_phone_rejects_short_phone():
     with pytest.raises(ValueError):
         await lms_service.get_training_by_phone("555-1234")
+
+
+def _patched_lms_call(handler):
+    """Common patch stack for a live (cache-miss) lms_service call."""
+    real_client = httpx.AsyncClient
+
+    def client_factory(**kwargs):
+        kwargs["transport"] = _mock_transport(handler)
+        return real_client(**kwargs)
+
+    return (
+        patch.object(lms_service, "redis_get", new=AsyncMock(return_value=None)),
+        patch.object(lms_service, "redis_set", new=AsyncMock()),
+        patch.object(
+            lms_service,
+            "get_app_settings",
+            new=AsyncMock(
+                return_value={
+                    "lms_api_base_url": "https://training.spinr.ca",
+                    "lms_api_key": "secret-key",
+                }
+            ),
+        ),
+        patch.object(lms_service.httpx, "AsyncClient", new=client_factory),
+    )
+
+
+async def test_get_training_by_phone_non_json_200_is_upstream_error():
+    """A 200 with a non-JSON body must map to 502, not crash as a 500."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html>proxy error page</html>")
+
+    p1, p2, p3, p4 = _patched_lms_call(handler)
+    with p1, p2, p3, p4:
+        with pytest.raises(lms_service.LMSUpstreamError):
+            await lms_service.get_training_by_phone("+13065551234")
+
+
+async def test_get_training_by_phone_success_false_is_upstream_error():
+    """An application-level LMS failure must not read as not_found_in_lms."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": False, "error": "boom"})
+
+    p1, p2, p3, p4 = _patched_lms_call(handler)
+    with p1, p2, p3, p4:
+        with pytest.raises(lms_service.LMSUpstreamError):
+            await lms_service.get_training_by_phone("+13065551234")
+
+
+async def test_upstream_error_logs_never_contain_phone(caplog):
+    """PIPEDA: logs must not carry the phone (query URL / echoed body)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="error for phone 3065551234")
+
+    p1, p2, p3, p4 = _patched_lms_call(handler)
+    with p1, p2, p3, p4, caplog.at_level("ERROR"):
+        with pytest.raises(lms_service.LMSUpstreamError):
+            await lms_service.get_training_by_phone("+13065551234")
+
+    assert "3065551234" not in caplog.text

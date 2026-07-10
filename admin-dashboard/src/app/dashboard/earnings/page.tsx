@@ -15,7 +15,7 @@ import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
-import { Download, Car, CreditCard, Users, TrendingUp, TrendingDown, DollarSign, UserPlus, Clock, MapPin, X, GitCompareArrows, Wallet, CheckCircle, AlertTriangle, Percent, Receipt, UserCheck, XCircle, Ticket, Zap, Landmark, Undo2, Filter, Hourglass, Activity, Gift, ArrowRight } from "lucide-react";
+import { Download, Car, CreditCard, Users, TrendingUp, TrendingDown, DollarSign, UserPlus, Clock, MapPin, X, GitCompareArrows, Wallet, CheckCircle, AlertTriangle, Percent, Receipt, UserCheck, XCircle, Ticket, Zap, Landmark, Undo2, Filter, Hourglass, Activity, Gift, ArrowRight, Search, Radar, Flag } from "lucide-react";
 import { getPayouts, getPayoutStats, getPayoutsOverview, retryPayout, bulkRetryPayouts, closePayoutPeriod, type PayoutsOverview } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
@@ -205,6 +205,7 @@ function CeoMetricsHeader({
 }) {
     const m = overview?.metrics;
     const cx = overview?.cancellation_breakdown;
+    const fn = overview?.ride_funnel;
     return (
         <div className="space-y-4">
             <div className="flex items-end justify-between gap-3 flex-wrap">
@@ -343,6 +344,32 @@ function CeoMetricsHeader({
                     <MetricCard icon={Landmark} label="PST Collected"       metric={m?.pst_collected}        format={fmtMoney} loading={loading} />
                     <MetricCard icon={CreditCard} label="Cancellation Fees" metric={m?.cancellation_revenue} format={fmtMoney} loading={loading} />
                     <MetricCard icon={XCircle}  label="Cancelled Trips"     metric={m?.cancelled_trips}      format={fmtCount} loading={loading} />
+                </div>
+
+                {/* Ride funnel — a created_at cohort of the rides requested in
+                    this window, followed through to outcome. Reads top-to-bottom:
+                    price searches → requested → searched for a driver →
+                    travelled, then the three cancellation outcomes. `Travelled`
+                    is cohort-based, so it differs from the completion-date
+                    "Completed Trips" KPI above — same window, different lens. */}
+                <div className="mt-6">
+                    <div className="flex items-center gap-2 mb-3">
+                        <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                            Ride funnel
+                        </h3>
+                        <span className="text-[11px] text-muted-foreground">
+                            of rides requested this window
+                        </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                        <MetricCard icon={Search}        label="Price Searches"        metric={fn?.price_searches}        format={fmtCount} loading={loading} />
+                        <MetricCard icon={Car}           label="Rides Requested"       metric={fn?.requested}             format={fmtCount} loading={loading} />
+                        <MetricCard icon={Radar}         label="Searched for Driver"   metric={fn?.reached_searching}     format={fmtCount} loading={loading} />
+                        <MetricCard icon={Flag}          label="Travelled"             metric={fn?.completed}             format={fmtCount} accent="text-emerald-600 dark:text-emerald-400" loading={loading} />
+                        <MetricCard icon={XCircle}       label="Rider Cancelled"       metric={fn?.rider_cancelled}       format={fmtCount} accent="text-amber-600 dark:text-amber-400" loading={loading} />
+                        <MetricCard icon={XCircle}       label="Driver Cancelled"      metric={fn?.driver_cancelled}      format={fmtCount} accent="text-red-600 dark:text-red-400" loading={loading} />
+                        <MetricCard icon={AlertTriangle} label="Cancelled After Start" metric={fn?.cancelled_after_start} format={fmtCount} accent="text-red-600 dark:text-red-400" loading={loading} />
+                    </div>
                 </div>
 
                 {/* Rider / driver / system cancellation mix — bar split

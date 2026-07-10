@@ -609,6 +609,72 @@ export interface DriverReferralSummary {
 export const getDriverReferrals = (id: string) =>
     request<DriverReferralSummary>(`/api/admin/drivers/${id}/referrals`);
 
+// ─── LMS training integration ───────────────────────────────────────
+// The backend matches the driver against the external Spinr LMS by phone
+// number and proxies its training record (see routes/admin/drivers.py
+// admin_get_driver_training + services/lms_service.py).
+export interface DriverTrainingCourse {
+    course_title: string | null;
+    status: string;
+    progress: number;
+    enrolled_at: string | null;
+    completed_at: string | null;
+}
+export interface DriverTrainingCertificate {
+    certificate_number: string;
+    course_title: string;
+    final_quiz_score: number | null;
+    issued_at: string;
+    expires_at: string | null;
+    status: "active" | "revoked" | "expired" | string;
+}
+export interface DriverTrainingQuizAttempt {
+    quiz_title: string | null;
+    score: number;
+    passed: boolean;
+    attempted_at: string;
+}
+export interface DriverTrainingCommunication {
+    communication_type: string;
+    message_type: string;
+    subject: string | null;
+    status: string;
+    sent_at: string;
+}
+export interface DriverTraining {
+    matched: boolean;
+    reason: "no_phone" | "not_found_in_lms" | null;
+    phone_last4: string | null;
+    lms: {
+        driver: {
+            id: string;
+            full_name: string;
+            email: string;
+            phone: string | null;
+            city: string | null;
+            spinr_approved: boolean;
+            sgi_approved: boolean;
+        };
+        training: {
+            status: "not_invited" | "invited" | "registered" | "in_progress" | "completed" | string;
+            registered: boolean;
+            registered_at: string | null;
+            completed_at: string | null;
+            completion_percentage: number;
+            courses: DriverTrainingCourse[];
+        };
+        certificates: DriverTrainingCertificate[];
+        history: {
+            quiz_attempts: DriverTrainingQuizAttempt[];
+            communications: DriverTrainingCommunication[];
+        };
+    } | null;
+}
+export const getDriverTraining = (id: string, refresh = false) =>
+    request<DriverTraining>(
+        `/api/admin/drivers/${id}/training${refresh ? "?refresh=true" : ""}`,
+    );
+
 export interface ReferralLeader {
     driver_id: string;
     driver_code: string;

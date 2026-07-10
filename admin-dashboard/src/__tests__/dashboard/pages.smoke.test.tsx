@@ -113,6 +113,8 @@ vi.mock("lucide-react", () => {
     BarChart3: Icon, Ticket: Icon, Zap: Icon, ZoomIn: Icon,
     // main-side additions (rides PlusCircle, earnings Filter) + AI console icons
     Filter: Icon, PlusCircle: Icon, Bot: Icon, MessageSquarePlus: Icon, Sparkles: Icon,
+    // drivers Training (LMS) tab
+    GraduationCap: Icon, Award: Icon, Maximize2: Icon,
   };
 });
 

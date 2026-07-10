@@ -648,6 +648,11 @@ const recordApiError = (entry: ApiErrorLogEntry) => {
 // exempt — that's a normal authenticated CRUD surface.)
 const isSosUrl = (url: string): boolean => /^\/rides\/[^/]+\/emergency$/.test(url);
 
+// Request paths currently inside their single allowed 503 retry (see the
+// 503 branch in handleApiError). Keyed by "METHOD url" — same-path
+// concurrent requests share the slot, which at worst skips a retry.
+const _inflight503Retries = new Set<string>();
+
 const handleApiError = async (response: Response, method: string, url: string, retryFn?: () => Promise<unknown>): Promise<never> => {
   // ── Guard: refresh endpoint itself returned 401 ──────────────────
   // If the /auth/refresh call is rejected by the server the refresh token is
@@ -743,12 +748,28 @@ const handleApiError = async (response: Response, method: string, url: string, r
   // Giving the rider-app one more shot after another 1.5s catches
   // longer Supabase edge hiccups without the user seeing
   // "Service temporarily unavailable: database" mid-booking.
-  if (response.status === 503 && retryFn && url !== '/auth/refresh') {
-    await new Promise(r => setTimeout(r, 1500));
+  //
+  // The _inflight503Retries guard bounds this to ONE retry: retryFn goes
+  // back through client.<method>(), which passes a fresh retryFn of its
+  // own, so without the guard a *persistent* 503 (e.g. Twilio unconfigured
+  // → send-otp 503s every time) looped fetch → 1.5s → fetch forever. The
+  // caller's promise never settled, and the user only saw an error when a
+  // fetch in the loop eventually failed at the network layer — surfacing a
+  // misleading "unable to reach server" instead of the server's message.
+  if (response.status === 503 && retryFn && url !== '/auth/refresh' && !_inflight503Retries.has(`${method} ${url}`)) {
+    const retryKey = `${method} ${url}`;
+    _inflight503Retries.add(retryKey);
     try {
-      return retryFn() as Promise<never>;
-    } catch {
-      // retry threw — fall through to the original error surface below
+      await new Promise(r => setTimeout(r, 1500));
+      return (await retryFn()) as never;
+    } catch (retryError) {
+      // The retry's own SpinrApiError carries the freshest server detail —
+      // rethrow it. Anything else (network drop mid-retry) falls through so
+      // the ORIGINAL 503 body below is surfaced instead of a response-less
+      // error that reads as "unable to reach server".
+      if (retryError instanceof SpinrApiError) throw retryError;
+    } finally {
+      _inflight503Retries.delete(retryKey);
     }
   }
 

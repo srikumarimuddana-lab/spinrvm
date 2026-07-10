@@ -29,6 +29,7 @@ import {
     setAudioModeAsync,
     type AudioPlayer,
 } from 'expo-audio';
+import { useAlertPrefsStore } from '../store/alertPrefsStore';
 
 const REPLAY_INTERVAL_MS = 2500;
 
@@ -112,6 +113,9 @@ export function useRideOfferSound(): RideOfferSoundControls {
     const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     const playOnce = useCallback(() => {
+        // Settings → Sound & Haptics → Sound Effects. Checked per replay (not
+        // just at play()) so muting mid-offer silences the loop immediately.
+        if (!useAlertPrefsStore.getState().soundEffects) return;
         const player = _getOrCreatePlayer();
         if (!player) return;
         try {

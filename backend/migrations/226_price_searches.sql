@@ -5,8 +5,14 @@
 -- for a window — the top of the ride funnel, before a ride is ever created.
 --
 -- Written fire-and-forget from POST /rides/estimate (the rider tapping to see
--- a price). The AI-assistant fare-quote path does NOT write here — only the
--- rider-app estimate call counts as a user price search.
+-- a price). Intentionally excluded surfaces — only the rider-app estimate
+-- call counts as a consumer price search:
+--   • AI-assistant fare quotes (compute_ride_estimates with the default
+--     track_search=False) — assistant-driven, not a rider shopping a price.
+--   • Corporate guest-booking quotes (GET /bookings/fare-estimate → the
+--     separate compute_fare_estimate engine) — a B2B booking surface, outside
+--     the consumer funnel this table feeds. Revisit if corporate quotes ever
+--     belong in the ops funnel.
 --
 -- PIPEDA-safe: stores the acting user id + the matched service area id only.
 -- NEVER add raw pickup/dropoff coordinates or addresses — the funnel needs a

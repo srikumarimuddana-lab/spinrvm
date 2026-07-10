@@ -116,8 +116,11 @@ async def _track_price_search(rider_id: str, service_area_id: Optional[str]) -> 
             "price_searches",
             {"user_id": rider_id, "service_area_id": service_area_id},
         )
-    except Exception:  # noqa: BLE001 — analytics write, never fatal
-        logger.warning("[estimate] price-search tracking write failed (non-fatal)", exc_info=True)
+    except Exception:  # noqa: BLE001 — analytics write, never fatal to the quote
+        # error (not warning) so a broken price_searches table/RLS surfaces
+        # loudly instead of the funnel silently flatlining at zero. Still
+        # swallowed: a tracking failure must never fail or slow a fare quote.
+        logger.error("[estimate] price-search tracking write failed", exc_info=True)
 
 
 async def compute_ride_estimates(
@@ -513,10 +516,12 @@ async def compute_ride_estimates(
 
     # Ops-funnel tracking — count this as a rider "price search" (top of the
     # funnel). Only when called via the rider-app /estimate route (not AI
-    # quotes). Fire-and-forget so it never touches the estimate latency budget.
+    # quotes). _deps.spawn (not bare create_task) keeps a strong reference so
+    # the task can't be GC'd before the insert lands — same as every other
+    # fire-and-forget in this package, and it never touches the latency budget.
     if track_search:
         _est_area_id = _est_matched_area.get("id") if _est_matched_area else None
-        asyncio.create_task(_track_price_search(rider_id, _est_area_id))
+        _deps.spawn(_track_price_search(rider_id, _est_area_id))
 
     return {"estimates": estimates, "route_polyline": route_polyline}
 

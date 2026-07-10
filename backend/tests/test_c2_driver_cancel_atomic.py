@@ -60,10 +60,10 @@ def test_driver_cancel_returns_409_when_ride_left_pretrip_state():
     ride = {"id": "ride-1", "status": "driver_accepted", "rider_id": "rider-1", "driver_id": "drv-1"}
 
     with (
-        patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),
-        patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=ride)),
-        patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(return_value=None)) as upd,
-        patch("backend.routes.drivers.db_supabase.set_driver_available", AsyncMock()) as avail,
+        patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+        patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(return_value=None)) as upd,
+        patch("backend.routes.drivers._deps.db_supabase.set_driver_available", AsyncMock()) as avail,
     ):
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(
@@ -93,11 +93,11 @@ def test_driver_noshow_returns_409_and_charges_nothing_on_race():
     }
 
     with (
-        patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),
-        patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=ride)),
-        patch("backend.routes.drivers.db_supabase.find_one", AsyncMock(return_value=None)),
+        patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+        patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.drivers._deps.db_supabase.find_one", AsyncMock(return_value=None)),
         patch("backend.settings_loader.get_app_settings", AsyncMock(return_value={"noshow_wait_seconds": 300})),
-        patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(return_value=None)) as upd,
+        patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(return_value=None)) as upd,
         patch("backend.services.cancellation_service.calculate_noshow_fee", MagicMock()) as fee_calc,
     ):
         with pytest.raises(HTTPException) as exc_info:

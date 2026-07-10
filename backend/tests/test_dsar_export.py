@@ -95,9 +95,9 @@ async def _run_export(table_map: dict):
         return table_map.get(table, [])
 
     with (
-        patch("backend.routes.drivers.db_supabase.get_rows", side_effect=_get_rows),
-        patch("backend.routes.drivers._upload_export_zip", side_effect=fake_upload),
-        patch("backend.routes.drivers.send_email", AsyncMock(side_effect=fake_send_email)),
+        patch("backend.routes.drivers._deps.db_supabase.get_rows", side_effect=_get_rows),
+        patch("backend.routes.drivers.tax_exports._upload_export_zip", side_effect=fake_upload),
+        patch("backend.routes.drivers._deps.send_email", AsyncMock(side_effect=fake_send_email)),
     ):
         await drivers_mod._build_and_email_data_export("u1", "driver@example.com")
 
@@ -330,9 +330,9 @@ class TestDsarExportBundle:
             captured.update(kwargs)
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", side_effect=_get_rows),
-            patch("backend.routes.drivers._upload_export_zip", side_effect=failing_upload),
-            patch("backend.routes.drivers.send_email", AsyncMock(side_effect=fake_send_email)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", side_effect=_get_rows),
+            patch("backend.routes.drivers.tax_exports._upload_export_zip", side_effect=failing_upload),
+            patch("backend.routes.drivers._deps.send_email", AsyncMock(side_effect=fake_send_email)),
         ):
             await drivers_mod._build_and_email_data_export("u1", "driver@example.com")
 

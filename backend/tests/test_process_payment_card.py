@@ -75,11 +75,11 @@ def _install_common_patches(outcome, *, ride_row=None, already_paid=False):
         return True
 
     patches = [
-        patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
-        patch("backend.routes.rides.db_supabase.get_user_by_id", AsyncMock(return_value=rider_user)),
-        patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=None)),
-        patch("backend.routes.rides.db_supabase.update_ride", AsyncMock(side_effect=_capture_update)),
-        patch("backend.routes.rides.db_supabase.update_one", AsyncMock(return_value=guard_row)),
+        patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.rides._deps.db_supabase.get_user_by_id", AsyncMock(return_value=rider_user)),
+        patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=None)),
+        patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock(side_effect=_capture_update)),
+        patch("backend.routes.rides._deps.db_supabase.update_one", AsyncMock(return_value=guard_row)),
         patch("backend.services.payment_service.charge_ride", AsyncMock(return_value=outcome)),
     ]
     return patches, updates
@@ -283,8 +283,8 @@ class TestIdempotencyGuards:
         charge_mock = AsyncMock()
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.rides.db_supabase.get_user_by_id", AsyncMock(return_value=rider_user)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.get_user_by_id", AsyncMock(return_value=rider_user)),
             patch("backend.services.payment_service.charge_ride", charge_mock),
         ):
             req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
@@ -320,7 +320,7 @@ class TestIdempotencyGuards:
                 st.enter_context(p)
             # Override charge_ride patch so we can assert not-called
             st.enter_context(patch("backend.services.payment_service.charge_ride", charge_mock))
-            st.enter_context(patch("backend.routes.rides.db_supabase.get_ride", get_ride_mock))
+            st.enter_context(patch("backend.routes.rides._deps.db_supabase.get_ride", get_ride_mock))
 
             req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
             result = await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
@@ -351,7 +351,7 @@ class TestIdempotencyGuards:
         with ExitStack() as st:
             for p in patches:
                 st.enter_context(p)
-            st.enter_context(patch("backend.routes.rides.db_supabase.get_ride", get_ride_mock))
+            st.enter_context(patch("backend.routes.rides._deps.db_supabase.get_ride", get_ride_mock))
 
             req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
             with pytest.raises(HTTPException) as exc_info:
@@ -370,7 +370,7 @@ class TestOpenInvoiceGuard:
         from backend.routes import rides as rides_mod
 
         ride = _completed_ride(stripe_invoice_id="in_admin_123")
-        with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
+        with patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)):
             req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
             with pytest.raises(HTTPException) as exc:
                 await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
@@ -387,7 +387,7 @@ class TestOpenInvoiceGuard:
         from backend.routes import rides as rides_mod
 
         fresh = _completed_ride(stripe_invoice_id=f"pending:{datetime.now(timezone.utc).timestamp()}:u1")
-        with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=fresh)):
+        with patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=fresh)):
             req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
             with pytest.raises(HTTPException) as exc:
                 await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
@@ -404,7 +404,7 @@ class TestOpenInvoiceGuard:
         stale = _completed_ride(
             stripe_invoice_id=f"pending:{(datetime.now(timezone.utc) - timedelta(minutes=10)).timestamp()}:u1"
         )
-        with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=stale)):
+        with patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=stale)):
             req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
             with pytest.raises(HTTPException) as exc:
                 await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
@@ -418,7 +418,7 @@ class TestAuthorization:
 
         ride = _completed_ride()
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
         ):
             req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
             with pytest.raises(HTTPException) as exc_info:

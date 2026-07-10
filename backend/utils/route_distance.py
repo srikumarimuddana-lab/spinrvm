@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+from datetime import datetime, timezone
 from typing import Any, List, Optional, Tuple
 
 import httpx
@@ -137,27 +138,76 @@ def _osrm_radius(point: dict) -> str:
     return str(int(r))
 
 
+def _osrm_timestamp(point: dict) -> Optional[int]:
+    """Return a Unix timestamp for OSRM /match, or None when unavailable."""
+    ts = point.get("timestamp") or point.get("recorded_at") or point.get("created_at")
+    if ts is None:
+        return None
+    if isinstance(ts, (int, float)):
+        # Expo Location timestamps are milliseconds; server rows are usually seconds/ISO.
+        return int(ts / 1000) if ts > 10_000_000_000 else int(ts)
+    if isinstance(ts, str):
+        try:
+            return int(float(ts))
+        except ValueError:
+            pass
+        try:
+            parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return int(parsed.timestamp())
+        except ValueError:
+            return None
+    return None
+
+
+def _osrm_bearing(point: dict) -> str:
+    """Per-point heading constraint for OSRM /match.
+
+    Empty string means "no bearing constraint" for that coordinate. When the
+    phone provides heading/course, giving OSRM a directional hint helps avoid
+    snapping a noisy fix to the opposite carriageway on divided roads.
+    """
+    bearing = point.get("heading")
+    if bearing is None:
+        bearing = point.get("bearing")
+    if bearing is None:
+        bearing = point.get("course")
+    try:
+        return f"{int(round(float(bearing))) % 360},45"
+    except (TypeError, ValueError):
+        return ""
+
+
 async def _compute_via_osrm(trip_points: list[dict], osrm_url: str) -> Optional[RoadMatch]:
     """Map-match the trace with OSRM /match; return (distance_km, [[lat,lng],...]).
 
     OSRM expects {lng},{lat} order. We sum every matching's distance and
     concatenate their geometries because a sparse/messy trace can be split into
-    several matchings; gaps=ignore keeps a momentary signal loss from
-    fragmenting the trip and tidy=true drops outliers before matching.
+    several matchings. gaps=split keeps OSRM from force-joining questionable
+    traces across GPS dropouts, timestamps improve speed plausibility, bearings
+    help stay on the correct carriageway on divided roads, and tidy=true drops
+    outliers before matching.
     overview=full + geometries=geojson returns the snapped road geometry.
     """
     sampled = _downsample(trip_points, _OSRM_MAX_POINTS)
     coords = ";".join(f"{p['lng']},{p['lat']}" for p in sampled)
     radiuses = ";".join(_osrm_radius(p) for p in sampled)
+    timestamps = [_osrm_timestamp(p) for p in sampled]
+    bearings = [_osrm_bearing(p) for p in sampled]
     url = f"{osrm_url.rstrip('/')}/match/v1/driving/{coords}"
     params = {
         "overview": "full",  # return the snapped road geometry, not just distance
         "geometries": "geojson",  # [[lng,lat],...] — no polyline decoder needed
         "steps": "false",
         "radiuses": radiuses,
-        "gaps": "ignore",
+        "gaps": "split",
         "tidy": "true",
     }
+    if all(ts is not None for ts in timestamps):
+        params["timestamps"] = ";".join(str(ts) for ts in timestamps)
+    if any(bearings):
+        params["bearings"] = ";".join(bearings)
 
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
@@ -183,7 +233,9 @@ async def _compute_via_osrm(trip_points: list[dict], osrm_url: str) -> Optional[
             total_m += float(d)
         # geometry.coordinates is [[lng, lat], ...] for geojson.
         for lng, lat in (m.get("geometry") or {}).get("coordinates") or []:
-            polyline.append([round(float(lat), 6), round(float(lng), 6)])
+            point = [round(float(lat), 6), round(float(lng), 6)]
+            if not polyline or polyline[-1] != point:
+                polyline.append(point)
 
     if total_m <= 0:
         return None

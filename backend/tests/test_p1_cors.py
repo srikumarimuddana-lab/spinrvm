@@ -366,3 +366,31 @@ class TestStripeAppCheckExemption:
         from backend.core.middleware import _APP_CHECK_EXEMPT_PREFIXES
 
         assert not any("/api/v1/drivers/payouts".startswith(p) for p in _APP_CHECK_EXEMPT_PREFIXES)
+
+
+class TestMobileBootstrapAppCheckExemptions:
+    """Login/bootstrap endpoints must not deadlock behind App Check.
+
+    They either return public client config or have their own OTP proof and
+    rate-limit controls. Authenticated ride/payment endpoints remain enforced.
+    """
+
+    def test_login_and_public_settings_endpoints_are_exempt(self):
+        from backend.core.middleware import _APP_CHECK_EXEMPT_PREFIXES
+
+        for path in (
+            "/api/v1/settings",
+            "/api/v1/auth/send-otp",
+            "/api/v1/auth/verify-otp",
+        ):
+            assert any(path.startswith(p) for p in _APP_CHECK_EXEMPT_PREFIXES), path
+
+    def test_authenticated_ride_endpoints_remain_enforced(self):
+        from backend.core.middleware import _APP_CHECK_EXEMPT_PREFIXES
+
+        for path in (
+            "/api/v1/rides/active",
+            "/api/v1/drivers/rides/active",
+        ):
+            assert not any(path.startswith(p) for p in _APP_CHECK_EXEMPT_PREFIXES), path
+

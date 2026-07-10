@@ -62,7 +62,7 @@ class TestPaymentStatusGuard:
         from backend.routes import rides as rides_mod
 
         with patch(
-            "backend.routes.rides.db_supabase.get_ride",
+            "backend.routes.rides._deps.db_supabase.get_ride",
             AsyncMock(
                 return_value={"id": RIDE_ID, "rider_id": RIDER_ID, "status": status, "payment_status": "pending"}
             ),
@@ -89,7 +89,7 @@ class TestPaymentIdempotency:
 
         ride = _completed_ride(payment_status=payment_status, total_fare=18.5, tip_amount=2.0)
 
-        with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
+        with patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)):
             result = await rides_mod.process_payment(
                 ride_id=RIDE_ID,
                 req=_payment_request(tip=0.0),
@@ -139,17 +139,17 @@ class TestPaymentAtomicGuard:
             return _completed_ride(payment_status="processing")
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(side_effect=_get_ride)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(side_effect=_get_ride)),
             patch(
-                "backend.routes.rides.db_supabase.get_user_by_id",
+                "backend.routes.rides._deps.db_supabase.get_user_by_id",
                 AsyncMock(return_value={"stripe_customer_id": "cus_g", "default_payment_method": "pm_g"}),
             ),
             patch(
-                "backend.routes.rides.db_supabase.update_one",
+                "backend.routes.rides._deps.db_supabase.update_one",
                 AsyncMock(side_effect=update_side_effects),
             ),
             patch("backend.services.payment_service.charge_ride", stripe_mock),
-            patch("backend.routes.rides.db_supabase.update_ride", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
         ):
             results = await asyncio.gather(
                 rides_mod.process_payment(ride_id=RIDE_ID, req=_payment_request(), current_user={"id": RIDER_ID}),
@@ -171,7 +171,7 @@ class TestPaymentAtomicGuard:
 
         ride = _completed_ride()  # rider_id = RIDER_ID
 
-        with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
+        with patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)):
             with pytest.raises(HTTPException) as exc:
                 await rides_mod.process_payment(
                     ride_id=RIDE_ID,
@@ -196,9 +196,9 @@ class TestPaymentTipValidation:
         guard_row = {"id": RIDE_ID, "payment_status": "processing"}
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.rides.db_supabase.update_one", AsyncMock(return_value=guard_row)),
-            patch("backend.routes.rides.db_supabase.update_ride", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.update_one", AsyncMock(return_value=guard_row)),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
         ):
             with pytest.raises(HTTPException) as exc:
                 await rides_mod.process_payment(
@@ -219,9 +219,9 @@ class TestPaymentTipValidation:
         guard_row = {"id": RIDE_ID, "payment_status": "processing"}
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.rides.db_supabase.update_one", AsyncMock(return_value=guard_row)),
-            patch("backend.routes.rides.db_supabase.update_ride", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.update_one", AsyncMock(return_value=guard_row)),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock()),
         ):
             with pytest.raises(HTTPException) as exc:
                 await rides_mod.process_payment(

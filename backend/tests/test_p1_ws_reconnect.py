@@ -188,15 +188,15 @@ class TestActiveRideHttpRecovery:
 
         with (
             patch(
-                "backend.routes.rides.db_supabase.get_rows",
+                "backend.routes.rides._deps.db_supabase.get_rows",
                 AsyncMock(side_effect=[[], [ride]]),
             ),
             patch(
-                "backend.routes.rides.db_supabase.get_driver_by_id",
+                "backend.routes.rides._deps.db_supabase.get_driver_by_id",
                 AsyncMock(return_value=driver_row),
             ),
             patch(
-                "backend.routes.rides.db_supabase.get_user_by_id",
+                "backend.routes.rides._deps.db_supabase.get_user_by_id",
                 AsyncMock(return_value=driver_user),
             ),
         ):
@@ -216,11 +216,11 @@ class TestActiveRideHttpRecovery:
 
         with (
             patch(
-                "backend.routes.rides.db_supabase.get_rows",
+                "backend.routes.rides._deps.db_supabase.get_rows",
                 AsyncMock(side_effect=[[], [ride]]),
             ),
             patch(
-                "backend.routes.rides.db_supabase.get_driver_by_id",
+                "backend.routes.rides._deps.db_supabase.get_driver_by_id",
                 AsyncMock(return_value=None),
             ),
         ):
@@ -235,7 +235,7 @@ class TestActiveRideHttpRecovery:
         from backend.routes import rides as rides_mod
 
         with patch(
-            "backend.routes.rides.db_supabase.get_rows",
+            "backend.routes.rides._deps.db_supabase.get_rows",
             AsyncMock(return_value=[]),
         ):
             result = await rides_mod.get_active_ride(request=_MOCK_REQUEST, current_user={"id": RIDER_ID})
@@ -252,7 +252,7 @@ class TestActiveRideHttpRecovery:
 
         with (
             patch(
-                "backend.routes.rides.db_supabase.get_rows",
+                "backend.routes.rides._deps.db_supabase.get_rows",
                 AsyncMock(side_effect=[[], [ride]]),
             ),
         ):

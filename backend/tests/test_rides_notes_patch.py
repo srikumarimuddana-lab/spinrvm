@@ -32,8 +32,8 @@ class TestRideNotesPatch:
         update_mock = AsyncMock()
 
         with (
-            patch("backend.routes.rides.db") as mock_db,
-            patch("backend.routes.rides.manager.send_personal_message", send_mock),
+            patch("backend.routes.rides._deps.db") as mock_db,
+            patch("backend.routes.rides._deps.manager.send_personal_message", send_mock),
         ):
             mock_db.find_one = AsyncMock(side_effect=[ride, {"id": "driver_1", "user_id": "user_driver_1"}])
             mock_db.update_one = update_mock
@@ -69,8 +69,8 @@ class TestRideNotesPatch:
         update_mock = AsyncMock()
 
         with (
-            patch("backend.routes.rides.db") as mock_db,
-            patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides._deps.db") as mock_db,
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
         ):
             mock_db.find_one = AsyncMock(return_value=ride)
             mock_db.update_one = update_mock
@@ -94,8 +94,8 @@ class TestRideNotesPatch:
 
         ride = _ride(status="driver_accepted")
         with (
-            patch("backend.routes.rides.db") as mock_db,
-            patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides._deps.db") as mock_db,
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
         ):
             mock_db.find_one = AsyncMock(return_value=ride)
             mock_db.update_one = AsyncMock()
@@ -118,8 +118,8 @@ class TestRideNotesPatch:
 
         ride = _ride(status="in_progress")
         with (
-            patch("backend.routes.rides.db") as mock_db,
-            patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides._deps.db") as mock_db,
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
         ):
             mock_db.find_one = AsyncMock(return_value=ride)
             mock_db.update_one = AsyncMock()
@@ -140,7 +140,7 @@ class TestRideNotesPatch:
         from backend.routes import rides as rides_mod
 
         with (
-            patch("backend.routes.rides.db") as mock_db,
+            patch("backend.routes.rides._deps.db") as mock_db,
         ):
             mock_db.find_one = AsyncMock(return_value=None)
 

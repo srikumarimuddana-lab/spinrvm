@@ -110,12 +110,12 @@ class TestAddTip:
         driver = _driver()
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.rides.db_supabase.update_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
-            patch("backend.routes.rides.db_supabase.get_user_by_id", AsyncMock(return_value={"first_name": "Alice"})),
-            patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
-            patch("backend.routes.rides.send_push_notification", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("backend.routes.rides._deps.db_supabase.get_user_by_id", AsyncMock(return_value={"first_name": "Alice"})),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
         ):
             req = TipRequest(amount=Decimal("5.00"))
             result = asyncio.run(
@@ -149,7 +149,7 @@ class TestAddTip:
 
         ride = _ride("completed", tip_amount=3.0)  # already tipped
 
-        with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
+        with patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(
                     rides_mod.add_tip(
@@ -169,7 +169,7 @@ class TestAddTip:
 
         ride = _ride("in_progress")
 
-        with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
+        with patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(
                     rides_mod.add_tip(
@@ -189,7 +189,7 @@ class TestAddTip:
 
         ride = _ride("completed")
 
-        with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
+        with patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(
                     rides_mod.add_tip(
@@ -216,11 +216,11 @@ class TestRateDriver:
         driver = _driver(total_ratings=4, rating=4.5)
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.rides.db_supabase.update_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
-            patch("backend.routes.rides.db_supabase.update_one", AsyncMock(return_value=None)),
-            patch("backend.routes.rides.send_push_notification", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("backend.routes.rides._deps.db_supabase.update_one", AsyncMock(return_value=None)),
+            patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
         ):
             result = asyncio.run(
                 rides_mod.rate_driver(
@@ -240,11 +240,11 @@ class TestRateDriver:
         driver = _driver()
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.rides.db_supabase.update_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
-            patch("backend.routes.rides.db_supabase.update_one", AsyncMock(return_value=None)),
-            patch("backend.routes.rides.send_push_notification", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("backend.routes.rides._deps.db_supabase.update_one", AsyncMock(return_value=None)),
+            patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
         ):
             result = asyncio.run(
                 rides_mod.rate_driver(
@@ -264,7 +264,7 @@ class TestRateDriver:
 
         ride = _ride("in_progress")
 
-        with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
+        with patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(
                     rides_mod.rate_driver(
@@ -283,7 +283,7 @@ class TestRateDriver:
 
         ride = _ride("completed")
 
-        with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
+        with patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(
                     rides_mod.rate_driver(
@@ -315,10 +315,10 @@ class TestGetRideReceipt:
             return []
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
-            patch("backend.routes.rides.db_supabase.get_user_by_id", AsyncMock(return_value=driver_profile)),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("backend.routes.rides._deps.db_supabase.get_user_by_id", AsyncMock(return_value=driver_profile)),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
         ):
             result = asyncio.run(rides_mod.get_ride_receipt(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
 
@@ -333,7 +333,7 @@ class TestGetRideReceipt:
 
         ride = _ride("in_progress")
 
-        with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
+        with patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(rides_mod.get_ride_receipt(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
         assert exc.value.status_code == 400
@@ -345,7 +345,7 @@ class TestGetRideReceipt:
 
         ride = _ride("completed")
 
-        with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
+        with patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(rides_mod.get_ride_receipt(ride_id=RIDE_ID, current_user={"id": "other_rider"}))
         assert exc.value.status_code == 403
@@ -355,7 +355,7 @@ class TestGetRideReceipt:
 
         from backend.routes import rides as rides_mod
 
-        with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=None)):
+        with patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=None)):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(rides_mod.get_ride_receipt(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
         assert exc.value.status_code == 404
@@ -373,8 +373,8 @@ class TestGetShareTripLink:
         ride = _ride("in_progress", shared_trip_token=None)
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.rides.db_supabase.update_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock(return_value=ride)),
         ):
             result = asyncio.run(rides_mod.get_share_trip_link(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
 
@@ -387,7 +387,7 @@ class TestGetShareTripLink:
 
         ride = _ride("in_progress", shared_trip_token="existing_token_abc")
 
-        with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
+        with patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)):
             result = asyncio.run(rides_mod.get_share_trip_link(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
 
         assert result["share_token"] == "existing_token_abc"
@@ -399,7 +399,7 @@ class TestGetShareTripLink:
 
         ride = _ride("completed")
 
-        with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
+        with patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(rides_mod.get_share_trip_link(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
         assert exc.value.status_code == 400
@@ -411,7 +411,7 @@ class TestGetShareTripLink:
 
         ride = _ride("in_progress")
 
-        with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
+        with patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(rides_mod.get_share_trip_link(ride_id=RIDE_ID, current_user={"id": "other_rider"}))
         assert exc.value.status_code == 403
@@ -428,7 +428,7 @@ class TestGetChatStatus:
 
         ride = _ride("in_progress")
 
-        with patch("backend.routes.rides.db.find_one", AsyncMock(return_value=ride)):
+        with patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=ride)):
             result = asyncio.run(rides_mod.get_chat_status(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
 
         assert result["available"] is True
@@ -439,7 +439,7 @@ class TestGetChatStatus:
 
         ride = _ride("cancelled")
 
-        with patch("backend.routes.rides.db.find_one", AsyncMock(return_value=ride)):
+        with patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=ride)):
             result = asyncio.run(rides_mod.get_chat_status(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
 
         assert result["available"] is False
@@ -450,7 +450,7 @@ class TestGetChatStatus:
         recent_ts = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
         ride = _ride("completed", ride_completed_at=recent_ts)
 
-        with patch("backend.routes.rides.db.find_one", AsyncMock(return_value=ride)):
+        with patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=ride)):
             result = asyncio.run(rides_mod.get_chat_status(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
 
         assert result["available"] is True
@@ -463,7 +463,7 @@ class TestGetChatStatus:
         old_ts = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
         ride = _ride("completed", ride_completed_at=old_ts)
 
-        with patch("backend.routes.rides.db.find_one", AsyncMock(return_value=ride)):
+        with patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=ride)):
             result = asyncio.run(rides_mod.get_chat_status(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
 
         assert result["available"] is False
@@ -473,7 +473,7 @@ class TestGetChatStatus:
 
         from backend.routes import rides as rides_mod
 
-        with patch("backend.routes.rides.db.find_one", AsyncMock(return_value=None)):
+        with patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=None)):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(rides_mod.get_chat_status(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
         assert exc.value.status_code == 404
@@ -490,8 +490,8 @@ class TestGetChatStatus:
         ride = _ride("in_progress")
 
         with (
-            patch("backend.routes.rides.db.find_one", AsyncMock(return_value=ride)),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
         ):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(rides_mod.get_chat_status(ride_id=RIDE_ID, current_user={"id": "outsider_999"}))
@@ -505,9 +505,9 @@ class TestGetChatStatus:
         ride = _ride("in_progress")
 
         with (
-            patch("backend.routes.rides.db.find_one", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=ride)),
             patch(
-                "backend.routes.rides.db_supabase.get_rows",
+                "backend.routes.rides._deps.db_supabase.get_rows",
                 AsyncMock(return_value=[{"id": DRIVER_ID, "user_id": "driver_user_xyz"}]),
             ),
         ):
@@ -535,8 +535,8 @@ class TestGetRideMessages:
             return []
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
         ):
             result = asyncio.run(rides_mod.get_ride_messages(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
 
@@ -553,8 +553,8 @@ class TestGetRideMessages:
             return []
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
         ):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(rides_mod.get_ride_messages(ride_id=RIDE_ID, current_user={"id": "outsider"}))
@@ -572,7 +572,7 @@ class TestGetScheduledRides:
 
         scheduled = [_ride("scheduled")]
 
-        with patch("backend.routes.rides.db_supabase.get_rides_for_user", MagicMock(return_value=scheduled)):
+        with patch("backend.routes.rides._deps.db_supabase.get_rides_for_user", MagicMock(return_value=scheduled)):
             result = asyncio.run(rides_mod.get_scheduled_rides(current_user={"id": RIDER_ID}))
 
         assert isinstance(result, list)
@@ -592,8 +592,8 @@ class TestCancelScheduledRide:
         cancelled = _ride("cancelled")
 
         with (
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[ride])),
-            patch("backend.routes.rides.db_supabase.update_ride", AsyncMock(return_value=cancelled)),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[ride])),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock(return_value=cancelled)),
         ):
             result = asyncio.run(rides_mod.cancel_scheduled_ride(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
 
@@ -605,7 +605,7 @@ class TestCancelScheduledRide:
         from backend.routes import rides as rides_mod
         from backend.utils.error_handling import SpinrException
 
-        with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])):
+        with patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])):
             with pytest.raises((HTTPException, SpinrException)) as exc:
                 asyncio.run(rides_mod.cancel_scheduled_ride(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
         assert exc.value.status_code == 404

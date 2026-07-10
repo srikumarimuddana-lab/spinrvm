@@ -148,9 +148,9 @@ class TestRidePIIFiltering:
             db_supabase.get_rows("drivers", {...}) — for is_driver check
         """
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride_with_driver)),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
-            patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=FULL_DRIVER_ROW)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride_with_driver)),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=FULL_DRIVER_ROW)),
         ):
             from backend.routes.rides import get_ride
 
@@ -168,9 +168,9 @@ class TestRidePIIFiltering:
     async def test_allowed_fields_present(self, ride_with_driver):
         """The response's `driver` object contains every allowed field."""
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride_with_driver)),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
-            patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=FULL_DRIVER_ROW)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride_with_driver)),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=FULL_DRIVER_ROW)),
         ):
             from backend.routes.rides import get_ride
 
@@ -192,9 +192,9 @@ class TestRidePIIFiltering:
             "status": "searching",
         }
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride_no_driver)),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
-            patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=None)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride_no_driver)),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=None)),
         ):
             from backend.routes.rides import get_ride
 

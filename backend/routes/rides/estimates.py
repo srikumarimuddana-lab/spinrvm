@@ -104,11 +104,31 @@ async def _filter_reachable_drivers(all_drivers: list) -> list:
     return filtered
 
 
+async def _track_price_search(rider_id: str, service_area_id: Optional[str]) -> None:
+    """Best-effort log of one rider price search for the ops funnel.
+
+    Fire-and-forget: a failure here must never surface to the rider or slow
+    the /estimate hot path (P95 < 300 ms). PIPEDA-safe — id + area only, no
+    coordinates. See migration 226_price_searches.sql.
+    """
+    try:
+        await _deps.db_supabase.insert_one(
+            "price_searches",
+            {"user_id": rider_id, "service_area_id": service_area_id},
+        )
+    except Exception:  # noqa: BLE001 — analytics write, never fatal to the quote
+        # error (not warning) so a broken price_searches table/RLS surfaces
+        # loudly instead of the funnel silently flatlining at zero. Still
+        # swallowed: a tracking failure must never fail or slow a fare quote.
+        logger.error("[estimate] price-search tracking write failed", exc_info=True)
+
+
 async def compute_ride_estimates(
     body: RideEstimateRequest,
     rider_id: str,
     *,
     include_polyline: bool = True,
+    track_search: bool = False,
 ) -> dict:
     """Shared estimate engine behind POST /rides/estimate.
 
@@ -493,6 +513,16 @@ async def compute_ride_estimates(
         len(route_polyline) if route_polyline else 0,
         [(e["vehicle_type"].get("name", "?"), e["available"], e["driver_count"]) for e in estimates],
     )
+
+    # Ops-funnel tracking — count this as a rider "price search" (top of the
+    # funnel). Only when called via the rider-app /estimate route (not AI
+    # quotes). _deps.spawn (not bare create_task) keeps a strong reference so
+    # the task can't be GC'd before the insert lands — same as every other
+    # fire-and-forget in this package, and it never touches the latency budget.
+    if track_search:
+        _est_area_id = _est_matched_area.get("id") if _est_matched_area else None
+        _deps.spawn(_track_price_search(rider_id, _est_area_id))
+
     return {"estimates": estimates, "route_polyline": route_polyline}
 
 
@@ -504,4 +534,4 @@ async def estimate_ride(
     request: Request = None,
     current_user: dict = Depends(get_current_user),
 ):
-    return await compute_ride_estimates(body, current_user["id"])
+    return await compute_ride_estimates(body, current_user["id"], track_search=True)

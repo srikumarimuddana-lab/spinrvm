@@ -14,9 +14,11 @@ from typing import Any, Dict, Optional, Union
 try:
     from ..db_supabase import run_sync  # type: ignore
     from ..supabase_client import supabase  # type: ignore
+    from ..utils.error_handling import DuplicateRecordError, db_error_text  # type: ignore
 except ImportError:
     from db_supabase import run_sync  # type: ignore
     from supabase_client import supabase  # type: ignore
+    from utils.error_handling import DuplicateRecordError, db_error_text  # type: ignore
 
 # Money values cross the JSON boundary into the Postgres RPC. We always
 # normalize to Decimal and serialize as a string to avoid IEEE-754 drift —
@@ -65,6 +67,25 @@ async def _apply(
     return rows[0]
 
 
+async def _wallet_scope(wallet_id: str) -> str:
+    """Derive the ledger scope from the wallet row (M5.4): 'master' for the
+    company wallet, 'section:<uuid>' for a department wallet. Top-ups land
+    via the wallet-agnostic Stripe webhook, so the scope must come from the
+    wallet itself — hardcoding 'master' mislabeled section-wallet ledger rows."""
+
+    def _fn():
+        return supabase.table("corporate_wallets").select("id, section_id").eq("id", wallet_id).limit(1).execute()
+
+    resp = await run_sync(_fn)
+    rows = getattr(resp, "data", None) or []
+    if not rows:
+        # Surface loudly (CLAUDE.md): a missing wallet must never silently
+        # ledger as 'master' — the webhook 5xxes and Stripe retries/reconciles.
+        raise RuntimeError(f"wallet not found for scope derivation: {wallet_id}")
+    section_id = rows[0].get("section_id")
+    return f"section:{section_id}" if section_id else "master"
+
+
 async def apply_topup(
     *,
     wallet_id: str,
@@ -78,7 +99,7 @@ async def apply_topup(
         raise ValueError("top-up amount must be positive")
     return await _apply(
         wallet_id=wallet_id,
-        scope="master",
+        scope=await _wallet_scope(wallet_id),
         type_="topup",
         delta=delta,
         stripe_payment_intent_id=stripe_payment_intent_id,
@@ -130,3 +151,99 @@ async def apply_refund(
         actor_user_id=actor_user_id,
         notes=notes,
     )
+
+
+class TransferBelowFloor(Exception):
+    """Source wallet would breach its floor (section: 0; master: credit floor)."""
+
+
+async def transfer_between_wallets(
+    *,
+    from_wallet_id: str,
+    to_wallet_id: str,
+    amount: _Numeric,
+    actor_user_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    notes: Optional[str] = None,
+    source_floor: Optional[_Numeric] = None,
+) -> Dict[str, Any]:
+    """Atomic two-wallet allocation via corporate_wallet_transfer (migration 227).
+
+    The RPC derives the source floor server-side (a SECTION source is always
+    floored at 0 — Q9 as a DB invariant; a MASTER source may be tightened but
+    never loosened below its own soft_negative_floor), locks both rows in id
+    order, and writes paired 'allocation' ledger legs idempotent on
+    '<key>:out'/'<key>:in'.
+
+    Reviewer-flagged race: two concurrent FIRST attempts with the same
+    idempotency key can both pass the RPC's pre-lock ledger check; the loser
+    then hits the ledger's unique index and its transaction aborts. That is
+    fail-safe (no double-move) but not idempotent-transparent — so on a
+    unique-violation-shaped error we re-query the ledger by key and return
+    the winner's legs instead of surfacing a 500 to a retrying client.
+    """
+    delta = Decimal(str(amount))
+    if delta <= 0:
+        raise ValueError("transfer amount must be positive")
+
+    params = {
+        "p_from_wallet_id": from_wallet_id,
+        "p_to_wallet_id": to_wallet_id,
+        "p_amount": _money_str(delta),
+        "p_actor_user_id": actor_user_id,
+        "p_idempotency_key": idempotency_key,
+        "p_notes": notes,
+        "p_source_floor": _money_str(source_floor) if source_floor is not None else None,
+    }
+
+    def _fn():
+        return supabase.rpc("corporate_wallet_transfer", params).execute()
+
+    try:
+        resp = await run_sync(_fn)
+    except Exception as e:  # noqa: BLE001 — inspected and re-raised below
+        # run_sync wraps DB errors (DatabaseError/DuplicateRecordError) whose
+        # str() is a generic sentinel — the real message lives in
+        # details['original']; db_error_text joins all layers.
+        msg = db_error_text(e)
+        if "wallet_below_floor" in msg:
+            raise TransferBelowFloor(msg) from e
+        is_duplicate = isinstance(e, DuplicateRecordError) or "duplicate" in msg or "23505" in msg or "unique" in msg
+        if idempotency_key and is_duplicate:
+            # Concurrent same-key first-attempt lost the race — the winner's
+            # legs are in the ledger; return them as the idempotent result.
+            replay = await _lookup_transfer_by_key(idempotency_key)
+            if replay:
+                return replay
+        raise
+
+    rows = getattr(resp, "data", None) or []
+    if not rows:
+        raise RuntimeError("wallet transfer RPC returned no row")
+    return rows[0]
+
+
+async def _lookup_transfer_by_key(idempotency_key: str) -> Optional[Dict[str, Any]]:
+    def _fn():
+        return (
+            supabase.table("corporate_wallet_transactions")
+            .select("id, balance_after, stripe_payment_intent_id")
+            .in_(
+                "stripe_payment_intent_id",
+                [f"{idempotency_key}:out", f"{idempotency_key}:in"],
+            )
+            .execute()
+        )
+
+    resp = await run_sync(_fn)
+    rows = getattr(resp, "data", None) or []
+    if not rows:
+        return None
+    out = next((r for r in rows if str(r.get("stripe_payment_intent_id", "")).endswith(":out")), None)
+    inn = next((r for r in rows if str(r.get("stripe_payment_intent_id", "")).endswith(":in")), None)
+    return {
+        "out_txn_id": (out or {}).get("id"),
+        "in_txn_id": (inn or {}).get("id"),
+        "from_balance": (out or {}).get("balance_after"),
+        "to_balance": (inn or {}).get("balance_after"),
+    }

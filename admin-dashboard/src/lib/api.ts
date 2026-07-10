@@ -922,6 +922,20 @@ export interface EarningsOverview {
         current: { rider: number; driver: number; system: number };
         previous: { rider: number; driver: number; system: number };
     };
+    /** Ops funnel — created_at cohort of rides requested in the window,
+     *  each as a current/previous MetricWithDelta. Reads top-to-bottom:
+     *  price searches → requested → reached searching → travelled →
+     *  cancels. `completed` here is cohort-based, so it differs from the
+     *  completion-date "Completed Trips" KPI above. */
+    ride_funnel: {
+        price_searches: MetricWithDelta;
+        requested: MetricWithDelta;
+        reached_searching: MetricWithDelta;
+        completed: MetricWithDelta;
+        rider_cancelled: MetricWithDelta;
+        driver_cancelled: MetricWithDelta;
+        cancelled_after_start: MetricWithDelta;
+    };
     daily_series: Array<{
         date: string;
         gbv: number;

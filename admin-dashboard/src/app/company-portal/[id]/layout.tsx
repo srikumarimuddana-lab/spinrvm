@@ -80,7 +80,25 @@ export default function CompanyPortalLayout({
     }, [id, profile, router, setMemberships]);
 
     const isCompanyAdmin = profile?.membership.role === "owner" || profile?.membership.role === "admin";
-    const nav = buildNav(id).filter((item) => isCompanyAdmin || !item.adminOnly);
+
+    // M2.6 verification gate: a non-active company (pending_verification /
+    // suspended / closed) only gets the verification page — every other
+    // portal path redirects there. Cached memberships from before the status
+    // field existed are refetched by the effect above on next login; treat
+    // missing status as active to avoid false lockouts on stale caches.
+    const companyStatus = profile?.company.status ?? "active";
+    const verificationPath = `/company-portal/${id}/verification`;
+    const gated = Boolean(profile) && companyStatus !== "active";
+
+    useEffect(() => {
+        if (gated && pathname !== verificationPath) {
+            router.replace(verificationPath);
+        }
+    }, [gated, pathname, verificationPath, router]);
+
+    const nav = gated
+        ? [{ href: verificationPath, label: "Verification", icon: ShieldCheck } as NavItem]
+        : buildNav(id).filter((item) => isCompanyAdmin || !item.adminOnly);
 
     return (
         <div className="flex min-h-screen flex-col md:flex-row">

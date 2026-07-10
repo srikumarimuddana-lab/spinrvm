@@ -489,3 +489,38 @@ def test_billing_transactions_404_when_no_wallet(test_client, rider_override):
     ):
         resp = test_client.get("/company/c1/billing/transactions")
     assert resp.status_code == 404
+
+
+# ── M2.6: verification gate on booking ───────────────────────────────────────
+
+
+def test_create_booking_blocked_for_non_active_company(test_client, rider_override):
+    with (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"company_id": "c1", "role": "member", "id": "m1"}]),
+        ),
+        patch(
+            "db_supabase.get_corporate_account_by_id",
+            AsyncMock(return_value={"id": "c1", "status": "pending_verification"}),
+        ),
+    ):
+        resp = test_client.post(
+            "/company/c1/bookings",
+            json={
+                "customer_name": "Sam",
+                "customer_phone": "+13065550123",
+                "pickup_address": "123 A St",
+                "pickup_lat": 52.13,
+                "pickup_lng": -106.67,
+                "dropoff_address": "456 B St",
+                "dropoff_lat": 52.14,
+                "dropoff_lng": -106.66,
+                "distance_km": 3.2,
+                "duration_minutes": 9,
+                "vehicle_type_id": "standard",
+            },
+        )
+    assert resp.status_code == 403, resp.text
+    detail = resp.json()["detail"]
+    assert detail["code"] == "company_not_active"  # typed — portal routes to /verification

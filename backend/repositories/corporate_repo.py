@@ -462,6 +462,47 @@ async def insert_corporate_member_invite(
     return await run_sync(_fn)
 
 
+async def create_active_member(
+    *,
+    company_id: str,
+    user_id: str,
+    email: str,
+    role: str = "owner",
+    invited_by: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Insert a directly-ACTIVE membership (no invite round-trip).
+
+    Used by owner bootstrap: the self-serve signup creator is already an
+    authenticated, email-verified user, so there is nothing to invite — they
+    become the company's first (owner) member immediately. The partial unique
+    index corp_members_company_user_unique makes a duplicate insert raise;
+    callers pre-check membership (bootstrap_owner), so a violation here is a
+    genuine bug and must surface, not be swallowed.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+
+    def _fn():
+        res = (
+            supabase.table("corporate_members")
+            .insert(
+                {
+                    "company_id": company_id,
+                    "user_id": user_id,
+                    "invited_email": email,
+                    "role": role,
+                    "status": "active",
+                    "joined_at": now,
+                    "invited_at": now,
+                    "invited_by": invited_by or user_id,
+                }
+            )
+            .execute()
+        )
+        return _single_row_from_res(res) or {}
+
+    return await run_sync(_fn)
+
+
 async def list_company_members(
     *,
     company_id: str,

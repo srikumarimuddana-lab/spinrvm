@@ -415,10 +415,17 @@ export const inviteCompanyMember = (
     companyId: string,
     body: { email: string; role: CorporateMemberRole; policy_override?: boolean }
 ) =>
-    companyRequest<{ member: CorporateMember; invite_url: string }>(
-        `/api/company/${companyId}/members/invite`,
-        { method: "POST", body: JSON.stringify(body) }
-    );
+    companyRequest<{
+        member: CorporateMember;
+        invite_url: string;
+        // M3.1: backend emails the web link; email_sent=false → show the
+        // copy-link fallback instead of pretending delivery succeeded.
+        web_invite_url?: string | null;
+        email_sent?: boolean;
+    }>(`/api/company/${companyId}/members/invite`, {
+        method: "POST",
+        body: JSON.stringify(body),
+    });
 
 export const updateCompanyMember = (
     companyId: string,

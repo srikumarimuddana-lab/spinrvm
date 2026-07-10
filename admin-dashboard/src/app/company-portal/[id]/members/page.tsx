@@ -33,7 +33,7 @@ import {
     TableRow,
 } from "@/components/ui/table";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
-import { Mail, PauseCircle, PlayCircle, UserPlus } from "lucide-react";
+import { Copy, Mail, PauseCircle, PlayCircle, RefreshCw, UserPlus } from "lucide-react";
 
 const STATUS_COLORS: Record<CorporateMemberStatus, string> = {
     invited: "bg-yellow-100 text-yellow-800",
@@ -52,7 +52,11 @@ export default function MembersPage() {
     const [inviteEmail, setInviteEmail] = useState("");
     const [inviteRole, setInviteRole] = useState<CorporateMemberRole>("member");
     const [inviting, setInviting] = useState(false);
-    const [feedback, setFeedback] = useState<string | null>(null);
+    const [feedback, setFeedback] = useState<{
+        kind: "ok" | "warn";
+        text: string;
+        link?: string | null;
+    } | null>(null);
     const [error, setError] = useState<string | null>(null);
 
     const load = useCallback(async () => {
@@ -77,31 +81,52 @@ export default function MembersPage() {
     );
     const { sorted, sort, toggle } = useTableSort(filtered);
 
-    const onInvite = async () => {
-        if (!id || !inviteEmail.trim()) return;
+    const sendInvite = async (email: string, role: CorporateMemberRole) => {
+        if (!id) return;
         setInviting(true);
         setError(null);
         setFeedback(null);
         try {
-            const res = await inviteCompanyMember(id, {
-                email: inviteEmail.trim(),
-                role: inviteRole,
-            });
-            // The backend mints an app://join?token=… deep link (for the rider
-            // app). Desk employees follow a link in a browser, so surface a
-            // web link to the portal login that carries the same token.
+            const res = await inviteCompanyMember(id, { email, role });
+            // Prefer the backend-composed web link (M3.1); fall back to
+            // rewriting the app://join deep link for older backends.
             const tokenMatch = /[?&]token=([^&]+)/.exec(res.invite_url ?? "");
             const webLink =
-                tokenMatch && typeof window !== "undefined"
+                res.web_invite_url ??
+                (tokenMatch && typeof window !== "undefined"
                     ? `${window.location.origin}/company-login?invite_token=${tokenMatch[1]}`
-                    : res.invite_url;
-            setFeedback(`Invite sent — share this link: ${webLink}`);
-            setInviteEmail("");
+                    : res.invite_url);
+            if (res.email_sent) {
+                setFeedback({ kind: "ok", text: `Invite emailed to ${email}.`, link: webLink });
+            } else {
+                // Delivery failed or backend predates M3.1 — never pretend it
+                // was emailed; hand the admin the link to share manually.
+                setFeedback({
+                    kind: "warn",
+                    text: `Invite created for ${email}, but the email could not be sent — share the link manually.`,
+                    link: webLink,
+                });
+            }
             await load();
         } catch (e) {
             setError(e instanceof Error ? e.message : "Invite failed");
         } finally {
             setInviting(false);
+        }
+    };
+
+    const onInvite = async () => {
+        if (!inviteEmail.trim()) return;
+        await sendInvite(inviteEmail.trim(), inviteRole);
+        setInviteEmail("");
+    };
+
+    const copyLink = async (link: string) => {
+        try {
+            await navigator.clipboard.writeText(link);
+            setFeedback((f) => (f ? { ...f, text: `${f.text.replace(/ \(link copied\)$/, "")} (link copied)` } : f));
+        } catch {
+            /* clipboard unavailable — the link is visible in the banner */
         }
     };
 
@@ -165,9 +190,25 @@ export default function MembersPage() {
                         </div>
                     </div>
                     {feedback && (
-                        <p className="rounded bg-emerald-50 p-2 text-xs text-emerald-800">
-                            {feedback}
-                        </p>
+                        <div
+                            className={
+                                "flex flex-wrap items-center gap-2 rounded p-2 text-xs " +
+                                (feedback.kind === "ok"
+                                    ? "bg-emerald-50 text-emerald-800"
+                                    : "bg-amber-50 text-amber-800")
+                            }
+                        >
+                            <span>{feedback.text}</span>
+                            {feedback.link && (
+                                <button
+                                    type="button"
+                                    className="inline-flex items-center gap-1 font-medium underline"
+                                    onClick={() => copyLink(feedback.link!)}
+                                >
+                                    <Copy className="h-3 w-3" /> Copy invite link
+                                </button>
+                            )}
+                        </div>
                     )}
                     {error && (
                         <p className="rounded bg-red-50 p-2 text-xs text-red-700">{error}</p>
@@ -229,6 +270,17 @@ export default function MembersPage() {
                                         </Badge>
                                     </TableCell>
                                     <TableCell className="text-right">
+                                        {m.status === "invited" && m.invited_email && (
+                                            <Button
+                                                size="sm"
+                                                variant="ghost"
+                                                disabled={inviting}
+                                                onClick={() => sendInvite(m.invited_email!, m.role)}
+                                            >
+                                                <RefreshCw className="mr-1 h-3.5 w-3.5" />
+                                                Resend
+                                            </Button>
+                                        )}
                                         {m.status === "active" && (
                                             <Button
                                                 size="sm"

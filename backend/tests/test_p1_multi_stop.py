@@ -101,9 +101,9 @@ class TestAddStopMidTrip:
         updated_ride = {**ride, "stops": ride.get("stops", []) + [_stop(address, lat, lng)]}
 
         with (
-            patch("backend.routes.rides.db.find_one", AsyncMock(side_effect=[ride, _driver_row()])),
-            patch("backend.routes.rides.db.update_one", AsyncMock(return_value=updated_ride)),
-            patch("backend.routes.rides.manager.send_personal_message", AsyncMock(side_effect=_capture_ws)),
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(side_effect=[ride, _driver_row()])),
+            patch("backend.routes.rides._deps.db.update_one", AsyncMock(return_value=updated_ride)),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock(side_effect=_capture_ws)),
         ):
             result = await rides_mod.add_stop_mid_trip(
                 ride_id=RIDE_ID,
@@ -150,7 +150,7 @@ class TestAddStopMidTrip:
             lng = -106.68
             position = None
 
-        with patch("backend.routes.rides.db.find_one", AsyncMock(return_value=ride)):
+        with patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=ride)):
             with pytest.raises(HTTPException) as exc_info:
                 await rides_mod.add_stop_mid_trip(
                     ride_id=RIDE_ID,
@@ -174,7 +174,7 @@ class TestAddStopMidTrip:
             lng = -106.68
             position = None
 
-        with patch("backend.routes.rides.db.find_one", AsyncMock(return_value=ride)):
+        with patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=ride)):
             with pytest.raises(HTTPException) as exc_info:
                 await rides_mod.add_stop_mid_trip(
                     ride_id=RIDE_ID,
@@ -201,9 +201,9 @@ class TestAddStopMidTrip:
             return {}
 
         with (
-            patch("backend.routes.rides.db.find_one", AsyncMock(side_effect=[ride, _driver_row()])),
-            patch("backend.routes.rides.db.update_one", AsyncMock(side_effect=_capture_update)),
-            patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(side_effect=[ride, _driver_row()])),
+            patch("backend.routes.rides._deps.db.update_one", AsyncMock(side_effect=_capture_update)),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
         ):
             from backend.routes import rides as rides_mod
 
@@ -245,9 +245,9 @@ class TestRemoveStopMidTrip:
             ws_calls.append((channel, message))
 
         with (
-            patch("backend.routes.rides.db.find_one", AsyncMock(side_effect=[ride, _driver_row()])),
-            patch("backend.routes.rides.db.update_one", AsyncMock(return_value={})),
-            patch("backend.routes.rides.manager.send_personal_message", AsyncMock(side_effect=_capture_ws)),
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(side_effect=[ride, _driver_row()])),
+            patch("backend.routes.rides._deps.db.update_one", AsyncMock(return_value={})),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock(side_effect=_capture_ws)),
         ):
             result = await rides_mod.remove_stop_mid_trip(
                 ride_id=RIDE_ID,
@@ -272,9 +272,9 @@ class TestRemoveStopMidTrip:
             ws_calls.append((channel, message))
 
         with (
-            patch("backend.routes.rides.db.find_one", AsyncMock(side_effect=[ride, _driver_row()])),
-            patch("backend.routes.rides.db.update_one", AsyncMock(return_value={})),
-            patch("backend.routes.rides.manager.send_personal_message", AsyncMock(side_effect=_capture_ws)),
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(side_effect=[ride, _driver_row()])),
+            patch("backend.routes.rides._deps.db.update_one", AsyncMock(return_value={})),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock(side_effect=_capture_ws)),
         ):
             await rides_mod.remove_stop_mid_trip(
                 ride_id=RIDE_ID,
@@ -293,7 +293,7 @@ class TestRemoveStopMidTrip:
 
         ride = _ride(status="in_progress", stops=[_stop("Only Stop")])
 
-        with patch("backend.routes.rides.db.find_one", AsyncMock(return_value=ride)):
+        with patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=ride)):
             with pytest.raises(HTTPException) as exc_info:
                 await rides_mod.remove_stop_mid_trip(
                     ride_id=RIDE_ID,

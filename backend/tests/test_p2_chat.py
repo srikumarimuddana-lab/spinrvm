@@ -92,9 +92,9 @@ class TestSendRideMessage:
         find_calls = [ride, None, driver_row if ride.get("driver_id") else None]
 
         with (
-            patch("backend.routes.rides.db.find_one", AsyncMock(side_effect=find_calls)),
-            patch("backend.routes.rides.db.insert_one", AsyncMock(side_effect=_insert)),
-            patch("backend.routes.rides.manager.send_personal_message", AsyncMock(side_effect=_capture_ws)),
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(side_effect=find_calls)),
+            patch("backend.routes.rides._deps.db.insert_one", AsyncMock(side_effect=_insert)),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock(side_effect=_capture_ws)),
         ):
             result = await rides_mod.send_ride_message(
                 ride_id=RIDE_ID,
@@ -142,10 +142,10 @@ class TestSendRideMessage:
         with (
             # find_one: ride, driver (for auth check)
             patch(
-                "backend.routes.rides.db.find_one", AsyncMock(side_effect=[ride, _driver_row(user_id=DRIVER_USER_ID)])
+                "backend.routes.rides._deps.db.find_one", AsyncMock(side_effect=[ride, _driver_row(user_id=DRIVER_USER_ID)])
             ),
-            patch("backend.routes.rides.db.insert_one", AsyncMock(side_effect=_insert)),
-            patch("backend.routes.rides.manager.send_personal_message", AsyncMock(side_effect=_capture_ws)),
+            patch("backend.routes.rides._deps.db.insert_one", AsyncMock(side_effect=_insert)),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock(side_effect=_capture_ws)),
         ):
             result = await rides_mod.send_ride_message(
                 ride_id=RIDE_ID,
@@ -170,7 +170,7 @@ class TestSendRideMessage:
             text = "Intruder"
 
         with patch(
-            "backend.routes.rides.db.find_one", AsyncMock(side_effect=[ride, None])
+            "backend.routes.rides._deps.db.find_one", AsyncMock(side_effect=[ride, None])
         ):  # no driver row for outsider
             with pytest.raises(HTTPException) as exc_info:
                 await rides_mod.send_ride_message(
@@ -191,7 +191,7 @@ class TestSendRideMessage:
         class _Body:
             text = "Still there?"
 
-        with patch("backend.routes.rides.db.find_one", AsyncMock(return_value=ride)):
+        with patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=ride)):
             with pytest.raises(HTTPException) as exc_info:
                 await rides_mod.send_ride_message(
                     ride_id=RIDE_ID,
@@ -221,7 +221,7 @@ class TestSendRideMessage:
         class _Body:
             text = "Too late"
 
-        with patch("backend.routes.rides.db.find_one", AsyncMock(return_value=ride)):
+        with patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=ride)):
             with pytest.raises(HTTPException) as exc_info:
                 await rides_mod.send_ride_message(
                     ride_id=RIDE_ID,
@@ -260,11 +260,11 @@ class TestGetRideMessages:
         ]
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
             patch(
-                "backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])
+                "backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])
             ),  # no driver row for rider auth
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(side_effect=[[], msgs])),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(side_effect=[[], msgs])),
         ):
             # Use a simpler direct approach: mock the specific calls
             call_count = [0]
@@ -277,8 +277,8 @@ class TestGetRideMessages:
                     return msgs
                 return []
 
-            with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)):
-                with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
+            with patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)):
+                with patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)):
                     result = await rides_mod.get_ride_messages(
                         ride_id=RIDE_ID,
                         current_user={"id": RIDER_ID},
@@ -299,8 +299,8 @@ class TestGetRideMessages:
             return []  # outsider has no driver row
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await rides_mod.get_ride_messages(
@@ -349,8 +349,8 @@ class TestGetRideMessagesDriver:
             return []
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
         ):
             result = await rides_mod.get_ride_messages(
                 ride_id=RIDE_ID,
@@ -397,8 +397,8 @@ class TestGetRideMessagesDriver:
             return msgs
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
         ):
             result = await rides_mod.get_ride_messages(ride_id=RIDE_ID, current_user={"id": RIDER_ID})
 
@@ -413,8 +413,8 @@ class TestGetRideMessagesDriver:
             return []
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
         ):
             result = await rides_mod.get_ride_messages(ride_id=RIDE_ID, current_user={"id": RIDER_ID})
 
@@ -494,9 +494,9 @@ class TestRideSenderIdentity:
             find_sequence.append(driver_row)
 
         with (
-            patch("backend.routes.rides.db.find_one", AsyncMock(side_effect=find_sequence)),
-            patch("backend.routes.rides.db.insert_one", AsyncMock(side_effect=_insert)),
-            patch("backend.routes.rides.manager.send_personal_message", AsyncMock(side_effect=_capture_ws)),
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(side_effect=find_sequence)),
+            patch("backend.routes.rides._deps.db.insert_one", AsyncMock(side_effect=_insert)),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock(side_effect=_capture_ws)),
         ):
             result = await rides_mod.send_ride_message(ride_id=RIDE_ID, body=_Body(), current_user={"id": user_id})
         return result, ws_calls, inserted

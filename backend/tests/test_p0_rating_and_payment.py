@@ -107,18 +107,18 @@ class TestFirstRatingUpdatesDriverAverage:
             return data
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.rides.db_supabase.update_ride", AsyncMock(return_value=ride_with_rating)),
-            patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.update_ride", AsyncMock(return_value=ride_with_rating)),
+            patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
             patch(
-                "backend.routes.rides.db_supabase.get_rows",
+                "backend.routes.rides._deps.db_supabase.get_rows",
                 AsyncMock(return_value=[ride_with_rating]),
             ),
             patch(
-                "backend.routes.rides.db_supabase.update_one",
+                "backend.routes.rides._deps.db_supabase.update_one",
                 AsyncMock(side_effect=capture_update_one),
             ),
-            patch("backend.routes.rides.send_push_notification", AsyncMock()),
+            patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
         ):
             rating_req = MagicMock()
             rating_req.rating = 5
@@ -151,21 +151,21 @@ class TestFirstRatingUpdatesDriverAverage:
             return data
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
             patch(
-                "backend.routes.rides.db_supabase.update_ride",
+                "backend.routes.rides._deps.db_supabase.update_ride",
                 AsyncMock(return_value=current_ride_with_rating),
             ),
-            patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("backend.routes.rides._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
             patch(
-                "backend.routes.rides.db_supabase.get_rows",
+                "backend.routes.rides._deps.db_supabase.get_rows",
                 AsyncMock(return_value=[prior_ride, current_ride_with_rating]),
             ),
             patch(
-                "backend.routes.rides.db_supabase.update_one",
+                "backend.routes.rides._deps.db_supabase.update_one",
                 AsyncMock(side_effect=capture_update_one),
             ),
-            patch("backend.routes.rides.send_push_notification", AsyncMock()),
+            patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
         ):
             rating_req = MagicMock()
             rating_req.rating = 5
@@ -198,7 +198,7 @@ class TestRiderPaymentAfterDriverCompletes:
         ride = _ride(status="in_progress")
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
         ):
             req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
 
@@ -225,8 +225,8 @@ class TestRiderPaymentAfterDriverCompletes:
         guard_result.modified_count = 0  # simulate race — already claimed
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.rides.db.update_one", AsyncMock(return_value=guard_result)),
+            patch("backend.routes.rides._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides._deps.db.update_one", AsyncMock(return_value=guard_result)),
         ):
             req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
 

@@ -144,8 +144,8 @@ async def test_cancel_ride_raises_on_in_progress():
     driver = {"id": "d1", "user_id": "u1"}
 
     with (
-        patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),
-        patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+        patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
     ):
         with pytest.raises(RideStateError):
             await _drivers_module.cancel_ride(
@@ -188,16 +188,16 @@ async def test_complete_ride_does_not_overwrite_payment_status():
 
     with (
         patch(
-            "backend.routes.drivers.db_supabase.get_rows",
+            "backend.routes.drivers._deps.db_supabase.get_rows",
             AsyncMock(side_effect=lambda t, *a, **kw: [driver] if t == "drivers" else ([ride] if t == "rides" else [])),
         ),
-        patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(side_effect=capture_update_one)),
-        patch("backend.routes.drivers.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
-        patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
-        patch("backend.routes.drivers.manager.broadcast_ride_status", AsyncMock()),
-        patch("backend.routes.drivers.manager.broadcast_to_admins", AsyncMock()),
-        patch("backend.routes.drivers.send_push_notification", AsyncMock()),
-        patch("backend.routes.drivers.asyncio.create_task", lambda coro: coro.close()),
+        patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(side_effect=capture_update_one)),
+        patch("backend.routes.drivers._deps.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
+        patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+        patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+        patch("backend.routes.drivers._deps.manager.broadcast_to_admins", AsyncMock()),
+        patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
+        patch("backend.routes.drivers._deps.asyncio.create_task", lambda coro: coro.close()),
     ):
         await _drivers_module.complete_ride(ride_id="r1", current_user={"id": "u1"})
 

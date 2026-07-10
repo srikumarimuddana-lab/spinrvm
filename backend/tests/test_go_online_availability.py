@@ -80,11 +80,11 @@ class TestGoOnlineAvailability:
 
         with (
             patch(
-                "backend.routes.drivers.db_supabase.get_driver_by_id",
+                "backend.routes.drivers._deps.db_supabase.get_driver_by_id",
                 AsyncMock(side_effect=[driver, updated]),
             ),
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
-            patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(side_effect=_update_one)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(side_effect=_update_one)),
         ):
             result = await drv_mod.update_driver_status(
                 driver_id=DRIVER_ID,
@@ -189,11 +189,11 @@ class TestGoOnlineAvailability:
 
         with (
             patch(
-                "backend.routes.drivers.db_supabase.get_driver_by_id",
+                "backend.routes.drivers._deps.db_supabase.get_driver_by_id",
                 AsyncMock(side_effect=[driver, updated]),
             ),
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
-            patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(side_effect=_update_one)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(side_effect=_update_one)),
         ):
             result = await drv_mod.update_driver_status(
                 driver_id=DRIVER_ID,

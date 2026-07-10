@@ -337,13 +337,13 @@ async def get_fare_quote(
     dropoff_address: Optional[str] = None,
 ) -> Dict[str, Any]:
     try:
-        from ..routes.rides import RideEstimateRequest, compute_ride_estimates
+        from ..routes.rides import estimates as _rides_estimates
     except ImportError:
-        from routes.rides import RideEstimateRequest, compute_ride_estimates
+        from routes.rides import estimates as _rides_estimates
 
     try:
-        estimate_result = await compute_ride_estimates(
-            RideEstimateRequest(
+        estimate_result = await _rides_estimates.compute_ride_estimates(
+            _rides_estimates.RideEstimateRequest(
                 pickup_lat=pickup_lat,
                 pickup_lng=pickup_lng,
                 dropoff_lat=dropoff_lat,

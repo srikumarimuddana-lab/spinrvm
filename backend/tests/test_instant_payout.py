@@ -107,8 +107,8 @@ class TestRequestInstantPayout:
         req = drv.InstantPayoutRequest(amount=Decimal("50.00"))
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
-            patch("backend.routes.drivers.get_driver_balance", AsyncMock(return_value=self._balance())),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers.earnings.get_driver_balance", AsyncMock(return_value=self._balance())),
         ):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(
@@ -136,8 +136,8 @@ class TestRequestInstantPayout:
         req = drv.InstantPayoutRequest(amount=Decimal("50.00"))
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
-            patch("backend.routes.drivers.get_driver_balance", AsyncMock(return_value=self._balance())),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers.earnings.get_driver_balance", AsyncMock(return_value=self._balance())),
         ):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(
@@ -163,9 +163,9 @@ class TestRequestInstantPayout:
         req = drv.InstantPayoutRequest(amount=Decimal("500.00"))
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
             patch(
-                "backend.routes.drivers.get_driver_balance",
+                "backend.routes.drivers.earnings.get_driver_balance",
                 AsyncMock(return_value=self._balance(payable="100.00")),
             ),
         ):
@@ -204,17 +204,17 @@ class TestRequestInstantPayout:
         req = drv.InstantPayoutRequest(amount=Decimal("100.00"))
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
-            patch("backend.routes.drivers.db_supabase.insert_one", AsyncMock(side_effect=fake_insert)),
-            patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(side_effect=fake_update)),
-            patch("backend.routes.drivers.get_driver_balance", AsyncMock(return_value=self._balance())),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers._deps.db_supabase.insert_one", AsyncMock(side_effect=fake_insert)),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(side_effect=fake_update)),
+            patch("backend.routes.drivers.earnings.get_driver_balance", AsyncMock(return_value=self._balance())),
             patch(
                 "backend.settings_loader.get_app_settings",
                 AsyncMock(return_value={"stripe_secret_key": "sk_test_abc"}),
             ),
-            patch("backend.routes.drivers.stripe.Transfer.create", MagicMock(return_value=MagicMock(id="tr_x"))),
+            patch("backend.routes.drivers._deps.stripe.Transfer.create", MagicMock(return_value=MagicMock(id="tr_x"))),
             patch(
-                "backend.routes.drivers.stripe.Payout.create",
+                "backend.routes.drivers._deps.stripe.Payout.create",
                 MagicMock(return_value=MagicMock(id="po_INSTANT")),
             ),
         ):
@@ -270,21 +270,21 @@ class TestRequestInstantPayout:
         req = drv.InstantPayoutRequest(amount=Decimal("100.00"))
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
-            patch("backend.routes.drivers.db_supabase.insert_one", AsyncMock(side_effect=fake_insert)),
-            patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(side_effect=fake_update)),
-            patch("backend.routes.drivers.get_driver_balance", AsyncMock(return_value=self._balance())),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers._deps.db_supabase.insert_one", AsyncMock(side_effect=fake_insert)),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(side_effect=fake_update)),
+            patch("backend.routes.drivers.earnings.get_driver_balance", AsyncMock(return_value=self._balance())),
             patch(
                 "backend.settings_loader.get_app_settings",
                 AsyncMock(return_value={"stripe_secret_key": "sk_test_abc"}),
             ),
-            patch("backend.routes.drivers.stripe.Transfer.create", MagicMock(return_value=MagicMock(id="tr_x"))),
+            patch("backend.routes.drivers._deps.stripe.Transfer.create", MagicMock(return_value=MagicMock(id="tr_x"))),
             patch(
-                "backend.routes.drivers.stripe.Payout.create",
+                "backend.routes.drivers._deps.stripe.Payout.create",
                 MagicMock(side_effect=Exception("instant payout temporarily unavailable")),
             ),
             patch(
-                "backend.routes.drivers.stripe.Transfer.create_reversal",
+                "backend.routes.drivers._deps.stripe.Transfer.create_reversal",
                 MagicMock(return_value=MagicMock(id="trr_ok")),
             ),
         ):
@@ -337,21 +337,21 @@ class TestRequestInstantPayout:
         req = drv.InstantPayoutRequest(amount=Decimal("100.00"))
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
-            patch("backend.routes.drivers.db_supabase.insert_one", AsyncMock(side_effect=fake_insert)),
-            patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(side_effect=fake_update)),
-            patch("backend.routes.drivers.get_driver_balance", AsyncMock(return_value=self._balance())),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers._deps.db_supabase.insert_one", AsyncMock(side_effect=fake_insert)),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock(side_effect=fake_update)),
+            patch("backend.routes.drivers.earnings.get_driver_balance", AsyncMock(return_value=self._balance())),
             patch(
                 "backend.settings_loader.get_app_settings",
                 AsyncMock(return_value={"stripe_secret_key": "sk_test_abc"}),
             ),
-            patch("backend.routes.drivers.stripe.Transfer.create", MagicMock(return_value=MagicMock(id="tr_x"))),
+            patch("backend.routes.drivers._deps.stripe.Transfer.create", MagicMock(return_value=MagicMock(id="tr_x"))),
             patch(
-                "backend.routes.drivers.stripe.Payout.create",
+                "backend.routes.drivers._deps.stripe.Payout.create",
                 MagicMock(side_effect=Exception("bank network down")),
             ),
             patch(
-                "backend.routes.drivers.stripe.Transfer.create_reversal",
+                "backend.routes.drivers._deps.stripe.Transfer.create_reversal",
                 MagicMock(side_effect=Exception("transfer already settled")),
             ),
         ):
@@ -394,18 +394,18 @@ class TestRequestInstantPayout:
         req = drv.InstantPayoutRequest(amount=Decimal("100.00"))
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
-            patch("backend.routes.drivers.db_supabase.insert_one", AsyncMock(side_effect=fake_insert)),
-            patch("backend.routes.drivers.get_driver_balance", AsyncMock(return_value=self._balance())),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers._deps.db_supabase.insert_one", AsyncMock(side_effect=fake_insert)),
+            patch("backend.routes.drivers.earnings.get_driver_balance", AsyncMock(return_value=self._balance())),
             patch(
                 "backend.settings_loader.get_app_settings",
                 AsyncMock(return_value={"stripe_secret_key": "sk_test_abc"}),
             ),
             patch(
-                "backend.routes.drivers.stripe.Transfer.create",
+                "backend.routes.drivers._deps.stripe.Transfer.create",
                 MagicMock(side_effect=Exception("connect account closed")),
             ),
-            patch("backend.routes.drivers.stripe.Transfer.create_reversal", MagicMock(side_effect=fake_reversal)),
+            patch("backend.routes.drivers._deps.stripe.Transfer.create_reversal", MagicMock(side_effect=fake_reversal)),
         ):
             with pytest.raises(HTTPException):
                 asyncio.run(

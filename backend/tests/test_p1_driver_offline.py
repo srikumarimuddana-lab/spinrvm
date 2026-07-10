@@ -74,9 +74,9 @@ class TestDriverOfflineMidTrip:
         driver = _driver_row()
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("backend.routes.drivers._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
             patch(
-                "backend.routes.drivers.db_supabase.get_rows",
+                "backend.routes.drivers._deps.db_supabase.get_rows",
                 AsyncMock(return_value=[_ride("driver_accepted")]),
             ),
         ):
@@ -98,9 +98,9 @@ class TestDriverOfflineMidTrip:
         driver = _driver_row()
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("backend.routes.drivers._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
             patch(
-                "backend.routes.drivers.db_supabase.get_rows",
+                "backend.routes.drivers._deps.db_supabase.get_rows",
                 AsyncMock(return_value=[_ride("in_progress")]),
             ),
         ):
@@ -121,9 +121,9 @@ class TestDriverOfflineMidTrip:
         driver = _driver_row()
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("backend.routes.drivers._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
             patch(
-                "backend.routes.drivers.db_supabase.get_rows",
+                "backend.routes.drivers._deps.db_supabase.get_rows",
                 AsyncMock(return_value=[_ride("driver_arrived")]),
             ),
         ):
@@ -145,13 +145,13 @@ class TestDriverOfflineMidTrip:
 
         with (
             patch(
-                "backend.routes.drivers.db_supabase.get_driver_by_id", AsyncMock(side_effect=[driver, updated_driver])
+                "backend.routes.drivers._deps.db_supabase.get_driver_by_id", AsyncMock(side_effect=[driver, updated_driver])
             ),
             patch(
-                "backend.routes.drivers.db_supabase.get_rows",
+                "backend.routes.drivers._deps.db_supabase.get_rows",
                 AsyncMock(return_value=[]),  # no active ride
             ),
-            patch("backend.routes.drivers.db_supabase.update_one", AsyncMock()),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock()),
         ):
             result = await drv_mod.update_driver_status(
                 driver_id=DRIVER_ID,
@@ -171,13 +171,13 @@ class TestDriverOfflineMidTrip:
 
         with (
             patch(
-                "backend.routes.drivers.db_supabase.get_driver_by_id", AsyncMock(side_effect=[driver, updated_driver])
+                "backend.routes.drivers._deps.db_supabase.get_driver_by_id", AsyncMock(side_effect=[driver, updated_driver])
             ),
             patch(
-                "backend.routes.drivers.db_supabase.get_rows",
+                "backend.routes.drivers._deps.db_supabase.get_rows",
                 AsyncMock(return_value=[]),  # completed rides not in active_statuses list
             ),
-            patch("backend.routes.drivers.db_supabase.update_one", AsyncMock()),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock()),
         ):
             result = await drv_mod.update_driver_status(
                 driver_id=DRIVER_ID,
@@ -200,13 +200,13 @@ class TestDriverOfflineMidTrip:
         # and asserting no 409 is raised.
         with (
             patch(
-                "backend.routes.drivers.db_supabase.get_driver_by_id", AsyncMock(side_effect=[driver, updated_driver])
+                "backend.routes.drivers._deps.db_supabase.get_driver_by_id", AsyncMock(side_effect=[driver, updated_driver])
             ),
             patch(
-                "backend.routes.drivers.db_supabase.get_rows",
+                "backend.routes.drivers._deps.db_supabase.get_rows",
                 AsyncMock(return_value=[]),  # called for docs check, not active-ride
             ),
-            patch("backend.routes.drivers.db_supabase.update_one", AsyncMock()),
+            patch("backend.routes.drivers._deps.db_supabase.update_one", AsyncMock()),
         ):
             result = await drv_mod.update_driver_status(
                 driver_id=DRIVER_ID,
@@ -225,7 +225,7 @@ class TestDriverOfflineMidTrip:
 
         driver = _driver_row()  # user_id = DRIVER_USER_ID
 
-        with patch("backend.routes.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)):
+        with patch("backend.routes.drivers._deps.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)):
             with pytest.raises(HTTPException) as exc_info:
                 await drv_mod.update_driver_status(
                     driver_id=DRIVER_ID,

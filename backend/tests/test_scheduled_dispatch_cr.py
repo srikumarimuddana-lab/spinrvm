@@ -65,8 +65,8 @@ class TestScheduledDispatch:
         with (
             patch.object(sr.db, "update_one", AsyncMock(side_effect=_update_one)),
             patch.object(sr.db, "get_user_by_id", AsyncMock(return_value={"id": RIDER_ID, "first_name": "Ada"})),
-            patch("routes.rides.match_driver_to_ride", match_mock),
-            patch("routes.rides.ride_search_timeout", _timeout),
+            patch("routes.rides.matching.match_driver_to_ride", match_mock),
+            patch("routes.rides.matching.ride_search_timeout", _timeout),
             patch.object(sr.manager, "broadcast_ride_status", AsyncMock()) as bcast,
             patch.object(sr.manager, "broadcast_to_admins", AsyncMock()) as admin_bcast,
             patch.object(sr, "send_push_notification", AsyncMock()),
@@ -103,7 +103,7 @@ class TestScheduledDispatch:
 
         with (
             patch.object(sr.db, "update_one", AsyncMock(return_value=None)),
-            patch("routes.rides.match_driver_to_ride", match_mock),
+            patch("routes.rides.matching.match_driver_to_ride", match_mock),
             patch.object(sr.manager, "broadcast_ride_status", AsyncMock()) as bcast,
             patch.object(sr, "send_push_notification", AsyncMock()),
         ):
@@ -127,7 +127,7 @@ class TestScheduledDispatch:
 
         with (
             patch.object(sr.db, "update_one", AsyncMock(side_effect=_raise_conflict)),
-            patch("routes.rides.match_driver_to_ride", match_mock),
+            patch("routes.rides.matching.match_driver_to_ride", match_mock),
             patch.object(sr.manager, "broadcast_ride_status", AsyncMock()) as bcast,
             patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
             patch.object(sr, "send_push_notification", AsyncMock()) as push,

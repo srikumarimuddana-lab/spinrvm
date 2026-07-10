@@ -123,10 +123,10 @@ class TestActiveRideGuard:
         rider_row = {"id": RIDER_ID, "status": "active", "stripe_customer_id": "cus_x"}
 
         with (
-            patch("backend.routes.rides.db_supabase.find_one", AsyncMock(return_value=None)),
-            patch("backend.routes.rides.db.find_one", AsyncMock(return_value=rider_row)),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[_active_ride(active_status)])),
-            patch("backend.routes.rides.validate_ride_location", return_value=None),
+            patch("backend.routes.rides._deps.db_supabase.find_one", AsyncMock(return_value=None)),
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=rider_row)),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[_active_ride(active_status)])),
+            patch("backend.routes.rides._deps.validate_ride_location", return_value=None),
         ):
             with pytest.raises((HTTPException, SpinrException)) as exc:
                 await rides_mod.create_ride(
@@ -146,18 +146,18 @@ class TestActiveRideGuard:
         new_ride = {**_active_ride(), "id": "ride-new-001"}
 
         with (
-            patch("backend.routes.rides.db_supabase.find_one", AsyncMock(return_value=None)),
-            patch("backend.routes.rides.db.find_one", AsyncMock(return_value=rider_row)),
+            patch("backend.routes.rides._deps.db_supabase.find_one", AsyncMock(return_value=None)),
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=rider_row)),
             # get_rows returns [] — no active ride found
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
-            patch("backend.routes.rides.validate_ride_location", return_value=None),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
-            patch("backend.routes.rides.get_app_settings", AsyncMock(return_value={})),
-            patch("backend.routes.rides.db_supabase.insert_ride", AsyncMock(return_value=new_ride)),
-            patch("backend.routes.rides.db_supabase.insert_one", AsyncMock(return_value=new_ride)),
-            patch("backend.routes.rides.asyncio.create_task", MagicMock()),
-            patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
-            patch("backend.routes.rides.send_push_notification", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.rides._deps.validate_ride_location", return_value=None),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+            patch("backend.routes.rides._deps.db_supabase.insert_ride", AsyncMock(return_value=new_ride)),
+            patch("backend.routes.rides._deps.db_supabase.insert_one", AsyncMock(return_value=new_ride)),
+            patch("backend.routes.rides._deps.asyncio.create_task", MagicMock()),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
         ):
             # Should not raise
             try:
@@ -195,8 +195,8 @@ class TestIdempotencyKeyGuard:
         original = _active_ride()
 
         with (
-            patch("backend.routes.rides.db_supabase.find_one", AsyncMock(return_value=original)),
-            patch("backend.routes.rides.validate_ride_location", return_value=None),
+            patch("backend.routes.rides._deps.db_supabase.find_one", AsyncMock(return_value=original)),
+            patch("backend.routes.rides._deps.validate_ride_location", return_value=None),
         ):
             result = await rides_mod.create_ride(
                 request=_mock_request(idempotency_key="key-abc-123"),
@@ -229,10 +229,10 @@ class TestIdempotencyKeyGuard:
             return None
 
         with (
-            patch("backend.routes.rides.db_supabase.find_one", AsyncMock(side_effect=_find_one)),
+            patch("backend.routes.rides._deps.db_supabase.find_one", AsyncMock(side_effect=_find_one)),
             # Active ride exists → 409
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[_active_ride()])),
-            patch("backend.routes.rides.validate_ride_location", return_value=None),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[_active_ride()])),
+            patch("backend.routes.rides._deps.validate_ride_location", return_value=None),
         ):
             with pytest.raises((HTTPException, SpinrException)) as exc:
                 await rides_mod.create_ride(
@@ -252,16 +252,16 @@ class TestIdempotencyKeyGuard:
 
         with (
             # find_one returns None — key lookup uses rider_id filter too
-            patch("backend.routes.rides.db_supabase.find_one", AsyncMock(return_value=None)),
-            patch("backend.routes.rides.db.find_one", AsyncMock(return_value=other_rider)),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
-            patch("backend.routes.rides.validate_ride_location", return_value=None),
-            patch("backend.routes.rides.get_app_settings", AsyncMock(return_value={})),
-            patch("backend.routes.rides.db_supabase.insert_ride", AsyncMock(return_value={})),
-            patch("backend.routes.rides.db_supabase.insert_one", AsyncMock(return_value={})),
-            patch("backend.routes.rides.asyncio.create_task", MagicMock()),
-            patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
-            patch("backend.routes.rides.send_push_notification", AsyncMock()),
+            patch("backend.routes.rides._deps.db_supabase.find_one", AsyncMock(return_value=None)),
+            patch("backend.routes.rides._deps.db.find_one", AsyncMock(return_value=other_rider)),
+            patch("backend.routes.rides._deps.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.rides._deps.validate_ride_location", return_value=None),
+            patch("backend.routes.rides._deps.get_app_settings", AsyncMock(return_value={})),
+            patch("backend.routes.rides._deps.db_supabase.insert_ride", AsyncMock(return_value={})),
+            patch("backend.routes.rides._deps.db_supabase.insert_one", AsyncMock(return_value={})),
+            patch("backend.routes.rides._deps.asyncio.create_task", MagicMock()),
+            patch("backend.routes.rides._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.rides._deps.send_push_notification", AsyncMock()),
         ):
             try:
                 await rides_mod.create_ride(

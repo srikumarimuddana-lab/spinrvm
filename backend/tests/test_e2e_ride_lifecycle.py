@@ -98,12 +98,12 @@ class TestRideLifecycleHappyPath:
         guard_ok.modified_count = 1
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[_driver_row()])),
-            patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.drivers.db.update_one", AsyncMock(return_value=guard_ok)),
-            patch("backend.routes.drivers.db.find_one", AsyncMock(return_value=accepted)),
-            patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()) as ws_mock,
-            patch("backend.routes.drivers.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver_row()])),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.drivers._deps.db.update_one", AsyncMock(return_value=guard_ok)),
+            patch("backend.routes.drivers._deps.db.find_one", AsyncMock(return_value=accepted)),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()) as ws_mock,
+            patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
         ):
             result = await drv_mod.accept_ride(ride_id=RIDE_ID, current_user={"id": DRIVER_USER_ID})
 
@@ -128,7 +128,7 @@ class TestRideLifecycleHappyPath:
         # Production code uses flat API: db.find_one("rides", {...})
         mock_db.find_one = AsyncMock(return_value=ride)
 
-        with patch("backend.routes.drivers.db", mock_db):
+        with patch("backend.routes.drivers._deps.db", mock_db):
             result = await _require_ride_in_state(RIDE_ID, DRIVER_ID, ARRIVE_FROM_STATES)
 
         assert result["status"] == "driver_accepted"
@@ -142,7 +142,7 @@ class TestRideLifecycleHappyPath:
         # Production code uses flat API: db.find_one("rides", {...})
         mock_db.find_one = AsyncMock(return_value=ride)
 
-        with patch("backend.routes.drivers.db", mock_db):
+        with patch("backend.routes.drivers._deps.db", mock_db):
             result = await _require_ride_in_state(RIDE_ID, DRIVER_ID, START_FROM_STATES)
 
         assert result["status"] == "driver_arrived"
@@ -165,7 +165,7 @@ class TestRideLifecycleHappyPath:
                 {"id": RIDE_ID, "driver_id": DRIVER_ID, "status": "completed"},
             ]
         )
-        with patch("backend.routes.drivers.db", mock_db):
+        with patch("backend.routes.drivers._deps.db", mock_db):
             with pytest.raises((HTTPException, SpinrException)) as exc:
                 await _require_ride_in_state(RIDE_ID, DRIVER_ID, COMPLETE_FROM_STATES)
         assert exc.value.status_code == 409
@@ -187,12 +187,12 @@ class TestRideLifecycleConcurrency:
         accepted = {**ride, "status": "driver_accepted", "driver_id": "driver_a"}
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),
-            patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.drivers.db.update_one", AsyncMock(side_effect=[accepted, None])),
-            patch("backend.routes.drivers.db.find_one", AsyncMock(return_value=accepted)),
-            patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
-            patch("backend.routes.drivers.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.drivers._deps.db.update_one", AsyncMock(side_effect=[accepted, None])),
+            patch("backend.routes.drivers._deps.db.find_one", AsyncMock(return_value=accepted)),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
         ):
             results = await asyncio.gather(
                 drv_mod.accept_ride(ride_id=RIDE_ID, current_user={"id": "user_a"}),

@@ -14,7 +14,8 @@ Domain auto-match flow:
 from __future__ import annotations
 
 import secrets
-from typing import Any, Dict, List, Tuple
+import uuid
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     from ..db_supabase import (  # type: ignore
@@ -133,6 +134,18 @@ async def join_via_domain(
     return updated or member
 
 
+def _uuid_or_none(v: Optional[str]) -> Optional[str]:
+    """corporate_members.invited_by is a UUID column; staff-admin actor ids
+    (e.g. 'admin-001') are NOT uuid-castable and would fail the insert. Store
+    NULL for non-UUID actors — the audit log carries the staff attribution."""
+    if not v:
+        return None
+    try:
+        return str(uuid.UUID(str(v)))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
 async def bootstrap_owner(
     *,
     company_id: str,
@@ -167,7 +180,7 @@ async def bootstrap_owner(
             user_id=user_id,
             email=email,
             role="owner",
-            invited_by=invited_by or user_id,
+            invited_by=_uuid_or_none(invited_by) or user_id,
         )
         return member, None
 
@@ -175,6 +188,8 @@ async def bootstrap_owner(
         company_id=company_id,
         email=email,
         role="owner",
-        invited_by=invited_by or "staff",
+        # NULL for staff-admin actors ('admin-001' isn't UUID-castable);
+        # the create_corporate_account audit row carries the attribution.
+        invited_by=_uuid_or_none(invited_by),
     )
     return member, invite_url

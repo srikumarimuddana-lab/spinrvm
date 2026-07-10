@@ -10,7 +10,7 @@ from decimal import Decimal
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from db_supabase import (  # noqa: E402
     delete_corporate_account as db_delete_corporate_account,
@@ -40,6 +40,8 @@ from schemas.corporate import (  # noqa: E402
 from settings_loader import get_app_settings  # noqa: E402
 from validators import (
     sanitize_string,
+    validate_canadian_tax_region,
+    validate_cra_business_number,
     validate_email,
     validate_id,
     validate_phone,
@@ -49,6 +51,11 @@ try:
     from ..utils.audit_logger import log_admin_action
 except ImportError:
     from utils.audit_logger import log_admin_action  # type: ignore[no-redef]
+
+try:
+    from ..services.corporate_membership_service import bootstrap_owner
+except ImportError:
+    from services.corporate_membership_service import bootstrap_owner  # type: ignore[no-redef]
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +83,43 @@ class CorporateAccountBase(BaseModel):
 
 
 class CorporateAccountCreate(CorporateAccountBase):
-    pass
+    """Staff create payload — M1.4 upgraded it from the thin base to the rich
+    B2B fields so business_number/legal_name land at CREATE time instead of a
+    follow-up PUT, plus an optional owner_email that seeds the company's first
+    (owner) member via bootstrap_owner."""
+
+    legal_name: Optional[str] = Field(None, max_length=300)
+    business_number: Optional[str] = Field(None, max_length=20)
+    tax_region: Optional[str] = None
+    billing_email: Optional[str] = None
+    size_tier: Optional[str] = Field(None, pattern="^(smb|mid_market|enterprise)$")
+    industry: Optional[str] = Field(None, max_length=100)
+    # Not a corporate_accounts column — consumed by the endpoint to invite
+    # the company's first owner.
+    owner_email: Optional[str] = None
+
+    @field_validator("business_number")
+    @classmethod
+    def _check_bn(cls, v: Optional[str]) -> Optional[str]:
+        if not v:
+            return None
+        return validate_cra_business_number(v)
+
+    @field_validator("tax_region")
+    @classmethod
+    def _check_region(cls, v: Optional[str]) -> Optional[str]:
+        if not v:
+            return None
+        return validate_canadian_tax_region(v.strip().upper())
+
+
+class CorporateAccountCreatedResponse(CorporateAccountDetailResponse):
+    """POST response = the account + owner-bootstrap outcome. Extra fields are
+    optional so the admin dashboard's existing account typing stays valid."""
+
+    owner_invite_url: Optional[str] = None
+    owner_member_id: Optional[str] = None
+    owner_bootstrap_error: bool = False
 
 
 class CorporateAccountUpdate(BaseModel):
@@ -291,23 +334,28 @@ async def admin_view_kyb_document(
     return Response(content=data, media_type=content_type or "application/octet-stream")
 
 
-@router.post("", response_model=CorporateAccountDetailResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=CorporateAccountCreatedResponse, status_code=status.HTTP_201_CREATED)
 async def create_corporate_account(
     request: Request,
     account: CorporateAccountCreate,
     current_admin: dict = Depends(get_current_admin),
 ):
     """
-    Create a new corporate account.
+    Create a new corporate account (rich B2B fields + optional owner bootstrap).
 
     Args:
-        account: Corporate account data
+        account: Corporate account data (may include owner_email — the first
+            owner member is invited immediately, fixing the zero-members gap)
         current_admin: Authenticated admin user
     """
     # Validate inputs
     if account.contact_email:
         valid, normalized_email = validate_email(account.contact_email, raise_exception=True)
         account.contact_email = normalized_email
+
+    if account.owner_email:
+        valid, normalized_owner = validate_email(account.owner_email, raise_exception=True)
+        account.owner_email = normalized_owner
 
     if account.contact_phone:
         valid, normalized_phone = validate_phone(account.contact_phone, raise_exception=True)
@@ -319,8 +367,11 @@ async def create_corporate_account(
     if account.contact_name:
         _, account.contact_name = sanitize_string(account.contact_name, max_length=100, raise_exception=True)
 
+    # owner_email is not a corporate_accounts column — consumed below.
+    payload = account.model_dump(exclude={"owner_email"})
+
     try:
-        created_account = await insert_corporate_account(account.model_dump())
+        created_account = await insert_corporate_account(payload)
     except Exception as e:
         logger.exception("Failed to create corporate account")
         raise HTTPException(
@@ -328,13 +379,40 @@ async def create_corporate_account(
             detail="Failed to create corporate account.",
         ) from e
 
+    # Seed the first owner member. Partial-success is deliberate: the company
+    # row is valid on its own, so a bootstrap failure is surfaced explicitly
+    # in the response (owner_bootstrap_error) instead of rolling back — staff
+    # can re-invite from the members page.
+    owner_invite_url = None
+    owner_member_id = None
+    owner_bootstrap_error = False
+    if account.owner_email:
+        try:
+            member, owner_invite_url = await bootstrap_owner(
+                company_id=str(created_account["id"]),
+                email=account.owner_email,
+                invited_by=str(current_admin.get("id") or ""),
+            )
+            owner_member_id = member.get("id")
+        except Exception:
+            logger.error(
+                "create_corporate_account: owner bootstrap failed for company %s",
+                created_account.get("id"),
+                exc_info=True,
+            )
+            owner_bootstrap_error = True
+
     try:
         await log_admin_action(
             admin=current_admin,
             action="create_corporate_account",
             resource="corporate_account",
             resource_id=str(created_account["id"]),
-            details={"company_name": created_account.get("name")},
+            details={
+                "company_name": created_account.get("name"),
+                "owner_email_provided": bool(account.owner_email),
+                "owner_bootstrap_error": owner_bootstrap_error,
+            },
         )
     except Exception as _ae:
         logger.error(
@@ -342,7 +420,12 @@ async def create_corporate_account(
             exc_info=True,
         )
 
-    return created_account
+    return {
+        **created_account,
+        "owner_invite_url": owner_invite_url,
+        "owner_member_id": owner_member_id,
+        "owner_bootstrap_error": owner_bootstrap_error,
+    }
 
 
 @router.get("/{account_id}", response_model=CorporateAccountDetailResponse)

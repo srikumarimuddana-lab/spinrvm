@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
+    fetchKybDocumentBlob,
     CorporateAccount,
     CompanyStatus,
     CorporateWallet,
@@ -450,16 +451,42 @@ export default function CompanyDetailPage() {
                             </Label>
                             <p>{company.kyb_reviewed_by ?? "—"}</p>
                         </div>
+                        <div>
+                            <Label className="text-xs uppercase text-muted-foreground">
+                                Submitted At
+                            </Label>
+                            <p>{formatDate(company.kyb_submitted_at)}</p>
+                        </div>
+                        {company.kyb_review_note && (
+                            <div className="md:col-span-2">
+                                <Label className="text-xs uppercase text-muted-foreground">
+                                    Review Note
+                                </Label>
+                                <p className="rounded bg-muted p-2">{company.kyb_review_note}</p>
+                            </div>
+                        )}
                         {company.kyb_document_url && (
                             <div className="md:col-span-2">
-                                <a
+                                <button
+                                    type="button"
                                     className="inline-flex items-center gap-1 text-blue-600 hover:underline"
-                                    href={company.kyb_document_url}
-                                    target="_blank"
-                                    rel="noreferrer"
+                                    onClick={async () => {
+                                        try {
+                                            const blob = await fetchKybDocumentBlob(company.id);
+                                            const url = URL.createObjectURL(blob);
+                                            window.open(url, "_blank", "noopener");
+                                            setTimeout(() => URL.revokeObjectURL(url), 60_000);
+                                        } catch (e: any) {
+                                            toast({
+                                                title: "Could not load document",
+                                                description: e?.message,
+                                                variant: "destructive",
+                                            });
+                                        }
+                                    }}
                                 >
-                                    <FileText className="h-3 w-3" /> View KYB document
-                                </a>
+                                    <FileText className="h-3 w-3" /> Preview KYB document
+                                </button>
                             </div>
                         )}
                     </div>

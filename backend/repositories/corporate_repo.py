@@ -462,6 +462,27 @@ async def insert_corporate_member_invite(
     return await run_sync(_fn)
 
 
+async def count_pending_signups_for_user(user_id: str) -> int:
+    """How many pending_verification companies this user has self-registered.
+
+    Backs the self-serve signup abuse cap (max 3 pending per user); served by
+    the partial index corp_accounts_signup_pending_idx (migration 224).
+    """
+
+    def _fn():
+        res = (
+            supabase.table("corporate_accounts")
+            .select("id", count="exact")
+            .eq("signup_user_id", user_id)
+            .eq("status", "pending_verification")
+            .execute()
+        )
+        count = getattr(res, "count", None)
+        return count if count is not None else len(res.data or [])
+
+    return await run_sync(_fn)
+
+
 async def create_active_member(
     *,
     company_id: str,

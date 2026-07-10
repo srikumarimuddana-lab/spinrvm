@@ -121,6 +121,7 @@ from routes.corporate_accounts import router as corporate_accounts_router
 from routes.corporate_company import router as corporate_company_router
 from routes.corporate_company_bookings import router as corporate_company_bookings_router
 from routes.corporate_rider import router as corporate_rider_router
+from routes.corporate_signup import router as corporate_signup_router
 from routes.corporate_wallet import router as corporate_wallet_router
 from routes.disputes import api_router as disputes_router
 from routes.drivers import api_router as drivers_router
@@ -349,6 +350,10 @@ app.include_router(auth_router, prefix="/api")
 # which can't attach an X-Firebase-AppCheck header — can send OTP / verify /
 # refresh / logout, while mobile keeps /api/v1/auth/* App-Check-enforced.
 app.include_router(auth_router, prefix="/api/portal")
+# Self-serve company signup lives in the same App-Check-exempt portal
+# namespace: POST /api/portal/companies/signup. Authenticated-first (work-email
+# OTP session) — see routes/corporate_signup.py.
+app.include_router(corporate_signup_router, prefix="/api/portal")
 
 # WebSocket routes — mounted at root so the path /ws/{client_type}/{client_id} is served directly
 app.include_router(websocket_router)

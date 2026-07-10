@@ -94,6 +94,7 @@ try:
     from .repositories.corporate_repo import (  # noqa: F401 — re-exported
         accept_member_invite,
         add_allowed_domain,
+        count_pending_signups_for_user,
         create_active_member,
         create_kyb_upload_url,
         delete_allowed_domain,
@@ -142,6 +143,7 @@ except ImportError:
     from repositories.corporate_repo import (  # type: ignore  # noqa: F401
         accept_member_invite,
         add_allowed_domain,
+        count_pending_signups_for_user,
         create_active_member,
         create_kyb_upload_url,
         delete_allowed_domain,

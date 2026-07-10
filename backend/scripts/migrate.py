@@ -131,9 +131,19 @@ def _inject_session_variables(conn) -> None:
 
 
 def get_migration_files(migrations_dir: Path) -> list:
-    """Return sorted list of .sql files in the migrations directory."""
+    """Return .sql files in numeric-prefix order (matches run_migrations.py).
+
+    Lexicographic sort mis-orders unpadded prefixes ("224_…" before "48_…"),
+    which breaks fresh-environment runs when a later migration ALTERs a table
+    created by a two-digit one.
+    """
+    try:
+        from .run_migrations import migration_sort_key
+    except ImportError:
+        from run_migrations import migration_sort_key  # type: ignore
+
     pattern = str(migrations_dir / "*.sql")
-    files = sorted(glob.glob(pattern))
+    files = sorted(glob.glob(pattern), key=lambda f: migration_sort_key(os.path.basename(f)))
     return files
 
 

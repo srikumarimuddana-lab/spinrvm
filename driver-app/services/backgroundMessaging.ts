@@ -159,7 +159,15 @@ export function registerBackgroundMessageHandlers(): void {
     if (Platform.OS === 'android' && displayRideOfferNotification) {
       try {
         const offer = offerDisplayDataFromFcm(data);
-        if (offer) await displayRideOfferNotification(offer);
+        if (offer) {
+          // Headless launch: the alert-prefs store hasn't hydrated, so read
+          // it explicitly before ringing. muted kills audio only — the
+          // heads-up card and full-screen wake still fire.
+          const { useAlertPrefsStore } = require('../store/alertPrefsStore');
+          await useAlertPrefsStore.getState().loadAlertPrefs();
+          const muted = !useAlertPrefsStore.getState().soundEffects;
+          await displayRideOfferNotification(offer, muted ? { muted } : undefined);
+        }
       } catch (e) {
         console.warn('[Notifee] displayRideOfferNotification failed:', e);
       }

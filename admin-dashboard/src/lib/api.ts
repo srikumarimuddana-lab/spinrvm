@@ -1292,6 +1292,9 @@ export interface CorporateAccount {
     kyb_document_url?: string | null;
     kyb_reviewed_at?: string | null;
     kyb_reviewed_by?: string | null;
+    kyb_submitted_at?: string | null;
+    kyb_review_note?: string | null;
+    kyb_last_decision?: "approved" | "rejected" | null;
     credit_limit?: number;
     is_active: boolean;
     created_at: string;
@@ -1337,6 +1340,17 @@ export const changeCompanyStatus = (
         method: "POST",
         body: JSON.stringify(transition),
     });
+
+// Blob-fetch the KYB document through the backend streaming endpoint
+// (kyb_document_url is a raw PRIVATE-bucket key, not a browser-usable URL).
+export async function fetchKybDocumentBlob(id: string): Promise<Blob> {
+    const token = useAuthStore.getState().token;
+    const res = await fetch(`/api/admin/corporate-accounts/${id}/kyb/view`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new Error(`Could not load document (${res.status})`);
+    return res.blob();
+}
 
 export const createCorporateAccount = (data: any) =>
     request<CorporateAccount>("/api/admin/corporate-accounts", {

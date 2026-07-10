@@ -123,12 +123,37 @@ class CorporateAccountCreatedResponse(CorporateAccountDetailResponse):
 
 
 class CorporateAccountUpdate(BaseModel):
+    """Staff update payload. M1.6: gained the rich B2B fields — previously the
+    thin schema silently DROPPED legal_name/business_number/tax_region/
+    billing_email/size_tier sent by the admin detail page (pydantic default
+    extra='ignore'), so those edits never persisted."""
+
     name: Optional[str] = Field(None, min_length=1, max_length=200)
     contact_name: Optional[str] = Field(None, max_length=100)
     contact_email: Optional[str] = Field(None)
     contact_phone: Optional[str] = Field(None)
     credit_limit: Optional[Decimal] = Field(None, ge=0)
     is_active: Optional[bool] = Field(None)
+    legal_name: Optional[str] = Field(None, max_length=300)
+    business_number: Optional[str] = Field(None, max_length=20)
+    tax_region: Optional[str] = None
+    billing_email: Optional[str] = None
+    size_tier: Optional[str] = Field(None, pattern="^(smb|mid_market|enterprise)$")
+    industry: Optional[str] = Field(None, max_length=100)
+
+    @field_validator("business_number")
+    @classmethod
+    def _check_bn(cls, v: Optional[str]) -> Optional[str]:
+        if not v:
+            return None
+        return validate_cra_business_number(v)
+
+    @field_validator("tax_region")
+    @classmethod
+    def _check_region(cls, v: Optional[str]) -> Optional[str]:
+        if not v:
+            return None
+        return validate_canadian_tax_region(v.strip().upper())
 
 
 @router.get("", response_model=List[CorporateAccountDetailResponse])

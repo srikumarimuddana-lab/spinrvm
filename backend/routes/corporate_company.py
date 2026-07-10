@@ -7,6 +7,7 @@ Reads available to any active member use require_company_member.
 
 from __future__ import annotations
 
+import logging
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
 
@@ -17,6 +18,7 @@ try:
         add_allowed_domain,
         delete_allowed_domain,
         get_allowance_request_by_id,
+        get_corporate_account_by_id,
         get_corporate_member_by_id,
         get_corporate_policy,
         get_corporate_wallet_by_company,
@@ -53,6 +55,7 @@ except ImportError:
         add_allowed_domain,
         delete_allowed_domain,
         get_allowance_request_by_id,
+        get_corporate_account_by_id,
         get_corporate_member_by_id,
         get_corporate_policy,
         get_corporate_wallet_by_company,
@@ -85,6 +88,8 @@ except ImportError:
     from services.corporate_allowance_service import apply_grant  # type: ignore
     from services.corporate_membership_service import invite_member  # type: ignore
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/company/{company_id}", tags=["Corporate Company"])
 
@@ -135,7 +140,53 @@ async def invite(
         invited_by=guard["user"]["id"],
         policy_override=body.policy_override,
     )
-    return {"member": member, "invite_url": url}
+
+    # M3.1: deliver the invite by email instead of relying on the admin to
+    # copy-paste the link. The web link (not the app deep link) is what works
+    # on a desk computer; /company-login accepts ?invite_token= and claims the
+    # membership right after OTP. Failure is surfaced (email_sent=false → the
+    # UI offers the copy-link fallback), never swallowed into a fake success.
+    try:
+        from ..core.config import settings as _settings  # type: ignore
+    except ImportError:
+        from core.config import settings as _settings  # type: ignore
+
+    token = member.get("invite_token")
+    web_invite_url = f"{_settings.PORTAL_BASE_URL}/company-login?invite_token={token}" if token else None
+
+    email_sent = False
+    if web_invite_url:
+        try:
+            try:
+                from ..utils.email_provider import send_transactional_email  # type: ignore
+            except ImportError:
+                from utils.email_provider import send_transactional_email  # type: ignore
+
+            company = await get_corporate_account_by_id(company_id) or {}
+            company_name = company.get("name") or "your company"
+            email_sent = await send_transactional_email(
+                to=body.email,
+                subject=f"You're invited to {company_name} on Spinr for Business",
+                text=(
+                    f"You've been invited to join {company_name} on Spinr for Business "
+                    f"as {'an admin' if body.role.value in ('admin', 'owner') else 'a member'}.\n\n"
+                    f"Accept the invite and sign in with this email address:\n{web_invite_url}\n\n"
+                    "The link signs you in with a one-time code sent to this address — "
+                    "no password needed."
+                ),
+                log_id=member.get("id") or company_id,
+                email_type="corporate_member_invite",
+            )
+        except Exception:
+            logger.error("member invite: email delivery failed for member %s", member.get("id"), exc_info=True)
+            email_sent = False
+
+    return {
+        "member": member,
+        "invite_url": url,
+        "web_invite_url": web_invite_url,
+        "email_sent": bool(email_sent),
+    }
 
 
 @router.patch("/members/{member_id}")

@@ -524,3 +524,60 @@ def test_create_booking_blocked_for_non_active_company(test_client, rider_overri
     assert resp.status_code == 403, resp.text
     detail = resp.json()["detail"]
     assert detail["code"] == "company_not_active"  # typed — portal routes to /verification
+
+
+# ── M3.1: automated invite email delivery ────────────────────────────────────
+
+
+def _invite_mocks(email_result=True):
+    member = {"id": "m9", "status": "invited", "invite_token": "t0ken123"}
+    return (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"company_id": "c1", "role": "admin", "id": "m1"}]),
+        ),
+        patch(
+            "routes.corporate_company.invite_member",
+            AsyncMock(return_value=(member, "app://join?token=t0ken123")),
+        ),
+        patch(
+            "routes.corporate_company.get_corporate_account_by_id",
+            AsyncMock(return_value={"id": "c1", "name": "Acme Corp"}),
+        ),
+        patch(
+            "utils.email_provider.send_transactional_email",
+            AsyncMock(return_value=email_result)
+            if not isinstance(email_result, Exception)
+            else AsyncMock(side_effect=email_result),
+        ),
+    )
+
+
+def test_invite_sends_email_with_web_link(test_client, rider_override):
+    p_guard, p_invite, p_company, p_mail = _invite_mocks()
+    with p_guard, p_invite, p_company, p_mail as m_mail:
+        resp = test_client.post(
+            "/company/c1/members/invite",
+            json={"email": "new@acme.com", "role": "member"},
+        )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["email_sent"] is True
+    assert data["web_invite_url"].endswith("/company-login?invite_token=t0ken123")
+    kwargs = m_mail.await_args.kwargs
+    assert kwargs["to"] == "new@acme.com"
+    assert "Acme Corp" in kwargs["subject"]
+    assert "/company-login?invite_token=t0ken123" in kwargs["text"]
+
+
+def test_invite_email_failure_surfaced_not_swallowed(test_client, rider_override):
+    p_guard, p_invite, p_company, p_mail = _invite_mocks(email_result=RuntimeError("ses down"))
+    with p_guard, p_invite, p_company, p_mail:
+        resp = test_client.post(
+            "/company/c1/members/invite",
+            json={"email": "new@acme.com", "role": "member"},
+        )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["email_sent"] is False  # UI shows the copy-link fallback
+    assert data["web_invite_url"]  # link still available for manual delivery

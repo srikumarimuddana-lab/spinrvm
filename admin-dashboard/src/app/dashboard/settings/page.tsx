@@ -496,6 +496,45 @@ export default function SettingsPage() {
                             })()}
                         </CardContent>
                     </Card>
+
+                    {/* Driver LMS (training platform) — feeds the Training tab
+                        in the driver details drawer, matched by phone number. */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">Driver LMS (Training)</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <p className="text-xs text-muted-foreground">
+                                Connects to the Spinr driver training LMS. When configured, the
+                                driver details drawer shows each driver&apos;s registration,
+                                completion percentage, certificates, and training history,
+                                matched by phone number. The API key must equal the{" "}
+                                <code>SPINR_INTEGRATION_API_KEY</code> set on the LMS deployment.
+                            </p>
+                            <div className="space-y-2">
+                                <Label>LMS Base URL</Label>
+                                <Input
+                                    value={settings.lms_api_base_url || ""}
+                                    onChange={(e) => update("lms_api_base_url", e.target.value)}
+                                    placeholder="https://training.spinr.ca"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>API Key</Label>
+                                <Input
+                                    type="password"
+                                    value={settings.lms_api_key || ""}
+                                    onChange={(e) => update("lms_api_key", e.target.value)}
+                                    placeholder="Shared secret"
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    Leave both blank to disable the integration — the drawer&apos;s
+                                    Training tab will report it as not configured.
+                                </p>
+                            </div>
+                        </CardContent>
+                    </Card>
                 </TabsContent>
                 <TabsContent value="email" className="mt-0 grid gap-6 lg:grid-cols-2 items-start">
                     {/* Email — AWS SES (primary) */}

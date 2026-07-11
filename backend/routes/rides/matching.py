@@ -1137,8 +1137,15 @@ async def _batch_offer_timeout_handler(
                 await reset_miss_streak(did)
                 await _deps.record_period_transition(did, 0)
             else:
-                await _deps.db_supabase.set_driver_available(did, True)
-                await _deps.record_period_transition(did, 1)
+                # Only open Period 1 (online, no ride) if the release actually
+                # made the driver available. If they went offline between offer
+                # dispatch and this timeout, set_driver_available clamps
+                # is_available→False; recording Period 1 here would falsely
+                # reopen a commercial-insurance window for an offline driver.
+                # Mirrors the single-offer guard at _offer_timeout_handler.
+                released = await _deps.db_supabase.set_driver_available(did, True)
+                if isinstance(released, dict) and released.get("is_available"):
+                    await _deps.record_period_transition(did, 1)
 
             try:
                 await _redis_set(f"spinr:offer_skip:{ride_id}:{did}", "1", ttl=300)

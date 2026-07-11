@@ -310,3 +310,71 @@ class TestDispatchHardening:
         events = [(c.args[0]["type"], c.args[1]) for c in send_personal_mock.call_args_list]
         assert ("driver_timeout", "rider_rider_disp_2") in events
         assert ("ride_offer_expired", "driver_user_driver_disp_2") in events
+
+
+class TestBatchOfferTimeoutInsuranceGuard:
+    """Regression for the batch offer-timeout insurance-period write.
+
+    The single-offer handler only opens insurance Period 1 (online / no ride /
+    TNC contingent liability) when the driver's *committed* state actually
+    became available (matching.py:962-970) — otherwise a driver who went
+    offline between offer dispatch and timeout would get a Period-1 row that
+    falsely reopens a commercial-insurance window. The batch handler must apply
+    the same guard; recording Period 1 unconditionally is an insurance
+    misclassification and a regulatory (SGI) liability.
+    """
+
+    @pytest.mark.asyncio
+    async def test_batch_timeout_skips_period1_when_driver_clamped_offline(self):
+        # One pending offer for a driver who is now offline; set_driver_available
+        # clamps is_available→False to preserve the is_available⇒is_online
+        # invariant. Period 1 must NOT be recorded for that driver.
+        pending_result = MagicMock(data=[{"driver_id": "d_offline"}])
+
+        with (
+            patch(
+                "backend.routes.rides._deps.db_supabase.get_ride",
+                AsyncMock(return_value={"id": "ride_b", "status": "searching"}),
+            ),
+            patch(
+                "backend.routes.rides._deps.db_supabase.run_sync",
+                AsyncMock(return_value=pending_result),
+            ),
+            patch(
+                "backend.routes.rides._deps.db_supabase.set_driver_available",
+                AsyncMock(return_value={"is_available": False}),
+            ),
+            patch(
+                "backend.routes.rides._deps.db_supabase.get_driver_by_id",
+                AsyncMock(return_value=None),
+            ),
+            patch(
+                "backend.routes.rides._deps.get_app_settings",
+                AsyncMock(return_value={"auto_offline_miss_threshold": 3}),
+            ),
+            patch(
+                "backend.routes.rides._deps.record_period_transition",
+                new_callable=AsyncMock,
+            ) as mock_period,
+            patch("backend.routes.rides._deps.manager") as mock_manager,
+            patch("backend.repositories.driver_repo.update_acceptance_rate", new_callable=AsyncMock),
+            patch(
+                "backend.utils.driver_presence.increment_miss_streak",
+                AsyncMock(return_value=1),  # below threshold → normal-release else branch
+            ),
+            patch("backend.utils.driver_presence.clear_presence", new_callable=AsyncMock),
+            patch("backend.utils.driver_presence.reset_miss_streak", new_callable=AsyncMock),
+            patch("backend.utils.redis_client.redis_set", new_callable=AsyncMock),
+        ):
+            mock_manager.send_personal_message = AsyncMock()
+
+            from backend.routes.rides import _batch_offer_timeout_handler
+
+            await _batch_offer_timeout_handler("ride_b", rider_id=None, timeout_seconds=0)
+
+            period1_calls = [c for c in mock_period.call_args_list if c.args == ("d_offline", 1)]
+            assert not period1_calls, (
+                "Batch timeout recorded insurance Period 1 for a driver whose committed "
+                "state is offline (is_available=False) — must mirror the single-offer "
+                "guard at matching.py:962-970"
+            )

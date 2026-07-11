@@ -157,13 +157,11 @@ export const verifyCompanyEmailOtp = async (
     return body as CompanyOtpVerifyResult;
 };
 
-// Role-appropriate landing inside a company: owner/admin get the management
-// overview (which calls admin-only endpoints); a plain member gets the
-// booking flow (the overview would show empty/failed admin metrics for them).
+// Landing page (M6.3): the dashboard is role-scoped SERVER-SIDE (admins see
+// the company, members their own work rides), so every role lands on it.
 export function portalHome(companyId: string, role?: string): string {
-    return role === "owner" || role === "admin"
-        ? `/company-portal/${companyId}/overview`
-        : `/company-portal/${companyId}/book`;
+    void role; // kept for call-site compatibility
+    return `/company-portal/${companyId}/overview`;
 }
 
 /* ── Self-serve company signup (M1.5) ── */
@@ -273,6 +271,60 @@ export const createSectionTopupSession = (
         `/api/company/${companyId}/sections/${sectionId}/wallet/topup-session`,
         { method: "POST", body: JSON.stringify({ amount, client_key: clientKey }) }
     );
+
+/* ── Dashboard (Phase 6) ── */
+
+export interface DashboardWindows {
+    today: number | string;
+    week: number | string;
+    month: number | string;
+    overall: number | string;
+}
+
+export interface DashboardStats {
+    scope: string;
+    stats: {
+        total_bookings: DashboardWindows;
+        active_rides: DashboardWindows;
+        pending_bookings: DashboardWindows;
+        completed_rides: DashboardWindows;
+        expenses: DashboardWindows;
+    };
+    generated_at: string;
+}
+
+export const getDashboardStats = (companyId: string) =>
+    companyRequest<DashboardStats>(`/api/company/${companyId}/dashboard/stats`);
+
+export interface BookingDetail {
+    ride_id: string;
+    ride_code?: string | null;
+    status: string;
+    guest_booking: boolean;
+    booked_for_member_id?: string | null;
+    booked_by_member_id?: string | null;
+    pickup_address?: string | null;
+    dropoff_address?: string | null;
+    scheduled_time?: string | null;
+    timeline: Array<{ event: string; at: string }>;
+    fare: Record<string, unknown> & { tax_breakdown?: Record<string, number> | null };
+    payment_source?: {
+        allowance?: number | null;
+        section?: number | null;
+        section_id?: string | null;
+        master?: number | null;
+    } | null;
+    payment_status?: string | null;
+    driver?: {
+        first_name?: string | null;
+        vehicle_make?: string | null;
+        vehicle_model?: string | null;
+        license_plate?: string | null;
+    } | null;
+}
+
+export const getBookingDetail = (companyId: string, rideId: string) =>
+    companyRequest<BookingDetail>(`/api/company/${companyId}/bookings/${rideId}`);
 
 export const getMyWorkProfiles = () =>
     companyRequest<CompanyMembershipProfile[]>("/api/rider/work-profile");

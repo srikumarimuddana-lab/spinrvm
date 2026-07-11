@@ -441,18 +441,28 @@ class ConnectionManager:
 
         B-P3-1: same per-message timeout as broadcast() — a stuck admin
         client must not stall the entire admin fan-out.
+
+        Sends are dispatched CONCURRENTLY (asyncio.gather): a slow/half-open
+        admin socket must only cost its own per-socket timeout, not serialise
+        the whole fleet's fan-out (with A admins, sequential awaits made
+        worst-case latency A × timeout). Each send owns its timeout + error
+        handling so one failure never affects the others.
         """
         keys = [k for k in self.active_connections if k.startswith(prefix)]
-        for key in keys:
+
+        async def _send_one(key: str) -> None:
             ws = self.active_connections.get(key)
             if ws is None:
-                continue
+                return
             try:
                 await asyncio.wait_for(ws.send_json(message), timeout=_BROADCAST_SEND_TIMEOUT)
             except asyncio.TimeoutError:
                 logger.warning(f"Failed to send to {key}: timed out after {_BROADCAST_SEND_TIMEOUT}s")
             except Exception as e:
                 logger.warning(f"Failed to send to {key}: {e}")
+
+        if keys:
+            await asyncio.gather(*(_send_one(key) for key in keys))
 
     async def update_driver_location(self, driver_id: str, lat: float, lng: float):
         try:

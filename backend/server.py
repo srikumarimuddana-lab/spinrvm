@@ -120,6 +120,7 @@ from routes.auth import api_router as auth_router
 from routes.corporate_accounts import router as corporate_accounts_router
 from routes.corporate_company import router as corporate_company_router
 from routes.corporate_company_bookings import router as corporate_company_bookings_router
+from routes.corporate_company_dashboard import router as corporate_company_dashboard_router
 from routes.corporate_company_kyb import router as corporate_company_kyb_router
 from routes.corporate_company_wallet import router as corporate_company_wallet_router
 from routes.corporate_rider import router as corporate_rider_router
@@ -390,6 +391,7 @@ app.include_router(corporate_wallet_router, prefix="/api")
 app.include_router(corporate_company_router)
 app.include_router(corporate_company_bookings_router)
 app.include_router(corporate_company_kyb_router)
+app.include_router(corporate_company_dashboard_router)
 app.include_router(corporate_company_wallet_router)
 app.include_router(corporate_rider_router)
 app.include_router(corporate_rider_router, prefix="/api/v1")
@@ -400,6 +402,7 @@ app.include_router(corporate_rider_router, prefix="/api/v1")
 app.include_router(corporate_company_router, prefix="/api")
 app.include_router(corporate_company_bookings_router, prefix="/api")
 app.include_router(corporate_company_kyb_router, prefix="/api")
+app.include_router(corporate_company_dashboard_router, prefix="/api")
 app.include_router(corporate_company_wallet_router, prefix="/api")
 app.include_router(corporate_rider_router, prefix="/api")
 # files_router serves document files at /api/documents/{id} (used by admin dashboard).

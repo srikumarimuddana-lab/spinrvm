@@ -378,3 +378,25 @@ class TestBatchOfferTimeoutInsuranceGuard:
                 "state is offline (is_available=False) — must mirror the single-offer "
                 "guard at matching.py:962-970"
             )
+
+
+def test_build_offer_rows_persists_expires_at():
+    """Every dispatched ride_offers row must carry expires_at so the durable
+    reaper can expire it even if the in-process asyncio timer is lost on a
+    backend restart (migration 224 persists this deadline)."""
+    from backend.routes.rides.matching import _build_offer_rows
+
+    rows = _build_offer_rows(
+        [({"id": "d1"}, 120), ({"id": "d2"}, 90)],
+        ride_id="ride_1",
+        offered_at_iso="2026-01-01T00:00:00+00:00",
+        expires_at_iso="2026-01-01T00:00:30+00:00",
+    )
+
+    assert [r["driver_id"] for r in rows] == ["d1", "d2"]
+    assert rows[0]["eta_seconds"] == 120
+    for r in rows:
+        assert r["status"] == "pending"
+        assert r["ride_id"] == "ride_1"
+        assert r["offered_at"] == "2026-01-01T00:00:00+00:00"
+        assert r["expires_at"] == "2026-01-01T00:00:30+00:00"

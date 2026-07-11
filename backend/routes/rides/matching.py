@@ -4,6 +4,8 @@ Split from ``backend/routes/rides.py`` (god-file refactor). Pure code
 motion — no behaviour changes. See docs/refactors/god-file-split.md.
 """
 
+from datetime import timedelta
+
 from . import _deps, _shared
 from ._deps import (  # noqa: F401
     Optional,
@@ -87,6 +89,27 @@ async def _dispatch_retry(ride_id: str, delay: int = 10, *, attempt: int = 1) ->
         # the escalating delay stops a broad outage becoming a retry storm.
         logger.error(f"[DISPATCH] retry failed for {ride_id}: {e}", exc_info=True)
         _deps.spawn(_dispatch_retry(ride_id, delay=_dispatch_error_delay(attempt), attempt=attempt + 1))
+
+
+def _build_offer_rows(claimed_drivers, ride_id, offered_at_iso, expires_at_iso):
+    """Build the ride_offers insert payload for a batch of claimed drivers.
+
+    Each row persists ``expires_at`` (the offer deadline) so the durable
+    offer-expiry reaper can expire it even if the in-process asyncio timer is
+    lost on a backend restart/deploy (see migration 224). Pure/side-effect-free
+    so offer-row construction is unit-testable without the dispatch harness.
+    """
+    return [
+        {
+            "ride_id": ride_id,
+            "driver_id": d["id"],
+            "status": "pending",
+            "eta_seconds": eta,
+            "offered_at": offered_at_iso,
+            "expires_at": expires_at_iso,
+        }
+        for d, eta in claimed_drivers
+    ]
 
 
 async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, attempt: int = 0):
@@ -645,16 +668,11 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
 
     # ── Insert ride_offers rows ───────────────────────────────────
     now = datetime.now(timezone.utc)
-    offer_rows = [
-        {
-            "ride_id": ride_id,
-            "driver_id": d["id"],
-            "status": "pending",
-            "eta_seconds": eta,
-            "offered_at": now.isoformat(),
-        }
-        for d, eta in claimed_drivers
-    ]
+    # Compute the offer deadline once and reuse it for both the persisted
+    # ride_offers rows (so the durable reaper can find them after a restart) and
+    # the WS/FCM countdown payload below.
+    _offer_expires_at = (now + timedelta(seconds=offer_timeout)).isoformat()
+    offer_rows = _build_offer_rows(claimed_drivers, ride_id, now.isoformat(), _offer_expires_at)
     try:
         await _deps.db_supabase.run_sync(
             lambda: _deps.db_supabase.supabase.table("ride_offers").insert(offer_rows).execute()
@@ -734,9 +752,6 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     rider_display_name = first_name_only(rider_user) or None
 
     _surge_mult = float(ride.get("surge_multiplier") or 1.0)
-    from datetime import timedelta as _td
-
-    _offer_expires_at = (now + _td(seconds=offer_timeout)).isoformat()
 
     # ── Notify each claimed driver ────────────────────────────────
     for driver, _eta in claimed_drivers:

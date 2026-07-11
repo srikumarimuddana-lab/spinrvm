@@ -11,6 +11,7 @@ try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
     from ...features import send_push_notification
+    from ...services import lms_service
     from ...utils.audit_logger import log_admin_action
     from ...utils.datetime_utils import parse_iso_utc
     from ...utils.referral_payout import ReferralClaimNotFound, recredit_failed_claim
@@ -19,6 +20,7 @@ except ImportError:
     import db_supabase
     from dependencies import get_admin_user  # noqa: F401
     from features import send_push_notification
+    from services import lms_service  # type: ignore
     from utils.audit_logger import log_admin_action  # noqa: F401
     from utils.datetime_utils import parse_iso_utc
     from utils.referral_payout import ReferralClaimNotFound, recredit_failed_claim  # type: ignore
@@ -1715,6 +1717,45 @@ async def admin_get_driver_referrals(driver_id: str, admin: dict = Depends(get_a
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
     return await _driver_referral_summary(driver, include_referees=True)
+
+
+@router.get("/drivers/{driver_id}/training")
+async def admin_get_driver_training(
+    driver_id: str,
+    refresh: bool = Query(False),
+    admin: dict = Depends(get_admin_user),
+):
+    """Driver's training record from the external LMS, matched by phone number.
+
+    Returns {matched, phone_last4, lms: <LMS payload data>} where lms carries
+    registration status, completion percentage, certificates, and history
+    (quiz attempts + reminder communications). matched=false when the phone
+    has no LMS driver record or the driver has no usable phone on file.
+    """
+    driver = await db_supabase.get_driver_by_id(driver_id)
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    user = await db_supabase.get_user_by_id(driver["user_id"]) if driver.get("user_id") else None
+    phone = (user or {}).get("phone") or driver.get("phone") or ""
+
+    normalized = lms_service.normalize_phone(phone)
+    if not normalized:
+        return {"matched": False, "reason": "no_phone", "phone_last4": None, "lms": None}
+
+    try:
+        payload = await lms_service.get_training_by_phone(phone, force_refresh=refresh)
+    except lms_service.LMSNotConfiguredError as e:
+        raise HTTPException(status_code=503, detail="LMS integration is not configured") from e
+    except lms_service.LMSUpstreamError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+    return {
+        "matched": bool(payload.get("matched")),
+        "reason": None if payload.get("matched") else "not_found_in_lms",
+        "phone_last4": normalized[-4:],
+        "lms": payload.get("data"),
+    }
 
 
 @router.get("/referrals/leaderboard")

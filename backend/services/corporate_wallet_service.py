@@ -115,8 +115,14 @@ async def apply_adjustment(
     notes: str,
     actor_user_id: str,
     floor: Optional[_Numeric] = None,
+    idempotency_key: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Signed adjustment to the master wallet (support/refund). Notes required."""
+    """Signed adjustment to the master wallet (support/refund). Notes required.
+
+    idempotency_key (M5.5): rides pass a deterministic synthetic key
+    ('ride:<id>:master') through the ledger's stripe_payment_intent_id
+    idempotency channel so a settlement retry after a partial failure is a
+    no-op at the DB layer instead of a double debit."""
     delta = Decimal(str(amount))
     if delta == 0:
         raise ValueError("adjustment amount cannot be zero")
@@ -126,6 +132,7 @@ async def apply_adjustment(
         type_="adjustment",
         delta=delta,
         actor_user_id=actor_user_id,
+        stripe_payment_intent_id=idempotency_key,
         notes=notes,
         floor=Decimal(str(floor)) if floor is not None else None,
     )
@@ -247,3 +254,111 @@ async def _lookup_transfer_by_key(idempotency_key: str) -> Optional[Dict[str, An
         "from_balance": (out or {}).get("balance_after"),
         "to_balance": (inn or {}).get("balance_after"),
     }
+
+
+async def apply_section_ride_debit(
+    *,
+    wallet_id: str,
+    section_id: str,
+    amount: _Numeric,
+    ride_id: str,
+    actor_user_id: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Debit a SECTION wallet for a ride leg (M5.5 settlement chain tier 2).
+
+    Floor 0 (Q9): the RPC enforces it server-side for 'section:%' scopes —
+    a race that would push the department negative raises wallet_below_floor
+    and the caller falls through to the master tier instead."""
+    delta = Decimal(str(amount))
+    if delta <= 0:
+        raise ValueError("section debit must be positive")
+    return await _apply(
+        wallet_id=wallet_id,
+        scope=f"section:{section_id}",
+        type_="ride_debit",
+        delta=-delta,
+        ride_id=ride_id,
+        actor_user_id=actor_user_id,
+        # Deterministic per-leg idempotency: a settlement retry re-running
+        # this leg is a DB-level no-op (money-audit blocker fix).
+        stripe_payment_intent_id=f"ride:{ride_id}:section",
+        notes=notes,
+        floor=Decimal("0"),
+    )
+
+
+async def refund_corporate_ride_legs(
+    *,
+    ride_id: str,
+    payment_source: Dict[str, Any],
+    company_id: str,
+    actor_user_id: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Reverse a corporate ride settlement PER LEG (Q13): each portion goes
+    back to the wallet that paid — allowance leg to the allowance, section
+    leg to the section wallet, master leg to the master wallet.
+
+    ``payment_source`` is the ride's ride_payment_sources row (the frozen
+    settlement attribution). Legs are reversed independently; a failed leg
+    raises after the earlier legs committed — caller logs and retries, the
+    ledger stays consistent (each leg is idempotent-safe to re-run only via
+    caller-level bookkeeping; this primitive is for staff/refund flows that
+    already track completion).
+    """
+    try:
+        from ..db_supabase import get_master_wallet, get_member_allowance, get_section_wallet  # type: ignore
+        from . import corporate_allowance_service  # type: ignore
+    except ImportError:
+        from db_supabase import get_master_wallet, get_member_allowance, get_section_wallet  # type: ignore
+        from services import corporate_allowance_service  # type: ignore
+
+    reversed_legs: Dict[str, Any] = {"allowance": None, "section": None, "master": None}
+    note = notes or f"per-leg refund ride:{ride_id}"
+
+    allowance_amt = Decimal(str(payment_source.get("allowance_debit_amount") or 0))
+    section_amt = Decimal(str(payment_source.get("section_debit_amount") or 0))
+    master_amt = Decimal(str(payment_source.get("master_fallback_amount") or 0))
+
+    master = await get_master_wallet(company_id) or {}
+
+    if allowance_amt > 0 and payment_source.get("member_id") and master.get("id"):
+        allowance = await get_member_allowance(payment_source["member_id"]) or {}
+        if allowance.get("id"):
+            reversed_legs["allowance"] = await corporate_allowance_service.apply_grant(
+                wallet_id=master["id"],
+                allowance_id=allowance["id"],
+                member_id=payment_source["member_id"],
+                # Decimal-safe string — never float on money (audit blocker).
+                amount=_money_str(allowance_amt),
+                notes=f"{note}:allowance",
+            )
+
+    if section_amt > 0 and payment_source.get("section_id"):
+        section_wallet = await get_section_wallet(company_id=company_id, section_id=payment_source["section_id"])
+        if section_wallet and section_wallet.get("id"):
+            reversed_legs["section"] = await _apply(
+                wallet_id=section_wallet["id"],
+                scope=f"section:{payment_source['section_id']}",
+                type_="refund",
+                delta=section_amt,
+                ride_id=ride_id,
+                actor_user_id=actor_user_id,
+                stripe_payment_intent_id=f"ride:{ride_id}:section_refund",
+                notes=f"{note}:section",
+            )
+
+    if master_amt > 0 and master.get("id"):
+        reversed_legs["master"] = await _apply(
+            wallet_id=master["id"],
+            scope="master",
+            type_="refund",
+            delta=master_amt,
+            ride_id=ride_id,
+            actor_user_id=actor_user_id,
+            stripe_payment_intent_id=f"ride:{ride_id}:master_refund",
+            notes=f"{note}:master",
+        )
+
+    return reversed_legs

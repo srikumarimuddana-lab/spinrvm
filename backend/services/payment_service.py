@@ -29,10 +29,12 @@ except ImportError:
 try:
     from ..core.config import settings as app_config
     from ..features import send_push_notification
+    from ..utils.error_handling import db_error_text
     from ..utils.pii import area_only
 except ImportError:
     from core.config import settings as app_config  # type: ignore
     from features import send_push_notification  # type: ignore
+    from utils.error_handling import db_error_text  # type: ignore
     from utils.pii import area_only  # type: ignore
 
 
@@ -404,15 +406,75 @@ async def settle_corporate(
     total = _round(_d(str(total_charge)))
     if allowance.get("type") == "unlimited":
         allowance_debit = total
-        master_debit = _round(Decimal("0"))
     else:
         remaining = _round(_d(str(allowance.get("amount") or 0)) - max(_d(str(allowance.get("used") or 0)), _d("0")))
         remaining = max(remaining, _round(Decimal("0")))
         allowance_debit = min(remaining, total)
-        master_debit = total - allowance_debit
+
+    # M5.5 settlement chain (Q9): allowance → member's SECTION wallet
+    # (floor 0) → master wallet (down to its credit floor, Q10). The section
+    # tier only engages when the member belongs to a section that has a
+    # funded wallet; otherwise the remainder falls straight to master.
+    spill = _round(total - allowance_debit)
+    section_id = membership.get("section_id")
+    section_wallet = None
+    section_debit = _round(Decimal("0"))
+    if spill > 0 and section_id:
+        section_wallet = await db_supabase.get_section_wallet(company_id=company_id, section_id=section_id)
+        if section_wallet and section_wallet.get("id"):
+            section_balance = max(_d(str(section_wallet.get("balance") or 0)), _d("0"))
+            section_debit = _round(min(section_balance, spill))
+    master_debit = _round(spill - section_debit)
 
     corp_policy = await db_supabase.get_corporate_policy(company_id) or {}
-    flag_violation = master_debit > 0 and corp_policy.get("allowed_payment_source") == "allowance_only"
+    # allowance_only means NO company-wallet spillover of either tier.
+    flag_violation = (section_debit + master_debit) > 0 and corp_policy.get(
+        "allowed_payment_source"
+    ) == "allowance_only"
+
+    actor_user_id = membership.get("user_id") or ride.get("rider_id", "system")
+
+    async def _compensate_allowance() -> None:
+        try:
+            await corporate_allowance_service.apply_grant(
+                wallet_id=corp_wallet["id"],
+                allowance_id=allowance["id"],
+                member_id=membership["id"],
+                amount=_f(allowance_debit),
+                notes=f"ride:{ride_id}:allowance_compensation",
+            )
+        except Exception as comp_err:
+            logger.error(
+                "[PAYMENT] Allowance compensation failed for ride %s — "
+                "allowance %.2f was debited but downstream tier was NOT; "
+                "manual ledger fix required. comp_err=%s",
+                ride_id,
+                allowance_debit,
+                comp_err,
+                exc_info=True,
+            )
+
+    async def _compensate_section() -> None:
+        try:
+            await corporate_wallet_service.refund_corporate_ride_legs(
+                ride_id=ride_id,
+                payment_source={
+                    "section_debit_amount": _f(section_debit),
+                    "section_id": section_id,
+                },
+                company_id=company_id,
+                actor_user_id=actor_user_id,
+                notes=f"ride:{ride_id}:section_compensation",
+            )
+        except Exception as comp_err:
+            logger.error(
+                "[PAYMENT] Section compensation failed for ride %s — section %.2f "
+                "was debited but master was NOT; manual ledger fix required. comp_err=%s",
+                ride_id,
+                section_debit,
+                comp_err,
+                exc_info=True,
+            )
 
     allowance_applied = False
     if allowance_debit > 0 and allowance.get("id") and corp_wallet.get("id"):
@@ -425,6 +487,52 @@ async def settle_corporate(
         )
         allowance_applied = True
 
+    # Tier 2 (M5.5): the member's section wallet, hard-floored at 0 (Q9).
+    # A concurrent drain between the balance read and this debit raises
+    # wallet_below_floor — we re-route that remainder to master rather than
+    # failing the settlement.
+    section_applied = False
+    if section_debit > 0 and section_wallet and section_wallet.get("id"):
+        try:
+            await corporate_wallet_service.apply_section_ride_debit(
+                wallet_id=section_wallet["id"],
+                section_id=section_id,
+                amount=_f(section_debit),
+                ride_id=ride_id,
+                actor_user_id=actor_user_id,
+                notes=f"ride:{ride_id}:section",
+            )
+            section_applied = True
+        except Exception as section_err:
+            if "wallet_below_floor" in db_error_text(section_err):
+                logger.warning(
+                    "[PAYMENT] Section wallet drained concurrently for ride %s — re-routing %.2f to master",
+                    ride_id,
+                    section_debit,
+                )
+                try:
+                    from ..utils.metrics import inc as _metric_inc  # type: ignore
+                except ImportError:
+                    from utils.metrics import inc as _metric_inc  # type: ignore
+                _metric_inc("spinr_payment_section_reroute_total", {})
+                master_debit = _round(master_debit + section_debit)
+                section_debit = _round(Decimal("0"))
+            else:
+                if allowance_applied:
+                    await _compensate_allowance()
+                await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
+                logger.error(
+                    "[PAYMENT] Section wallet debit failed for ride %s: %s",
+                    ride_id,
+                    section_err,
+                    exc_info=True,
+                )
+                return PaymentResult(
+                    success=False,
+                    error="Corporate payment failed — please retry.",
+                    status_code=503,
+                )
+
     if master_debit > 0 and corp_wallet.get("id"):
         try:
             await corporate_wallet_service.apply_adjustment(
@@ -433,29 +541,20 @@ async def settle_corporate(
                 notes=f"Ride fallback debit {ride_id}",
                 # Ledger actor = the PAYING member's user. For guest bookings
                 # the rider is the company's customer, not the payer.
-                actor_user_id=membership.get("user_id") or ride.get("rider_id", "system"),
-                floor=0.0,
+                actor_user_id=actor_user_id,
+                # Q10 (M5.5): the master tier extends into the company's credit
+                # floor at settlement — previously floor=0.0, which made
+                # credit_limit dead at the moment it mattered most.
+                floor=_f(_d(str(corp_wallet.get("soft_negative_floor") or 0))),
+                # Deterministic per-leg idempotency (money-audit blocker fix):
+                # a settlement retry re-running this leg no-ops at the DB.
+                idempotency_key=f"ride:{ride_id}:master",
             )
         except Exception as master_err:
+            if section_applied:
+                await _compensate_section()
             if allowance_applied:
-                try:
-                    await corporate_allowance_service.apply_grant(
-                        wallet_id=corp_wallet["id"],
-                        allowance_id=allowance["id"],
-                        member_id=membership["id"],
-                        amount=_f(allowance_debit),
-                        notes=f"ride:{ride_id}:allowance_compensation",
-                    )
-                except Exception as comp_err:
-                    logger.error(
-                        "[PAYMENT] Allowance compensation failed for ride %s — "
-                        "allowance %.2f was debited but master wallet was NOT; "
-                        "manual ledger fix required. comp_err=%s",
-                        ride_id,
-                        allowance_debit,
-                        comp_err,
-                        exc_info=True,
-                    )
+                await _compensate_allowance()
             await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
             logger.error(
                 "[PAYMENT] Master wallet debit failed for ride %s: %s",
@@ -475,6 +574,11 @@ async def settle_corporate(
             "ride_id": ride_id,
             "source_type": "company_allowance",
             "allowance_debit_amount": _f(allowance_debit),
+            # Section leg frozen at settlement time (migration 228) — refunds
+            # reverse per leg to the wallet that PAID (Q13), regardless of the
+            # member's section later changing.
+            "section_debit_amount": _f(section_debit),
+            "section_id": section_id if section_debit > 0 else None,
             "master_fallback_amount": _f(master_debit),
             "member_id": membership["id"],
             "company_id": company_id,

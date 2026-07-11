@@ -1227,6 +1227,14 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
     message to the rider's channel and fires a push notification so the rider
     is alerted even if the app is backgrounded.
 
+    Durable backstop: this is an in-process asyncio timer, so a pod
+    restart/deploy drops it. ``utils.stuck_ride_sweeper`` is the restart-safe
+    equivalent — it cancels rides stuck in ``searching`` past the same 5-minute
+    threshold with the identical payload (``no_drivers_found`` attribution,
+    ``ride_cancelled`` WS, push, driver release) via an atomic replay-safe DB
+    claim. So a lost timer here still cancels within ~one 60s sweep of the
+    intended deadline; no separate durable search-timeout worker is needed.
+
     Extracted from ``create_ride`` so it can be unit-tested directly — see
     backend/tests/test_p0_ship_blockers.py::TestNoDriversAvailableTimeout.
     """

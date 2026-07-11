@@ -8,6 +8,7 @@ import type {
     CorporateMemberStatus,
 } from "@/lib/api";
 import {
+    bulkInviteMembers,
     inviteCompanyMember,
     listCompanyMembers,
     updateCompanyMember,
@@ -121,6 +122,45 @@ export default function MembersPage() {
         setInviteEmail("");
     };
 
+    const [bulkText, setBulkText] = useState("");
+    const [bulkBusy, setBulkBusy] = useState(false);
+
+    // Paste a roster (emails separated by commas/newlines/semicolons) or the
+    // contents of a CSV column — parsed client-side, sent as one request.
+    const onBulkInvite = async () => {
+        const emails = Array.from(
+            new Set(
+                bulkText
+                    .split(/[\s,;]+/)
+                    .map((e) => e.trim().toLowerCase())
+                    .filter((e) => e.includes("@"))
+            )
+        );
+        if (emails.length === 0) return;
+        if (emails.length > 100) {
+            setError("Up to 100 emails per batch.");
+            return;
+        }
+        setBulkBusy(true);
+        setError(null);
+        setFeedback(null);
+        try {
+            const res = await bulkInviteMembers(id!, emails, inviteRole);
+            const failed = res.results.filter((r) => r.error).map((r) => r.email);
+            const unsent = res.results.filter((r) => !r.error && !r.email_sent).map((r) => r.email);
+            let text = `Invited ${res.invited} member${res.invited === 1 ? "" : "s"} (${res.emailed} emailed).`;
+            if (failed.length) text += ` Failed: ${failed.join(", ")}.`;
+            if (unsent.length) text += ` Email not delivered (share links from the list): ${unsent.join(", ")}.`;
+            setFeedback({ kind: failed.length || unsent.length ? "warn" : "ok", text });
+            setBulkText("");
+            await load();
+        } catch (e) {
+            setError(e instanceof Error ? e.message : "Bulk invite failed");
+        } finally {
+            setBulkBusy(false);
+        }
+    };
+
     const copyLink = async (link: string) => {
         try {
             await navigator.clipboard.writeText(link);
@@ -188,6 +228,24 @@ export default function MembersPage() {
                                 {inviting ? "Sending…" : "Send invite"}
                             </Button>
                         </div>
+                    </div>
+                    <div className="space-y-1">
+                        <Label htmlFor="bulk-invite">Bulk invite (paste emails or a CSV column)</Label>
+                        <textarea
+                            id="bulk-invite"
+                            className="min-h-20 w-full rounded-md border border-input bg-background p-2 text-sm"
+                            placeholder="jane@acme.com, sam@acme.com&#10;lee@acme.com"
+                            value={bulkText}
+                            onChange={(e) => setBulkText(e.target.value)}
+                        />
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={onBulkInvite}
+                            disabled={bulkBusy || !bulkText.trim()}
+                        >
+                            {bulkBusy ? "Inviting…" : "Invite all"}
+                        </Button>
                     </div>
                     {feedback && (
                         <div

@@ -717,3 +717,52 @@ def test_cancel_rights_extend_to_booker(test_client, rider_override):
     ):
         resp = test_client.post("/company/c1/bookings/r1/cancel", json={})
     assert resp.status_code == 200, resp.text
+
+
+# ── FF1: bulk invite ─────────────────────────────────────────────────────────
+
+
+def test_bulk_invite_per_row_results(test_client, rider_override):
+    async def fake_invite(**kwargs):
+        email = kwargs["email"]
+        if email == "bad@acme.com":
+            raise RuntimeError("db burp")
+        return ({"id": f"m-{email}", "invite_token": f"tok-{email}"}, "app://join?token=x")
+
+    with (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"company_id": "c1", "role": "admin", "id": "m1"}]),
+        ),
+        patch(
+            "routes.corporate_company.get_corporate_account_by_id",
+            AsyncMock(return_value={"id": "c1", "name": "Acme Corp"}),
+        ),
+        patch("routes.corporate_company.invite_member", AsyncMock(side_effect=fake_invite)),
+        patch("utils.email_provider.send_transactional_email", AsyncMock(return_value=True)),
+    ):
+        resp = test_client.post(
+            "/company/c1/members/invite-bulk",
+            json={"emails": ["a@acme.com", "A@ACME.COM", "bad@acme.com", "b@acme.com"], "role": "member"},
+        )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["invited"] == 2  # a + b (dupe deduped, bad failed)
+    assert data["emailed"] == 2
+    rows = {r["email"]: r for r in data["results"]}
+    assert len(rows) == 3  # deduped
+    assert rows["bad@acme.com"]["error"] == "invite_failed"
+    assert rows["a@acme.com"]["email_sent"] is True
+    assert "/company-login?invite_token=tok-a@acme.com" in rows["a@acme.com"]["web_invite_url"]
+
+
+def test_bulk_invite_requires_admin(test_client, rider_override):
+    with patch(
+        "dependencies.company_guard.list_active_memberships_for_user",
+        AsyncMock(return_value=[{"company_id": "c1", "role": "member", "id": "m1"}]),
+    ):
+        resp = test_client.post(
+            "/company/c1/members/invite-bulk",
+            json={"emails": ["a@acme.com"], "role": "member"},
+        )
+    assert resp.status_code == 403

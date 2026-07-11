@@ -12,6 +12,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 try:
     from ..db_supabase import (  # type: ignore
@@ -44,6 +45,7 @@ try:
         AllowanceUpdate,
         AllowedDomainCreate,
         MemberInvite,
+        MemberRole,
         MemberUpdate,
         PolicyCreate,
         PolicyUpdate,
@@ -81,6 +83,7 @@ except ImportError:
         AllowanceUpdate,
         AllowedDomainCreate,
         MemberInvite,
+        MemberRole,
         MemberUpdate,
         PolicyCreate,
         PolicyUpdate,
@@ -187,6 +190,83 @@ async def invite(
         "web_invite_url": web_invite_url,
         "email_sent": bool(email_sent),
     }
+
+
+class BulkInvite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    emails: list[EmailStr] = Field(..., min_length=1, max_length=100)
+    role: MemberRole = MemberRole.MEMBER
+
+
+@router.post("/members/invite-bulk")
+async def invite_bulk(
+    company_id: str,
+    body: BulkInvite,
+    guard=Depends(require_company_admin),
+):
+    """Bulk invite (fast-follow, Uber-for-Business parity): paste a roster or
+    upload a CSV — the portal sends the parsed emails here. Each row is
+    processed independently (one bad address never blocks the rest) and gets
+    its own email_sent/web link/error in the response — failures are
+    surfaced per row, never collapsed into a fake success."""
+    try:
+        from ..core.config import settings as _settings  # type: ignore
+        from ..utils.email_provider import send_transactional_email  # type: ignore
+    except ImportError:
+        from core.config import settings as _settings  # type: ignore
+        from utils.email_provider import send_transactional_email  # type: ignore
+
+    company = await get_corporate_account_by_id(company_id) or {}
+    company_name = company.get("name") or "your company"
+
+    # Dedupe while preserving order; normalize like the single invite.
+    seen: set = set()
+    emails = []
+    for e in body.emails:
+        norm = str(e).strip().lower()
+        if norm not in seen:
+            seen.add(norm)
+            emails.append(norm)
+
+    results = []
+    for email in emails:
+        row = {"email": email, "member_id": None, "email_sent": False, "web_invite_url": None, "error": None}
+        try:
+            member, _url = await invite_member(
+                company_id=company_id,
+                email=email,
+                role=body.role.value,
+                invited_by=guard["user"]["id"],
+            )
+            row["member_id"] = member.get("id")
+            token = member.get("invite_token")
+            if token:
+                web_url = f"{_settings.PORTAL_BASE_URL}/company-login?invite_token={token}"
+                row["web_invite_url"] = web_url
+                try:
+                    row["email_sent"] = bool(
+                        await send_transactional_email(
+                            to=email,
+                            subject=f"You're invited to {company_name} on Spinr for Business",
+                            text=(
+                                f"You've been invited to join {company_name} on Spinr for Business.\n\n"
+                                f"Accept the invite and sign in with this email address:\n{web_url}\n\n"
+                                "The link signs you in with a one-time code sent to this address."
+                            ),
+                            log_id=member.get("id") or company_id,
+                            email_type="corporate_member_invite",
+                        )
+                    )
+                except Exception:
+                    logger.error("bulk invite: email delivery failed for member %s", member.get("id"), exc_info=True)
+        except Exception as e:
+            logger.error("bulk invite: row failed for company %s", company_id, exc_info=True)
+            row["error"] = "invite_failed"
+        results.append(row)
+
+    sent = sum(1 for r in results if r["email_sent"])
+    return {"invited": len([r for r in results if r["member_id"]]), "emailed": sent, "results": results}
 
 
 @router.patch("/members/{member_id}")

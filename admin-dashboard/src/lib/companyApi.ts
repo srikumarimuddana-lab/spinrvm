@@ -518,6 +518,20 @@ export const inviteCompanyMember = (
         body: JSON.stringify(body),
     });
 
+export interface BulkInviteRow {
+    email: string;
+    member_id: string | null;
+    email_sent: boolean;
+    web_invite_url: string | null;
+    error: string | null;
+}
+
+export const bulkInviteMembers = (companyId: string, emails: string[], role: CorporateMemberRole) =>
+    companyRequest<{ invited: number; emailed: number; results: BulkInviteRow[] }>(
+        `/api/company/${companyId}/members/invite-bulk`,
+        { method: "POST", body: JSON.stringify({ emails, role }) }
+    );
+
 export const updateCompanyMember = (
     companyId: string,
     memberId: string,

@@ -236,6 +236,44 @@ export const submitKybDocument = (companyId: string, path: string) =>
         { method: "POST", body: JSON.stringify({ path }) }
     );
 
+/* ── Departmental funding (M5.7) ── */
+
+export interface SectionWalletInfo {
+    wallet: { id: string; balance: number | string; section_id: string } | null;
+    transactions: Array<Record<string, unknown>>;
+}
+
+export const getSectionWallet = (companyId: string, sectionId: string) =>
+    companyRequest<SectionWalletInfo>(`/api/company/${companyId}/sections/${sectionId}/wallet`);
+
+export const allocateSectionFunds = (
+    companyId: string,
+    body: { section_id: string; amount: string; direction?: "to_section" | "to_master"; client_key?: string }
+) =>
+    companyRequest<{ success: boolean; from_balance: number; to_balance: number }>(
+        `/api/company/${companyId}/wallet/allocate`,
+        { method: "POST", body: JSON.stringify(body) }
+    );
+
+// Stripe Checkout top-ups: client_key (a per-click UUID) makes retries reuse
+// the same session — never a second charge.
+export const createMasterTopupSession = (companyId: string, amount: string, clientKey: string) =>
+    companyRequest<{ checkout_url: string }>(`/api/company/${companyId}/wallet/topup-session`, {
+        method: "POST",
+        body: JSON.stringify({ amount, client_key: clientKey }),
+    });
+
+export const createSectionTopupSession = (
+    companyId: string,
+    sectionId: string,
+    amount: string,
+    clientKey: string
+) =>
+    companyRequest<{ checkout_url: string }>(
+        `/api/company/${companyId}/sections/${sectionId}/wallet/topup-session`,
+        { method: "POST", body: JSON.stringify({ amount, client_key: clientKey }) }
+    );
+
 export const getMyWorkProfiles = () =>
     companyRequest<CompanyMembershipProfile[]>("/api/rider/work-profile");
 
@@ -364,6 +402,7 @@ export interface CompanySection {
     status: "active" | "archived";
     member_count?: number;
     created_at?: string;
+    head_member_id?: string | null;
 }
 
 export const listCompanySections = (companyId: string) =>
@@ -378,7 +417,7 @@ export const createCompanySection = (companyId: string, body: { name: string; de
 export const updateCompanySection = (
     companyId: string,
     sectionId: string,
-    body: { name?: string; description?: string; status?: "active" | "archived" }
+    body: { name?: string; description?: string; status?: "active" | "archived"; head_member_id?: string }
 ) =>
     companyRequest<CompanySection>(`/api/company/${companyId}/sections/${sectionId}`, {
         method: "PATCH",

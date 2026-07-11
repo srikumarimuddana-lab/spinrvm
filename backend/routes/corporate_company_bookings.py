@@ -377,6 +377,9 @@ class SectionUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=80)
     description: Optional[str] = Field(default=None, max_length=300)
     status: Optional[str] = Field(default=None, pattern="^(active|archived)$")
+    # M5.7 (Q11): the section's single department head — a corporate_members
+    # id of any role. Empty string clears the head.
+    head_member_id: Optional[str] = Field(default=None, max_length=64)
 
     @field_validator("name")
     @classmethod
@@ -461,6 +464,13 @@ async def update_section(
     patch = {k: v for k, v in body.model_dump(exclude_none=True).items()}
     if "name" in patch:
         patch["name"] = patch["name"].strip()
+    if "head_member_id" in patch:
+        if patch["head_member_id"] == "":
+            patch["head_member_id"] = None  # explicit clear
+        else:
+            head = await db_supabase.get_corporate_member_by_id(patch["head_member_id"])
+            if not head or head.get("company_id") != ctx["company_id"] or head.get("status") != "active":
+                raise HTTPException(status_code=404, detail="Member not found")
     if not patch:
         return existing[0]
     try:

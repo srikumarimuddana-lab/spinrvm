@@ -580,6 +580,9 @@ async def billing_summary(
         "month": month,
         "wallet_balance": _money_str(wallet.get("balance") or "0"),
         "wallet_currency": wallet.get("currency") or "CAD",
+        # M5.7: staff-set credit floor (0 = no credit, opt-in per Q10). The
+        # portal shows remaining credit = balance - floor when floor < 0.
+        "credit_floor": _money_str(wallet.get("soft_negative_floor") or "0"),
         **_aggregate_rows(all_rows),
     }
 

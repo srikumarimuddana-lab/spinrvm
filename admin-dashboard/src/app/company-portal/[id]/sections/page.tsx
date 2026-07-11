@@ -2,16 +2,20 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { FolderTree, Loader2, Plus } from "lucide-react";
+import { CreditCard, FolderTree, Loader2, Plus, Wallet } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+    allocateSectionFunds,
     archiveCompanySection,
     assignMemberSection,
     createCompanySection,
+    createSectionTopupSession,
+    getSectionWallet,
     listCompanySections,
+    updateCompanySection,
     CompanySection,
 } from "@/lib/companyApi";
 import type {
@@ -94,6 +98,82 @@ export default function CompanySectionsPage() {
         }
     };
 
+    // M5.7: per-section wallet balances (departmental funding).
+    const [walletBalances, setWalletBalances] = useState<Record<string, string>>({});
+    useEffect(() => {
+        if (!companyId || sections.length === 0) return;
+        let cancelled = false;
+        (async () => {
+            const entries: Record<string, string> = {};
+            await Promise.all(
+                sections
+                    .filter((s) => s.status === "active")
+                    .map(async (s) => {
+                        try {
+                            const info = await getSectionWallet(companyId, s.id);
+                            entries[s.id] = String(info.wallet?.balance ?? "0");
+                        } catch {
+                            /* non-heads without access simply see no balance */
+                        }
+                    })
+            );
+            if (!cancelled) setWalletBalances(entries);
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [companyId, sections]);
+
+    const handleSetHead = async (sectionId: string, memberId: string) => {
+        try {
+            await updateCompanySection(companyId, sectionId, { head_member_id: memberId });
+            await load();
+        } catch (e) {
+            setError(e instanceof Error ? e.message : "Could not set section head");
+        }
+    };
+
+    const handleAllocate = async (sectionId: string) => {
+        const raw = window.prompt("Amount to allocate from the master wallet (CAD):");
+        if (!raw) return;
+        setBusy(true);
+        setError(null);
+        try {
+            await allocateSectionFunds(companyId, {
+                section_id: sectionId,
+                amount: raw.trim(),
+                client_key: crypto.randomUUID(),
+            });
+            const info = await getSectionWallet(companyId, sectionId).catch(() => null);
+            if (info?.wallet) {
+                setWalletBalances((b) => ({ ...b, [sectionId]: String(info.wallet!.balance) }));
+            }
+        } catch (e) {
+            setError(e instanceof Error ? e.message : "Allocation failed");
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const handleTopup = async (sectionId: string) => {
+        const raw = window.prompt("Top-up amount via Stripe (CAD, $100-$10,000; $5,000/day cap):");
+        if (!raw) return;
+        setBusy(true);
+        setError(null);
+        try {
+            const { checkout_url } = await createSectionTopupSession(
+                companyId,
+                sectionId,
+                raw.trim(),
+                crypto.randomUUID()
+            );
+            window.location.assign(checkout_url);
+        } catch (e) {
+            setError(e instanceof Error ? e.message : "Could not start the top-up");
+            setBusy(false);
+        }
+    };
+
     const activeSections = sections.filter((s) => s.status === "active");
 
     return (
@@ -104,7 +184,8 @@ export default function CompanySectionsPage() {
                 </h1>
                 <p className="text-sm text-muted-foreground">
                     Organize your team into departments (showroom, service, …) — bookings
-                    and reports filter by section. Budgets stay per-employee allowances.
+                    and reports filter by section. Each department can hold its own
+                    wallet, funded by allocation or its head&apos;s Stripe top-up.
                 </p>
             </header>
 
@@ -129,25 +210,65 @@ export default function CompanySectionsPage() {
 
                     <div className="space-y-2">
                         {sections.map((s) => (
-                            <div
-                                key={s.id}
-                                className="flex items-center justify-between rounded-md border p-3"
-                            >
-                                <div>
-                                    <span className="font-medium">{s.name}</span>
-                                    <span className="ml-2 text-xs text-muted-foreground">
-                                        {s.member_count ?? 0} member{(s.member_count ?? 0) === 1 ? "" : "s"}
-                                    </span>
-                                    {s.status === "archived" && (
-                                        <Badge className="ml-2 bg-muted text-muted-foreground hover:bg-muted">
-                                            archived
-                                        </Badge>
+                            <div key={s.id} className="rounded-md border p-3">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <span className="font-medium">{s.name}</span>
+                                        <span className="ml-2 text-xs text-muted-foreground">
+                                            {s.member_count ?? 0} member{(s.member_count ?? 0) === 1 ? "" : "s"}
+                                        </span>
+                                        {s.status === "archived" && (
+                                            <Badge className="ml-2 bg-muted text-muted-foreground hover:bg-muted">
+                                                archived
+                                            </Badge>
+                                        )}
+                                    </div>
+                                    {s.status === "active" && (
+                                        <Button variant="ghost" size="sm" onClick={() => handleArchive(s.id)}>
+                                            Archive
+                                        </Button>
                                     )}
                                 </div>
                                 {s.status === "active" && (
-                                    <Button variant="ghost" size="sm" onClick={() => handleArchive(s.id)}>
-                                        Archive
-                                    </Button>
+                                    <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
+                                        <span className="inline-flex items-center gap-1 text-muted-foreground">
+                                            <Wallet className="h-3.5 w-3.5" />
+                                            {walletBalances[s.id] !== undefined
+                                                ? `$${walletBalances[s.id]}`
+                                                : "\u2014"}
+                                        </span>
+                                        <label className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                                            Head:
+                                            <select
+                                                className="h-7 rounded-md border border-input bg-background px-1 text-xs"
+                                                value={s.head_member_id ?? ""}
+                                                onChange={(e) => handleSetHead(s.id, e.target.value)}
+                                            >
+                                                <option value="">None</option>
+                                                {members.map((m) => (
+                                                    <option key={m.id} value={m.id}>
+                                                        {m.invited_email ?? m.id}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </label>
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            disabled={busy}
+                                            onClick={() => handleAllocate(s.id)}
+                                        >
+                                            <Wallet className="mr-1 h-3.5 w-3.5" /> Allocate
+                                        </Button>
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            disabled={busy}
+                                            onClick={() => handleTopup(s.id)}
+                                        >
+                                            <CreditCard className="mr-1 h-3.5 w-3.5" /> Top up
+                                        </Button>
+                                    </div>
                                 )}
                             </div>
                         ))}

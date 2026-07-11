@@ -81,6 +81,22 @@ export default function BillingPage() {
     const { id } = useParams<{ id: string }>();
     const months = monthOptions();
     const [month, setMonth] = useState<string>(months[0]);
+    const topupMaster = async () => {
+        const raw = window.prompt("Top-up amount via Stripe (CAD, $100-$10,000):");
+        if (!raw) return;
+        try {
+            const { createMasterTopupSession } = await import("@/lib/companyApi");
+            const { checkout_url } = await createMasterTopupSession(
+                id,
+                raw.trim(),
+                crypto.randomUUID()
+            );
+            window.location.assign(checkout_url);
+        } catch (e) {
+            alert(e instanceof Error ? e.message : "Could not start the top-up");
+        }
+    };
+
     const [summary, setSummary] = useState<BillingSummary | null>(null);
     const [statement, setStatement] = useState<BillingStatement | null>(null);
     const [txns, setTxns] = useState<BillingTransactionsPage | null>(null);
@@ -146,6 +162,9 @@ export default function BillingPage() {
                             </option>
                         ))}
                     </select>
+                    <Button size="sm" onClick={topupMaster}>
+                        Top up wallet
+                    </Button>
                     <Button
                         size="sm"
                         variant="outline"
@@ -162,7 +181,17 @@ export default function BillingPage() {
             )}
 
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <Metric label="Wallet balance" value={formatCAD(summary?.wallet_balance)} />
+                <Metric
+                    label="Wallet balance"
+                    value={formatCAD(summary?.wallet_balance)}
+                    sub={
+                        Number(summary?.credit_floor ?? 0) < 0
+                            ? `Credit available: ${formatCAD(
+                                  Number(summary?.wallet_balance ?? 0) - Number(summary?.credit_floor ?? 0)
+                              )}`
+                            : undefined
+                    }
+                />
                 <Metric
                     label="Total spend"
                     value={formatCAD(summary?.total)}

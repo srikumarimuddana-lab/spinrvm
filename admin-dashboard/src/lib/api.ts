@@ -1611,6 +1611,8 @@ export interface BillingMemberBreakdown {
 export interface BillingSummary {
     month: string;
     wallet_balance: number;
+    // M5.7: staff-set credit floor (negative = credit; 0 = none, opt-in).
+    credit_floor?: number | string;
     wallet_currency: string;
     ride_count: number;
     allowance_total: number;

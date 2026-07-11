@@ -1066,12 +1066,20 @@ async def _offer_timeout_handler(
         )
 
 
-async def _batch_offer_timeout_handler(
-    ride_id: str,
-    rider_id: str | None,
-    timeout_seconds: int = 15,
-):
-    """Expire all still-pending batch offers after timeout (no grace period)."""
+async def process_expired_offer(ride_id: str, driver_id: str, miss_threshold: int) -> bool:
+    """Atomically expire ONE pending ride_offer and run its release side-effects.
+
+    Idempotent: the pending->expired claim is the single gate. If another actor
+    (the in-process batch-timeout handler OR the durable offer-expiry reaper)
+    already expired this offer — or the driver just accepted it — the conditional
+    UPDATE returns zero rows and the side-effects are skipped. Returns True iff
+    this call won the claim and processed the offer.
+
+    Side-effects on win: miss-streak++, acceptance-rate(accepted=False), then
+    auto-offline (Period 0) at the miss threshold, else a committed-state-guarded
+    Period 1 (mirrors the single-offer guard), an offer-skip key, and a WS notice
+    to the driver. Ride-level concerns (rider WS, re-dispatch) are the caller's.
+    """
     try:
         from ...repositories.driver_repo import update_acceptance_rate
         from ...utils.driver_presence import (
@@ -1089,6 +1097,84 @@ async def _batch_offer_timeout_handler(
         )
         from utils.redis_client import redis_set as _redis_set  # type: ignore
 
+    now_iso = datetime.now(timezone.utc).isoformat()
+    # Atomic claim: only the actor that flips this offer pending->expired owns its
+    # side-effects. Conditional on status='pending' so a concurrent accept
+    # (status='accepted') or a peer reaper cannot be double-processed.
+    claimed = await _deps.db_supabase.run_sync(
+        lambda: (
+            _deps.db_supabase.supabase.table("ride_offers")
+            .update({"status": "expired", "responded_at": now_iso})
+            .eq("ride_id", ride_id)
+            .eq("driver_id", driver_id)
+            .eq("status", "pending")
+            .execute()
+        )
+    )
+    if not (getattr(claimed, "data", None) or []):
+        return False
+
+    miss_count = await increment_miss_streak(driver_id)
+    await update_acceptance_rate(driver_id, accepted=False)
+
+    auto_offline = miss_count >= miss_threshold
+    if auto_offline:
+        logger.info(
+            f"[DISPATCH] Auto-offline: driver {driver_id} missed "
+            f"{miss_count} consecutive offers (threshold={miss_threshold})"
+        )
+        await _deps.db_supabase.set_driver_available(driver_id, False)
+        await _deps.db_supabase.run_sync(
+            lambda: (
+                _deps.db_supabase.supabase.table("drivers")
+                .update({"is_online": False, "is_available": False})
+                .eq("id", driver_id)
+                .execute()
+            )
+        )
+        await clear_presence(driver_id)
+        await reset_miss_streak(driver_id)
+        await _deps.record_period_transition(driver_id, 0)
+    else:
+        # Only open Period 1 (online, no ride) if the release actually made the
+        # driver available. If they went offline between offer dispatch and this
+        # timeout, set_driver_available clamps is_available→False; recording
+        # Period 1 here would falsely reopen a commercial-insurance window for an
+        # offline driver. Mirrors the single-offer guard at _offer_timeout_handler.
+        released = await _deps.db_supabase.set_driver_available(driver_id, True)
+        if isinstance(released, dict) and released.get("is_available"):
+            await _deps.record_period_transition(driver_id, 1)
+
+    try:
+        await _redis_set(f"spinr:offer_skip:{ride_id}:{driver_id}", "1", ttl=300)
+    except Exception as e:
+        logger.warning(f"Failed to set offer skip key for driver {driver_id}: {e}")
+    try:
+        drv = await _deps.db_supabase.get_driver_by_id(driver_id)
+        uid = (drv or {}).get("user_id")
+        if uid:
+            msg_type = "auto_offline" if auto_offline else "ride_offer_expired"
+            await _deps.manager.send_personal_message(
+                {"type": msg_type, "ride_id": ride_id},
+                f"driver_{uid}",
+            )
+    except Exception as e:
+        logger.warning(f"Failed to send offer_expired WS to driver {driver_id}: {e}")
+
+    return True
+
+
+async def _batch_offer_timeout_handler(
+    ride_id: str,
+    rider_id: str | None,
+    timeout_seconds: int = 15,
+):
+    """Expire all still-pending batch offers after timeout (no grace period).
+
+    Each offer is expired via process_expired_offer, whose atomic pending->expired
+    claim makes this safe to run concurrently with the durable offer-expiry reaper
+    — neither can double-process the same offer.
+    """
     await asyncio.sleep(timeout_seconds)
     try:
         ride = await _deps.db_supabase.get_ride(ride_id)
@@ -1108,77 +1194,15 @@ async def _batch_offer_timeout_handler(
         if not pending_ids:
             return
 
-        now_iso = datetime.now(timezone.utc).isoformat()
-        await _deps.db_supabase.run_sync(
-            lambda: (
-                _deps.db_supabase.supabase.table("ride_offers")
-                .update({"status": "expired", "responded_at": now_iso})
-                .eq("ride_id", ride_id)
-                .eq("status", "pending")
-                .execute()
-            )
-        )
-
         try:
             settings = await _deps.get_app_settings()
             miss_threshold = int(settings.get("auto_offline_miss_threshold", 3))
         except Exception:
             miss_threshold = 3
 
-        # P2: each pending driver's release is independent (distinct driver,
-        # no cross-driver ordering), so run them concurrently instead of one
-        # serial chain of DB/WS round-trips. Sub-steps within a driver stay
-        # sequential (they have their own ordering).
-        async def _release_pending_driver(did: str) -> None:
-            miss_count = await increment_miss_streak(did)
-            await update_acceptance_rate(did, accepted=False)
-
-            auto_offline = miss_count >= miss_threshold
-            if auto_offline:
-                logger.info(
-                    f"[DISPATCH] Auto-offline: driver {did} missed "
-                    f"{miss_count} consecutive offers (threshold={miss_threshold})"
-                )
-                await _deps.db_supabase.set_driver_available(did, False)
-                await _deps.db_supabase.run_sync(
-                    lambda _did=did: (
-                        _deps.db_supabase.supabase.table("drivers")
-                        .update({"is_online": False, "is_available": False})
-                        .eq("id", _did)
-                        .execute()
-                    )
-                )
-                await clear_presence(did)
-                await reset_miss_streak(did)
-                await _deps.record_period_transition(did, 0)
-            else:
-                # Only open Period 1 (online, no ride) if the release actually
-                # made the driver available. If they went offline between offer
-                # dispatch and this timeout, set_driver_available clamps
-                # is_available→False; recording Period 1 here would falsely
-                # reopen a commercial-insurance window for an offline driver.
-                # Mirrors the single-offer guard at _offer_timeout_handler.
-                released = await _deps.db_supabase.set_driver_available(did, True)
-                if isinstance(released, dict) and released.get("is_available"):
-                    await _deps.record_period_transition(did, 1)
-
-            try:
-                await _redis_set(f"spinr:offer_skip:{ride_id}:{did}", "1", ttl=300)
-            except Exception as e:
-                logger.warning(f"Failed to set offer skip key for driver {did}: {e}")
-            try:
-                drv = await _deps.db_supabase.get_driver_by_id(did)
-                uid = (drv or {}).get("user_id")
-                if uid:
-                    msg_type = "auto_offline" if auto_offline else "ride_offer_expired"
-                    await _deps.manager.send_personal_message(
-                        {"type": msg_type, "ride_id": ride_id},
-                        f"driver_{uid}",
-                    )
-            except Exception as e:
-                logger.warning(f"Failed to send offer_expired WS to driver {did}: {e}")
-
-        await asyncio.gather(*(_release_pending_driver(did) for did in pending_ids))
+        # Each driver's offer is expired + released independently and idempotently
+        # (process_expired_offer's atomic claim is the gate), so run concurrently.
+        await asyncio.gather(*(process_expired_offer(ride_id, did, miss_threshold) for did in pending_ids))
 
         if rider_id:
             await _deps.manager.send_personal_message(

@@ -8,7 +8,7 @@ import { RideStatus } from '../constants/rideStatus';
 import { recordNonFatal } from '../utils/crashlytics';
 
 const ACTIVE_RIDE_KEY = '@spinr:active_ride';
-const TERMINAL_STATUSES: Set<string> = new Set([RideStatus.COMPLETED, RideStatus.CANCELLED, RideStatus.FAILED]);
+const TERMINAL_STATUSES: Set<string> = new Set([RideStatus.COMPLETED, RideStatus.CANCELLED]);
 
 function isErrorLike(e: unknown): e is { message: string } {
   return typeof e === 'object' && e !== null && 'message' in e;

@@ -32,9 +32,9 @@ interface NavItem {
 // items is UX, not security.
 function buildNav(id: string): NavItem[] {
     return [
+        { href: `/company-portal/${id}/overview`, label: "Overview", icon: LayoutDashboard },
         { href: `/company-portal/${id}/book`, label: "Book a ride", icon: CalendarPlus },
         { href: `/company-portal/${id}/bookings`, label: "Bookings", icon: ListChecks },
-        { href: `/company-portal/${id}/overview`, label: "Overview", icon: LayoutDashboard, adminOnly: true },
         { href: `/company-portal/${id}/members`, label: "Members", icon: Users, adminOnly: true },
         { href: `/company-portal/${id}/sections`, label: "Sections", icon: Users, adminOnly: true },
         { href: `/company-portal/${id}/allowances`, label: "Allowances", icon: Wallet, adminOnly: true },

@@ -86,6 +86,40 @@ async def test_local_broadcast_skips_stuck_connection(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_local_broadcast_fans_out_concurrently():
+    """Admin fan-out must dispatch sends concurrently, not serially, so a single
+    slow admin socket can't delay delivery to the others. Verified by probing
+    peak in-flight concurrency (deterministic) rather than wall-clock timing.
+    """
+    from socket_manager import ConnectionManager
+
+    active = 0
+    max_active = 0
+
+    async def _probe_send(_msg):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.02)
+        active -= 1
+
+    mgr = ConnectionManager()
+    conns = {}
+    for i in range(4):
+        c = MagicMock()
+        c.send_json = AsyncMock(side_effect=_probe_send)
+        conns[f"admin_{i}"] = c
+    mgr.active_connections = conns
+
+    await mgr._deliver_broadcast_local("admin_", {"type": "ride_status_changed"})
+
+    assert max_active == 4, (
+        f"admin fan-out peaked at {max_active} concurrent sends; expected 4 — "
+        "sequential awaits delay every admin behind the slowest socket"
+    )
+
+
+@pytest.mark.anyio
 async def test_broadcast_propagates_message_to_all_healthy_connections():
     """Sanity check: when no connection is stuck, every connection gets
     the message exactly once."""

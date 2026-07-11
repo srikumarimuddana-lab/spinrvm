@@ -1,6 +1,6 @@
 # CarPlay & Android Auto — integration strategy
 
-**Last verified:** 2026-06-02
+**Last verified:** 2026-07-10
 **Status:** Android Auto implemented on **@iternio/react-native-auto-play** (Nitro / New
 Architecture). Committed: the dependency, the JS entry registration, and the car-UI layer
 (`driver-app/lib/androidAuto/`) — an always-on live map (the driver's current location shown
@@ -191,9 +191,24 @@ launch path (iternio's `CarAppService` is a new `<service>` merged from its libr
 
 ## External approvals (start early — weeks of lead time)
 
-- **Google Play Android Auto** — declare the car app and pass Car App Quality review
-  (NAVIGATION category explicitly allows ride/delivery driver apps). Required before Android
-  Auto reaches users; for development/DHU testing, enable Android Auto "Unknown sources".
+- **Google Play Android Auto** — real vehicles only list templated Car App Library apps installed
+  from a trusted source. Android Auto's developer-mode **Unknown sources does not apply** to this
+  app type, so the sideloaded APKs produced by the `test` and `preview` EAS profiles will not
+  appear in a car even when that switch is enabled. Build and publish the dedicated Play internal
+  test profile instead:
+
+  ```bash
+  cd driver-app
+  eas build --platform android --profile android-auto --auto-submit-with-profile android-auto
+  ```
+
+  Add the driver's Google account to Play Console's internal testers, accept the opt-in link, then
+  install **Spinr Driver from Google Play** on the phone connected to the car. The `android-auto`
+  profile creates a store AAB and completes the internal-track release; it is not a public
+  production rollout. A local APK remains suitable for emulator/DHU debugging where supported,
+  but it is not a valid real-car discovery test.
+- **Google Play car-app review** — declare the car app and pass the applicable Car App Quality
+  review before a public release.
 - **Apple CarPlay entitlement** (only when iOS CarPlay is taken up) — request at
   developer.apple.com/carplay. A rideshare *driver* app is typically pushed to the
   template-only **driving-task** category; the in-dash **map** needs the harder

@@ -38,6 +38,17 @@
         "SENTRY_ALLOW_FAILURE": "true"
       }
     },
+    "android-auto": {
+      "distribution": "store",
+      "autoIncrement": true,
+      "channel": "preview",
+      "environment": "preview",
+      "env": {
+        "EXPO_PUBLIC_ENV": "preview",
+        "EXPO_USE_PRECOMPILED_MODULES": "0",
+        "SENTRY_ALLOW_FAILURE": "true"
+      }
+    },
     "production": {
       "distribution": "store",
       "autoIncrement": true,
@@ -62,6 +73,13 @@
         "serviceAccountKeyPath": "./play-service-account.json",
         "track": "internal",
         "releaseStatus": "draft"
+      }
+    },
+    "android-auto": {
+      "android": {
+        "serviceAccountKeyPath": "./play-service-account.json",
+        "track": "internal",
+        "releaseStatus": "completed"
       }
     }
   }

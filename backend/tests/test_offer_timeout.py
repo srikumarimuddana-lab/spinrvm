@@ -380,6 +380,52 @@ class TestBatchOfferTimeoutInsuranceGuard:
             )
 
 
+@pytest.mark.asyncio
+async def test_process_expired_offer_is_idempotent():
+    """The pending->expired claim gates the side-effects: a second call for an
+    offer that is already expired runs NO side-effects. This is what lets the
+    in-process timeout handler and the durable reaper both call
+    process_expired_offer without ever double-counting a miss / double-writing
+    an insurance-period row for the same offer."""
+    from backend.routes.rides import matching as m
+
+    # First claim wins (returns a row); second finds nothing pending.
+    claim_results = [MagicMock(data=[{"id": "off1"}]), MagicMock(data=[])]
+
+    with (
+        patch(
+            "backend.routes.rides._deps.db_supabase.run_sync",
+            AsyncMock(side_effect=claim_results),
+        ),
+        patch(
+            "backend.routes.rides._deps.db_supabase.set_driver_available",
+            AsyncMock(return_value={"is_available": True}),
+        ),
+        patch(
+            "backend.routes.rides._deps.db_supabase.get_driver_by_id",
+            AsyncMock(return_value=None),
+        ),
+        patch("backend.routes.rides._deps.record_period_transition", new_callable=AsyncMock) as mock_period,
+        patch("backend.routes.rides._deps.manager") as mock_mgr,
+        patch("backend.repositories.driver_repo.update_acceptance_rate", new_callable=AsyncMock) as mock_ar,
+        patch("backend.utils.driver_presence.increment_miss_streak", AsyncMock(return_value=1)) as mock_miss,
+        patch("backend.utils.driver_presence.clear_presence", new_callable=AsyncMock),
+        patch("backend.utils.driver_presence.reset_miss_streak", new_callable=AsyncMock),
+        patch("backend.utils.redis_client.redis_set", new_callable=AsyncMock),
+    ):
+        mock_mgr.send_personal_message = AsyncMock()
+
+        won_first = await m.process_expired_offer("ride_b", "d1", 3)
+        won_second = await m.process_expired_offer("ride_b", "d1", 3)
+
+    assert won_first is True
+    assert won_second is False
+    # Side-effects ran for the winning claim only.
+    assert mock_miss.await_count == 1
+    assert mock_ar.await_count == 1
+    mock_period.assert_awaited_once_with("d1", 1)
+
+
 def test_build_offer_rows_persists_expires_at():
     """Every dispatched ride_offers row must carry expires_at so the durable
     reaper can expire it even if the in-process asyncio timer is lost on a

@@ -59,18 +59,56 @@ def _round2(v: Decimal) -> Decimal:
     return v.quantize(Decimal("0.01"))
 
 
+async def _get_member_user(member):
+    """Resolve an on-behalf target member's rider account (M5.6). A member
+    still in 'invited' state has no user row yet — surface that clearly."""
+    try:
+        from .. import db_supabase  # type: ignore
+    except ImportError:
+        import db_supabase  # type: ignore
+
+    user_id = member.get("user_id")
+    if not user_id:
+        raise HTTPException(
+            status_code=409,
+            detail="This member hasn't activated their account yet — they must accept their invite first.",
+        )
+    user = await db_supabase.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=409, detail="Member account not found.")
+    return user
+
+
 async def create_company_guest_booking(
     company_id: str,
     booker_member: Dict[str, Any],
     payload: Any,
+    for_member: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    """Create a guest ride for ``company_id`` booked by ``booker_member``.
+    """Create a company ride booked by ``booker_member``.
+
+    Two modes:
+      * GUEST (default): ``payload.customer_phone/name`` identify an external
+        customer (phone-keyed guest user, SMS lifecycle).
+      * ON-BEHALF (M5.6, Q12): ``for_member`` is a TARGET staff member — the
+        ride's rider is their app account, and THEIR allowance → section →
+        master chain pays (rides.corporate_member_id = target;
+        corporate_booked_by_member_id = booker). Create + notify — the member
+        gets standard rider notifications and can cancel pre-trip.
 
     ``payload`` is the validated CompanyGuestBookingRequest (see
     routes/corporate_company_bookings.py). Returns
     ``{"ride": <row>, "tracking_url": <str|None>, "customer_has_app": bool}``.
     """
-    guest_user, customer_has_app = await find_or_create_guest_by_phone(payload.customer_phone, payload.customer_name)
+    if for_member is not None:
+        rider_user = await _get_member_user(for_member)
+        guest_user, customer_has_app = rider_user, True
+        paying_member = for_member
+    else:
+        guest_user, customer_has_app = await find_or_create_guest_by_phone(
+            payload.customer_phone, payload.customer_name
+        )
+        paying_member = booker_member
 
     # Canonical fare, surge pinned at 1.0 (corporate-paid rides never surge).
     fare = await compute_fare_estimate(
@@ -91,11 +129,13 @@ async def create_company_guest_booking(
     pickup_time = payload.scheduled_time or datetime.now(timezone.utc)
     policy_result = await evaluate_policy_for_ride(
         corporate_account_id=company_id,
-        rider_id=booker_member["user_id"],
+        # The PAYING member's policy/allowance governs — for on-behalf
+        # bookings that is the TARGET staff member, not the booker.
+        rider_id=paying_member["user_id"],
         estimated_fare=grand_total,
         ride_type=payload.vehicle_type_id or "standard",
         pickup_time=pickup_time,
-        policy_override=booker_member.get("policy_override", False),
+        policy_override=paying_member.get("policy_override", False),
     )
     if not policy_result.passed:
         raise HTTPException(
@@ -145,8 +185,12 @@ async def create_company_guest_booking(
 
     ride_data = ride.dict()
     ride_data["corporate_account_id"] = company_id
-    ride_data["corporate_member_id"] = booker_member["id"]
-    ride_data["guest_booking"] = True
+    # Payer attribution: the member whose allowance/section/master chain
+    # settles (target member for on-behalf; the booker for guest bookings).
+    ride_data["corporate_member_id"] = paying_member["id"]
+    # Booker attribution (migration 230): who created the ride.
+    ride_data["corporate_booked_by_member_id"] = booker_member["id"]
+    ride_data["guest_booking"] = for_member is None
     ride_data["planned_distance_km"] = round(payload.distance_km, 2)
     ride_data["area_fees_breakdown"] = fare.get("area_fees", [])
     ride_data["area_fees_total"] = fare.get("area_fees_total", 0)

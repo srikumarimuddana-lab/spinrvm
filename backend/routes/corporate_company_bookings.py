@@ -27,7 +27,7 @@ try:
 except ImportError:
     from utils.metrics import inc as _metric_inc  # type: ignore
     from utils.rate_limiter import company_booking_limit  # type: ignore
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 try:
     from .. import db_supabase
@@ -51,8 +51,11 @@ _ACTIVE_RIDE_STATUSES = ["searching", "driver_assigned", "driver_accepted", "dri
 
 
 class CompanyGuestBookingRequest(BaseModel):
-    customer_name: str = Field(..., min_length=1, max_length=80)
-    customer_phone: str = Field(..., min_length=7, max_length=20)
+    # GUEST mode: name+phone required. ON-BEHALF mode (M5.6): for_member_id
+    # instead — the ride goes to a staff member's own app account.
+    customer_name: Optional[str] = Field(None, min_length=1, max_length=80)
+    customer_phone: Optional[str] = Field(None, min_length=7, max_length=20)
+    for_member_id: Optional[str] = Field(None, max_length=64)
     pickup_address: str = Field(..., min_length=3, max_length=500)
     pickup_lat: float
     pickup_lng: float
@@ -67,9 +70,19 @@ class CompanyGuestBookingRequest(BaseModel):
 
     @field_validator("customer_phone")
     @classmethod
-    def _phone_e164(cls, v: str) -> str:
+    def _phone_e164(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
         _, normalized = validate_phone(v.strip())
         return normalized or v.strip()
+
+    @model_validator(mode="after")
+    def _one_target(self):
+        if self.for_member_id:
+            return self
+        if not (self.customer_name and self.customer_phone):
+            raise ValueError("provide customer_name + customer_phone, or for_member_id")
+        return self
 
 
 def _booking_row(ride: Dict[str, Any], member: Optional[Dict[str, Any]], guest: Optional[Dict[str, Any]]) -> dict:
@@ -81,7 +94,10 @@ def _booking_row(ride: Dict[str, Any], member: Optional[Dict[str, Any]], guest: 
         "status": ride.get("status"),
         "guest_booking": bool(ride.get("guest_booking")),
         "customer_first_name": (guest or {}).get("first_name"),
-        "booked_by_member_id": ride.get("corporate_member_id"),
+        # Payer (target member for on-behalf; booker for guest bookings).
+        "booked_for_member_id": ride.get("corporate_member_id"),
+        # Who actually created it (migration 230; falls back for old rows).
+        "booked_by_member_id": ride.get("corporate_booked_by_member_id") or ride.get("corporate_member_id"),
         "booked_by_name": (member or {}).get("invited_email") or (member or {}).get("display_name"),
         "section_id": (member or {}).get("section_id"),
         "pickup_address": ride.get("pickup_address"),
@@ -116,9 +132,36 @@ async def create_booking(
     body: CompanyGuestBookingRequest,
     ctx: dict = Depends(require_company_member),
 ):
-    """Book a ride for a customer on the company's dime (booker's allowance)."""
+    """Book a ride for a customer (guest) or a staff member (on-behalf, M5.6)."""
     await _require_company_active(ctx["company_id"])
-    result = await create_company_guest_booking(ctx["company_id"], ctx["member"], body)
+
+    for_member = None
+    if body.for_member_id and body.for_member_id != ctx["member_id"]:
+        for_member = await db_supabase.get_corporate_member_by_id(body.for_member_id)
+        if not for_member or for_member.get("company_id") != ctx["company_id"] or for_member.get("status") != "active":
+            raise HTTPException(status_code=404, detail="Member not found")
+        # Authz (Q12): admins book for anyone; a section HEAD only for members
+        # of their own section; plain members only for themselves.
+        if ctx["role"] not in _ADMIN_ROLES:
+            target_section = for_member.get("section_id")
+            is_their_head = False
+            if target_section:
+                sections = await db_supabase.get_rows(
+                    "corporate_sections",
+                    {"id": target_section, "company_id": ctx["company_id"]},
+                    limit=1,
+                )
+                is_their_head = bool(sections) and sections[0].get("head_member_id") == ctx["member_id"]
+            if not is_their_head:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Only company admins or the member's section head can book on their behalf.",
+                )
+    elif body.for_member_id:
+        # Booking for yourself on-behalf = a normal member booking.
+        for_member = ctx["member"]
+
+    result = await create_company_guest_booking(ctx["company_id"], ctx["member"], body, for_member=for_member)
     ride = result["ride"]
     _metric_inc(
         "spinr_corporate_guest_booking_total",
@@ -147,6 +190,10 @@ async def list_bookings(
     owner/admin see everyone's (optionally filtered by member or section)."""
     filters: Dict[str, Any] = {"corporate_account_id": ctx["company_id"]}
 
+    # Q16: a member sees rides they PAID for (booked for them / self-booked)
+    # AND rides they BOOKED for others (section heads). The second set is
+    # fetched separately below and merged — the db helper has no OR filter.
+    own_booked_extra: list = []
     if ctx["role"] not in _ADMIN_ROLES:
         filters["corporate_member_id"] = ctx["member_id"]
     elif member_id:
@@ -172,6 +219,25 @@ async def list_bookings(
         )
         or []
     )
+
+    if ctx["role"] not in _ADMIN_ROLES:
+        booked_filters = {k: v for k, v in filters.items() if k != "corporate_member_id"}
+        booked_filters["corporate_booked_by_member_id"] = ctx["member_id"]
+        own_booked_extra = (
+            await db_supabase.get_rows(
+                "rides",
+                booked_filters,
+                order="created_at",
+                desc=True,
+                limit=limit,
+                offset=skip,
+            )
+            or []
+        )
+        seen_ids = {r.get("id") for r in rides}
+        rides = rides + [r for r in own_booked_extra if r.get("id") not in seen_ids]
+        rides.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+        rides = rides[:limit]
 
     # Batch-join booker members and guest users (no N+1).
     member_ids = sorted({r["corporate_member_id"] for r in rides if r.get("corporate_member_id")})
@@ -221,9 +287,15 @@ async def cancel_booking(
     rider-cancel flow (atomic pre-trip claim, driver release, WS events)
     with the guest as the acting rider."""
     ride = await db_supabase.get_ride(ride_id)
-    if not ride or ride.get("corporate_account_id") != ctx["company_id"] or not ride.get("guest_booking"):
+    is_portal_booking = bool(ride and (ride.get("guest_booking") or ride.get("corporate_booked_by_member_id")))
+    if not ride or ride.get("corporate_account_id") != ctx["company_id"] or not is_portal_booking:
         raise HTTPException(status_code=404, detail="Booking not found")
-    if ctx["role"] not in _ADMIN_ROLES and ride.get("corporate_member_id") != ctx["member_id"]:
+    # Cancel rights (M5.6): admins, the paying member, or the booker.
+    allowed = ctx["role"] in _ADMIN_ROLES or ctx["member_id"] in (
+        ride.get("corporate_member_id"),
+        ride.get("corporate_booked_by_member_id"),
+    )
+    if not allowed:
         raise HTTPException(status_code=403, detail="You can only cancel your own bookings")
 
     guest_user = await db_supabase.get_user_by_id(ride["rider_id"])

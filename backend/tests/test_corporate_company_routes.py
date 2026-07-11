@@ -581,3 +581,139 @@ def test_invite_email_failure_surfaced_not_swallowed(test_client, rider_override
     data = resp.json()
     assert data["email_sent"] is False  # UI shows the copy-link fallback
     assert data["web_invite_url"]  # link still available for manual delivery
+
+
+# ── M5.6: book on behalf of staff members ────────────────────────────────────
+
+
+_BOOKING_BODY = {
+    "pickup_address": "123 A St",
+    "pickup_lat": 52.13,
+    "pickup_lng": -106.67,
+    "dropoff_address": "456 B St",
+    "dropoff_lat": 52.14,
+    "dropoff_lng": -106.66,
+    "distance_km": 3.2,
+    "duration_minutes": 9,
+    "vehicle_type_id": "standard",
+}
+
+
+def _active_company():
+    return patch(
+        "db_supabase.get_corporate_account_by_id",
+        AsyncMock(return_value={"id": "c1", "status": "active"}),
+    )
+
+
+def test_on_behalf_requires_admin_or_section_head(test_client, rider_override):
+    target = {"id": "m-target", "company_id": "c1", "status": "active", "section_id": "s1", "user_id": "u-t"}
+    with (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"company_id": "c1", "role": "member", "id": "m-plain"}]),
+        ),
+        _active_company(),
+        patch("db_supabase.get_corporate_member_by_id", AsyncMock(return_value=target)),
+        patch(
+            "db_supabase.get_rows",
+            AsyncMock(return_value=[{"id": "s1", "company_id": "c1", "head_member_id": "SOMEONE_ELSE"}]),
+        ),
+    ):
+        resp = test_client.post(
+            "/company/c1/bookings",
+            json={**_BOOKING_BODY, "for_member_id": "m-target"},
+        )
+    assert resp.status_code == 403
+    assert "section head" in resp.json()["detail"].lower()
+
+
+def test_on_behalf_section_head_allowed_and_target_pays(test_client, rider_override):
+    target = {"id": "m-target", "company_id": "c1", "status": "active", "section_id": "s1", "user_id": "u-t"}
+    with (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"company_id": "c1", "role": "member", "id": "m-head"}]),
+        ),
+        _active_company(),
+        patch("db_supabase.get_corporate_member_by_id", AsyncMock(return_value=target)),
+        patch(
+            "db_supabase.get_rows",
+            AsyncMock(return_value=[{"id": "s1", "company_id": "c1", "head_member_id": "m-head"}]),
+        ),
+        patch(
+            "routes.corporate_company_bookings.create_company_guest_booking",
+            AsyncMock(
+                return_value={
+                    "ride": {"id": "r1", "corporate_member_id": "m-target", "corporate_booked_by_member_id": "m-head"},
+                    "tracking_url": None,
+                    "customer_has_app": True,
+                }
+            ),
+        ) as m_create,
+    ):
+        resp = test_client.post(
+            "/company/c1/bookings",
+            json={**_BOOKING_BODY, "for_member_id": "m-target"},
+        )
+    assert resp.status_code == 200, resp.text
+    kwargs = m_create.await_args.kwargs
+    assert kwargs["for_member"] == target  # TARGET member's chain pays
+    data = resp.json()["booking"]
+    assert data["booked_for_member_id"] == "m-target"
+    assert data["booked_by_member_id"] == "m-head"
+
+
+def test_on_behalf_foreign_member_404(test_client, rider_override):
+    with (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"company_id": "c1", "role": "admin", "id": "m1"}]),
+        ),
+        _active_company(),
+        patch(
+            "db_supabase.get_corporate_member_by_id",
+            AsyncMock(return_value={"id": "m-x", "company_id": "OTHER", "status": "active"}),
+        ),
+    ):
+        resp = test_client.post(
+            "/company/c1/bookings",
+            json={**_BOOKING_BODY, "for_member_id": "m-x"},
+        )
+    assert resp.status_code == 404
+
+
+def test_booking_requires_customer_or_member(test_client, rider_override):
+    with patch(
+        "dependencies.company_guard.list_active_memberships_for_user",
+        AsyncMock(return_value=[{"company_id": "c1", "role": "member", "id": "m1"}]),
+    ):
+        resp = test_client.post("/company/c1/bookings", json=_BOOKING_BODY)  # neither target
+    assert resp.status_code == 422
+
+
+def test_cancel_rights_extend_to_booker(test_client, rider_override):
+    # On-behalf ride: payer = m-target, booker = m-head. The booker cancels.
+    ride = {
+        "id": "r1",
+        "corporate_account_id": "c1",
+        "guest_booking": False,
+        "corporate_member_id": "m-target",
+        "corporate_booked_by_member_id": "m-head",
+        "rider_id": "u-t",
+        "status": "searching",
+    }
+    with (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"company_id": "c1", "role": "member", "id": "m-head"}]),
+        ),
+        patch("db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("db_supabase.get_user_by_id", AsyncMock(return_value={"id": "u-t"})),
+        patch(
+            "routes.rides.cancel_ride_rider",
+            AsyncMock(return_value={"success": True}),
+        ),
+    ):
+        resp = test_client.post("/company/c1/bookings/r1/cancel", json={})
+    assert resp.status_code == 200, resp.text

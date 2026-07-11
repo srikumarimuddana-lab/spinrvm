@@ -3,6 +3,7 @@ import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { recordNonFatal } from '../utils/crashlytics';
+import { RideStatus } from '../constants/rideStatus';
 
 function isAxiosError(e: unknown): e is { response?: { status?: number; data?: { detail?: string } }; message?: string } {
   return typeof e === 'object' && e !== null;
@@ -676,26 +677,37 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     fetchActiveRide: async () => {
         try {
-            // Guard: if the driver already has a live offer counting down
-            // (set by the WS/FCM handler), don't let the HTTP poll clobber it.
-            // The WS event is authoritative for new offers; the API round-trip
-            // can race and return stale state (no active ride yet, or a
-            // different offer_expires_at) that would flash-dismiss the panel.
+            // A live local offer (set by the WS/FCM handler) is authoritative
+            // for the PRE-accept phase: an HTTP poll that still reports
+            // 'driver_assigned' must not reset its countdown, and a poll that
+            // returns no active ride must not flash-dismiss the panel. But an
+            // authoritative FORWARD transition (driver_accepted / driver_arrived
+            // / in_progress) reported by the server MUST win over a stale local
+            // ride_offered — otherwise the driver is stranded on the offer panel
+            // after the ride already advanced (issue #5). So we snapshot the
+            // live-offer flag, fetch, then preserve the offer only while the
+            // server agrees it's still pending; the no-active-ride case is
+            // handled by the ride_offered guard in the else-branch below.
             const _cur = get();
-            if (_cur.rideState === 'ride_offered' && _cur.incomingRide && _cur.countdownSeconds > 2) {
-                return;
-            }
+            const _hasLiveOffer =
+                _cur.rideState === 'ride_offered' && !!_cur.incomingRide && _cur.countdownSeconds > 2;
 
             const res = await api.get<ActiveRide | null>('/drivers/rides/active');
             if (res.data && res.data.ride) {
                 const ride = res.data.ride;
                 const rider = res.data.rider;
 
+                if (_hasLiveOffer && ride.status === RideStatus.DRIVER_ASSIGNED) {
+                    // Still pending for this driver — keep the live countdown
+                    // rather than letting the poll reset it.
+                    return;
+                }
+
                 // `driver_assigned` means the backend dispatched the offer to
                 // this driver but they have NOT clicked accept yet — resume
                 // the ride_offered countdown screen instead of jumping to the
                 // post-accept navigation panel.
-                if (ride.status === 'driver_assigned') {
+                if (ride.status === RideStatus.DRIVER_ASSIGNED) {
                     const fullTimeout = get().configuredCountdownSeconds || FALLBACK_COUNTDOWN;
                     // Use the server's offer_expires_at to compute remaining
                     // time — otherwise the client always restarts at 15s even
@@ -762,9 +774,9 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                 }
 
                 let rideState: RideState = 'idle';
-                if (ride.status === 'driver_accepted') rideState = 'navigating_to_pickup';
-                else if (ride.status === 'driver_arrived') rideState = 'arrived_at_pickup';
-                else if (ride.status === 'in_progress') rideState = 'trip_in_progress';
+                if (ride.status === RideStatus.DRIVER_ACCEPTED) rideState = 'navigating_to_pickup';
+                else if (ride.status === RideStatus.DRIVER_ARRIVED) rideState = 'arrived_at_pickup';
+                else if (ride.status === RideStatus.IN_PROGRESS) rideState = 'trip_in_progress';
 
                 set({
                     activeRide: res.data,

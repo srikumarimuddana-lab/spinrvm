@@ -1,15 +1,28 @@
 # CarPlay & Android Auto — integration strategy
 
-**Last verified:** 2026-06-02
+**Last verified:** 2026-07-11
 **Status:** Android Auto implemented on **@iternio/react-native-auto-play** (Nitro / New
 Architecture). Committed: the dependency, the JS entry registration, and the car-UI layer
 (`driver-app/lib/androidAuto/`) — an always-on live map (the driver's current location shown
 as a car marker, with zoom buttons) that overlays the stored route during a ride, plus a
 Lyft-style branded trip card and in-car ride actions (Accept/Decline offer alert, Arrived,
 Complete) driven from the same `useDriverStore`.
-**Still unproven on hardware:** it must be confirmed by an **EAS dev build** on an
-Android Auto DHU (Nitro codegen under Expo prebuild + the on-surface map render are the two
-open unknowns). No release branch should merge until that build passes.
+**Statically validated (2026-07-11, cloud session — see `docs/testing-android-auto.md` for
+the hands-on test path):** `expo prebuild --platform android` succeeds on Expo SDK 55 /
+RN 0.85.2; autolinking resolves all three car modules (`@iternio/react-native-auto-play`,
+`react-native-nitro-modules`, `react-native-maps`); gradle version inputs align
+(compileSdk 36 both sides, minSdk 25 ≥ iternio's 24, NDK default 27.1.12297006 identical,
+Kotlin 2.2.21 root ≥ library's 2.1.20); the generated app manifest already carries
+`FOREGROUND_SERVICE_LOCATION`, which iternio's `CarAppService` needs, and has no elements
+conflicting with the library's manifest merge; the iternio 0.4.7 typings export the exact
+API `register.ts` consumes (`HybridAutoPlay.addListener('didConnect')`, `isConnected()`,
+`MapTemplate` `component`/`setMapButtons`/`setHeaderActions`/`showAlert`, `Flag`); and the
+57 car unit tests pass. Note: `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` must be present in the EAS
+environment at build time or the map surface renders blank.
+**Still unproven on hardware:** the gradle/Nitro **compile** and the on-surface map render
+must be confirmed by an **EAS build** on an Android Auto head unit or DHU (the cloud
+session's egress policy blocks `dl.google.com`, so the SDK/NDK compile could not run
+there). No release branch should merge until that build passes.
 **Decision inputs:** Scope = *driving-task v1, architected for an in-dash-nav phase later*;
 platforms = *Android Auto now, iOS CarPlay dormant*; approach = *a maintained, New-Architecture
 native library + keep all ride logic in shared TS/Zustand*.
@@ -105,7 +118,7 @@ store and hand turn-by-turn to the driver's own Google Maps / Waze.
   hand-off, `zoom_in/zoom_out.png` for the camera. (Header actions are text, so need no icon.)
 - **Still unproven on hardware:** Nitro codegen building under Expo prebuild, the on-surface
   map + card render, and the alert/header rendering need the EAS dev build + DHU. The JS
-  contract is covered by **56 unit tests** (`lib/androidAuto/__tests__/`).
+  contract is covered by **57 unit tests** (`lib/androidAuto/__tests__/`).
 - **Not yet wired:** online/offline toggle, OTP start-trip + rider rating (stay on phone).
 
 ### iOS CarPlay — dormant
@@ -204,7 +217,7 @@ launch path (iternio's `CarAppService` is a new `<service>` merged from its libr
 ## What's committed vs what the build must validate
 
 Committed on this branch (verifiable without a device): the dependency swap to iternio, the
-entry registration, and the `lib/androidAuto/` car-UI layer with 56 unit tests (lint/tsc clean
+entry registration, and the `lib/androidAuto/` car-UI layer with 57 unit tests (lint/tsc clean
 on the new files; pure logic fully covered).
 
 **Not yet validated** (needs an EAS build + head unit, which this environment can't run): that

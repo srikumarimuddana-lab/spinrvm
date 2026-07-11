@@ -115,11 +115,14 @@ class TestReapTick:
 
         release.assert_not_called()
 
-    async def test_stale_pending_offer_expired_and_driver_released(self):
-        """An offer stuck 'pending' well past the ~15s window (its timeout
-        task died with its process — 2026-07-04) is an orphan, not a live
-        claim: the reaper must expire the row (conditionally, so a racing
-        accept wins) and release the driver instead of skipping forever."""
+    async def test_stale_pending_offer_left_to_offer_reaper(self):
+        """Offer expiry is owned by offer_expiry_reaper, which expires stale
+        offers via process_expired_offer with the full miss-streak /
+        acceptance-rate / insurance-period / re-dispatch side-effects. The claim
+        reaper must NOT expire offers itself (a bare status flip would skip those
+        side-effects, e.g. leave no insurance Period-1 row). So a driver with any
+        pending offer — even a stale one — is treated as busy and left alone; the
+        offer reaper clears it and releases the driver with correct accounting."""
         from contextlib import ExitStack
 
         from backend.utils.driver_claim_reaper import _reap_tick
@@ -129,21 +132,18 @@ class TestReapTick:
             drivers=[_driver(minutes_ago=5)],
             offer_rows=[{"id": "o1", "offered_at": stale}],
         )
-        expire = AsyncMock(return_value={"id": "o1", "status": "expired"})
+        expire = AsyncMock()
         patches.append(patch("backend.utils.driver_claim_reaper.db.update_one", expire))
         with ExitStack() as st:
             for p in patches:
                 st.enter_context(p)
             await _reap_tick()
 
-        expire.assert_awaited_once()
-        _table, flt, payload = expire.await_args.args
-        assert flt == {"id": "o1", "status": "pending"}
-        assert payload["status"] == "expired"
-        release.assert_called_once_with("drv_1", available=True)
+        expire.assert_not_awaited()  # claim reaper no longer expires offers
+        release.assert_not_called()  # pending offer → busy → left for offer_expiry_reaper
 
-    async def test_fresh_timestamped_offer_still_blocks(self):
-        """A pending offer inside the live window is a real claim."""
+    async def test_fresh_pending_offer_still_blocks(self):
+        """A pending offer is a live claim → the driver is not reaped."""
         from contextlib import ExitStack
 
         from backend.utils.driver_claim_reaper import _reap_tick
@@ -153,30 +153,6 @@ class TestReapTick:
             drivers=[_driver(minutes_ago=5)],
             offer_rows=[{"id": "o1", "offered_at": fresh}],
         )
-        expire = AsyncMock()
-        patches.append(patch("backend.utils.driver_claim_reaper.db.update_one", expire))
-        with ExitStack() as st:
-            for p in patches:
-                st.enter_context(p)
-            await _reap_tick()
-
-        expire.assert_not_awaited()
-        release.assert_not_called()
-
-    async def test_offer_expiry_failure_leaves_driver_alone(self):
-        """If the expiry write fails we can't prove the offer is dead —
-        skip the release this tick rather than risk reaping a busy driver."""
-        from contextlib import ExitStack
-
-        from backend.utils.driver_claim_reaper import _reap_tick
-
-        stale = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
-        patches, release = _patches(
-            drivers=[_driver(minutes_ago=5)],
-            offer_rows=[{"id": "o1", "offered_at": stale}],
-        )
-        expire = AsyncMock(side_effect=RuntimeError("db down"))
-        patches.append(patch("backend.utils.driver_claim_reaper.db.update_one", expire))
         with ExitStack() as st:
             for p in patches:
                 st.enter_context(p)

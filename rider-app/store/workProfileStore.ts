@@ -74,6 +74,9 @@ interface WorkProfileState {
   fetchPolicy(): Promise<void>;
   fetchRequests(): Promise<void>;
   submitRequest(amount: number, reason: string): Promise<AllowanceRequest>;
+  /** Accept a company invite token (app://join / spinr.app/join deep link).
+   *  Returns the company name; refreshes profiles on success. */
+  acceptInvite(token: string): Promise<string>;
   checkRide(fare: number, pickupAt?: Date): { ok: boolean; reasons: string[] };
 }
 
@@ -102,6 +105,20 @@ export const useWorkProfileStore = create<WorkProfileState>((set, get) => ({
         set({ activeCompanyId: activeCompanyId ?? null, workModeEnabled: !!workModeEnabled });
       }
     } catch { /* ignore */ }
+  },
+
+  acceptInvite: async (token: string) => {
+    const res = await api.post<{ company?: { id?: string; name?: string } }>(
+      '/rider/work-profile/accept-invite',
+      { token },
+    );
+    await get().fetchProfiles();
+    const company = res.data?.company;
+    if (company?.id) {
+      set({ activeCompanyId: company.id, workModeEnabled: true });
+      _persist(company.id, true);
+    }
+    return company?.name || 'your company';
   },
 
   fetchProfiles: async () => {

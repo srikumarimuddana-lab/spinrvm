@@ -121,7 +121,16 @@ export default function SettingsPage() {
             if (updated?.audit_log_id) {
                 toast({ title: "Settings saved", description: `Ref: ${updated.audit_log_id}` });
             }
-        } catch {
+        } catch (err: any) {
+            // A silent catch here made failed saves look like successful
+            // no-ops (403 privilege gate, 422 validation, missing migration
+            // column → 500). Surface the backend's error so the operator
+            // knows the save did NOT go through.
+            toast({
+                title: "Settings not saved",
+                description: err?.message || "The server rejected the update.",
+                variant: "destructive",
+            });
         } finally {
             setSaving(false);
         }

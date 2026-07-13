@@ -29,7 +29,6 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import JSONResponse
 
 try:
     from ...dependencies import get_admin_user
@@ -138,8 +137,10 @@ async def commit_driver_import(
 
     if plan.errors:
         # Data changed since the operator validated (or they skipped validate).
-        # Refuse and hand back the same report shape so the UI can render it.
-        return JSONResponse(status_code=422, content={**_report(plan, batch, len(rows)), "committed": False})
+        # Refuse but return 200 with committed=false and the full report so the
+        # UI can render the errors — the shared api client throws away non-2xx
+        # bodies, and pre-flight failures (size/row caps) already 4xx above.
+        return {**_report(plan, batch, len(rows)), "committed": False}
 
     try:
         await asyncio.to_thread(import_svc.commit_plan, plan)

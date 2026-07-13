@@ -181,7 +181,7 @@ def test_commit_refuses_on_errors(test_client, super_admin_override):
     p_sb, p_audit = _patches(store)
     with p_sb, p_audit:
         resp = _post(test_client, "/api/admin/drivers/import/commit", _csv(bad))
-    assert resp.status_code == 422, resp.text
+    assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["committed"] is False
     assert body["errors"]

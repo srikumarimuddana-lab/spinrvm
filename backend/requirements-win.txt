@@ -74,7 +74,7 @@ pluggy==1.6.0             # via pytest, pytest-cov
 postgrest==2.29.0         # via -r requirements.in, supabase
 propcache==0.4.1          # via aiohttp, yarl
 proto-plus==1.27.2        # via google-ai-generativelanguage, google-api-core, google-cloud-firestore
-protobuf==5.29.6          # via google-ai-generativelanguage, google-api-core, google-cloud-firestore, google-generativeai, googleapis-common-protos, grpcio-status, proto-plus
+protobuf==7.35.1          # via google-ai-generativelanguage, google-api-core, google-cloud-firestore, google-generativeai, googleapis-common-protos, grpcio-status, proto-plus
 pyasn1==0.6.3             # via pyasn1-modules
 pyasn1-modules==0.4.2     # via google-auth
 pycodestyle==2.14.0       # via flake8

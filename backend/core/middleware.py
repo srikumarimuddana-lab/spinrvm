@@ -575,6 +575,11 @@ def init_middleware(app):
         "https://www.spinr-track.app",
         "https://track.spinr.ca",
         "https://admin-spinr.spinr.ca",
+        # Marketing website (driver signup + rider web booking) — browser
+        # calls the API directly with credentialed fetches (cookies), so the
+        # origin must be allow-listed here even if ALLOWED_ORIGINS is misset.
+        "https://spinr.ca",
+        "https://www.spinr.ca",
         "http://localhost:3000",
         "http://localhost:3001",
     ]

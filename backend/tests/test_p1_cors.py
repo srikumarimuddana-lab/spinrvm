@@ -305,6 +305,32 @@ class TestAlwaysAllowedOrigins:
         # The dead Vercel preview domain was removed in favour of the custom domain.
         assert "https://spinr-admin.vercel.app" not in allowed
 
+    def test_marketing_website_always_allowed(self):
+        from fastapi.middleware.cors import CORSMiddleware
+
+        from backend.core.middleware import init_middleware
+
+        fake_app = _fake_app()
+
+        with (
+            patch("backend.core.middleware.settings") as mock_settings,
+            patch("backend.core.middleware._validate_production_config"),
+            patch("backend.core.middleware.default_limiter"),
+            patch("backend.core.middleware.rate_limit_exceeded_handler"),
+        ):
+            mock_settings.ENV = "development"
+            # Deliberately omit the website from the env variable
+            mock_settings.ALLOWED_ORIGINS = "https://app.spinr.ca"
+
+            init_middleware(fake_app)
+
+        cors_mw = next(m for m in fake_app.middlewares if m["cls"] is CORSMiddleware)
+        allowed = cors_mw["kwargs"]["allow_origins"]
+        # The marketing website makes credentialed browser calls (driver
+        # signup + rider web booking) and must never fall out of CORS.
+        assert "https://spinr.ca" in allowed
+        assert "https://www.spinr.ca" in allowed
+
 
 class TestStripeEmbedSecurityHeaders:
     """The Stripe embedded onboarding page needs a relaxed CSP + camera, but

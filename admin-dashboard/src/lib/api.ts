@@ -1283,6 +1283,10 @@ export interface ApprovalQueueItem {
     service_area_name: string | null;
     vehicle_type_id: string | null;
     vehicle_type_name: string | null;
+    profile_image_status: string | null;
+    is_new_applicant: boolean;
+    is_resubmission: boolean;
+    has_pending_photo: boolean;
 }
 
 export interface ApprovalQueueResponse {
@@ -1291,6 +1295,9 @@ export interface ApprovalQueueResponse {
         oldest_in_queue_hours: number;
         median_wait_hours: number;
         over_24h_count: number;
+        new_applicants: number;
+        resubmissions: number;
+        photo_review: number;
     };
     items: ApprovalQueueItem[];
 }

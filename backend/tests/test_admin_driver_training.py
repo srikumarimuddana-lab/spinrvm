@@ -252,6 +252,38 @@ async def test_get_training_by_phone_not_configured():
             await lms_service.get_training_by_phone("+13065551234")
 
 
+async def test_get_training_by_phone_rejects_unpinned_lms_host(monkeypatch):
+    """Do not send the LMS API key to a host controlled via app_settings."""
+    monkeypatch.delenv("LMS_ALLOWED_HOSTS", raising=False)
+    monkeypatch.setenv("ENV", "production")
+
+    async def fail_if_called(*args, **kwargs):  # pragma: no cover - should never run
+        raise AssertionError("HTTP client must not be opened for an unpinned host")
+
+    with (
+        patch.object(lms_service, "redis_get", new=AsyncMock(return_value=None)),
+        patch.object(
+            lms_service,
+            "get_app_settings",
+            new=AsyncMock(
+                return_value={
+                    "lms_api_base_url": "https://evil.example.com",
+                    "lms_api_key": "secret-key",
+                }
+            ),
+        ),
+        patch.object(lms_service.httpx, "AsyncClient", new=fail_if_called),
+    ):
+        with pytest.raises(lms_service.LMSNotConfiguredError):
+            await lms_service.get_training_by_phone("+13065551234")
+
+
+def test_lms_allowed_hosts_can_be_pinned_from_environment(monkeypatch):
+    monkeypatch.setenv("LMS_ALLOWED_HOSTS", "training2.spinr.ca, staging-training.spinr.ca")
+
+    assert lms_service._validate_lms_base_url("https://training2.spinr.ca/") == "https://training2.spinr.ca"
+
+
 async def test_get_training_by_phone_upstream_http_error():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, text="boom")

@@ -865,6 +865,18 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       // may already have acted; these are reconciliation / catch-up paths.
       case 'ride_status_changed': {
         const status = data.status as string | undefined;
+        // Drop stale / out-of-order events by the server-authoritative
+        // monotonic ride version (V4, issue #11) — e.g. a delayed cancelled
+        // arriving after the ride already advanced, or a reconnect-replay
+        // duplicate. Events without a version (un-migrated backend) always
+        // apply, so this is behaviour-preserving until the backend stamps one.
+        const _version = typeof data.version === 'number' ? data.version : undefined;
+        if (!useDriverStore.getState().shouldApplyRideEvent(data.ride_id, _version)) {
+          console.warn('[WS] dropping out-of-order ride_status_changed', {
+            ride_id: data.ride_id, version: _version, status,
+          });
+          break;
+        }
         if (status === 'cancelled') {
           resetRideState();
         } else if (status === 'completed' && typeof data.total_fare === 'number') {

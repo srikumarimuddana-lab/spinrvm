@@ -173,7 +173,15 @@ export function useRiderSocket() {
       // ride_status_update handler at websocket.py:236-245).
       case 'ride_status_changed':
         if (data.ride_id && data.status) {
-          applyRideStatusFromWS(data.ride_id, data.status);
+          // Forward the server-authoritative monotonic ride version (V3, issue
+          // #11) so the store can drop stale / out-of-order events. Omitted when
+          // the backend didn't stamp one (older backend) — the store then
+          // applies unconditionally, exactly as before.
+          applyRideStatusFromWS(
+            data.ride_id,
+            data.status,
+            typeof data.version === 'number' ? { version: data.version } : undefined,
+          );
           fetchRide(data.ride_id);
         }
         break;

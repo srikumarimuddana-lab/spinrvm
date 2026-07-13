@@ -129,6 +129,24 @@ _APP_CHECK_EXEMPT_PREFIXES = (
     # without possession of the SMS code.
     "/api/v1/auth/send-otp",
     "/api/v1/auth/verify-otp",
+    # Marketing website (spinr.ca) — driver signup + rider web booking run in
+    # the browser and, like the admin dashboard and company portal above,
+    # cannot attach an X-Firebase-AppCheck header. Every path below is gated
+    # by the rider/driver JWT (get_current_user) except the two public reads
+    # at the end, which are the same low-sensitivity class as the already
+    # exempt /api/v1/vehicle-types. Prefixes are used where the path carries
+    # a dynamic segment (rides/{id}, documents/{id}, cards/{id}).
+    "/api/v1/users/profile",
+    "/api/v1/drivers/register",
+    "/api/v1/drivers/requirements",
+    "/api/v1/drivers/documents",
+    "/api/v1/drivers/me",
+    "/api/v1/rides",  # estimate, create, active, {id}, {id}/cancel — all JWT-gated
+    "/api/v1/payments/setup-intent",
+    "/api/v1/payments/cards",
+    # Public reads the website's fare calculator needs pre-login.
+    "/api/v1/fares",
+    "/api/v1/service-areas",
 )
 
 

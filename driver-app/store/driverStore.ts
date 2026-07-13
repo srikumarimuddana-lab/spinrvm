@@ -322,6 +322,14 @@ interface DriverState {
     completedRide: CompletedRideData | null;
     countdownSeconds: number;
 
+    // ── Monotonic ride-event ordering (V4, issue #11) ────────────────
+    // Highest ride_status_changed version applied, plus the ride it belongs
+    // to. rides.version is per-ride (each ride has its own sequence, bumped by
+    // the migration-225 trigger), so a new ride resets the baseline. Internal
+    // (underscore-prefixed) — only shouldApplyRideEvent reads/writes these.
+    _lastEventRideId: string | null;
+    _lastEventVersion: number;
+
     // Server-driven operational config (populated by applyDriverConfig on mount).
     // These override the module-level fallbacks without requiring a rebuild.
     configuredCountdownSeconds: number;
@@ -402,6 +410,7 @@ interface DriverState {
 
     // State management
     hydrateDriverRideState: () => Promise<void>;
+    shouldApplyRideEvent: (rideId: string | undefined, version: number | undefined) => boolean;
     resetRideState: () => void;
     rateRider: (rideId: string, rating: number, comment?: string) => Promise<void>;
     clearError: () => void;
@@ -413,6 +422,10 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     activeRide: null,
     completedRide: null,
     countdownSeconds: 0,
+    // Monotonic ride-event ordering baseline (V4). -1 so version 0 (a ride's
+    // first bump) is strictly greater and applies.
+    _lastEventRideId: null,
+    _lastEventVersion: -1,
     // Server-config fallbacks — overwritten by applyDriverConfig() after
     // the first /drivers/config fetch.
     configuredCountdownSeconds: FALLBACK_COUNTDOWN,
@@ -935,6 +948,40 @@ export const useDriverStore = create<DriverState>((set, get) => ({
         } catch {
             AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
         }
+    },
+
+    // Decide whether an incoming ride event should be applied, dropping stale /
+    // out-of-order duplicates by the server-authoritative monotonic version
+    // (V4, issue #11). Called from the WS ride_status_changed handler.
+    //
+    // Single-slot tracker: it remembers the baseline for one ride at a time, so
+    // it only orders events within a CONTIGUOUS run of the same ride. This is
+    // sound because a driver is assigned one ride at a time (a ride reaches a
+    // terminal state before the next is offered) and events for one ride arrive
+    // in order on the single WS connection — so two rides never interleave here.
+    // Even if a stale event for a previous ride slipped through after the tracker
+    // moved to a new ride, the only side-effects (resetRideState / fetchEarnings)
+    // are idempotent. If driver-facing events for MULTIPLE concurrent rides ever
+    // become possible, switch to a per-ride map.
+    shouldApplyRideEvent: (rideId, version) => {
+        // No version → no ordering info (un-migrated backend, or an event type
+        // that doesn't stamp one). Apply unconditionally so behaviour matches
+        // pre-V4, and leave the baseline untouched.
+        if (typeof version !== 'number') return true;
+        const { _lastEventRideId, _lastEventVersion } = get();
+        // A different ride starts its own version sequence — versions are not
+        // comparable across rides, so reset the baseline and apply.
+        if (_lastEventRideId !== rideId) {
+            set({ _lastEventRideId: rideId ?? null, _lastEventVersion: version });
+            return true;
+        }
+        // Same ride: apply only if strictly newer than the highest applied.
+        if (version > _lastEventVersion) {
+            set({ _lastEventVersion: version });
+            return true;
+        }
+        // Stale or duplicate — drop.
+        return false;
     },
 
     resetRideState: () => {

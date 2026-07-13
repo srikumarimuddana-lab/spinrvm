@@ -369,6 +369,53 @@ def regulatory_authority_defaults(row: dict[str, str], service_area: dict[str, A
     return authority, region
 
 
+def _select_in(table: str, columns: str, column: str, values: list[str], chunk: int = 200) -> list[dict[str, Any]]:
+    """Batched ``SELECT ... WHERE column IN (values)`` to avoid N+1 lookups."""
+    out: list[dict[str, Any]] = []
+    for i in range(0, len(values), chunk):
+        batch = values[i : i + chunk]
+        if not batch:
+            continue
+        rows = supabase.table(table).select(columns).in_(column, batch).execute().data or []
+        out.extend(rows)
+    return out
+
+
+def _prefetch_existing(
+    driver_rows: list[dict[str, str]],
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    """Prefetch existing users (by phone, by email) and drivers (by phone).
+
+    Replaces the per-row ``.eq(...).limit(1)`` lookups in build_plan with three
+    batched ``.in_()`` queries. First-seen wins per key so it mirrors the
+    original ``.limit(1)`` "pick one" behaviour. Returns three maps keyed by
+    normalized phone / lowercased email / normalized phone respectively.
+    """
+    phones = sorted({normalize_phone(r.get("phone", "")) for r in driver_rows})
+    emails = sorted({(r.get("email") or "").strip().lower() for r in driver_rows if (r.get("email") or "").strip()})
+
+    users_by_phone: dict[str, dict[str, Any]] = {}
+    users_by_email: dict[str, dict[str, Any]] = {}
+    drivers_by_phone: dict[str, dict[str, Any]] = {}
+
+    if phones:
+        for u in _select_in("users", "id,phone,email", "phone", phones):
+            key = u.get("phone")
+            if key is not None and key not in users_by_phone:
+                users_by_phone[key] = u
+        for d in _select_in("drivers", "id,phone,legacy_import_metadata", "phone", phones):
+            key = d.get("phone")
+            if key is not None and key not in drivers_by_phone:
+                drivers_by_phone[key] = d
+    if emails:
+        for u in _select_in("users", "id,phone,email", "email", emails):
+            key = (u.get("email") or "").strip().lower()
+            if key and key not in users_by_email:
+                users_by_email[key] = u
+
+    return users_by_phone, users_by_email, drivers_by_phone
+
+
 def build_plan(
     driver_rows: list[dict[str, str]],
     document_rows: list[dict[str, str]],
@@ -391,6 +438,7 @@ def build_plan(
     required_docs = service_area.get("required_documents") or []
     allowed_doc_keys = {str(d.get("key")) for d in required_docs if d.get("key")}
     vt_map = vehicle_type_map()
+    users_by_phone, users_by_email, drivers_by_phone = _prefetch_existing(driver_rows)
     seen_old_ids: set[str] = set()
     planned_driver_ids: dict[str, str] = {}
     resumed_driver_ids: set[str] = set()
@@ -416,13 +464,12 @@ def build_plan(
 
         phone = normalize_phone(row.get("phone", ""))
         email = (row.get("email") or "").strip().lower()
-        existing_users = supabase.table("users").select("id").eq("phone", phone).limit(1).execute().data or []
-        if email and not existing_users:
-            existing_users = supabase.table("users").select("id").eq("email", email).limit(1).execute().data or []
-        existing_drivers = (
-            supabase.table("drivers").select("id,legacy_import_metadata").eq("phone", phone).limit(1).execute().data
-            or []
-        )
+        # Prefetched maps replace per-row queries; preserve "match by phone,
+        # else by email" for users and "match by phone" for drivers.
+        matched_user = users_by_phone.get(phone) or (users_by_email.get(email) if email else None)
+        existing_users = [matched_user] if matched_user else []
+        matched_driver = drivers_by_phone.get(phone)
+        existing_drivers = [matched_driver] if matched_driver else []
         if existing_users or existing_drivers:
             # Resume path: a driver row created by a previous run of THIS
             # importer for the same old_driver_id is not a conflict — the run

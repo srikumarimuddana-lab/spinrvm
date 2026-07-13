@@ -1,23 +1,36 @@
 import logging
 import mimetypes
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
-    from ...documents import _extract_storage_key, regenerate_signed_url
+    from ...documents import (
+        _extract_storage_key,
+        _is_valid_uuid,
+        _supersede_and_flag_pending_review,
+        regenerate_signed_url,
+        save_upload,
+    )
     from ...features import send_push_notification
     from ...supabase_client import supabase
     from ...utils.audit_logger import log_admin_action
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user  # noqa: F401
-    from documents import _extract_storage_key, regenerate_signed_url  # noqa: F401
+    from documents import (  # noqa: F401
+        _extract_storage_key,
+        _is_valid_uuid,
+        _supersede_and_flag_pending_review,
+        regenerate_signed_url,
+        save_upload,
+    )
     from features import send_push_notification  # noqa: F401
     from supabase_client import supabase  # noqa: F401
     from utils.audit_logger import log_admin_action  # noqa: F401
@@ -462,3 +475,152 @@ async def admin_review_driver_document(
                 )
 
     return {"message": f"Document {status}"}
+
+
+# ---------- Manual admin document upload ----------
+
+
+async def _propagate_approval(driver_id: str, req_name: Optional[str], expiry_iso: Optional[str]) -> None:
+    """Approval side-effects shared with the review flow: mirror the doc expiry
+    onto the legacy ``drivers.*_expiry_date`` column (so the go-online check
+    stops blocking on a stale onboarding date) and, if the driver has no more
+    pending docs, flip a ``needs_review`` driver back to ``active``.
+    """
+    legacy_field = _legacy_expiry_field_for_requirement(req_name)
+    if legacy_field:
+        try:
+            await db_supabase.update_one(
+                "drivers",
+                {"id": driver_id},
+                {legacy_field: expiry_iso, "updated_at": datetime.now(timezone.utc).isoformat()},
+            )
+        except Exception:
+            logger.error(
+                "Could not update legacy expiry field %s for driver %s",
+                legacy_field,
+                driver_id,
+                exc_info=True,
+            )
+
+    remaining_pending = await db_supabase.get_rows(
+        "driver_documents",
+        {"driver_id": driver_id, "status": "pending"},
+        limit=1,
+    )
+    if not remaining_pending:
+        try:
+            drv = await db_supabase.get_driver_by_id(driver_id)
+            if drv and drv.get("status") == "needs_review":
+                await db_supabase.update_one(
+                    "drivers",
+                    {"id": driver_id},
+                    {"status": "active", "is_verified": True},
+                )
+        except Exception as _exc:
+            logger.debug(f"Could not reset driver {driver_id} status to active: {_exc}")
+
+
+@router.post("/documents/upload")
+async def admin_upload_driver_document(
+    file: UploadFile = File(...),
+    driver_id: str = Form(...),
+    requirement_key: str = Form(...),
+    side: Optional[str] = Form(None),  # 'front' or 'back'
+    expiry_date: Optional[str] = Form(None),  # ISO string
+    status: str = Form("pending"),  # 'pending' or 'approved'
+    admin: dict = Depends(get_admin_user),
+):
+    """Upload a document on a driver's behalf.
+
+    Mirrors the driver self-upload flow (``documents.upload_driver_document``)
+    but is admin-driven: the admin names the ``driver_id`` and may commit the
+    document straight to ``approved``. Approving here runs the same legacy-expiry
+    mirror + reactivation side-effects as the review endpoint, and skips the
+    ``needs_review`` flip so an active driver isn't taken offline by the upload.
+    """
+    if status not in ("pending", "approved"):
+        raise HTTPException(status_code=400, detail="status must be 'pending' or 'approved'")
+    if side is not None and side not in ("front", "back"):
+        raise HTTPException(status_code=400, detail="side must be 'front' or 'back'")
+
+    drv = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"id": driver_id}, limit=1))
+    if not drv:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    # Resolve the requirement: global document_requirements by UUID, else the
+    # driver's service-area required_documents by slug key. Strict (404) so a
+    # typo can't create an orphan document the onboarding check never sees.
+    req_name: Optional[str] = None
+    req_id_for_db: Optional[str] = None
+    if _is_valid_uuid(requirement_key):
+        req = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows("document_requirements", {"id": requirement_key}, limit=1)
+        )
+        if req:
+            req_name = req.get("name")
+            req_id_for_db = requirement_key
+    if req_name is None and drv.get("service_area_id"):
+        area = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows("service_areas", {"id": drv["service_area_id"]}, limit=1)
+        )
+        if area:
+            area_req = next(
+                (d for d in (area.get("required_documents") or []) if d.get("key") == requirement_key), None
+            )
+            if area_req:
+                req_name = area_req.get("label") or requirement_key
+    if req_name is None:
+        raise HTTPException(status_code=404, detail="Requirement not found for this driver's service area")
+
+    expiry_iso: Optional[str] = None
+    if expiry_date:
+        try:
+            expiry_iso = datetime.fromisoformat(str(expiry_date).replace("Z", "+00:00")).isoformat()
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail="expiry_date must be an ISO date") from e
+
+    # Uploads (validates size/MIME/magic-bytes, stores in the driver-documents bucket).
+    url = await save_upload(file)
+
+    # Supersede prior docs for the same requirement+side. Only flag the driver
+    # for review when this upload is left pending; an approved upload keeps the
+    # driver's current state.
+    await _supersede_and_flag_pending_review(
+        driver_id,
+        requirement_key,
+        side,
+        document_type=req_name,
+        flag_review=(status == "pending"),
+    )
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    record = {
+        "id": str(uuid.uuid4()),
+        "driver_id": driver_id,
+        "requirement_id": req_id_for_db,
+        "requirement_key": requirement_key,
+        "document_type": req_name,
+        "document_url": url,
+        "side": side,
+        "status": status,
+        "expiry_date": expiry_iso,
+        "uploaded_at": now_iso,
+        "updated_at": now_iso,
+    }
+    try:
+        await db_supabase.insert_one("driver_documents", record)
+    except Exception as e:
+        logger.exception("admin document upload insert failed for driver %s", driver_id)
+        raise HTTPException(status_code=502, detail="Could not save document record") from e
+
+    if status == "approved":
+        await _propagate_approval(driver_id, req_name, expiry_iso)
+
+    await log_admin_action(
+        admin,
+        "document_uploaded",
+        "driver_documents",
+        record["id"],
+        {"driver_id": driver_id, "requirement_key": requirement_key, "status": status},
+    )
+    return record

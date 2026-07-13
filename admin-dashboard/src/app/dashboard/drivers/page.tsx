@@ -14,9 +14,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
-import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Shield, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, EyeOff, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2, RefreshCw, GraduationCap, Award } from "lucide-react";
+import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Shield, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, EyeOff, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2, RefreshCw, GraduationCap, Award, Upload } from "lucide-react";
 import { maskEmail, maskPhone, maskPlate } from "@/lib/pii";
 import { DocumentReviewer } from "./_components/document-reviewer";
+import { DocumentUploadDialog } from "./_components/document-upload-dialog";
 import DriverStatsCards from "./_components/driver-stats-cards";
 import DriverCharts from "./_components/driver-charts";
 import AreaStatsTable from "./_components/area-stats-table";
@@ -94,6 +95,7 @@ export default function DriversPage() {
     const [reviewReason, setReviewReason] = useState("");
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
     const [openReviewerForDriver, setOpenReviewerForDriver] = useState<{ id: string; name: string } | null>(null);
+    const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
     const [editing, setEditing] = useState(false);
     const [editForm, setEditForm] = useState<Record<string, any>>({});
     const [saving, setSaving] = useState(false);
@@ -1279,15 +1281,26 @@ export default function DriversPage() {
                                         <p className="text-xs text-muted-foreground">
                                             Review docs inline below, or open the full-screen reviewer for keyboard-driven triage.
                                         </p>
-                                        <Button
-                                            size="sm"
-                                            variant="outline"
-                                            className="h-8"
-                                            onClick={() => setOpenReviewerForDriver({ id: selected.id, name: selected.name || selected.email || selected.id })}
-                                        >
-                                            <Maximize2 className="h-3.5 w-3.5 mr-1.5" />
-                                            Open in Reviewer
-                                        </Button>
+                                        <div className="flex items-center gap-2">
+                                            <Button
+                                                size="sm"
+                                                variant="outline"
+                                                className="h-8"
+                                                onClick={() => setUploadDialogOpen(true)}
+                                            >
+                                                <Upload className="h-3.5 w-3.5 mr-1.5" />
+                                                Upload Document
+                                            </Button>
+                                            <Button
+                                                size="sm"
+                                                variant="outline"
+                                                className="h-8"
+                                                onClick={() => setOpenReviewerForDriver({ id: selected.id, name: selected.name || selected.email || selected.id })}
+                                            >
+                                                <Maximize2 className="h-3.5 w-3.5 mr-1.5" />
+                                                Open in Reviewer
+                                            </Button>
+                                        </div>
                                     </div>
                                     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                                         {docsLoading ? (
@@ -1462,6 +1475,15 @@ export default function DriversPage() {
                 driverName={openReviewerForDriver?.name}
                 onClose={() => setOpenReviewerForDriver(null)}
                 onAfterAction={() => { reloadDriverDocs(); loadData(); loadDrivers(); }}
+            />
+
+            <DocumentUploadDialog
+                open={uploadDialogOpen}
+                onClose={() => setUploadDialogOpen(false)}
+                driverId={selected?.id || null}
+                driverName={selected?.name || selected?.email || null}
+                requirements={requiredDocs}
+                onUploaded={() => { reloadDriverDocs(); loadData(); loadDrivers(); }}
             />
 
             {/* Document preview — uses shadcn Dialog (Radix Portal) so it

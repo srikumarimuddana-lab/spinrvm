@@ -564,6 +564,13 @@ async def admin_get_approval_queue(
     - drivers.status == "pending" (new applicants)
     - drivers with any driver_documents.status == "pending" (re-uploads
       from suspended/needs_review drivers)
+    - drivers whose profile photo awaits review
+      (users.profile_image_status == "pending_review")
+
+    Each item carries non-exclusive segment flags (is_new_applicant,
+    is_resubmission, has_pending_photo) so the queue UI can split the
+    list into tabs; `stats` exposes a count per segment over the full
+    result set.
 
     Each item carries time-in-queue, pending/missing doc counts, and the
     service area + vehicle type names so the queue page doesn't need
@@ -575,7 +582,10 @@ async def admin_get_approval_queue(
     queue_started_at: status_changed at unavailable on `drivers`, so we
     fall back to drivers.created_at for new applicants, or the earliest
     pending-doc upload_at for re-uploaders. This matches what ops cares
-    about: "how long has this been waiting on us?"
+    about: "how long has this been waiting on us?" Photo-only rows have
+    no photo-upload timestamp, so users.updated_at is the best available
+    approximation (any profile update refreshes it), falling back to
+    drivers.created_at.
     """
     now = datetime.now(timezone.utc)
 
@@ -615,9 +625,38 @@ async def admin_get_approval_queue(
             if d.get("id"):
                 driver_map[d["id"]] = d
 
+    # Drivers whose only pending item is a profile photo. The join back to
+    # `drivers` is what keeps riders out — they share profile_image_status
+    # but have no drivers row.
+    photo_users = await db_supabase.get_rows(
+        "users", {"profile_image_status": "pending_review"}, limit=1000, columns="id"
+    )
+    known_user_ids = {d.get("user_id") for d in driver_map.values() if d.get("user_id")}
+    photo_only_uids = [u["id"] for u in photo_users if u.get("id") and u["id"] not in known_user_ids]
+    if photo_only_uids:
+        photo_filters: Dict[str, Any] = {
+            "user_id": {"$in": photo_only_uids},
+            "status": {"$nin": ["banned", "rejected"]},
+        }
+        if service_area_id:
+            photo_filters["service_area_id"] = service_area_id
+        photo_drivers = await db_supabase.get_rows("drivers", photo_filters, limit=len(photo_only_uids))
+        for d in photo_drivers:
+            if d.get("id") and d["id"] not in driver_map and d.get("user_id") not in known_user_ids:
+                driver_map[d["id"]] = d
+                known_user_ids.add(d.get("user_id"))
+
     if not driver_map:
         return {
-            "stats": {"total_pending": 0, "oldest_in_queue_hours": 0.0, "median_wait_hours": 0.0, "over_24h_count": 0},
+            "stats": {
+                "total_pending": 0,
+                "oldest_in_queue_hours": 0.0,
+                "median_wait_hours": 0.0,
+                "over_24h_count": 0,
+                "new_applicants": 0,
+                "resubmissions": 0,
+                "photo_review": 0,
+            },
             "items": [],
         }
 
@@ -687,10 +726,21 @@ async def admin_get_approval_queue(
     items: List[Dict[str, Any]] = []
     for did, drow in driver_map.items():
         u = users_map.get(drow.get("user_id"))
-        if drow.get("status") == "pending":
+        profile_image_status = (u or {}).get("profile_image_status")
+        pending_doc_count = pending_doc_count_by_driver.get(did, 0)
+        is_new_applicant = drow.get("status") == "pending"
+        is_resubmission = not is_new_applicant and pending_doc_count > 0
+        has_pending_photo = profile_image_status == "pending_review"
+
+        if is_new_applicant:
             queue_started_at = drow.get("created_at")
-        else:
+        elif pending_doc_count > 0:
             queue_started_at = earliest_pending_doc_by_driver.get(did) or drow.get("created_at")
+        else:
+            # Photo-only row: users.updated_at approximates when the photo
+            # changed; drivers.created_at would overstate the wait for a
+            # long-active driver who just swapped their photo.
+            queue_started_at = (u or {}).get("updated_at") or drow.get("created_at")
 
         time_in_queue_seconds = 0
         if queue_started_at:
@@ -713,8 +763,12 @@ async def admin_get_approval_queue(
                 "created_at": drow.get("created_at"),
                 "queue_started_at": queue_started_at,
                 "time_in_queue_seconds": time_in_queue_seconds,
-                "pending_docs_count": pending_doc_count_by_driver.get(did, 0),
+                "pending_docs_count": pending_doc_count,
                 "missing_docs_count": _missing_count(drow),
+                "profile_image_status": profile_image_status,
+                "is_new_applicant": is_new_applicant,
+                "is_resubmission": is_resubmission,
+                "has_pending_photo": has_pending_photo,
                 "service_area_id": drow.get("service_area_id"),
                 "service_area_name": (areas_map.get(drow.get("service_area_id")) or {}).get("name"),
                 "vehicle_type_id": drow.get("vehicle_type_id"),
@@ -742,6 +796,9 @@ async def admin_get_approval_queue(
             "oldest_in_queue_hours": oldest_hours,
             "median_wait_hours": median_hours,
             "over_24h_count": over_24h,
+            "new_applicants": sum(1 for it in items if it["is_new_applicant"]),
+            "resubmissions": sum(1 for it in items if it["is_resubmission"]),
+            "photo_review": sum(1 for it in items if it["has_pending_photo"]),
         },
         "items": items[:limit],
     }

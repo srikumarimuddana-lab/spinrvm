@@ -64,6 +64,14 @@ def _make_app() -> tuple[FastAPI, TestClient]:
     async def send_otp():
         return {"ok": True}
 
+    @app.post("/api/v1/auth/refresh")
+    async def auth_refresh():
+        return {"ok": True}
+
+    @app.post("/api/portal/auth/refresh")
+    async def portal_auth_refresh():
+        return {"ok": True}
+
     @app.post("/api/admin/auth/login")
     async def admin_login():
         return {"ok": True}
@@ -146,6 +154,15 @@ class TestExemptPaths:
             headers={"Origin": "https://example.com"},
         )
         assert res.status_code == 200
+
+    def test_auth_refresh_exempt(self, client: TestClient):
+        # A returning browser's csrf cookie has expired (access-token TTL)
+        # while its 30-day refresh cookie is still valid — refresh must not
+        # 403 or web sessions can never resume. SameSite=Strict on the
+        # refresh cookie is the cross-site defence here.
+        for path in ("/api/v1/auth/refresh", "/api/portal/auth/refresh"):
+            res = client.post(path, headers={"Origin": "https://www.spinr.ca"})
+            assert res.status_code == 200, path
 
     def test_stripe_account_session_exempt(self, client: TestClient):
         # The driver app's embedded-onboarding WebView posts here with an Origin

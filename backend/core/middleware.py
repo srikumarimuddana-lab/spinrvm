@@ -42,6 +42,13 @@ _CSRF_EXEMPT_EXACT = frozenset(
         "/api/portal/auth/send-email-otp",
         "/api/portal/auth/verify-email-otp",
         "/api/v1/auth/firebase",
+        # Session resume from the browser: the csrf cookie expires with the
+        # access token (~15 min) while the refresh cookie lives 30 days, so a
+        # returning browser has no csrf token to echo yet. Safe to exempt —
+        # the refresh cookie is SameSite=Strict (never sent cross-site) and
+        # the response body is unreadable cross-origin.
+        "/api/v1/auth/refresh",
+        "/api/portal/auth/refresh",
         "/api/admin/auth/login",
         "/api/v1/stripe/webhook",
         # Stripe embedded onboarding: the driver app's WebView posts here from

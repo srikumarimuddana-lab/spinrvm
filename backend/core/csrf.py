@@ -18,6 +18,13 @@ CSRF_EXEMPT_EXACT = frozenset(
         "/api/v1/auth/send-otp",
         "/api/v1/auth/verify-otp",
         "/api/v1/auth/firebase",
+        # Session resume from the browser: the csrf cookie is short-lived
+        # (access-token TTL) while the refresh cookie lives 30 days, so a
+        # returning browser has no csrf token to echo. Safe to exempt —
+        # the refresh cookie is SameSite=Strict (never sent cross-site) and
+        # the rotated tokens in the response are unreadable cross-origin.
+        "/api/v1/auth/refresh",
+        "/api/portal/auth/refresh",
         "/api/admin/auth/login",
         # Stripe webhooks are server-to-server — no browser CSRF risk
         "/api/v1/stripe/webhook",

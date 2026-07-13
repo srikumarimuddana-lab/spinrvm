@@ -443,6 +443,7 @@ def build_plan(
     planned_driver_ids: dict[str, str] = {}
     resumed_driver_ids: set[str] = set()
     existing_docs_cache: dict[str, set[tuple[str, str | None]]] = {}
+    document_old_ids = {r.get("old_driver_id") for r in document_rows if r.get("old_driver_id")}
 
     for row in driver_rows:
         old_id = row.get("old_driver_id") or "<missing>"
@@ -522,7 +523,12 @@ def build_plan(
         regulatory_approved = parse_bool(row.get("regulatory_authority_approved", ""))
         regulatory_authority, regulatory_region = regulatory_authority_defaults(row, service_area)
         is_approved = parse_bool(row.get("spinr_approved", "")) is True and regulatory_approved is True
-        driver_status = "needs_review" if not is_approved else "active"
+        # Web imports intentionally create drivers before per-driver document
+        # uploads happen. Keep those drivers under review until approved
+        # document rows exist, even if the CSV says Spinr + regulator approved.
+        has_import_documents = files_root is not None and old_id in document_old_ids
+        driver_status = "active" if is_approved and has_import_documents else "needs_review"
+        is_verified = is_approved and has_import_documents
 
         plan.users_to_insert.append(
             {
@@ -561,7 +567,7 @@ def build_plan(
                 "service_area_id": service_area["id"],
                 "city": "Saskatoon",
                 "status": driver_status,
-                "is_verified": is_approved,
+                "is_verified": is_verified,
                 "is_online": False,
                 "is_available": False,
                 "sgi_approved": regulatory_approved if regulatory_authority == "SGI" else None,

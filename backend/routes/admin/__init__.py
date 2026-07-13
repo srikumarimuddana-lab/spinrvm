@@ -58,6 +58,7 @@ from .analytics import api_router as analytics_router
 from .auth import admin_auth_router
 from .auth import router as auth_router
 from .documents import router as documents_router
+from .driver_import import router as driver_import_router
 from .drivers import router as drivers_router
 from .faqs import router as faqs_router
 from .incentives import router as incentives_router
@@ -103,6 +104,7 @@ admin_router.include_router(service_areas_router, dependencies=[Depends(require_
 admin_router.include_router(venues_router, dependencies=[Depends(require_module("service_areas"))])
 admin_router.include_router(vehicle_fleet_router, dependencies=[Depends(require_module("vehicle_types"))])
 admin_router.include_router(drivers_router, dependencies=[Depends(require_module("drivers"))])
+admin_router.include_router(driver_import_router, dependencies=[Depends(require_module("drivers"))])
 admin_router.include_router(rides_router, dependencies=[Depends(require_module("rides"))])
 admin_router.include_router(users_router, dependencies=[Depends(require_module("users"))])
 admin_router.include_router(promotions_router, dependencies=[Depends(require_module("promotions"))])

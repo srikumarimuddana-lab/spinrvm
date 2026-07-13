@@ -182,6 +182,7 @@ async def _supersede_and_flag_pending_review(
     requirement_id: str,
     side: Optional[str],
     document_type: Optional[str] = None,
+    flag_review: bool = True,
 ) -> None:
     """
     When a driver (re-)uploads a document, mark any prior docs for the same
@@ -189,6 +190,11 @@ async def _supersede_and_flag_pending_review(
     and flip the driver's `is_verified` back to False. This makes the driver
     re-appear in the admin panel's "Unverified" queue so the Approve button
     becomes actionable again.
+
+    ``flag_review=False`` supersedes the prior docs but does NOT knock the
+    driver back to ``needs_review`` / offline. The admin manual-upload flow uses
+    this when uploading a document already marked ``approved`` on the driver's
+    behalf, so a currently-active driver isn't taken offline by the upload.
     """
     try:
         query: Dict[str, Any] = {
@@ -213,6 +219,11 @@ async def _supersede_and_flag_pending_review(
         )
     except Exception as e:
         logger.warning(f"Could not supersede prior docs for driver {driver_id}: {e}")
+
+    if not flag_review:
+        # Admin uploaded an already-approved doc — supersede prior docs but keep
+        # the driver in their current state (don't take an active driver offline).
+        return
 
     # Set driver to needs_review so they can't go online until admin re-approves.
     try:
@@ -257,7 +268,6 @@ def _extract_signed_url(res: Any) -> str:
     if not url:
         raise RuntimeError(f"create_signed_url missing URL field: {res!r}")
     return url
-
 
 
 _STORAGE_KEY_RE = _re.compile(r"/storage/v1/object/(?:sign|public)/driver-documents/([^?#]+)")

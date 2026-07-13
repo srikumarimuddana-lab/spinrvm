@@ -115,6 +115,10 @@ vi.mock("lucide-react", () => {
     Filter: Icon, PlusCircle: Icon, Bot: Icon, MessageSquarePlus: Icon, Sparkles: Icon,
     // drivers Training (LMS) tab
     GraduationCap: Icon, Award: Icon, Maximize2: Icon,
+    // bulk import page + manual upload
+    Upload: Icon, FileDown: Icon, CheckCircle2: Icon, Info: Icon,
+    // sortable-table (used by users/earnings/analytics/corporate/disputes)
+    ChevronsUpDown: Icon, Percent: Icon, Receipt: Icon, Undo2: Icon, Landmark: Icon,
   };
 });
 
@@ -448,6 +452,13 @@ describe("Dashboard page — /dashboard/monitoring", () => {
 describe("Dashboard page — /dashboard/documents", () => {
   it("renders without crashing", async () => {
     const { default: Page } = await import("@/app/dashboard/documents/page");
+    await expect(renderPage(Page)).resolves.not.toThrow();
+  });
+});
+
+describe("Dashboard page — /dashboard/drivers/import", () => {
+  it("renders without crashing", async () => {
+    const { default: Page } = await import("@/app/dashboard/drivers/import/page");
     await expect(renderPage(Page)).resolves.not.toThrow();
   });
 });

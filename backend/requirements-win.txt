@@ -11,7 +11,7 @@ black==26.3.1             # via -r requirements.in
 boto3==1.42.96            # via -r requirements.in
 botocore==1.43.2         # via boto3, s3transfer
 cachecontrol==0.14.4      # via firebase-admin
-cachetools==7.1.1         # via pyiceberg
+cachetools==7.1.4         # via pyiceberg
 certifi==2026.4.22        # via -r requirements.in, cloudinary, httpcore, httpx, requests, sentry-sdk
 cffi==2.0.0               # via cryptography
 charset-normalizer==3.4.7  # via -r requirements.in, requests

@@ -480,6 +480,72 @@ async def admin_review_driver_document(
 # ---------- Manual admin document upload ----------
 
 
+def _matches_requirement(doc: Dict[str, Any], req: Dict[str, Any]) -> bool:
+    req_key = (req.get("key") or "").lower()
+    req_label = (req.get("label") or "").lower()
+    req_id = req.get("id")
+    dkey = (doc.get("requirement_key") or "").lower()
+    if dkey and dkey == req_key:
+        return True
+    drid = doc.get("requirement_id")
+    if drid and (drid == req_id or (isinstance(drid, str) and drid.lower() == req_key)):
+        return True
+    dt = (doc.get("document_type") or "").lower()
+    return bool(dt and (dt == req_label or dt == req_key.replace("_", " ")))
+
+
+def _parse_expiry_datetime(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    return None
+
+
+async def _driver_required_documents_complete(driver_id: str) -> bool:
+    """True only when every mandatory service-area document is approved.
+
+    Reactivating a needs_review driver on a single approved upload is unsafe:
+    imports can start with zero documents, and some requirements need front +
+    back or an unexpired expiry date.
+    """
+    driver = await db_supabase.get_driver_by_id(driver_id)
+    if not driver or not driver.get("service_area_id"):
+        return False
+    area = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("service_areas", {"id": driver["service_area_id"]}, limit=1)
+    )
+    if not area:
+        return False
+    required = [r for r in (area.get("required_documents") or []) if r.get("required", True)]
+    if not required:
+        return True
+    approved_docs = await db_supabase.get_rows(
+        "driver_documents", {"driver_id": driver_id, "status": "approved"}, limit=200
+    )
+    now = datetime.now(timezone.utc)
+    for req in required:
+        docs = [doc for doc in approved_docs if _matches_requirement(doc, req)]
+        if not docs:
+            return False
+        if req.get("requires_back_side"):
+            sides = {doc.get("side") for doc in docs}
+            if not {"front", "back"}.issubset(sides):
+                return False
+        if req.get("has_expiry"):
+            latest = sorted(docs, key=lambda d: str(d.get("uploaded_at") or ""), reverse=True)[0]
+            expiry = _parse_expiry_datetime(latest.get("expiry_date") or latest.get("expires_at"))
+            if not expiry or expiry < now:
+                return False
+    return True
+
+
 async def _propagate_approval(driver_id: str, req_name: Optional[str], expiry_iso: Optional[str]) -> None:
     """Approval side-effects shared with the review flow: mirror the doc expiry
     onto the legacy ``drivers.*_expiry_date`` column (so the go-online check
@@ -502,12 +568,8 @@ async def _propagate_approval(driver_id: str, req_name: Optional[str], expiry_is
                 exc_info=True,
             )
 
-    remaining_pending = await db_supabase.get_rows(
-        "driver_documents",
-        {"driver_id": driver_id, "status": "pending"},
-        limit=1,
-    )
-    if not remaining_pending:
+    all_required_docs_complete = await _driver_required_documents_complete(driver_id)
+    if all_required_docs_complete:
         try:
             drv = await db_supabase.get_driver_by_id(driver_id)
             if drv and drv.get("status") == "needs_review":
@@ -552,6 +614,7 @@ async def admin_upload_driver_document(
     # typo can't create an orphan document the onboarding check never sees.
     req_name: Optional[str] = None
     req_id_for_db: Optional[str] = None
+    req_has_expiry = False
     if _is_valid_uuid(requirement_key):
         req = (lambda _r: _r[0] if _r else None)(
             await db_supabase.get_rows("document_requirements", {"id": requirement_key}, limit=1)
@@ -559,6 +622,7 @@ async def admin_upload_driver_document(
         if req:
             req_name = req.get("name")
             req_id_for_db = requirement_key
+            req_has_expiry = bool(req.get("has_expiry"))
     if req_name is None and drv.get("service_area_id"):
         area = (lambda _r: _r[0] if _r else None)(
             await db_supabase.get_rows("service_areas", {"id": drv["service_area_id"]}, limit=1)
@@ -569,6 +633,7 @@ async def admin_upload_driver_document(
             )
             if area_req:
                 req_name = area_req.get("label") or requirement_key
+                req_has_expiry = bool(area_req.get("has_expiry"))
     if req_name is None:
         raise HTTPException(status_code=404, detail="Requirement not found for this driver's service area")
 
@@ -578,6 +643,9 @@ async def admin_upload_driver_document(
             expiry_iso = datetime.fromisoformat(str(expiry_date).replace("Z", "+00:00")).isoformat()
         except ValueError as e:
             raise HTTPException(status_code=400, detail="expiry_date must be an ISO date") from e
+
+    if status == "approved" and req_has_expiry and not expiry_iso:
+        raise HTTPException(status_code=400, detail="expiry_date is required before approving this document")
 
     # Uploads (validates size/MIME/magic-bytes, stores in the driver-documents bucket).
     url = await save_upload(file)

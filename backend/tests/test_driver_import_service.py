@@ -102,6 +102,15 @@ def test_new_driver_is_planned(monkeypatch):
     assert len(plan.drivers_to_insert) == 1
 
 
+def test_web_import_keeps_csv_approved_driver_under_review(monkeypatch):
+    _install_fake(monkeypatch)
+    row = _driver_row(spinr_approved="yes", regulatory_authority_approved="yes")
+    plan = svc.build_plan([row], [], None, SERVICE_AREA, "batch1")
+    assert not plan.errors
+    assert plan.drivers_to_insert[0]["status"] == "needs_review"
+    assert plan.drivers_to_insert[0]["is_verified"] is False
+
+
 def test_existing_user_by_phone_is_conflict(monkeypatch):
     _install_fake(monkeypatch, users=[{"id": "u1", "phone": "+13065551234", "email": "other@x.com"}])
     plan = svc.build_plan([_driver_row()], [], None, SERVICE_AREA, "batch1")

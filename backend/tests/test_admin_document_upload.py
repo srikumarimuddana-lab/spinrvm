@@ -108,6 +108,70 @@ def test_upload_approved_mirrors_legacy_expiry(test_client, super_admin_override
     assert legacy_updates, "expected a drivers.license_expiry_date update"
 
 
+def test_upload_approved_expiring_requirement_requires_expiry(test_client, super_admin_override):
+    with patch("routes.admin.documents.save_upload", AsyncMock(return_value="https://signed/url")), patch(
+        "db_supabase.get_rows", AsyncMock(side_effect=_fake_get_rows)
+    ), patch("db_supabase.insert_one", AsyncMock()) as insert:
+        resp = _upload(
+            test_client,
+            {"driver_id": "drv-1", "requirement_key": "drivers_license", "status": "approved"},
+        )
+    assert resp.status_code == 400, resp.text
+    assert "expiry_date" in resp.text
+    insert.assert_not_awaited()
+
+
+def test_approved_upload_does_not_reactivate_until_all_required_docs_complete(test_client, super_admin_override):
+    service_area = {
+        "id": "sa-1",
+        "required_documents": [
+            {"key": "drivers_license", "label": "Driver's License", "has_expiry": True, "requires_back_side": True},
+            {"key": "insurance", "label": "Insurance", "has_expiry": True},
+        ],
+    }
+
+    async def _rows(table, _filter=None, limit=None, **_kw):
+        if table == "drivers":
+            return [DRIVER]
+        if table == "service_areas":
+            return [service_area]
+        if table == "driver_documents" and _filter == {"driver_id": "drv-1", "status": "approved"}:
+            return [
+                {
+                    "requirement_key": "drivers_license",
+                    "document_type": "Driver's License",
+                    "side": "front",
+                    "status": "approved",
+                    "expiry_date": "2027-01-15T00:00:00+00:00",
+                    "uploaded_at": "2026-01-01T00:00:00+00:00",
+                }
+            ]
+        return []
+
+    update = AsyncMock()
+    with patch("routes.admin.documents.save_upload", AsyncMock(return_value="https://signed/url")), patch(
+        "routes.admin.documents._supersede_and_flag_pending_review", AsyncMock()
+    ), patch("routes.admin.documents.log_admin_action", AsyncMock()), patch(
+        "db_supabase.get_rows", AsyncMock(side_effect=_rows)
+    ), patch("db_supabase.insert_one", AsyncMock()), patch("db_supabase.update_one", update), patch(
+        "db_supabase.get_driver_by_id", AsyncMock(return_value=DRIVER)
+    ):
+        resp = _upload(
+            test_client,
+            {
+                "driver_id": "drv-1",
+                "requirement_key": "drivers_license",
+                "expiry_date": "2027-01-15",
+                "status": "approved",
+            },
+        )
+    assert resp.status_code == 200, resp.text
+    status_updates = [
+        c for c in update.await_args_list if (c.args[2] if len(c.args) > 2 else {}).get("status") == "active"
+    ]
+    assert not status_updates
+
+
 def test_upload_unknown_requirement_404(test_client, super_admin_override):
     for p in _base_patches():
         p.start()

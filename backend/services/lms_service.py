@@ -15,7 +15,9 @@ minutes keyed on a hash of the phone number (never the raw number).
 import hashlib
 import json
 import logging
+import os
 import re
+from urllib.parse import urlparse
 
 import httpx
 
@@ -30,6 +32,8 @@ logger = logging.getLogger(__name__)
 
 _HTTP_TIMEOUT = 10.0
 _CACHE_TTL_SECONDS = 300  # LMS data changes slowly; 5 min keeps the modal snappy
+_DEFAULT_ALLOWED_LMS_HOSTS = frozenset({"training.spinr.ca"})
+_LOCAL_DEV_LMS_HOSTS = frozenset({"localhost", "127.0.0.1"})
 
 
 class LMSNotConfiguredError(Exception):
@@ -38,6 +42,44 @@ class LMSNotConfiguredError(Exception):
 
 class LMSUpstreamError(Exception):
     """The LMS API is unreachable or returned an error response."""
+
+
+def _allowed_lms_hosts() -> frozenset[str]:
+    """Return hosts the backend may send the LMS API key to.
+
+    The base URL lives in editable app settings, but the credential must only
+    be sent to a deployment host pinned outside app_settings. Operators can
+    add staging/blue-green hosts through LMS_ALLOWED_HOSTS in the deployment
+    environment; settings admins cannot use the dashboard to repoint the key
+    at an attacker-controlled host or an internal SSRF target.
+    """
+    configured = {
+        host.strip().lower()
+        for host in os.getenv("LMS_ALLOWED_HOSTS", "").split(",")
+        if host.strip()
+    }
+    return frozenset(configured or _DEFAULT_ALLOWED_LMS_HOSTS)
+
+
+def _is_local_dev_lms_url(parsed) -> bool:
+    return (
+        os.getenv("ENV", "development").lower() != "production"
+        and parsed.scheme == "http"
+        and (parsed.hostname or "").lower() in _LOCAL_DEV_LMS_HOSTS
+    )
+
+
+def _validate_lms_base_url(base_url: str) -> str:
+    parsed = urlparse(base_url)
+    host = (parsed.hostname or "").lower()
+    if not parsed.scheme or not host or parsed.username or parsed.password:
+        raise LMSNotConfiguredError("lms_api_base_url must be an absolute URL without embedded credentials")
+    if _is_local_dev_lms_url(parsed):
+        return base_url.rstrip("/")
+    if parsed.scheme != "https" or host not in _allowed_lms_hosts():
+        logger.error("[lms_service] Refusing to send LMS API key to unpinned host")
+        raise LMSNotConfiguredError("lms_api_base_url host is not allowlisted")
+    return base_url.rstrip("/")
 
 
 def normalize_phone(phone: str) -> str | None:
@@ -62,11 +104,11 @@ def _cache_key(normalized_phone: str) -> str:
 
 async def _lms_credentials() -> tuple[str, str]:
     settings_row = await get_app_settings() or {}
-    base_url = (settings_row.get("lms_api_base_url") or "").rstrip("/")
+    raw_base_url = settings_row.get("lms_api_base_url") or ""
     api_key = settings_row.get("lms_api_key") or ""
-    if not base_url or not api_key:
+    if not raw_base_url or not api_key:
         raise LMSNotConfiguredError("lms_api_base_url / lms_api_key not set in app settings")
-    return base_url, api_key
+    return _validate_lms_base_url(raw_base_url), api_key
 
 
 async def get_training_by_phone(phone: str, force_refresh: bool = False) -> dict:

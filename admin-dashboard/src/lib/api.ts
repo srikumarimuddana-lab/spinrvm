@@ -1264,6 +1264,84 @@ export const reviewDocument = (
         }),
     });
 
+/* ── Bulk Driver Import (CSV) ─────────────── */
+export interface DriverImportReportItem {
+    old_driver_id: string;
+    field: string;
+    message: string;
+}
+export interface DriverImportReport {
+    batch: string;
+    can_commit: boolean;
+    counts: { rows: number; users: number; drivers: number; skipped_resume: number };
+    warnings: DriverImportReportItem[];
+    errors: DriverImportReportItem[];
+}
+export interface DriverImportCommitResult {
+    batch: string;
+    committed: boolean;
+    imported_users?: number;
+    imported_drivers?: number;
+    warnings?: DriverImportReportItem[];
+    // Present (with can_commit=false) when the commit was refused on errors.
+    can_commit?: boolean;
+    counts?: DriverImportReport["counts"];
+    errors?: DriverImportReportItem[];
+}
+export interface DriverImportOptions {
+    serviceAreaId?: string;
+    serviceAreaName?: string;
+    batch?: string;
+}
+
+function driverImportFormData(file: File, opts?: DriverImportOptions): FormData {
+    const fd = new FormData();
+    fd.append("drivers_csv", file);
+    if (opts?.serviceAreaId) fd.append("service_area_id", opts.serviceAreaId);
+    if (opts?.serviceAreaName) fd.append("service_area_name", opts.serviceAreaName);
+    if (opts?.batch) fd.append("batch", opts.batch);
+    return fd;
+}
+
+/** Dry-run: parse + validate the drivers CSV and return the report (no writes). */
+export const adminValidateDriverImport = (file: File, opts?: DriverImportOptions) =>
+    request<DriverImportReport>("/api/admin/drivers/import/validate", {
+        method: "POST",
+        body: driverImportFormData(file, opts),
+    });
+
+/** Commit the import. Returns committed=false + errors if the CSV no longer validates. */
+export const adminCommitDriverImport = (file: File, opts?: DriverImportOptions) =>
+    request<DriverImportCommitResult>("/api/admin/drivers/import/commit", {
+        method: "POST",
+        body: driverImportFormData(file, opts),
+    });
+
+/* ── Manual Admin Document Upload ─────────── */
+export interface AdminUploadDocumentInput {
+    driverId: string;
+    requirementKey: string;
+    file: File;
+    side?: "front" | "back";
+    expiryDate?: string;
+    status?: "pending" | "approved";
+}
+
+/** Upload a document on a driver's behalf (pending, or committed straight to approved). */
+export const adminUploadDriverDocument = (input: AdminUploadDocumentInput) => {
+    const fd = new FormData();
+    fd.append("file", input.file);
+    fd.append("driver_id", input.driverId);
+    fd.append("requirement_key", input.requirementKey);
+    if (input.side) fd.append("side", input.side);
+    if (input.expiryDate) fd.append("expiry_date", input.expiryDate);
+    fd.append("status", input.status ?? "pending");
+    return request<Record<string, unknown>>("/api/admin/documents/upload", {
+        method: "POST",
+        body: fd,
+    });
+};
+
 export interface ApprovalQueueItem {
     driver_id: string;
     user_id: string | null;

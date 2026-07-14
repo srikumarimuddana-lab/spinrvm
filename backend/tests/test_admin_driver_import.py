@@ -112,7 +112,7 @@ def _fresh_store():
                 "regulatory_region": "SK",
             }
         ],
-        "vehicle_types": [{"id": "vt-sedan", "name": "Sedan", "display_name": "Sedan"}],
+        "vehicle_types": [{"id": "vt-sedan", "name": "Sedan"}],
         "users": [],
         "drivers": [],
     }

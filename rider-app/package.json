@@ -24,7 +24,7 @@
     "@gorhom/bottom-sheet": "^5.2.13",
     "@logrocket/react-native": "^2.3.1",
     "@notifee/react-native": "^9.1.8",
-    "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-native-async-storage/async-storage": "3.1.1",
     "@react-native-community/datetimepicker": "8.6.0",
     "@react-native-community/netinfo": "11.5.2",
     "@react-native-firebase/app": "^24.0.0",
@@ -125,7 +125,7 @@
     "protobufjs": "^7.5.5",
     "@xmldom/xmldom": "^0.8.13",
     "@react-native-community/netinfo": "11.5.2",
-    "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-native-async-storage/async-storage": "3.1.1",
     "expo-modules-core": "55.0.25",
     "postcss": ">=8.5.10"
   },

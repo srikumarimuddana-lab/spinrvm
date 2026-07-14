@@ -111,6 +111,24 @@ def test_web_import_keeps_csv_approved_driver_under_review(monkeypatch):
     assert plan.drivers_to_insert[0]["is_verified"] is False
 
 
+def test_city_derives_from_service_area_name(monkeypatch):
+    _install_fake(monkeypatch)
+    area = {**SERVICE_AREA, "id": "sa-regina", "name": "Regina"}
+    # Regina rows must scope to that area, not the Saskatoon default.
+    row = _driver_row(service_area="regina")
+    plan = svc.build_plan([row], [], None, area, "batch1")
+    assert not plan.errors
+    assert plan.drivers_to_insert[0]["city"] == "Regina"
+
+
+def test_city_from_csv_column_wins(monkeypatch):
+    _install_fake(monkeypatch)
+    row = _driver_row(city="Warman")
+    plan = svc.build_plan([row], [], None, SERVICE_AREA, "batch1")
+    assert not plan.errors
+    assert plan.drivers_to_insert[0]["city"] == "Warman"
+
+
 def test_existing_user_by_phone_is_conflict(monkeypatch):
     _install_fake(monkeypatch, users=[{"id": "u1", "phone": "+13065551234", "email": "other@x.com"}])
     plan = svc.build_plan([_driver_row()], [], None, SERVICE_AREA, "batch1")

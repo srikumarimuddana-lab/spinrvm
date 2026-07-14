@@ -312,13 +312,15 @@ def get_service_area(service_area_id: str | None, service_area_name: str) -> dic
 
 
 def vehicle_type_map() -> dict[str, str]:
-    rows = supabase.table("vehicle_types").select("id,name,display_name").execute().data or []
+    # vehicle_types has no display_name column (id, name, description, icon,
+    # capacity, is_active, created_at) — selecting it 42703s in production.
+    rows = supabase.table("vehicle_types").select("id,name").execute().data or []
     out: dict[str, str] = {}
     for row in rows:
         vid = row.get("id")
         if not vid:
             continue
-        for val in (row.get("name"), row.get("display_name"), vid):
+        for val in (row.get("name"), vid):
             if val:
                 out[slug(str(val))] = vid
     return out

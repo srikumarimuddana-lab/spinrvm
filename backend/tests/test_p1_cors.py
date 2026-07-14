@@ -411,12 +411,28 @@ class TestMobileBootstrapAppCheckExemptions:
         ):
             assert any(path.startswith(p) for p in _APP_CHECK_EXEMPT_PREFIXES), path
 
-    def test_authenticated_ride_endpoints_remain_enforced(self):
+    def test_consumer_ride_endpoints_are_browser_exempt(self):
+        # The marketing website's rider booking flow (browser, no App Check
+        # header) reads and creates consumer rides. Because ride reads carry a
+        # dynamic {ride_id} segment, the exemption is the whole /api/v1/rides/
+        # prefix — the same browser-surface trust model as the admin dashboard
+        # and company portal. All still JWT-gated + rider-scoped.
         from backend.core.middleware import _APP_CHECK_EXEMPT_PREFIXES
 
         for path in (
+            "/api/v1/rides",
+            "/api/v1/rides/estimate",
             "/api/v1/rides/active",
-            "/api/v1/drivers/rides/active",
+            "/api/v1/rides/some-ride-uuid",
+            "/api/v1/rides/some-ride-uuid/cancel",
         ):
+            assert any(path.startswith(p) for p in _APP_CHECK_EXEMPT_PREFIXES), path
+
+    def test_driver_app_ride_endpoints_remain_enforced(self):
+        # The driver app's own ride endpoints are never called by the website,
+        # so they keep full App Check enforcement.
+        from backend.core.middleware import _APP_CHECK_EXEMPT_PREFIXES
+
+        for path in ("/api/v1/drivers/rides/active",):
             assert not any(path.startswith(p) for p in _APP_CHECK_EXEMPT_PREFIXES), path
 

@@ -529,6 +529,10 @@ def build_plan(
         has_import_documents = files_root is not None and old_id in document_old_ids
         driver_status = "active" if is_approved and has_import_documents else "needs_review"
         is_verified = is_approved and has_import_documents
+        # Derive the city from the CSV (if a `city` column is present) or the
+        # selected service area's name, so a non-Saskatoon import isn't
+        # mislabeled with a Saskatoon city in admin/ride displays.
+        city = row.get("city") or str(service_area.get("name") or "").strip() or "Saskatoon"
 
         plan.users_to_insert.append(
             {
@@ -565,7 +569,7 @@ def build_plan(
                 "license_class": row.get("license_class") or None,
                 "date_of_birth": dob,
                 "service_area_id": service_area["id"],
-                "city": "Saskatoon",
+                "city": city,
                 "status": driver_status,
                 "is_verified": is_verified,
                 "is_online": False,

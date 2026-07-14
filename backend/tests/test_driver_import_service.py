@@ -72,7 +72,8 @@ def _install_fake(monkeypatch, *, users=None, drivers=None):
     store = {
         "users": users or [],
         "drivers": drivers or [],
-        "vehicle_types": [{"id": "vt-sedan", "name": "Sedan", "display_name": "Sedan"}],
+        # Mirror the real schema: vehicle_types has no display_name column.
+        "vehicle_types": [{"id": "vt-sedan", "name": "Sedan"}],
     }
     monkeypatch.setattr(svc, "supabase", _FakeSupabase(store))
     return store

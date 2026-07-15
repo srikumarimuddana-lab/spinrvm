@@ -6,8 +6,8 @@ import {
   FlatList,
   TouchableOpacity,
   ActivityIndicator,
-  RefreshControl,
 } from 'react-native';
+import SafeRefreshControl from '../../components/SafeRefreshControl';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
@@ -158,7 +158,7 @@ export default function DriverLostAndFoundScreen() {
           contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + 16 }]}
           showsVerticalScrollIndicator={false}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
+            <SafeRefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
           }
         />
       )}

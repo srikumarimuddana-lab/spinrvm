@@ -14,20 +14,32 @@ import { RefreshControl, Platform, View, ActivityIndicator, type RefreshControlP
  * is lost but the UI doesn't crash.
  */
 
-// Check at module load if the native Android RefreshControl component is valid.
-// The patched RefreshControl.js has a fallback, but in case it doesn't fire
-// (stale cache, etc.), this is the last line of defense.
+// Check at module load whether the platform's native RefreshControl component
+// is renderable. RN 0.85.2 under the New Architecture (Bridgeless) declares
+// these via codegenNativeComponent(interfaceOnly), which can resolve to a
+// non-renderable object — rendering <RefreshControl> then throws "Element type
+// is invalid: got object" from ScrollView. This happens on BOTH platforms
+// (Android: AndroidSwipeRefreshLayout, iOS: PullToRefreshView — the latter
+// crashed NotificationsScreen), so guard both and fall back to a plain spinner.
+function _isRenderable(c: unknown): boolean {
+  return (
+    typeof c === 'function' ||
+    typeof c === 'string' ||
+    (c != null && typeof c === 'object' && (c as { $$typeof?: unknown }).$$typeof != null)
+  );
+}
+
 let useNative = true;
-if (Platform.OS === 'android') {
-  try {
-    const nativeModule = require('react-native/Libraries/Components/RefreshControl/AndroidSwipeRefreshLayoutNativeComponent');
-    const component = nativeModule?.default;
-    if (component && typeof component !== 'function' && typeof component !== 'string') {
-      useNative = false;
-    }
-  } catch {
+try {
+  const native =
+    Platform.OS === 'android'
+      ? require('react-native/Libraries/Components/RefreshControl/AndroidSwipeRefreshLayoutNativeComponent')?.default
+      : require('react-native/Libraries/Components/RefreshControl/PullToRefreshViewNativeComponent')?.default;
+  if (!_isRenderable(native)) {
     useNative = false;
   }
+} catch {
+  useNative = false;
 }
 
 function SafeRefreshControl(props: RefreshControlProps) {

@@ -16,6 +16,12 @@ const NSE_TARGET = 'OfferCardService';
 const NSE_SWIFT = 'NotificationService.swift';
 const SRC_DIR = 'plugins/notification-service-extension';
 const DEPLOYMENT_TARGET = '15.1';
+// Apple Developer Team that signs the extension target. Xcode 14+ signs every
+// target (incl. app extensions) and errors "requires a development team" if the
+// .appex target has none — EAS only auto-signs the MAIN app, not config-plugin
+// targets. Defaults to Spinr Mobility Inc's team; override via APPLE_TEAM_ID
+// (e.g. eas.json build.<profile>.env) if the signing team ever changes.
+const APPLE_TEAM_ID = process.env.APPLE_TEAM_ID || 'X8863WAU7L';
 
 function withExtensionFiles(config) {
   return withDangerousMod(config, [
@@ -73,15 +79,20 @@ function withExtensionTarget(config) {
     proj.addBuildPhase([], 'PBXResourcesBuildPhase', 'Resources', target.uuid);
     proj.addBuildPhase([], 'PBXFrameworksBuildPhase', 'Frameworks', target.uuid);
 
-    // 4. Embed the .appex into the main app ("Embed App Extensions").
-    const mainTarget = proj.getFirstTarget();
-    proj.addBuildPhase(
-      [`${NSE_TARGET}.appex`],
-      'PBXCopyFilesBuildPhase',
-      'Embed App Extensions',
-      mainTarget.uuid,
-      'app_extension',
-    );
+    // 4. Embedding is already done by addTarget() above. For an 'app_extension'
+    //    target, node-xcode creates the "Embed App Extensions" Copy Files phase
+    //    on the main app target and adds the extension's PRODUCT reference —
+    //    which addProductFile() parented under the Products group — to it.
+    //
+    //    Do NOT add a second embed phase here. Passing the "OfferCardService.appex"
+    //    *filename* to addBuildPhase makes node-xcode mint a brand-new
+    //    PBXFileReference that is never attached to any PBXGroup; that orphan is
+    //    exactly what xcodeproj refuses to serialize during `pod install`, failing
+    //    the EAS build with:
+    //      [Xcodeproj] Consistency issue: no parent for object `OfferCardService.appex`
+    //    A manual duplicate phase would also double-embed the .appex ("multiple
+    //    commands produce" once the orphan is gone). One embed phase, from
+    //    addTarget, is correct.
 
     // 5. Build settings for both Debug + Release configs of the new target.
     const xcConfigs = proj.pbxXCBuildConfigurationSection();
@@ -99,6 +110,11 @@ function withExtensionTarget(config) {
         s.SWIFT_VERSION = '5.0';
         s.TARGETED_DEVICE_FAMILY = '"1,2"';
         s.CODE_SIGN_STYLE = 'Automatic';
+        // Give the extension target a signing team. Without this Xcode 14+ fails
+        // the archive with "Signing for OfferCardService requires a development
+        // team". EAS re-writes this to Manual + its managed profile once the
+        // extension's credentials exist; until then this stops the hard error.
+        s.DEVELOPMENT_TEAM = APPLE_TEAM_ID;
         s.CLANG_ENABLE_MODULES = 'YES';
         s.SWIFT_OPTIMIZATION_LEVEL = s.SWIFT_OPTIMIZATION_LEVEL || '"-Onone"';
         s.MARKETING_VERSION = '1.0';

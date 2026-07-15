@@ -400,6 +400,45 @@ export const extractError = (
 };
 
 /**
+ * Convenience wrapper over `extractError` for toast/alert call sites. Takes an
+ * Axios error (or anything with `response.data`) and returns the backend's
+ * specific human message (e.g. "This email is already linked to an existing
+ * Spinr account") rather than Axios's generic "Request failed with status code
+ * 400". Falls back to the caller's message only when the server sent no usable
+ * detail (network error, empty body).
+ */
+export function getApiErrorMessage(
+  err: unknown,
+  fallback = 'Something went wrong. Please try again.',
+): string {
+  const anyErr = err as {
+    response?: { data?: ApiErrorBody | null; status?: number };
+    message?: string;
+  } | null;
+  const data = anyErr?.response?.data;
+  if (data) {
+    const { message } = extractError(data, anyErr?.response?.status);
+    // extractError returns the default 'Request failed' when the body had no
+    // recognizable detail — treat that as "no useful message" and fall back.
+    if (message && message !== 'Request failed') return message;
+  }
+  // No usable response body. Some callers (e.g. authStore.createProfile) extract
+  // the backend detail themselves and re-throw `new Error(detail)`, so a
+  // meaningful err.message should still win. Ignore Axios's generic
+  // "Request failed with status code N" and "Network Error".
+  const raw = anyErr?.message;
+  if (
+    raw &&
+    !/^Request failed with status code/i.test(raw) &&
+    !/^Network Error$/i.test(raw) &&
+    !/^timeout of /i.test(raw)
+  ) {
+    return raw;
+  }
+  return fallback;
+}
+
+/**
  * Backwards-compatible string extractor — every existing caller of
  * `extractErrorMessage` continues to work unchanged.
  */

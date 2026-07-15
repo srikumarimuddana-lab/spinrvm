@@ -4,6 +4,8 @@ Split from ``backend/routes/rides.py`` (god-file refactor). Pure code
 motion — no behaviour changes. See docs/refactors/god-file-split.md.
 """
 
+from datetime import timedelta
+
 from . import _deps, _shared
 from ._deps import (  # noqa: F401
     Optional,
@@ -87,6 +89,27 @@ async def _dispatch_retry(ride_id: str, delay: int = 10, *, attempt: int = 1) ->
         # the escalating delay stops a broad outage becoming a retry storm.
         logger.error(f"[DISPATCH] retry failed for {ride_id}: {e}", exc_info=True)
         _deps.spawn(_dispatch_retry(ride_id, delay=_dispatch_error_delay(attempt), attempt=attempt + 1))
+
+
+def _build_offer_rows(claimed_drivers, ride_id, offered_at_iso, expires_at_iso):
+    """Build the ride_offers insert payload for a batch of claimed drivers.
+
+    Each row persists ``expires_at`` (the offer deadline) so the durable
+    offer-expiry reaper can expire it even if the in-process asyncio timer is
+    lost on a backend restart/deploy (see migration 224). Pure/side-effect-free
+    so offer-row construction is unit-testable without the dispatch harness.
+    """
+    return [
+        {
+            "ride_id": ride_id,
+            "driver_id": d["id"],
+            "status": "pending",
+            "eta_seconds": eta,
+            "offered_at": offered_at_iso,
+            "expires_at": expires_at_iso,
+        }
+        for d, eta in claimed_drivers
+    ]
 
 
 async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None, attempt: int = 0):
@@ -645,16 +668,11 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
 
     # ── Insert ride_offers rows ───────────────────────────────────
     now = datetime.now(timezone.utc)
-    offer_rows = [
-        {
-            "ride_id": ride_id,
-            "driver_id": d["id"],
-            "status": "pending",
-            "eta_seconds": eta,
-            "offered_at": now.isoformat(),
-        }
-        for d, eta in claimed_drivers
-    ]
+    # Compute the offer deadline once and reuse it for both the persisted
+    # ride_offers rows (so the durable reaper can find them after a restart) and
+    # the WS/FCM countdown payload below.
+    _offer_expires_at = (now + timedelta(seconds=offer_timeout)).isoformat()
+    offer_rows = _build_offer_rows(claimed_drivers, ride_id, now.isoformat(), _offer_expires_at)
     try:
         await _deps.db_supabase.run_sync(
             lambda: _deps.db_supabase.supabase.table("ride_offers").insert(offer_rows).execute()
@@ -734,9 +752,6 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     rider_display_name = first_name_only(rider_user) or None
 
     _surge_mult = float(ride.get("surge_multiplier") or 1.0)
-    from datetime import timedelta as _td
-
-    _offer_expires_at = (now + _td(seconds=offer_timeout)).isoformat()
 
     # ── Notify each claimed driver ────────────────────────────────
     for driver, _eta in claimed_drivers:
@@ -1051,12 +1066,20 @@ async def _offer_timeout_handler(
         )
 
 
-async def _batch_offer_timeout_handler(
-    ride_id: str,
-    rider_id: str | None,
-    timeout_seconds: int = 15,
-):
-    """Expire all still-pending batch offers after timeout (no grace period)."""
+async def process_expired_offer(ride_id: str, driver_id: str, miss_threshold: int) -> bool:
+    """Atomically expire ONE pending ride_offer and run its release side-effects.
+
+    Idempotent: the pending->expired claim is the single gate. If another actor
+    (the in-process batch-timeout handler OR the durable offer-expiry reaper)
+    already expired this offer — or the driver just accepted it — the conditional
+    UPDATE returns zero rows and the side-effects are skipped. Returns True iff
+    this call won the claim and processed the offer.
+
+    Side-effects on win: miss-streak++, acceptance-rate(accepted=False), then
+    auto-offline (Period 0) at the miss threshold, else a committed-state-guarded
+    Period 1 (mirrors the single-offer guard), an offer-skip key, and a WS notice
+    to the driver. Ride-level concerns (rider WS, re-dispatch) are the caller's.
+    """
     try:
         from ...repositories.driver_repo import update_acceptance_rate
         from ...utils.driver_presence import (
@@ -1074,6 +1097,84 @@ async def _batch_offer_timeout_handler(
         )
         from utils.redis_client import redis_set as _redis_set  # type: ignore
 
+    now_iso = datetime.now(timezone.utc).isoformat()
+    # Atomic claim: only the actor that flips this offer pending->expired owns its
+    # side-effects. Conditional on status='pending' so a concurrent accept
+    # (status='accepted') or a peer reaper cannot be double-processed.
+    claimed = await _deps.db_supabase.run_sync(
+        lambda: (
+            _deps.db_supabase.supabase.table("ride_offers")
+            .update({"status": "expired", "responded_at": now_iso})
+            .eq("ride_id", ride_id)
+            .eq("driver_id", driver_id)
+            .eq("status", "pending")
+            .execute()
+        )
+    )
+    if not (getattr(claimed, "data", None) or []):
+        return False
+
+    miss_count = await increment_miss_streak(driver_id)
+    await update_acceptance_rate(driver_id, accepted=False)
+
+    auto_offline = miss_count >= miss_threshold
+    if auto_offline:
+        logger.info(
+            f"[DISPATCH] Auto-offline: driver {driver_id} missed "
+            f"{miss_count} consecutive offers (threshold={miss_threshold})"
+        )
+        await _deps.db_supabase.set_driver_available(driver_id, False)
+        await _deps.db_supabase.run_sync(
+            lambda: (
+                _deps.db_supabase.supabase.table("drivers")
+                .update({"is_online": False, "is_available": False})
+                .eq("id", driver_id)
+                .execute()
+            )
+        )
+        await clear_presence(driver_id)
+        await reset_miss_streak(driver_id)
+        await _deps.record_period_transition(driver_id, 0)
+    else:
+        # Only open Period 1 (online, no ride) if the release actually made the
+        # driver available. If they went offline between offer dispatch and this
+        # timeout, set_driver_available clamps is_available→False; recording
+        # Period 1 here would falsely reopen a commercial-insurance window for an
+        # offline driver. Mirrors the single-offer guard at _offer_timeout_handler.
+        released = await _deps.db_supabase.set_driver_available(driver_id, True)
+        if isinstance(released, dict) and released.get("is_available"):
+            await _deps.record_period_transition(driver_id, 1)
+
+    try:
+        await _redis_set(f"spinr:offer_skip:{ride_id}:{driver_id}", "1", ttl=300)
+    except Exception as e:
+        logger.warning(f"Failed to set offer skip key for driver {driver_id}: {e}")
+    try:
+        drv = await _deps.db_supabase.get_driver_by_id(driver_id)
+        uid = (drv or {}).get("user_id")
+        if uid:
+            msg_type = "auto_offline" if auto_offline else "ride_offer_expired"
+            await _deps.manager.send_personal_message(
+                {"type": msg_type, "ride_id": ride_id},
+                f"driver_{uid}",
+            )
+    except Exception as e:
+        logger.warning(f"Failed to send offer_expired WS to driver {driver_id}: {e}")
+
+    return True
+
+
+async def _batch_offer_timeout_handler(
+    ride_id: str,
+    rider_id: str | None,
+    timeout_seconds: int = 15,
+):
+    """Expire all still-pending batch offers after timeout (no grace period).
+
+    Each offer is expired via process_expired_offer, whose atomic pending->expired
+    claim makes this safe to run concurrently with the durable offer-expiry reaper
+    — neither can double-process the same offer.
+    """
     await asyncio.sleep(timeout_seconds)
     try:
         ride = await _deps.db_supabase.get_ride(ride_id)
@@ -1093,70 +1194,15 @@ async def _batch_offer_timeout_handler(
         if not pending_ids:
             return
 
-        now_iso = datetime.now(timezone.utc).isoformat()
-        await _deps.db_supabase.run_sync(
-            lambda: (
-                _deps.db_supabase.supabase.table("ride_offers")
-                .update({"status": "expired", "responded_at": now_iso})
-                .eq("ride_id", ride_id)
-                .eq("status", "pending")
-                .execute()
-            )
-        )
-
         try:
             settings = await _deps.get_app_settings()
             miss_threshold = int(settings.get("auto_offline_miss_threshold", 3))
         except Exception:
             miss_threshold = 3
 
-        # P2: each pending driver's release is independent (distinct driver,
-        # no cross-driver ordering), so run them concurrently instead of one
-        # serial chain of DB/WS round-trips. Sub-steps within a driver stay
-        # sequential (they have their own ordering).
-        async def _release_pending_driver(did: str) -> None:
-            miss_count = await increment_miss_streak(did)
-            await update_acceptance_rate(did, accepted=False)
-
-            auto_offline = miss_count >= miss_threshold
-            if auto_offline:
-                logger.info(
-                    f"[DISPATCH] Auto-offline: driver {did} missed "
-                    f"{miss_count} consecutive offers (threshold={miss_threshold})"
-                )
-                await _deps.db_supabase.set_driver_available(did, False)
-                await _deps.db_supabase.run_sync(
-                    lambda _did=did: (
-                        _deps.db_supabase.supabase.table("drivers")
-                        .update({"is_online": False, "is_available": False})
-                        .eq("id", _did)
-                        .execute()
-                    )
-                )
-                await clear_presence(did)
-                await reset_miss_streak(did)
-                await _deps.record_period_transition(did, 0)
-            else:
-                await _deps.db_supabase.set_driver_available(did, True)
-                await _deps.record_period_transition(did, 1)
-
-            try:
-                await _redis_set(f"spinr:offer_skip:{ride_id}:{did}", "1", ttl=300)
-            except Exception as e:
-                logger.warning(f"Failed to set offer skip key for driver {did}: {e}")
-            try:
-                drv = await _deps.db_supabase.get_driver_by_id(did)
-                uid = (drv or {}).get("user_id")
-                if uid:
-                    msg_type = "auto_offline" if auto_offline else "ride_offer_expired"
-                    await _deps.manager.send_personal_message(
-                        {"type": msg_type, "ride_id": ride_id},
-                        f"driver_{uid}",
-                    )
-            except Exception as e:
-                logger.warning(f"Failed to send offer_expired WS to driver {did}: {e}")
-
-        await asyncio.gather(*(_release_pending_driver(did) for did in pending_ids))
+        # Each driver's offer is expired + released independently and idempotently
+        # (process_expired_offer's atomic claim is the gate), so run concurrently.
+        await asyncio.gather(*(process_expired_offer(ride_id, did, miss_threshold) for did in pending_ids))
 
         if rider_id:
             await _deps.manager.send_personal_message(
@@ -1180,6 +1226,14 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
     Matches Uber/Lyft's 5-minute default. Publishes a ``ride_cancelled`` WS
     message to the rider's channel and fires a push notification so the rider
     is alerted even if the app is backgrounded.
+
+    Durable backstop: this is an in-process asyncio timer, so a pod
+    restart/deploy drops it. ``utils.stuck_ride_sweeper`` is the restart-safe
+    equivalent — it cancels rides stuck in ``searching`` past the same 5-minute
+    threshold with the identical payload (``no_drivers_found`` attribution,
+    ``ride_cancelled`` WS, push, driver release) via an atomic replay-safe DB
+    claim. So a lost timer here still cancels within ~one 60s sweep of the
+    intended deadline; no separate durable search-timeout worker is needed.
 
     Extracted from ``create_ride`` so it can be unit-tested directly — see
     backend/tests/test_p0_ship_blockers.py::TestNoDriversAvailableTimeout.

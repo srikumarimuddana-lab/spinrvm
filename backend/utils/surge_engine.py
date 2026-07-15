@@ -29,11 +29,13 @@ try:
     from geo_utils import get_service_area_polygon, point_in_polygon
     from utils.driver_presence import present_driver_ids
     from utils.metrics import inc as _metric_inc
+    from utils.redis_client import redis_set_nx
 except ImportError:
     from ..db import db
     from ..geo_utils import get_service_area_polygon, point_in_polygon
     from .driver_presence import present_driver_ids
     from .metrics import inc as _metric_inc
+    from .redis_client import redis_set_nx
 
 # Per-area supply/demand fetch cap. Surge = demand/supply, a regulated rider-
 # facing price; if a fetch hits this cap the count is TRUNCATED and the
@@ -152,8 +154,7 @@ async def _count_supply_in_area(area: Dict[str, Any]) -> int:
             return await _count_supply_spatial(poly)
         except Exception as exc:
             logger.warning(
-                f"Surge: spatial supply count failed for area {area.get('id')}, "
-                f"falling back to Python scan: {exc}",
+                f"Surge: spatial supply count failed for area {area.get('id')}, falling back to Python scan: {exc}",
                 exc_info=False,
             )
 
@@ -357,6 +358,37 @@ async def surge_recalculation_loop():
     """Background loop that recalculates surge every RECALC_INTERVAL_SECONDS."""
     logger.info(f"Surge engine started (interval={RECALC_INTERVAL_SECONDS}s)")
     while True:
+        # Single-writer across replicas. Without this gate every replica runs
+        # the tick and inserts a surge_pricing history row → N duplicate rows
+        # per area per interval. Lock on a per-interval wall-clock bucket so
+        # exactly one replica handles each window while preserving the ~2min
+        # cadence (fresh bucket key each interval; TTL 2× absorbs jitter/skew).
+        # Edge case: if a replica's jittered sleep lands its next iteration in
+        # the bucket it already holds, it's denied and skips that one window —
+        # self-healing (next window is a fresh bucket) and covered by peers in a
+        # multi-replica deployment.
+        bucket = int(datetime.now(timezone.utc).timestamp() // RECALC_INTERVAL_SECONDS)
+        lock_ttl = int(RECALC_INTERVAL_SECONDS * 2)
+        try:
+            is_leader = await redis_set_nx(f"spinr:surge_engine:lock:{bucket}", "1", lock_ttl)
+        except Exception as _lock_err:
+            # Redis unavailable (dev in-memory fallback / outage): proceed. Dev is
+            # single-process; a prod Redis outage degrades to per-replica recompute
+            # and self-heals once Redis returns. Mirrors scheduled_rides' degrade.
+            logger.warning(f"Surge: leader lock unavailable ({_lock_err}), proceeding without lock")
+            is_leader = True
+
+        # B-P3-2: ±10% per-tick jitter so replicas don't all flip surge state on
+        # the same wall-clock tick (rider apps would receive a synchronised
+        # price-change notification storm).
+        delta = RECALC_INTERVAL_SECONDS * 0.1
+        sleep_seconds = RECALC_INTERVAL_SECONDS + random.uniform(-delta, delta)
+
+        if not is_leader:
+            _record_heartbeat("surge_engine (2min)")
+            await asyncio.sleep(sleep_seconds)
+            continue
+
         try:
             results = await recalculate_all_surges()
             if results:
@@ -365,8 +397,4 @@ async def surge_recalculation_loop():
         except Exception as e:
             logger.error(f"Surge recalculation loop error: {e}")
         _record_heartbeat("surge_engine (2min)")
-        # B-P3-2: ±10% per-tick jitter so replicas don't all flip surge
-        # state on the same wall-clock tick (rider apps would receive a
-        # synchronised price-change notification storm).
-        delta = RECALC_INTERVAL_SECONDS * 0.1
-        await asyncio.sleep(RECALC_INTERVAL_SECONDS + random.uniform(-delta, delta))
+        await asyncio.sleep(sleep_seconds)

@@ -585,3 +585,53 @@ async def test_get_surge_status_gates_on_surge_enabled():
     assert by_id["a2"]["surge_enabled"] is True
     assert by_id["a2"]["surge_active"] is True
     assert by_id["a2"]["multiplier"] == 1.75
+
+
+# ── surge_recalculation_loop leader lock (multi-replica dedupe) ──────────────
+
+
+class _StopLoop(Exception):
+    """Sentinel to break the infinite recalculation loop after one iteration."""
+
+
+async def _sleep_break(*_args, **_kwargs):
+    raise _StopLoop()
+
+
+class TestSurgeLoopLeaderLock:
+    """The recalculation loop must run the tick at most once per interval across
+    replicas. Without a leader lock, every replica recalculates and inserts a
+    surge_pricing history row each tick → N duplicate rows per area per interval.
+    """
+
+    @pytest.mark.asyncio
+    async def test_non_leader_replica_skips_tick(self):
+        recalc = AsyncMock(return_value=[])
+        with (
+            patch("utils.surge_engine.redis_set_nx", AsyncMock(return_value=False), create=True),
+            patch("utils.surge_engine.recalculate_all_surges", recalc),
+            patch("utils.surge_engine._record_heartbeat", MagicMock()),
+            patch("utils.surge_engine.asyncio.sleep", side_effect=_sleep_break),
+        ):
+            from utils.surge_engine import surge_recalculation_loop
+
+            with pytest.raises(_StopLoop):
+                await surge_recalculation_loop()
+
+        recalc.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_leader_replica_runs_tick(self):
+        recalc = AsyncMock(return_value=[])
+        with (
+            patch("utils.surge_engine.redis_set_nx", AsyncMock(return_value=True), create=True),
+            patch("utils.surge_engine.recalculate_all_surges", recalc),
+            patch("utils.surge_engine._record_heartbeat", MagicMock()),
+            patch("utils.surge_engine.asyncio.sleep", side_effect=_sleep_break),
+        ):
+            from utils.surge_engine import surge_recalculation_loop
+
+            with pytest.raises(_StopLoop):
+                await surge_recalculation_loop()
+
+        recalc.assert_awaited_once()

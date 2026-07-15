@@ -367,6 +367,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to import stuck ride sweeper: {e}", exc_info=True)
 
+    # Durable offer-expiry reaper — restart-safe backstop for offer timeouts.
+    # In-process asyncio offer/search timers are lost on a pod restart; this loop
+    # finds pending ride_offers past their persisted expires_at (migration 224)
+    # and runs the same idempotent process_expired_offer, then re-dispatches.
+    # Replay-safe: the per-offer atomic claim gates side-effects across replicas.
+    try:
+        from utils.offer_expiry_reaper import offer_expiry_reaper_loop
+
+        _spawn("offer_expiry_reaper (10s)", offer_expiry_reaper_loop)
+    except Exception as e:
+        logger.error(f"Failed to import offer expiry reaper: {e}", exc_info=True)
+
     # Auto-reactivation of expired temporary rider suspensions — flips status
     # back to active once suspended_until passes so the admin list isn't stale.
     # Atomic conditional update keeps it replay-safe across replicas.
@@ -417,6 +429,7 @@ async def lifespan(app: FastAPI):
             "stripe_reconcile (24h)",
             "t4a_annual_job (yearly Feb 28)",
             "stuck_ride_sweeper (60s)",
+            "offer_expiry_reaper (10s)",
             "push_retry (30s)",
         ]
     )

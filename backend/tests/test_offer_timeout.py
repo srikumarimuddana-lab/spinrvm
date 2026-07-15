@@ -310,3 +310,139 @@ class TestDispatchHardening:
         events = [(c.args[0]["type"], c.args[1]) for c in send_personal_mock.call_args_list]
         assert ("driver_timeout", "rider_rider_disp_2") in events
         assert ("ride_offer_expired", "driver_user_driver_disp_2") in events
+
+
+class TestBatchOfferTimeoutInsuranceGuard:
+    """Regression for the batch offer-timeout insurance-period write.
+
+    The single-offer handler only opens insurance Period 1 (online / no ride /
+    TNC contingent liability) when the driver's *committed* state actually
+    became available (matching.py:962-970) — otherwise a driver who went
+    offline between offer dispatch and timeout would get a Period-1 row that
+    falsely reopens a commercial-insurance window. The batch handler must apply
+    the same guard; recording Period 1 unconditionally is an insurance
+    misclassification and a regulatory (SGI) liability.
+    """
+
+    @pytest.mark.asyncio
+    async def test_batch_timeout_skips_period1_when_driver_clamped_offline(self):
+        # One pending offer for a driver who is now offline; set_driver_available
+        # clamps is_available→False to preserve the is_available⇒is_online
+        # invariant. Period 1 must NOT be recorded for that driver.
+        pending_result = MagicMock(data=[{"driver_id": "d_offline"}])
+
+        with (
+            patch(
+                "backend.routes.rides._deps.db_supabase.get_ride",
+                AsyncMock(return_value={"id": "ride_b", "status": "searching"}),
+            ),
+            patch(
+                "backend.routes.rides._deps.db_supabase.run_sync",
+                AsyncMock(return_value=pending_result),
+            ),
+            patch(
+                "backend.routes.rides._deps.db_supabase.set_driver_available",
+                AsyncMock(return_value={"is_available": False}),
+            ),
+            patch(
+                "backend.routes.rides._deps.db_supabase.get_driver_by_id",
+                AsyncMock(return_value=None),
+            ),
+            patch(
+                "backend.routes.rides._deps.get_app_settings",
+                AsyncMock(return_value={"auto_offline_miss_threshold": 3}),
+            ),
+            patch(
+                "backend.routes.rides._deps.record_period_transition",
+                new_callable=AsyncMock,
+            ) as mock_period,
+            patch("backend.routes.rides._deps.manager") as mock_manager,
+            patch("backend.repositories.driver_repo.update_acceptance_rate", new_callable=AsyncMock),
+            patch(
+                "backend.utils.driver_presence.increment_miss_streak",
+                AsyncMock(return_value=1),  # below threshold → normal-release else branch
+            ),
+            patch("backend.utils.driver_presence.clear_presence", new_callable=AsyncMock),
+            patch("backend.utils.driver_presence.reset_miss_streak", new_callable=AsyncMock),
+            patch("backend.utils.redis_client.redis_set", new_callable=AsyncMock),
+        ):
+            mock_manager.send_personal_message = AsyncMock()
+
+            from backend.routes.rides import _batch_offer_timeout_handler
+
+            await _batch_offer_timeout_handler("ride_b", rider_id=None, timeout_seconds=0)
+
+            period1_calls = [c for c in mock_period.call_args_list if c.args == ("d_offline", 1)]
+            assert not period1_calls, (
+                "Batch timeout recorded insurance Period 1 for a driver whose committed "
+                "state is offline (is_available=False) — must mirror the single-offer "
+                "guard at matching.py:962-970"
+            )
+
+
+@pytest.mark.asyncio
+async def test_process_expired_offer_is_idempotent():
+    """The pending->expired claim gates the side-effects: a second call for an
+    offer that is already expired runs NO side-effects. This is what lets the
+    in-process timeout handler and the durable reaper both call
+    process_expired_offer without ever double-counting a miss / double-writing
+    an insurance-period row for the same offer."""
+    from backend.routes.rides import matching as m
+
+    # First claim wins (returns a row); second finds nothing pending.
+    claim_results = [MagicMock(data=[{"id": "off1"}]), MagicMock(data=[])]
+
+    with (
+        patch(
+            "backend.routes.rides._deps.db_supabase.run_sync",
+            AsyncMock(side_effect=claim_results),
+        ),
+        patch(
+            "backend.routes.rides._deps.db_supabase.set_driver_available",
+            AsyncMock(return_value={"is_available": True}),
+        ),
+        patch(
+            "backend.routes.rides._deps.db_supabase.get_driver_by_id",
+            AsyncMock(return_value=None),
+        ),
+        patch("backend.routes.rides._deps.record_period_transition", new_callable=AsyncMock) as mock_period,
+        patch("backend.routes.rides._deps.manager") as mock_mgr,
+        patch("backend.repositories.driver_repo.update_acceptance_rate", new_callable=AsyncMock) as mock_ar,
+        patch("backend.utils.driver_presence.increment_miss_streak", AsyncMock(return_value=1)) as mock_miss,
+        patch("backend.utils.driver_presence.clear_presence", new_callable=AsyncMock),
+        patch("backend.utils.driver_presence.reset_miss_streak", new_callable=AsyncMock),
+        patch("backend.utils.redis_client.redis_set", new_callable=AsyncMock),
+    ):
+        mock_mgr.send_personal_message = AsyncMock()
+
+        won_first = await m.process_expired_offer("ride_b", "d1", 3)
+        won_second = await m.process_expired_offer("ride_b", "d1", 3)
+
+    assert won_first is True
+    assert won_second is False
+    # Side-effects ran for the winning claim only.
+    assert mock_miss.await_count == 1
+    assert mock_ar.await_count == 1
+    mock_period.assert_awaited_once_with("d1", 1)
+
+
+def test_build_offer_rows_persists_expires_at():
+    """Every dispatched ride_offers row must carry expires_at so the durable
+    reaper can expire it even if the in-process asyncio timer is lost on a
+    backend restart (migration 224 persists this deadline)."""
+    from backend.routes.rides.matching import _build_offer_rows
+
+    rows = _build_offer_rows(
+        [({"id": "d1"}, 120), ({"id": "d2"}, 90)],
+        ride_id="ride_1",
+        offered_at_iso="2026-01-01T00:00:00+00:00",
+        expires_at_iso="2026-01-01T00:00:30+00:00",
+    )
+
+    assert [r["driver_id"] for r in rows] == ["d1", "d2"]
+    assert rows[0]["eta_seconds"] == 120
+    for r in rows:
+        assert r["status"] == "pending"
+        assert r["ride_id"] == "ride_1"
+        assert r["offered_at"] == "2026-01-01T00:00:00+00:00"
+        assert r["expires_at"] == "2026-01-01T00:00:30+00:00"

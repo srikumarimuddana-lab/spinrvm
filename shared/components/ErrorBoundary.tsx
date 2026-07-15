@@ -25,25 +25,32 @@ import { ScrollView } from 'react-native';
 
 interface ErrorFallbackProps {
   error: Error | null;
+  componentStack?: string | null;
   onRetry: () => void;
 }
 
-function ErrorFallback({ error, onRetry }: ErrorFallbackProps) {
+function ErrorFallback({ error, componentStack, onRetry }: ErrorFallbackProps) {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+
+  // The React component stack names the exact element chain down to the
+  // invalid render (e.g. "Element type is invalid … got: object"). Show it
+  // on-device — not just in __DEV__ — so a release/TestFlight crash can be
+  // diagnosed from a screenshot when Sentry isn't reachable.
+  const diagnostics = (componentStack || error?.stack || '').trim();
 
   return (
     <View style={styles.container}>
       <View style={styles.content}>
         <Text style={styles.icon}>⚠️</Text>
         <Text style={styles.title}>Something went wrong</Text>
-        <Text style={styles.message}>
+        <Text style={styles.message} selectable>
           {error?.name ? `${error.name}: ` : ''}{error?.message || 'An unexpected error occurred'}
         </Text>
-        
-        {__DEV__ && error?.stack && (
+
+        {diagnostics.length > 0 && (
           <ScrollView style={styles.stackScroll} contentContainerStyle={styles.stackContent}>
-            <Text style={styles.stackText}>{error.stack}</Text>
+            <Text style={styles.stackText} selectable>{diagnostics}</Text>
           </ScrollView>
         )}
 
@@ -145,6 +152,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       return (
         <ErrorFallback
           error={this.state.error}
+          componentStack={this.state.errorInfo?.componentStack ?? null}
           onRetry={this.handleRetry}
         />
       );
@@ -218,8 +226,8 @@ function createStyles(colors: ThemeColors) {
       fontWeight: '600',
     },
     stackScroll: {
-      maxHeight: 200,
-      width: 280,
+      maxHeight: 320,
+      width: 300,
       backgroundColor: '#1E1E1E',
       borderRadius: 6,
       padding: 10,

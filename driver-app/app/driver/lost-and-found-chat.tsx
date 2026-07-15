@@ -25,7 +25,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../../hooks/useToast';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -92,8 +92,8 @@ export default function DriverLostAndFoundChatScreen() {
       ]);
       setLostCase(caseRes.data?.case ?? null);
       setMessages(msgRes.data?.messages ?? []);
-    } catch {
-      showToast('error', 'Could not load case.', 'Pull to refresh.');
+    } catch (e: any) {
+      showToast('error', 'Could not load case.', getApiErrorMessage(e, 'Pull to refresh.'));
     } finally {
       setLoading(false);
     }
@@ -126,7 +126,7 @@ export default function DriverLostAndFoundChatScreen() {
         await loadCase(newCase.id);
       }
     } catch (e: any) {
-      showToast('error', 'Submit Failed', e?.response?.data?.detail || 'Could not submit report.');
+      showToast('error', 'Submit Failed', getApiErrorMessage(e, 'Could not submit report. Please try again.'));
     } finally {
       setSubmitting(false);
     }
@@ -149,7 +149,7 @@ export default function DriverLostAndFoundChatScreen() {
               await api.put(`/lost-and-found/${lostCase.id}/respond`, { found });
               await loadCase(lostCase.id);
             } catch (e: any) {
-              showToast('error', 'Update Failed', e?.response?.data?.detail || 'Could not update status.');
+              showToast('error', 'Update Failed', getApiErrorMessage(e, 'Could not update status. Please try again.'));
             } finally {
               setResponding(false);
             }
@@ -185,7 +185,7 @@ export default function DriverLostAndFoundChatScreen() {
     } catch (e: any) {
       setMessages(prev => prev.filter(m => m.id !== optimistic.id));
       setText(trimmed);
-      showToast('error', 'Send Failed', e?.response?.data?.detail || 'Could not send message.');
+      showToast('error', 'Send Failed', getApiErrorMessage(e, 'Could not send message. Please try again.'));
     } finally {
       setSending(false);
     }

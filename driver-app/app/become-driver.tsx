@@ -19,7 +19,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useAuthStore } from '@shared/store/authStore';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
 import { uploadFile } from '@shared/api/upload';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -235,7 +235,7 @@ export default function BecomeDriverScreen() {
       setVehicleTypes(types);
     } catch (e: any) {
       console.log('Error fetching vehicle types:', e);
-      Alert.alert('Connection Error', 'Failed to load vehicle types. Please check your internet connection.');
+      Alert.alert('Connection Error', getApiErrorMessage(e, 'Could not load vehicle types. Check your connection.'));
     } finally {
       setLoadingTypes(false);
     }
@@ -267,7 +267,7 @@ export default function BecomeDriverScreen() {
       }));
       Alert.alert('Success', 'Document uploaded successfully');
     } catch (err: any) {
-      Alert.alert('Upload Failed', err.message);
+      Alert.alert('Upload Failed', getApiErrorMessage(err, 'Could not upload your document. Please try again.'));
     } finally {
       setUploadingDoc(null);
     }
@@ -492,7 +492,7 @@ export default function BecomeDriverScreen() {
         }
       ]);
     } catch (err: any) {
-      Alert.alert('Registration Failed', err.message);
+      Alert.alert('Registration Failed', getApiErrorMessage(err, 'Could not submit your application. Please try again.'));
     }
   };
 

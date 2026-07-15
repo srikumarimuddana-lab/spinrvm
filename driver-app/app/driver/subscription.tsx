@@ -7,7 +7,7 @@ import * as ExpoLinking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { showToast } from '../../hooks/useToast';
@@ -190,7 +190,7 @@ export default function SubscriptionScreen() {
         loadData();
       }
     } catch (e: any) {
-      showToast('error', 'Error', e.response?.data?.detail || 'Failed to subscribe');
+      showToast('error', 'Error', getApiErrorMessage(e, 'Could not subscribe. Please try again.'));
     } finally { setSubscribing(null); }
   };
 
@@ -208,7 +208,7 @@ export default function SubscriptionScreen() {
               showToast('info', 'Cancelled', 'Your subscription has been cancelled.');
               loadData();
             } catch (e: any) {
-              showToast('error', 'Error', e.response?.data?.detail || 'Failed to cancel');
+              showToast('error', 'Error', getApiErrorMessage(e, 'Could not cancel your subscription. Please try again.'));
             }
           },
         },
@@ -224,7 +224,7 @@ export default function SubscriptionScreen() {
       await api.post(`/drivers/subscription/payments/${paymentId}/resend-invoice`);
       showToast('success', 'Invoice Sent', 'Invoice emailed to your address on file.');
     } catch (e: any) {
-      showToast('error', 'Error', e.response?.data?.detail || 'Failed to send invoice');
+      showToast('error', 'Error', getApiErrorMessage(e, 'Could not send the invoice. Please try again.'));
     } finally {
       setResendingId(null);
     }

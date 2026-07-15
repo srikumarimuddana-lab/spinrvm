@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'rea
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { useAuthStore, type User } from '@shared/store/authStore';
 import { showToast } from '../hooks/useToast';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -69,7 +69,7 @@ export default function ReactivateAccountScreen() {
         showToast('error', 'Account Deleted', 'This account has been permanently deleted. Please create a new one.');
         router.replace('/login' as any);
       } else {
-        showToast('error', 'Reactivation Failed', err?.response?.data?.detail || 'Could not reactivate. Please try again.');
+        showToast('error', 'Reactivation Failed', getApiErrorMessage(err, 'Could not reactivate. Please try again.'));
       }
     } finally {
       setBusy(false);

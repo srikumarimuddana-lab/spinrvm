@@ -20,7 +20,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 import { useUpdateDriverMe } from '@shared/hooks/queries';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -100,7 +100,7 @@ export default function VehicleInfoScreen() {
             }
         } catch (error: any) {
             setVehicleTypesStatus('error');
-            showToast('error', 'Error', error?.response?.data?.detail || 'Failed to load vehicle types. Check your connection and try again.');
+            showToast('error', 'Error', getApiErrorMessage(error, 'Could not load vehicle types. Check your connection.'));
         }
     };
 
@@ -174,7 +174,7 @@ export default function VehicleInfoScreen() {
                             showToast('success', 'Vehicle Saved', 'Vehicle information updated. Please wait for admin approval.');
                             router.back();
                         } catch (err: any) {
-                            showToast('error', 'Update Failed', err.response?.data?.detail || 'Failed to update vehicle information');
+                            showToast('error', 'Update Failed', getApiErrorMessage(err, 'Could not update your vehicle info. Please try again.'));
                         } finally {
                             setSaving(false);
                         }

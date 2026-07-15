@@ -299,7 +299,16 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // (iOS equivalent of the Android BigPicture). Backend sends the URL via
         // apns.fcm_options.image + mutable-content. NATIVE change — needs a new
         // build (and an EAS iOS build to validate; not exercised by tsc/Jest).
-        './plugins/withOfferCardNotificationService',
+        //
+        // TEMPORARILY DISABLED for dev/testing iOS builds: the NSE is a separate
+        // signing target (com.spinr.driver.OfferCardService) that needs its own
+        // Apple provisioning profile, which blocks the archive until EAS is given
+        // Apple-account access to mint it. The extension is only a push-image
+        // enhancement (offer pushes still arrive, just without the rich banner),
+        // so it's safe to skip while testing. RE-ENABLE before the production
+        // cutover and provision the extension's profile (eas credentials -> log
+        // in to Apple -> set up com.spinr.driver.OfferCardService).
+        // './plugins/withOfferCardNotificationService',
         // Android Auto is provided by @iternio/react-native-auto-play, which ships
         // its own merged AndroidManifest (CarAppService + permissions) and needs no
         // app-side config plugin. iOS CarPlay stays dormant: it requires an

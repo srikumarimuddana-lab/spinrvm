@@ -32,10 +32,24 @@ import * as Clipboard from 'expo-clipboard';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { ScreenHeader } from '../../../components/ScreenHeader';
+import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// Each tab screen is wrapped in its own ErrorBoundary — Home (index.tsx) and
+// Activity (activity.tsx) already are, but Profile was not. Without this, a
+// render error in the Profile tab bubbles past the tab navigator to the ROOT
+// boundary and blanks the ENTIRE app, including Home, so the driver can't even
+// go online. Isolating it here keeps a Profile failure contained to that tab.
 export default function ProfileScreen() {
+  return (
+    <ErrorBoundary>
+      <ProfileScreenInner />
+    </ErrorBoundary>
+  );
+}
+
+function ProfileScreenInner() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { user, driver: driverData, logout, logoutAll, fetchDriverProfile, updateProfileImage } = useAuthStore();

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, Dimensions, BackHandler, Platform,
+  View, Text, TouchableOpacity, StyleSheet, Dimensions, BackHandler, Platform, Alert,
 } from 'react-native';
 import { create } from 'zustand';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -31,11 +31,25 @@ export function showAlert(
   message: string,
   buttons?: AlertButton[],
 ) {
+  const btns = buttons || [{ text: 'OK' }];
+  // iOS: use the OS-native alert. It's rendered by UIKit, not React Native,
+  // so it sidesteps every RN Modal / overlay quirk on iOS (the split-screen
+  // presentation, New-Architecture host-view issues, etc.) and always floats
+  // correctly over whatever is on screen. Android keeps the custom overlay
+  // below, which behaves correctly there.
+  if (Platform.OS === 'ios') {
+    Alert.alert(
+      title,
+      message,
+      btns.map((b) => ({ text: b.text, onPress: b.onPress, style: b.style })),
+    );
+    return;
+  }
   useAlertStore.setState({
     visible: true,
     title,
     message,
-    buttons: buttons || [{ text: 'OK' }],
+    buttons: btns,
   });
 }
 

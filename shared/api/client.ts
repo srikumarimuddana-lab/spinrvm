@@ -407,6 +407,21 @@ export const extractError = (
  * 400". Falls back to the caller's message only when the server sent no usable
  * detail (network error, empty body).
  */
+// Toasts render at most two lines (see rider Toast.tsx / driver toastConfig.tsx),
+// so clamp long backend messages to a length that fits that box, cutting at a
+// word boundary and appending an ellipsis rather than truncating mid-word.
+export const TOAST_MESSAGE_MAX = 140;
+
+export function clampToastMessage(message: string, maxLength = TOAST_MESSAGE_MAX): string {
+  const trimmed = message.trim().replace(/\s+/g, ' ');
+  if (trimmed.length <= maxLength) return trimmed;
+  const slice = trimmed.slice(0, maxLength - 1);
+  const lastSpace = slice.lastIndexOf(' ');
+  // Prefer a word boundary if one exists reasonably close to the end.
+  const cut = lastSpace > maxLength * 0.6 ? slice.slice(0, lastSpace) : slice;
+  return `${cut.replace(/[\s.,;:!-]+$/, '')}…`;
+}
+
 export function getApiErrorMessage(
   err: unknown,
   fallback = 'Something went wrong. Please try again.',
@@ -420,7 +435,7 @@ export function getApiErrorMessage(
     const { message } = extractError(data, anyErr?.response?.status);
     // extractError returns the default 'Request failed' when the body had no
     // recognizable detail — treat that as "no useful message" and fall back.
-    if (message && message !== 'Request failed') return message;
+    if (message && message !== 'Request failed') return clampToastMessage(message);
   }
   // No usable response body. Some callers (e.g. authStore.createProfile) extract
   // the backend detail themselves and re-throw `new Error(detail)`, so a
@@ -433,7 +448,7 @@ export function getApiErrorMessage(
     !/^Network Error$/i.test(raw) &&
     !/^timeout of /i.test(raw)
   ) {
-    return raw;
+    return clampToastMessage(raw);
   }
   return fallback;
 }

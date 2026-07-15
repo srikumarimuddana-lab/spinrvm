@@ -399,7 +399,13 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
                 from services.guest_notification_service import notify_guest_driver_assigned  # type: ignore
             spawn(notify_guest_driver_assigned(dict(ride), dict(driver)))
     await _deps.manager.broadcast_ride_status(
-        ride_id, RideStatus.DRIVER_ACCEPTED, rider_id=(ride or {}).get("rider_id")
+        ride_id,
+        RideStatus.DRIVER_ACCEPTED,
+        rider_id=(ride or {}).get("rider_id"),
+        # Post-claim re-read (line ~235): rides.version bumped by the migration-225
+        # trigger on the accept UPDATE. Lets clients order this driver_accepted
+        # event ahead of any stale searching/offer event still in flight.
+        version=(ride or {}).get("version"),
     )
 
     # Start the rider's live activity (no-op until the app registers its token).

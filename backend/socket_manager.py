@@ -404,6 +404,7 @@ class ConnectionManager:
         status: str,
         rider_id: str | None = None,
         driver_user_id: str | None = None,
+        version: int | None = None,
         **extra,
     ):
         """Emit a unified ``ride_status_changed`` event for a ride transition.
@@ -417,8 +418,18 @@ class ConnectionManager:
         ``rider_id`` and ``driver_user_id`` are optional — pass None for
         connections that shouldn't receive the event (e.g. driver_user_id=None
         for transitions the driver triggers themselves and already knows about).
+
+        ``version`` is the ride's monotonic event version (rides.version, bumped
+        by the migration-225 trigger on every UPDATE). Pass the value from the
+        post-update rides row so clients can drop stale / out-of-order events by
+        comparing it against the highest they've applied. It is stamped
+        authoritatively (wins over any ``version`` in ``extra``) and OMITTED when
+        None — a caller with no version must not emit ``"version": null``, which
+        a client cannot tell apart from version 0.
         """
         payload = {"type": "ride_status_changed", "ride_id": ride_id, "status": status, **extra}
+        if version is not None:
+            payload["version"] = version
         if rider_id:
             try:
                 await self.send_personal_message(payload, f"rider_{rider_id}")
@@ -441,18 +452,28 @@ class ConnectionManager:
 
         B-P3-1: same per-message timeout as broadcast() — a stuck admin
         client must not stall the entire admin fan-out.
+
+        Sends are dispatched CONCURRENTLY (asyncio.gather): a slow/half-open
+        admin socket must only cost its own per-socket timeout, not serialise
+        the whole fleet's fan-out (with A admins, sequential awaits made
+        worst-case latency A × timeout). Each send owns its timeout + error
+        handling so one failure never affects the others.
         """
         keys = [k for k in self.active_connections if k.startswith(prefix)]
-        for key in keys:
+
+        async def _send_one(key: str) -> None:
             ws = self.active_connections.get(key)
             if ws is None:
-                continue
+                return
             try:
                 await asyncio.wait_for(ws.send_json(message), timeout=_BROADCAST_SEND_TIMEOUT)
             except asyncio.TimeoutError:
                 logger.warning(f"Failed to send to {key}: timed out after {_BROADCAST_SEND_TIMEOUT}s")
             except Exception as e:
                 logger.warning(f"Failed to send to {key}: {e}")
+
+        if keys:
+            await asyncio.gather(*(_send_one(key) for key in keys))
 
     async def update_driver_location(self, driver_id: str, lat: float, lng: float):
         try:

@@ -8,7 +8,7 @@ import { RideStatus } from '../constants/rideStatus';
 import { recordNonFatal } from '../utils/crashlytics';
 
 const ACTIVE_RIDE_KEY = '@spinr:active_ride';
-const TERMINAL_STATUSES: Set<string> = new Set([RideStatus.COMPLETED, RideStatus.CANCELLED, RideStatus.FAILED]);
+const TERMINAL_STATUSES: Set<string> = new Set([RideStatus.COMPLETED, RideStatus.CANCELLED]);
 
 function isErrorLike(e: unknown): e is { message: string } {
   return typeof e === 'object' && e !== null && 'message' in e;
@@ -189,6 +189,12 @@ interface RideState {
   currentDriver: Driver | null;
   driverEtaSeconds: number | null; // road-network ETA from last WS location_update
   _lastWsDriverPositionAt: number; // epoch ms of last WS-driven position update
+  // Monotonic ride-event ordering (V3, issue #11). Highest ride_status_changed
+  // version applied, plus the ride it belongs to. rides.version is per-ride
+  // (bumped by the migration-225 trigger), so a new ride resets the baseline.
+  // Internal — only applyRideStatusFromWS reads/writes these.
+  _lastEventRideId: string | null;
+  _lastEventVersion: number;
   savedAddresses: SavedAddress[];
   recentSearches: Location[];
   scheduledTime: Date | null;
@@ -295,6 +301,10 @@ export const useRideStore = create<RideState>((set, get) => ({
   currentDriver: null,
   driverEtaSeconds: null,
   _lastWsDriverPositionAt: 0,
+  // Monotonic ride-event ordering baseline (V3). -1 so version 0 (a ride's
+  // first bump) is strictly greater and applies.
+  _lastEventRideId: null,
+  _lastEventVersion: -1,
   chatMessages: [],
   _clearedRideId: null,
   wsConnected: false,
@@ -1040,6 +1050,25 @@ export const useRideStore = create<RideState>((set, get) => ({
   applyRideStatusFromWS: (rideId, status, extra) => {
     const { currentRide, currentDriver } = get();
     if (!currentRide || currentRide.id !== rideId) return;
+
+    // Drop stale / out-of-order events by the server-authoritative monotonic
+    // ride version (V3, issue #11) — e.g. a delayed driver_arrived arriving
+    // after in_progress, or a reconnect-replay duplicate. rides.version
+    // (migration-225 trigger) is stamped into the payload and forwarded here in
+    // `extra`. Events without a numeric version (un-migrated backend, or a
+    // specific event type that doesn't carry one) always apply and leave the
+    // baseline untouched, so this is behaviour-preserving. Versions are
+    // per-ride; a different ride resets the baseline (single-slot tracker — a
+    // driver/rider has one active ride at a time, so events for two rides never
+    // interleave here, and the side-effects below are idempotent regardless).
+    const rawVersion = extra?.version;
+    if (typeof rawVersion === 'number') {
+      const { _lastEventRideId, _lastEventVersion } = get();
+      if (_lastEventRideId === rideId && rawVersion <= _lastEventVersion) {
+        return; // stale or duplicate — drop without mutating ride state
+      }
+      set({ _lastEventRideId: rideId, _lastEventVersion: rawVersion });
+    }
 
     // Apply the status transition and any extra fields (like total_fare
     // on ride_completed). This provides an instant in-app state change

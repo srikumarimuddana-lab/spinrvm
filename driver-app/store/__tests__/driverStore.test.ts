@@ -405,6 +405,26 @@ describe('driverStore — ride state machine', () => {
     expect(state.countdownSeconds).toBe(0);
   });
 
+  test('fetchActiveRide overrides a stale ride_offered when the server shows a later forward status', async () => {
+    // Issue #5: a live local offer must not shadow an authoritative forward
+    // transition. Here the server reports driver_arrived while the client is
+    // still stuck on the offer panel — the server wins.
+    useDriverStore.setState({
+      rideState: 'ride_offered',
+      incomingRide: makeMockRide(),
+      countdownSeconds: 12,
+    });
+    mockApi.get.mockResolvedValueOnce(makeActiveRideResponse('driver_arrived') as any);
+
+    await act(async () => {
+      await useDriverStore.getState().fetchActiveRide();
+    });
+
+    const state = useDriverStore.getState();
+    expect(state.rideState).toBe('arrived_at_pickup');
+    expect(state.incomingRide).toBeNull();
+  });
+
   test('cancelRide resets to idle and clears active/incoming ride', async () => {
     useDriverStore.setState({
       rideState: 'navigating_to_pickup',

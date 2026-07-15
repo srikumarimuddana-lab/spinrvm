@@ -58,53 +58,27 @@ def _pod_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}"
 
 
-async def _has_pending_offer(driver_id: str, now: datetime) -> bool:
-    """True iff the driver has a LIVE pending offer.
+async def _has_pending_offer(driver_id: str) -> bool:
+    """True iff the driver has a pending offer — i.e. is mid-dispatch and busy.
 
-    An offer normally resolves within ~15s (accept/decline/timeout task).
-    A row still 'pending' well past that window means its in-process
-    timeout task died (crash, restart, DB outage — 2026-07-04): treating it
-    as "legitimately busy" parked the driver unavailable forever, because
-    this guard skipped them and go-online kept re-asserting unavailable.
-    Stale rows are expired here (best-effort, conditional on still-pending
-    so a concurrent accept always wins) and no longer count as busy.
-    Missing/unparseable offered_at counts as live — never reap on ambiguity.
+    Offer expiry — including a stale offer whose in-process timeout task died —
+    is owned by ``offer_expiry_reaper``, which expires it via
+    ``process_expired_offer`` with the full miss-streak / acceptance-rate /
+    insurance-period / re-dispatch side-effects. The claim reaper therefore no
+    longer expires offers itself: a bare ``pending -> expired`` flip here would
+    win the atomic claim WITHOUT those side-effects (e.g. leaving no insurance
+    Period-1 audit row and not re-dispatching the ride). It only checks whether
+    an offer exists so it never releases a driver who is mid-offer. A stale
+    pending offer is transient — the offer reaper clears it (and releases the
+    driver with correct accounting) within one interval.
     """
     rows = await db.get_rows(
         "ride_offers",
         {"driver_id": driver_id, "status": "pending"},
-        limit=5,
-        columns="id,offered_at",
+        limit=1,
+        columns="id",
     )
-    cutoff = now - timedelta(seconds=RECLAIM_THRESHOLD_SECONDS)
-    live = False
-    for offer in rows or []:
-        ts = parse_iso_utc(offer.get("offered_at"))
-        if ts is None or ts > cutoff:
-            live = True
-            continue
-        try:
-            expired = await db.update_one(
-                "ride_offers",
-                {"id": offer["id"], "status": "pending"},
-                {"status": "expired", "responded_at": now.isoformat()},
-            )
-        except Exception as e:
-            logger.error("[claim-reaper] failed to expire offer %s: %s", offer.get("id"), e, exc_info=True)
-            live = True  # couldn't normalize — leave the driver alone this tick
-            continue
-        if expired:
-            logger.warning(
-                "[claim-reaper] expired orphaned pending offer %s (driver %s, offered_at=%s)",
-                offer.get("id"),
-                driver_id,
-                offer.get("offered_at"),
-            )
-        else:
-            # Zero rows matched: the offer was accepted/declined between our
-            # read and the conditional write — the driver is genuinely busy.
-            live = True
-    return live
+    return bool(rows)
 
 
 async def _has_active_ride(driver_id: str) -> bool:
@@ -141,8 +115,8 @@ async def _reap_tick() -> None:
             continue
 
         driver_id = driver["id"]
-        # Legitimately busy? LIVE pending offer or active ride → leave alone.
-        if await _has_pending_offer(driver_id, now) or await _has_active_ride(driver_id):
+        # Legitimately busy? A pending offer or active ride → leave alone.
+        if await _has_pending_offer(driver_id) or await _has_active_ride(driver_id):
             continue
 
         try:

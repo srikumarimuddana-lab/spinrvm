@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from enum import Enum
 from typing import Optional
@@ -77,6 +78,65 @@ class CorporateAccountCreate(CorporateAccountBase):
     The public self-serve signup flow (Plan not in this document) will wrap
     this schema with an outer form that also uploads the KYB document.
     """
+
+
+class CorporateSelfServeSignup(BaseModel):
+    """Payload for the public self-serve company signup (migration 224).
+
+    Submitted AUTHENTICATED: the caller has already completed the portal
+    work-email OTP login, so their verified email/user_id come from the
+    session — never from this payload. Unlike the staff-facing
+    ``CorporateAccountCreate``, the KYB-relevant fields (legal_name,
+    business_number) are REQUIRED here: a self-registering company must
+    provide them up front so the staff KYB queue has something to review.
+    ``province`` doubles as ``tax_region`` (two-letter code, validated).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(..., min_length=1, max_length=200)
+    legal_name: str = Field(..., min_length=1, max_length=300)
+    business_number: str = Field(..., max_length=20)
+    industry: Optional[str] = Field(None, max_length=100)
+    size_tier: SizeTier = SizeTier.SMB
+    contact_name: str = Field(..., min_length=1, max_length=100)
+    contact_phone: Optional[str] = Field(None, max_length=32)
+    billing_email: Optional[EmailStr] = None
+    address_line1: str = Field(..., min_length=1, max_length=200)
+    address_line2: Optional[str] = Field(None, max_length=200)
+    city: str = Field(..., min_length=1, max_length=100)
+    province: str = Field(..., min_length=2, max_length=2)
+    postal_code: str = Field(..., min_length=6, max_length=7)
+    locale: Locale = Locale.EN_CA
+    # Business terms consent (PIPEDA-adjacent recording): the client sends the
+    # version string it displayed; acceptance must be explicit.
+    terms_accepted: bool
+    terms_version: str = Field(..., min_length=1, max_length=32)
+
+    @field_validator("business_number")
+    @classmethod
+    def _check_bn(cls, v: str) -> str:
+        return validate_cra_business_number(v)
+
+    @field_validator("province")
+    @classmethod
+    def _check_province(cls, v: str) -> str:
+        return validate_canadian_tax_region(v.strip().upper())
+
+    @field_validator("postal_code")
+    @classmethod
+    def _check_postal(cls, v: str) -> str:
+        canon = v.strip().upper().replace(" ", "")
+        if not re.match(r"^[A-Z]\d[A-Z]\d[A-Z]\d$", canon):
+            raise ValueError("invalid Canadian postal code")
+        return f"{canon[:3]} {canon[3:]}"
+
+    @field_validator("terms_accepted")
+    @classmethod
+    def _check_terms(cls, v: bool) -> bool:
+        if not v:
+            raise ValueError("business terms must be accepted")
+        return v
 
 
 class CorporateAccountUpdate(BaseModel):

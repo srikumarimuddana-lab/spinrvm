@@ -9,9 +9,12 @@ The pickup OTP is deliberately NEVER returned to the booker: it goes to the
 customer by SMS only, so a desk employee cannot proxy-start the trip
 (meter-start fraud). The tracking URL is safe to share — the public resolver
 is PII-scrubbed and expires 24h after mint.
-"""
 
-from __future__ import annotations
+NOTE: no `from __future__ import annotations` — string annotations resolved
+through slowapi's @company_booking_limit wrapper globals silently downgraded
+the POST /bookings pydantic body to a QUERY param, 422ing every real booking
+(same failure mode documented in corporate_signup.py; auth.py precedent).
+"""
 
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -91,6 +94,21 @@ def _booking_row(ride: Dict[str, Any], member: Optional[Dict[str, Any]], guest: 
     }
 
 
+async def _require_company_active(company_id: str) -> None:
+    """Typed 403 for non-active companies (M2.6): a pending_verification /
+    suspended / closed company cannot book. The portal reads the `code` to
+    route the user to the verification page instead of a raw error."""
+    company = await db_supabase.get_corporate_account_by_id(company_id) or {}
+    if (company.get("status") or "").lower() != "active":
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "company_not_active",
+                "message": "This company hasn't completed verification yet. Bookings unlock once it's approved.",
+            },
+        )
+
+
 @router.post("/bookings")
 @company_booking_limit
 async def create_booking(
@@ -99,6 +117,7 @@ async def create_booking(
     ctx: dict = Depends(require_company_member),
 ):
     """Book a ride for a customer on the company's dime (booker's allowance)."""
+    await _require_company_active(ctx["company_id"])
     result = await create_company_guest_booking(ctx["company_id"], ctx["member"], body)
     ride = result["ride"]
     _metric_inc(

@@ -24,7 +24,7 @@ How it works
 2. Reads `backend/migrations/24_schema_migrations.sql` first if the
    tracking table is missing (bootstrap case), then consults
    `schema_migrations` to decide what's pending.
-3. For each pending file (lexicographically sorted), wraps the file's
+3. For each pending file (numeric-prefix order; see migration_sort_key), wraps the file's
    contents in a single transaction with an INSERT into
    schema_migrations at the end, so either the whole migration +
    provenance row commits together, or neither does.
@@ -54,9 +54,28 @@ def _checksum(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def migration_sort_key(name: str) -> Tuple[int, str]:
+    """Order migrations by their numeric prefix, full filename as tiebreak.
+
+    Plain lexicographic sort mis-orders unpadded prefixes ("157_…" before
+    "15_…", "224_…" before "48_…"), which breaks a fresh-environment run the
+    moment a later migration ALTERs a table a two-digit migration created.
+    Files with no numeric prefix sort last, lexicographically.
+    """
+    digits = ""
+    for ch in name:
+        if not ch.isdigit():
+            break
+        digits += ch
+    return (int(digits) if digits else sys.maxsize, name)
+
+
 def _discover_migrations() -> List[Path]:
-    """Return all .sql files in MIGRATIONS_DIR sorted lexicographically."""
-    files = sorted(p for p in MIGRATIONS_DIR.glob("*.sql") if p.is_file())
+    """Return all .sql files in MIGRATIONS_DIR in numeric-prefix order."""
+    files = sorted(
+        (p for p in MIGRATIONS_DIR.glob("*.sql") if p.is_file()),
+        key=lambda p: migration_sort_key(p.name),
+    )
     if not files:
         raise RuntimeError(f"No migrations found in {MIGRATIONS_DIR}")
     return files

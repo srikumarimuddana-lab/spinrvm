@@ -1,4 +1,4 @@
--- 216_seed_rider_faqs.sql
+-- 230_seed_rider_faqs.sql
 --
 -- Seeds rider-audience FAQ content (booking, fares/surge, payments/refunds,
 -- wallet, promos, safety, accessibility, receipts, support). The driver app

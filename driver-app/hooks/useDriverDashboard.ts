@@ -11,6 +11,7 @@ import { router } from 'expo-router';
 
 import { useAuthStore } from '@shared/store/authStore';
 import { useDriverStore } from '../store/driverStore';
+import { useAlertPrefsStore } from '../store/alertPrefsStore';
 import { useRideOfferSound, setOfferSoundUrl } from './useRideOfferSound';
 import { tKey } from '../i18n';
 import api from '@shared/api/client';
@@ -128,7 +129,7 @@ interface UseDriverDashboardReturn {
 // Lazy-load Notifee helpers; mirrors the gating in _layout.tsx so the
 // dashboard still mounts in Expo Go / web (where the native module is absent).
 let _dismissRideOfferNotification: (() => Promise<void>) | null = null;
-let _displayRideOfferNotification: ((o: any, opts?: { silent?: boolean }) => Promise<void>) | null = null;
+let _displayRideOfferNotification: ((o: any, opts?: { silent?: boolean; muted?: boolean }) => Promise<void>) | null = null;
 if (Platform.OS === 'android' || Platform.OS === 'ios') {
   try {
     const _notifee = require('../services/notifeeService');
@@ -159,6 +160,9 @@ function _surfaceOfferNotification(data: any): void {
   // sound here would double-ring. Backgrounded-but-alive (WS still connected)
   // keeps the audible heads-up since the in-app loop can't be heard.
   const silent = AppState.currentState === 'active';
+  // Settings → Sound & Haptics → Sound Effects: suppress the channel/APNs
+  // sound (audio only — the card and full-screen wake still fire).
+  const muted = !useAlertPrefsStore.getState().soundEffects;
   display({
     ride_id: data.ride_id,
     booking_id: data.booking_id || data.ride_id,
@@ -174,7 +178,7 @@ function _surfaceOfferNotification(data: any): void {
     countdown_seconds: _num(data.countdown_seconds),
     offer_expires_at: data.offer_expires_at || undefined,
     offer_card_url: data.offer_card_url || undefined,
-  }, { silent }).catch((e: any) => console.warn('[Offer] Notifee surface failed:', e));
+  }, { silent, muted }).catch((e: any) => console.warn('[Offer] Notifee surface failed:', e));
 }
 const PENDING_ACTION_KEY = 'spinr_pending_notifee_action';
 
@@ -740,7 +744,9 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           );
           break;
         }
-        Vibration.vibrate([0, 500, 200, 500]);
+        if (useAlertPrefsStore.getState().vibration) {
+          Vibration.vibrate([0, 500, 200, 500]);
+        }
         offerSound.play();
         // Backgrounded-but-alive: the in-app panel is hidden, so surface the
         // heads-up Notifee card here — the WS offer is the first, most reliable
@@ -1462,7 +1468,9 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         const existing = _fcmExisting;
         const isUpdate = existing?.ride_id === data.ride_id;
         if (!isUpdate) {
-          Vibration.vibrate([0, 500, 200, 500]);
+          if (useAlertPrefsStore.getState().vibration) {
+            Vibration.vibrate([0, 500, 200, 500]);
+          }
           offerSound.play();
           _surfaceOfferNotification(data);
           router.replace('/driver/' as any);

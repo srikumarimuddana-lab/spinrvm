@@ -198,13 +198,20 @@ export async function ensureNotifeeReady(): Promise<void> {
  * `silent: true` is the foreground variant (app open, in-app panel already
  * visible and the MP3 loop already playing): banner + vibration only, no
  * channel sound, no full-screen intent.
+ *
+ * `muted: true` suppresses AUDIO ONLY (driver turned off Settings → Sound &
+ * Haptics → Sound Effects): no channel sound / APNs sound / loop, but the
+ * heads-up card and full-screen wake still fire — the driver opted out of
+ * noise, not of seeing offers.
  */
 export async function displayRideOfferNotification(
     offer: RideOfferDisplayData,
-    opts?: { silent?: boolean },
+    opts?: { silent?: boolean; muted?: boolean },
 ): Promise<void> {
     await ensureNotifeeReady();
     const silent = opts?.silent === true;
+    // Everything audible keys off `muted`; visibility behaviour keys off `silent`.
+    const muted = silent || opts?.muted === true;
 
     const timeoutMs = getRideOfferTimeoutMs(offer);
     if (timeoutMs <= 0) {
@@ -257,7 +264,7 @@ export async function displayRideOfferNotification(
         subtitle: summaryLine || undefined,
         data: dataPayload,
         android: {
-            channelId: silent ? RIDE_OFFER_SILENT_CHANNEL_ID : RIDE_OFFER_CHANNEL_ID,
+            channelId: muted ? RIDE_OFFER_SILENT_CHANNEL_ID : RIDE_OFFER_CHANNEL_ID,
             category: AndroidCategory.CALL,
             importance: AndroidImportance.HIGH,
             visibility: AndroidVisibility.PUBLIC,
@@ -272,7 +279,7 @@ export async function displayRideOfferNotification(
             ongoing: true,
             autoCancel: false,
             showTimestamp: true,
-            ...(silent ? {} : { sound: 'ride_offer' }),
+            ...(muted ? {} : { sound: 'ride_offer' }),
             vibrationPattern: [300, 500, 300, 500],
             // Rich card: when the backend handed us a signed banner URL, expand
             // to the BigPicture fare card; otherwise fall back to BigText. If
@@ -310,17 +317,17 @@ export async function displayRideOfferNotification(
             ...(silent ? {} : { fullScreenAction: { id: 'default', launchActivity: 'default' } }),
             // Heads-up takes priority over silent notifications
             asForegroundService: false,
-            loopSound: !silent,
+            loopSound: !muted,
             timeoutAfter: timeoutMs,
         },
         ios: {
             categoryId: RIDE_OFFER_CATEGORY_ID,
             critical: false, // requires special Apple entitlement
-            ...(silent ? {} : { sound: 'ride_offer.caf' }),
+            ...(muted ? {} : { sound: 'ride_offer.caf' }),
             interruptionLevel: 'timeSensitive' as const, // iOS 15+
             foregroundPresentationOptions: {
                 alert: true,
-                sound: !silent,
+                sound: !muted,
                 badge: true,
                 banner: true,
                 list: true,
@@ -349,7 +356,7 @@ export async function displayRideOfferNotification(
                 body,
                 data: dataPayload,
                 android: {
-                    channelId: silent ? RIDE_OFFER_SILENT_CHANNEL_ID : RIDE_OFFER_CHANNEL_ID,
+                    channelId: muted ? RIDE_OFFER_SILENT_CHANNEL_ID : RIDE_OFFER_CHANNEL_ID,
                     importance: AndroidImportance.HIGH,
                     smallIcon: RIDE_OFFER_SMALL_ICON,
                     pressAction: { id: 'default', launchActivity: 'default' },

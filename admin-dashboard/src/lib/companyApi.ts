@@ -166,6 +166,76 @@ export function portalHome(companyId: string, role?: string): string {
         : `/company-portal/${companyId}/book`;
 }
 
+/* ── Self-serve company signup (M1.5) ── */
+
+export interface CompanySignupPayload {
+    name: string;
+    legal_name: string;
+    business_number: string;
+    industry?: string | null;
+    contact_name: string;
+    contact_phone?: string | null;
+    address_line1: string;
+    address_line2?: string | null;
+    city: string;
+    province: string;
+    postal_code: string;
+    terms_accepted: boolean;
+    terms_version: string;
+}
+
+export interface CompanySignupResult {
+    success: boolean;
+    company: { id: string; name: string; status: string };
+    member: { id: string; role: string };
+    message: string;
+}
+
+// Authenticated-first: the caller has already completed the email-OTP login,
+// so companyRequest attaches the bearer + CSRF token. Identity (work email)
+// comes from the session server-side — it is deliberately NOT in the payload.
+export const registerCompany = (payload: CompanySignupPayload) =>
+    companyRequest<CompanySignupResult>("/api/portal/companies/signup", {
+        method: "POST",
+        body: JSON.stringify(payload),
+    });
+
+/* ── KYB verification (M2.5) ── */
+
+export interface CompanyKybState {
+    state: "not_submitted" | "under_review" | "rejected" | "suspended" | "approved" | "closed";
+    submitted_at?: string | null;
+    reviewed_at?: string | null;
+    review_note?: string | null;
+    can_resubmit: boolean;
+}
+
+export const getCompanyKyb = (companyId: string) =>
+    companyRequest<CompanyKybState>(`/api/company/${companyId}/kyb`);
+
+export const getKybUploadUrl = (companyId: string, contentType: string) =>
+    companyRequest<{ signed_url: string; path: string; expires_at: string }>(
+        `/api/company/${companyId}/kyb/upload-url`,
+        { method: "POST", body: JSON.stringify({ content_type: contentType }) }
+    );
+
+// Raw PUT to the short-lived signed URL — goes straight to storage, not the
+// backend, so companyRequest (auth headers/CSRF) is deliberately not used.
+export async function uploadKybFile(signedUrl: string, file: File): Promise<void> {
+    const res = await fetch(signedUrl, {
+        method: "PUT",
+        headers: { "Content-Type": file.type },
+        body: file,
+    });
+    if (!res.ok) throw new Error("Upload failed — please try again.");
+}
+
+export const submitKybDocument = (companyId: string, path: string) =>
+    companyRequest<{ success: boolean; state: string; submitted_at?: string; resubmitted: boolean }>(
+        `/api/company/${companyId}/kyb/submit`,
+        { method: "POST", body: JSON.stringify({ path }) }
+    );
+
 export const getMyWorkProfiles = () =>
     companyRequest<CompanyMembershipProfile[]>("/api/rider/work-profile");
 
@@ -345,10 +415,17 @@ export const inviteCompanyMember = (
     companyId: string,
     body: { email: string; role: CorporateMemberRole; policy_override?: boolean }
 ) =>
-    companyRequest<{ member: CorporateMember; invite_url: string }>(
-        `/api/company/${companyId}/members/invite`,
-        { method: "POST", body: JSON.stringify(body) }
-    );
+    companyRequest<{
+        member: CorporateMember;
+        invite_url: string;
+        // M3.1: backend emails the web link; email_sent=false → show the
+        // copy-link fallback instead of pretending delivery succeeded.
+        web_invite_url?: string | null;
+        email_sent?: boolean;
+    }>(`/api/company/${companyId}/members/invite`, {
+        method: "POST",
+        body: JSON.stringify(body),
+    });
 
 export const updateCompanyMember = (
     companyId: string,

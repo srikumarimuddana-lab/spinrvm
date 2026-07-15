@@ -26,6 +26,7 @@ import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
 import { useVehicleTypesSync } from '@shared/store/vehicleTypeStore';
 import { useDriverStore } from '../store/driverStore';
+import { useAlertPrefsStore } from '../store/alertPrefsStore';
 import BrandSplash from '../components/BrandSplash';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
@@ -331,6 +332,11 @@ function RootLayout() {
         // flag can't push a user with existing profile data back into
         // onboarding.
         await Promise.all([initializeAuth(), initializeLocation()]);
+
+        // Device-local alert prefs (sound/vibration) must be hydrated
+        // before the first ride offer can ring, not on first Settings
+        // visit — fire-and-forget is fine, consumers read getState().
+        useAlertPrefsStore.getState().loadAlertPrefs();
 
         // Firebase native modules: Crashlytics + App Check. FCM token
         // registration is deferred to a separate effect that waits for

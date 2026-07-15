@@ -13,6 +13,10 @@ import api from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 import type { ThemeColors } from '@shared/theme/index';
 import { useTranslation } from '../i18n';
+import {
+  useNotificationPreferences,
+  useUpdateNotificationPreferences,
+} from '@shared/hooks/queries';
 
 export default function PrivacySettingsScreen() {
   const router = useRouter();
@@ -20,9 +24,24 @@ export default function PrivacySettingsScreen() {
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { logout } = useAuthStore();
   const { t } = useTranslation();
-  const [locationAlways, setLocationAlways] = useState(false);
-  const [shareRideData, setShareRideData] = useState(true);
+  // Push mirrors Settings → Notifications: same server-side preference
+  // (notification_preferences.push_enabled), so the two screens agree.
   const [pushNotifications, setPushNotifications] = useState(true);
+  const { data: notificationPrefs } = useNotificationPreferences();
+  const updatePreferences = useUpdateNotificationPreferences();
+  useEffect(() => {
+    const prefs: any = notificationPrefs;
+    if (prefs?.push_enabled != null) setPushNotifications(Boolean(prefs.push_enabled));
+  }, [notificationPrefs]);
+  const handlePushToggle = (value: boolean) => {
+    setPushNotifications(value);
+    updatePreferences.mutate({ push_enabled: value }, {
+      onError: () => {
+        setPushNotifications(!value);
+        showToast('Update Failed', 'Could not save your preference. Please try again.', 'danger');
+      },
+    });
+  };
   // Marketing consent (CASL): express opt-in, so every channel DEFAULTS OFF.
   // Hydrated from the backend on mount; each toggle persists immediately.
   const [marketingEmails, setMarketingEmails] = useState(false);
@@ -112,25 +131,6 @@ export default function PrivacySettingsScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
-        {/* Location */}
-        <Text style={styles.sectionTitle}>{t('privacy.location_section')}</Text>
-        <View style={styles.card}>
-          <SettingRow
-            icon="location" iconColor="#3B82F6" iconBg="#DBEAFE"
-            title={t('privacy.background_location')}
-            subtitle={t('privacy.background_location_subtitle')}
-            toggle value={locationAlways} onToggle={setLocationAlways}
-            colors={colors}
-          />
-          <SettingRow
-            icon="navigate" iconColor="#10B981" iconBg="#ECFDF5"
-            title={t('privacy.share_live')}
-            subtitle={t('privacy.share_live_subtitle')}
-            toggle value={shareRideData} onToggle={setShareRideData}
-            colors={colors}
-          />
-        </View>
-
         {/* Notifications */}
         <Text style={styles.sectionTitle}>{t('privacy.notifications_section')}</Text>
         <View style={styles.card}>
@@ -138,7 +138,7 @@ export default function PrivacySettingsScreen() {
             icon="notifications" iconColor="#F59E0B" iconBg="#FEF3C7"
             title={t('privacy.push_notifications')}
             subtitle={t('privacy.push_notifications_subtitle')}
-            toggle value={pushNotifications} onToggle={setPushNotifications}
+            toggle value={pushNotifications} onToggle={handlePushToggle}
             colors={colors}
           />
           <SettingRow

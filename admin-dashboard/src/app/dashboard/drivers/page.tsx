@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, reviewDriverPhoto, getDriverVehicleHistory, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, getDriverReferrals, retryPayout, refreshDriverStripeKyc, revealDriverSin, logPiiReveal, getAdminSubscriptionPayments, type DriverLiveStats, type DriverPayoutSummary, type DriverReferralSummary } from "@/lib/api";
+import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, reviewDriverPhoto, getDriverVehicleHistory, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, getDriverReferrals, getDriverTraining, retryPayout, refreshDriverStripeKyc, revealDriverSin, logPiiReveal, getAdminSubscriptionPayments, type DriverLiveStats, type DriverPayoutSummary, type DriverReferralSummary, type DriverTraining } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
@@ -14,9 +14,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
-import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Shield, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, EyeOff, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2, RefreshCw } from "lucide-react";
+import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Shield, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, EyeOff, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2, RefreshCw, GraduationCap, Award, Upload } from "lucide-react";
 import { maskEmail, maskPhone, maskPlate } from "@/lib/pii";
 import { DocumentReviewer } from "./_components/document-reviewer";
+import { DocumentUploadDialog } from "./_components/document-upload-dialog";
 import DriverStatsCards from "./_components/driver-stats-cards";
 import DriverCharts from "./_components/driver-charts";
 import AreaStatsTable from "./_components/area-stats-table";
@@ -94,6 +95,7 @@ export default function DriversPage() {
     const [reviewReason, setReviewReason] = useState("");
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
     const [openReviewerForDriver, setOpenReviewerForDriver] = useState<{ id: string; name: string } | null>(null);
+    const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
     const [editing, setEditing] = useState(false);
     const [editForm, setEditForm] = useState<Record<string, any>>({});
     const [saving, setSaving] = useState(false);
@@ -121,6 +123,10 @@ export default function DriversPage() {
     const [driverSubPayments, setDriverSubPayments] = useState<any[]>([]);
     const [subPaymentsLoading, setSubPaymentsLoading] = useState(false);
     const [subPaymentsLoaded, setSubPaymentsLoaded] = useState<string | null>(null);
+    const [training, setTraining] = useState<DriverTraining | null>(null);
+    const [trainingLoading, setTrainingLoading] = useState(false);
+    const [trainingLoaded, setTrainingLoaded] = useState<string | null>(null);
+    const [trainingError, setTrainingError] = useState<string | null>(null);
     const [liveStats, setLiveStats] = useState<DriverLiveStats | null>(null);
     const [payoutSummary, setPayoutSummary] = useState<DriverPayoutSummary | null>(null);
     const [payoutLoading, setPayoutLoading] = useState(false);
@@ -186,6 +192,32 @@ export default function DriversPage() {
             setSubPaymentsLoading(false);
         }
     }, [subPaymentsLoaded]);
+
+    // Request-id guard: the LMS lookup can be slow, so a response that
+    // arrives after the admin switched drivers (or triggered a newer
+    // refresh) must be discarded — otherwise driver A's training data
+    // renders in driver B's drawer. The ref also bumps on drawer close /
+    // driver change (see the selected?.id effect) to invalidate in-flight
+    // requests even when no new one starts.
+    const trainingReqRef = useRef(0);
+    const loadDriverTraining = useCallback(async (driverId: string, refresh = false) => {
+        if (!refresh && trainingLoaded === driverId) return;
+        const reqId = ++trainingReqRef.current;
+        setTrainingLoading(true);
+        setTrainingError(null);
+        try {
+            const res = await getDriverTraining(driverId, refresh);
+            if (reqId !== trainingReqRef.current) return;
+            setTraining(res);
+            setTrainingLoaded(driverId);
+        } catch (e: any) {
+            if (reqId !== trainingReqRef.current) return;
+            setTraining(null);
+            setTrainingError(e?.message || "Failed to load training data from the LMS");
+        } finally {
+            if (reqId === trainingReqRef.current) setTrainingLoading(false);
+        }
+    }, [trainingLoaded]);
 
     const loadData = useCallback(() => {
         setLoading(true);
@@ -304,9 +336,19 @@ export default function DriversPage() {
             setPayoutSummary(null);
             setDriverSubPayments([]);
             setSubPaymentsLoaded(null);
+            trainingReqRef.current++; // invalidate any in-flight LMS request
+            setTraining(null);
+            setTrainingLoaded(null);
+            setTrainingError(null);
             return;
         }
         setDetailTab("overview");
+        // Switching directly A → B: drop A's training data and invalidate
+        // any in-flight LMS request so it can't render under driver B.
+        trainingReqRef.current++;
+        setTraining(null);
+        setTrainingLoaded(null);
+        setTrainingError(null);
         // Live-stats compute Rating / Rides / Earnings / Accept Rate from
         // the rides table on demand because three of the four denormalised
         // columns on the drivers row are unreliable (see backend comment in
@@ -916,13 +958,14 @@ export default function DriversPage() {
                             </div>
                         </div>
 
-                        <Tabs value={detailTab} onValueChange={(v) => { setDetailTab(v); if (v === "rides") loadDriverRides(selected.id); if (v === "referrals") loadDriverReferrals(selected.id); if (v === "subscriptions") loadDriverSubscriptions(selected.id); }} className="flex-1 overflow-hidden flex flex-col">
+                        <Tabs value={detailTab} onValueChange={(v) => { setDetailTab(v); if (v === "rides") loadDriverRides(selected.id); if (v === "referrals") loadDriverReferrals(selected.id); if (v === "subscriptions") loadDriverSubscriptions(selected.id); if (v === "training") loadDriverTraining(selected.id); }} className="flex-1 overflow-hidden flex flex-col">
                             <TabsList className="mx-6 mt-4 w-fit">
                                 <TabsTrigger value="overview">Overview</TabsTrigger>
                                 <TabsTrigger value="documents">Documents{pendingDocsCount > 0 && <span className="ml-1.5 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full" title={`${pendingDocsCount} document${pendingDocsCount === 1 ? "" : "s"} awaiting review`}>{pendingDocsCount}</span>}</TabsTrigger>
                                 <TabsTrigger value="rides">Rides{selected.total_rides > 0 && <span className="ml-1.5 bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full">{(selected.total_rides || 0).toLocaleString()}</span>}</TabsTrigger>
                                 <TabsTrigger value="payouts">Payouts{payoutSummary && payoutSummary.summary.pending_balance > 0 && <span className="ml-1.5 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full" title={`${formatCurrency(payoutSummary.summary.pending_balance)} pending payout`}>!</span>}</TabsTrigger>
                                 <TabsTrigger value="referrals">Referrals</TabsTrigger>
+                                <TabsTrigger value="training">Training</TabsTrigger>
                                 <TabsTrigger value="subscriptions">Subscriptions</TabsTrigger>
                                 <TabsTrigger value="verification">Actions</TabsTrigger>
                                 <TabsTrigger value="notes">Notes</TabsTrigger>
@@ -1170,6 +1213,17 @@ export default function DriversPage() {
                                     <DriverReferralsTab data={referrals} loading={referralsLoading} fmtDate={fmtDate} />
                                 </TabsContent>
 
+                                {/* Training (LMS) */}
+                                <TabsContent value="training" className="mt-4">
+                                    <DriverTrainingTab
+                                        data={training}
+                                        loading={trainingLoading}
+                                        error={trainingError}
+                                        onRefresh={() => loadDriverTraining(selected.id, true)}
+                                        fmtDate={fmtDate}
+                                    />
+                                </TabsContent>
+
                                 {/* Payouts */}
                                 <TabsContent value="payouts" className="mt-4">
                                     <DriverPayoutsTab
@@ -1227,15 +1281,26 @@ export default function DriversPage() {
                                         <p className="text-xs text-muted-foreground">
                                             Review docs inline below, or open the full-screen reviewer for keyboard-driven triage.
                                         </p>
-                                        <Button
-                                            size="sm"
-                                            variant="outline"
-                                            className="h-8"
-                                            onClick={() => setOpenReviewerForDriver({ id: selected.id, name: selected.name || selected.email || selected.id })}
-                                        >
-                                            <Maximize2 className="h-3.5 w-3.5 mr-1.5" />
-                                            Open in Reviewer
-                                        </Button>
+                                        <div className="flex items-center gap-2">
+                                            <Button
+                                                size="sm"
+                                                variant="outline"
+                                                className="h-8"
+                                                onClick={() => setUploadDialogOpen(true)}
+                                            >
+                                                <Upload className="h-3.5 w-3.5 mr-1.5" />
+                                                Upload Document
+                                            </Button>
+                                            <Button
+                                                size="sm"
+                                                variant="outline"
+                                                className="h-8"
+                                                onClick={() => setOpenReviewerForDriver({ id: selected.id, name: selected.name || selected.email || selected.id })}
+                                            >
+                                                <Maximize2 className="h-3.5 w-3.5 mr-1.5" />
+                                                Open in Reviewer
+                                            </Button>
+                                        </div>
                                     </div>
                                     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                                         {docsLoading ? (
@@ -1410,6 +1475,15 @@ export default function DriversPage() {
                 driverName={openReviewerForDriver?.name}
                 onClose={() => setOpenReviewerForDriver(null)}
                 onAfterAction={() => { reloadDriverDocs(); loadData(); loadDrivers(); }}
+            />
+
+            <DocumentUploadDialog
+                open={uploadDialogOpen}
+                onClose={() => setUploadDialogOpen(false)}
+                driverId={selected?.id || null}
+                driverName={selected?.name || selected?.email || null}
+                requirements={requiredDocs}
+                onUploaded={() => { reloadDriverDocs(); loadData(); loadDrivers(); }}
             />
 
             {/* Document preview — uses shadcn Dialog (Radix Portal) so it
@@ -2095,6 +2169,195 @@ function DriverReferralsTab({ data, loading, fmtDate }: {
                     })}
                 </div>
             )}
+        </div>
+    );
+}
+
+const TRAINING_STATUS_STYLES: Record<string, string> = {
+    completed: "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300",
+    in_progress: "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300",
+    registered: "bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300",
+    invited: "bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300",
+    not_invited: "bg-muted text-muted-foreground",
+};
+
+function DriverTrainingTab({ data, loading, error, onRefresh, fmtDate }: {
+    data: DriverTraining | null;
+    loading: boolean;
+    error: string | null;
+    onRefresh: () => void;
+    fmtDate: (d: string) => string;
+}) {
+    if (loading) {
+        return <div className="text-sm text-muted-foreground py-10 text-center">Loading training data from the LMS…</div>;
+    }
+    if (error) {
+        return (
+            <div className="py-10 text-center space-y-3">
+                <p className="text-sm text-muted-foreground">{error}</p>
+                <Button variant="outline" size="sm" onClick={onRefresh}><RefreshCw className="w-3.5 h-3.5 mr-1.5" />Retry</Button>
+            </div>
+        );
+    }
+    if (!data) {
+        return <div className="text-sm text-muted-foreground py-10 text-center">No training data.</div>;
+    }
+    if (!data.matched) {
+        return (
+            <div className="py-10 text-center space-y-3">
+                <GraduationCap className="w-8 h-8 mx-auto text-muted-foreground/50" />
+                <p className="text-sm text-muted-foreground">
+                    {data.reason === "no_phone"
+                        ? "This driver has no phone number on file, so they can't be matched against the LMS."
+                        : `No LMS driver record matches this phone number${data.phone_last4 ? ` (ending in ${data.phone_last4})` : ""}.`}
+                </p>
+                <Button variant="outline" size="sm" onClick={onRefresh}><RefreshCw className="w-3.5 h-3.5 mr-1.5" />Refresh</Button>
+            </div>
+        );
+    }
+
+    const lms = data.lms!;
+    const t = lms.training;
+    const statusLabel = (t.status || "unknown").replace(/_/g, " ");
+    const pct = Math.max(0, Math.min(100, Math.round(t.completion_percentage ?? 0)));
+    const quizAttempts = lms.history?.quiz_attempts || [];
+    const communications = lms.history?.communications || [];
+
+    return (
+        <div className="space-y-5">
+            {/* Status summary */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="rounded-xl border border-border/50 p-3">
+                    <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium">Training Status</p>
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide mt-1.5 ${TRAINING_STATUS_STYLES[t.status] || "bg-muted text-muted-foreground"}`}>
+                        {statusLabel}
+                    </span>
+                </div>
+                <div className="rounded-xl border border-border/50 p-3">
+                    <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium">Registered</p>
+                    <p className="text-sm font-semibold mt-1">
+                        {t.registered ? `Yes${t.registered_at ? ` · ${fmtDate(t.registered_at)}` : ""}` : "No"}
+                    </p>
+                </div>
+                <div className="rounded-xl border border-border/50 p-3">
+                    <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium">Completion</p>
+                    <p className="text-xl font-bold mt-0.5">{pct}%</p>
+                    <div className="h-1.5 rounded-full bg-muted overflow-hidden mt-1.5">
+                        <div className={`h-full rounded-full ${pct >= 100 ? "bg-emerald-500" : "bg-primary"}`} style={{ width: `${pct}%` }} />
+                    </div>
+                </div>
+                <div className="rounded-xl border border-border/50 p-3">
+                    <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium">Completed</p>
+                    <p className="text-sm font-semibold mt-1">{t.completed_at ? fmtDate(t.completed_at) : "—"}</p>
+                </div>
+            </div>
+            <p className="text-xs text-muted-foreground flex items-center gap-2">
+                Matched by phone{data.phone_last4 ? ` ending in ${data.phone_last4}` : ""} · LMS record for <span className="font-semibold text-foreground">{lms.driver.full_name}</span>
+                <button type="button" onClick={onRefresh} className="inline-flex items-center gap-1 text-primary hover:underline" title="Bypass the cache and re-fetch from the LMS">
+                    <RefreshCw className="w-3 h-3" />Refresh
+                </button>
+            </p>
+
+            {/* Certificates */}
+            <div>
+                <h4 className="text-sm font-semibold flex items-center gap-1.5 mb-2"><Award className="w-4 h-4 text-muted-foreground" />Certificates</h4>
+                {lms.certificates.length === 0 ? (
+                    <p className="text-sm text-muted-foreground py-4 text-center">No certificates issued yet.</p>
+                ) : (
+                    <div className="space-y-2">
+                        {lms.certificates.map((c, i) => (
+                            <div key={i} className="rounded-xl border border-border/50 p-3 flex items-center gap-3">
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-sm font-mono font-semibold truncate">{c.certificate_number}</p>
+                                    <p className="text-xs text-muted-foreground mt-0.5">
+                                        {c.course_title}
+                                        {c.final_quiz_score != null ? ` · final score ${Math.round(Number(c.final_quiz_score))}%` : ""}
+                                        {` · issued ${fmtDate(c.issued_at)}`}
+                                        {c.expires_at ? ` · expires ${fmtDate(c.expires_at)}` : ""}
+                                    </p>
+                                </div>
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide shrink-0 ${c.status === "active" ? "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300" : "bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-300"}`}>
+                                    {c.status}
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+
+            {/* Courses */}
+            {t.courses.length > 0 && (
+                <div>
+                    <h4 className="text-sm font-semibold flex items-center gap-1.5 mb-2"><GraduationCap className="w-4 h-4 text-muted-foreground" />Courses</h4>
+                    <div className="space-y-2">
+                        {t.courses.map((c, i) => {
+                            const coursePct = Math.max(0, Math.min(100, Math.round(c.progress ?? 0)));
+                            return (
+                                <div key={i} className="rounded-xl border border-border/50 p-3">
+                                    <div className="flex items-center justify-between gap-2">
+                                        <p className="text-sm font-medium truncate">{c.course_title || "Course"}</p>
+                                        <span className="text-[11px] text-muted-foreground shrink-0">{coursePct}% · {(c.status || "").replace(/_/g, " ")}</span>
+                                    </div>
+                                    <div className="h-1.5 rounded-full bg-muted overflow-hidden mt-1.5">
+                                        <div className={`h-full rounded-full ${coursePct >= 100 ? "bg-emerald-500" : "bg-primary"}`} style={{ width: `${coursePct}%` }} />
+                                    </div>
+                                    <p className="text-[11px] text-muted-foreground mt-1">
+                                        Enrolled {c.enrolled_at ? fmtDate(c.enrolled_at) : "—"}
+                                        {c.completed_at ? ` · completed ${fmtDate(c.completed_at)}` : ""}
+                                    </p>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
+
+            {/* History */}
+            <div>
+                <h4 className="text-sm font-semibold flex items-center gap-1.5 mb-2"><Clock className="w-4 h-4 text-muted-foreground" />History</h4>
+                {quizAttempts.length === 0 && communications.length === 0 ? (
+                    <p className="text-sm text-muted-foreground py-4 text-center">No training history yet.</p>
+                ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium mb-1.5">Quiz Attempts</p>
+                            {quizAttempts.length === 0 ? (
+                                <p className="text-xs text-muted-foreground">None.</p>
+                            ) : (
+                                <div className="space-y-1.5">
+                                    {quizAttempts.map((q, i) => (
+                                        <div key={i} className="flex items-center justify-between gap-2 rounded-lg border border-border/50 px-2.5 py-1.5">
+                                            <span className="text-xs truncate">{q.quiz_title || "Quiz"} · {Math.round(Number(q.score))}%</span>
+                                            <span className="flex items-center gap-1.5 shrink-0">
+                                                <span className={`text-[10px] font-bold uppercase ${q.passed ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>{q.passed ? "Pass" : "Fail"}</span>
+                                                <span className="text-[10px] text-muted-foreground">{fmtDate(q.attempted_at)}</span>
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                        <div>
+                            <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium mb-1.5">Communications</p>
+                            {communications.length === 0 ? (
+                                <p className="text-xs text-muted-foreground">None.</p>
+                            ) : (
+                                <div className="space-y-1.5">
+                                    {communications.map((m, i) => (
+                                        <div key={i} className="flex items-center justify-between gap-2 rounded-lg border border-border/50 px-2.5 py-1.5">
+                                            <span className="text-xs truncate">{(m.message_type || "message").replace(/_/g, " ")} ({m.communication_type})</span>
+                                            <span className="flex items-center gap-1.5 shrink-0">
+                                                <span className="text-[10px] text-muted-foreground uppercase">{m.status}</span>
+                                                <span className="text-[10px] text-muted-foreground">{fmtDate(m.sent_at)}</span>
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
+            </div>
         </div>
     );
 }

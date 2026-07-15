@@ -261,33 +261,33 @@ export default function ActivityView() {
               <View style={styles.breakdownItem}>
                 <Ionicons name="cash-outline" size={18} color="#ef4444" />
                 <Text style={styles.label}>Fare</Text>
-                <Text style={styles.value}>${toMoney(fareEarnings)}</Text>
+                <Text style={styles.value} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>${toMoney(fareEarnings)}</Text>
               </View>
               <View style={styles.divider} />
               <View style={styles.breakdownItem}>
                 <Ionicons name="gift-outline" size={18} color="#f59e0b" />
                 <Text style={styles.label}>Tips</Text>
-                <Text style={[styles.value, { color: '#f59e0b' }]}>${toMoney(totalTips)}</Text>
+                <Text style={[styles.value, { color: '#f59e0b' }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>${toMoney(totalTips)}</Text>
               </View>
               <View style={styles.divider} />
               <View style={styles.breakdownItem}>
                 <Ionicons name="flash" size={18} color="#8b5cf6" />
                 <Text style={styles.label}>Bonus</Text>
                 {/* Per-ride incentives + quest rewards (referral shown separately). */}
-                <Text style={[styles.value, { color: '#8b5cf6' }]}>${toMoney(totalIncentives + (totalBonuses - totalReferralBonuses))}</Text>
+                <Text style={[styles.value, { color: '#8b5cf6' }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>${toMoney(totalIncentives + (totalBonuses - totalReferralBonuses))}</Text>
               </View>
               <View style={styles.divider} />
               <View style={styles.breakdownItem}>
                 <Ionicons name="people-outline" size={18} color="#10b981" />
                 <Text style={styles.label}>Referral</Text>
                 {/* Referral rewards paid into payable_balance (kind='referral'). */}
-                <Text style={[styles.value, { color: '#10b981' }]}>${toMoney(totalReferralBonuses)}</Text>
+                <Text style={[styles.value, { color: '#10b981' }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>${toMoney(totalReferralBonuses)}</Text>
               </View>
               <View style={styles.divider} />
               <View style={styles.breakdownItem}>
                 <Ionicons name="receipt-outline" size={18} color="#6b7280" />
                 <Text style={styles.label}>Tax</Text>
-                <Text style={[styles.value, { color: '#6b7280' }]}>${toMoney(totalTax)}</Text>
+                <Text style={[styles.value, { color: '#6b7280' }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>${toMoney(totalTax)}</Text>
               </View>
             </View>
           </View>
@@ -490,8 +490,9 @@ const styles = StyleSheet.create({
   },
   value: {
     color: '#111827',
-    fontSize: 20,
+    fontSize: 16,
     fontWeight: '900',
+    textAlign: 'center',
   },
   divider: {
     width: 1,

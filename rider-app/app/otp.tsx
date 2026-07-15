@@ -14,7 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAuthStore, type User } from '@shared/store/authStore';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import Analytics from '@shared/analytics';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -141,7 +141,7 @@ export default function OtpScreen() {
     } catch (err: any) {
       triggerShake();
       setCode('');
-      showToast('Verification Failed', err.response?.data?.detail || 'Invalid code. Please try again.', 'danger');
+      showToast('Verification Failed', getApiErrorMessage(err, 'Invalid code. Please try again.'), 'danger');
     } finally {
       setVerifying(false);
     }
@@ -163,7 +163,7 @@ export default function OtpScreen() {
         setCountdown(retrySeconds > 0 ? retrySeconds : 60);
         showToast('Too Many Attempts', `Please wait ${retrySeconds} seconds before requesting another code.`, 'warning');
       } else {
-        showToast('Failed', 'Could not resend code. Please try again.', 'danger');
+        showToast('Failed', getApiErrorMessage(e, 'Could not resend code. Please try again.'), 'danger');
       }
     } finally {
       resendInFlight.current = false;

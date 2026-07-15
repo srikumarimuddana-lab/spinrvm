@@ -400,6 +400,60 @@ export const extractError = (
 };
 
 /**
+ * Convenience wrapper over `extractError` for toast/alert call sites. Takes an
+ * Axios error (or anything with `response.data`) and returns the backend's
+ * specific human message (e.g. "This email is already linked to an existing
+ * Spinr account") rather than Axios's generic "Request failed with status code
+ * 400". Falls back to the caller's message only when the server sent no usable
+ * detail (network error, empty body).
+ */
+// Toasts render at most two lines (see rider Toast.tsx / driver toastConfig.tsx),
+// so clamp long backend messages to a length that fits that box, cutting at a
+// word boundary and appending an ellipsis rather than truncating mid-word.
+export const TOAST_MESSAGE_MAX = 140;
+
+export function clampToastMessage(message: string, maxLength = TOAST_MESSAGE_MAX): string {
+  const trimmed = message.trim().replace(/\s+/g, ' ');
+  if (trimmed.length <= maxLength) return trimmed;
+  const slice = trimmed.slice(0, maxLength - 1);
+  const lastSpace = slice.lastIndexOf(' ');
+  // Prefer a word boundary if one exists reasonably close to the end.
+  const cut = lastSpace > maxLength * 0.6 ? slice.slice(0, lastSpace) : slice;
+  return `${cut.replace(/[\s.,;:!-]+$/, '')}…`;
+}
+
+export function getApiErrorMessage(
+  err: unknown,
+  fallback = 'Something went wrong. Please try again.',
+): string {
+  const anyErr = err as {
+    response?: { data?: ApiErrorBody | null; status?: number };
+    message?: string;
+  } | null;
+  const data = anyErr?.response?.data;
+  if (data) {
+    const { message } = extractError(data, anyErr?.response?.status);
+    // extractError returns the default 'Request failed' when the body had no
+    // recognizable detail — treat that as "no useful message" and fall back.
+    if (message && message !== 'Request failed') return clampToastMessage(message);
+  }
+  // No usable response body. Some callers (e.g. authStore.createProfile) extract
+  // the backend detail themselves and re-throw `new Error(detail)`, so a
+  // meaningful err.message should still win. Ignore Axios's generic
+  // "Request failed with status code N" and "Network Error".
+  const raw = anyErr?.message;
+  if (
+    raw &&
+    !/^Request failed with status code/i.test(raw) &&
+    !/^Network Error$/i.test(raw) &&
+    !/^timeout of /i.test(raw)
+  ) {
+    return clampToastMessage(raw);
+  }
+  return fallback;
+}
+
+/**
  * Backwards-compatible string extractor — every existing caller of
  * `extractErrorMessage` continues to work unchanged.
  */

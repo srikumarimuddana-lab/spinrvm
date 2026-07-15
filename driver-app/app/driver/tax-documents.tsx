@@ -13,7 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
@@ -58,8 +58,8 @@ function TaxDocumentsScreen() {
                 generated_at: null,
             }));
             setDocuments(synthesized);
-        } catch {
-            showToast('error', 'Load Failed', 'Failed to load tax documents. Please try again.');
+        } catch (err: any) {
+            showToast('error', 'Load Failed', getApiErrorMessage(err, 'Could not load tax documents. Please try again.'));
         } finally {
             setLoading(false);
             setRefreshing(false);
@@ -83,7 +83,7 @@ function TaxDocumentsScreen() {
                 res.data?.message || `Your T4A summary for ${doc.tax_year} is on its way.`,
             );
         } catch (err: any) {
-            showToast('error', 'Send Failed', err?.response?.data?.detail || 'Could not send the document. Please try again.');
+            showToast('error', 'Send Failed', getApiErrorMessage(err, 'Could not send the document. Please try again.'));
         } finally {
             setSendingId(null);
         }

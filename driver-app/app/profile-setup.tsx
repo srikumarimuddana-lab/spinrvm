@@ -20,7 +20,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useAuthStore, type User } from '@shared/store/authStore';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../hooks/useToast';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -250,7 +250,7 @@ export default function ProfileSetupScreen() {
       }
       router.replace('/driver' as any);
     } catch (err: any) {
-      showToast('error', 'Error', err.message || 'Failed to create profile. Please try again.');
+      showToast('error', 'Error', getApiErrorMessage(err, 'Failed to create profile. Please try again.'));
     } finally {
       setIsSubmitting(false);
     }

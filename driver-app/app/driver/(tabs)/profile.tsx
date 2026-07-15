@@ -13,10 +13,14 @@ import {
   KeyboardAvoidingView,
   Keyboard,
   Alert,
+  Image,
 } from 'react-native';
-import { Image } from 'expo-image';
+// Avatar uses React Native's built-in Image (a core host component that is
+// always registered) instead of expo-image. On the New-Architecture release
+// build, expo-image's native Fabric view was resolving to a non-renderable
+// object on this screen ("Element type is invalid … got: object"), taking down
+// the app. Core Image needs no native module lookup, so it can't fail that way.
 
-const BLURHASH_PLACEHOLDER = 'LGF5]+Yk^6#M@-5c,1J5@[or[Q6.';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -291,9 +295,7 @@ function ProfileScreenInner() {
                   styles.avatar,
                   user.profile_image_status === 'pending_review' && { opacity: 0.7 },
                 ]}
-                placeholder={BLURHASH_PLACEHOLDER}
-                contentFit="cover"
-                transition={200}
+                resizeMode="cover"
               />
             ) : (
               <View style={[styles.avatarPlaceholder, { backgroundColor: 'rgba(255,255,255,0.2)' }]}>

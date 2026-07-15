@@ -42,6 +42,11 @@ export default function ActivityView() {
   // True once the first data load has completed — used to keep cached data on
   // screen (instead of a full-screen spinner) on subsequent tab focuses.
   const hasLoadedRef = useRef(false);
+  // Last time each period was refreshed. Rapid tab switches within this window
+  // skip the network round-trip entirely (the on-screen numbers are already
+  // current), so re-opening Activity does zero work instead of 3 GETs.
+  const lastLoadedRef = useRef<Record<string, number>>({});
+  const FRESH_MS = 30_000;
 
   const loadData = useCallback(async () => {
     // Only show the full-screen loading state on the FIRST load. On every
@@ -52,6 +57,12 @@ export default function ActivityView() {
     // spinner for ~3s each time the Activity tab was opened. hasLoadedRef is a
     // ref (not a hook dep) so loadData stays stable and doesn't retrigger
     // useFocusEffect in a loop.
+    // Skip the network round-trip entirely when this period was refreshed
+    // within FRESH_MS — the on-screen numbers are already current, so rapid tab
+    // switching does no work. A period the driver hasn't opened recently (or a
+    // just-switched period) still refetches.
+    const fresh = hasLoadedRef.current && Date.now() - (lastLoadedRef.current[period] ?? 0) < FRESH_MS;
+    if (fresh) return;
     if (!hasLoadedRef.current) setLoading(true);
     try {
       await Promise.allSettled([
@@ -61,6 +72,7 @@ export default function ActivityView() {
       ]);
     } catch {}
     hasLoadedRef.current = true;
+    lastLoadedRef.current[period] = Date.now();
     setLoading(false);
   }, [period, fetchEarnings, fetchRideHistory, fetchDriverBalance]);
 

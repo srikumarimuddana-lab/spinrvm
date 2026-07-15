@@ -41,6 +41,7 @@ class PreferencesUpdate(BaseModel):
     ride_updates: Optional[bool] = None
     promotions: Optional[bool] = None
     safety_alerts: Optional[bool] = None
+    earnings_summary: Optional[bool] = None
 
 
 class RegisterTokenRequest(BaseModel):
@@ -417,6 +418,7 @@ async def get_preferences(current_user: dict = Depends(get_current_user)):
             "ride_updates": True,
             "promotions": True,
             "safety_alerts": True,
+            "earnings_summary": True,
         }
     return prefs
 
@@ -432,6 +434,7 @@ async def update_preferences(req: PreferencesUpdate, current_user: dict = Depend
         "ride_updates",
         "promotions",
         "safety_alerts",
+        "earnings_summary",
     ]:
         val = getattr(req, field)
         if val is not None:

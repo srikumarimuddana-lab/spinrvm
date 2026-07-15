@@ -37,7 +37,7 @@ def test_actor_user_id_is_text_not_uuid():
     col_type = None
     param_type = None
     for sql in sorted(_MIGRATIONS_DIR.glob("*.sql"), key=_migration_seq):
-        live = "\n".join(line.split("--", 1)[0] for line in sql.read_text().splitlines())
+        live = "\n".join(line.split("--", 1)[0] for line in sql.read_text(encoding="utf-8").splitlines())
         for m in re.finditer(r"actor_user_id\s+(UUID|TEXT)", live, re.IGNORECASE):
             col_type = m.group(1).upper()
         for m in re.finditer(r"ALTER COLUMN\s+actor_user_id\s+TYPE\s+(UUID|TEXT)", live, re.IGNORECASE):

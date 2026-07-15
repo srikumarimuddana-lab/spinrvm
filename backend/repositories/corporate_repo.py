@@ -215,9 +215,51 @@ async def record_kyb_decision(
         "status": new_status,
         "kyb_reviewed_at": datetime.now(timezone.utc).isoformat(),
         "kyb_reviewed_by": reviewer_id,
+        # 'approved' | 'rejected' (migration 225) — lets the portal distinguish
+        # KYB-rejected (may resubmit) from staff-suspended (may not).
+        "kyb_last_decision": "approved" if approved else "rejected",
     }
     if note:
-        patch["kyb_review_note"] = note  # column added in a follow-up migration if desired
+        patch["kyb_review_note"] = note  # column exists since migration 225
+
+    def _fn():
+        res = supabase.table("corporate_accounts").update(patch).eq("id", company_id).execute()
+        return _single_row_from_res(res)
+
+    return await run_sync(_fn)
+
+
+async def kyb_object_exists(*, path: str) -> bool:
+    """True if the object was actually uploaded to the private kyb-documents
+    bucket. Guards /kyb/submit: a client must not be able to point
+    kyb_document_url at a path that was never uploaded (or someone else's)."""
+    folder, _, filename = path.rpartition("/")
+
+    def _fn():
+        return supabase.storage.from_("kyb-documents").list(folder)
+
+    entries = await run_sync(_fn) or []
+    for e in entries:
+        name = e.get("name") if isinstance(e, dict) else getattr(e, "name", None)
+        if name == filename:
+            return True
+    return False
+
+
+async def set_kyb_document(*, company_id: str, path: str) -> Optional[Dict[str, Any]]:
+    """Persist the uploaded KYB document's storage key + submission time.
+
+    FIXES the never-persisted-URL bug: create_kyb_upload_url returned a path
+    but nothing ever wrote it to corporate_accounts.kyb_document_url, so
+    GET /{id}/kyb/view read a column no code populated. Stores the RAW
+    storage key (kyb/{company_id}/{uuid}.ext) — the private-bucket object is
+    only reachable via the backend's signed streaming endpoint, never a
+    public URL.
+    """
+    patch = {
+        "kyb_document_url": path,
+        "kyb_submitted_at": datetime.now(timezone.utc).isoformat(),
+    }
 
     def _fn():
         res = supabase.table("corporate_accounts").update(patch).eq("id", company_id).execute()
@@ -453,6 +495,68 @@ async def insert_corporate_member_invite(
                     "invited_by": invited_by,
                     "policy_override": policy_override,
                     "status": "invited",
+                }
+            )
+            .execute()
+        )
+        return _single_row_from_res(res) or {}
+
+    return await run_sync(_fn)
+
+
+async def count_pending_signups_for_user(user_id: str) -> int:
+    """How many pending_verification companies this user has self-registered.
+
+    Backs the self-serve signup abuse cap (max 3 pending per user); served by
+    the partial index corp_accounts_signup_pending_idx (migration 224).
+    """
+
+    def _fn():
+        res = (
+            supabase.table("corporate_accounts")
+            .select("id", count="exact")
+            .eq("signup_user_id", user_id)
+            .eq("status", "pending_verification")
+            .execute()
+        )
+        count = getattr(res, "count", None)
+        return count if count is not None else len(res.data or [])
+
+    return await run_sync(_fn)
+
+
+async def create_active_member(
+    *,
+    company_id: str,
+    user_id: str,
+    email: str,
+    role: str = "owner",
+    invited_by: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Insert a directly-ACTIVE membership (no invite round-trip).
+
+    Used by owner bootstrap: the self-serve signup creator is already an
+    authenticated, email-verified user, so there is nothing to invite — they
+    become the company's first (owner) member immediately. The partial unique
+    index corp_members_company_user_unique makes a duplicate insert raise;
+    callers pre-check membership (bootstrap_owner), so a violation here is a
+    genuine bug and must surface, not be swallowed.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+
+    def _fn():
+        res = (
+            supabase.table("corporate_members")
+            .insert(
+                {
+                    "company_id": company_id,
+                    "user_id": user_id,
+                    "invited_email": email,
+                    "role": role,
+                    "status": "active",
+                    "joined_at": now,
+                    "invited_at": now,
+                    "invited_by": invited_by or user_id,
                 }
             )
             .execute()

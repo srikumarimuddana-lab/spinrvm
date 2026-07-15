@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Save, Check, ShieldCheck, ShieldOff } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 
@@ -120,7 +121,16 @@ export default function SettingsPage() {
             if (updated?.audit_log_id) {
                 toast({ title: "Settings saved", description: `Ref: ${updated.audit_log_id}` });
             }
-        } catch {
+        } catch (err: any) {
+            // A silent catch here made failed saves look like successful
+            // no-ops (403 privilege gate, 422 validation, missing migration
+            // column → 500). Surface the backend's error so the operator
+            // knows the save did NOT go through.
+            toast({
+                title: "Settings not saved",
+                description: err?.message || "The server rejected the update.",
+                variant: "destructive",
+            });
         } finally {
             setSaving(false);
         }
@@ -161,7 +171,16 @@ export default function SettingsPage() {
             </div>
 
             {settings && (
-                <div className="grid gap-6 lg:grid-cols-2">
+                <Tabs defaultValue="integrations" className="space-y-6">
+                <TabsList className="h-auto flex-wrap">
+                    <TabsTrigger value="integrations">Integrations</TabsTrigger>
+                    <TabsTrigger value="email">Email &amp; Alerts</TabsTrigger>
+                    <TabsTrigger value="operations">Operations</TabsTrigger>
+                    <TabsTrigger value="company">Company &amp; Apps</TabsTrigger>
+                    <TabsTrigger value="security">Security</TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="integrations" className="mt-0 grid gap-6 lg:grid-cols-2 items-start">
                     {/* Stripe */}
                     <Card className="border-border/50">
                         <CardHeader>
@@ -241,154 +260,6 @@ export default function SettingsPage() {
                         </CardContent>
                     </Card>
 
-                    {/* Email — AWS SES (primary) */}
-                    <Card className="border-border/50">
-                        <CardHeader>
-                            <CardTitle className="text-base">Email — AWS SES (primary)</CardTitle>
-                        </CardHeader>
-                        <Separator />
-                        <CardContent className="pt-4 space-y-4">
-                            <p className="text-xs text-muted-foreground">
-                                Primary provider for ride receipts, T4A links, DSAR exports and
-                                safety/corporate alerts. When the access key and secret are set,
-                                email is sent via SES; if SES is blank or a send fails, Spinr falls
-                                back to Resend below. The <strong>From Email</strong> must be a
-                                verified identity in the SES account.
-                            </p>
-                            <div className="space-y-2">
-                                <Label>Region</Label>
-                                <Input
-                                    type="text"
-                                    value={settings.aws_ses_region || ""}
-                                    onChange={(e) =>
-                                        update("aws_ses_region", e.target.value)
-                                    }
-                                    placeholder="ca-central-1"
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <Label>Access Key ID</Label>
-                                <Input
-                                    type="text"
-                                    value={settings.aws_ses_access_key_id || ""}
-                                    onChange={(e) =>
-                                        update("aws_ses_access_key_id", e.target.value)
-                                    }
-                                    placeholder="AKIA...."
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <Label>Secret Access Key</Label>
-                                <Input
-                                    type="password"
-                                    value={settings.aws_ses_secret_access_key || ""}
-                                    onChange={(e) =>
-                                        update("aws_ses_secret_access_key", e.target.value)
-                                    }
-                                    placeholder="••••••••"
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <Label>From Email</Label>
-                                <Input
-                                    type="email"
-                                    value={settings.aws_ses_from_email || ""}
-                                    onChange={(e) =>
-                                        update("aws_ses_from_email", e.target.value)
-                                    }
-                                    placeholder="receipts@spinr.ca"
-                                />
-                            </div>
-                        </CardContent>
-                    </Card>
-
-                    {/* Email — Resend (fallback guardrail) */}
-                    <Card className="border-border/50">
-                        <CardHeader>
-                            <CardTitle className="text-base">Email — Resend (fallback)</CardTitle>
-                        </CardHeader>
-                        <Separator />
-                        <CardContent className="pt-4 space-y-4">
-                            <p className="text-xs text-muted-foreground">
-                                Guardrail provider. Used only when AWS SES above is unconfigured or a
-                                send fails. If <strong>From Email</strong> is blank, the SES from
-                                address (then a code default) is used as a fallback.
-                            </p>
-                            <div className="space-y-2">
-                                <Label>API Key</Label>
-                                <Input
-                                    type="password"
-                                    value={settings.resend_api_key || ""}
-                                    onChange={(e) =>
-                                        update("resend_api_key", e.target.value)
-                                    }
-                                    placeholder="re_...."
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <Label>From Email</Label>
-                                <Input
-                                    type="email"
-                                    value={settings.resend_from_email || ""}
-                                    onChange={(e) =>
-                                        update("resend_from_email", e.target.value)
-                                    }
-                                    placeholder="receipts@spinr.ca"
-                                />
-                            </div>
-                        </CardContent>
-                    </Card>
-
-                    {/* Email deliverability */}
-                    <Card className="border-border/50">
-                        <CardHeader>
-                            <CardTitle className="text-base">Email deliverability (last 7 days)</CardTitle>
-                        </CardHeader>
-                        <Separator />
-                        <CardContent className="pt-4 space-y-4">
-                            {!deliverability ? (
-                                <p className="text-xs text-muted-foreground">No send data yet.</p>
-                            ) : (
-                                <>
-                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                                        <div className="rounded-lg border border-border/50 p-3">
-                                            <p className="text-xs text-muted-foreground">Sent</p>
-                                            <p className="text-lg font-bold">{deliverability.by_status?.sent ?? 0}</p>
-                                        </div>
-                                        <div className="rounded-lg border border-border/50 p-3">
-                                            <p className="text-xs text-muted-foreground">Failed</p>
-                                            <p className={`text-lg font-bold ${deliverability.failure_rate > 0.01 ? "text-red-600" : ""}`}>{deliverability.by_status?.failed ?? 0}</p>
-                                        </div>
-                                        <div className="rounded-lg border border-border/50 p-3">
-                                            <p className="text-xs text-muted-foreground">Failure rate</p>
-                                            <p className="text-lg font-bold">{((deliverability.failure_rate ?? 0) * 100).toFixed(1)}%</p>
-                                        </div>
-                                        <div className="rounded-lg border border-border/50 p-3">
-                                            <p className="text-xs text-muted-foreground">Suppressed (total)</p>
-                                            <p className="text-lg font-bold">{deliverability.suppression_list_size ?? 0}</p>
-                                        </div>
-                                    </div>
-                                    <p className="text-xs text-muted-foreground">
-                                        By provider:{" "}
-                                        {Object.entries(deliverability.by_provider || {}).map(([k, v]) => `${k} ${v}`).join(" · ") || "—"}
-                                    </p>
-                                    {deliverability.recent_failures?.length > 0 && (
-                                        <div className="space-y-1">
-                                            <p className="text-xs font-semibold">Recent failures</p>
-                                            {deliverability.recent_failures.slice(0, 8).map((f: any, i: number) => (
-                                                <div key={i} className="text-xs text-muted-foreground flex gap-2">
-                                                    <span className="whitespace-nowrap">{new Date(f.created_at).toLocaleDateString()}</span>
-                                                    <span className="font-medium">{f.email_type}</span>
-                                                    <span>via {f.provider}</span>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-                                </>
-                            )}
-                        </CardContent>
-                    </Card>
-
                     {/* Google Maps */}
                     <Card className="border-border/50">
                         <CardHeader>
@@ -417,6 +288,66 @@ export default function SettingsPage() {
                                 />
                                 <p className="text-xs text-muted-foreground">
                                     GCP Console &rarr; APIs &amp; Services &rarr; Credentials
+                                </p>
+                            </div>
+                        </CardContent>
+                    </Card>
+
+                    {/* Telephony / Twilio */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">Telephony (Twilio)</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <p className="text-xs text-muted-foreground">
+                                When not configured, OTP defaults to <strong>1234</strong> for testing.
+                                The Proxy Service SID enables anonymous in-ride calling.
+                            </p>
+                            <div className="space-y-2">
+                                <Label>Account SID</Label>
+                                <Input
+                                    type="password"
+                                    value={settings.twilio_account_sid || ""}
+                                    onChange={(e) =>
+                                        update("twilio_account_sid", e.target.value)
+                                    }
+                                    placeholder="AC..."
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Auth Token</Label>
+                                <Input
+                                    type="password"
+                                    value={settings.twilio_auth_token || ""}
+                                    onChange={(e) =>
+                                        update("twilio_auth_token", e.target.value)
+                                    }
+                                    placeholder="Token"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>From Number</Label>
+                                <Input
+                                    value={settings.twilio_from_number || ""}
+                                    onChange={(e) =>
+                                        update("twilio_from_number", e.target.value)
+                                    }
+                                    placeholder="+1234567890"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Proxy Service SID</Label>
+                                <Input
+                                    type="password"
+                                    value={settings.twilio_proxy_service_sid || ""}
+                                    onChange={(e) =>
+                                        update("twilio_proxy_service_sid", e.target.value)
+                                    }
+                                    placeholder="KS..."
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    From Twilio Console &rarr; Proxy &rarr; Services
                                 </p>
                             </div>
                         </CardContent>
@@ -575,6 +506,194 @@ export default function SettingsPage() {
                         </CardContent>
                     </Card>
 
+                    {/* Driver LMS (training platform) — feeds the Training tab
+                        in the driver details drawer, matched by phone number. */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">Driver LMS (Training)</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <p className="text-xs text-muted-foreground">
+                                Connects to the Spinr driver training LMS. When configured, the
+                                driver details drawer shows each driver&apos;s registration,
+                                completion percentage, certificates, and training history,
+                                matched by phone number. The API key must equal the{" "}
+                                <code>SPINR_INTEGRATION_API_KEY</code> set on the LMS deployment.
+                            </p>
+                            <div className="space-y-2">
+                                <Label>LMS Base URL</Label>
+                                <Input
+                                    value={settings.lms_api_base_url || ""}
+                                    onChange={(e) => update("lms_api_base_url", e.target.value)}
+                                    placeholder="https://training.spinr.ca"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>API Key</Label>
+                                <Input
+                                    type="password"
+                                    value={settings.lms_api_key || ""}
+                                    onChange={(e) => update("lms_api_key", e.target.value)}
+                                    placeholder="Shared secret"
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    Leave both blank to disable the integration — the drawer&apos;s
+                                    Training tab will report it as not configured.
+                                </p>
+                            </div>
+                        </CardContent>
+                    </Card>
+                </TabsContent>
+                <TabsContent value="email" className="mt-0 grid gap-6 lg:grid-cols-2 items-start">
+                    {/* Email — AWS SES (primary) */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">Email — AWS SES (primary)</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <p className="text-xs text-muted-foreground">
+                                Primary provider for ride receipts, T4A links, DSAR exports and
+                                safety/corporate alerts. When the access key and secret are set,
+                                email is sent via SES; if SES is blank or a send fails, Spinr falls
+                                back to Resend below. The <strong>From Email</strong> must be a
+                                verified identity in the SES account.
+                            </p>
+                            <div className="space-y-2">
+                                <Label>Region</Label>
+                                <Input
+                                    type="text"
+                                    value={settings.aws_ses_region || ""}
+                                    onChange={(e) =>
+                                        update("aws_ses_region", e.target.value)
+                                    }
+                                    placeholder="ca-central-1"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Access Key ID</Label>
+                                <Input
+                                    type="text"
+                                    value={settings.aws_ses_access_key_id || ""}
+                                    onChange={(e) =>
+                                        update("aws_ses_access_key_id", e.target.value)
+                                    }
+                                    placeholder="AKIA...."
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Secret Access Key</Label>
+                                <Input
+                                    type="password"
+                                    value={settings.aws_ses_secret_access_key || ""}
+                                    onChange={(e) =>
+                                        update("aws_ses_secret_access_key", e.target.value)
+                                    }
+                                    placeholder="••••••••"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>From Email</Label>
+                                <Input
+                                    type="email"
+                                    value={settings.aws_ses_from_email || ""}
+                                    onChange={(e) =>
+                                        update("aws_ses_from_email", e.target.value)
+                                    }
+                                    placeholder="receipts@spinr.ca"
+                                />
+                            </div>
+                        </CardContent>
+                    </Card>
+
+                    {/* Email — Resend (fallback guardrail) */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">Email — Resend (fallback)</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <p className="text-xs text-muted-foreground">
+                                Guardrail provider. Used only when AWS SES above is unconfigured or a
+                                send fails. If <strong>From Email</strong> is blank, the SES from
+                                address (then a code default) is used as a fallback.
+                            </p>
+                            <div className="space-y-2">
+                                <Label>API Key</Label>
+                                <Input
+                                    type="password"
+                                    value={settings.resend_api_key || ""}
+                                    onChange={(e) =>
+                                        update("resend_api_key", e.target.value)
+                                    }
+                                    placeholder="re_...."
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>From Email</Label>
+                                <Input
+                                    type="email"
+                                    value={settings.resend_from_email || ""}
+                                    onChange={(e) =>
+                                        update("resend_from_email", e.target.value)
+                                    }
+                                    placeholder="receipts@spinr.ca"
+                                />
+                            </div>
+                        </CardContent>
+                    </Card>
+
+                    {/* Email deliverability */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">Email deliverability (last 7 days)</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            {!deliverability ? (
+                                <p className="text-xs text-muted-foreground">No send data yet.</p>
+                            ) : (
+                                <>
+                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                        <div className="rounded-lg border border-border/50 p-3">
+                                            <p className="text-xs text-muted-foreground">Sent</p>
+                                            <p className="text-lg font-bold">{deliverability.by_status?.sent ?? 0}</p>
+                                        </div>
+                                        <div className="rounded-lg border border-border/50 p-3">
+                                            <p className="text-xs text-muted-foreground">Failed</p>
+                                            <p className={`text-lg font-bold ${deliverability.failure_rate > 0.01 ? "text-red-600" : ""}`}>{deliverability.by_status?.failed ?? 0}</p>
+                                        </div>
+                                        <div className="rounded-lg border border-border/50 p-3">
+                                            <p className="text-xs text-muted-foreground">Failure rate</p>
+                                            <p className="text-lg font-bold">{((deliverability.failure_rate ?? 0) * 100).toFixed(1)}%</p>
+                                        </div>
+                                        <div className="rounded-lg border border-border/50 p-3">
+                                            <p className="text-xs text-muted-foreground">Suppressed (total)</p>
+                                            <p className="text-lg font-bold">{deliverability.suppression_list_size ?? 0}</p>
+                                        </div>
+                                    </div>
+                                    <p className="text-xs text-muted-foreground">
+                                        By provider:{" "}
+                                        {Object.entries(deliverability.by_provider || {}).map(([k, v]) => `${k} ${v}`).join(" · ") || "—"}
+                                    </p>
+                                    {deliverability.recent_failures?.length > 0 && (
+                                        <div className="space-y-1">
+                                            <p className="text-xs font-semibold">Recent failures</p>
+                                            {deliverability.recent_failures.slice(0, 8).map((f: any, i: number) => (
+                                                <div key={i} className="text-xs text-muted-foreground flex gap-2">
+                                                    <span className="whitespace-nowrap">{new Date(f.created_at).toLocaleDateString()}</span>
+                                                    <span className="font-medium">{f.email_type}</span>
+                                                    <span>via {f.provider}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </>
+                            )}
+                        </CardContent>
+                    </Card>
+
                     {/* Safety — distribution list for SOS / safety-incident
                         alert emails. Empty disables outbound email cleanly;
                         WS broadcast + critical log line still fire so
@@ -611,67 +730,8 @@ export default function SettingsPage() {
                             </div>
                         </CardContent>
                     </Card>
-
-                    {/* Telephony / Twilio */}
-                    <Card className="border-border/50">
-                        <CardHeader>
-                            <CardTitle className="text-base">Telephony (Twilio)</CardTitle>
-                        </CardHeader>
-                        <Separator />
-                        <CardContent className="pt-4 space-y-4">
-                            <p className="text-xs text-muted-foreground">
-                                When not configured, OTP defaults to <strong>1234</strong> for testing.
-                                The Proxy Service SID enables anonymous in-ride calling.
-                            </p>
-                            <div className="space-y-2">
-                                <Label>Account SID</Label>
-                                <Input
-                                    type="password"
-                                    value={settings.twilio_account_sid || ""}
-                                    onChange={(e) =>
-                                        update("twilio_account_sid", e.target.value)
-                                    }
-                                    placeholder="AC..."
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <Label>Auth Token</Label>
-                                <Input
-                                    type="password"
-                                    value={settings.twilio_auth_token || ""}
-                                    onChange={(e) =>
-                                        update("twilio_auth_token", e.target.value)
-                                    }
-                                    placeholder="Token"
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <Label>From Number</Label>
-                                <Input
-                                    value={settings.twilio_from_number || ""}
-                                    onChange={(e) =>
-                                        update("twilio_from_number", e.target.value)
-                                    }
-                                    placeholder="+1234567890"
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <Label>Proxy Service SID</Label>
-                                <Input
-                                    type="password"
-                                    value={settings.twilio_proxy_service_sid || ""}
-                                    onChange={(e) =>
-                                        update("twilio_proxy_service_sid", e.target.value)
-                                    }
-                                    placeholder="KS..."
-                                />
-                                <p className="text-xs text-muted-foreground">
-                                    From Twilio Console &rarr; Proxy &rarr; Services
-                                </p>
-                            </div>
-                        </CardContent>
-                    </Card>
-
+                </TabsContent>
+                <TabsContent value="operations" className="mt-0 grid gap-6 lg:grid-cols-2 items-start">
                     {/* Dispatch & Matching */}
                     <Card className="border-border/50">
                         <CardHeader>
@@ -840,6 +900,196 @@ export default function SettingsPage() {
                         </CardContent>
                     </Card>
 
+                    {/* Fare Lock — SK regulatory requirement: the price shown
+                        to the rider at booking time is the price charged,
+                        regardless of actual distance/time deviation. */}
+                    <Card className="border-border/50 lg:col-span-2">
+                        <CardHeader>
+                            <CardTitle className="text-base">Fare Lock (SK Regulation)</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <div className="flex items-center justify-between">
+                                <div className="space-y-0.5">
+                                    <Label htmlFor="fare_lock_enabled">Lock fare at booking time</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        When enabled, the fare shown to the rider before the ride is the final charge —
+                                        no recalculation at completion regardless of distance or time deviation.
+                                        Required under Saskatchewan ride-share regulations.
+                                    </p>
+                                </div>
+                                <Switch
+                                    id="fare_lock_enabled"
+                                    checked={settings.fare_lock_enabled ?? false}
+                                    onCheckedChange={(v) => update("fare_lock_enabled", v)}
+                                />
+                            </div>
+                        </CardContent>
+                    </Card>
+                </TabsContent>
+                <TabsContent value="company" className="mt-0 grid gap-6 lg:grid-cols-2 items-start">
+                    {/* Company Info — surfaced in rider & driver apps
+                        via GET /api/company-info (public endpoint). */}
+                    <Card className="border-border/50 lg:col-span-2">
+                        <CardHeader>
+                            <CardTitle className="text-base">Company Info (shown in apps)</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 grid gap-4 sm:grid-cols-2">
+                            <div className="space-y-2">
+                                <Label>Company Name</Label>
+                                <Input
+                                    value={settings.company_name || ""}
+                                    onChange={(e) => update("company_name", e.target.value)}
+                                    placeholder="Spinr"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Phone</Label>
+                                <Input
+                                    value={settings.company_phone || ""}
+                                    onChange={(e) => update("company_phone", e.target.value)}
+                                    placeholder="+1 306 555 0100"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Email</Label>
+                                <Input
+                                    type="email"
+                                    value={settings.company_email || ""}
+                                    onChange={(e) => update("company_email", e.target.value)}
+                                    placeholder="support@spinr.ca"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Website</Label>
+                                <Input
+                                    value={settings.company_website || ""}
+                                    onChange={(e) => update("company_website", e.target.value)}
+                                    placeholder="https://spinr.ca"
+                                />
+                            </div>
+                            <div className="space-y-2 sm:col-span-2">
+                                <Label>Address</Label>
+                                <Textarea
+                                    value={settings.company_address || ""}
+                                    onChange={(e) => update("company_address", e.target.value)}
+                                    placeholder="123 Example St, Saskatoon, SK S7K 1A1"
+                                    className="min-h-[70px]"
+                                />
+                            </div>
+                        </CardContent>
+                    </Card>
+
+                    {/* Legal Documents */}
+                    <Card className="border-border/50 lg:col-span-2">
+                        <CardHeader>
+                            <CardTitle className="text-base">Legal Documents</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-6">
+                            <div className="space-y-2">
+                                <Label>Terms of Service</Label>
+                                <Textarea
+                                    value={settings.terms_of_service_text || ""}
+                                    onChange={(e) => update("terms_of_service_text", e.target.value)}
+                                    placeholder="Enter full terms of service text here..."
+                                    className="min-h-[200px]"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Privacy Policy</Label>
+                                <Textarea
+                                    value={settings.privacy_policy_text || ""}
+                                    onChange={(e) => update("privacy_policy_text", e.target.value)}
+                                    placeholder="Enter full privacy policy text here..."
+                                    className="min-h-[200px]"
+                                />
+                            </div>
+                        </CardContent>
+                    </Card>
+
+                    {/* Share Trip tracking URL — base of the public live-tracking
+                        page that rider-app embeds in the "Share Trip" message.
+                        Recipients open ${base}/${share_token}; the URL is served
+                        runtime from app_settings so it rotates without a mobile
+                        rebuild. Should point at the admin dashboard's /track route
+                        — e.g. https://track.spinr.ca/track. */}
+                    <Card className="border-border/50 lg:col-span-2">
+                        <CardHeader>
+                            <CardTitle className="text-base">Share Trip — Live Tracking URL</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-2">
+                            <Label>Tracking base URL</Label>
+                            <Input
+                                value={settings.track_base_url || ""}
+                                onChange={(e) => update("track_base_url", e.target.value)}
+                                placeholder="https://track.spinr.ca/track"
+                            />
+                            <p className="text-xs text-muted-foreground">
+                                Used by the rider-app "Share Trip" message. Set this to the
+                                deployed admin dashboard's /track route. Leave blank to disable
+                                in-app sharing.
+                            </p>
+                        </CardContent>
+                    </Card>
+
+                    {/* Driver-app ride-offer alert tone — uploaded via
+                        a dedicated multipart endpoint that writes the URL
+                        directly to settings.ride_offer_sound_url. */}
+                    <Card className="border-border/50 lg:col-span-2">
+                        <CardHeader>
+                            <CardTitle className="text-base">Ride-offer alert sound (driver app)</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <div className="space-y-2">
+                                <Label>Upload MP3 or WAV (≤500 KB)</Label>
+                                <div className="flex items-center gap-2">
+                                    <Input
+                                        type="file"
+                                        accept="audio/mpeg,audio/mp3,audio/wav"
+                                        disabled={soundUploading}
+                                        onChange={(e) => {
+                                            const f = e.target.files?.[0];
+                                            if (f) void handleUploadOfferSound(f);
+                                            e.target.value = "";
+                                        }}
+                                    />
+                                    {soundUploading && (
+                                        <span className="text-xs text-muted-foreground">Uploading…</span>
+                                    )}
+                                </div>
+                                <p className="text-xs text-muted-foreground">
+                                    Drivers hear this tone every ~2.5s while a ride offer is on screen. Leave empty to use the bundled placeholder.
+                                </p>
+                            </div>
+                            {settings.ride_offer_sound_url ? (
+                                <div className="space-y-2">
+                                    <Label>Current</Label>
+                                    {/* Native HTML5 audio — no extra dep. */}
+                                    <audio controls src={settings.ride_offer_sound_url} className="w-full" />
+                                    <div className="flex gap-2">
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={handleClearOfferSound}
+                                        >
+                                            Clear (revert to bundled)
+                                        </Button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <p className="text-xs text-muted-foreground italic">
+                                    No custom sound set — drivers play the bundled placeholder.
+                                </p>
+                            )}
+                        </CardContent>
+                    </Card>
+                </TabsContent>
+                <TabsContent value="security" className="mt-0 grid gap-6 lg:grid-cols-2 items-start">
                     {/* Two-Factor Authentication */}
                     {mfaAvailable && <Card className="border-border/50">
                         <CardHeader>
@@ -934,195 +1184,11 @@ export default function SettingsPage() {
                             )}
                         </CardContent>
                     </Card>}
-
-                    {/* Legal Documents */}
-                    <Card className="border-border/50 lg:col-span-2">
-                        <CardHeader>
-                            <CardTitle className="text-base">Legal Documents</CardTitle>
-                        </CardHeader>
-                        <Separator />
-                        <CardContent className="pt-4 space-y-6">
-                            <div className="space-y-2">
-                                <Label>Terms of Service</Label>
-                                <Textarea
-                                    value={settings.terms_of_service_text || ""}
-                                    onChange={(e) => update("terms_of_service_text", e.target.value)}
-                                    placeholder="Enter full terms of service text here..."
-                                    className="min-h-[200px]"
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <Label>Privacy Policy</Label>
-                                <Textarea
-                                    value={settings.privacy_policy_text || ""}
-                                    onChange={(e) => update("privacy_policy_text", e.target.value)}
-                                    placeholder="Enter full privacy policy text here..."
-                                    className="min-h-[200px]"
-                                />
-                            </div>
-                        </CardContent>
-                    </Card>
-
-                    {/* Company Info — surfaced in rider & driver apps
-                        via GET /api/company-info (public endpoint). */}
-                    <Card className="border-border/50 lg:col-span-2">
-                        <CardHeader>
-                            <CardTitle className="text-base">Company Info (shown in apps)</CardTitle>
-                        </CardHeader>
-                        <Separator />
-                        <CardContent className="pt-4 grid gap-4 sm:grid-cols-2">
-                            <div className="space-y-2">
-                                <Label>Company Name</Label>
-                                <Input
-                                    value={settings.company_name || ""}
-                                    onChange={(e) => update("company_name", e.target.value)}
-                                    placeholder="Spinr"
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <Label>Phone</Label>
-                                <Input
-                                    value={settings.company_phone || ""}
-                                    onChange={(e) => update("company_phone", e.target.value)}
-                                    placeholder="+1 306 555 0100"
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <Label>Email</Label>
-                                <Input
-                                    type="email"
-                                    value={settings.company_email || ""}
-                                    onChange={(e) => update("company_email", e.target.value)}
-                                    placeholder="support@spinr.ca"
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <Label>Website</Label>
-                                <Input
-                                    value={settings.company_website || ""}
-                                    onChange={(e) => update("company_website", e.target.value)}
-                                    placeholder="https://spinr.ca"
-                                />
-                            </div>
-                            <div className="space-y-2 sm:col-span-2">
-                                <Label>Address</Label>
-                                <Textarea
-                                    value={settings.company_address || ""}
-                                    onChange={(e) => update("company_address", e.target.value)}
-                                    placeholder="123 Example St, Saskatoon, SK S7K 1A1"
-                                    className="min-h-[70px]"
-                                />
-                            </div>
-                        </CardContent>
-                    </Card>
-
-                    {/* Share Trip tracking URL — base of the public live-tracking
-                        page that rider-app embeds in the "Share Trip" message.
-                        Recipients open ${base}/${share_token}; the URL is served
-                        runtime from app_settings so it rotates without a mobile
-                        rebuild. Should point at the admin dashboard's /track route
-                        — e.g. https://track.spinr.ca/track. */}
-                    <Card className="border-border/50 lg:col-span-2">
-                        <CardHeader>
-                            <CardTitle className="text-base">Share Trip — Live Tracking URL</CardTitle>
-                        </CardHeader>
-                        <Separator />
-                        <CardContent className="pt-4 space-y-2">
-                            <Label>Tracking base URL</Label>
-                            <Input
-                                value={settings.track_base_url || ""}
-                                onChange={(e) => update("track_base_url", e.target.value)}
-                                placeholder="https://track.spinr.ca/track"
-                            />
-                            <p className="text-xs text-muted-foreground">
-                                Used by the rider-app "Share Trip" message. Set this to the
-                                deployed admin dashboard's /track route. Leave blank to disable
-                                in-app sharing.
-                            </p>
-                        </CardContent>
-                    </Card>
-
-                    {/* Driver-app ride-offer alert tone — uploaded via
-                        a dedicated multipart endpoint that writes the URL
-                        directly to settings.ride_offer_sound_url. */}
-                    <Card className="border-border/50 lg:col-span-2">
-                        <CardHeader>
-                            <CardTitle className="text-base">Ride-offer alert sound (driver app)</CardTitle>
-                        </CardHeader>
-                        <Separator />
-                        <CardContent className="pt-4 space-y-4">
-                            <div className="space-y-2">
-                                <Label>Upload MP3 or WAV (≤500 KB)</Label>
-                                <div className="flex items-center gap-2">
-                                    <Input
-                                        type="file"
-                                        accept="audio/mpeg,audio/mp3,audio/wav"
-                                        disabled={soundUploading}
-                                        onChange={(e) => {
-                                            const f = e.target.files?.[0];
-                                            if (f) void handleUploadOfferSound(f);
-                                            e.target.value = "";
-                                        }}
-                                    />
-                                    {soundUploading && (
-                                        <span className="text-xs text-muted-foreground">Uploading…</span>
-                                    )}
-                                </div>
-                                <p className="text-xs text-muted-foreground">
-                                    Drivers hear this tone every ~2.5s while a ride offer is on screen. Leave empty to use the bundled placeholder.
-                                </p>
-                            </div>
-                            {settings.ride_offer_sound_url ? (
-                                <div className="space-y-2">
-                                    <Label>Current</Label>
-                                    {/* Native HTML5 audio — no extra dep. */}
-                                    <audio controls src={settings.ride_offer_sound_url} className="w-full" />
-                                    <div className="flex gap-2">
-                                        <Button
-                                            type="button"
-                                            variant="outline"
-                                            size="sm"
-                                            onClick={handleClearOfferSound}
-                                        >
-                                            Clear (revert to bundled)
-                                        </Button>
-                                    </div>
-                                </div>
-                            ) : (
-                                <p className="text-xs text-muted-foreground italic">
-                                    No custom sound set — drivers play the bundled placeholder.
-                                </p>
-                            )}
-                        </CardContent>
-                    </Card>
-
-                    {/* Fare Lock — SK regulatory requirement: the price shown
-                        to the rider at booking time is the price charged,
-                        regardless of actual distance/time deviation. */}
-                    <Card className="border-border/50 lg:col-span-2">
-                        <CardHeader>
-                            <CardTitle className="text-base">Fare Lock (SK Regulation)</CardTitle>
-                        </CardHeader>
-                        <Separator />
-                        <CardContent className="pt-4 space-y-4">
-                            <div className="flex items-center justify-between">
-                                <div className="space-y-0.5">
-                                    <Label htmlFor="fare_lock_enabled">Lock fare at booking time</Label>
-                                    <p className="text-xs text-muted-foreground">
-                                        When enabled, the fare shown to the rider before the ride is the final charge —
-                                        no recalculation at completion regardless of distance or time deviation.
-                                        Required under Saskatchewan ride-share regulations.
-                                    </p>
-                                </div>
-                                <Switch
-                                    id="fare_lock_enabled"
-                                    checked={settings.fare_lock_enabled ?? false}
-                                    onCheckedChange={(v) => update("fare_lock_enabled", v)}
-                                />
-                            </div>
-                        </CardContent>
-                    </Card>
-                </div>
+                    {!mfaAvailable && (
+                        <p className="text-sm text-muted-foreground">Two-factor authentication is not available on this deployment.</p>
+                    )}
+                </TabsContent>
+                </Tabs>
             )}
 
             <MfaEnrollDialog

@@ -55,3 +55,53 @@ async def test_record_kyb_decision(mock_supabase_client):
     assert patch_body["status"] == "active"
     assert patch_body["kyb_reviewed_by"] == "admin_1"
     assert "kyb_reviewed_at" in patch_body
+
+
+# ── KYB v1 (migration 225 / M2.1) ────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_record_kyb_decision_stamps_last_decision_and_note():
+    fake = MagicMock()
+    fake.data = [{"id": "c1", "status": "suspended", "kyb_last_decision": "rejected"}]
+    with patch("repositories.corporate_repo.supabase") as mock_sb:
+        mock_sb.table.return_value.update.return_value.eq.return_value.execute.return_value = fake
+        from db_supabase import record_kyb_decision
+
+        row = await record_kyb_decision(company_id="c1", reviewer_id="admin-001", approved=False, note="BN mismatch")
+    assert row["status"] == "suspended"
+    patch_sent = mock_sb.table.return_value.update.call_args.args[0]
+    assert patch_sent["kyb_last_decision"] == "rejected"
+    assert patch_sent["kyb_review_note"] == "BN mismatch"  # column exists (225)
+
+
+@pytest.mark.asyncio
+async def test_record_kyb_decision_approval_activates():
+    fake = MagicMock()
+    fake.data = [{"id": "c1", "status": "active"}]
+    with patch("repositories.corporate_repo.supabase") as mock_sb:
+        mock_sb.table.return_value.update.return_value.eq.return_value.execute.return_value = fake
+        from db_supabase import record_kyb_decision
+
+        await record_kyb_decision(company_id="c1", reviewer_id="admin-001", approved=True, note=None)
+    patch_sent = mock_sb.table.return_value.update.call_args.args[0]
+    assert patch_sent["status"] == "active"
+    assert patch_sent["kyb_last_decision"] == "approved"
+    assert "kyb_review_note" not in patch_sent
+
+
+@pytest.mark.asyncio
+async def test_set_kyb_document_persists_path_and_submitted_at():
+    # Regression: create_kyb_upload_url returned a path but nothing persisted
+    # it, so /kyb/view read an always-NULL kyb_document_url.
+    fake = MagicMock()
+    fake.data = [{"id": "c1", "kyb_document_url": "kyb/c1/abc.pdf"}]
+    with patch("repositories.corporate_repo.supabase") as mock_sb:
+        mock_sb.table.return_value.update.return_value.eq.return_value.execute.return_value = fake
+        from db_supabase import set_kyb_document
+
+        row = await set_kyb_document(company_id="c1", path="kyb/c1/abc.pdf")
+    assert row["kyb_document_url"] == "kyb/c1/abc.pdf"
+    patch_sent = mock_sb.table.return_value.update.call_args.args[0]
+    assert patch_sent["kyb_document_url"] == "kyb/c1/abc.pdf"
+    assert patch_sent["kyb_submitted_at"]

@@ -8,7 +8,7 @@ import {
     Flame, Building2, LifeBuoy, HelpCircle,
     LogOut, Menu, X, ChevronLeft, ChevronRight,
     Sun, Moon, Shield, ShieldAlert, Cloud, Trophy, TrendingUp, Activity,
-    Inbox, Clock, Headphones, BarChart3, Send, Sparkles, Gift,
+    Inbox, Clock, Headphones, BarChart3, Send, Sparkles, Gift, Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useState, useEffect } from "react";
@@ -26,6 +26,10 @@ interface NavItem {
      *  the list); children are deeper triage views. Active highlight on
      *  the parent uses startsWith() so any child path keeps it lit. */
     children?: NavItem[];
+    /** Hide this item when the user also holds this module (or is a super
+     *  admin) — for pages whose content lives inside another module's page,
+     *  so the entry only shows for staff who can't reach it there. */
+    hideIfModule?: string;
 }
 
 interface NavGroup {
@@ -53,13 +57,18 @@ const NAV_GROUPS: NavGroup[] = [
                 children: [
                     { href: "/dashboard/drivers/queue", label: "Approvals", icon: Inbox, module: "drivers" },
                     { href: "/dashboard/drivers/expiring", label: "Expiring Docs", icon: Clock, module: "drivers" },
+                    { href: "/dashboard/drivers/import", label: "Bulk Import", icon: Upload, module: "drivers" },
                 ],
             },
             { href: "/dashboard/users", label: "Users", icon: Users, module: "users" },
             { href: "/dashboard/heatmap", label: "Heat Map", icon: Flame, module: "heatmap" },
             { href: "/dashboard/analytics", label: "Analytics", icon: LayoutDashboard, module: "dashboard" },
             { href: "/dashboard/driver-offers", label: "Driver Offers", icon: Send, module: "dashboard" },
-            { href: "/dashboard/referrals", label: "Referrals", icon: Gift, module: "drivers" },
+            // Referrals live inside Earnings & Payouts → Referrals tab. This
+            // entry (to the still-existing standalone page) shows ONLY for
+            // staff with drivers but not earnings — e.g. the "operations"
+            // role — who would otherwise lose all navigable referral access.
+            { href: "/dashboard/referrals", label: "Referrals", icon: Gift, module: "drivers", hideIfModule: "earnings" },
             { href: "/dashboard/forecast", label: "Demand Forecast", icon: TrendingUp, module: "dashboard" },
         ],
     },
@@ -231,9 +240,12 @@ export function Sidebar() {
                 {/* Nav */}
                 <div className="flex-1 overflow-y-auto scrollbar-thin">
                     {NAV_GROUPS.map((group, gi) => {
-                        const visibleItems = isSuperAdmin
-                            ? group.items
-                            : group.items.filter(item => userModules.includes(item.module));
+                        const visibleItems = group.items.filter(item => {
+                            // Suppressed when the user can already reach this
+                            // content inside another module's page.
+                            if (item.hideIfModule && (isSuperAdmin || userModules.includes(item.hideIfModule))) return false;
+                            return isSuperAdmin || userModules.includes(item.module);
+                        });
                         if (visibleItems.length === 0) return null;
 
                         return (

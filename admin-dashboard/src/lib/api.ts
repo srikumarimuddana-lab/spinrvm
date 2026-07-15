@@ -609,6 +609,72 @@ export interface DriverReferralSummary {
 export const getDriverReferrals = (id: string) =>
     request<DriverReferralSummary>(`/api/admin/drivers/${id}/referrals`);
 
+// ─── LMS training integration ───────────────────────────────────────
+// The backend matches the driver against the external Spinr LMS by phone
+// number and proxies its training record (see routes/admin/drivers.py
+// admin_get_driver_training + services/lms_service.py).
+export interface DriverTrainingCourse {
+    course_title: string | null;
+    status: string;
+    progress: number;
+    enrolled_at: string | null;
+    completed_at: string | null;
+}
+export interface DriverTrainingCertificate {
+    certificate_number: string;
+    course_title: string;
+    final_quiz_score: number | null;
+    issued_at: string;
+    expires_at: string | null;
+    status: "active" | "revoked" | "expired" | string;
+}
+export interface DriverTrainingQuizAttempt {
+    quiz_title: string | null;
+    score: number;
+    passed: boolean;
+    attempted_at: string;
+}
+export interface DriverTrainingCommunication {
+    communication_type: string;
+    message_type: string;
+    subject: string | null;
+    status: string;
+    sent_at: string;
+}
+export interface DriverTraining {
+    matched: boolean;
+    reason: "no_phone" | "not_found_in_lms" | null;
+    phone_last4: string | null;
+    lms: {
+        driver: {
+            id: string;
+            full_name: string;
+            email: string;
+            phone: string | null;
+            city: string | null;
+            spinr_approved: boolean;
+            sgi_approved: boolean;
+        };
+        training: {
+            status: "not_invited" | "invited" | "registered" | "in_progress" | "completed" | string;
+            registered: boolean;
+            registered_at: string | null;
+            completed_at: string | null;
+            completion_percentage: number;
+            courses: DriverTrainingCourse[];
+        };
+        certificates: DriverTrainingCertificate[];
+        history: {
+            quiz_attempts: DriverTrainingQuizAttempt[];
+            communications: DriverTrainingCommunication[];
+        };
+    } | null;
+}
+export const getDriverTraining = (id: string, refresh = false) =>
+    request<DriverTraining>(
+        `/api/admin/drivers/${id}/training${refresh ? "?refresh=true" : ""}`,
+    );
+
 export interface ReferralLeader {
     driver_id: string;
     driver_code: string;
@@ -922,6 +988,23 @@ export interface EarningsOverview {
         current: { rider: number; driver: number; system: number };
         previous: { rider: number; driver: number; system: number };
     };
+    /** Ops funnel — created_at cohort of rides requested in the window,
+     *  each as a current/previous MetricWithDelta. Semantics (cohort basis,
+     *  cancelled_by attribution, reached-searching definition) live in
+     *  migration 227_earnings_overview_funnel_agg.sql. The cancel splits
+     *  share attribution with cancellation_breakdown — the two widgets
+     *  always reconcile. */
+    ride_funnel: {
+        price_searches: MetricWithDelta;
+        requested: MetricWithDelta;
+        reached_searching: MetricWithDelta;
+        completed: MetricWithDelta;
+        rider_cancelled: MetricWithDelta;
+        driver_cancelled: MetricWithDelta;
+        /** Admin/system/no-driver + unattributed — count − rider − driver. */
+        system_cancelled: MetricWithDelta;
+        cancelled_after_start: MetricWithDelta;
+    };
     daily_series: Array<{
         date: string;
         gbv: number;
@@ -1181,6 +1264,84 @@ export const reviewDocument = (
         }),
     });
 
+/* ── Bulk Driver Import (CSV) ─────────────── */
+export interface DriverImportReportItem {
+    old_driver_id: string;
+    field: string;
+    message: string;
+}
+export interface DriverImportReport {
+    batch: string;
+    can_commit: boolean;
+    counts: { rows: number; users: number; drivers: number; skipped_resume: number };
+    warnings: DriverImportReportItem[];
+    errors: DriverImportReportItem[];
+}
+export interface DriverImportCommitResult {
+    batch: string;
+    committed: boolean;
+    imported_users?: number;
+    imported_drivers?: number;
+    warnings?: DriverImportReportItem[];
+    // Present (with can_commit=false) when the commit was refused on errors.
+    can_commit?: boolean;
+    counts?: DriverImportReport["counts"];
+    errors?: DriverImportReportItem[];
+}
+export interface DriverImportOptions {
+    serviceAreaId?: string;
+    serviceAreaName?: string;
+    batch?: string;
+}
+
+function driverImportFormData(file: File, opts?: DriverImportOptions): FormData {
+    const fd = new FormData();
+    fd.append("drivers_csv", file);
+    if (opts?.serviceAreaId) fd.append("service_area_id", opts.serviceAreaId);
+    if (opts?.serviceAreaName) fd.append("service_area_name", opts.serviceAreaName);
+    if (opts?.batch) fd.append("batch", opts.batch);
+    return fd;
+}
+
+/** Dry-run: parse + validate the drivers CSV and return the report (no writes). */
+export const adminValidateDriverImport = (file: File, opts?: DriverImportOptions) =>
+    request<DriverImportReport>("/api/admin/drivers/import/validate", {
+        method: "POST",
+        body: driverImportFormData(file, opts),
+    });
+
+/** Commit the import. Returns committed=false + errors if the CSV no longer validates. */
+export const adminCommitDriverImport = (file: File, opts?: DriverImportOptions) =>
+    request<DriverImportCommitResult>("/api/admin/drivers/import/commit", {
+        method: "POST",
+        body: driverImportFormData(file, opts),
+    });
+
+/* ── Manual Admin Document Upload ─────────── */
+export interface AdminUploadDocumentInput {
+    driverId: string;
+    requirementKey: string;
+    file: File;
+    side?: "front" | "back";
+    expiryDate?: string;
+    status?: "pending" | "approved";
+}
+
+/** Upload a document on a driver's behalf (pending, or committed straight to approved). */
+export const adminUploadDriverDocument = (input: AdminUploadDocumentInput) => {
+    const fd = new FormData();
+    fd.append("file", input.file);
+    fd.append("driver_id", input.driverId);
+    fd.append("requirement_key", input.requirementKey);
+    if (input.side) fd.append("side", input.side);
+    if (input.expiryDate) fd.append("expiry_date", input.expiryDate);
+    fd.append("status", input.status ?? "pending");
+    return request<Record<string, unknown>>("/api/admin/documents/upload", {
+        method: "POST",
+        body: fd,
+    });
+};
+
 export interface ApprovalQueueItem {
     driver_id: string;
     user_id: string | null;
@@ -1200,6 +1361,10 @@ export interface ApprovalQueueItem {
     service_area_name: string | null;
     vehicle_type_id: string | null;
     vehicle_type_name: string | null;
+    profile_image_status: string | null;
+    is_new_applicant: boolean;
+    is_resubmission: boolean;
+    has_pending_photo: boolean;
 }
 
 export interface ApprovalQueueResponse {
@@ -1208,6 +1373,9 @@ export interface ApprovalQueueResponse {
         oldest_in_queue_hours: number;
         median_wait_hours: number;
         over_24h_count: number;
+        new_applicants: number;
+        resubmissions: number;
+        photo_review: number;
     };
     items: ApprovalQueueItem[];
 }
@@ -1292,6 +1460,9 @@ export interface CorporateAccount {
     kyb_document_url?: string | null;
     kyb_reviewed_at?: string | null;
     kyb_reviewed_by?: string | null;
+    kyb_submitted_at?: string | null;
+    kyb_review_note?: string | null;
+    kyb_last_decision?: "approved" | "rejected" | null;
     credit_limit?: number;
     is_active: boolean;
     created_at: string;
@@ -1337,6 +1508,17 @@ export const changeCompanyStatus = (
         method: "POST",
         body: JSON.stringify(transition),
     });
+
+// Blob-fetch the KYB document through the backend streaming endpoint
+// (kyb_document_url is a raw PRIVATE-bucket key, not a browser-usable URL).
+export async function fetchKybDocumentBlob(id: string): Promise<Blob> {
+    const token = useAuthStore.getState().token;
+    const res = await fetch(`/api/admin/corporate-accounts/${id}/kyb/view`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new Error(`Could not load document (${res.status})`);
+    return res.blob();
+}
 
 export const createCorporateAccount = (data: any) =>
     request<CorporateAccount>("/api/admin/corporate-accounts", {

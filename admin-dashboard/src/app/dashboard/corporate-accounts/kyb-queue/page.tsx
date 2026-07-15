@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
     CorporateAccount,
+    fetchKybDocumentBlob,
     listCorporateAccounts,
     reviewKyb,
 } from "@/lib/api";
@@ -103,6 +104,22 @@ export default function KybQueuePage() {
         }
     };
 
+    // kyb_document_url is a raw PRIVATE-bucket key — stream it through the
+    // backend and open the blob in a new tab (M2.7).
+    const preview = async (c: CorporateAccount) => {
+        setBusyId(c.id);
+        try {
+            const blob = await fetchKybDocumentBlob(c.id);
+            const url = URL.createObjectURL(blob);
+            window.open(url, "_blank", "noopener");
+            setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        } catch (e: any) {
+            toast({ title: "Could not load document", description: e?.message, variant: "destructive" });
+        } finally {
+            setBusyId(null);
+        }
+    };
+
     return (
         <div className="space-y-6">
             <div className="flex items-center justify-between">
@@ -145,6 +162,7 @@ export default function KybQueuePage() {
                                 <SortableHead column="tax_region" sort={sort} onSort={toggle}>Region</SortableHead>
                                 <SortableHead column="size_tier" sort={sort} onSort={toggle}>Tier</SortableHead>
                                 <SortableHead column="billing_email" sort={sort} onSort={toggle}>Billing Email</SortableHead>
+                                <SortableHead column="kyb_submitted_at" sort={sort} onSort={toggle}>Submitted</SortableHead>
                                 <SortableHead column="kyb_document_url" sort={sort} onSort={toggle}>Document</SortableHead>
                                 <TableHead className="text-right">Actions</TableHead>
                             </TableRow>
@@ -152,7 +170,7 @@ export default function KybQueuePage() {
                         <TableBody>
                             {loading ? (
                                 <TableRow>
-                                    <TableCell colSpan={7} className="py-10 text-center">
+                                    <TableCell colSpan={8} className="py-10 text-center">
                                         <div className="flex justify-center">
                                             <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
                                         </div>
@@ -161,7 +179,7 @@ export default function KybQueuePage() {
                             ) : rows.length === 0 ? (
                                 <TableRow>
                                     <TableCell
-                                        colSpan={7}
+                                        colSpan={8}
                                         className="py-10 text-center text-muted-foreground"
                                     >
                                         Queue is empty. No companies are waiting for KYB review.
@@ -191,16 +209,21 @@ export default function KybQueuePage() {
                                         <TableCell className="text-sm text-muted-foreground">
                                             {c.billing_email ?? "—"}
                                         </TableCell>
+                                        <TableCell className="text-xs text-muted-foreground">
+                                            {c.kyb_submitted_at
+                                                ? new Date(c.kyb_submitted_at).toLocaleDateString()
+                                                : "—"}
+                                        </TableCell>
                                         <TableCell>
                                             {c.kyb_document_url ? (
-                                                <a
-                                                    className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline"
-                                                    href={c.kyb_document_url}
-                                                    target="_blank"
-                                                    rel="noreferrer"
+                                                <button
+                                                    type="button"
+                                                    className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline disabled:opacity-50"
+                                                    onClick={() => preview(c)}
+                                                    disabled={busyId === c.id}
                                                 >
-                                                    <FileText className="h-3 w-3" /> View
-                                                </a>
+                                                    <FileText className="h-3 w-3" /> Preview
+                                                </button>
                                             ) : (
                                                 <span className="text-xs text-muted-foreground">
                                                     None

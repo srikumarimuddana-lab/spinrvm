@@ -2311,7 +2311,7 @@ async def admin_get_earnings_overview(
     def _i(d: Dict[str, Any], k: str) -> int:
         return int(d.get(k) or 0)
 
-    def _win(res: Any) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    def _win(res: Any) -> tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
         a = _obj(res)
         completed = {
             "gbv": _f(a, "gbv"),
@@ -2331,10 +2331,24 @@ async def admin_get_earnings_overview(
             "rider_cancels": _i(a, "cx_rider_cancels"),
             "driver_cancels": _i(a, "cx_driver_cancels"),
         }
-        return completed, cancelled
+        # Ops funnel (created_at cohort — migration 227). The rider/driver/
+        # system cancel splits are NOT separate keys: they reuse the cx_*
+        # attribution above so the funnel and the cancellation-mix bar on the
+        # same page can never disagree.
+        funnel = {
+            "price_searches": _i(a, "fn_price_searches"),
+            "requested": _i(a, "fn_requested"),
+            "reached_searching": _i(a, "fn_reached_searching"),
+            "completed": _i(a, "fn_completed"),
+            "rider_cancelled": cancelled["rider_cancels"],
+            "driver_cancelled": cancelled["driver_cancels"],
+            "system_cancelled": cancelled["count"] - cancelled["rider_cancels"] - cancelled["driver_cancels"],
+            "cancelled_after_start": _i(a, "fn_cancelled_after_start"),
+        }
+        return completed, cancelled, funnel
 
-    cur, cur_cx = _win(current_agg)
-    prev, prev_cx = _win(previous_agg)
+    cur, cur_cx, cur_fn = _win(current_agg)
+    prev, prev_cx, prev_fn = _win(previous_agg)
 
     cur_ref_obj = _obj(current_ref)
     prev_ref_obj = _obj(previous_ref)
@@ -2342,6 +2356,10 @@ async def admin_get_earnings_overview(
     prev_refund_amt = _f(prev_ref_obj, "refund_amount")
     cur_refund_count = _i(cur_ref_obj, "refund_count")
     prev_refund_count = _i(prev_ref_obj, "refund_count")
+
+    # Ops funnel — each key as a current/previous MetricWithDelta so the
+    # frontend reuses the same MetricCard as the rest.
+    ride_funnel = {k: _metric(cur_fn[k], prev_fn[k]) for k in cur_fn}
 
     # Cancellation rate: cancelled / (completed + cancelled). Same
     # formula the ops cancellation-rate KPI uses across the codebase.
@@ -2443,6 +2461,7 @@ async def admin_get_earnings_overview(
                 "system": prev_cx["count"] - prev_cx["rider_cancels"] - prev_cx["driver_cancels"],
             },
         },
+        "ride_funnel": ride_funnel,
         "daily_series": daily_series,
     }
 

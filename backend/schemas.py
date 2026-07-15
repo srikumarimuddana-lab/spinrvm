@@ -132,6 +132,12 @@ class AppSettings(BaseModel):
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
     twilio_from_number: str = ""
+    # Spinr driver LMS (training platform) integration. Base URL of the LMS
+    # deployment and the shared secret it expects in the x-api-key header
+    # (SPINR_INTEGRATION_API_KEY on the LMS side). Used by services/lms_service
+    # to pull driver training status into the admin dashboard.
+    lms_api_base_url: str = ""
+    lms_api_key: str = ""
     driver_matching_algorithm: str = "nearest"
     min_driver_rating: float = 4.0
     search_radius_km: float = 10.0

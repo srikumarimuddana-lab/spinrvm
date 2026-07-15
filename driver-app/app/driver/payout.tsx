@@ -17,7 +17,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useDriverStore } from '../../store/driverStore';
 import { useAuthStore } from '@shared/store/authStore';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import * as WebBrowser from 'expo-web-browser';
 import { useDriverMe, useUpdateDriverMe } from '@shared/hooks/queries';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -165,7 +165,7 @@ function PayoutScreen() {
             // Refresh balance / bank / status so the screen reflects the new state.
             await loadData();
         } catch (err: any) {
-            showToast('error', 'Error', err?.response?.data?.detail || 'Could not start verification. Please try again.');
+            showToast('error', 'Error', getApiErrorMessage(err, 'Could not start verification. Please try again.'));
         } finally {
             setStripeOnboarding(false);
         }
@@ -187,7 +187,7 @@ function PayoutScreen() {
             setShowGstForm(false);
             showToast('success', 'Saved', 'GST/BN number updated successfully');
         } catch (err: any) {
-            showToast('error', 'Save Failed', err.response?.data?.detail || 'Failed to save GST number');
+            showToast('error', 'Save Failed', getApiErrorMessage(err, 'Could not save your GST number. Please try again.'));
         }
     };
 
@@ -224,7 +224,7 @@ function PayoutScreen() {
             const res = await api.post<{ message?: string }>(`/drivers/t4a/${year}/email`);
             showToast('success', 'Check Your Email', res.data?.message || `Your T4A summary for ${year} is on its way.`);
         } catch (err: any) {
-            showToast('error', 'Send Failed', err.response?.data?.detail || 'Could not send your T4A. Please try again.');
+            showToast('error', 'Send Failed', getApiErrorMessage(err, 'Could not send your T4A. Please try again.'));
         } finally {
             setSendingT4A(false);
         }
@@ -237,7 +237,7 @@ function PayoutScreen() {
             const res = await api.post<{ message?: string }>(`/drivers/earnings/export/email?year=${year}`);
             showToast('success', 'Check Your Email', res.data?.message || `Your earnings export for ${year} is on its way.`);
         } catch (err: any) {
-            showToast('error', 'Send Failed', err.response?.data?.detail || 'Could not send your earnings export. Please try again.');
+            showToast('error', 'Send Failed', getApiErrorMessage(err, 'Could not send your earnings export. Please try again.'));
         } finally {
             setSendingCSV(false);
         }

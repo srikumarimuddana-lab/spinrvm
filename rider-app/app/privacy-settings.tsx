@@ -9,7 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { showToast } from '../store/toastStore';
 import ConfirmSheet from '../components/ConfirmSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 import type { ThemeColors } from '@shared/theme/index';
 import { useTranslation } from '../i18n';
@@ -36,9 +36,9 @@ export default function PrivacySettingsScreen() {
   const handlePushToggle = (value: boolean) => {
     setPushNotifications(value);
     updatePreferences.mutate({ push_enabled: value }, {
-      onError: () => {
+      onError: (err) => {
         setPushNotifications(!value);
-        showToast('Update Failed', 'Could not save your preference. Please try again.', 'danger');
+        showToast('Update Failed', getApiErrorMessage(err, 'Could not save your preference. Please try again.'), 'danger');
       },
     });
   };
@@ -73,7 +73,7 @@ export default function PrivacySettingsScreen() {
       await api.put('/marketing/preferences', { [field]: value, source: 'rider_app' });
     } catch (err: any) {
       setter(!value);
-      showToast('Update Failed', 'Could not save your preference. Please try again.', 'danger');
+      showToast('Update Failed', getApiErrorMessage(err, 'Could not save your preference. Please try again.'), 'danger');
     }
   };
   const [confirmSheet, setConfirmSheet] = useState<{
@@ -90,7 +90,7 @@ export default function PrivacySettingsScreen() {
       await api.post('/users/data-export');
       showToast(t('privacy.download_requested'), t('privacy.download_requested_msg'), 'success');
     } catch (err: any) {
-      showToast('Export Failed', 'Failed to request data export. Please try again.', 'danger');
+      showToast('Export Failed', getApiErrorMessage(err, 'Could not request your data export. Please try again.'), 'danger');
     }
   };
 
@@ -111,7 +111,7 @@ export default function PrivacySettingsScreen() {
               await logout();
               router.replace('/login' as any);
             } catch (err: any) {
-              showToast('Delete Failed', 'Could not delete account. Please contact support.', 'danger');
+              showToast('Delete Failed', getApiErrorMessage(err, 'Could not delete account. Please contact support.'), 'danger');
             }
           },
         },

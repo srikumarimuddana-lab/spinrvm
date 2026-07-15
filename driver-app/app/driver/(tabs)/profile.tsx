@@ -28,7 +28,7 @@ import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuthStore, type User, type Driver } from '@shared/store/authStore';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { useDriverMe } from '@shared/hooks/queries';
 import SpinrConfig from '@shared/config/spinr.config';
 import { showToast } from '../../../hooks/useToast';
@@ -185,7 +185,7 @@ function ProfileScreenInner() {
       await updateProfileImage(uri);
       showToast('success', 'Photo Updated', 'Your profile photo has been submitted for review.');
     } catch (err: any) {
-      showToast('error', 'Upload Failed', err.message || 'Failed to upload');
+      showToast('error', 'Upload Failed', getApiErrorMessage(err, 'Could not upload your photo. Please try again.'));
     } finally {
       setIsUploadingPhoto(false);
     }
@@ -219,7 +219,9 @@ function ProfileScreenInner() {
       setShowEditModal(false);
       showToast('success', 'Profile Updated', 'Your information has been saved.');
     } catch (err: any) {
-      showToast('error', 'Update Failed', err.message || 'Failed to update');
+      // Surface the backend's specific reason (e.g. "This email is already
+      // linked to an existing Spinr account") instead of a generic message.
+      showToast('error', 'Update Failed', getApiErrorMessage(err, 'Failed to update your profile. Please try again.'));
     } finally {
       setIsSaving(false);
     }

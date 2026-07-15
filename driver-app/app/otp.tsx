@@ -15,7 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAuthStore, type User } from '@shared/store/authStore';
-import api, { setInMemoryToken } from '@shared/api/client';
+import api, { setInMemoryToken, getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../hooks/useToast';
 import { useLanguageStore } from '../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -168,8 +168,7 @@ export default function OtpScreen() {
     } catch (err: any) {
       triggerShake();
       setCode('');
-      const message = err.response?.data?.detail || err.message || 'Invalid code. Please try again.';
-      showToast('error', 'Verification Failed', message);
+      showToast('error', 'Verification Failed', getApiErrorMessage(err, 'Invalid code. Please try again.'));
     } finally {
       setVerifying(false);
     }
@@ -182,8 +181,8 @@ export default function OtpScreen() {
     try {
       await api.post('/auth/send-otp', { phone: phoneNumber });
       showToast('success', 'Code Sent', 'A new verification code has been sent to your phone.');
-    } catch {
-      showToast('error', 'Failed', 'Could not resend code. Please try again.');
+    } catch (err: any) {
+      showToast('error', 'Failed', getApiErrorMessage(err, 'Could not resend code. Please try again.'));
     }
   };
 

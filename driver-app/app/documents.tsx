@@ -6,7 +6,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
-import api, { getAuthHeader } from '@shared/api/client';
+import api, { getAuthHeader, getApiErrorMessage } from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 import SpinrConfig from '@shared/config/spinr.config';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -71,7 +71,7 @@ export default function DocumentsScreen() {
             setRequirements(reqRes.data as Requirement[]);
             setDocuments(docRes.data as DriverDocument[]);
         } catch (err: any) {
-            showToast('error', 'Load Failed', 'Failed to load your documents. Please check your connection and try again.');
+            showToast('error', 'Load Failed', getApiErrorMessage(err, 'Could not load your documents. Please try again.'));
         } finally {
             setLoading(false);
         }
@@ -184,15 +184,7 @@ export default function DocumentsScreen() {
 
             showToast('success', 'Uploaded', 'Document submitted for review.');
         } catch (err: any) {
-            // Unpack the error safely — axios errors have `response.data.detail`,
-            // fetch errors have `message`, anything else falls back to String().
-            const detail =
-                err?.response?.data?.detail ||
-                err?.response?.data?.message ||
-                err?.message ||
-                (typeof err === 'string' ? err : JSON.stringify(err)) ||
-                'Something went wrong';
-            showToast('error', 'Upload Failed', String(detail));
+            showToast('error', 'Upload Failed', getApiErrorMessage(err, 'Could not upload your document. Please try again.'));
         } finally {
             setUploading(null);
         }

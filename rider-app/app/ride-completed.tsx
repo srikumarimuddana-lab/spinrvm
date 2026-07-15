@@ -13,7 +13,7 @@ import { useRideStore } from '../store/rideStore';
 import { useAuthStore } from '@shared/store/authStore';
 import { showToast } from '../store/toastStore';
 import ConfirmSheet from '../components/ConfirmSheet';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import Analytics from '@shared/analytics';
@@ -160,7 +160,7 @@ function RideCompletedScreenContent() {
       const user = useAuthStore.getState().user;
       showToast('Receipt Sent', `Receipt emailed to ${user?.email || 'your registered email'}.`, 'success');
     } catch (e: any) {
-      showToast('Email Not Sent', 'Could not send receipt email. Please try again.', 'danger');
+      showToast('Email Not Sent', getApiErrorMessage(e, 'Could not send receipt email. Please try again.'), 'danger');
     } finally {
       setEmailSending(false);
     }
@@ -182,7 +182,7 @@ function RideCompletedScreenContent() {
       setLostItemText('');
       showToast('Report Submitted', "Your driver has been notified. They'll get back to you if the item is found.", 'success');
     } catch (e: any) {
-      showToast('Report Not Sent', 'Could not submit report. Please try again.', 'danger');
+      showToast('Report Not Sent', getApiErrorMessage(e, 'Could not submit report. Please try again.'), 'danger');
     } finally {
       setLostItemSending(false);
     }

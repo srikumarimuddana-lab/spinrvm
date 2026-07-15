@@ -14,7 +14,7 @@ import { useAppResumeKey } from '../hooks/useAppResumeKey';
 import { useRideStore } from '../store/rideStore';
 import { RideStatus } from '../constants/rideStatus';
 import { CarMarker } from '@shared/components/CarMarker';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import ConfirmSheet from '../components/ConfirmSheet';
 import CancelReasonSheet from '../components/CancelReasonSheet';
@@ -84,8 +84,8 @@ function DriverArrivedScreenContent() {
       await cancelRide(reason);
       clearRide();
       router.replace('/(tabs)' as any);
-    } catch {
-      showToast('Could not cancel', 'The server rejected the request. Please try again.', 'danger');
+    } catch (err) {
+      showToast('Could not cancel', getApiErrorMessage(err, 'Could not cancel your ride. Please try again.'), 'danger');
     }
   };
 

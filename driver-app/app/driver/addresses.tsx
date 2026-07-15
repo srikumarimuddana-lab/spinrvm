@@ -18,7 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { useLanguageStore } from '../../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -88,7 +88,7 @@ export default function AddressesScreen() {
             // PIPEDA: never spread the raw error body into logs — backend error
             // payloads can contain saved-address strings or user identifiers.
             console.error('Error fetching addresses', { code: err?.code, status: err?.status });
-            showToast('error', 'Load Failed', 'Failed to load saved addresses');
+            showToast('error', 'Load Failed', getApiErrorMessage(err, 'Could not load your saved addresses. Please try again.'));
         } finally {
             setLoading(false);
         }
@@ -106,7 +106,7 @@ export default function AddressesScreen() {
                         await fetchAddresses();
                         showToast('success', 'Address Deleted', 'Address has been removed.');
                     } catch (err: any) {
-                        showToast('error', 'Delete Failed', 'Failed to delete address');
+                        showToast('error', 'Delete Failed', getApiErrorMessage(err, 'Could not delete the address. Please try again.'));
                     }
                 },
             },
@@ -139,8 +139,7 @@ export default function AddressesScreen() {
             await fetchAddresses();
             showToast('success', 'Address Saved', 'Address has been saved.');
         } catch (err: any) {
-            const errorMessage = err.response?.data?.detail || 'Failed to save address';
-            showToast('error', 'Save Failed', errorMessage);
+            showToast('error', 'Save Failed', getApiErrorMessage(err, 'Could not save your address. Please try again.'));
         }
     };
 

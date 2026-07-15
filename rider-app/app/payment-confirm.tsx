@@ -21,7 +21,7 @@ import { useWorkProfileStore } from '../store/workProfileStore';
 import { showToast } from '../store/toastStore';
 import type { Ride, RideRequiresAction } from '../store/rideStore';
 import ConfirmSheet from '../components/ConfirmSheet';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import Analytics from '@shared/analytics';
@@ -202,7 +202,7 @@ function PaymentConfirmScreenContent() {
           ],
         });
       } else {
-        showToast('Booking Failed', 'Could not complete your booking. Please try again.', 'danger');
+        showToast('Booking Failed', getApiErrorMessage(error, 'Could not complete your booking. Please try again.'), 'danger');
       }
     } finally {
       setIsBooking(false);

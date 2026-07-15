@@ -8,6 +8,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@shared/store/authStore';
 import { showToast } from '../store/toastStore';
+import { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import i18n, { useTranslation, useLanguageStore, LANGUAGES, type Language } from '../i18n';
@@ -51,9 +52,9 @@ export default function SettingsScreen() {
   const handleNotificationToggle = (key: string, setter: (v: boolean) => void) => (value: boolean) => {
     setter(value);
     updatePreferences.mutate({ [key]: value }, {
-      onError: () => {
+      onError: (err) => {
         setter(!value);
-        showToast(t('settings.prefNotSavedTitle'), t('settings.prefNotSavedMsg'), 'danger');
+        showToast(t('settings.prefNotSavedTitle'), getApiErrorMessage(err, t('settings.prefNotSavedMsg')), 'danger');
       },
     });
   };

@@ -10,6 +10,7 @@ import { useStripe } from '@stripe/stripe-react-native';
 import { StripeKeyContext } from './_layout';
 import { useWalletStore, WalletTransaction, WalletTransactionMeta } from '../store/walletStore';
 import { showToast } from '../store/toastStore';
+import { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -125,7 +126,7 @@ export default function WalletScreen() {
       showToast('Payment Successful', `$${effectiveAmount.toFixed(2)} will be added to your wallet shortly.`, 'success');
       setTimeout(() => { fetchWallet(); fetchTransactions(30); }, 2000);
     } catch (err: any) {
-      showToast('Top-up Failed', err.response?.data?.detail || err.message || 'Please try again', 'danger');
+      showToast('Top-up Failed', getApiErrorMessage(err, 'Could not complete your top-up. Please try again.'), 'danger');
     } finally {
       setTopUpLoading(false);
     }

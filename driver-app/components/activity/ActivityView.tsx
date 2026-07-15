@@ -257,37 +257,39 @@ export default function ActivityView() {
               <Text style={styles.totalLabel}>Total Earned</Text>
               <Text style={styles.totalValue}>${toMoney(totalEarnings)}</Text>
             </View>
-            <View style={styles.breakdownRow}>
-              <View style={styles.breakdownItem}>
-                <Ionicons name="cash-outline" size={18} color="#ef4444" />
+            {/* Vertical list (icon + label on the left, amount right-aligned).
+                A single row of five columns cramped the dollar values into
+                ~65px each, so amounts like $254.62 wrapped mid-number and the
+                columns fell out of alignment. A full-width row per category
+                gives every amount room to render on one line and stay uniform
+                regardless of how large it is or how narrow the screen. */}
+            <View style={styles.breakdownList}>
+              <View style={styles.breakdownRow}>
+                <Ionicons name="cash-outline" size={18} color="#ef4444" style={styles.breakdownIcon} />
                 <Text style={styles.label}>Fare</Text>
-                <Text style={styles.value} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>${toMoney(fareEarnings)}</Text>
+                <Text style={styles.value} numberOfLines={1}>${toMoney(fareEarnings)}</Text>
               </View>
-              <View style={styles.divider} />
-              <View style={styles.breakdownItem}>
-                <Ionicons name="gift-outline" size={18} color="#f59e0b" />
+              <View style={[styles.breakdownRow, styles.breakdownRowBorder]}>
+                <Ionicons name="gift-outline" size={18} color="#f59e0b" style={styles.breakdownIcon} />
                 <Text style={styles.label}>Tips</Text>
-                <Text style={[styles.value, { color: '#f59e0b' }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>${toMoney(totalTips)}</Text>
+                <Text style={[styles.value, { color: '#f59e0b' }]} numberOfLines={1}>${toMoney(totalTips)}</Text>
               </View>
-              <View style={styles.divider} />
-              <View style={styles.breakdownItem}>
-                <Ionicons name="flash" size={18} color="#8b5cf6" />
-                <Text style={styles.label}>Bonus</Text>
+              <View style={[styles.breakdownRow, styles.breakdownRowBorder]}>
+                <Ionicons name="flash" size={18} color="#8b5cf6" style={styles.breakdownIcon} />
                 {/* Per-ride incentives + quest rewards (referral shown separately). */}
-                <Text style={[styles.value, { color: '#8b5cf6' }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>${toMoney(totalIncentives + (totalBonuses - totalReferralBonuses))}</Text>
+                <Text style={styles.label}>Bonus</Text>
+                <Text style={[styles.value, { color: '#8b5cf6' }]} numberOfLines={1}>${toMoney(totalIncentives + (totalBonuses - totalReferralBonuses))}</Text>
               </View>
-              <View style={styles.divider} />
-              <View style={styles.breakdownItem}>
-                <Ionicons name="people-outline" size={18} color="#10b981" />
-                <Text style={styles.label}>Referral</Text>
+              <View style={[styles.breakdownRow, styles.breakdownRowBorder]}>
+                <Ionicons name="people-outline" size={18} color="#10b981" style={styles.breakdownIcon} />
                 {/* Referral rewards paid into payable_balance (kind='referral'). */}
-                <Text style={[styles.value, { color: '#10b981' }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>${toMoney(totalReferralBonuses)}</Text>
+                <Text style={styles.label}>Referral</Text>
+                <Text style={[styles.value, { color: '#10b981' }]} numberOfLines={1}>${toMoney(totalReferralBonuses)}</Text>
               </View>
-              <View style={styles.divider} />
-              <View style={styles.breakdownItem}>
-                <Ionicons name="receipt-outline" size={18} color="#6b7280" />
+              <View style={[styles.breakdownRow, styles.breakdownRowBorder]}>
+                <Ionicons name="receipt-outline" size={18} color="#6b7280" style={styles.breakdownIcon} />
                 <Text style={styles.label}>Tax</Text>
-                <Text style={[styles.value, { color: '#6b7280' }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>${toMoney(totalTax)}</Text>
+                <Text style={[styles.value, { color: '#6b7280' }]} numberOfLines={1}>${toMoney(totalTax)}</Text>
               </View>
             </View>
           </View>
@@ -473,31 +475,34 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: '900',
   },
+  breakdownList: {
+    // Vertical stack of full-width category rows.
+  },
   breakdownRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-around',
+    paddingVertical: 12,
   },
-  breakdownItem: {
-    flex: 1,
-    alignItems: 'center',
-    gap: 4,
+  breakdownRowBorder: {
+    borderTopWidth: 1,
+    borderTopColor: '#f3f4f6',
+  },
+  breakdownIcon: {
+    width: 22,
+    textAlign: 'center',
   },
   label: {
-    color: '#6b7280',
-    fontSize: 11,
+    flex: 1,
+    marginLeft: 10,
+    color: '#374151',
+    fontSize: 14,
     fontWeight: '600',
   },
   value: {
     color: '#111827',
     fontSize: 16,
-    fontWeight: '900',
-    textAlign: 'center',
-  },
-  divider: {
-    width: 1,
-    height: 44,
-    backgroundColor: '#e5e7eb',
+    fontWeight: '800',
+    marginLeft: 12,
   },
   // Stats grid
   statsGrid: {

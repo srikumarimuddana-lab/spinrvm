@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuestStore, MyQuestProgress } from '../../store/questStore';
+import { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -97,7 +98,7 @@ export default function QuestsScreen() {
   const handleJoin = async (id: string) => {
     setBusy(id);
     try { await joinQuest(id); setTab('active'); }
-    catch (e: any) { Alert.alert('Could not join', e?.response?.data?.detail || e?.message || 'Please try again.'); }
+    catch (e: any) { Alert.alert('Could not join', getApiErrorMessage(e, 'Could not join the quest. Please try again.')); }
     finally { setBusy(null); }
   };
   const handleClaim = async (pid: string, reward: string) => {
@@ -106,7 +107,7 @@ export default function QuestsScreen() {
       const r = await claimReward(pid);
       Alert.alert('Reward claimed! 🎉', `${money(r?.reward_amount ?? reward)} added to your wallet.`);
     } catch (e: any) {
-      Alert.alert('Could not claim', e?.response?.data?.detail || e?.message || 'Please try again.');
+      Alert.alert('Could not claim', getApiErrorMessage(e, 'Could not claim your reward. Please try again.'));
     } finally { setBusy(null); }
   };
 

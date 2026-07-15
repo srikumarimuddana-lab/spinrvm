@@ -18,7 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import api from '@shared/api/client';
-import { getAuthHeader } from '@shared/api/client';
+import { getAuthHeader, getApiErrorMessage } from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
 import { showToast } from '../hooks/useToast';
 import { useLocationStore } from '@shared/store/locationStore';
@@ -134,7 +134,7 @@ export default function ReportSafetyScreen() {
             showToast('success', 'Report Submitted', 'Your safety report has been submitted. Our trust and safety team will review it promptly.');
             router.back();
         } catch (e) {
-            showToast('error', 'Error', 'Failed to submit report. Please try again.');
+            showToast('error', 'Error', getApiErrorMessage(e, 'Could not submit your report. Please try again.'));
             setSubmitting(false);
         }
     };

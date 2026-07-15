@@ -8,7 +8,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { CardField, CardFieldInput, useStripe } from '@stripe/stripe-react-native';
 import { StripeKeyContext } from './_layout';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import ConfirmSheet from '../components/ConfirmSheet';
 import { showToast } from '../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -119,7 +119,7 @@ export default function ManageCardsScreen() {
       fetchCards();
       showToast('Card Added', 'Card added successfully', 'success');
     } catch (err: any) {
-      showToast('Card Not Added', err.response?.data?.detail || 'Failed to add card. Please try again.', 'danger');
+      showToast('Card Not Added', getApiErrorMessage(err, 'Could not add card. Please try again.'), 'danger');
     } finally {
       setSaving(false);
     }
@@ -144,8 +144,8 @@ export default function ManageCardsScreen() {
     try {
       await api.post(`/payments/cards/${cardId}/default`);
       fetchCards();
-    } catch {
-      showToast('Update Failed', 'Could not set default card. Please try again.', 'danger');
+    } catch (err) {
+      showToast('Update Failed', getApiErrorMessage(err, 'Could not set default card. Please try again.'), 'danger');
     }
   };
 
@@ -163,8 +163,8 @@ export default function ManageCardsScreen() {
             try {
               await api.delete(`/payments/cards/${cardId}`);
               fetchCards();
-            } catch {
-              showToast('Remove Failed', 'Could not remove card. Please try again.', 'danger');
+            } catch (err) {
+              showToast('Remove Failed', getApiErrorMessage(err, 'Could not remove card. Please try again.'), 'danger');
             }
           },
         },

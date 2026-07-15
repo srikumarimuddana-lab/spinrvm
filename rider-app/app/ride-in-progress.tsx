@@ -38,7 +38,7 @@ import BottomSheet, { BottomSheetScrollView } from '../components/SafeBottomShee
 import { useAppResumeKey } from '../hooks/useAppResumeKey';
 import { useRideStore } from '../store/rideStore';
 import { RideStatus } from '../constants/rideStatus';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import ConfirmSheet from '../components/ConfirmSheet';
 import { SOSButton } from '@shared/components/SOSButton';
@@ -265,7 +265,7 @@ function RideInProgressScreenContent() {
             style: 'destructive',
             onPress: async () => {
               try { await api.post(`/rides/${currentRide?.id}/complete`); }
-              catch { showToast('Error', 'Could not end ride. Please try again.', 'danger'); }
+              catch (err) { showToast('Error', getApiErrorMessage(err, 'Could not end ride. Please try again.'), 'danger'); }
               if (rideId) fetchRide(rideId);
             },
           },
@@ -565,7 +565,7 @@ I've shared my live location with you for safety.
                 text: 'End & Pay Full Fare', style: 'destructive',
                 onPress: async () => {
                   try { await api.post(`/rides/${currentRide?.id}/complete`); }
-                  catch { showToast('Error', 'Could not end ride. Please try again.', 'danger'); }
+                  catch (err) { showToast('Error', getApiErrorMessage(err, 'Could not end ride. Please try again.'), 'danger'); }
                   if (rideId) fetchRide(rideId);
                 },
               },

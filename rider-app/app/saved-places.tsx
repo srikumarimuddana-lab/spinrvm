@@ -11,7 +11,7 @@ import { showToast } from '../store/toastStore';
 import ConfirmSheet from '../components/ConfirmSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { usePlacesAutocomplete } from '@shared/hooks/usePlacesAutocomplete';
 import type { PlacePrediction as Prediction } from '@shared/api/places';
 
@@ -114,7 +114,7 @@ export default function SavedPlacesScreen() {
       setShowAdd(false);
       resetForm();
     } catch (err: any) {
-      showToast('Save Failed', err.response?.data?.detail || 'Failed to save place. Please try again.', 'danger');
+      showToast('Save Failed', getApiErrorMessage(err, 'Could not save this place. Please try again.'), 'danger');
     } finally { setSaving(false); }
   };
 

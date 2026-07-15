@@ -19,6 +19,7 @@ import { useAuthStore } from '@shared/store/authStore';
 import SpinrConfig from '@shared/config/spinr.config';
 import { uploadFile } from '@shared/api/upload';
 import { showToast } from '../store/toastStore';
+import { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -143,7 +144,7 @@ export default function BecomeDriverScreen() {
       }));
       showToast('Success', 'Document uploaded successfully', 'success');
     } catch (err: any) {
-      showToast('Upload Failed', (err as any)?.statusCode ? 'Please try again.' : 'Something went wrong. Please try again.', 'danger');
+      showToast('Upload Failed', getApiErrorMessage(err, 'Could not upload document. Please try again.'), 'danger');
     } finally {
       setUploadingDoc(null);
     }
@@ -264,7 +265,7 @@ export default function BecomeDriverScreen() {
       showToast('Application Submitted!', 'Waiting for approval. To start driving, download the Spinr Driver app.', 'success');
       router.replace('/(tabs)' as any);
     } catch (err: any) {
-      showToast('Registration Failed', (err as any)?.statusCode ? 'Please try again.' : 'Something went wrong. Please try again.', 'danger');
+      showToast('Registration Failed', getApiErrorMessage(err, 'Could not submit your application. Please try again.'), 'danger');
     }
   };
 

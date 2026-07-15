@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { showToast } from '../store/toastStore';
+import { getApiErrorMessage } from '@shared/api/client';
 import { useWorkProfileStore } from '../store/workProfileStore';
 
 const QUICK_AMOUNTS = [25, 50, 100, 200];
@@ -55,8 +56,7 @@ export default function WorkAllowanceRequestScreen() {
       setAmount('');
       setReason('');
     } catch (e: any) {
-      const msg = e?.response?.data?.detail || e?.message || 'Failed to submit request';
-      showToast('Request Failed', msg, 'danger');
+      showToast('Request Failed', getApiErrorMessage(e, 'Could not submit your request. Please try again.'), 'danger');
     } finally {
       setSubmitting(false);
     }

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -39,9 +39,20 @@ export default function ActivityView() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  // True once the first data load has completed — used to keep cached data on
+  // screen (instead of a full-screen spinner) on subsequent tab focuses.
+  const hasLoadedRef = useRef(false);
 
   const loadData = useCallback(async () => {
-    setLoading(true);
+    // Only show the full-screen loading state on the FIRST load. On every
+    // subsequent tab focus the previous earnings / ride history are still in
+    // the store (the tab stays mounted), so keep showing them and refresh
+    // silently in the background. Previously loadData set loading=true and
+    // awaited all three fetches on every focus, blanking the whole screen to a
+    // spinner for ~3s each time the Activity tab was opened. hasLoadedRef is a
+    // ref (not a hook dep) so loadData stays stable and doesn't retrigger
+    // useFocusEffect in a loop.
+    if (!hasLoadedRef.current) setLoading(true);
     try {
       await Promise.allSettled([
         fetchEarnings(period),
@@ -49,6 +60,7 @@ export default function ActivityView() {
         fetchDriverBalance(),
       ]);
     } catch {}
+    hasLoadedRef.current = true;
     setLoading(false);
   }, [period, fetchEarnings, fetchRideHistory, fetchDriverBalance]);
 

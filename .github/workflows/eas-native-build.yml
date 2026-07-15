@@ -1,0 +1,99 @@
+name: EAS Native Build (iOS/Android)
+
+# ─── What this does ────────────────────────────────────────────────────────
+# Triggers a full native EAS **build** — a new installable binary (.ipa/.apk) —
+# NOT an OTA update. Use this whenever the NATIVE layer changes and an OTA
+# therefore cannot deliver the fix:
+#   • a dependency with a native side changes version (e.g. react-native-screens)
+#   • a config-plugin / Info.plist / AndroidManifest / permission change
+#   • a runtimeVersion bump (OTA is gated by runtimeVersion, so a bump needs a
+#     fresh binary to land on)
+#
+# For JS-only changes, use the "EAS Mobile Update" workflow (eas-build.yml)
+# instead — it's faster (over-the-air, no store round-trip).
+#
+# ─── Prerequisites ─────────────────────────────────────────────────────────
+#   • Repo secret EXPO_TOKEN (already used by the OTA workflow).
+#   • iOS build credentials must already exist on EAS (distribution cert +
+#     provisioning profile). --non-interactive cannot create them; if they're
+#     missing the run fails with a clear message — run `eas credentials` once
+#     locally to set them up, then re-run this workflow.
+#   • For `preview` (internal distribution) iOS installs, the target device's
+#     UDID must be registered with the provisioning profile. `production`
+#     produces a store build for TestFlight instead.
+
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: "Which app to build"
+        required: true
+        default: "driver-app"
+        type: choice
+        options: [driver-app, rider-app]
+      platform:
+        description: "Platform to build"
+        required: true
+        default: "ios"
+        type: choice
+        options: [ios, android, all]
+      profile:
+        description: "EAS build profile (from eas.json)"
+        required: true
+        default: "preview"
+        type: choice
+        options: [development, test, preview, production]
+      auto_submit:
+        description: "Auto-submit to the store after build (production only)"
+        required: false
+        default: false
+        type: boolean
+
+# One native build per app/platform at a time; a newer request cancels a
+# queued older one for the same target rather than stacking expensive builds.
+concurrency:
+  group: eas-native-build-${{ github.event.inputs.app }}-${{ github.event.inputs.platform }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ github.event.inputs.app }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - run: yarn install --frozen-lockfile
+
+      - name: Trigger EAS native build
+        run: |
+          SUBMIT_FLAG=""
+          if [ "${{ github.event.inputs.auto_submit }}" = "true" ] && [ "${{ github.event.inputs.profile }}" = "production" ]; then
+            SUBMIT_FLAG="--auto-submit"
+          fi
+          # --no-wait returns as soon as the build is queued (native iOS builds
+          # run 20-40 min on EAS servers — well past a sensible Actions runtime).
+          # The command prints the build detail URL; watch progress there or in
+          # `eas build:list`.
+          eas build \
+            --platform "${{ github.event.inputs.platform }}" \
+            --profile "${{ github.event.inputs.profile }}" \
+            --non-interactive \
+            --no-wait \
+            $SUBMIT_FLAG
+
+      - name: Where to find the build
+        run: |
+          echo "Build queued on EAS. Track it at:"
+          echo "  https://expo.dev/accounts  →  project  →  Builds"
+          echo "or run:  eas build:list --platform ${{ github.event.inputs.platform }} --limit 5"

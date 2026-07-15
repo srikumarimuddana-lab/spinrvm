@@ -25,7 +25,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // 'fingerprint'/'appVersion' rejected by EAS CLI). Bump manually when
     // shipping native changes that break JS-bundle compatibility. Pre-launch
     // with no production users, OTA compatibility risk is zero.
-    runtimeVersion: '2.3.0', // bump from 2.2.0: adds react-native-webview (a new native module) for Stripe embedded onboarding + the Android CAMERA permission — old binaries lack both, so this JS must not reach them via OTA. The same bump also covers @iternio/react-native-auto-play + react-native-nitro-modules (Android Auto), which landed in the same merge.
+    runtimeVersion: '2.4.0', // bump from 2.3.0: react-native-screens was re-pinned 4.24.0 -> 4.23.0 (a native module change). 4.24.0's New-Arch/Bridgeless codegen resolved an expo-router <Screen> to a non-renderable object ("Element type is invalid ... got: object") in release builds. Because 2.3.0 spanned both native versions, an OTA of 4.23.0 JS could land on a 4.24.0 binary (and vice versa) and crash every screen. Isolating the 4.23.0 native line under 2.4.0 keeps that JS from ever reaching a 4.24.0 binary over-the-air. Prior 2.2.0 -> 2.3.0 bump added react-native-webview (Stripe embedded onboarding) + Android CAMERA, plus @iternio/react-native-auto-play + react-native-nitro-modules (Android Auto).
     splash: {
         image: './assets/images/splash-blank.png',
         resizeMode: 'contain',

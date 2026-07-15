@@ -36,4 +36,13 @@ require('expo-router/entry');
 //    'didConnect' event, so its order is irrelevant — it just must run at
 //    bundle load: Android Auto / DHU can cold-launch the JS context car-only,
 //    with the phone UI (a route layout) never mounting.
-require('./lib/androidAuto/register').default();
+//
+//    iOS guard: Android Auto is Android-only (iOS CarPlay isn't wired). Loading
+//    this tree on iOS pulls in the react-native-auto-play / nitro-modules
+//    runtime for no benefit. Rider — which has no Android Auto — runs fine while
+//    driver crashes at first render on the New-Architecture release build, so
+//    this native integration is the leading suspect. Skip it entirely off
+//    Android; requires a NATIVE rebuild to take effect (not an OTA).
+if (require('react-native').Platform.OS === 'android') {
+  require('./lib/androidAuto/register').default();
+}

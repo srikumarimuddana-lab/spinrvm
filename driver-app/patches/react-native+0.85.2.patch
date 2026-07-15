@@ -1,8 +1,8 @@
 diff --git a/node_modules/react-native/Libraries/Components/ActivityIndicator/ActivityIndicator.js b/node_modules/react-native/Libraries/Components/ActivityIndicator/ActivityIndicator.js
-index de86dba..d92369b 100644
+index de86dba..16779c0 100644
 --- a/node_modules/react-native/Libraries/Components/ActivityIndicator/ActivityIndicator.js
 +++ b/node_modules/react-native/Libraries/Components/ActivityIndicator/ActivityIndicator.js
-@@ -17,9 +17,36 @@ import Platform from '../../Utilities/Platform';
+@@ -17,10 +17,51 @@ import Platform from '../../Utilities/Platform';
  import View from '../View/View';
  import * as React from 'react';
  
@@ -33,13 +33,29 @@ index de86dba..d92369b 100644
 +  );
 +}
 +
++// PATCH (spinr driver-app): iOS extension of the Android fallback above. On the
++// New Architecture (Bridgeless), ActivityIndicatorViewNativeComponent can also
++// resolve to a non-renderable codegen object on iOS in some builds, throwing
++// "Element type is invalid... got: object" — this crashed BrandSplash (and thus
++// the whole app at first render) on the driver app while rider was unaffected.
++// Guard it with the same renderability check used elsewhere in these patches and
++// fall back to the JS View spinner when the native component isn't renderable.
++const _iosActivityIndicatorNative = require('./ActivityIndicatorViewNativeComponent').default;
++const _isRenderableComponent = (c: $FlowFixMe): boolean =>
++  typeof c === 'function' ||
++  typeof c === 'string' ||
++  (c != null && typeof c === 'object' && c.$$typeof != null);
  const PlatformActivityIndicator =
    Platform.OS === 'android'
 -    ? require('../ProgressBarAndroid/ProgressBarAndroid').default
+-    : require('./ActivityIndicatorViewNativeComponent').default;
 +    ? AndroidActivityIndicatorJSFallback
-     : require('./ActivityIndicatorViewNativeComponent').default;
++    : _isRenderableComponent(_iosActivityIndicatorNative)
++      ? _iosActivityIndicatorNative
++      : AndroidActivityIndicatorJSFallback;
  
  const GRAY = '#999999';
+ 
 diff --git a/node_modules/react-native/Libraries/Components/RefreshControl/RefreshControl.js b/node_modules/react-native/Libraries/Components/RefreshControl/RefreshControl.js
 index 5ce30f3..428ffb8 100644
 --- a/node_modules/react-native/Libraries/Components/RefreshControl/RefreshControl.js
@@ -105,6 +121,155 @@ index 5ce30f3..428ffb8 100644
  
  export type RefreshControlPropsIOS = Readonly<{
    /**
+diff --git a/node_modules/react-native/Libraries/Components/ScrollView/ScrollView.js b/node_modules/react-native/Libraries/Components/ScrollView/ScrollView.js
+index 4688149..e24c82d 100644
+--- a/node_modules/react-native/Libraries/Components/ScrollView/ScrollView.js
++++ b/node_modules/react-native/Libraries/Components/ScrollView/ScrollView.js
+@@ -1643,13 +1643,41 @@ class ScrollView extends React.Component<ScrollViewProps, ScrollViewState> {
+   render(): React.Node {
+     const horizontal = this.props.horizontal === true;
+ 
+-    const NativeScrollView = horizontal
++    // PATCH (spinr): defensive guard. The H/VScrollView native components are
++    // patched to fall back to View on Android, but if for any reason
++    // (module-init order, Hermes quirk, partial patch apply) they resolve to
++    // a non-renderable value, swap in View directly so ScrollView renders
++    // instead of crashing with "Element type is invalid... got: undefined".
++    let NativeScrollView: $FlowFixMe = horizontal
+       ? HScrollViewNativeComponent
+       : VScrollViewNativeComponent;
+-
+-    const NativeScrollContentView = horizontal
++    let NativeScrollContentView: $FlowFixMe = horizontal
+       ? HScrollContentViewNativeComponent
+       : VScrollContentViewNativeComponent;
++    const _isRenderable = (c: $FlowFixMe): boolean =>
++      typeof c === 'function' ||
++      typeof c === 'string' ||
++      (c != null && typeof c === 'object' && c.$$typeof != null);
++    if (!_isRenderable(NativeScrollView)) {
++      if (__DEV__) {
++        // eslint-disable-next-line no-console
++        console.warn(
++          '[spinr-patch] NativeScrollView non-renderable, falling back to View. typeof=',
++          typeof NativeScrollView,
++        );
++      }
++      NativeScrollView = View;
++    }
++    if (!_isRenderable(NativeScrollContentView)) {
++      if (__DEV__) {
++        // eslint-disable-next-line no-console
++        console.warn(
++          '[spinr-patch] NativeScrollContentView non-renderable, falling back to View. typeof=',
++          typeof NativeScrollContentView,
++        );
++      }
++      NativeScrollContentView = View;
++    }
+ 
+     const contentContainerStyle = [
+       horizontal && styles.contentContainerHorizontal,
+diff --git a/node_modules/react-native/Libraries/Components/Switch/Switch.js b/node_modules/react-native/Libraries/Components/Switch/Switch.js
+index 8d3c553..ce4ef96 100644
+--- a/node_modules/react-native/Libraries/Components/Switch/Switch.js
++++ b/node_modules/react-native/Libraries/Components/Switch/Switch.js
+@@ -16,7 +16,7 @@ import type {ViewProps} from '../View/ViewPropTypes';
+ import StyleSheet from '../../StyleSheet/StyleSheet';
+ import Platform from '../../Utilities/Platform';
+ import useMergeRefs from '../../Utilities/useMergeRefs';
+-import AndroidSwitchNativeComponent, {
++import _NativeAndroidSwitch, {
+   Commands as AndroidSwitchCommands,
+ } from './AndroidSwitchNativeComponent';
+ import SwitchNativeComponent, {
+@@ -25,6 +25,86 @@ import SwitchNativeComponent, {
+ import * as React from 'react';
+ import {useLayoutEffect, useRef, useState} from 'react';
+ 
++// PATCH (spinr rider-app/driver-app):
++// RN 0.85.2's AndroidSwitchNativeComponent is declared with
++// `interfaceOnly: true` — codegenNativeComponent returns a non-renderable
++// placeholder object. Under the New Architecture (Bridgeless), JSX
++// `<AndroidSwitchNativeComponent>` throws "Element type is invalid... got:
++// object". Reproduced on driver-app SettingsScreen.
++//
++// Strategy: detect the broken codegen object and fall back to a JS-only
++// Pressable toggle that fires onChange on press. Visual chrome is a
++// minimal track + thumb in the requested colors. Loses the native
++// material switch animation; functionally equivalent for state.
++const _PressableModule = require('../Pressable/Pressable');
++const _Pressable = _PressableModule.default || _PressableModule;
++const _ViewModule = require('../View/View');
++const _SwitchView = _ViewModule.default || _ViewModule;
++const _isAndroidSwitchNativeValid =
++  typeof _NativeAndroidSwitch === 'function' ||
++  typeof _NativeAndroidSwitch === 'string';
++
++function AndroidSwitchJSFallback(props: $FlowFixMe): React.Node {
++  const {
++    on,
++    enabled,
++    style,
++    thumbTintColor,
++    trackTintColor,
++    trackColorForTrue,
++    trackColorForFalse,
++    onChange,
++    accessibilityState,
++    accessibilityRole,
++    ...rest
++  } = props;
++  const isOn = on === true;
++  const trackBg =
++    (isOn ? trackColorForTrue : trackColorForFalse) ?? trackTintColor ?? (isOn ? '#34C759' : '#787880');
++  const thumbBg = thumbTintColor ?? '#FFFFFF';
++  const handlePress = () => {
++    if (enabled === false) return;
++    if (typeof onChange === 'function') {
++      onChange({nativeEvent: {value: !isOn, target: 0}});
++    }
++  };
++  return (
++    <_Pressable
++      {...rest}
++      accessibilityRole={accessibilityRole ?? 'switch'}
++      accessibilityState={{...(accessibilityState ?? {}), checked: isOn, disabled: enabled === false}}
++      disabled={enabled === false}
++      onPress={handlePress}
++      style={[
++        {
++          width: 51,
++          height: 31,
++          borderRadius: 31 / 2,
++          padding: 2,
++          backgroundColor: trackBg,
++          opacity: enabled === false ? 0.5 : 1,
++          justifyContent: 'center',
++        },
++        style,
++      ]}>
++      <_SwitchView
++        style={{
++          width: 27,
++          height: 27,
++          borderRadius: 27 / 2,
++          backgroundColor: thumbBg,
++          alignSelf: isOn ? 'flex-end' : 'flex-start',
++        }}
++      />
++    </_Pressable>
++  );
++}
++
++const AndroidSwitchNativeComponent: $FlowFixMe =
++  Platform.OS === 'android' && !_isAndroidSwitchNativeValid
++    ? AndroidSwitchJSFallback
++    : _NativeAndroidSwitch;
++
+ export type SwitchPropsIOS = {
+   /**
+    * Background color when the switch is turned on.
 diff --git a/node_modules/react-native/Libraries/Debugging/DebuggingOverlay.js b/node_modules/react-native/Libraries/Debugging/DebuggingOverlay.js
 index a668765..3d96b9c 100644
 --- a/node_modules/react-native/Libraries/Debugging/DebuggingOverlay.js
@@ -432,144 +597,3 @@ index 4ba5b68..a746a97 100644
  }>;
  
  export default codegenNativeComponent<VirtualViewNativeProps>('VirtualView', {
-diff --git a/node_modules/react-native/Libraries/Components/Switch/Switch.js b/node_modules/react-native/Libraries/Components/Switch/Switch.js
---- a/node_modules/react-native/Libraries/Components/Switch/Switch.js
-+++ b/node_modules/react-native/Libraries/Components/Switch/Switch.js
-@@ -16,7 +16,7 @@
- import StyleSheet from '../../StyleSheet/StyleSheet';
- import Platform from '../../Utilities/Platform';
- import useMergeRefs from '../../Utilities/useMergeRefs';
--import AndroidSwitchNativeComponent, {
-+import _NativeAndroidSwitch, {
-   Commands as AndroidSwitchCommands,
- } from './AndroidSwitchNativeComponent';
- import SwitchNativeComponent, {
-@@ -24,3 +24,83 @@
- } from './SwitchNativeComponent';
- import * as React from 'react';
- import {useLayoutEffect, useRef, useState} from 'react';
-+
-+// PATCH (spinr rider-app/driver-app):
-+// RN 0.85.2's AndroidSwitchNativeComponent is declared with
-+// `interfaceOnly: true` — codegenNativeComponent returns a non-renderable
-+// placeholder object. Under the New Architecture (Bridgeless), JSX
-+// `<AndroidSwitchNativeComponent>` throws "Element type is invalid... got:
-+// object". Reproduced on driver-app SettingsScreen.
-+//
-+// Strategy: detect the broken codegen object and fall back to a JS-only
-+// Pressable toggle that fires onChange on press. Visual chrome is a
-+// minimal track + thumb in the requested colors. Loses the native
-+// material switch animation; functionally equivalent for state.
-+const _PressableModule = require('../Pressable/Pressable');
-+const _Pressable = _PressableModule.default || _PressableModule;
-+const _ViewModule = require('../View/View');
-+const _SwitchView = _ViewModule.default || _ViewModule;
-+const _isAndroidSwitchNativeValid =
-+  typeof _NativeAndroidSwitch === 'function' ||
-+  typeof _NativeAndroidSwitch === 'string';
-+
-+function AndroidSwitchJSFallback(props: $FlowFixMe): React.Node {
-+  const {
-+    on,
-+    enabled,
-+    style,
-+    thumbTintColor,
-+    trackTintColor,
-+    trackColorForTrue,
-+    trackColorForFalse,
-+    onChange,
-+    accessibilityState,
-+    accessibilityRole,
-+    ...rest
-+  } = props;
-+  const isOn = on === true;
-+  const trackBg =
-+    (isOn ? trackColorForTrue : trackColorForFalse) ?? trackTintColor ?? (isOn ? '#34C759' : '#787880');
-+  const thumbBg = thumbTintColor ?? '#FFFFFF';
-+  const handlePress = () => {
-+    if (enabled === false) return;
-+    if (typeof onChange === 'function') {
-+      onChange({nativeEvent: {value: !isOn, target: 0}});
-+    }
-+  };
-+  return (
-+    <_Pressable
-+      {...rest}
-+      accessibilityRole={accessibilityRole ?? 'switch'}
-+      accessibilityState={{...(accessibilityState ?? {}), checked: isOn, disabled: enabled === false}}
-+      disabled={enabled === false}
-+      onPress={handlePress}
-+      style={[
-+        {
-+          width: 51,
-+          height: 31,
-+          borderRadius: 31 / 2,
-+          padding: 2,
-+          backgroundColor: trackBg,
-+          opacity: enabled === false ? 0.5 : 1,
-+          justifyContent: 'center',
-+        },
-+        style,
-+      ]}>
-+      <_SwitchView
-+        style={{
-+          width: 27,
-+          height: 27,
-+          borderRadius: 27 / 2,
-+          backgroundColor: thumbBg,
-+          alignSelf: isOn ? 'flex-end' : 'flex-start',
-+        }}
-+      />
-+    </_Pressable>
-+  );
-+}
-+
-+const AndroidSwitchNativeComponent: $FlowFixMe =
-+  Platform.OS === 'android' && !_isAndroidSwitchNativeValid
-+    ? AndroidSwitchJSFallback
-+    : _NativeAndroidSwitch;
-diff --git a/node_modules/react-native/Libraries/Components/ScrollView/ScrollView.js b/node_modules/react-native/Libraries/Components/ScrollView/ScrollView.js
---- a/node_modules/react-native/Libraries/Components/ScrollView/ScrollView.js
-+++ b/node_modules/react-native/Libraries/Components/ScrollView/ScrollView.js
-@@ -1643,10 +1643,38 @@
-   render(): React.Node {
-     const horizontal = this.props.horizontal === true;
- 
--    const NativeScrollView = horizontal
-+    // PATCH (spinr): defensive guard. The H/VScrollView native components are
-+    // patched to fall back to View on Android, but if for any reason
-+    // (module-init order, Hermes quirk, partial patch apply) they resolve to
-+    // a non-renderable value, swap in View directly so ScrollView renders
-+    // instead of crashing with "Element type is invalid... got: undefined".
-+    let NativeScrollView: $FlowFixMe = horizontal
-       ? HScrollViewNativeComponent
-       : VScrollViewNativeComponent;
--
--    const NativeScrollContentView = horizontal
-+    let NativeScrollContentView: $FlowFixMe = horizontal
-       ? HScrollContentViewNativeComponent
-       : VScrollContentViewNativeComponent;
-+    const _isRenderable = (c: $FlowFixMe): boolean =>
-+      typeof c === 'function' ||
-+      typeof c === 'string' ||
-+      (c != null && typeof c === 'object' && c.$$typeof != null);
-+    if (!_isRenderable(NativeScrollView)) {
-+      if (__DEV__) {
-+        // eslint-disable-next-line no-console
-+        console.warn(
-+          '[spinr-patch] NativeScrollView non-renderable, falling back to View. typeof=',
-+          typeof NativeScrollView,
-+        );
-+      }
-+      NativeScrollView = View;
-+    }
-+    if (!_isRenderable(NativeScrollContentView)) {
-+      if (__DEV__) {
-+        // eslint-disable-next-line no-console
-+        console.warn(
-+          '[spinr-patch] NativeScrollContentView non-renderable, falling back to View. typeof=',
-+          typeof NativeScrollContentView,
-+        );
-+      }
-+      NativeScrollContentView = View;
-+    }

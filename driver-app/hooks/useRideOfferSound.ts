@@ -112,16 +112,21 @@ export interface RideOfferSoundControls {
 export function useRideOfferSound(): RideOfferSoundControls {
     const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-    const playOnce = useCallback(() => {
+    const playOnce = useCallback(async () => {
         // Settings → Sound & Haptics → Sound Effects. Checked per replay (not
         // just at play()) so muting mid-offer silences the loop immediately.
         if (!useAlertPrefsStore.getState().soundEffects) return;
         const player = _getOrCreatePlayer();
         if (!player) return;
         try {
-            // Seek to start before each replay so a still-playing tone
-            // restarts cleanly instead of stacking with itself.
-            player.seekTo(0);
+            // Seek to start before each replay so a still-playing tone restarts
+            // cleanly instead of stacking with itself. seekTo() is async
+            // (Promise<void>) — it MUST be awaited before play(). Previously
+            // play() fired before the seek landed, so once the first tone had
+            // finished the player was still parked at its end position and
+            // play() was a no-op: the alert sounded only once on iOS, while
+            // Android's faster seek happened to win the race and repeat.
+            await player.seekTo(0);
             player.play();
         } catch (e) {
             if (__DEV__) console.warn('[useRideOfferSound] play failed:', e);
@@ -131,8 +136,8 @@ export function useRideOfferSound(): RideOfferSoundControls {
     const play = useCallback(() => {
         if (intervalRef.current) return; // idempotent
         void _configureAudioMode();
-        playOnce();
-        intervalRef.current = setInterval(playOnce, REPLAY_INTERVAL_MS);
+        void playOnce();
+        intervalRef.current = setInterval(() => { void playOnce(); }, REPLAY_INTERVAL_MS);
     }, [playOnce]);
 
     const stop = useCallback(() => {

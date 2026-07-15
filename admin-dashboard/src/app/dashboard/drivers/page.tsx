@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, reviewDriverPhoto, getDriverVehicleHistory, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, getDriverReferrals, getDriverTraining, retryPayout, refreshDriverStripeKyc, revealDriverSin, logPiiReveal, getAdminSubscriptionPayments, type DriverLiveStats, type DriverPayoutSummary, type DriverReferralSummary, type DriverTraining } from "@/lib/api";
+import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, reviewDriverPhoto, uploadDriverPhoto, getDriverVehicleHistory, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, getDriverReferrals, getDriverTraining, retryPayout, refreshDriverStripeKyc, revealDriverSin, logPiiReveal, getAdminSubscriptionPayments, type DriverLiveStats, type DriverPayoutSummary, type DriverReferralSummary, type DriverTraining } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
@@ -497,6 +497,30 @@ export default function DriversPage() {
         }
     };
 
+    const photoInputRef = useRef<HTMLInputElement>(null);
+    const [photoUploading, setPhotoUploading] = useState(false);
+    const handlePhotoUpload = async (file: File) => {
+        if (!selected || photoUploading) return;
+        if (!file.type.startsWith("image/")) {
+            toast({ title: "Invalid file", description: "Please choose an image (JPEG, PNG, WebP, or GIF).", variant: "destructive" });
+            return;
+        }
+        setPhotoUploading(true);
+        try {
+            const res = await uploadDriverPhoto(selected.id, file);
+            const next = res.profile_image_status;
+            setSelected({ ...selected, profile_image_status: next, photo_url: res.profile_image });
+            setLiveStats(prev => prev ? { ...prev, photo_url: res.profile_image } : prev);
+            setDrivers(prev => prev.map(d => d.id === selected.id ? { ...d, profile_image_status: next } : d));
+            toast({ title: "Photo uploaded", description: "The driver's profile photo was updated and approved." });
+        } catch (e: any) {
+            toast({ title: "Photo upload failed", description: e?.message || "Unknown error", variant: "destructive" });
+        } finally {
+            setPhotoUploading(false);
+            if (photoInputRef.current) photoInputRef.current.value = "";
+        }
+    };
+
     const ef = (field: string) => editForm[field] ?? "";
     const setEf = (field: string, value: string) => setEditForm(prev => ({ ...prev, [field]: value }));
 
@@ -838,6 +862,22 @@ export default function DriversPage() {
                                                 <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center text-xl font-bold text-primary">{(selected.first_name?.[0] || "")}{(selected.last_name?.[0] || "")}</div>
                                             )}
                                             <span className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-background ${selected.is_online ? "bg-emerald-500" : "bg-gray-300"}`} />
+                                            <button
+                                                type="button"
+                                                title="Upload / change profile photo"
+                                                disabled={photoUploading}
+                                                onClick={() => photoInputRef.current?.click()}
+                                                className="absolute -top-1 -left-1 w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow border-2 border-background disabled:opacity-50"
+                                            >
+                                                {photoUploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />}
+                                            </button>
+                                            <input
+                                                ref={photoInputRef}
+                                                type="file"
+                                                accept="image/jpeg,image/png,image/webp,image/gif"
+                                                className="hidden"
+                                                onChange={(e) => { const f = e.target.files?.[0]; if (f) void handlePhotoUpload(f); }}
+                                            />
                                         </div>
                                         <div>
                                             <h2 className="text-xl font-bold">{selected.first_name} {selected.last_name}</h2>

@@ -26,6 +26,7 @@ except ImportError:
         resolve_referral_terms,
     )
     from utils.refresh_tokens import revoke_all_for_user  # type: ignore  # noqa: F811
+import asyncio
 import base64
 import logging
 import uuid
@@ -312,37 +313,18 @@ def _compress_profile_image(content: bytes, content_type: str) -> "tuple[bytes, 
         return content, content_type
 
 
-@api_router.put("/profile-image", response_model=UserProfile)
-async def upload_profile_image(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
-    """Upload a profile image for the current user (resized to a small JPEG)."""
-    # Validate file type
-    allowed_types = ["image/jpeg", "image/png", "image/webp", "image/gif"]
-    if file.content_type not in allowed_types:
-        raise HTTPException(status_code=400, detail="File must be an image (JPEG, PNG, WebP, or GIF)")
+async def store_profile_image(user_id: str, content: bytes, content_type: str) -> str:
+    """Compress + store a profile photo for ``user_id`` and return the stored
+    value: a public Supabase Storage URL, or a base64 data-URI fallback when
+    storage is unavailable/unconfigured so uploads never hard-fail.
 
-    # Validate file size (max 5MB)
-    content = await file.read()
-    if not isinstance(content, bytes):
-        content = bytes(content) if hasattr(content, "__bytes__") else str(content).encode("utf-8")
-
-    if len(content) > 5 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Image must be smaller than 5MB")
-
-    # Resize + recompress to a small avatar-sized JPEG so the stored file — and
-    # therefore every profile/avatar load — stays tiny and fast. CPU-bound work
-    # runs off the event loop. `content_type` is the post-compression type
-    # (image/jpeg on success) used for the extension, upload, and base64 below.
-    import asyncio
-
-    content, content_type = await asyncio.to_thread(_compress_profile_image, content, file.content_type)
-
-    # Prefer object storage (Supabase Storage bucket `profile-photos`) so the
-    # photo is a small URL rather than a base64 blob bloating every API
-    # response that returns it. Fall back to an inline base64 data URI when
-    # storage is unavailable/unconfigured so uploads never hard-fail (and dev
-    # without a bucket still works). Both forms render in the apps unchanged.
+    Shared by the self-serve endpoint below and the admin upload-on-behalf
+    endpoint (routes/admin/drivers.py). CPU-bound compression and the blocking
+    storage call both run off the event loop.
+    """
+    content, content_type = await asyncio.to_thread(_compress_profile_image, content, content_type)
     _ext = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}.get(content_type, "jpg")
-    object_path = f"{current_user['id']}/{uuid.uuid4()}.{_ext}"
+    object_path = f"{user_id}/{uuid.uuid4()}.{_ext}"
     profile_value: Optional[str] = None
     try:
         sb = getattr(db_supabase, "supabase", None)
@@ -364,6 +346,28 @@ async def upload_profile_image(file: UploadFile = File(...), current_user: dict 
 
     if not profile_value:
         profile_value = f"data:{content_type};base64,{base64.b64encode(content).decode('utf-8')}"
+    return profile_value
+
+
+@api_router.put("/profile-image", response_model=UserProfile)
+async def upload_profile_image(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
+    """Upload a profile image for the current user (resized to a small JPEG)."""
+    # Validate file type
+    allowed_types = ["image/jpeg", "image/png", "image/webp", "image/gif"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="File must be an image (JPEG, PNG, WebP, or GIF)")
+
+    # Validate file size (max 5MB)
+    content = await file.read()
+    if not isinstance(content, bytes):
+        content = bytes(content) if hasattr(content, "__bytes__") else str(content).encode("utf-8")
+
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image must be smaller than 5MB")
+
+    # Compress + store (public URL, or base64 fallback). Shared with the admin
+    # upload-on-behalf endpoint. `file.content_type` is validated above.
+    profile_value = await store_profile_image(current_user["id"], content, file.content_type)
 
     # Riders' profile photos are visible immediately; only driver photos
     # go to the admin review queue (identity/safety check before going online).

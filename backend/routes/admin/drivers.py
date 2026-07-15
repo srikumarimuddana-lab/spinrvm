@@ -4,13 +4,14 @@ from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
     from ...features import send_push_notification
+    from ...routes.users import store_profile_image
     from ...services import lms_service
     from ...utils.audit_logger import log_admin_action
     from ...utils.datetime_utils import parse_iso_utc
@@ -20,6 +21,7 @@ except ImportError:
     import db_supabase
     from dependencies import get_admin_user  # noqa: F401
     from features import send_push_notification
+    from routes.users import store_profile_image  # type: ignore
     from services import lms_service  # type: ignore
     from utils.audit_logger import log_admin_action  # noqa: F401
     from utils.datetime_utils import parse_iso_utc
@@ -1260,6 +1262,46 @@ async def admin_review_driver_photo(
 
     await log_admin_action(admin, "driver_photo_review", "drivers", driver_id, {"status": new_status})
     return {"message": f"Photo {new_status}", "profile_image_status": new_status}
+
+
+@router.post("/drivers/{driver_id}/photo")
+async def admin_upload_driver_photo(
+    driver_id: str,
+    file: UploadFile = File(...),
+    admin: dict = Depends(get_admin_user),
+):
+    """Upload a driver's profile photo on their behalf.
+
+    The photo lives on users.profile_image. Because an admin is uploading it
+    (identity already vetted through onboarding), it is stored 'approved'
+    directly rather than entering the pending_review moderation queue.
+    """
+    allowed_types = ["image/jpeg", "image/png", "image/webp", "image/gif"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="File must be an image (JPEG, PNG, WebP, or GIF)")
+
+    driver = await db_supabase.get_driver_by_id(driver_id)
+    if not driver:
+        raise HTTPException(status_code=404, detail=f"Driver {driver_id} not found")
+    user_id = driver.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=422, detail="Driver has no linked user account")
+
+    content = await file.read()
+    if not isinstance(content, bytes):
+        content = bytes(content) if hasattr(content, "__bytes__") else str(content).encode("utf-8")
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image must be smaller than 5MB")
+
+    profile_value = await store_profile_image(user_id, content, file.content_type)
+    await db_supabase.update_one(
+        "users",
+        {"id": user_id},
+        {"profile_image": profile_value, "profile_image_status": "approved"},
+    )
+
+    await log_admin_action(admin, "driver_photo_upload", "drivers", driver_id, {"status": "approved"})
+    return {"message": "Photo uploaded", "profile_image": profile_value, "profile_image_status": "approved"}
 
 
 @router.get("/drivers/{driver_id}/vehicle-history")

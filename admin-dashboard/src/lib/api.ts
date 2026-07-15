@@ -2292,6 +2292,16 @@ export const reviewDriverPhoto = (driverId: string, action: "approve" | "reject"
         body: JSON.stringify({ action }),
     });
 
+/** Upload a driver's profile photo on their behalf (stored approved). */
+export const uploadDriverPhoto = (driverId: string, file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return request<{ message: string; profile_image: string; profile_image_status: string }>(
+        `/api/admin/drivers/${driverId}/photo`,
+        { method: "POST", body: fd },
+    );
+};
+
 export const overrideDriverStatus = (driverId: string, status: string, reason?: string) =>
     request<any>(`/api/admin/drivers/${driverId}/status-override`, {
         method: "PUT",

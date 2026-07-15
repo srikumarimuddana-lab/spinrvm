@@ -1,6 +1,6 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import {
-  Modal, View, Text, TouchableOpacity, StyleSheet, Dimensions,
+  View, Text, TouchableOpacity, StyleSheet, Dimensions, BackHandler, Platform,
 } from 'react-native';
 import { create } from 'zustand';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -48,6 +48,18 @@ export const AlertDialog: React.FC = () => {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
+  // Consume the Android hardware back button while the alert is up so it
+  // dismisses the dialog instead of popping the underlying screen — this is
+  // the behaviour a native modal gave us before we moved to an inline overlay.
+  useEffect(() => {
+    if (!visible || Platform.OS !== 'android') return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      hideAlert();
+      return true;
+    });
+    return () => sub.remove();
+  }, [visible]);
+
   if (!visible) return null;
 
   const handlePress = (btn: AlertButton) => {
@@ -55,48 +67,52 @@ export const AlertDialog: React.FC = () => {
     btn.onPress?.();
   };
 
-  const hasDestructive = buttons.some((b) => b.style === 'destructive');
-
+  // Rendered as a plain absolute-fill overlay (NOT a native <Modal>). RN
+  // 0.85.2's RCTModalHostView misbehaves under the New Architecture on iOS —
+  // presenting it resizes the app's root view, collapsing the dashboard into
+  // the top half and dropping the dialog into a black bottom half. Every other
+  // overlay in this app (ride-offer / idle / active-ride panels) is an inline
+  // absolute View for the same reason; this keeps the dialog on top of the
+  // whole screen with no native modal presentation involved. Mounted once at
+  // the SafeAreaProvider root in app/_layout.tsx.
   return (
-    <Modal transparent animationType="fade" visible={visible} statusBarTranslucent>
-      <View style={styles.overlay}>
-        <View style={styles.dialog}>
-          <Text style={styles.title}>{title}</Text>
-          <Text style={styles.message}>{message}</Text>
-          <View style={[styles.buttonRow, buttons.length === 1 && styles.buttonRowSingle]}>
-            {buttons.map((btn, i) => {
-              const isDestructive = btn.style === 'destructive';
-              const isCancel = btn.style === 'cancel';
-              return (
-                <TouchableOpacity
-                  key={i}
+    <View style={styles.overlay} pointerEvents="auto">
+      <View style={styles.dialog}>
+        <Text style={styles.title}>{title}</Text>
+        <Text style={styles.message}>{message}</Text>
+        <View style={[styles.buttonRow, buttons.length === 1 && styles.buttonRowSingle]}>
+          {buttons.map((btn, i) => {
+            const isDestructive = btn.style === 'destructive';
+            const isCancel = btn.style === 'cancel';
+            return (
+              <TouchableOpacity
+                key={i}
+                style={[
+                  styles.button,
+                  isDestructive && styles.buttonDestructive,
+                  isCancel && styles.buttonCancel,
+                  !isDestructive && !isCancel && styles.buttonPrimary,
+                  buttons.length === 1 && styles.buttonFull,
+                ]}
+                onPress={() => handlePress(btn)}
+                activeOpacity={0.8}
+              >
+                <Text
                   style={[
-                    styles.button,
-                    isDestructive && styles.buttonDestructive,
-                    isCancel && styles.buttonCancel,
-                    !isDestructive && !isCancel && styles.buttonPrimary,
-                    buttons.length === 1 && styles.buttonFull,
+                    styles.buttonText,
+                    isDestructive && styles.buttonTextDestructive,
+                    isCancel && styles.buttonTextCancel,
+                    !isDestructive && !isCancel && styles.buttonTextPrimary,
                   ]}
-                  onPress={() => handlePress(btn)}
-                  activeOpacity={0.8}
                 >
-                  <Text
-                    style={[
-                      styles.buttonText,
-                      isDestructive && styles.buttonTextDestructive,
-                      isCancel && styles.buttonTextCancel,
-                      !isDestructive && !isCancel && styles.buttonTextPrimary,
-                    ]}
-                  >
-                    {btn.text}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
+                  {btn.text}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
       </View>
-    </Modal>
+    </View>
   );
 };
 
@@ -105,7 +121,16 @@ const { width } = Dimensions.get('window');
 const createStyles = (colors: ThemeColors) =>
   StyleSheet.create({
     overlay: {
-      flex: 1,
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      // Sit above the navigator (and thus the map / dashboard) on both
+      // platforms. iOS honours zIndex from paint order; Android needs
+      // elevation to lift the overlay above native surfaces.
+      zIndex: 9999,
+      elevation: 9999,
       backgroundColor: 'rgba(0,0,0,0.5)',
       justifyContent: 'center',
       alignItems: 'center',

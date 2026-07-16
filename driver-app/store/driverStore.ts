@@ -640,6 +640,10 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                 activeRide: null,
                 incomingRide: null,
                 chatMessages: [],
+                // A completed ride changes every period's earnings/trip counts —
+                // drop the Activity per-period cache so the next view refetches
+                // fresh instead of showing pre-ride numbers under any pill.
+                earningsByPeriod: {},
             });
             AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
         } catch (err: unknown) {
@@ -655,7 +659,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                 await get().fetchActiveRide();
                 if (!get().activeRide) {
                     // Ride is gone server-side — completion already happened.
-                    set({ rideState: 'trip_completed', activeRide: null, incomingRide: null, chatMessages: [] });
+                    set({ rideState: 'trip_completed', activeRide: null, incomingRide: null, chatMessages: [], earningsByPeriod: {} });
                     AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
                     return;
                 }
@@ -683,6 +687,9 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                 activeRide: null,
                 incomingRide: null,
                 chatMessages: [],
+                // A cancellation changes trip counts (and any cancellation fee),
+                // so invalidate the Activity per-period earnings cache too.
+                earningsByPeriod: {},
             });
             AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
         } catch (err: unknown) {

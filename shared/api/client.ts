@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import SpinrConfig from '../config/spinr.config';
+import { clampToastMessage, TOAST_MESSAGE_MAX } from '../utils/toastMessage';
 
 
 const API_URL = SpinrConfig.backendUrl;
@@ -407,20 +408,11 @@ export const extractError = (
  * 400". Falls back to the caller's message only when the server sent no usable
  * detail (network error, empty body).
  */
-// Toasts render at most two lines (see rider Toast.tsx / driver toastConfig.tsx),
-// so clamp long backend messages to a length that fits that box, cutting at a
-// word boundary and appending an ellipsis rather than truncating mid-word.
-export const TOAST_MESSAGE_MAX = 140;
-
-export function clampToastMessage(message: string, maxLength = TOAST_MESSAGE_MAX): string {
-  const trimmed = message.trim().replace(/\s+/g, ' ');
-  if (trimmed.length <= maxLength) return trimmed;
-  const slice = trimmed.slice(0, maxLength - 1);
-  const lastSpace = slice.lastIndexOf(' ');
-  // Prefer a word boundary if one exists reasonably close to the end.
-  const cut = lastSpace > maxLength * 0.6 ? slice.slice(0, lastSpace) : slice;
-  return `${cut.replace(/[\s.,;:!-]+$/, '')}…`;
-}
+// Toast length caps live in shared/utils/toastMessage.ts (dependency-free so
+// the toast stores can enforce them without pulling in this client).
+// Re-exported for the existing call/test sites that import them from
+// '@shared/api/client'.
+export { clampToastMessage, TOAST_MESSAGE_MAX };
 
 export function getApiErrorMessage(
   err: unknown,

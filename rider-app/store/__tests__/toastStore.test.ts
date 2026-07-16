@@ -12,6 +12,7 @@
  */
 
 import { useToastStore, showToast } from '../toastStore';
+import { TOAST_MESSAGE_MAX, TOAST_TITLE_MAX } from '@shared/utils/toastMessage';
 
 beforeEach(() => {
   useToastStore.setState({ current: null });
@@ -73,5 +74,44 @@ describe('toastStore — dedupe', () => {
     expect(useToastStore.getState().current).not.toBeNull();
     useToastStore.getState().dismiss();
     expect(useToastStore.getState().current).toBeNull();
+  });
+});
+
+describe('toastStore — length caps', () => {
+  it('clamps an over-long message to TOAST_MESSAGE_MAX at a word boundary', () => {
+    const longMessage = 'word '.repeat(60).trim(); // 299 chars
+    showToast('Booking Failed', longMessage, 'danger');
+    const shown = useToastStore.getState().current!;
+    expect(shown.message!.length).toBeLessThanOrEqual(TOAST_MESSAGE_MAX);
+    expect(shown.message!.endsWith('…')).toBe(true);
+    expect(shown.message).not.toMatch(/\swor…$/); // no mid-word cut
+  });
+
+  it('clamps an over-long title to TOAST_TITLE_MAX', () => {
+    const longTitle = 'This title is far too long to be a title and reads like a message body instead';
+    showToast(longTitle, 'Short message.', 'warning');
+    const shown = useToastStore.getState().current!;
+    expect(shown.title.length).toBeLessThanOrEqual(TOAST_TITLE_MAX);
+    expect(shown.title.endsWith('…')).toBe(true);
+  });
+
+  it('leaves short content untouched and keeps undefined message undefined', () => {
+    showToast('Code Sent', undefined, 'success');
+    const shown = useToastStore.getState().current!;
+    expect(shown.title).toBe('Code Sent');
+    expect(shown.message).toBeUndefined();
+  });
+
+  it('dedupes a repeat of the same over-long toast (clamp happens before compare)', () => {
+    const longMessage = 'repeat '.repeat(40).trim();
+    const nowSpy = jest.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(1000);
+    showToast('Sync Failed', longMessage, 'danger');
+    const firstId = useToastStore.getState().current?.id;
+
+    nowSpy.mockReturnValue(1300); // inside the dedupe window
+    showToast('Sync Failed', longMessage, 'danger');
+
+    expect(useToastStore.getState().current?.id).toBe(firstId);
   });
 });

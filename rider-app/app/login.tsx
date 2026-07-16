@@ -13,7 +13,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import { useAuthStore } from '@shared/store/authStore';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -65,13 +65,14 @@ export default function LoginScreen() {
         showToast('Code Not Sent', 'Could not send verification code. Please try again.', 'danger');
       }
     } catch (error: any) {
-      // A response with a detail means the server answered (e.g. 503
-      // "Verification is temporarily unavailable") — don't mislabel that as a
-      // connectivity problem or users report "can't reach server" while the
-      // backend is up and saying exactly what's wrong.
-      const detail = error.response?.data?.detail;
-      if (detail) {
-        showToast('Sign-in Unavailable', detail, 'danger');
+      // If the server answered (e.g. 503 "Verification is temporarily
+      // unavailable", or a 429 lockout — thrown as RateLimitError, which has
+      // no .response), show its reason. Only a genuinely silent failure gets
+      // labelled a connectivity problem, or users report "can't reach server"
+      // while the backend is up and saying exactly what's wrong.
+      const serverMessage = getApiErrorMessage(error, '');
+      if (serverMessage) {
+        showToast('Sign-in Unavailable', serverMessage, 'danger');
       } else {
         showToast('Connection Error', 'Unable to reach server. Please check your connection.', 'danger');
       }

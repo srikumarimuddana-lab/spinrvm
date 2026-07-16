@@ -19,8 +19,9 @@ import { useRouter, useNavigation } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@shared/store/authStore';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
+import { notifyError } from '../lib/notifyError';
 import ConfirmSheet from '../components/ConfirmSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -73,18 +74,29 @@ export default function ProfileSetupScreen() {
       await updateProfileImage(uri);
       showToast('Photo Updated', 'Your profile photo has been updated.', 'success');
     } catch (err: any) {
-      showToast('Upload Failed', err.message || 'Failed to upload photo', 'danger');
+      showToast('Upload Failed', getApiErrorMessage(err, 'Could not upload your photo. Please try again.'), 'danger');
     } finally {
       setIsUploadingPhoto(false);
     }
   };
 
   const handleSubmit = async () => {
-    if (!form.firstName.trim() || !form.lastName.trim() || !form.email.trim() || !form.gender) {
-      return showToast('Missing Info', 'Please fill in all fields.', 'warning');
+    // Field-specific validation: name the exact field and problem — a blanket
+    // "fill in all fields" leaves the user hunting for what's wrong.
+    if (!form.firstName.trim()) {
+      return showToast('First Name Required', 'Please enter your first name.', 'warning');
+    }
+    if (!form.lastName.trim()) {
+      return showToast('Last Name Required', 'Please enter your last name.', 'warning');
+    }
+    if (!form.email.trim()) {
+      return showToast('Email Required', 'Please enter your email address.', 'warning');
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
-      return showToast('Invalid Email', 'Please enter a valid email address.', 'warning');
+      return showToast('Invalid Email', 'That email doesn’t look right — e.g. name@example.com.', 'warning');
+    }
+    if (!form.gender) {
+      return showToast('Gender Required', 'Please select your gender.', 'warning');
     }
 
     Keyboard.dismiss();
@@ -129,7 +141,10 @@ export default function ProfileSetupScreen() {
         router.replace('/(tabs)' as any);
       }
     } catch (err: any) {
-      showToast('Profile Not Saved', 'Failed to save your profile. Please try again.', 'danger');
+      // Title + severity come from the backend error code/field (e.g. a
+      // duplicate-email 400 → "Email Already In Use"); the body is the
+      // server's specific reason. No regex-sniffing the message.
+      notifyError(err, { fallbackTitle: 'Profile Not Saved', fallbackMessage: 'Failed to save your profile. Please try again.' });
     } finally {
       setIsSubmitting(false);
     }

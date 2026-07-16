@@ -20,8 +20,9 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useAuthStore, type User } from '@shared/store/authStore';
-import api, { getApiErrorMessage } from '@shared/api/client';
+import api from '@shared/api/client';
 import { showToast } from '../hooks/useToast';
+import { notifyError } from '../lib/notifyError';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -191,8 +192,30 @@ export default function ProfileSetupScreen() {
   const isFormValid = isFirstNameValid && isLastNameValid && isEmailValid && gender && isServiceAreaValid;
 
   const handleSubmit = async () => {
-    if (!isFormValid) {
-      showToast('error', 'Missing Info', 'Please complete all required fields.');
+    // Field-specific validation: name the exact field and problem — a blanket
+    // "complete all required fields" leaves the driver hunting for what's wrong.
+    if (!isFirstNameValid) {
+      showToast('warning', 'First Name Required', 'Please enter your first name (at least 2 letters).');
+      return;
+    }
+    if (!isLastNameValid) {
+      showToast('warning', 'Last Name Required', 'Please enter your last name (at least 2 letters).');
+      return;
+    }
+    if (!email.trim()) {
+      showToast('warning', 'Email Required', 'Please enter your email address.');
+      return;
+    }
+    if (!isEmailValid) {
+      showToast('warning', 'Invalid Email', 'That email doesn’t look right — e.g. name@example.com.');
+      return;
+    }
+    if (!gender) {
+      showToast('warning', 'Gender Required', 'Please select your gender.');
+      return;
+    }
+    if (!isServiceAreaValid) {
+      showToast('warning', 'Service Area Required', 'Please select the area where you plan to drive.');
       return;
     }
 
@@ -250,7 +273,10 @@ export default function ProfileSetupScreen() {
       }
       router.replace('/driver' as any);
     } catch (err: any) {
-      showToast('error', 'Error', getApiErrorMessage(err, 'Failed to create profile. Please try again.'));
+      // Title + severity come from the backend error code/field (e.g. a
+      // duplicate-email 400 → "Email Already In Use"); the body is the
+      // server's specific reason. No regex-sniffing the message.
+      notifyError(err, { fallbackTitle: 'Profile Not Saved', fallbackMessage: 'Failed to create profile. Please try again.' });
     } finally {
       setIsSubmitting(false);
     }

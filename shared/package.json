@@ -20,6 +20,8 @@
     "./services/firebase": "./services/firebase.ts",
     "./utils/logger": "./utils/logger.ts",
     "./utils/pii": "./utils/pii.ts",
+    "./utils/toastMessage": "./utils/toastMessage.ts",
+    "./errors/errorPresentation": "./errors/errorPresentation.ts",
     "./utils/responsive": "./utils/responsive.ts",
     "./cache": "./cache/index.ts",
     "./types": "./types/index.ts",

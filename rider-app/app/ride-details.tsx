@@ -6,7 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useAuthStore } from '@shared/store/authStore';
@@ -130,7 +130,7 @@ export default function RideDetailsScreen() {
       const user = useAuthStore.getState().user;
       showToast('Receipt Sent', `Receipt emailed to ${user?.email || 'your registered email'}.`, 'success');
     } catch (e: any) {
-      showToast('Email Not Sent', 'Could not send receipt email. Please try again.', 'danger');
+      showToast('Email Not Sent', getApiErrorMessage(e, 'Could not send receipt email. Please try again.'), 'danger');
     } finally {
       setEmailSending(false);
     }

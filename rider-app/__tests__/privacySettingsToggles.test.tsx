@@ -34,6 +34,9 @@ jest.mock('@shared/api/client', () => ({
     post: jest.fn(() => Promise.resolve({ data: {} })),
     delete: jest.fn(() => Promise.resolve({ data: {} })),
   },
+  // The screen routes save failures through getApiErrorMessage; mirror the
+  // real fallback contract (no usable detail → caller's message).
+  getApiErrorMessage: jest.fn((_err: unknown, fallback: string) => fallback),
 }));
 
 const COLORS = {

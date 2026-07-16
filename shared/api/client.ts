@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import SpinrConfig from '../config/spinr.config';
+import { clampToastMessage, TOAST_MESSAGE_MAX } from '../utils/toastMessage';
 
 
 const API_URL = SpinrConfig.backendUrl;
@@ -407,29 +408,37 @@ export const extractError = (
  * 400". Falls back to the caller's message only when the server sent no usable
  * detail (network error, empty body).
  */
-// Toasts render at most two lines (see rider Toast.tsx / driver toastConfig.tsx),
-// so clamp long backend messages to a length that fits that box, cutting at a
-// word boundary and appending an ellipsis rather than truncating mid-word.
-export const TOAST_MESSAGE_MAX = 140;
-
-export function clampToastMessage(message: string, maxLength = TOAST_MESSAGE_MAX): string {
-  const trimmed = message.trim().replace(/\s+/g, ' ');
-  if (trimmed.length <= maxLength) return trimmed;
-  const slice = trimmed.slice(0, maxLength - 1);
-  const lastSpace = slice.lastIndexOf(' ');
-  // Prefer a word boundary if one exists reasonably close to the end.
-  const cut = lastSpace > maxLength * 0.6 ? slice.slice(0, lastSpace) : slice;
-  return `${cut.replace(/[\s.,;:!-]+$/, '')}…`;
-}
+// Toast length caps live in shared/utils/toastMessage.ts (dependency-free so
+// the toast stores can enforce them without pulling in this client).
+// Re-exported for the existing call/test sites that import them from
+// '@shared/api/client'.
+export { clampToastMessage, TOAST_MESSAGE_MAX };
 
 export function getApiErrorMessage(
   err: unknown,
   fallback = 'Something went wrong. Please try again.',
 ): string {
   const anyErr = err as {
+    name?: string;
     response?: { data?: ApiErrorBody | null; status?: number };
     message?: string;
+    retryAfterSeconds?: number;
   } | null;
+  // 429s are thrown as RateLimitError, which carries no `.response` — without
+  // this branch a lockout would fall through to the generic fallback and read
+  // like a connectivity problem. Prefer the backend's own message (e.g. the
+  // OTP-lockout wording) and only synthesize one from Retry-After when the
+  // body had no usable detail. Duck-typed by name so plain-object test
+  // doubles and cross-realm instances match too.
+  if (anyErr?.name === 'RateLimitError') {
+    const raw = anyErr.message;
+    if (raw && raw !== 'Request failed') return clampToastMessage(raw);
+    const retryAfter = anyErr.retryAfterSeconds;
+    if (typeof retryAfter === 'number' && retryAfter > 0) {
+      return `Too many requests — please try again in ${retryAfter}s.`;
+    }
+    return 'Too many requests — please try again shortly.';
+  }
   const data = anyErr?.response?.data;
   if (data) {
     const { message } = extractError(data, anyErr?.response?.status);
@@ -444,6 +453,7 @@ export function getApiErrorMessage(
   const raw = anyErr?.message;
   if (
     raw &&
+    raw !== 'Request failed' && // extractError's no-detail sentinel
     !/^Request failed with status code/i.test(raw) &&
     !/^Network Error$/i.test(raw) &&
     !/^timeout of /i.test(raw)

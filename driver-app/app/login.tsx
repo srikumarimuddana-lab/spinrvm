@@ -18,7 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
 import { useLanguageStore } from '../store/languageStore';
 import { showToast } from '../hooks/useToast';
@@ -108,12 +108,13 @@ export default function LoginScreen() {
         showToast('error', 'Failed', 'Could not send verification code. Please try again.');
       }
     } catch (error: any) {
-      // A response with a detail means the server answered (e.g. 503
-      // "Verification is temporarily unavailable") — don't mislabel that as
-      // a connectivity problem.
-      const detail = error.response?.data?.detail;
-      if (detail) {
-        showToast('error', 'Sign-in Unavailable', detail);
+      // If the server answered (e.g. 503 "Verification is temporarily
+      // unavailable", or a 429 lockout — thrown as RateLimitError, which has
+      // no .response), show its reason. Only a genuinely silent failure gets
+      // labelled a connectivity problem.
+      const serverMessage = getApiErrorMessage(error, '');
+      if (serverMessage) {
+        showToast('error', 'Sign-in Unavailable', serverMessage);
       } else {
         showToast('error', 'Connection Error', 'Unable to reach server. Please check your connection.');
       }

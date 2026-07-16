@@ -246,7 +246,10 @@ export default function DocumentsScreen() {
             await processUpload(asset.uri, asset.name, asset.mimeType || getMimeFromUri(asset.uri, asset.name), reqId, side);
 
         } catch (err: any) {
-            showToast('error', 'Upload Failed', err.message);
+            // processUpload surfaces its own API errors and doesn't rethrow, so
+            // this only sees DocumentPicker failures — a raw native err.message
+            // is meaningless to the driver; match pickImage's clean generic.
+            showToast('error', 'Upload Failed', 'Could not open that file. Please try again.');
         }
     };
 

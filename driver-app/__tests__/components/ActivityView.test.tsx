@@ -84,6 +84,9 @@ describe('ActivityView', () => {
     jest.clearAllMocks();
     mockStore = makeStore();
     mockUseDriverStore.mockReturnValue(mockStore);
+    // ActivityView reads the per-period earnings cache via getState(); the
+    // closure returns whatever mockStore is set to (including per-test overrides).
+    (mockUseDriverStore as unknown as { getState: () => unknown }).getState = () => mockStore;
   });
 
   it('keeps ride history visible when earnings loading fails', async () => {

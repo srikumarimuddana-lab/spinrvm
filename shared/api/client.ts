@@ -427,9 +427,26 @@ export function getApiErrorMessage(
   fallback = 'Something went wrong. Please try again.',
 ): string {
   const anyErr = err as {
+    name?: string;
     response?: { data?: ApiErrorBody | null; status?: number };
     message?: string;
+    retryAfterSeconds?: number;
   } | null;
+  // 429s are thrown as RateLimitError, which carries no `.response` — without
+  // this branch a lockout would fall through to the generic fallback and read
+  // like a connectivity problem. Prefer the backend's own message (e.g. the
+  // OTP-lockout wording) and only synthesize one from Retry-After when the
+  // body had no usable detail. Duck-typed by name so plain-object test
+  // doubles and cross-realm instances match too.
+  if (anyErr?.name === 'RateLimitError') {
+    const raw = anyErr.message;
+    if (raw && raw !== 'Request failed') return clampToastMessage(raw);
+    const retryAfter = anyErr.retryAfterSeconds;
+    if (typeof retryAfter === 'number' && retryAfter > 0) {
+      return `Too many requests — please try again in ${retryAfter}s.`;
+    }
+    return 'Too many requests — please try again shortly.';
+  }
   const data = anyErr?.response?.data;
   if (data) {
     const { message } = extractError(data, anyErr?.response?.status);
@@ -444,6 +461,7 @@ export function getApiErrorMessage(
   const raw = anyErr?.message;
   if (
     raw &&
+    raw !== 'Request failed' && // extractError's no-detail sentinel
     !/^Request failed with status code/i.test(raw) &&
     !/^Network Error$/i.test(raw) &&
     !/^timeout of /i.test(raw)

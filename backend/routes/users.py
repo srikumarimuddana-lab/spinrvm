@@ -65,13 +65,13 @@ async def create_profile(request: CreateProfileRequest, current_user: dict = Dep
         await db_supabase.get_rows("users", {"email": email_lower, "id": {"$ne": current_user["id"]}}, limit=1)
     )
     if existing_email_user:
+        # Kept ≤140 chars so mobile clients can show it in a toast without
+        # clamping (see shared/utils/toastMessage.ts TOAST_MESSAGE_MAX).
         raise HTTPException(
             status_code=400,
             detail=(
-                "This email is already linked to an existing Spinr account. Your rider "
-                "and driver profiles share one account — please log in to that account "
-                "instead of creating a new one. If you no longer have access to its "
-                "phone number, contact support."
+                "This email is already linked to an existing Spinr account. "
+                "Please log in to that account, or contact support if you can't access it."
             ),
         )
 

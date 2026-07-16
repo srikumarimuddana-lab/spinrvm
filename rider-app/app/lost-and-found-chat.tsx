@@ -12,7 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -72,8 +72,8 @@ export default function LostAndFoundChatScreen() {
       ]);
       setLostCase(caseRes.data?.case ?? null);
       setMessages(msgRes.data?.messages ?? []);
-    } catch {
-      showToast('Error', 'Could not load case. Pull to refresh.', 'danger');
+    } catch (err) {
+      showToast("Couldn't Load Case", getApiErrorMessage(err, 'Could not load case. Pull to refresh.'), 'danger');
     } finally {
       setLoading(false);
     }
@@ -113,7 +113,7 @@ export default function LostAndFoundChatScreen() {
     } catch (e: any) {
       setMessages(prev => prev.filter(m => m.id !== optimistic.id));
       setText(trimmed);
-      showToast('Send Failed', e?.response?.data?.detail || 'Could not send message.', 'danger');
+      showToast('Send Failed', getApiErrorMessage(e, 'Could not send message.'), 'danger');
     } finally {
       setSending(false);
     }

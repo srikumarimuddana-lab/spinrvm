@@ -20,8 +20,9 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useAuthStore, type User } from '@shared/store/authStore';
-import api, { getApiErrorMessage } from '@shared/api/client';
+import api from '@shared/api/client';
 import { showToast } from '../hooks/useToast';
+import { notifyError } from '../lib/notifyError';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -272,13 +273,10 @@ export default function ProfileSetupScreen() {
       }
       router.replace('/driver' as any);
     } catch (err: any) {
-      // When the failure is about the email itself (e.g. already linked to an
-      // existing account), say so in the title too — not a bare "Error".
-      const message = getApiErrorMessage(err, 'Failed to create profile. Please try again.');
-      const title = /email/i.test(message) && /already/i.test(message)
-        ? 'Email Already In Use'
-        : 'Profile Not Saved';
-      showToast('error', title, message);
+      // Title + severity come from the backend error code/field (e.g. a
+      // duplicate-email 400 → "Email Already In Use"); the body is the
+      // server's specific reason. No regex-sniffing the message.
+      notifyError(err, { fallbackTitle: 'Profile Not Saved', fallbackMessage: 'Failed to create profile. Please try again.' });
     } finally {
       setIsSubmitting(false);
     }

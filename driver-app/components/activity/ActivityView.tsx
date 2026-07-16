@@ -57,24 +57,26 @@ export default function ActivityView() {
 
   const loadData = useCallback(async () => {
     const isPeriodChange = shownPeriodRef.current !== period;
-    // Same-period re-focus: if we refreshed within FRESH_MS the on-screen
-    // numbers are already this period's, so skip the network round-trip — this
-    // is what makes re-opening the Activity tab instant. A pill change is never
-    // skipped (the check below is gated on !isPeriodChange).
+    // Read the per-period cache via getState() so loadData stays stable and
+    // doesn't retrigger useFocusEffect in a loop.
+    const cached = !!useDriverStore.getState().earningsByPeriod?.[period];
+    // Same-period re-focus, still cached and refreshed within FRESH_MS: skip the
+    // network round-trip — this is what makes re-opening the Activity tab
+    // instant. If the cache was invalidated (e.g. a ride just completed) `cached`
+    // is false, so we refetch fresh instead of showing stale numbers. A pill
+    // change is never skipped (gated on !isPeriodChange).
     if (
       !isPeriodChange &&
       hasLoadedRef.current &&
+      cached &&
       Date.now() - lastFocusFetchRef.current < FRESH_MS
     ) {
       return;
     }
-    // Show the spinner only when this period isn't cached yet. A pill change to
-    // a previously-loaded period renders its cached numbers instantly (and
-    // refreshes silently in the background); a never-loaded period shows the
-    // spinner while it fetches. Read the cache via getState() so loadData stays
-    // stable and doesn't retrigger useFocusEffect in a loop.
-    const cached = !!useDriverStore.getState().earningsByPeriod?.[period];
-    if ((!hasLoadedRef.current || isPeriodChange) && !cached) setLoading(true);
+    // Show the spinner whenever this period isn't cached — first load, a
+    // never-opened pill, or after a ride invalidated the cache. A cached pill
+    // renders its numbers instantly and refreshes silently in the background.
+    if (!cached) setLoading(true);
     try {
       if (isPeriodChange && hasLoadedRef.current) {
         // Pill change (not the first load): only earnings is period-specific.

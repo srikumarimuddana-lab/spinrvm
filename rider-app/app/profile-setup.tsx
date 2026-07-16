@@ -80,11 +80,22 @@ export default function ProfileSetupScreen() {
   };
 
   const handleSubmit = async () => {
-    if (!form.firstName.trim() || !form.lastName.trim() || !form.email.trim() || !form.gender) {
-      return showToast('Missing Info', 'Please fill in all fields.', 'warning');
+    // Field-specific validation: name the exact field and problem — a blanket
+    // "fill in all fields" leaves the user hunting for what's wrong.
+    if (!form.firstName.trim()) {
+      return showToast('First Name Required', 'Please enter your first name.', 'warning');
+    }
+    if (!form.lastName.trim()) {
+      return showToast('Last Name Required', 'Please enter your last name.', 'warning');
+    }
+    if (!form.email.trim()) {
+      return showToast('Email Required', 'Please enter your email address.', 'warning');
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
-      return showToast('Invalid Email', 'Please enter a valid email address.', 'warning');
+      return showToast('Invalid Email', 'That email doesn’t look right — e.g. name@example.com.', 'warning');
+    }
+    if (!form.gender) {
+      return showToast('Gender Required', 'Please select your gender.', 'warning');
     }
 
     Keyboard.dismiss();
@@ -129,10 +140,14 @@ export default function ProfileSetupScreen() {
         router.replace('/(tabs)' as any);
       }
     } catch (err: any) {
-      // Surface the backend's specific reason (e.g. "This email is already
-      // linked to an existing Spinr account…") instead of a blanket "try
-      // again" — a duplicate email will never succeed on retry.
-      showToast('Profile Not Saved', getApiErrorMessage(err, 'Failed to save your profile. Please try again.'), 'danger');
+      // Surface the backend's specific reason instead of a blanket "try
+      // again" — a duplicate email will never succeed on retry. When the
+      // failure is about the email itself, say so in the title too.
+      const message = getApiErrorMessage(err, 'Failed to save your profile. Please try again.');
+      const title = /email/i.test(message) && /already/i.test(message)
+        ? 'Email Already In Use'
+        : 'Profile Not Saved';
+      showToast(title, message, 'danger');
     } finally {
       setIsSubmitting(false);
     }

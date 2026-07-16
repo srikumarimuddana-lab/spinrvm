@@ -76,11 +76,20 @@ export default function ActivityView() {
     const cached = !!useDriverStore.getState().earningsByPeriod?.[period];
     if ((!hasLoadedRef.current || isPeriodChange) && !cached) setLoading(true);
     try {
-      await Promise.allSettled([
-        fetchEarnings(period),
-        fetchRideHistory(PAGE_SIZE, 0, false),
-        fetchDriverBalance(),
-      ]);
+      if (isPeriodChange && hasLoadedRef.current) {
+        // Pill change (not the first load): only earnings is period-specific.
+        // The ride list re-filters client-side and the balance is
+        // period-independent, so DON'T refetch them — replacing rideHistory
+        // forces the whole FlatList to re-render for no reason, which is the
+        // client-side lag on pill taps.
+        await fetchEarnings(period);
+      } else {
+        await Promise.allSettled([
+          fetchEarnings(period),
+          fetchRideHistory(PAGE_SIZE, 0, false),
+          fetchDriverBalance(),
+        ]);
+      }
     } catch {}
     hasLoadedRef.current = true;
     shownPeriodRef.current = period;
@@ -149,7 +158,7 @@ export default function ActivityView() {
   // #6: render one ride card. Extracted from the inline map so the list can be
   // virtualized by FlatList. Wrapped in the 16px horizontal inset that the old
   // `ridesSection` View used to provide (rideCard has no inset of its own).
-  const renderRideCard = ({ item: ride }: { item: any }) => {
+  const renderRideCard = useCallback(({ item: ride }: { item: any }) => {
     const isCompleted = ride.status === 'completed';
     const isCancelled = ride.status === 'cancelled';
     const statusColor = isCompleted ? '#10b981' : isCancelled ? '#ef4444' : '#f59e0b';
@@ -259,7 +268,7 @@ export default function ActivityView() {
         </TouchableOpacity>
       </View>
     );
-  };
+  }, [router, styles]);
 
   // #6: FlatList virtualizes the (potentially long, 'all'-period) ride history
   // that was previously a filteredRides.map() inside a ScrollView — rendering

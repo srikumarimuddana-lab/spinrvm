@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { QRCodeSVG } from "qrcode.react";
 import { mfaEnroll, mfaConfirm, MfaConfirmResponse } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -123,21 +124,23 @@ export function MfaEnrollDialog({ open, onOpenChange, onEnrolled, authToken, onS
                             </Button>
                         ) : (
                             <div className="space-y-4">
+                                <div className="flex flex-col items-center gap-2">
+                                    {/* Force a white background and quiet-zone padding so the
+                                        code stays dark-on-light and scannable in dark mode —
+                                        a theme-tinted or transparent QR fails to scan. */}
+                                    <div className="rounded-lg bg-white p-3">
+                                        <QRCodeSVG value={otpauthUri} size={184} level="M" marginSize={0} />
+                                    </div>
+                                    <p className="text-center text-xs text-muted-foreground">
+                                        Scan with Google Authenticator, Authy, or any TOTP app.
+                                    </p>
+                                </div>
+
                                 <div className="space-y-2">
-                                    <Label>Manual Entry Key</Label>
+                                    <Label>Can&apos;t scan? Enter this key manually</Label>
                                     <div className="rounded-md bg-muted px-3 py-2 font-mono text-sm tracking-widest select-all break-all">
                                         {secret}
                                     </div>
-                                </div>
-
-                                <div className="space-y-1">
-                                    <Label>Or open in your authenticator app</Label>
-                                    <a
-                                        href={otpauthUri}
-                                        className="block truncate text-xs text-primary underline-offset-4 hover:underline"
-                                    >
-                                        Open authenticator link
-                                    </a>
                                 </div>
 
                                 <div className="space-y-2">

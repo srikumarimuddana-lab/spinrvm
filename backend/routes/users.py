@@ -5,6 +5,8 @@ try:
     from ..dependencies import get_current_user  # type: ignore
     from ..schemas import CreateProfileRequest, UserProfile  # type: ignore
     from ..utils.audit_logger import log_admin_action  # type: ignore
+    from ..utils.error_handling import ErrorCode, SpinrException  # type: ignore
+    from ..utils.error_keys import ErrorKeys  # type: ignore
     from ..utils.redis_client import redis_delete  # type: ignore
     from ..utils.referral_terms import (  # type: ignore
         area_id_for_rider,
@@ -18,6 +20,8 @@ except ImportError:
     from dependencies import get_current_user  # type: ignore
     from schemas import CreateProfileRequest, UserProfile  # type: ignore
     from utils.audit_logger import log_admin_action  # type: ignore  # noqa: F811
+    from utils.error_handling import ErrorCode, SpinrException  # type: ignore  # noqa: F811
+    from utils.error_keys import ErrorKeys  # type: ignore  # noqa: F811
     from utils.redis_client import redis_delete  # type: ignore  # noqa: F811
     from utils.referral_terms import (  # type: ignore  # noqa: F811
         area_id_for_rider,
@@ -65,14 +69,19 @@ async def create_profile(request: CreateProfileRequest, current_user: dict = Dep
         await db_supabase.get_rows("users", {"email": email_lower, "id": {"$ne": current_user["id"]}}, limit=1)
     )
     if existing_email_user:
-        # Kept ≤140 chars so mobile clients can show it in a toast without
-        # clamping (see shared/utils/toastMessage.ts TOAST_MESSAGE_MAX).
-        raise HTTPException(
-            status_code=400,
-            detail=(
+        # Structured error so mobile clients derive a field-specific toast
+        # title ("Email Already In Use") from `error.code` + `details.field`
+        # instead of regex-sniffing the message. Message kept ≤140 chars so it
+        # fits a toast whole (see shared/utils/toastMessage.ts TOAST_MESSAGE_MAX).
+        raise SpinrException(
+            message=(
                 "This email is already linked to an existing Spinr account. "
                 "Please log in to that account, or contact support if you can't access it."
             ),
+            error_code=ErrorCode.RESOURCE_ALREADY_EXISTS,
+            status_code=400,
+            details={"field": "email"},
+            message_key=ErrorKeys.PROFILE_EMAIL_IN_USE,
         )
 
     update_data = {

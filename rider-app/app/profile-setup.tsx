@@ -19,7 +19,7 @@ import { useRouter, useNavigation } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@shared/store/authStore';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import ConfirmSheet from '../components/ConfirmSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -73,7 +73,7 @@ export default function ProfileSetupScreen() {
       await updateProfileImage(uri);
       showToast('Photo Updated', 'Your profile photo has been updated.', 'success');
     } catch (err: any) {
-      showToast('Upload Failed', err.message || 'Failed to upload photo', 'danger');
+      showToast('Upload Failed', getApiErrorMessage(err, 'Could not upload your photo. Please try again.'), 'danger');
     } finally {
       setIsUploadingPhoto(false);
     }
@@ -129,7 +129,10 @@ export default function ProfileSetupScreen() {
         router.replace('/(tabs)' as any);
       }
     } catch (err: any) {
-      showToast('Profile Not Saved', 'Failed to save your profile. Please try again.', 'danger');
+      // Surface the backend's specific reason (e.g. "This email is already
+      // linked to an existing Spinr account…") instead of a blanket "try
+      // again" — a duplicate email will never succeed on retry.
+      showToast('Profile Not Saved', getApiErrorMessage(err, 'Failed to save your profile. Please try again.'), 'danger');
     } finally {
       setIsSubmitting(false);
     }

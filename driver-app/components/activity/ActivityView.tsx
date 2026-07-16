@@ -39,31 +39,36 @@ export default function ActivityView() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  // True once the first data load has completed — used to keep cached data on
-  // screen (instead of a full-screen spinner) on subsequent tab focuses.
+  // True once the first data load has completed.
   const hasLoadedRef = useRef(false);
-  // Last time each period was refreshed. Rapid tab switches within this window
-  // skip the network round-trip entirely (the on-screen numbers are already
-  // current), so re-opening Activity does zero work instead of 3 GETs.
-  const lastLoadedRef = useRef<Record<string, number>>({});
+  // The period whose data is currently on screen. The store holds only ONE
+  // `earnings` object (overwritten by each fetchEarnings), so a pill change must
+  // always refetch — showing the last-fetched period's numbers under a
+  // different pill would be wrong.
+  const shownPeriodRef = useRef<string | null>(null);
+  // Last same-period refresh, so rapid tab re-focus (same pill) can skip a
+  // redundant background refetch. Never applied across a pill change.
+  const lastFocusFetchRef = useRef(0);
   const FRESH_MS = 30_000;
 
   const loadData = useCallback(async () => {
-    // Only show the full-screen loading state on the FIRST load. On every
-    // subsequent tab focus the previous earnings / ride history are still in
-    // the store (the tab stays mounted), so keep showing them and refresh
-    // silently in the background. Previously loadData set loading=true and
-    // awaited all three fetches on every focus, blanking the whole screen to a
-    // spinner for ~3s each time the Activity tab was opened. hasLoadedRef is a
-    // ref (not a hook dep) so loadData stays stable and doesn't retrigger
-    // useFocusEffect in a loop.
-    // Skip the network round-trip entirely when this period was refreshed
-    // within FRESH_MS — the on-screen numbers are already current, so rapid tab
-    // switching does no work. A period the driver hasn't opened recently (or a
-    // just-switched period) still refetches.
-    const fresh = hasLoadedRef.current && Date.now() - (lastLoadedRef.current[period] ?? 0) < FRESH_MS;
-    if (fresh) return;
-    if (!hasLoadedRef.current) setLoading(true);
+    const isPeriodChange = shownPeriodRef.current !== period;
+    // Same-period re-focus: if we refreshed within FRESH_MS the on-screen
+    // numbers are already this period's, so skip the network round-trip — this
+    // is what makes re-opening the Activity tab instant. A pill change is never
+    // skipped (the check below is gated on !isPeriodChange).
+    if (
+      !isPeriodChange &&
+      hasLoadedRef.current &&
+      Date.now() - lastFocusFetchRef.current < FRESH_MS
+    ) {
+      return;
+    }
+    // Show the loading state when this period's data isn't on screen yet — the
+    // first load, or a pill change (keep the numbers behind a spinner instead
+    // of leaving the previous period's figures under the new pill). A
+    // same-period background refresh stays silent so the tab opens instantly.
+    if (!hasLoadedRef.current || isPeriodChange) setLoading(true);
     try {
       await Promise.allSettled([
         fetchEarnings(period),
@@ -72,7 +77,8 @@ export default function ActivityView() {
       ]);
     } catch {}
     hasLoadedRef.current = true;
-    lastLoadedRef.current[period] = Date.now();
+    shownPeriodRef.current = period;
+    lastFocusFetchRef.current = Date.now();
     setLoading(false);
   }, [period, fetchEarnings, fetchRideHistory, fetchDriverBalance]);
 

@@ -15,7 +15,14 @@ jest.mock('@shared/api/client', () => {
     delete: jest.fn(),
     put: jest.fn(),
   };
-  return { __esModule: true, default: mockClient };
+  return {
+    __esModule: true,
+    default: mockClient,
+    // Same contract as the real helper: backend detail wins, else fallback.
+    getApiErrorMessage: jest.fn(
+      (err: any, fallback: string) => err?.response?.data?.detail || fallback,
+    ),
+  };
 });
 
 // Mock expo-router

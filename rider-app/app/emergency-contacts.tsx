@@ -12,7 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import ConfirmSheet from '../components/ConfirmSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -95,8 +95,7 @@ export default function EmergencyContactsScreen() {
       await fetchContacts();
       showToast('Contact Added', `${trimmedName} has been added as an emergency contact.`, 'success');
     } catch (error: any) {
-      const msg = error?.response?.data?.detail || 'Could not add contact.';
-      showToast('Could Not Add', msg, 'danger');
+      showToast('Could Not Add', getApiErrorMessage(error, 'Could not add contact.'), 'danger');
     } finally {
       setSaving(false);
     }
@@ -116,8 +115,8 @@ export default function EmergencyContactsScreen() {
             try {
               await api.delete(`/users/emergency-contacts/${contact.id}`);
               await fetchContacts();
-            } catch {
-              showToast('Remove Failed', 'Could not remove contact.', 'danger');
+            } catch (err) {
+              showToast('Remove Failed', getApiErrorMessage(err, 'Could not remove contact.'), 'danger');
             }
           },
         },

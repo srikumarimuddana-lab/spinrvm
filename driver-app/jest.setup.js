@@ -62,6 +62,11 @@ jest.mock('@shared/api/client', () => ({
     patch: jest.fn(),
     delete: jest.fn(),
   },
+  // Same contract as the real helper: backend detail wins, else fallback.
+  getApiErrorMessage: jest.fn(
+    (err, fallback = 'Something went wrong. Please try again.') =>
+      err?.response?.data?.detail || fallback,
+  ),
 }));
 
 jest.mock('@shared/config/spinr.config', () => ({

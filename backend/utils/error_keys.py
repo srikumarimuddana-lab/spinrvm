@@ -43,6 +43,9 @@ class ErrorKeys:
     PAYMENT_REFUND_FAILED: Final[str] = "errors.payment.refund_failed"
     PAYMENT_UNPAID_RIDE_BLOCK: Final[str] = "errors.payment.unpaid_ride_block"
 
+    # Profile / account
+    PROFILE_EMAIL_IN_USE: Final[str] = "errors.profile.email_in_use"
+
     # System
     SYSTEM_INTERNAL: Final[str] = "errors.system.internal"
     SYSTEM_SERVICE_UNAVAILABLE: Final[str] = "errors.system.service_unavailable"

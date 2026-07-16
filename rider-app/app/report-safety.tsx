@@ -11,9 +11,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
-import { submitErrorMessage } from '../utils/submitErrorMessage';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -38,11 +37,12 @@ export default function ReportSafetyScreen() {
         } catch (e) {
             // Do not swallow — a failed *safety* report must be observable
             // (CLAUDE.md: "Do not silently swallow errors"). Log it, and surface
-            // a rate-limit retry hint when present instead of a blanket message.
+            // the backend's reason (validation detail, rate-limit retry hint)
+            // instead of a blanket message.
             console.error('[report-safety] safety report submit failed', e);
             showToast(
                 'Submit Failed',
-                submitErrorMessage(e, 'Failed to submit report. Please try again.'),
+                getApiErrorMessage(e, 'Failed to submit report. Please try again.'),
                 'danger',
             );
             setSubmitting(false);

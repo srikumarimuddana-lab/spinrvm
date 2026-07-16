@@ -12,14 +12,20 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastapi import HTTPException
 
 try:
     from routes.users import create_profile
     from schemas import CreateProfileRequest
+    from utils.error_handling import ErrorCode, SpinrException
+    from utils.error_keys import ErrorKeys
 except ImportError:
     from backend.routes.users import create_profile  # type: ignore[no-redef]
     from backend.schemas import CreateProfileRequest  # type: ignore[no-redef]
+    from backend.utils.error_handling import (  # type: ignore[no-redef]  # noqa: F811
+        ErrorCode,
+        SpinrException,
+    )
+    from backend.utils.error_keys import ErrorKeys  # type: ignore[no-redef]  # noqa: F811
 
 
 def _req(email: str = "Shared@Example.com", role: str | None = None) -> CreateProfileRequest:
@@ -45,16 +51,24 @@ async def test_duplicate_email_is_blocked_with_account_recovery_message():
         ),
         patch("routes.users.db_supabase.update_one", AsyncMock()) as update_mock,
     ):
-        with pytest.raises(HTTPException) as ei:
+        with pytest.raises(SpinrException) as ei:
             await create_profile(request=_req(), current_user=current_user)
 
-    assert ei.value.status_code == 400
-    detail = ei.value.detail.lower()
+    exc = ei.value
+    assert exc.status_code == 400
+    # Structured so mobile clients derive a field-specific toast title.
+    assert exc.error_code == ErrorCode.RESOURCE_ALREADY_EXISTS
+    assert exc.details == {"field": "email"}
+    assert exc.message_key == ErrorKeys.PROFILE_EMAIL_IN_USE
+    message = exc.message.lower()
     # Uber-style: point the user to their existing account, not a new one.
-    assert "already linked to an existing spinr account" in detail
-    assert "log in" in detail
+    assert "already linked to an existing spinr account" in message
+    assert "log in" in message
     # Never disclose the other account's phone number (PII / enumeration).
-    assert "+13060000001" not in ei.value.detail
+    assert "+13060000001" not in exc.message
+    # Must fit a mobile toast whole (TOAST_MESSAGE_MAX in
+    # shared/utils/toastMessage.ts) — no clamping mid-guidance.
+    assert len(exc.message) <= 140
     # The duplicate must not be written.
     update_mock.assert_not_called()
 
@@ -72,7 +86,7 @@ async def test_duplicate_email_lookup_is_case_insensitive():
         patch("routes.users.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
         patch("routes.users.db_supabase.update_one", AsyncMock()),
     ):
-        with pytest.raises(HTTPException):
+        with pytest.raises(SpinrException):
             await create_profile(request=_req(email="SHARED@EXAMPLE.COM"), current_user={"id": "u-new", "phone": "+1"})
 
     assert captured["filter"]["email"] == "shared@example.com"

@@ -337,6 +337,10 @@ interface DriverState {
 
     // Earnings
     earnings: EarningsSummary | null;
+    // Earnings cached per period key ('today' | 'week' | 'month' | 'all' | …) so
+    // switching Activity pills can show a previously-loaded period instantly
+    // instead of refetching. `earnings` mirrors the most recent fetch.
+    earningsByPeriod: Record<string, EarningsSummary>;
     dailyEarnings: DailyEarning[];
     weeklyEarnings: WeeklyEarning[];
     monthlyEarnings: MonthlyEarning[];
@@ -431,6 +435,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     configuredCountdownSeconds: FALLBACK_COUNTDOWN,
     configuredPickupRadiusMeters: FALLBACK_PICKUP_RADIUS_METERS,
     earnings: null,
+    earningsByPeriod: {},
     dailyEarnings: [],
     weeklyEarnings: [],
     monthlyEarnings: [],
@@ -854,7 +859,12 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     fetchEarnings: async (period = 'day') => {
         try {
             const res = await api.get<EarningsSummary>(`/drivers/earnings?period=${period}`);
-            set({ earnings: res.data });
+            // Keep both the current `earnings` and the per-period cache so the
+            // Activity tab can render a revisited pill from cache instantly.
+            set((s) => ({
+                earnings: res.data,
+                earningsByPeriod: { ...s.earningsByPeriod, [period]: res.data },
+            }));
         } catch (err) {
             throw err;
         }

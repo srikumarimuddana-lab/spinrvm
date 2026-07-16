@@ -84,6 +84,9 @@ describe('ActivityView', () => {
     jest.clearAllMocks();
     mockStore = makeStore();
     mockUseDriverStore.mockReturnValue(mockStore);
+    // ActivityView reads the per-period earnings cache via getState(); the
+    // closure returns whatever mockStore is set to (including per-test overrides).
+    (mockUseDriverStore as unknown as { getState: () => unknown }).getState = () => mockStore;
   });
 
   it('keeps ride history visible when earnings loading fails', async () => {
@@ -174,7 +177,7 @@ describe('ActivityView', () => {
     expect(getByText('Load more rides')).toBeTruthy();
   });
 
-  it('reloads the first history page when the period changes', async () => {
+  it('refetches only earnings on a period change (list re-filters client-side)', async () => {
     const { getByText } = render(<ActivityView />);
 
     await waitFor(() => expect(getByText('123 Main St')).toBeTruthy());
@@ -183,6 +186,10 @@ describe('ActivityView', () => {
     fireEvent.press(getByText('This Week'));
 
     await waitFor(() => expect(mockStore.fetchEarnings).toHaveBeenLastCalledWith('week'));
-    expect(mockStore.fetchRideHistory).toHaveBeenCalledWith(50, 0, false);
+    // The ride-history endpoint is period-independent and the list filters
+    // client-side, so a pill change must NOT refetch history — that churn
+    // replaced the rideHistory array and re-rendered the whole FlatList on
+    // every pill tap.
+    expect(mockStore.fetchRideHistory).not.toHaveBeenCalled();
   });
 });

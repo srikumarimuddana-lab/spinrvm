@@ -28,6 +28,7 @@ export default function ActivityView() {
   const router = useRouter();
   const {
     earnings,
+    earningsByPeriod,
     rideHistory,
     historyTotal,
     fetchEarnings,
@@ -36,43 +37,63 @@ export default function ActivityView() {
   } = useDriverStore();
 
   const [period, setPeriod] = useState<Period>('today');
+  // Prefer this period's cached earnings so a revisited pill renders instantly;
+  // fall back to the most-recent `earnings` (first render / cache miss).
+  const shownEarnings = earningsByPeriod?.[period] ?? earnings;
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  // True once the first data load has completed — used to keep cached data on
-  // screen (instead of a full-screen spinner) on subsequent tab focuses.
+  // True once the first data load has completed.
   const hasLoadedRef = useRef(false);
-  // Last time each period was refreshed. Rapid tab switches within this window
-  // skip the network round-trip entirely (the on-screen numbers are already
-  // current), so re-opening Activity does zero work instead of 3 GETs.
-  const lastLoadedRef = useRef<Record<string, number>>({});
+  // The period whose data is currently on screen. The store holds only ONE
+  // `earnings` object (overwritten by each fetchEarnings), so a pill change must
+  // always refetch — showing the last-fetched period's numbers under a
+  // different pill would be wrong.
+  const shownPeriodRef = useRef<string | null>(null);
+  // Last same-period refresh, so rapid tab re-focus (same pill) can skip a
+  // redundant background refetch. Never applied across a pill change.
+  const lastFocusFetchRef = useRef(0);
   const FRESH_MS = 30_000;
 
   const loadData = useCallback(async () => {
-    // Only show the full-screen loading state on the FIRST load. On every
-    // subsequent tab focus the previous earnings / ride history are still in
-    // the store (the tab stays mounted), so keep showing them and refresh
-    // silently in the background. Previously loadData set loading=true and
-    // awaited all three fetches on every focus, blanking the whole screen to a
-    // spinner for ~3s each time the Activity tab was opened. hasLoadedRef is a
-    // ref (not a hook dep) so loadData stays stable and doesn't retrigger
-    // useFocusEffect in a loop.
-    // Skip the network round-trip entirely when this period was refreshed
-    // within FRESH_MS — the on-screen numbers are already current, so rapid tab
-    // switching does no work. A period the driver hasn't opened recently (or a
-    // just-switched period) still refetches.
-    const fresh = hasLoadedRef.current && Date.now() - (lastLoadedRef.current[period] ?? 0) < FRESH_MS;
-    if (fresh) return;
-    if (!hasLoadedRef.current) setLoading(true);
+    const isPeriodChange = shownPeriodRef.current !== period;
+    // Same-period re-focus: if we refreshed within FRESH_MS the on-screen
+    // numbers are already this period's, so skip the network round-trip — this
+    // is what makes re-opening the Activity tab instant. A pill change is never
+    // skipped (the check below is gated on !isPeriodChange).
+    if (
+      !isPeriodChange &&
+      hasLoadedRef.current &&
+      Date.now() - lastFocusFetchRef.current < FRESH_MS
+    ) {
+      return;
+    }
+    // Show the spinner only when this period isn't cached yet. A pill change to
+    // a previously-loaded period renders its cached numbers instantly (and
+    // refreshes silently in the background); a never-loaded period shows the
+    // spinner while it fetches. Read the cache via getState() so loadData stays
+    // stable and doesn't retrigger useFocusEffect in a loop.
+    const cached = !!useDriverStore.getState().earningsByPeriod?.[period];
+    if ((!hasLoadedRef.current || isPeriodChange) && !cached) setLoading(true);
     try {
-      await Promise.allSettled([
-        fetchEarnings(period),
-        fetchRideHistory(PAGE_SIZE, 0, false),
-        fetchDriverBalance(),
-      ]);
+      if (isPeriodChange && hasLoadedRef.current) {
+        // Pill change (not the first load): only earnings is period-specific.
+        // The ride list re-filters client-side and the balance is
+        // period-independent, so DON'T refetch them — replacing rideHistory
+        // forces the whole FlatList to re-render for no reason, which is the
+        // client-side lag on pill taps.
+        await fetchEarnings(period);
+      } else {
+        await Promise.allSettled([
+          fetchEarnings(period),
+          fetchRideHistory(PAGE_SIZE, 0, false),
+          fetchDriverBalance(),
+        ]);
+      }
     } catch {}
     hasLoadedRef.current = true;
-    lastLoadedRef.current[period] = Date.now();
+    shownPeriodRef.current = period;
+    lastFocusFetchRef.current = Date.now();
     setLoading(false);
   }, [period, fetchEarnings, fetchRideHistory, fetchDriverBalance]);
 
@@ -82,16 +103,16 @@ export default function ActivityView() {
     }, [loadData])
   );
 
-  const totalEarnings = parseMoney(earnings?.total_earnings);
-  const totalTips = parseMoney(earnings?.total_tips);
-  const totalIncentives = parseMoney(earnings?.total_incentives);
+  const totalEarnings = parseMoney(shownEarnings?.total_earnings);
+  const totalTips = parseMoney(shownEarnings?.total_tips);
+  const totalIncentives = parseMoney(shownEarnings?.total_incentives);
   // Quest + referral rewards (driver_bonuses) — distinct from per-ride incentives.
-  const totalBonuses = parseMoney(earnings?.total_bonuses);
+  const totalBonuses = parseMoney(shownEarnings?.total_bonuses);
   // Referral-only slice, shown as its own line; the remainder is quest bonuses.
-  const totalReferralBonuses = parseMoney(earnings?.total_referral_bonuses);
-  const totalTax = parseMoney(earnings?.total_tax);
+  const totalReferralBonuses = parseMoney(shownEarnings?.total_referral_bonuses);
+  const totalTax = parseMoney(shownEarnings?.total_tax);
   const fareEarnings = Math.max(totalEarnings - totalTips - totalIncentives - totalBonuses - totalTax, 0);
-  const periodRideTotal = period === 'all' ? historyTotal : Number(earnings?.total_rides ?? 0);
+  const periodRideTotal = period === 'all' ? historyTotal : Number(shownEarnings?.total_rides ?? 0);
   const hasMoreHistory = rideHistory.length < historyTotal;
 
   const loadMoreHistory = useCallback(async () => {
@@ -137,7 +158,7 @@ export default function ActivityView() {
   // #6: render one ride card. Extracted from the inline map so the list can be
   // virtualized by FlatList. Wrapped in the 16px horizontal inset that the old
   // `ridesSection` View used to provide (rideCard has no inset of its own).
-  const renderRideCard = ({ item: ride }: { item: any }) => {
+  const renderRideCard = useCallback(({ item: ride }: { item: any }) => {
     const isCompleted = ride.status === 'completed';
     const isCancelled = ride.status === 'cancelled';
     const statusColor = isCompleted ? '#10b981' : isCancelled ? '#ef4444' : '#f59e0b';
@@ -247,7 +268,7 @@ export default function ActivityView() {
         </TouchableOpacity>
       </View>
     );
-  };
+  }, [router, styles]);
 
   // #6: FlatList virtualizes the (potentially long, 'all'-period) ride history
   // that was previously a filteredRides.map() inside a ScrollView — rendering
@@ -325,7 +346,7 @@ export default function ActivityView() {
                 <FontAwesome5 name="car" size={16} color="#ef4444" />
               </View>
               <View>
-                <Text style={styles.statValue}>{earnings?.total_rides || 0}</Text>
+                <Text style={styles.statValue}>{shownEarnings?.total_rides || 0}</Text>
                 <Text style={styles.statLabel}>Total Trips</Text>
               </View>
             </View>
@@ -334,7 +355,7 @@ export default function ActivityView() {
                 <MaterialCommunityIcons name="road-variant" size={18} color="#f59e0b" />
               </View>
               <View>
-                <Text style={styles.statValue}>{parseMoney(earnings?.total_distance_km).toFixed(1)}</Text>
+                <Text style={styles.statValue}>{parseMoney(shownEarnings?.total_distance_km).toFixed(1)}</Text>
                 <Text style={styles.statLabel}>KM Driven</Text>
               </View>
             </View>
@@ -344,7 +365,7 @@ export default function ActivityView() {
               </View>
               <View>
                 <Text style={styles.statValue}>
-                  {Math.round((earnings?.total_duration_minutes || 0) / 60)}h
+                  {Math.round((shownEarnings?.total_duration_minutes || 0) / 60)}h
                 </Text>
                 <Text style={styles.statLabel}>Online Time</Text>
               </View>
@@ -354,7 +375,7 @@ export default function ActivityView() {
                 <Ionicons name="trending-up" size={18} color="#38bdf8" />
               </View>
               <View>
-                <Text style={styles.statValue}>${toMoney(earnings?.average_per_ride)}</Text>
+                <Text style={styles.statValue}>${toMoney(shownEarnings?.average_per_ride)}</Text>
                 <Text style={styles.statLabel}>Avg per Trip</Text>
               </View>
             </View>

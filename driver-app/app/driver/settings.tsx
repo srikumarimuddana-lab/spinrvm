@@ -22,7 +22,7 @@ import { useLanguageStore } from '../../store/languageStore';
 import { useNavStore } from '../../store/navStore';
 import { useAlertPrefsStore } from '../../store/alertPrefsStore';
 import { languages, Language } from '../../i18n';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import {
     useNotificationPreferences,
     useUpdateNotificationPreferences,
@@ -194,7 +194,9 @@ export default function SettingsScreen() {
             router.replace('/login' as any);
         } catch (err: any) {
             setShowDeleteStep2(false);
-            showToast('error', t('settings.deleteFailedTitle'), t('settings.deleteFailedMsg'));
+            // Deletion rejections are actionable (active ride, unsettled
+            // balance, pending payout) — show the backend's reason.
+            showToast('error', t('settings.deleteFailedTitle'), getApiErrorMessage(err, t('settings.deleteFailedMsg')));
         }
     };
 

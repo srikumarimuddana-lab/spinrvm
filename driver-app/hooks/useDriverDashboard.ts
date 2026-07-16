@@ -14,7 +14,7 @@ import { useDriverStore } from '../store/driverStore';
 import { useAlertPrefsStore } from '../store/alertPrefsStore';
 import { useRideOfferSound, setOfferSoundUrl } from './useRideOfferSound';
 import { tKey } from '../i18n';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { useDriverConfig } from '@shared/hooks/queries';
 import { API_URL } from '@shared/config';
 import SpinrConfig from '@shared/config/spinr.config';
@@ -1305,7 +1305,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         setIsOnline(!next);
 
         const status = err.response?.status;
-        const detail = err.response?.data?.detail;
+        // getApiErrorMessage handles every body shape (plain `detail`,
+        // structured `error.message`, validation arrays, RateLimitError) —
+        // a bare `data.detail` read misses SpinrException-style rejections
+        // (background check pending, inspection expired, area restriction).
+        const reason = getApiErrorMessage(err, '');
         // ErrorCode.DRIVER_QUOTA_EXCEEDED (backend utils/error_handling.py)
         const errCode = err.response?.data?.error?.code;
 
@@ -1313,10 +1317,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           // No / expired Spinr Pass while the area requires one. Toast on every
           // attempt so the reason is unmissable, plus an alert with a Subscribe
           // shortcut.
-          showToast('error', "Spinr Pass required", detail || "Activate your Spinr Pass to go online.");
+          showToast('error', "Spinr Pass required", reason || "Activate your Spinr Pass to go online.");
           showAlert(
             "Spinr Pass Required",
-            detail || "You need an active subscription to go online.",
+            reason || "You need an active subscription to go online.",
             [
               { text: "Subscribe", onPress: () => router.push('/driver/subscription' as any) },
               { text: "Cancel", style: "cancel" },
@@ -1324,9 +1328,9 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           );
         } else if (status === 403 && errCode === 5006) {
           // Daily Spinr Pass ride allowance used up — resets at local midnight.
-          showToast('info', "Daily ride limit reached", detail || "You've used today's Spinr Pass rides. They reset at midnight.");
+          showToast('info', "Daily ride limit reached", reason || "You've used today's Spinr Pass rides. They reset at midnight.");
         } else {
-          showToast('error', "Cannot Go Online", detail || "Failed to update status. Please try again.");
+          showToast('error', "Cannot Go Online", reason || "Failed to update status. Please try again.");
         }
         return;
       }

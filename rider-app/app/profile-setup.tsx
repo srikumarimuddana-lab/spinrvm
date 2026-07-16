@@ -21,6 +21,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@shared/store/authStore';
 import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
+import { notifyError } from '../lib/notifyError';
 import ConfirmSheet from '../components/ConfirmSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -140,14 +141,10 @@ export default function ProfileSetupScreen() {
         router.replace('/(tabs)' as any);
       }
     } catch (err: any) {
-      // Surface the backend's specific reason instead of a blanket "try
-      // again" — a duplicate email will never succeed on retry. When the
-      // failure is about the email itself, say so in the title too.
-      const message = getApiErrorMessage(err, 'Failed to save your profile. Please try again.');
-      const title = /email/i.test(message) && /already/i.test(message)
-        ? 'Email Already In Use'
-        : 'Profile Not Saved';
-      showToast(title, message, 'danger');
+      // Title + severity come from the backend error code/field (e.g. a
+      // duplicate-email 400 → "Email Already In Use"); the body is the
+      // server's specific reason. No regex-sniffing the message.
+      notifyError(err, { fallbackTitle: 'Profile Not Saved', fallbackMessage: 'Failed to save your profile. Please try again.' });
     } finally {
       setIsSubmitting(false);
     }

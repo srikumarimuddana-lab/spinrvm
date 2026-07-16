@@ -55,6 +55,9 @@ async def test_duplicate_email_is_blocked_with_account_recovery_message():
     assert "log in" in detail
     # Never disclose the other account's phone number (PII / enumeration).
     assert "+13060000001" not in ei.value.detail
+    # Must fit a mobile toast whole (TOAST_MESSAGE_MAX in
+    # shared/utils/toastMessage.ts) — no clamping mid-guidance.
+    assert len(ei.value.detail) <= 140
     # The duplicate must not be written.
     update_mock.assert_not_called()
 

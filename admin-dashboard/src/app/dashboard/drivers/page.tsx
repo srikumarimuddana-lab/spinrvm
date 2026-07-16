@@ -656,6 +656,18 @@ export default function DriversPage() {
         return _getDocSummary(rdId, rdKey, rdLabel).expiry;
     }
 
+    // Existing on-file date/status per document type, surfaced in the upload
+    // dialog so the admin can see what's already recorded before re-uploading.
+    // Plain (non-memoized) map — requiredDocs is small and this must stay above
+    // the `if (!allowed) return null` early-return without adding a hook.
+    const existingDocInfo: Record<string, { expiry?: string; status: "approved" | "pending" | "rejected" | "missing" }> =
+        Object.fromEntries(
+            requiredDocs.map((rd) => {
+                const s = _getDocSummary(rd.id, rd.key, rd.label);
+                return [rd.key, { expiry: s.expiry, status: s.docStatus }];
+            }),
+        );
+
     if (!allowed) return null;
 
     return (
@@ -1523,6 +1535,7 @@ export default function DriversPage() {
                 driverId={selected?.id || null}
                 driverName={selected?.name || selected?.email || null}
                 requirements={requiredDocs}
+                existing={existingDocInfo}
                 onUploaded={() => { reloadDriverDocs(); loadData(); loadDrivers(); }}
             />
 

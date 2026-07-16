@@ -191,8 +191,30 @@ export default function ProfileSetupScreen() {
   const isFormValid = isFirstNameValid && isLastNameValid && isEmailValid && gender && isServiceAreaValid;
 
   const handleSubmit = async () => {
-    if (!isFormValid) {
-      showToast('error', 'Missing Info', 'Please complete all required fields.');
+    // Field-specific validation: name the exact field and problem — a blanket
+    // "complete all required fields" leaves the driver hunting for what's wrong.
+    if (!isFirstNameValid) {
+      showToast('warning', 'First Name Required', 'Please enter your first name (at least 2 letters).');
+      return;
+    }
+    if (!isLastNameValid) {
+      showToast('warning', 'Last Name Required', 'Please enter your last name (at least 2 letters).');
+      return;
+    }
+    if (!email.trim()) {
+      showToast('warning', 'Email Required', 'Please enter your email address.');
+      return;
+    }
+    if (!isEmailValid) {
+      showToast('warning', 'Invalid Email', 'That email doesn’t look right — e.g. name@example.com.');
+      return;
+    }
+    if (!gender) {
+      showToast('warning', 'Gender Required', 'Please select your gender.');
+      return;
+    }
+    if (!isServiceAreaValid) {
+      showToast('warning', 'Service Area Required', 'Please select the area where you plan to drive.');
       return;
     }
 
@@ -250,7 +272,13 @@ export default function ProfileSetupScreen() {
       }
       router.replace('/driver' as any);
     } catch (err: any) {
-      showToast('error', 'Error', getApiErrorMessage(err, 'Failed to create profile. Please try again.'));
+      // When the failure is about the email itself (e.g. already linked to an
+      // existing account), say so in the title too — not a bare "Error".
+      const message = getApiErrorMessage(err, 'Failed to create profile. Please try again.');
+      const title = /email/i.test(message) && /already/i.test(message)
+        ? 'Email Already In Use'
+        : 'Profile Not Saved';
+      showToast('error', title, message);
     } finally {
       setIsSubmitting(false);
     }

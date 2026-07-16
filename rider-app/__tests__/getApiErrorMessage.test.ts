@@ -31,7 +31,15 @@ import { getApiErrorMessage, clampToastMessage, TOAST_MESSAGE_MAX } from '@share
 
 const FALLBACK = 'Failed to save your profile. Please try again.';
 
+// The live backend wording (backend/routes/users.py) — deliberately ≤140
+// chars so it reaches the toast whole, with no clamping.
 const DUPLICATE_EMAIL_DETAIL =
+  'This email is already linked to an existing Spinr account. ' +
+  "Please log in to that account, or contact support if you can't access it.";
+
+// Representative over-long backend detail (the pre-2026-07 signup wording),
+// kept as a fixture for the clamping tests.
+const LONG_DETAIL =
   'This email is already linked to an existing Spinr account. Your rider ' +
   'and driver profiles share one account — please log in to that account ' +
   'instead of creating a new one. If you no longer have access to its ' +
@@ -46,7 +54,8 @@ describe('getApiErrorMessage', () => {
     const message = getApiErrorMessage(err, FALLBACK);
     expect(message).toContain('This email is already linked to an existing Spinr account');
     expect(message).not.toBe(FALLBACK);
-    // Must fit the two-line toast box.
+    // The live wording is sized to reach the user whole — no ellipsis.
+    expect(message).toBe(DUPLICATE_EMAIL_DETAIL);
     expect(message.length).toBeLessThanOrEqual(TOAST_MESSAGE_MAX);
   });
 
@@ -113,7 +122,7 @@ describe('getApiErrorMessage', () => {
 
 describe('clampToastMessage', () => {
   it('clamps long backend messages at a word boundary with an ellipsis', () => {
-    const clamped = clampToastMessage(DUPLICATE_EMAIL_DETAIL);
+    const clamped = clampToastMessage(LONG_DETAIL);
     expect(clamped.length).toBeLessThanOrEqual(TOAST_MESSAGE_MAX);
     expect(clamped.endsWith('…')).toBe(true);
     expect(clamped).not.toMatch(/\s…$/); // no dangling space before the ellipsis

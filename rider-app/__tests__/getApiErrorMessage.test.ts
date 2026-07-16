@@ -68,6 +68,34 @@ describe('getApiErrorMessage', () => {
     expect(getApiErrorMessage({ response: { status: 500, data: {} } }, FALLBACK)).toBe(FALLBACK);
   });
 
+  it('never leaks the bare "Request failed" extractor sentinel', () => {
+    expect(getApiErrorMessage(new Error('Request failed'), FALLBACK)).toBe(FALLBACK);
+  });
+
+  // 429s throw RateLimitError, which has NO `.response` — before this branch
+  // existed, login screens reading `err.response?.data?.detail` showed
+  // "Connection Error — Unable to reach server" for a lockout.
+  describe('RateLimitError (429)', () => {
+    it('prefers the backend lockout message when present', () => {
+      const err = {
+        name: 'RateLimitError',
+        message: 'Too many attempts. Locked for 24 hours.',
+        retryAfterSeconds: 86400,
+      };
+      expect(getApiErrorMessage(err, FALLBACK)).toBe('Too many attempts. Locked for 24 hours.');
+    });
+
+    it('synthesizes a retry hint from Retry-After when the body had no detail', () => {
+      const err = { name: 'RateLimitError', message: 'Request failed', retryAfterSeconds: 60 };
+      expect(getApiErrorMessage(err, FALLBACK)).toBe('Too many requests — please try again in 60s.');
+    });
+
+    it('still says "too many requests" (not the fallback) with no retry information', () => {
+      const err = { name: 'RateLimitError', message: 'Request failed' };
+      expect(getApiErrorMessage(err, FALLBACK)).toBe('Too many requests — please try again shortly.');
+    });
+  });
+
   it('joins FastAPI validation-error arrays into one readable message', () => {
     const err = {
       response: {

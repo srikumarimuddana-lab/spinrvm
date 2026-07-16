@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { recordNonFatal } from '../utils/crashlytics';
@@ -520,7 +520,10 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             _persistDriverState('navigating_to_pickup', get().activeRide);
         } catch (err: unknown) {
             const status = isAxiosError(err) ? err.response?.status : undefined;
-            const detail: string = isAxiosError(err) ? (err.response?.data?.detail || '') : '';
+            // getApiErrorMessage covers plain `detail`, structured
+            // `error.message`, and RateLimitError shapes — a bare
+            // `data.detail` read drops SpinrException-style rejections.
+            const detail: string = getApiErrorMessage(err, '');
 
             // Race-condition handling: another driver beat us to the ride, or
             // the rider cancelled between dispatch and accept. Backend returns
@@ -588,7 +591,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             _persistDriverState('arrived_at_pickup', get().activeRide);
             return { success: true };
         } catch (err: unknown) {
-            const detail = isAxiosError(err) ? (err.response?.data?.detail || 'Failed to mark arrival') : 'Failed to mark arrival';
+            const detail = getApiErrorMessage(err, 'Failed to mark arrival');
             set({ error: detail });
             return { success: false, error: detail };
         } finally {
@@ -605,7 +608,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             _persistDriverState('trip_in_progress', get().activeRide);
             return true;
         } catch (err: unknown) {
-            set({ error: isAxiosError(err) ? (err.response?.data?.detail || 'Invalid OTP') : 'Invalid OTP' });
+            set({ error: getApiErrorMessage(err, 'Invalid OTP') });
             return false;
         } finally {
             set({ isLoading: false });
@@ -620,7 +623,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             await get().fetchActiveRide();
             _persistDriverState('trip_in_progress', get().activeRide);
         } catch (err: unknown) {
-            set({ error: isAxiosError(err) ? (err.response?.data?.detail || 'Failed to start ride') : 'Failed to start ride' });
+            set({ error: getApiErrorMessage(err, 'Failed to start ride') });
         } finally {
             set({ isLoading: false });
         }
@@ -665,7 +668,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                 }
             }
             recordNonFatal(err, { store: 'driverStore', action: 'completeRide' });
-            set({ error: isAxiosError(err) ? (err.response?.data?.detail || 'Failed to complete ride') : 'Failed to complete ride' });
+            set({ error: getApiErrorMessage(err, 'Failed to complete ride') });
         } finally {
             set({ isLoading: false });
         }
@@ -694,7 +697,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
         } catch (err: unknown) {
             recordNonFatal(err, { store: 'driverStore', action: 'cancelRide' });
-            set({ error: isAxiosError(err) ? (err.response?.data?.detail || 'Failed to cancel ride') : 'Failed to cancel ride' });
+            set({ error: getApiErrorMessage(err, 'Failed to cancel ride') });
         } finally {
             set({ isLoading: false, isCancellingRide: false });
         }
@@ -1020,7 +1023,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
         try {
             await api.post(`/drivers/rides/${rideId}/rate-rider`, { rating, comment: comment || '' });
         } catch (err: unknown) {
-            set({ error: isAxiosError(err) ? (err.response?.data?.detail || 'Failed to rate rider') : 'Failed to rate rider' });
+            set({ error: getApiErrorMessage(err, 'Failed to rate rider') });
         }
     },
 
@@ -1045,7 +1048,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             await get().fetchBankAccount();
             return true;
         } catch (err: unknown) {
-            set({ error: isAxiosError(err) ? (err.response?.data?.detail || 'Failed to save bank account') : 'Failed to save bank account' });
+            set({ error: getApiErrorMessage(err, 'Failed to save bank account') });
             return false;
         } finally {
             set({ isLoading: false });
@@ -1059,7 +1062,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             set({ hasBankAccount: false, bankAccount: null });
             return true;
         } catch (err: unknown) {
-            set({ error: isAxiosError(err) ? (err.response?.data?.detail || 'Failed to delete bank account') : 'Failed to delete bank account' });
+            set({ error: getApiErrorMessage(err, 'Failed to delete bank account') });
             return false;
         } finally {
             set({ isLoading: false });
@@ -1083,7 +1086,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             await get().fetchPayoutHistory();
             return { success: true };
         } catch (err: unknown) {
-            const error = isAxiosError(err) ? (err.response?.data?.detail || 'Failed to request payout') : 'Failed to request payout';
+            const error = getApiErrorMessage(err, 'Failed to request payout');
             set({ error });
             return { success: false, error };
         } finally {

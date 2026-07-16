@@ -50,10 +50,19 @@
 --
 -- HOW TO RUN
 --   1. Take a snapshot / backup first (Supabase: point-in-time restore).
---   2. psql "$SUPABASE_DB_URL" -f scripts/ops/wipe_drivers_and_customers.sql
---      -> runs Part 0 (preview counts) only; Parts 1 & 2 are commented out.
---   3. Review the counts, then un-comment Part 1 (drivers) and/or Part 2
---      (customers) and re-run. Each part is ONE transaction — all-or-nothing.
+--   2. Run the file as-is first: only Part 0 (preview counts) executes; the
+--      write parts are commented out. Review the counts.
+--   3. Enable exactly the part you want and re-run. Each part is ONE
+--      transaction — all-or-nothing.
+--
+--   WHICH PART?
+--     * Part 3 (FULL RESET) — RECOMMENDED for "wipe all drivers AND customers,
+--       reload from CSV". Removes every non-admin user, all rides, all drivers.
+--       Handles users who are BOTH a driver and a rider (that mix is what makes
+--       Part 1/Part 2 hit a rides_rider_id_fkey error when run alone).
+--     * Part 1 (drivers only) — only when you want to KEEP riders and their
+--       rides. Detaches any rides a driver booked as a passenger.
+--     * Part 2 (customers only) — only when you want to KEEP drivers.
 -- ============================================================================
 
 
@@ -189,6 +198,14 @@ BEGIN
         EXECUTE 'UPDATE reconciliation_discrepancies SET resolved_by = NULL '
              || 'WHERE resolved_by::text IN (SELECT id::text FROM _victims)';
     END IF;
+
+    -- Some driver accounts ALSO booked rides as a passenger (rides.rider_id ->
+    -- this driver user). rides.rider_id is nullable, so NULL it to detach the
+    -- ride from the account being removed while KEEPING the trip record. Without
+    -- this the users delete fails with rides_rider_id_fkey (23503).
+    -- NOTE: if you want those rides GONE too, use PART 3 (full reset) instead.
+    EXECUTE 'UPDATE rides SET rider_id = NULL WHERE rider_id::text IN (SELECT id::text FROM _victims)';
+    GET DIAGNOSTICS n = ROW_COUNT; RAISE NOTICE 'detached rides.rider_id from driver users : % rows', n;
 
     -- the drivers, then the driver user accounts.
     -- rides.driver_id has NO FK, so it stays as-is (trip linkage preserved).
@@ -350,3 +367,153 @@ SELECT count(*) AS rider_users_left FROM users WHERE role = 'rider';
 
 COMMIT;
 */  -- <<< enable Part 2 (delete this line too)
+
+
+-- ============================================================================
+-- PART 3 — FULL RESET  (RECOMMENDED for "delete all drivers AND customers,
+--          then reload from CSV").
+--
+-- Deletes EVERY non-admin account (riders AND drivers), ALL rides, ALL drivers,
+-- and every operational/dependent row — in one transaction. Because everything
+-- non-admin goes at once, cross-references like a driver who also booked rides
+-- as a passenger (the rides_rider_id_fkey error) cannot block it.
+--
+-- PRESERVES only: admin accounts (role='admin'), admin_staff/staff, and the
+-- configuration tables (service_areas, vehicle_types, fare_configs,
+-- document_requirements, settings, faqs, promotions).
+--
+-- To enable: delete the line "/*  <<< enable Part 3" and its matching close.
+-- ============================================================================
+/*  <<< enable Part 3
+BEGIN;
+
+DO $$
+DECLARE
+    -- child tables keyed on rides.id  (cleared wholesale — every ride is going)
+    _ride_child text[][] := ARRAY[
+        ['ride_routes','ride_id'], ['ride_offers','ride_id'], ['ride_messages','ride_id'],
+        ['ride_live_activities','ride_id'], ['ride_payment_sources','ride_id'],
+        ['ride_incentive_claims','ride_id'], ['stripe_disputes','ride_id'], ['disputes','ride_id']
+    ];
+    -- child tables keyed on drivers.id (cleared wholesale — every driver is going)
+    _driver_child text[][] := ARRAY[
+        ['ride_offers','driver_id'], ['payouts','driver_id'], ['bank_accounts','driver_id'],
+        ['subscription_payments','driver_id'], ['driver_subscriptions','driver_id'],
+        ['driver_documents','driver_id'], ['driver_daily_stats','driver_id'],
+        ['driver_activity_log','driver_id'], ['driver_notes','driver_id'],
+        ['driver_bonuses','driver_id'], ['driver_vehicle_history','driver_id'],
+        ['driver_location_history','driver_id'], ['driver_onboarding_reminder_log','driver_id'],
+        ['ride_incentive_claims','driver_id'], ['quest_progress','driver_id']
+    ];
+    -- child tables keyed on users.id (scoped to non-admin so admin data survives)
+    _user_child text[][] := ARRAY[
+        ['saved_addresses','user_id'], ['emergency_contacts','user_id'],
+        ['notifications','user_id'], ['notification_preferences','user_id'],
+        ['push_retry_queue','user_id'], ['push_tokens','user_id'],
+        ['support_tickets','user_id'], ['data_export_requests','user_id'],
+        ['data_export_objects','user_id'], ['complaints','reporter_id'],
+        ['lost_and_found','reporter_id'], ['disputes','user_id'],
+        ['marketing_preferences','user_id'], ['marketing_consent_events','user_id'],
+        ['marketing_suppressions','user_id'], ['loyalty_accounts','user_id'],
+        ['loyalty_transactions','user_id'], ['wallets','user_id'],
+        ['wallet_transactions','user_id'], ['fare_splits','user_id'],
+        ['fare_split_participants','user_id'], ['price_searches','user_id'],
+        ['refresh_tokens','user_id']
+    ];
+    _guard_triggers text[][] := ARRAY[
+        ['driver_insurance_periods','driver_insurance_periods_no_mutate'],
+        ['financial_events','financial_events_no_mutate']
+    ];
+    r text[];
+    g text[];
+    n integer;
+BEGIN
+    CREATE TEMP TABLE _victims ON COMMIT DROP AS
+        SELECT id FROM users WHERE role <> 'admin';
+
+    -- disable append-only guards for this transaction
+    FOREACH g SLICE 1 IN ARRAY _guard_triggers LOOP
+        IF EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+                   WHERE c.relname = g[1] AND t.tgname = g[2]) THEN
+            EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I', g[1], g[2]);
+            RAISE NOTICE 'disabled guard % on %', g[2], g[1];
+        END IF;
+    END LOOP;
+
+    -- AI chat for the non-admin accounts
+    IF to_regclass('public.ai_conversations') IS NOT NULL THEN
+        IF to_regclass('public.ai_messages') IS NOT NULL THEN
+            EXECUTE 'DELETE FROM ai_messages WHERE conversation_id::text IN '
+                 || '(SELECT id::text FROM ai_conversations WHERE user_id::text IN (SELECT id::text FROM _victims))';
+        END IF;
+        EXECUTE 'DELETE FROM ai_conversations WHERE user_id::text IN (SELECT id::text FROM _victims)';
+    END IF;
+
+    -- append-only regulatory ledgers (guards disabled) — wholesale
+    IF to_regclass('public.financial_events') IS NOT NULL THEN
+        EXECUTE 'DELETE FROM financial_events'; END IF;
+    IF to_regclass('public.driver_insurance_periods') IS NOT NULL THEN
+        EXECUTE 'DELETE FROM driver_insurance_periods'; END IF;
+
+    -- ride-keyed children (all rides going)
+    FOREACH r SLICE 1 IN ARRAY _ride_child LOOP
+        IF to_regclass('public.'||r[1]) IS NOT NULL
+           AND EXISTS (SELECT 1 FROM information_schema.columns
+                       WHERE table_schema='public' AND table_name=r[1] AND column_name=r[2]) THEN
+            EXECUTE format('DELETE FROM %I', r[1]);
+            GET DIAGNOSTICS n = ROW_COUNT; RAISE NOTICE 'cleared % : % rows', r[1], n;
+        END IF;
+    END LOOP;
+
+    -- driver-keyed children (all drivers going)
+    FOREACH r SLICE 1 IN ARRAY _driver_child LOOP
+        IF to_regclass('public.'||r[1]) IS NOT NULL
+           AND EXISTS (SELECT 1 FROM information_schema.columns
+                       WHERE table_schema='public' AND table_name=r[1] AND column_name=r[2]) THEN
+            EXECUTE format('DELETE FROM %I', r[1]);
+            GET DIAGNOSTICS n = ROW_COUNT; RAISE NOTICE 'cleared % : % rows', r[1], n;
+        END IF;
+    END LOOP;
+
+    -- user-keyed children (scoped to non-admin so admin rows survive)
+    FOREACH r SLICE 1 IN ARRAY _user_child LOOP
+        IF to_regclass('public.'||r[1]) IS NOT NULL
+           AND EXISTS (SELECT 1 FROM information_schema.columns
+                       WHERE table_schema='public' AND table_name=r[1] AND column_name=r[2]) THEN
+            EXECUTE format('DELETE FROM %I WHERE %I::text IN (SELECT id::text FROM _victims)', r[1], r[2]);
+            GET DIAGNOSTICS n = ROW_COUNT; RAISE NOTICE 'cleared % : % rows', r[1], n;
+        END IF;
+    END LOOP;
+
+    -- null admin back-references so the users delete is not blocked
+    IF to_regclass('public.reconciliation_discrepancies') IS NOT NULL THEN
+        EXECUTE 'UPDATE reconciliation_discrepancies SET resolved_by = NULL '
+             || 'WHERE resolved_by::text IN (SELECT id::text FROM _victims)';
+    END IF;
+
+    -- parents, deepest first: rides -> drivers -> non-admin users
+    EXECUTE 'DELETE FROM rides';
+    GET DIAGNOSTICS n = ROW_COUNT; RAISE NOTICE 'deleted rides : % rows', n;
+    EXECUTE 'DELETE FROM drivers';
+    GET DIAGNOSTICS n = ROW_COUNT; RAISE NOTICE 'deleted drivers : % rows', n;
+    EXECUTE 'DELETE FROM users WHERE id::text IN (SELECT id::text FROM _victims)';
+    GET DIAGNOSTICS n = ROW_COUNT; RAISE NOTICE 'deleted non-admin users : % rows', n;
+
+    -- re-enable the append-only guards before COMMIT
+    FOREACH g SLICE 1 IN ARRAY _guard_triggers LOOP
+        IF EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+                   WHERE c.relname = g[1] AND t.tgname = g[2]) THEN
+            EXECUTE format('ALTER TABLE %I ENABLE TRIGGER %I', g[1], g[2]);
+            RAISE NOTICE 're-enabled guard % on %', g[2], g[1];
+        END IF;
+    END LOOP;
+END $$;
+
+-- Sanity: expect 0 / 0 / 0 and admins preserved
+SELECT count(*) AS rides_left FROM rides;
+SELECT count(*) AS drivers_left FROM drivers;
+SELECT count(*) AS non_admin_users_left FROM users WHERE role <> 'admin';
+SELECT count(*) AS admins_kept FROM users WHERE role = 'admin';
+
+COMMIT;
+*/  -- <<< enable Part 3 (delete this line too)

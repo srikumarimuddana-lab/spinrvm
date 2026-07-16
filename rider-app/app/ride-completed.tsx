@@ -302,8 +302,8 @@ function RideCompletedScreenContent() {
 
       clearRide();
       router.replace('/(tabs)');
-    } catch {
-      showToast('Submit Failed', 'Failed to submit. Please try again.', 'danger');
+    } catch (e) {
+      showToast('Submit Failed', getApiErrorMessage(e, 'Failed to submit. Please try again.'), 'danger');
     } finally {
       setIsSubmitting(false);
       setSubmitPhase('idle');

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { clampToastMessage, TOAST_TITLE_MAX } from '@shared/utils/toastMessage';
 
 export type ToastVariant = 'info' | 'success' | 'warning' | 'danger';
 
@@ -32,7 +33,16 @@ let _id = 0;
 
 export const useToastStore = create<ToastStore>((set, get) => ({
   current: null,
-  show: (toast) => {
+  show: (rawToast) => {
+    // Hard length cap for every caller: the banner renders 1 title line and 2
+    // message lines — clamp here (word-boundary + ellipsis) so no call site
+    // can overflow it. Clamped BEFORE the dedupe compare so a repeat of the
+    // same over-long toast still dedupes.
+    const toast = {
+      ...rawToast,
+      title: clampToastMessage(rawToast.title, TOAST_TITLE_MAX),
+      message: rawToast.message === undefined ? undefined : clampToastMessage(rawToast.message),
+    };
     const now = Date.now();
     const cur = get().current;
     const sameContent =

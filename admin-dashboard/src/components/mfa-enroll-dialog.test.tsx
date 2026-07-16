@@ -59,11 +59,13 @@ describe('MfaEnrollDialog', () => {
     fireEvent.click(screen.getByText('Get Setup Key'));
 
     // Once enrollment resolves, the QR <svg> is rendered from the otpauth URI.
-    expect(await screen.findByText(/Scan with/i)).toBeInTheDocument();
+    // (findByText / getByText throw if absent — asserting not-null keeps the
+    // matcher set tsc-safe without the jest-dom type augmentation.)
+    expect(await screen.findByText(/Scan with/i)).not.toBeNull();
     expect(document.querySelector('svg')).not.toBeNull();
 
     // Manual key remains as a fallback for "can't scan".
-    expect(screen.getByText(SECRET)).toBeInTheDocument();
+    expect(screen.getByText(SECRET)).not.toBeNull();
 
     // The old dead desktop link must be gone.
     expect(screen.queryByText(/Open authenticator link/i)).toBeNull();

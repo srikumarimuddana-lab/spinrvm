@@ -24,6 +24,15 @@
 -- the parent DELETE fail. That is why there is no "keep regulatory data" option
 -- here — keeping them and deleting the account are mutually exclusive.
 --
+-- Two of them are also protected by append-only DB triggers that RAISE on any
+-- DELETE (driver_insurance_periods_no_mutate on driver_insurance_periods;
+-- financial_events_no_mutate on financial_events). Each part below DISABLEs
+-- those two triggers for the duration of its transaction and re-ENABLEs them
+-- before COMMIT — so the guard is only ever off inside the wipe, and any error
+-- rolls back with the guard left intact. Disabling them requires running as the
+-- table OWNER: the Supabase SQL editor / a direct connection as the `postgres`
+-- role works; a restricted role will get "permission denied" on ALTER TABLE.
+--
 -- The COMPLIANT production path is NOT this script — it is migration 216's
 -- purge_pii_retention() flow, which TOMBSTONES an account and only hard-deletes
 -- it after the ~7-year footprint ages out. Use THIS script only against:
@@ -119,11 +128,30 @@ DECLARE
         ['refresh_tokens',          'user_id'],
         ['financial_events',        'user_id']
     ];
+    -- Append-only tamper-evidence triggers (SK Transportation Act) that raise on
+    -- DELETE. They are disabled for THIS transaction only and re-enabled before
+    -- COMMIT; any error rolls the whole thing back and leaves them enabled.
+    -- ⚠️ Disabling these bypasses a regulatory guard — only run on a
+    --    non-production / staging DB or with documented legal sign-off.
+    _guard_triggers text[][] := ARRAY[
+        ['driver_insurance_periods', 'driver_insurance_periods_no_mutate'],
+        ['financial_events',         'financial_events_no_mutate']
+    ];
     r text[];
+    g text[];
     n integer;
 BEGIN
     CREATE TEMP TABLE _victims ON COMMIT DROP AS
         SELECT id FROM users WHERE role = 'driver';
+
+    -- disable append-only guards for this transaction
+    FOREACH g SLICE 1 IN ARRAY _guard_triggers LOOP
+        IF EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+                   WHERE c.relname = g[1] AND t.tgname = g[2]) THEN
+            EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I', g[1], g[2]);
+            RAISE NOTICE 'disabled guard % on %', g[2], g[1];
+        END IF;
+    END LOOP;
 
     -- AI chat (ai_messages -> ai_conversations -> users)
     IF to_regclass('public.ai_conversations') IS NOT NULL THEN
@@ -169,6 +197,15 @@ BEGIN
 
     EXECUTE 'DELETE FROM users WHERE id::text IN (SELECT id::text FROM _victims)';
     GET DIAGNOSTICS n = ROW_COUNT; RAISE NOTICE 'deleted driver users : % rows', n;
+
+    -- re-enable the append-only guards before COMMIT
+    FOREACH g SLICE 1 IN ARRAY _guard_triggers LOOP
+        IF EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+                   WHERE c.relname = g[1] AND t.tgname = g[2]) THEN
+            EXECUTE format('ALTER TABLE %I ENABLE TRIGGER %I', g[1], g[2]);
+            RAISE NOTICE 're-enabled guard % on %', g[2], g[1];
+        END IF;
+    END LOOP;
 END $$;
 
 -- Sanity: expect 0 / 0
@@ -226,11 +263,28 @@ DECLARE
         ['price_searches',          'user_id'],
         ['refresh_tokens',          'user_id']
     ];
+    -- Append-only tamper-evidence triggers (SK Transportation Act) that raise on
+    -- DELETE. Disabled for THIS transaction only and re-enabled before COMMIT.
+    -- ⚠️ Bypasses a regulatory guard — staging / legally-signed-off only.
+    _guard_triggers text[][] := ARRAY[
+        ['driver_insurance_periods', 'driver_insurance_periods_no_mutate'],
+        ['financial_events',         'financial_events_no_mutate']
+    ];
     r text[];
+    g text[];
     n integer;
 BEGIN
     CREATE TEMP TABLE _victims ON COMMIT DROP AS
         SELECT id FROM users WHERE role = 'rider';
+
+    -- disable append-only guards for this transaction
+    FOREACH g SLICE 1 IN ARRAY _guard_triggers LOOP
+        IF EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+                   WHERE c.relname = g[1] AND t.tgname = g[2]) THEN
+            EXECUTE format('ALTER TABLE %I DISABLE TRIGGER %I', g[1], g[2]);
+            RAISE NOTICE 'disabled guard % on %', g[2], g[1];
+        END IF;
+    END LOOP;
 
     -- AI chat
     IF to_regclass('public.ai_conversations') IS NOT NULL THEN
@@ -281,6 +335,15 @@ BEGIN
 
     EXECUTE 'DELETE FROM users WHERE id::text IN (SELECT id::text FROM _victims)';
     GET DIAGNOSTICS n = ROW_COUNT; RAISE NOTICE 'deleted rider users : % rows', n;
+
+    -- re-enable the append-only guards before COMMIT
+    FOREACH g SLICE 1 IN ARRAY _guard_triggers LOOP
+        IF EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+                   WHERE c.relname = g[1] AND t.tgname = g[2]) THEN
+            EXECUTE format('ALTER TABLE %I ENABLE TRIGGER %I', g[1], g[2]);
+            RAISE NOTICE 're-enabled guard % on %', g[2], g[1];
+        END IF;
+    END LOOP;
 END $$;
 
 SELECT count(*) AS rider_users_left FROM users WHERE role = 'rider';

@@ -34,7 +34,7 @@ import { useVehicleTypeStore } from '@shared/store/vehicleTypeStore';
 import SchedulePicker from '../components/SchedulePicker';
 import SkeletonBox from '../components/SkeletonBox';
 import { useResponsive } from '@shared/utils/responsive';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import Analytics from '@shared/analytics';
 import { useScheduledRideReminder } from '../hooks/useScheduledRideReminder';
 import { promoDiscountForEstimate, grandTotalOf } from '../utils/promoDiscount';
@@ -490,7 +490,7 @@ function RideOptionsScreenContent() {
           ],
         });
       } else {
-        showToast('Booking Failed', error.message || 'Failed to book ride. Please try again.', 'danger');
+        showToast('Booking Failed', getApiErrorMessage(error, 'Failed to book ride. Please try again.'), 'danger');
       }
     } finally {
       setIsBooking(false);

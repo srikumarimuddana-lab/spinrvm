@@ -8,6 +8,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
 import { showToast } from '../store/toastStore';
+import { getApiErrorMessage } from '@shared/api/client';
 import ConfirmSheet from '../components/ConfirmSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -58,7 +59,7 @@ export default function ScheduledRidesScreen() {
               cancelReminder(rideId).catch(() => {});
               showToast('Cancelled', 'Your scheduled ride has been cancelled.', 'success');
             } catch (err: any) {
-              showToast('Cancel Failed', 'Failed to cancel your scheduled ride. Please try again.', 'danger');
+              showToast('Cancel Failed', getApiErrorMessage(err, 'Failed to cancel your scheduled ride. Please try again.'), 'danger');
             }
           },
         },

@@ -17,7 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import ConfirmSheet from '../components/ConfirmSheet';
 import CancelReasonSheet from '../components/CancelReasonSheet';
@@ -111,8 +111,8 @@ export default function RideStatusScreen() {
       await cancelRide(reason);
       clearRide();
       router.replace('/(tabs)' as any);
-    } catch {
-      showToast('Could not cancel', 'The server rejected the request. Please try again.', 'danger');
+    } catch (err) {
+      showToast('Could not cancel', getApiErrorMessage(err, 'The server rejected the request. Please try again.'), 'danger');
     }
   };
 

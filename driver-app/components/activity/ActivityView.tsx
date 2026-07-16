@@ -28,6 +28,7 @@ export default function ActivityView() {
   const router = useRouter();
   const {
     earnings,
+    earningsByPeriod,
     rideHistory,
     historyTotal,
     fetchEarnings,
@@ -36,6 +37,9 @@ export default function ActivityView() {
   } = useDriverStore();
 
   const [period, setPeriod] = useState<Period>('today');
+  // Prefer this period's cached earnings so a revisited pill renders instantly;
+  // fall back to the most-recent `earnings` (first render / cache miss).
+  const shownEarnings = earningsByPeriod?.[period] ?? earnings;
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -64,11 +68,13 @@ export default function ActivityView() {
     ) {
       return;
     }
-    // Show the loading state when this period's data isn't on screen yet — the
-    // first load, or a pill change (keep the numbers behind a spinner instead
-    // of leaving the previous period's figures under the new pill). A
-    // same-period background refresh stays silent so the tab opens instantly.
-    if (!hasLoadedRef.current || isPeriodChange) setLoading(true);
+    // Show the spinner only when this period isn't cached yet. A pill change to
+    // a previously-loaded period renders its cached numbers instantly (and
+    // refreshes silently in the background); a never-loaded period shows the
+    // spinner while it fetches. Read the cache via getState() so loadData stays
+    // stable and doesn't retrigger useFocusEffect in a loop.
+    const cached = !!useDriverStore.getState().earningsByPeriod?.[period];
+    if ((!hasLoadedRef.current || isPeriodChange) && !cached) setLoading(true);
     try {
       await Promise.allSettled([
         fetchEarnings(period),
@@ -88,16 +94,16 @@ export default function ActivityView() {
     }, [loadData])
   );
 
-  const totalEarnings = parseMoney(earnings?.total_earnings);
-  const totalTips = parseMoney(earnings?.total_tips);
-  const totalIncentives = parseMoney(earnings?.total_incentives);
+  const totalEarnings = parseMoney(shownEarnings?.total_earnings);
+  const totalTips = parseMoney(shownEarnings?.total_tips);
+  const totalIncentives = parseMoney(shownEarnings?.total_incentives);
   // Quest + referral rewards (driver_bonuses) — distinct from per-ride incentives.
-  const totalBonuses = parseMoney(earnings?.total_bonuses);
+  const totalBonuses = parseMoney(shownEarnings?.total_bonuses);
   // Referral-only slice, shown as its own line; the remainder is quest bonuses.
-  const totalReferralBonuses = parseMoney(earnings?.total_referral_bonuses);
-  const totalTax = parseMoney(earnings?.total_tax);
+  const totalReferralBonuses = parseMoney(shownEarnings?.total_referral_bonuses);
+  const totalTax = parseMoney(shownEarnings?.total_tax);
   const fareEarnings = Math.max(totalEarnings - totalTips - totalIncentives - totalBonuses - totalTax, 0);
-  const periodRideTotal = period === 'all' ? historyTotal : Number(earnings?.total_rides ?? 0);
+  const periodRideTotal = period === 'all' ? historyTotal : Number(shownEarnings?.total_rides ?? 0);
   const hasMoreHistory = rideHistory.length < historyTotal;
 
   const loadMoreHistory = useCallback(async () => {
@@ -331,7 +337,7 @@ export default function ActivityView() {
                 <FontAwesome5 name="car" size={16} color="#ef4444" />
               </View>
               <View>
-                <Text style={styles.statValue}>{earnings?.total_rides || 0}</Text>
+                <Text style={styles.statValue}>{shownEarnings?.total_rides || 0}</Text>
                 <Text style={styles.statLabel}>Total Trips</Text>
               </View>
             </View>
@@ -340,7 +346,7 @@ export default function ActivityView() {
                 <MaterialCommunityIcons name="road-variant" size={18} color="#f59e0b" />
               </View>
               <View>
-                <Text style={styles.statValue}>{parseMoney(earnings?.total_distance_km).toFixed(1)}</Text>
+                <Text style={styles.statValue}>{parseMoney(shownEarnings?.total_distance_km).toFixed(1)}</Text>
                 <Text style={styles.statLabel}>KM Driven</Text>
               </View>
             </View>
@@ -350,7 +356,7 @@ export default function ActivityView() {
               </View>
               <View>
                 <Text style={styles.statValue}>
-                  {Math.round((earnings?.total_duration_minutes || 0) / 60)}h
+                  {Math.round((shownEarnings?.total_duration_minutes || 0) / 60)}h
                 </Text>
                 <Text style={styles.statLabel}>Online Time</Text>
               </View>
@@ -360,7 +366,7 @@ export default function ActivityView() {
                 <Ionicons name="trending-up" size={18} color="#38bdf8" />
               </View>
               <View>
-                <Text style={styles.statValue}>${toMoney(earnings?.average_per_ride)}</Text>
+                <Text style={styles.statValue}>${toMoney(shownEarnings?.average_per_ride)}</Text>
                 <Text style={styles.statLabel}>Avg per Trip</Text>
               </View>
             </View>

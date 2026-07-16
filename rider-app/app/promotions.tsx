@@ -6,7 +6,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -51,7 +51,9 @@ export default function PromotionsScreen() {
       setCode('');
       loadPromos();
     } catch (err: any) {
-      showToast('Invalid Code', err.response?.data?.detail || 'This promo code is not valid.', 'danger');
+      // Neutral title: the failure isn't always a bad code (rate limit,
+      // expired promo, server hiccup) — let the backend's message say why.
+      showToast("Couldn't Apply Code", getApiErrorMessage(err, 'This promo code is not valid.'), 'danger');
     } finally { setApplying(false); }
   };
 

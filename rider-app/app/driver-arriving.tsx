@@ -23,7 +23,7 @@ import MapView, { Marker, Polyline, Polygon, PROVIDER_GOOGLE } from 'react-nativ
 import MapViewDirections from 'react-native-maps-directions';
 import { useRideStore } from '../store/rideStore';
 import { RideStatus } from '../constants/rideStatus';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import ConfirmSheet from '../components/ConfirmSheet';
 import CancelReasonSheet from '../components/CancelReasonSheet';
@@ -233,10 +233,10 @@ function DriverArrivingScreenContent() {
       await cancelRide(reason);
       clearRide();
       router.replace('/(tabs)' as any);
-    } catch {
+    } catch (err) {
       cancelInitiatedRef.current = false;
       setIsCancelling(false);
-      showToast('Cancel Failed', 'Could not cancel the ride. Please try again.', 'danger');
+      showToast('Cancel Failed', getApiErrorMessage(err, 'Could not cancel the ride. Please try again.'), 'danger');
     }
   };
 

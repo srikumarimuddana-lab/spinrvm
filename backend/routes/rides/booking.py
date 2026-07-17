@@ -623,6 +623,7 @@ async def create_ride(
             body.dropoff_lng,
             distance_km,
             _f(total_fare),
+            driver_subtotal=_f(driver_earnings),
             _all_areas=all_areas,
             _matched_area=matched_area,
         )
@@ -775,6 +776,8 @@ async def create_ride(
     ride_data["area_fees_total"] = area_fees_total
     ride_data["tax_amount"] = tax_amount
     ride_data["tax_breakdown"] = fees_result.get("tax_breakdown", {})
+    if fees_result.get("tax_split"):
+        ride_data["tax_split"] = fees_result["tax_split"]
     ride_data["grand_total"] = grand_total
     if idempotency_key:
         ride_data["idempotency_key"] = idempotency_key

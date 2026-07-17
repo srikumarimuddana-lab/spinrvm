@@ -795,6 +795,7 @@ async def calculate_all_fees(
     subtotal: float,
     ride_time_hour: Optional[int] = None,
     *,
+    driver_subtotal: Optional[float] = None,
     _all_areas: Optional[List[Dict[str, Any]]] = None,
     _matched_area: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
@@ -807,6 +808,14 @@ async def calculate_all_fees(
     unchanged.
 
     Returns {'fees': [...], 'fees_total': float, 'tax_amount': float, 'tax_breakdown': {...}, 'grand_total': float}
+
+    When ``driver_subtotal`` is given (the driver-attributable fare portion:
+    base + distance + time, i.e. FareBreakdown.driver_earnings), the result
+    also carries ``tax_split`` attributing each tax between the driver (who
+    remits GST on their fare share to CRA) and the platform (GST on booking /
+    airport / area fees — Spinr's own remittance). The driver amount is
+    quantized directly and the platform amount is the exact remainder, so
+    driver + platform always equals the receipt's tax line to the cent.
     """
     from datetime import datetime as dt
     from datetime import timezone as _tz
@@ -931,12 +940,39 @@ async def calculate_all_fees(
     tax_breakdown: Dict[str, Dict[str, float]] = {}
     tax_total = Decimal("0")
 
+    # Driver/platform attribution base. The driver's taxable share is their
+    # fare portion (base + distance + time); everything else in the taxable
+    # base (booking fee, airport fee, area fees) is platform revenue whose
+    # GST Spinr remits itself.
+    driver_base: Optional[Decimal] = None
+    if driver_subtotal is not None:
+        driver_base = _money(driver_subtotal)
+        if driver_base < 0:
+            driver_base = Decimal("0")
+        if driver_base > taxable_amount:
+            driver_base = taxable_amount
+    driver_tax_total = Decimal("0")
+    platform_tax_total = Decimal("0")
+    tax_split_driver: Dict[str, float] = {}
+    tax_split_platform: Dict[str, float] = {}
+
     def _apply_tax(label: str, rate_value: Any) -> None:
-        nonlocal tax_total
+        nonlocal tax_total, driver_tax_total, platform_tax_total
         rate = _money(rate_value)
         amount = _q2(taxable_amount * rate / Decimal("100"))
         tax_breakdown[label] = {"rate": float(rate), "amount": float(amount)}
         tax_total += amount
+        if driver_base is not None:
+            # Quantize the driver share; platform gets the exact remainder so
+            # the split always sums to the receipt's tax line (no penny drift).
+            driver_amt = _q2(driver_base * rate / Decimal("100"))
+            if driver_amt > amount:
+                driver_amt = amount
+            platform_amt = amount - driver_amt
+            tax_split_driver[label] = float(driver_amt)
+            tax_split_platform[label] = float(platform_amt)
+            driver_tax_total += driver_amt
+            platform_tax_total += platform_amt
 
     if matched_area.get("hst_enabled"):
         _apply_tax("HST", matched_area.get("hst_rate", 0))
@@ -948,6 +984,15 @@ async def calculate_all_fees(
 
     result["tax_amount"] = float(_q2(tax_total))
     result["tax_breakdown"] = tax_breakdown
+    if driver_base is not None:
+        result["tax_split"] = {
+            "driver": tax_split_driver,
+            "platform": tax_split_platform,
+            "driver_total": float(_q2(driver_tax_total)),
+            "platform_total": float(_q2(platform_tax_total)),
+            "driver_taxable_base": float(_q2(driver_base)),
+            "platform_taxable_base": float(_q2(taxable_amount - driver_base)),
+        }
 
     return result
 

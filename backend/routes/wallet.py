@@ -166,12 +166,14 @@ async def top_up_wallet(
 
     stripe_customer_id = user.get("stripe_customer_id")
     if not stripe_customer_id:
-        customer = stripe.Customer.create(
-            email=user.get("email"),
-            name=f"{user.get('first_name', '')} {user.get('last_name', '')}".strip(),
-            metadata={"user_id": current_user["id"]},
-            api_key=stripe_secret,
-            idempotency_key=f"cus-create-{current_user['id']}",
+        customer = await asyncio.to_thread(
+            lambda: stripe.Customer.create(
+                email=user.get("email"),
+                name=f"{user.get('first_name', '')} {user.get('last_name', '')}".strip(),
+                metadata={"user_id": current_user["id"]},
+                api_key=stripe_secret,
+                idempotency_key=f"cus-create-{current_user['id']}",
+            )
         )
         stripe_customer_id = customer.id
         await db_supabase.update_one(

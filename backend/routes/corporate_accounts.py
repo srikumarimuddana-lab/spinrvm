@@ -5,6 +5,7 @@ This module implements CRUD operations for corporate accounts that can be used
 for business rides and expense management.
 """
 
+import asyncio
 import logging
 from decimal import Decimal
 from typing import List, Optional
@@ -334,12 +335,14 @@ async def kyb_review(
             if stripe_secret:
                 import stripe
 
-                customer = stripe.Customer.create(
-                    email=row.get("billing_email"),
-                    name=row.get("legal_name") or row.get("name"),
-                    metadata={"corporate_account_id": normalized_id},
-                    api_key=stripe_secret,
-                    idempotency_key=f"cus-create-corp-{normalized_id}",
+                customer = await asyncio.to_thread(
+                    lambda: stripe.Customer.create(
+                        email=row.get("billing_email"),
+                        name=row.get("legal_name") or row.get("name"),
+                        metadata={"corporate_account_id": normalized_id},
+                        api_key=stripe_secret,
+                        idempotency_key=f"cus-create-corp-{normalized_id}",
+                    )
                 )
                 await update_corporate_stripe_customer_id(company_id=normalized_id, stripe_customer_id=customer.id)
 

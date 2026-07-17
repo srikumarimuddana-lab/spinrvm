@@ -532,13 +532,37 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             // gone. Either way the right UX is to clear the incoming offer,
             // drop back to `idle`, and surface a short, non-alarming toast —
             // NOT leave the driver stuck staring at the accept/decline panel.
+            // 409 is the atomic-claim conflict (SpinrException RESOURCE_CONFLICT,
+            // "Ride already accepted by another driver") — previously unhandled
+            // here, which left a genuine race-loser stuck on the offer panel
+            // with a raw error string.
             const alreadyTakenDetail = /not assigned|already|no longer|cancelled|canceled/i.test(detail);
-            const alreadyTakenStatus = status === 404 || (status === 400 && alreadyTakenDetail);
+            const alreadyTakenStatus =
+                status === 404 || status === 409 || (status === 400 && alreadyTakenDetail);
 
             if (!alreadyTakenStatus) {
                 recordNonFatal(err, { store: 'driverStore', action: 'acceptRide' });
             }
             if (alreadyTakenStatus) {
+                // Defense-in-depth: a duplicate accept request (double-tap,
+                // notification action + in-app tap, network retry) can 409 even
+                // though THIS driver won the ride. Verify against the server
+                // before telling the driver someone else took it — the false
+                // toast was misleading winning drivers.
+                try {
+                    await get().fetchActiveRide();
+                    const st = get();
+                    const ownsThisRide =
+                        st.activeRide?.ride?.id === rideId &&
+                        ['navigating_to_pickup', 'arrived_at_pickup', 'trip_in_progress'].includes(st.rideState);
+                    // fetchActiveRide already set + persisted the post-accept
+                    // state — nothing to clean up, just skip the false toast.
+                    if (ownsThisRide) {
+                        return;
+                    }
+                } catch {
+                    // Verification fetch failed — fall through to the taken toast.
+                }
                 set({
                     rideState: 'idle',
                     incomingRide: null,

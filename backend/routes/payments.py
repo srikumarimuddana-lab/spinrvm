@@ -131,10 +131,12 @@ async def get_or_create_stripe_customer(user_id: str, stripe_secret: str):
         # our user. Avoiding the transfer keeps PII inside the Canadian region;
         # contact details can be attached later only if a specific Stripe flow
         # (e.g. a dispute) actually requires them.
-        customer = stripe.Customer.create(
-            metadata={"user_id": user_id},
-            api_key=stripe_secret,
-            idempotency_key=f"cus-create-{user_id}",
+        customer = await asyncio.to_thread(
+            lambda: stripe.Customer.create(
+                metadata={"user_id": user_id},
+                api_key=stripe_secret,
+                idempotency_key=f"cus-create-{user_id}",
+            )
         )
         stripe_customer_id = customer.id
         await db_supabase.update_one("users", {"id": user_id}, {"stripe_customer_id": stripe_customer_id})
@@ -498,11 +500,13 @@ async def create_setup_intent(request: Request = None, current_user: dict = Depe
 
         import time as _time
 
-        setup_intent = stripe.SetupIntent.create(
-            customer=customer_id,
-            payment_method_types=["card"],
-            api_key=stripe_secret,
-            idempotency_key=f"setup-intent-{current_user['id']}-{int(_time.time() // 60)}",
+        setup_intent = await asyncio.to_thread(
+            lambda: stripe.SetupIntent.create(
+                customer=customer_id,
+                payment_method_types=["card"],
+                api_key=stripe_secret,
+                idempotency_key=f"setup-intent-{current_user['id']}-{int(_time.time() // 60)}",
+            )
         )
 
         return {
@@ -536,10 +540,12 @@ async def get_payment_methods(request: Request = None, current_user: dict = Depe
         if not stripe_customer_id:
             return {"methods": [], "mock": False}
 
-        methods = stripe.PaymentMethod.list(
-            customer=stripe_customer_id,
-            type="card",
-            api_key=stripe_secret,
+        methods = await asyncio.to_thread(
+            lambda: stripe.PaymentMethod.list(
+                customer=stripe_customer_id,
+                type="card",
+                api_key=stripe_secret,
+            )
         )
 
         return {
@@ -596,7 +602,9 @@ async def get_cards(request: Request = None, current_user: dict = Depends(get_cu
 
     try:
         customer_id = await get_or_create_stripe_customer(current_user["id"], stripe_secret)
-        methods = stripe.PaymentMethod.list(customer=customer_id, type="card", api_key=stripe_secret)
+        methods = await asyncio.to_thread(
+            lambda: stripe.PaymentMethod.list(customer=customer_id, type="card", api_key=stripe_secret)
+        )
         user = await db_supabase.get_user_by_id(current_user["id"])
         default_pm = user.get("default_payment_method") if user else None
         return [
@@ -738,27 +746,33 @@ async def add_card(request: Request = None, current_user: dict = Depends(get_cur
 
         # Attach the client-tokenized PaymentMethod to the customer.
         # The PAN never touched our server — the token came from Stripe.js.
-        pm = stripe.PaymentMethod.attach(payment_method_id, customer=customer_id, api_key=stripe_secret)
+        pm = await asyncio.to_thread(
+            lambda: stripe.PaymentMethod.attach(payment_method_id, customer=customer_id, api_key=stripe_secret)
+        )
 
         # Confirm with SetupIntent — saves card for future off-session use.
 
-        si = stripe.SetupIntent.create(
-            customer=customer_id,
-            payment_method=pm.id,
-            confirm=True,
-            automatic_payment_methods={"enabled": True, "allow_redirects": "never"},
-            api_key=stripe_secret,
-            idempotency_key=f"setup-card-{current_user['id']}-{pm.id}",
+        si = await asyncio.to_thread(
+            lambda: stripe.SetupIntent.create(
+                customer=customer_id,
+                payment_method=pm.id,
+                confirm=True,
+                automatic_payment_methods={"enabled": True, "allow_redirects": "never"},
+                api_key=stripe_secret,
+                idempotency_key=f"setup-card-{current_user['id']}-{pm.id}",
+            )
         )
 
         # Set as default if first card
         user = await db_supabase.get_user_by_id(current_user["id"])
         if not user.get("default_payment_method"):
             await db_supabase.update_one("users", {"id": current_user["id"]}, {"default_payment_method": pm.id})
-            stripe.Customer.modify(
-                customer_id,
-                invoice_settings={"default_payment_method": pm.id},
-                api_key=stripe_secret,
+            await asyncio.to_thread(
+                lambda: stripe.Customer.modify(
+                    customer_id,
+                    invoice_settings={"default_payment_method": pm.id},
+                    api_key=stripe_secret,
+                )
             )
 
         logger.info(f"Card added: {pm.card.brand} ****{pm.card.last4} | SetupIntent: {si.id} ({si.status})")
@@ -808,18 +822,18 @@ async def set_default_card(
             user = await db_supabase.get_user_by_id(current_user["id"])
             cid = user.get("stripe_customer_id")
             if cid:
-                stripe.Customer.modify(
-                    cid,
-                    invoice_settings={"default_payment_method": card_id},
-                    api_key=stripe_secret,
+                await asyncio.to_thread(
+                    lambda: stripe.Customer.modify(
+                        cid,
+                        invoice_settings={"default_payment_method": card_id},
+                        api_key=stripe_secret,
+                    )
                 )
         except Exception as e:
             logger.error(f"Stripe set default failed for card {card_id}: {e}", exc_info=True)
             raise HTTPException(status_code=502, detail="Could not update your default card. Please try again.") from e
 
     await db_supabase.update_one("users", {"id": current_user["id"]}, {"default_payment_method": card_id})
-
-    import asyncio
 
     asyncio.create_task(
         _audit_log_user(
@@ -851,7 +865,7 @@ async def delete_card(
     stripe_secret = settings.get("stripe_secret_key", "")
     if stripe_secret:
         try:
-            stripe.PaymentMethod.detach(card_id, api_key=stripe_secret)
+            await asyncio.to_thread(lambda: stripe.PaymentMethod.detach(card_id, api_key=stripe_secret))
         except Exception as e:
             logger.error(f"Stripe detach failed for card {card_id}: {e}", exc_info=True)
             raise HTTPException(status_code=502, detail="Could not remove your card. Please try again.") from e
@@ -918,10 +932,12 @@ async def create_payment_sheet(
         # otherwise silently falls back to the SDK's bundled version.
         # ACTION REQUIRED when bumping STRIPE_API_VERSION: update the Stripe
         # dashboard webhook endpoint API version to match.
-        ephemeral_key = stripe.EphemeralKey.create(
-            customer=customer_id,
-            stripe_version=STRIPE_API_VERSION,
-            api_key=stripe_secret,
+        ephemeral_key = await asyncio.to_thread(
+            lambda: stripe.EphemeralKey.create(
+                customer=customer_id,
+                stripe_version=STRIPE_API_VERSION,
+                api_key=stripe_secret,
+            )
         )
 
         if body.client_idempotency_key:

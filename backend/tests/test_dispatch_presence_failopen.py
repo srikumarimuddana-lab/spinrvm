@@ -53,11 +53,16 @@ def _make_driver(driver_id: str) -> dict:
     }
 
 
-async def _run_match(presence_result, drivers, ranked_pools, mget_raises=False):
+async def _run_match(presence_result, drivers, ranked_pools, mget_raises=False, redis_configured=False):
     """Drive match_driver_to_ride with a stubbed presence store.
 
     ``mget_raises`` makes the batched offer-skip ``redis_mget`` raise, modelling
     a configured-but-unavailable Redis (the call re-raises in that state).
+
+    ``redis_configured`` makes ``_get_redis()`` return a truthy client so the
+    dispatch path treats an empty-but-reachable present set as authoritative
+    (all ghosts). Default False models the in-process dev/test dict (no
+    REDIS_URL), where an empty set is not authoritative and dispatch fails open.
 
     ``ranked_pools`` collects the candidate list that survives the presence
     filter and reaches filter_and_rank_drivers.
@@ -97,6 +102,11 @@ async def _run_match(presence_result, drivers, ranked_pools, mget_raises=False):
             side_effect=(RuntimeError("redis down") if mget_raises else None),
             return_value=(None if mget_raises else [None] * max(len(drivers), 1)),
         ),
+        patch(
+            "backend.utils.redis_client._get_redis",
+            new_callable=AsyncMock,
+            return_value=(object() if redis_configured else None),
+        ),
     ):
         await match_driver_to_ride("ride-1", ride=ride)
 
@@ -119,24 +129,23 @@ async def test_redis_unreachable_does_not_empty_pool(mock_supabase_client):
 
 
 @pytest.mark.anyio
-async def test_reachable_empty_set_fails_open(mock_supabase_client):
-    """reachable=True with an empty set is ambiguous (all-ghost / bootstrap /
-    dev in-process dict). The primary path fails open and keeps DB-online
-    drivers — same as DispatchService.find_candidate_drivers — rather than
-    report a false "no drivers". The accept-time atomic claim is the ghost
-    backstop. This also preserves the many primary-path tests that exercise
+async def test_empty_set_no_redis_fails_open(mock_supabase_client):
+    """reachable=True + empty set with NO Redis configured (in-process dev/test
+    dict) is not authoritative — the dict is empty until a heartbeat is
+    recorded. Fail open and keep DB-online drivers rather than report a false
+    "no drivers". This also preserves the many primary-path suites that exercise
     match_driver_to_ride without seeding presence."""
     drivers = [_make_driver("driver-1")]
     ranked_pools: list = []
     before = _counter_total("spinr_dispatch_presence_filter_failed_total")
 
-    await _run_match((set(), True), drivers, ranked_pools)
+    await _run_match((set(), True), drivers, ranked_pools, redis_configured=False)
 
     assert ranked_pools, "ranking never ran — dispatch aborted before offer stage"
     assert {d["id"] for d in ranked_pools[0]} == {"driver-1"}, (
-        "reachable-but-empty presence must not empty the pool (fail open)"
+        "empty in-process presence must not empty the pool (fail open)"
     )
-    # An empty-but-reachable set is not a degradation — no metric bump.
+    # In-process empty set is not a degradation — no metric bump.
     assert _counter_total("spinr_dispatch_presence_filter_failed_total") == before
 
 
@@ -150,6 +159,23 @@ async def test_reachable_partial_set_filters_to_present(mock_supabase_client):
 
     assert ranked_pools, "ranking never ran — dispatch aborted before offer stage"
     assert {d["id"] for d in ranked_pools[0]} == {"driver-live"}
+
+
+@pytest.mark.anyio
+async def test_empty_set_with_redis_configured_filters_all_ghosts(mock_supabase_client):
+    """reachable=True + empty set WITH Redis configured and answering is
+    authoritative: every candidate's heartbeat has expired (all ghosts). The
+    pool must be emptied so the cascade / no-drivers retry fires immediately,
+    instead of offering to phones that can't receive (Codex P1)."""
+    drivers = [_make_driver("driver-ghost-1"), _make_driver("driver-ghost-2")]
+    ranked_pools: list = []
+
+    await _run_match((set(), True), drivers, ranked_pools, redis_configured=True)
+
+    # No ghost may reach ranking/offer, whether the empty pool short-circuits
+    # before ranking or reaches it empty. Robust to either control flow.
+    ranked_ids = {d["id"] for pool in ranked_pools for d in pool}
+    assert ranked_ids == set(), f"authoritative-empty presence let ghosts through: {ranked_ids}"
 
 
 @pytest.mark.anyio

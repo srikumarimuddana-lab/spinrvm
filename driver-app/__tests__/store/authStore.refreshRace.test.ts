@@ -247,6 +247,39 @@ describe('authStore.refreshTokens — rotation-race recovery', () => {
     expect(mockSetSuppress).toHaveBeenLastCalledWith(false);
   });
 
+  it('tears down an active session when no refresh token exists (auth limbo guard)', async () => {
+    // The interceptor's G2 backstop no longer fires once a refresh was
+    // attempted, so refreshTokens itself must clear an unrecoverable session
+    // (active token/user but no refresh token anywhere).
+    useAuthStore.setState({ token: 'orphan-access', refreshToken: null });
+    // Nothing in storage either.
+
+    const ok = await useAuthStore.getState().refreshTokens();
+    // logout() is fire-and-forget (awaiting it inside refreshTokens can
+    // deadlock behind the interceptor's in-flight refresh) — let it settle.
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(ok).toBe(false);
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(useAuthStore.getState().token).toBeNull();
+    expect(useAuthStore.getState().user).toBeNull();
+  });
+
+  it('is a no-op with no refresh token and no active session (cold start)', async () => {
+    const SecureStore = require('expo-secure-store');
+    // Call history persists across tests in this file — reset before asserting.
+    (SecureStore.deleteItemAsync as jest.Mock).mockClear();
+
+    const ok = await useAuthStore.getState().refreshTokens();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(ok).toBe(false);
+    expect(mockPost).not.toHaveBeenCalled();
+    // No teardown side effects — nothing was cleared because nothing was set.
+    expect(SecureStore.deleteItemAsync).not.toHaveBeenCalled();
+  });
+
   it('keeps the session on a transient (5xx) refresh failure', async () => {
     useAuthStore.setState({ refreshToken: 'live-token', token: 'old-access' });
     mockSecureStoreBacking['refresh_token'] = 'live-token';

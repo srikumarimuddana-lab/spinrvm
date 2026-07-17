@@ -256,7 +256,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // background already performed instead of replaying a stale in-memory
     // token (which the backend then 401s as a benign rotation race).
     let candidate = (await storage.getItem('refresh_token')) ?? get().refreshToken ?? null;
-    if (!candidate) return false;
+    if (!candidate) {
+      // No refresh token but an active session: the session cannot be
+      // recovered, so tear it down here — the interceptor's G2 backstop no
+      // longer fires once a refresh was attempted, and without this the user
+      // would sit in auth limbo (API calls 401ing behind a live-looking UI).
+      // NOT awaited: logout()'s go-offline PUT can itself 401 and queue
+      // behind the interceptor's in-flight _refreshPromise — which is this
+      // very call — so awaiting would deadlock every queued request.
+      // Cold-start initialize() is unaffected (it only refreshes when a
+      // stored refresh token exists).
+      if (get().token || get().user) {
+        void get().logout();
+      }
+      return false;
+    }
 
     // Own the sign-out decision: a 401 from /auth/refresh during this attempt
     // must not auto-sign-out at the interceptor (see setSuppressRefreshSignOut)

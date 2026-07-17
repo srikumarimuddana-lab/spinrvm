@@ -3,6 +3,7 @@
 import asyncio
 import importlib
 import sys
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -155,3 +156,10 @@ def test_default_limiter_uses_async_storage_and_records_degradation(monkeypatch)
     module._record_storage_error("/rides", ConnectionError("redis unavailable"), False)
     after = metrics.snapshot()["counters"]["spinr_rate_limit_storage_errors_total"][labels]
     assert after == before + 1
+
+
+def test_admin_auth_does_not_construct_a_sync_slowapi_limiter() -> None:
+    source = (Path(__file__).parents[1] / "routes" / "admin" / "auth.py").read_text(encoding="utf-8")
+    assert "from slowapi import Limiter" not in source
+    assert "limiter = Limiter(" not in source
+    assert "get_remote_address(" not in source

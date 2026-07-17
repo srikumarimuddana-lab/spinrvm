@@ -17,6 +17,7 @@ from ._deps import (  # noqa: F401
     api_rate_limit,
     build_earnings_snapshot,
     datetime,
+    driver_tax_portion,
     get_current_user,
     logger,
     ride_action_limit,
@@ -252,7 +253,7 @@ async def rider_complete_ride(
                     fare=_fare_d,
                     tip=ride.get("tip_amount") or 0,
                     incentive=_rider_incentive_total,
-                    tax=ride.get("tax_amount") or 0,
+                    tax=driver_tax_portion(ride),
                     cancel_fee=ride.get("cancellation_fee_driver") or 0,
                 )
             },

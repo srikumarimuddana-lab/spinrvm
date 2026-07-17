@@ -22,6 +22,7 @@ from ._deps import (  # noqa: F401
     datetime,
     db_error_text,
     db_supabase,
+    driver_tax_portion,
     flush_driver_breadcrumbs,
     get_current_user,
     logger,
@@ -657,7 +658,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             fare=_fare_d,
             tip=ride.get("tip_amount") or 0,
             incentive=_total_bonus,
-            tax=ride.get("tax_amount") or 0,
+            tax=driver_tax_portion(ride),
             cancel_fee=ride.get("cancellation_fee_driver") or 0,
         )
         await db_supabase.update_one("rides", {"id": ride_id}, {"driver_earnings_snapshot": _snapshot})

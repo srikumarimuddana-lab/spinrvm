@@ -20,6 +20,21 @@ except ImportError:
     from utils.money import Money, to_decimal  # type: ignore
 
 
+def driver_tax_portion(ride: Dict[str, Any]) -> Any:
+    """The driver-attributable tax component for a ride's earnings.
+
+    Rides booked after migration 233 carry ``tax_split``: the driver receives
+    only the GST on their fare share (base + distance + time) — the platform
+    portion (GST on booking/airport/area fees) is retained and remitted by
+    Spinr via Stripe Tax. Legacy rides without a split keep the historical
+    behaviour of attributing the full ``tax_amount`` to the driver.
+    """
+    split = ride.get("tax_split")
+    if isinstance(split, dict) and split.get("driver_total") is not None:
+        return split.get("driver_total") or 0
+    return ride.get("tax_amount") or 0
+
+
 def build_earnings_snapshot(
     fare: "Money | None",
     tip: "Money | None" = 0,

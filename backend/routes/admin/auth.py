@@ -9,8 +9,6 @@ import jwt
 import pyotp
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 
 try:
     from ... import db_supabase
@@ -18,6 +16,8 @@ try:
     from ...dependencies import JWT_AUD_ADMIN, get_admin_user
     from ...utils.audit_logger import log_admin_action
     from ...utils.password import hash_password, verify_password
+    from ...utils.rate_limiter import default_limiter as limiter
+    from ...utils.rate_limiter import get_real_client_ip
     from ...utils.redis_client import (
         redis_delete,
         redis_expire,
@@ -37,6 +37,8 @@ except ImportError:
     from dependencies import JWT_AUD_ADMIN, get_admin_user
     from utils.audit_logger import log_admin_action
     from utils.password import hash_password, verify_password
+    from utils.rate_limiter import default_limiter as limiter
+    from utils.rate_limiter import get_real_client_ip
     from utils.redis_client import (
         redis_delete,
         redis_expire,
@@ -55,11 +57,8 @@ db = db_supabase  # legacy alias
 
 logger = logging.getLogger(__name__)
 
-# Per-router rate limiter. Admin login is a high-value brute-force
-# target (one correct hit → full super-admin access), so we cap it
-# to 5 attempts per minute per IP. Matches the pattern already used
-# for the rider/driver OTP endpoint in routes/auth.py.
-limiter = Limiter(key_func=get_remote_address)
+# Admin auth shares the distributed async limiter. Its /auth/ scope fails
+# closed if Redis is unavailable, rather than weakening brute-force controls.
 
 # Per-account lockout (A-P3-2) — 5 failures within the sliding window
 # triggers a 24-hour lockout regardless of IP (defends against distributed
@@ -315,7 +314,7 @@ async def admin_login(request: Request, response: Response, body: LoginRequest):
     from ``request`` to ``body`` to free up the name.
     """
     user_agent = request.headers.get("user-agent", "")
-    client_ip = get_remote_address(request)
+    client_ip = get_real_client_ip(request)
 
     # Per-account lockout (F-21): reject before touching credentials so that
     # timing differences cannot reveal whether an account exists.
@@ -482,7 +481,7 @@ async def admin_refresh(request: Request, body: RefreshRequest):
         token_version = int(staff.get("token_version") or 0)
 
     user_agent = request.headers.get("user-agent", "")
-    client_ip = get_remote_address(request)
+    client_ip = get_real_client_ip(request)
 
     new_raw, _, refresh_expires_at = await issue_refresh_token(
         user_id,
@@ -996,7 +995,7 @@ async def admin_mfa_confirm(
         return {"backup_codes": plaintext_codes}
 
     user_agent = request.headers.get("user-agent", "")
-    client_ip = get_remote_address(request)
+    client_ip = get_real_client_ip(request)
     modules = staff.get("modules", ["dashboard"])
     token, access_expires_at = _mint_admin_access_token(
         user_id=staff["id"],
@@ -1119,7 +1118,7 @@ async def admin_mfa_challenge(request: Request, body: MfaChallengeRequest):
         await db_supabase.update_one("admin_staff", {"id": user_id}, {"mfa_backup_codes": updated_codes})
     await _clear_totp_failures(user_id)
     user_agent = request.headers.get("user-agent", "")
-    client_ip = get_remote_address(request)
+    client_ip = get_real_client_ip(request)
     modules = staff.get("modules", ["dashboard"])
     token, access_expires_at = _mint_admin_access_token(
         user_id=staff["id"],
@@ -1179,7 +1178,7 @@ async def break_glass_access(request: Request, body: BreakGlassRequest):
       Store BREAK_GLASS_TOKEN_HASH=<hash> in the environment.
       Keep the raw token in an offline vault (1Password, Vault, etc.).
     """
-    client_ip = get_remote_address(request)
+    client_ip = get_real_client_ip(request)
     user_agent = request.headers.get("user-agent", "unknown")
 
     # 1. Feature-gate: disabled unless hash is configured

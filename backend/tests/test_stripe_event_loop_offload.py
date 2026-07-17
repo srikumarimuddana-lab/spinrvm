@@ -65,7 +65,17 @@ async def test_customer_creation_yields_to_event_loop() -> None:
 
 
 def test_all_payments_stripe_sdk_calls_are_offloaded() -> None:
-    source_path = Path(__file__).parents[1] / "routes" / "payments.py"
+    assert _blocking_stripe_lines("payments.py") == []
+
+
+@pytest.mark.parametrize("route_file", ["wallet.py", "corporate_accounts.py"])
+def test_customer_creation_routes_offload_stripe(route_file: str) -> None:
+    blocking_calls = _blocking_stripe_lines(route_file)
+    assert blocking_calls == [], f"{route_file} blocks on Stripe SDK calls at lines {blocking_calls}"
+
+
+def _blocking_stripe_lines(route_file: str, stripe_name: str = "stripe") -> list[int]:
+    source_path = Path(__file__).parents[1] / "routes" / route_file
     tree = ast.parse(source_path.read_text(encoding="utf-8"))
     parents: dict[ast.AST, ast.AST] = {}
     for parent in ast.walk(tree):
@@ -81,7 +91,7 @@ def test_all_payments_stripe_sdk_calls_are_offloaded() -> None:
             isinstance(func, ast.Attribute)
             and isinstance(func.value, ast.Attribute)
             and isinstance(func.value.value, ast.Name)
-            and func.value.value.id == "stripe"
+            and func.value.value.id == stripe_name
         ):
             continue
 
@@ -102,4 +112,4 @@ def test_all_payments_stripe_sdk_calls_are_offloaded() -> None:
         ):
             blocking_calls.append(node.lineno)
 
-    assert blocking_calls == [], f"Stripe SDK calls still run on the event loop at lines {blocking_calls}"
+    return blocking_calls

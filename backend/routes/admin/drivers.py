@@ -299,6 +299,14 @@ async def admin_get_drivers(
             {
                 **d,
                 "name": _user_display_name(u) or d.get("name"),
+                # Prefer the account's first/last over the drivers mirror (which
+                # the UI renders). The mirror can hold a stale or placeholder
+                # value — e.g. a legacy "Driver" — so a correct account name must
+                # win. Mirrors admin_get_driver_stats. Fall back to the mirror,
+                # but drop the generic "Driver" placeholder rather than show it.
+                "first_name": (u.get("first_name") if u else None)
+                or (None if d.get("first_name") == "Driver" else d.get("first_name")),
+                "last_name": (u.get("last_name") if u else None) or d.get("last_name"),
                 "email": u.get("email") if u else None,
                 "phone": u.get("phone") if u else d.get("phone"),
                 "profile_image_status": (u.get("profile_image_status") if u else None),
@@ -1092,6 +1100,16 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
 
     user_updates = {k: v for k, v in filtered.items() if k in user_fields}
     driver_updates = {k: v for k, v in filtered.items() if k in driver_fields}
+
+    # These drivers columns are `TEXT NOT NULL DEFAULT ''` (supabase_schema.sql),
+    # but the admin form posts an empty/absent vehicle field as JSON null.
+    # Writing null violates the not-null constraint (23502) and 500s the whole
+    # edit for any driver without full vehicle details (e.g. a pending driver who
+    # hasn't entered a vehicle yet). Coalesce an explicit null back to the column
+    # default so clearing a field stores '' instead of blowing up the update.
+    for _col in ("vehicle_make", "vehicle_model", "vehicle_color", "license_plate"):
+        if _col in driver_updates and driver_updates[_col] is None:
+            driver_updates[_col] = ""
 
     # Keep the legacy `drivers.name` atom in sync when either name part changes,
     # since enrichment falls back to it when there is no linked user row.

@@ -51,9 +51,15 @@ export default function BecomeDriverScreen() {
   const [currentStep, setCurrentStep] = useState(0);
 
   // Personal Info
-  const [firstName, setFirstName] = useState(user?.first_name || '');
-  const [lastName, setLastName] = useState(user?.last_name || '');
-  const [email, setEmail] = useState(user?.email || '');
+  // Start blank so the driver enters their own name/email during registration.
+  // We deliberately do NOT pre-fill from the logged-in account: a signup only
+  // needs a phone number, so the account's first/last/email are often stale or
+  // placeholder-looking values (e.g. "John Doe" / "john@gmail.com") that then
+  // showed up as if they were real, filled-in fields. An in-progress draft
+  // (loadDraft) still restores whatever the driver typed themselves.
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [email, setEmail] = useState('');
   const [gender, setGender] = useState(user?.gender || '');
   const [city, setCity] = useState(user?.city || 'Saskatoon');
   const [serviceAreaId, setServiceAreaId] = useState('');
@@ -221,17 +227,12 @@ export default function BecomeDriverScreen() {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
       const data = await response.json();
-      let types = Array.isArray(data) ? data : [];
-      // A service area with no fare configs filters out every type
-      // (backend returns 200 + []). Fall back to the unfiltered active
-      // list so onboarding isn't blocked by missing fare configuration.
-      if (types.length === 0) {
-        const fallback = await fetch(`${SpinrConfig.backendUrl}/api/v1/vehicle-types`);
-        if (fallback.ok) {
-          const fallbackData = await fallback.json();
-          if (Array.isArray(fallbackData)) types = fallbackData;
-        }
-      }
+      const types = Array.isArray(data) ? data : [];
+      // Show only the vehicle types configured for the selected service area.
+      // An empty result used to fall back to the unfiltered global list, which
+      // surfaced every seeded type (Economy / Premium / Van / XL) regardless of
+      // the area — the bug drivers reported. The empty state below handles a
+      // genuinely unconfigured area instead of masking it.
       setVehicleTypes(types);
     } catch (e: any) {
       console.log('Error fetching vehicle types:', e);

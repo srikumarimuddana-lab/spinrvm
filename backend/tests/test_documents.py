@@ -452,6 +452,89 @@ class TestDocumentRegressions:
             result = await get_driver_documents(current_user=mock_user)
             assert result == [], "Expected empty list when driver profile is absent, not an exception"
 
+    @pytest.mark.asyncio
+    async def test_link_document_no_driver_autocreates_not_403(self):
+        """Regression: POST /drivers/documents must NOT 403 "User is not a driver"
+        when the authenticated user has no drivers row yet (mid-onboarding).
+
+        The endpoint used to guard on `current_user["is_driver"]`, but is_driver
+        is false precisely when the drivers row is missing — the same condition
+        the auto-create block below the guard was written to handle. The guard
+        therefore made auto-create unreachable and every onboarding driver got a
+        403. This pins that the row is auto-created and the upload succeeds.
+        """
+        from documents import LinkDocumentRequest, link_driver_document
+
+        mock_user = {"id": "user_777", "is_driver": False, "first_name": "A", "last_name": "B", "phone": "+1"}
+        doc = LinkDocumentRequest(
+            requirement_id="drivers_license",  # non-UUID service-area key → common-requirement fallback
+            document_url="https://example.com/license.jpg",
+            side="front",
+            document_type="image/jpeg",
+        )
+
+        with (
+            patch("documents.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("documents.db_supabase.insert_one", AsyncMock(return_value={})) as insert_one,
+            patch("documents.db_supabase.update_one", AsyncMock(return_value={})),
+            patch("documents._supersede_and_flag_pending_review", AsyncMock(return_value=None)),
+        ):
+            result = await link_driver_document(doc_data=doc, current_user=mock_user)
+
+        assert result["document_url"] == "https://example.com/license.jpg"
+        assert result["status"] == "pending"
+        # A minimal drivers row must have been auto-created for this user.
+        inserted_tables = [c.args[0] for c in insert_one.call_args_list]
+        assert "drivers" in inserted_tables, "Expected a drivers row to be auto-created during onboarding upload"
+
+    @pytest.mark.asyncio
+    async def test_link_document_uses_service_area_requirement(self):
+        """Regression: when the driver's service area configures the requirement,
+        the endpoint must synthesise the req from that area entry — and must NOT
+        crash on the common-requirement fallback path.
+
+        Previously an unconditional `area_req.get(...)` ran after the fallback
+        block, so a common-requirement upload (area_req is None) raised
+        AttributeError (500). This pins that the area-configured branch is used
+        and the fallback branch no longer dereferences a None area_req.
+        """
+        from documents import LinkDocumentRequest, link_driver_document
+
+        async def fake_get_rows(table, filters=None, *args, **kwargs):
+            if table == "drivers":
+                return [{"id": "drv_1", "user_id": "user_1", "service_area_id": "area_1"}]
+            if table == "service_areas":
+                return [
+                    {
+                        "id": "area_1",
+                        "required_documents": [
+                            {"key": "drivers_license", "label": "SK Driver Licence", "requires_back_side": True},
+                        ],
+                    }
+                ]
+            return []
+
+        mock_user = {"id": "user_1", "is_driver": True}
+        doc = LinkDocumentRequest(
+            requirement_id="drivers_license",
+            document_url="https://example.com/license.jpg",
+            side="front",
+            document_type="image/jpeg",
+        )
+
+        with (
+            patch("documents.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+            patch("documents.db_supabase.insert_one", AsyncMock(return_value={})) as insert_one,
+            patch("documents.db_supabase.update_one", AsyncMock(return_value={})),
+            patch("documents._supersede_and_flag_pending_review", AsyncMock(return_value=None)),
+        ):
+            result = await link_driver_document(doc_data=doc, current_user=mock_user)
+
+        assert result["document_url"] == "https://example.com/license.jpg"
+        # Driver already exists → no drivers row auto-created.
+        inserted_tables = [c.args[0] for c in insert_one.call_args_list]
+        assert "drivers" not in inserted_tables
+
 
 class TestExtractSignedUrl:
     """

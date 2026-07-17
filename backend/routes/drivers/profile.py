@@ -283,22 +283,27 @@ async def register_driver(
     user_id = current_user["id"]
     user_phone = current_user.get("phone", "")
 
-    # Build name/phone from user if not supplied
-    first_name = body.get("first_name") or ""
-    last_name = body.get("last_name") or ""
-    full_name = (
-        f"{first_name} {last_name}".strip() or current_user.get("name") or current_user.get("full_name") or "Driver"
-    )
-    # Derive split first/last from whatever source produced full_name. Mirrors
-    # the migration backfill logic so a fresh row matches what the migration
-    # would produce.
+    # Build the driver name from the register body, then fall back to the
+    # user's account profile (phone signup captures first/last on the users
+    # row), then any legacy combined name field. The generic "Driver" label is
+    # an absolute last resort for the display `name` only — it must NEVER be
+    # split into first_name/last_name. Doing so is what created brand-new
+    # drivers rendered literally as "Driver" in the admin panel.
+    first_name = (body.get("first_name") or current_user.get("first_name") or "").strip()
+    last_name = (body.get("last_name") or current_user.get("last_name") or "").strip()
     if not first_name and not last_name:
-        _parts = full_name.split(" ", 1)
-        _first_name_split = _parts[0] if _parts else ""
-        _last_name_split = _parts[1].strip() if len(_parts) > 1 else ""
-    else:
-        _first_name_split = first_name
-        _last_name_split = last_name
+        # Recover a real name from a legacy combined field on the account, but
+        # never from the generic fallback below.
+        _account_name = (current_user.get("name") or current_user.get("full_name") or "").strip()
+        if _account_name:
+            _parts = _account_name.split(" ", 1)
+            first_name = _parts[0]
+            last_name = _parts[1].strip() if len(_parts) > 1 else ""
+    _first_name_split = first_name
+    _last_name_split = last_name
+    # Display name: the real name, else the phone number (matches the other
+    # driver auto-create paths), else a generic label so the column is not null.
+    full_name = f"{first_name} {last_name}".strip() or user_phone or "Driver"
 
     existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": user_id}, limit=1))
 

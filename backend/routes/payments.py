@@ -860,9 +860,43 @@ async def delete_card(
     failed detach was logged-and-ignored, then the DB default was cleared anyway
     — leaving the card live in Stripe but gone from the UI. Now a failed detach
     raises 502 and the DB is left untouched.
+
+    Default-card guard: the default card cannot be removed while the user still
+    has other saved cards — they must promote another card to default first, so
+    there is always a valid card to charge (409). Removing the *only* card is
+    allowed (nothing to fall back to). This mirrors the rider-app UI guard and
+    is enforced server-side so a direct API call cannot orphan the default.
     """
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "")
+
+    # Read the user once up front so we know whether this is the default card
+    # BEFORE mutating anything in Stripe.
+    user = await db_supabase.get_user_by_id(current_user["id"])
+    is_default = bool(user and user.get("default_payment_method") == card_id)
+
+    if is_default and stripe_secret:
+        # The default may only be removed when it is the user's sole card.
+        try:
+            cid = user.get("stripe_customer_id")
+            saved_count = 0
+            if cid:
+                methods = await asyncio.to_thread(
+                    lambda: stripe.PaymentMethod.list(customer=cid, type="card", api_key=stripe_secret)
+                )
+                saved_count = len(methods.data)
+        except Exception as e:
+            logger.error(
+                f"delete_card: could not list cards for default-card guard ({card_id}): {e}",
+                exc_info=True,
+            )
+            raise HTTPException(status_code=502, detail="Could not remove your card. Please try again.") from e
+        if saved_count > 1:
+            raise HTTPException(
+                status_code=409,
+                detail="Set another card as your default before removing this one.",
+            )
+
     if stripe_secret:
         try:
             await asyncio.to_thread(lambda: stripe.PaymentMethod.detach(card_id, api_key=stripe_secret))
@@ -870,8 +904,7 @@ async def delete_card(
             logger.error(f"Stripe detach failed for card {card_id}: {e}", exc_info=True)
             raise HTTPException(status_code=502, detail="Could not remove your card. Please try again.") from e
 
-    user = await db_supabase.get_user_by_id(current_user["id"])
-    if user and user.get("default_payment_method") == card_id:
+    if is_default:
         await db_supabase.update_one("users", {"id": current_user["id"]}, {"default_payment_method": None})
 
     return {"success": True}

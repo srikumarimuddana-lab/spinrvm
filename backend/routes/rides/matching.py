@@ -294,28 +294,36 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     # still alive (Uber/Lyft-style). Matches the filter applied in the rider-
     # facing /drivers/nearby endpoint so the cars a rider sees on the map are
     # exactly the drivers who can receive an offer.
-    # Presence filter: only dispatch to drivers whose Redis heartbeat key is
-    # alive. We distinguish two empty-set cases via the reachable flag:
-    #   - reachable=True, set empty → all candidates' heartbeats have expired
-    #     (ghost drivers) → apply the filter so they get no offer
+    # Presence filter: prefer dispatching to drivers whose Redis heartbeat key
+    # is alive (Uber/Lyft-style ghost suppression). Semantics mirror
+    # DispatchService.find_candidate_drivers exactly — filter only on a
+    # *non-empty, reachable* present set; fail open otherwise:
     #   - reachable=False (Redis configured but unavailable) → skip the filter
-    #     so a Redis outage can't halt dispatching entirely. A liveness probe
-    #     on the client object is NOT sufficient here — the lazy client looks
-    #     live mid-outage while MGET fails; only the checked variant reports
-    #     whether the presence store actually answered.
+    #     so a Redis outage can't empty the pool and strand every ride. A
+    #     liveness probe on the client object is NOT sufficient here — the lazy
+    #     client looks live mid-outage while MGET fails; only the checked
+    #     variant reports whether the presence store actually answered.
+    #   - reachable=True, non-empty set → apply the filter; ghosts among the
+    #     non-present candidates get no offer.
+    #   - reachable=True, empty set → ambiguous (all heartbeats expired /
+    #     bootstrap / dev in-process dict). Fail open and keep DB-online
+    #     drivers rather than report a false "no drivers"; the accept-time
+    #     atomic claim is the ghost backstop.
     try:
         try:
             from ...utils.driver_presence import present_driver_ids_checked as _present_ids_checked  # type: ignore
         except ImportError:
             from utils.driver_presence import present_driver_ids_checked as _present_ids_checked  # type: ignore
         _present_ids_set, _presence_reachable = await _present_ids_checked([d["id"] for d in all_drivers])
-        if _presence_reachable:
+        if not _presence_reachable:
+            logger.warning("[DISPATCH] Redis unavailable — presence filter skipped, using all DB-online drivers")
+            _metric_inc("spinr_dispatch_presence_filter_failed_total")
+        elif _present_ids_set:
             before_presence = len(all_drivers)
             all_drivers = [d for d in all_drivers if d["id"] in _present_ids_set]
             logger.info(f"[DISPATCH] presence filter: {len(all_drivers)}/{before_presence} driver(s) reachable")
         else:
-            logger.warning("[DISPATCH] Redis unavailable — presence filter skipped, using all DB-online drivers")
-            _metric_inc("spinr_dispatch_presence_filter_failed_total")
+            logger.info("[DISPATCH] presence set empty but store reachable — keeping all DB-online drivers")
     except Exception as _pres_exc:
         logger.warning(f"[DISPATCH] presence filter failed, using all DB-online drivers: {_pres_exc}")
         _metric_inc("spinr_dispatch_presence_filter_failed_total")

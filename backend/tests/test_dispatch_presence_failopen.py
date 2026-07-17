@@ -115,15 +115,25 @@ async def test_redis_unreachable_does_not_empty_pool(mock_supabase_client):
 
 
 @pytest.mark.anyio
-async def test_reachable_empty_set_still_filters_ghosts(mock_supabase_client):
-    """reachable=True with an empty set is authoritative — ghost drivers get no offer."""
-    drivers = [_make_driver("driver-ghost")]
+async def test_reachable_empty_set_fails_open(mock_supabase_client):
+    """reachable=True with an empty set is ambiguous (all-ghost / bootstrap /
+    dev in-process dict). The primary path fails open and keeps DB-online
+    drivers — same as DispatchService.find_candidate_drivers — rather than
+    report a false "no drivers". The accept-time atomic claim is the ghost
+    backstop. This also preserves the many primary-path tests that exercise
+    match_driver_to_ride without seeding presence."""
+    drivers = [_make_driver("driver-1")]
     ranked_pools: list = []
+    before = _counter_total("spinr_dispatch_presence_filter_failed_total")
 
     await _run_match((set(), True), drivers, ranked_pools)
 
-    for pool in ranked_pools:
-        assert pool == [], f"expired-heartbeat drivers must be filtered out, got {pool}"
+    assert ranked_pools, "ranking never ran — dispatch aborted before offer stage"
+    assert {d["id"] for d in ranked_pools[0]} == {"driver-1"}, (
+        "reachable-but-empty presence must not empty the pool (fail open)"
+    )
+    # An empty-but-reachable set is not a degradation — no metric bump.
+    assert _counter_total("spinr_dispatch_presence_filter_failed_total") == before
 
 
 @pytest.mark.anyio

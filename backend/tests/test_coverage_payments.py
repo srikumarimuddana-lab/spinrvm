@@ -730,28 +730,31 @@ def _mock_card_list(*ids: str):
 
 
 @pytest.mark.anyio
-async def test_delete_only_default_card_clears_default():
-    """Deleting the default when it is the user's ONLY card empties the wallet:
-    detach, no card to promote, default cleared to None."""
+async def test_delete_last_card_blocked():
+    """The user's only card cannot be removed — 409, and neither Stripe nor the
+    DB is mutated. They must add another card first."""
+    from fastapi import HTTPException
+
     from backend.routes.payments import delete_card
 
     with (
         patch("backend.routes.payments.get_app_settings", new_callable=AsyncMock, return_value=_settings()),
         patch("backend.routes.payments.db_supabase") as mock_db,
-        # No cards remain after the detach.
-        patch("backend.routes.payments.stripe.PaymentMethod.list", return_value=_mock_card_list()),
+        # Only one card on file.
+        patch("backend.routes.payments.stripe.PaymentMethod.list", return_value=_mock_card_list("pm_001")),
         patch("backend.routes.payments.stripe.Customer.modify") as mock_modify,
         patch("backend.routes.payments.stripe.PaymentMethod.detach") as mock_detach,
     ):
         mock_db.get_user_by_id = AsyncMock(return_value={**_USER, "default_payment_method": "pm_001"})
         mock_db.update_one = AsyncMock()
 
-        result = await delete_card(card_id="pm_001", current_user=_USER)
+        with pytest.raises(HTTPException) as exc:
+            await delete_card(card_id="pm_001", current_user=_USER)
 
-    assert result["success"] is True
-    mock_detach.assert_called_once_with("pm_001", api_key=_SK)
-    mock_modify.assert_not_called()  # nothing to promote
-    mock_db.update_one.assert_called_once_with("users", {"id": _USER["id"]}, {"default_payment_method": None})
+    assert exc.value.status_code == 409
+    mock_detach.assert_not_called()  # card left live in Stripe
+    mock_modify.assert_not_called()
+    mock_db.update_one.assert_not_awaited()  # default left intact
 
 
 @pytest.mark.anyio
@@ -790,9 +793,9 @@ async def test_delete_default_card_promotes_next_when_others_exist():
 
 
 @pytest.mark.anyio
-async def test_delete_default_promote_list_error_raises_502():
-    """If listing the remaining cards fails while promoting a new default, we
-    surface 502 and do not write a half-valid default to our DB."""
+async def test_delete_card_list_error_raises_502():
+    """If enumerating the saved cards fails, surface 502 and mutate nothing —
+    neither the detach nor the DB default runs."""
     from fastapi import HTTPException
 
     from backend.routes.payments import delete_card
@@ -800,7 +803,7 @@ async def test_delete_default_promote_list_error_raises_502():
     with (
         patch("backend.routes.payments.get_app_settings", new_callable=AsyncMock, return_value=_settings()),
         patch("backend.routes.payments.db_supabase") as mock_db,
-        patch("backend.routes.payments.stripe.PaymentMethod.detach"),
+        patch("backend.routes.payments.stripe.PaymentMethod.detach") as mock_detach,
         patch(
             "backend.routes.payments.stripe.PaymentMethod.list",
             side_effect=stripe.error.StripeError("list failed"),
@@ -813,6 +816,7 @@ async def test_delete_default_promote_list_error_raises_502():
             await delete_card(card_id="pm_001", current_user=_USER)
 
     assert exc.value.status_code == 502
+    mock_detach.assert_not_called()  # list runs before detach
     mock_db.update_one.assert_not_awaited()
 
 
@@ -828,7 +832,10 @@ async def test_delete_default_promote_modify_error_raises_502():
         patch("backend.routes.payments.get_app_settings", new_callable=AsyncMock, return_value=_settings()),
         patch("backend.routes.payments.db_supabase") as mock_db,
         patch("backend.routes.payments.stripe.PaymentMethod.detach"),
-        patch("backend.routes.payments.stripe.PaymentMethod.list", return_value=_mock_card_list("pm_002")),
+        patch(
+            "backend.routes.payments.stripe.PaymentMethod.list",
+            return_value=_mock_card_list("pm_002", "pm_001"),
+        ),
         patch(
             "backend.routes.payments.stripe.Customer.modify",
             side_effect=stripe.error.StripeError("modify failed"),
@@ -851,6 +858,11 @@ async def test_delete_card_non_default_skips_db_clear():
     with (
         patch("backend.routes.payments.get_app_settings", new_callable=AsyncMock, return_value=_settings()),
         patch("backend.routes.payments.db_supabase") as mock_db,
+        # Two cards on file so the last-card guard passes.
+        patch(
+            "backend.routes.payments.stripe.PaymentMethod.list",
+            return_value=_mock_card_list("pm_001", "pm_other"),
+        ),
         patch("backend.routes.payments.stripe.PaymentMethod.detach"),
     ):
         mock_db.get_user_by_id = AsyncMock(return_value={**_USER, "default_payment_method": "pm_other"})
@@ -1077,8 +1089,12 @@ async def test_delete_card_stripe_error_raises_502_and_keeps_db():
     with (
         patch("backend.routes.payments.get_app_settings", new_callable=AsyncMock, return_value=_settings()),
         patch("backend.routes.payments.db_supabase") as mock_db,
-        # Detach is attempted first; its failure must abort before any
-        # promotion / DB write.
+        # Two cards so the last-card guard passes and we reach the detach; the
+        # detach failure must abort before any promotion / DB write.
+        patch(
+            "backend.routes.payments.stripe.PaymentMethod.list",
+            return_value=_mock_card_list("pm_001", "pm_002"),
+        ),
         patch(
             "backend.routes.payments.stripe.PaymentMethod.detach",
             side_effect=stripe.error.StripeError("detach failed"),

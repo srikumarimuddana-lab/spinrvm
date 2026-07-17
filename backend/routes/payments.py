@@ -865,11 +865,13 @@ async def delete_card(
     — leaving the card live in Stripe but gone from the UI. Now a failed detach
     raises 502 and the DB is left untouched.
 
-    Default reassignment: any card may be removed. When the removed card was the
-    default and other cards remain, the most recently added remaining card is
-    auto-promoted to default (in both Stripe and our DB) so the user is never
-    left with saved cards but no default to charge. Removing the *only* card
-    simply clears the default and empties the wallet.
+    Last-card guard: the user must always keep at least one card on file, so
+    removing their only card is refused with 409 — they add another card first.
+
+    Default reassignment: when the removed card was the default (and, per the
+    guard above, at least one other card remains) the most recently added
+    remaining card is auto-promoted to default in both Stripe and our DB, so the
+    user is never left with saved cards but no default to charge.
     """
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "")
@@ -879,6 +881,26 @@ async def delete_card(
     user = await db_supabase.get_user_by_id(current_user["id"])
     is_default = bool(user and user.get("default_payment_method") == card_id)
     customer_id = user.get("stripe_customer_id") if user else None
+
+    # Enumerate saved cards up front — used both to block removing the last card
+    # and to pick the replacement default. Stripe returns most-recent-first.
+    saved_ids: list[str] = []
+    if stripe_secret and customer_id:
+        try:
+            methods = await asyncio.to_thread(
+                lambda: stripe.PaymentMethod.list(customer=customer_id, type="card", api_key=stripe_secret)
+            )
+            saved_ids = [m.id for m in methods.data]
+        except Exception as e:
+            logger.error(f"delete_card: could not list cards ({card_id}): {e}", exc_info=True)
+            raise HTTPException(status_code=502, detail="Could not remove your card. Please try again.") from e
+
+        # Keep at least one card on file.
+        if len(saved_ids) <= 1:
+            raise HTTPException(
+                status_code=409,
+                detail="You need at least one card on file. Add another card before removing this one.",
+            )
 
     if stripe_secret:
         try:
@@ -890,39 +912,23 @@ async def delete_card(
     if not is_default:
         return {"success": True}
 
-    # The default card was removed — promote another card if one remains.
-    new_default: str | None = None
-    if stripe_secret and customer_id:
+    # The default card was removed — promote the most recently added remaining
+    # card (guard above guarantees at least one exists when Stripe is configured).
+    new_default: str | None = next((cid for cid in saved_ids if cid != card_id), None)
+    if new_default and stripe_secret and customer_id:
         try:
-            methods = await asyncio.to_thread(
-                lambda: stripe.PaymentMethod.list(customer=customer_id, type="card", api_key=stripe_secret)
+            await asyncio.to_thread(
+                lambda: stripe.Customer.modify(
+                    customer_id,
+                    invoice_settings={"default_payment_method": new_default},
+                    api_key=stripe_secret,
+                )
             )
-            # Stripe returns most-recent-first; skip the just-detached card
-            # defensively in case it still appears in a stale list response.
-            remaining = [m for m in methods.data if m.id != card_id]
-            if remaining:
-                new_default = remaining[0].id
         except Exception as e:
-            logger.error(
-                f"delete_card: could not list cards to promote a new default ({card_id}): {e}",
-                exc_info=True,
-            )
+            logger.error(f"delete_card: could not set new default {new_default} in Stripe: {e}", exc_info=True)
             raise HTTPException(status_code=502, detail="Could not remove your card. Please try again.") from e
 
-        if new_default:
-            try:
-                await asyncio.to_thread(
-                    lambda: stripe.Customer.modify(
-                        customer_id,
-                        invoice_settings={"default_payment_method": new_default},
-                        api_key=stripe_secret,
-                    )
-                )
-            except Exception as e:
-                logger.error(f"delete_card: could not set new default {new_default} in Stripe: {e}", exc_info=True)
-                raise HTTPException(status_code=502, detail="Could not remove your card. Please try again.") from e
-
-    # Point our DB at the promoted card (or clear it when no cards remain).
+    # Point our DB at the promoted card (or clear it when Stripe is unconfigured).
     await db_supabase.update_one("users", {"id": current_user["id"]}, {"default_payment_method": new_default})
 
     return {"success": True}

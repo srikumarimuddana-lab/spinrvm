@@ -14,7 +14,7 @@ that fact decides where Stripe Tax fits:
 
 | Area | Merchant of record today | Verdict on Stripe Tax |
 |---|---|---|
-| Ride fares (GST 5%) | **The driver** — each driver is the CRA GST registrant and remits their own tax | **Do not use.** Keep the in-app per-area calculation and pass-through. |
+| Ride fares (GST 5%) | **Split** — the driver is the registrant for GST on their fare share; Spinr remits GST on its booking/airport/area fees | **Hybrid (implemented).** In-app calc stays authoritative; only Spinr's platform share is recorded into Stripe Tax for filing (`utils/stripe_tax.py`, gated off by default). |
 | Spinr Pass subscriptions (GST 5% + PST 6% SK) | **Spinr** — sells the SaaS, remits its own GST/PST | **Use Stripe Tax here.** `automatic_tax` on Checkout + Stripe Tax registrations + Stripe's tax reports for filing. |
 | Driver T4A slips | n/a (income reporting, not sales tax) | **Not a Stripe Tax feature.** Stripe's tax-forms product is US-1099 only; keep the in-app T4A pipeline. |
 | CRA books | Mixed | **Hybrid ledger.** `financial_events` + the daily reconcile loops remain the system of record; Stripe Tax reports cover only Spinr's own subscription remittance. |
@@ -152,19 +152,30 @@ statement so each driver can see exactly how much GST was collected on their far
 period — the number they must remit. All inputs already exist
 (`rides.tax_amount` per completed ride keyed to `driver_id`).
 
-> **⚠ Finding — GST on platform fees is currently passed to the driver.** Verified in code:
-> the taxable base is `subtotal + fees` (`backend/features.py:930`), which includes the
-> booking fee and airport fee — but those fees are **Spinr's revenue**
-> (`admin_earnings = booking + ap_fee`, `backend/services/fare_service.py:213`), while
-> **100% of the computed tax** goes into the driver's earnings snapshot
-> (`tax=ride.tax_amount` → `backend/utils/earnings_snapshot.py`). Net effect: GST collected
-> on Spinr's own booking/airport-fee revenue is handed to the driver instead of retained
-> for Spinr's remittance, and Spinr still owes CRA GST on that fee revenue. This may be a
-> deliberate agency-model treatment (driver as supplier of the entire ride) — but it must
-> be an explicit accountant decision, not an accident. If it's wrong, the fix is a tax
-> split at settlement: driver receives GST on the fare portion; Spinr retains GST on
-> booking/airport/area-fee portions. Flagged as Phase 2 prerequisite in §4 and open
-> question #6 in §5.
+> **✅ RESOLVED — GST split implemented (this branch).** The finding: the taxable base is
+> `subtotal + fees` (`backend/features.py`), which includes the booking and airport fees —
+> Spinr's revenue — yet the full tax was attributed to the driver's earnings, and (worse)
+> the GST cash never actually reached the driver's `payable_balance` at all: the balance
+> summed fare + tip only, while the BN payout gate told drivers to remit GST they never
+> received. Confirmed as the intended split model by the owner and now implemented:
+>
+> - `calculate_all_fees` accepts `driver_subtotal` and emits `tax_split` — per-label
+>   driver amount quantized directly, platform amount as the exact remainder (always sums
+>   to the receipt tax line). Persisted on `rides.tax_split` (migration 233).
+> - The driver's earnings snapshot, `total_earned` displays, and — critically —
+>   `payable_balance` now carry only `tax_split.driver_total`: the driver actually
+>   receives the GST on their fare share and remits it under their own BN. Legacy rides
+>   are untouched (no retroactive balance changes).
+> - The platform share (`tax_split.platform_*`) is retained by Spinr and mirrored into
+>   **Stripe Tax** by an hourly recorder loop (`backend/utils/stripe_tax.py`):
+>   Tax Calculation + Transaction per ride with a unique reference, stamped on
+>   `rides.stripe_tax_transaction_id`; full refunds create a tax reversal via
+>   `record_refund_event`, partials are flagged for reconciliation. Gated on the
+>   `stripe_tax_enabled` app setting (default OFF) — enable only after Spinr's GST
+>   registration exists in the Stripe Tax dashboard.
+>
+> The Stripe Tax report therefore covers exactly what Spinr files for ride-side GST;
+> drivers' statements (Phase 2) cover the rest.
 
 ### 3.2 Spinr Pass subscriptions — enable Stripe Tax (the clean fit)
 
@@ -277,10 +288,10 @@ Each phase is an independent PR-sized effort following the repo's task-decomposi
 5. **Historical rows**: `subscription_payments` rows predating migration 186 have NULL tax
    columns (legacy tax-free invoices) — confirm the accountant is comfortable with that
    boundary or wants a backfill note in the books.
-6. **GST on platform fees (the §3.1 finding)**: accountant/legal to rule on whether the
-   full ride tax passing to the driver — including GST attributable to Spinr's booking and
-   airport fees — is the intended agency treatment, or whether a settlement-time tax split
-   is required. This affects both parties' CRA returns and Phase 2's statement math.
+6. **GST on platform fees (the §3.1 finding)**: resolved — the settlement-time tax split
+   is implemented on this branch per the owner's confirmed model (driver receives GST on
+   the fare share; Spinr retains and remits GST on its fees). Accountant still to confirm
+   the treatment before `stripe_tax_enabled` is switched on in production.
 7. **Instant-payout fee GST**: the 1.5% instant-payout fee (`payouts.py`) is Spinr service
    revenue — confirm whether GST must be charged on it (it currently isn't).
 

@@ -19,6 +19,7 @@ import {
   SOS_FRESH_FIX_TIMEOUT_MS,
   SOS_LAST_KNOWN_TIMEOUT_MS,
   SOS_LAST_KNOWN_MAX_AGE_MS,
+  SOS_LAST_KNOWN_MAX_ACCURACY_M,
 } from '@shared/utils/sosLocation';
 
 jest.mock('expo-location', () => ({
@@ -65,20 +66,25 @@ describe('getSOSLocation', () => {
     await expect(promise).resolves.toEqual({ lat: 50.45, lng: -104.61 });
   });
 
-  it('bounds the cached fix by maxAge so stale positions are rejected', async () => {
+  it('bounds the cached fix by both age and accuracy', async () => {
     mockGetCurrent.mockRejectedValue(new Error('location unavailable'));
     mockGetLastKnown.mockResolvedValue(fix(50.45, -104.61));
 
     await getSOSLocation();
 
-    // A stale fix must never be accepted as the emergency location: the
-    // fallback must ask expo to reject anything older than the bound.
-    expect(mockGetLastKnown).toHaveBeenCalledWith({ maxAge: SOS_LAST_KNOWN_MAX_AGE_MS });
+    // A stale OR coarse fix must never be accepted as the emergency location:
+    // the fallback asks expo to reject anything older than the age bound or
+    // wider than the accuracy bound (km-scale cell/Wi-Fi).
+    expect(mockGetLastKnown).toHaveBeenCalledWith({
+      maxAge: SOS_LAST_KNOWN_MAX_AGE_MS,
+      requiredAccuracy: SOS_LAST_KNOWN_MAX_ACCURACY_M,
+    });
   });
 
-  it('returns no coords when the cached fix is too stale (expo returns null)', async () => {
+  it('returns no coords when the cached fix is too stale or coarse (expo returns null)', async () => {
     mockGetCurrent.mockRejectedValue(new Error('location unavailable'));
-    // expo returns null when no cached position satisfies the maxAge bound.
+    // expo returns null when no cached position satisfies the maxAge /
+    // requiredAccuracy bounds.
     mockGetLastKnown.mockResolvedValue(null);
 
     await expect(getSOSLocation()).resolves.toEqual({});

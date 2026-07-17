@@ -328,16 +328,22 @@ export default function ManageCardsScreen() {
     const marginTop = index === 0 ? 0 : selected || prevSelected ? SELECTED_GAP : -STACK_TUCK;
 
     return (
+      // Three layers: position (margin/zIndex) → shadowBox (drop shadow, so each
+      // card lifts off the one below) → clip (trims a collapsed card to its peek
+      // height). Shadow and overflow:hidden can't share a view on iOS, hence the
+      // split. The action row sits outside shadowBox so its shadow only frames
+      // the card.
       <View
         key={item.id}
-        style={[
-          { marginTop, zIndex: selected ? cards.length + 1 : index },
-          !selected && styles.stackItemCollapsed,
-        ]}
+        style={[styles.stackItem, { marginTop, zIndex: selected ? cards.length + 1 : index }]}
       >
-        <TouchableOpacity activeOpacity={0.92} onPress={() => selectCard(item.id)}>
-          {renderCardFace(item)}
-        </TouchableOpacity>
+        <View style={styles.shadowBox}>
+          <View style={!selected && styles.stackClip}>
+            <TouchableOpacity activeOpacity={0.92} onPress={() => selectCard(item.id)}>
+              {renderCardFace(item)}
+            </TouchableOpacity>
+          </View>
+        </View>
 
         {selected && (
           <View style={styles.actionStrip}>
@@ -546,7 +552,24 @@ function createStyles(colors: ThemeColors) {
 
     // Card stack (Apple-Wallet-style overlap)
     stack: { marginBottom: 16 },
-    stackItemCollapsed: {
+    // Layer 1: positioning only (marginTop / zIndex applied inline).
+    stackItem: {},
+    // Layer 2: drop shadow so each card lifts off the one below — the main cue
+    // that separates two same-coloured cards in the stack. Needs an opaque bg
+    // + matching radius for the shadow to take the card's rounded shape; the
+    // card face covers it exactly, so the colour never shows.
+    shadowBox: {
+      borderRadius: 20,
+      backgroundColor: '#111111',
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 6 },
+      shadowOpacity: 0.32,
+      shadowRadius: 9,
+      elevation: 7,
+    },
+    // Layer 3: clip a collapsed card to its peek height with rounded corners so
+    // the tucked card reads as its own card, not a seam.
+    stackClip: {
       height: CARD_PEEK,
       overflow: 'hidden',
       borderRadius: 20,
@@ -559,12 +582,12 @@ function createStyles(colors: ThemeColors) {
       height: CARD_FACE_HEIGHT,     // ISO 7810 ID-1 ratio (width / 1.586)
       justifyContent: 'space-between',
       overflow: 'hidden',
-      // Elevation for a "floating card" feel
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 8 },
-      shadowOpacity: 0.28,
-      shadowRadius: 16,
-      elevation: 8,
+      // Bright top edge + faint rim so each card has a crisp border against the
+      // card stacked beneath it.
+      borderWidth: 1,
+      borderColor: 'rgba(255,255,255,0.12)',
+      borderTopWidth: 1.5,
+      borderTopColor: 'rgba(255,255,255,0.40)',
     },
     sheenTop: {
       position: 'absolute', top: -70, right: -50,

@@ -724,6 +724,12 @@ const isSosUrl = (url: string): boolean => /^\/rides\/[^/]+\/emergency$/.test(ur
 const _inflight503Retries = new Set<string>();
 
 const handleApiError = async (response: Response, method: string, url: string, retryFn?: () => Promise<unknown>): Promise<never> => {
+  // Set when this 401 went through the silent-refresh path below. Once
+  // refreshTokens() has run, IT owns the logout decision (it logs out on a
+  // definitive 401 and deliberately keeps the session on transient
+  // network/5xx failures) — the G2 catch-all further down must not
+  // second-guess it by clearing the session anyway.
+  let refreshAttempted = false;
   // ── Guard: refresh endpoint itself returned 401 ──────────────────
   // If the /auth/refresh call is rejected by the server the refresh token is
   // expired or revoked. Sign the user out immediately to clear invalid state
@@ -766,6 +772,11 @@ const handleApiError = async (response: Response, method: string, url: string, r
   // SOS is exempt (see isSosUrl) — its backend route tolerates expired tokens,
   // so the refresh round-trip only adds failure modes during an emergency.
   if (response.status === 401 && _refreshCallback && retryFn && !isSosUrl(url)) {
+    // Before any await, so the fall-through below always sees it — this
+    // covers both the first-caller path and the queued-subscriber path
+    // (a queued request whose shared refresh fails rejects inside this
+    // try and would otherwise fall through to G2 and get logged out).
+    refreshAttempted = true;
     try {
       if (_refreshPromise) {
         // A refresh is already in-flight — queue this request and wait for
@@ -912,7 +923,13 @@ const handleApiError = async (response: Response, method: string, url: string, r
   // This prevents the "session limbo" state where API calls silently
   // fail 401 while the driver/rider still sees the dashboard.
   // SOS is exempt: never sign the user out mid-emergency (see isSosUrl).
-  if (response.status === 401 && !isSosUrl(url)) {
+  // Backstop ONLY for 401s where no silent refresh could be attempted
+  // (no _refreshCallback registered yet at cold start, or no retryFn).
+  // When a refresh ran, refreshTokens() owns the logout decision: it
+  // logs out on definitive rejection but keeps the session on transient
+  // failures — clearing here would hard-sign-out a driver mid-shift on
+  // a flaky connection and force a fresh OTP login.
+  if (response.status === 401 && !isSosUrl(url) && !refreshAttempted) {
     console.log('[API] 401 Unauthorized — clearing session');
     setInMemoryToken(null);
     try {

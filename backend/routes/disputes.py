@@ -235,17 +235,19 @@ async def admin_resolve_dispute(
                 raise HTTPException(status_code=503, detail="Stripe not configured")
 
             try:
-                refund = _stripe.Refund.create(
-                    payment_intent=payment_intent_id,
-                    amount=refund_amount_cents,
-                    reason="requested_by_customer",
-                    idempotency_key=f"refund-dispute-{dispute_id}",
-                    metadata={
-                        "dispute_id": dispute_id,
-                        "ride_id": str(dispute.get("ride_id")),
-                        "admin_note": req.admin_note or "",
-                    },
-                    api_key=stripe_secret,
+                refund = await asyncio.to_thread(
+                    lambda: _stripe.Refund.create(
+                        payment_intent=payment_intent_id,
+                        amount=refund_amount_cents,
+                        reason="requested_by_customer",
+                        idempotency_key=f"refund-dispute-{dispute_id}",
+                        metadata={
+                            "dispute_id": dispute_id,
+                            "ride_id": str(dispute.get("ride_id")),
+                            "admin_note": req.admin_note or "",
+                        },
+                        api_key=stripe_secret,
+                    )
                 )
                 refund_result = {"status": refund.status, "refund_id": refund.id}
                 logger.info(

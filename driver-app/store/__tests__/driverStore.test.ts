@@ -168,14 +168,55 @@ describe('driverStore — ride state machine', () => {
     useDriverStore.setState({ rideState: 'ride_offered', incomingRide: makeMockRide() });
 
     mockApi.post.mockRejectedValueOnce({
-      response: { status: 409, data: { detail: 'Ride no longer available' } },
+      response: { status: 500, data: { detail: 'Internal server error' } },
     } as any);
 
     await act(async () => {
       await useDriverStore.getState().acceptRide('ride-123');
     });
 
-    expect(useDriverStore.getState().error).toBe('Ride no longer available');
+    expect(useDriverStore.getState().error).toBe('Internal server error');
+  });
+
+  test('acceptRide 409 proceeds as success when this driver actually owns the ride', async () => {
+    // Regression: a duplicate accept request (double-tap / retry) 409s with
+    // "Ride already accepted by another driver" even though THIS driver won.
+    // The store must verify ownership and keep the ride — no misleading toast.
+    useDriverStore.setState({ rideState: 'ride_offered', incomingRide: makeMockRide() });
+
+    mockApi.post.mockRejectedValueOnce({
+      response: { status: 409, data: { detail: 'Ride already accepted by another driver' } },
+    } as any);
+    // Ownership verification: /drivers/rides/active returns OUR ride, accepted.
+    mockApi.get.mockResolvedValueOnce(makeActiveRideResponse('driver_accepted') as any);
+
+    await act(async () => {
+      await useDriverStore.getState().acceptRide('ride-123');
+    });
+
+    const state = useDriverStore.getState();
+    expect(state.rideState).toBe('navigating_to_pickup');
+    expect(state.activeRide?.ride?.id).toBe('ride-123');
+    expect(state.error).toBeNull();
+  });
+
+  test('acceptRide 409 resets to idle with taken message when another driver won', async () => {
+    useDriverStore.setState({ rideState: 'ride_offered', incomingRide: makeMockRide() });
+
+    mockApi.post.mockRejectedValueOnce({
+      response: { status: 409, data: { detail: 'Ride already accepted by another driver' } },
+    } as any);
+    // Ownership verification: no active ride for this driver — genuinely lost.
+    mockApi.get.mockResolvedValueOnce({ data: null } as any);
+
+    await act(async () => {
+      await useDriverStore.getState().acceptRide('ride-123');
+    });
+
+    const state = useDriverStore.getState();
+    expect(state.rideState).toBe('idle');
+    expect(state.incomingRide).toBeNull();
+    expect(state.error).toMatch(/already taken by another driver/i);
   });
 
   test('declineRide returns to idle and calls decline endpoint', async () => {

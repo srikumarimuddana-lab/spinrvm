@@ -3,6 +3,7 @@
 import asyncio
 
 import pytest
+from fastapi import HTTPException
 from limits.aio.storage import MemoryStorage
 from slowapi.errors import RateLimitExceeded
 from starlette.requests import Request
@@ -86,3 +87,49 @@ async def test_awaited_storage_does_not_block_unrelated_coroutines() -> None:
     assert await endpoint(request=_request()) == "ok"
     assert ticker.done()
     await ticker
+
+
+class _FailingStorage(MemoryStorage):
+    async def incr(self, *args, **kwargs):
+        raise ConnectionError("provider details must stay internal")
+
+
+@pytest.mark.anyio
+async def test_security_scope_fails_closed_with_sanitized_503() -> None:
+    limiter = AsyncLimiter(
+        key_func=lambda request: "client",
+        storage=_FailingStorage(),
+        fallback_storage=MemoryStorage(),
+        fail_closed_predicate=lambda scope: "otp" in scope,
+    )
+
+    @limiter.limit("1/minute")
+    async def endpoint(request: Request):
+        return "ok"
+
+    with pytest.raises(HTTPException) as exc_info:
+        await endpoint(request=_request(path="/auth/send-otp"))
+    assert exc_info.value.status_code == 503
+    assert "provider details" not in str(exc_info.value.detail)
+
+
+@pytest.mark.anyio
+async def test_general_scope_degrades_to_async_memory_limit() -> None:
+    failures = []
+    limiter = AsyncLimiter(
+        key_func=lambda request: "client",
+        storage=_FailingStorage(),
+        fallback_storage=MemoryStorage(),
+        fail_closed_predicate=lambda scope: "otp" in scope,
+        on_storage_error=lambda scope, _error, closed: failures.append((scope, closed)),
+    )
+
+    @limiter.limit("1/minute")
+    async def endpoint(request: Request):
+        return "ok"
+
+    request = _request(path="/rides")
+    assert await endpoint(request=request) == "ok"
+    with pytest.raises(RateLimitExceeded):
+        await endpoint(request=request)
+    assert failures == [("/rides", False), ("/rides", False)]

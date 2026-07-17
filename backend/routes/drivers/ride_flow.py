@@ -68,6 +68,23 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
     if ride.get("rider_id") == current_user["id"]:
         raise HTTPException(status_code=403, detail="Cannot accept your own ride")
 
+    # Idempotent replay: this driver already owns the ride. Duplicate accepts
+    # are real — double-tap, the Notifee notification Accept action firing
+    # alongside the in-app button, or a client retry after a dropped response.
+    # Answering 409 "already accepted by another driver" here tells the WINNING
+    # driver they lost their own ride. Checked before the subscription/quota
+    # gates too: those were already enforced by the request that won.
+    _POST_ACCEPT_STATUSES = (
+        RideStatus.DRIVER_ACCEPTED,
+        RideStatus.DRIVER_ARRIVED,
+        RideStatus.IN_PROGRESS,
+    )
+    if ride.get("driver_id") == driver["id"] and ride.get("status") in _POST_ACCEPT_STATUSES:
+        diag_logger.info(
+            f"[ACCEPT] idempotent replay ride_id={ride_id} driver_id={driver['id']} status={ride.get('status')}"
+        )
+        return {"success": True, "already_accepted": True}
+
     # Subscription guard: if the ride's service area requires a Spinr Pass,
     # verify the driver has an active subscription before allowing acceptance.
     # This is the last-resort gate — go-online and dispatch already block
@@ -219,9 +236,21 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
     # The old `hasattr(guard, "modified_count")` check was never true for
     # Supabase responses, so the double-accept guard was silently disabled.
     if guard is None:
+        # Before declaring the race lost, re-read: a concurrent duplicate from
+        # THIS driver (double-tap / retry) may have won the claim between our
+        # initial read and this update. That's a success for this driver, not
+        # "taken by another driver".
+        current = await _deps.db.find_one("rides", {"id": ride_id})
+        if current and current.get("driver_id") == driver["id"] and current.get("status") in _POST_ACCEPT_STATUSES:
+            diag_logger.info(
+                f"[ACCEPT] concurrent duplicate accept won by same driver "
+                f"ride_id={ride_id} driver_id={driver['id']} status={current.get('status')}"
+            )
+            return {"success": True, "already_accepted": True}
         diag_logger.info(
             f"[ACCEPT] claim rejected ride_id={ride_id} "
-            f"current_status={ride.get('status')} current_driver_id={ride.get('driver_id')}"
+            f"current_status={(current or ride).get('status')} "
+            f"current_driver_id={(current or ride).get('driver_id')}"
         )
         raise SpinrException(
             message="Ride already accepted by another driver",

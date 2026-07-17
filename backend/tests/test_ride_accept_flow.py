@@ -129,9 +129,11 @@ class TestAcceptRideFlipsStatus:
 
         assert result == {"success": True}
 
-        # 1) The atomic update_one was called (this is the real DB write path)
-        assert update_one_mock.await_count == 1
-        args = update_one_mock.call_args.args
+        # 1) The atomic update_one was called (this is the real DB write path).
+        # The handler may issue further update_one calls afterwards (e.g. the
+        # ride_metrics pickup-leg write) — the claim is always the FIRST.
+        assert update_one_mock.await_count >= 1
+        args = update_one_mock.call_args_list[0].args
         # args = (table, filter, patch_doc)
         assert args[0] == "rides"
         patch_payload = args[2].get("$set", args[2])
@@ -242,9 +244,80 @@ class TestAcceptRideFlipsStatus:
             )
 
         assert result == {"success": True}
-        assert update_one_mock.await_count == 1
-        accept_filter = update_one_mock.call_args.args[1]
+        # The claim is the first update_one; later calls (ride_metrics) don't count.
+        assert update_one_mock.await_count >= 1
+        accept_filter = update_one_mock.call_args_list[0].args[1]
         assert accept_filter == {"id": RIDE_ID, "status": "searching", "driver_id": None}
+
+    def test_replay_accept_by_owning_driver_is_idempotent_success(self):
+        """User report: with a batch offer to 2+ drivers, the ACCEPTING driver
+        got the ride but was also told "Ride already accepted by another
+        driver". A duplicate accept request (double-tap, Notifee action +
+        in-app tap, network retry) from the driver who already owns the ride
+        must return success — never 409."""
+        from backend.routes import drivers as drivers_mod
+
+        owned_ride = _ride_row(
+            "driver_accepted",
+            driver_id=DRIVER_ID,
+            driver_accepted_at=datetime.now(timezone.utc).isoformat(),
+        )
+        update_one_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=owned_ride)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver_row()])),
+            patch("backend.routes.drivers._deps.db.update_one", update_one_mock),
+            patch("backend.routes.drivers._deps.db.find_one", AsyncMock(return_value=owned_ride)),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
+        ):
+            result = asyncio.run(
+                drivers_mod.accept_ride(
+                    ride_id=RIDE_ID,
+                    current_user={"id": DRIVER_USER_ID},
+                )
+            )
+
+        assert result["success"] is True
+        assert result.get("already_accepted") is True
+        # A replay must not attempt another claim write (no side effects re-run).
+        update_one_mock.assert_not_awaited()
+
+    def test_concurrent_duplicate_accept_same_driver_returns_success(self):
+        """Two accept requests from the SAME driver race: the first wins the
+        atomic claim, the second sees guard=None. The re-read shows the ride
+        now belongs to this driver → success, not 409 'another driver'."""
+        from backend.routes import drivers as drivers_mod
+
+        pre_ride = _ride_row("driver_assigned", driver_id=DRIVER_ID)
+        post_ride = _ride_row(
+            "driver_accepted",
+            driver_id=DRIVER_ID,
+            driver_accepted_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+        with (
+            patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=pre_ride)),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[_driver_row()])),
+            # Claim fails (first duplicate already flipped the row)...
+            patch("backend.routes.drivers._deps.db.update_one", AsyncMock(return_value=None)),
+            # ...and the re-read shows this driver owns the ride.
+            patch("backend.routes.drivers._deps.db.find_one", AsyncMock(return_value=post_ride)),
+            patch("backend.routes.drivers._deps.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers._deps.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.drivers._deps.send_push_notification", AsyncMock()),
+        ):
+            result = asyncio.run(
+                drivers_mod.accept_ride(
+                    ride_id=RIDE_ID,
+                    current_user={"id": DRIVER_USER_ID},
+                )
+            )
+
+        assert result["success"] is True
+        assert result.get("already_accepted") is True
 
     def test_double_accept_rejected_by_guard(self):
         """When the atomic guard returns None (ride already taken by concurrent request),

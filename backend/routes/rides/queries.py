@@ -252,9 +252,12 @@ async def get_rider_stats(
 
     rides = await _deps.db_supabase.get_rows("rides", filters, limit=10000)
 
-    total_distance = sum(_d(r.get("distance_km") or 0) for r in rides)
+    # Seed the sums with Decimal(0): sum() of an empty iterable returns the
+    # start value, and a bare sum() defaults to int 0 — which then blows up in
+    # _round()'s Decimal.quantize() when a rider has no completed rides.
+    total_distance = sum((_d(r.get("distance_km") or 0) for r in rides), _d(0))
     total_rides = len(rides)
-    total_saved = sum(_d(r.get("discount_amount") or 0) for r in rides)
+    total_saved = sum((_d(r.get("discount_amount") or 0) for r in rides), _d(0))
     # CO2 saving vs. driving solo: 0.12 kg per km (rideshare vs. personal vehicle)
     co2_saved_kg = round(float(total_distance) * 0.12, 2)
 

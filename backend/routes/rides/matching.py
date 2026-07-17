@@ -337,7 +337,17 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     except ImportError:
         from utils.redis_client import redis_mget as _redis_mget  # type: ignore
     _skip_keys = [f"spinr:offer_skip:{ride_id}:{_d['id']}" for _d in all_drivers]
-    _skip_vals = await _redis_mget(_skip_keys)
+    try:
+        _skip_vals = await _redis_mget(_skip_keys)
+    except Exception as _skip_exc:
+        # Redis configured-but-unavailable: redis_mget re-raises. Fail open
+        # (no skips) so an outage can't halt dispatch here right after the
+        # presence filter already failed open — otherwise every dispatch
+        # attempt throws into the retry shell and the stuck-ride sweeper
+        # cancels the ride fleet-wide (the same C2 cascade). Mirrors the
+        # cascade branch's guarded skip MGET.
+        logger.warning(f"[DISPATCH] offer-skip lookup failed, dispatching without skip filter: {_skip_exc}")
+        _skip_vals = []
     _skip_ids: set = {_d["id"] for _d, _v in zip(all_drivers, _skip_vals, strict=False) if _v}
     if _skip_ids:
         all_drivers = [d for d in all_drivers if d["id"] not in _skip_ids]

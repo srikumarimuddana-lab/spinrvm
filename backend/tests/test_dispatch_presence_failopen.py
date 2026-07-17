@@ -53,8 +53,11 @@ def _make_driver(driver_id: str) -> dict:
     }
 
 
-async def _run_match(presence_result, drivers, ranked_pools):
+async def _run_match(presence_result, drivers, ranked_pools, mget_raises=False):
     """Drive match_driver_to_ride with a stubbed presence store.
+
+    ``mget_raises`` makes the batched offer-skip ``redis_mget`` raise, modelling
+    a configured-but-unavailable Redis (the call re-raises in that state).
 
     ``ranked_pools`` collects the candidate list that survives the presence
     filter and reaches filter_and_rank_drivers.
@@ -91,7 +94,8 @@ async def _run_match(presence_result, drivers, ranked_pools):
         patch(
             "backend.utils.redis_client.redis_mget",
             new_callable=AsyncMock,
-            return_value=[None] * max(len(drivers), 1),
+            side_effect=(RuntimeError("redis down") if mget_raises else None),
+            return_value=(None if mget_raises else [None] * max(len(drivers), 1)),
         ),
     ):
         await match_driver_to_ride("ride-1", ride=ride)
@@ -146,3 +150,21 @@ async def test_reachable_partial_set_filters_to_present(mock_supabase_client):
 
     assert ranked_pools, "ranking never ran — dispatch aborted before offer stage"
     assert {d["id"] for d in ranked_pools[0]} == {"driver-live"}
+
+
+@pytest.mark.anyio
+async def test_offer_skip_mget_outage_does_not_strand_dispatch(mock_supabase_client):
+    """A Redis outage that makes the offer-skip MGET raise must not abort
+    dispatch. Without the guard the presence-filter fail-open is moot — the
+    very next batched lookup throws into the retry shell and the stuck-ride
+    sweeper cancels the ride fleet-wide (the same C2 cascade, one line down)."""
+    drivers = [_make_driver("driver-1"), _make_driver("driver-2")]
+    ranked_pools: list = []
+
+    # Presence store also down (reachable=False) — the realistic outage shape.
+    await _run_match((set(), False), drivers, ranked_pools, mget_raises=True)
+
+    assert ranked_pools, "dispatch aborted on offer-skip MGET failure (stranded ride)"
+    assert {d["id"] for d in ranked_pools[0]} == {"driver-1", "driver-2"}, (
+        "offer-skip outage must fail open (no skips), keeping all candidates"
+    )

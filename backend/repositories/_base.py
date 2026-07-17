@@ -220,6 +220,8 @@ async def run_sync(
                 else:
                     result = await asyncio.wait_for(future, timeout=remaining)
             except TimeoutError:
+                if future.done() and not future.cancelled():
+                    raise
                 future.cancel()
                 _metric_inc("spinr_db_calls_rejected_total", {"reason": "deadline_timeout"})
                 logger.error("[DB] Executor wait exceeded the request deadline")

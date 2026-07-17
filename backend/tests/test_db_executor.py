@@ -136,6 +136,27 @@ async def test_slow_executor_wait_respects_deadline_without_tripping_breaker(mon
 
 
 @pytest.mark.anyio
+async def test_provider_timeout_is_not_mislabeled_as_client_deadline(monkeypatch):
+    from repositories import _base
+    from utils.error_handling import DatabaseError
+
+    _base._breaker.record_success()
+    monkeypatch.setattr(_base, "_remaining_seconds", lambda: 1.0)
+    loop = asyncio.get_running_loop()
+    original = loop.run_in_executor
+    failed = loop.create_future()
+    failed.set_exception(TimeoutError("provider operation timed out"))
+    loop.run_in_executor = lambda *_args, **_kwargs: failed  # type: ignore[method-assign]
+    try:
+        with pytest.raises(DatabaseError) as exc_info:
+            await _base.run_sync(lambda: 42, retry_policy="write")
+    finally:
+        loop.run_in_executor = original  # type: ignore[method-assign]
+
+    assert exc_info.value.details["original"] == "provider operation timed out"
+
+
+@pytest.mark.anyio
 async def test_run_sync_emits_queue_depth_gauge(monkeypatch):
     from repositories import _base
 

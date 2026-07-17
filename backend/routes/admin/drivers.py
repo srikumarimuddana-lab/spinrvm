@@ -299,6 +299,14 @@ async def admin_get_drivers(
             {
                 **d,
                 "name": _user_display_name(u) or d.get("name"),
+                # Prefer the account's first/last over the drivers mirror (which
+                # the UI renders). The mirror can hold a stale or placeholder
+                # value — e.g. a legacy "Driver" — so a correct account name must
+                # win. Mirrors admin_get_driver_stats. Fall back to the mirror,
+                # but drop the generic "Driver" placeholder rather than show it.
+                "first_name": (u.get("first_name") if u else None)
+                or (None if d.get("first_name") == "Driver" else d.get("first_name")),
+                "last_name": (u.get("last_name") if u else None) or d.get("last_name"),
                 "email": u.get("email") if u else None,
                 "phone": u.get("phone") if u else d.get("phone"),
                 "profile_image_status": (u.get("profile_image_status") if u else None),

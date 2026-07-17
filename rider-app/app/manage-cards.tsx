@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo, useContext } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, FlatList, TextInput,
-  ActivityIndicator, KeyboardAvoidingView,
+  View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput,
+  ActivityIndicator, KeyboardAvoidingView, Dimensions, LayoutAnimation,
+  Platform, UIManager,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -22,6 +23,7 @@ interface Card {
   exp_month: number;
   exp_year: number;
   is_default: boolean;
+  cardholder_name?: string | null;
 }
 
 /**
@@ -57,6 +59,23 @@ const DEFAULT_BRAND_STYLE: BrandStyle = {
 const brandStyle = (brand: string): BrandStyle =>
   BRAND_STYLES[(brand || '').trim().toLowerCase()] ?? DEFAULT_BRAND_STYLE;
 
+// LayoutAnimation needs an explicit opt-in on Android for the stack expand /
+// collapse to animate.
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
+// Card-face geometry for the Apple-Wallet-style stack. The face keeps the ISO
+// 7810 aspect ratio. A collapsed card is clipped to CARD_PEEK (showing just its
+// identifying peek bar) and tucked under the card above it so only
+// STACK_VISIBLE shows; the selected card expands to its full face height.
+const CARD_WIDTH = Dimensions.get('window').width - 40; // list padding: 20 each side
+const CARD_FACE_HEIGHT = CARD_WIDTH / 1.586;
+const CARD_PEEK = 96;          // clipped height of a collapsed card
+const STACK_VISIBLE = 54;      // how much of a tucked card stays visible
+const STACK_TUCK = CARD_PEEK - STACK_VISIBLE;
+const SELECTED_GAP = 14;       // clearance around the expanded card
+
 export default function ManageCardsScreen() {
   const router = useRouter();
   // When opened from a stuck ride-payment ("Change Card" escape), forPayment=1
@@ -78,6 +97,8 @@ export default function ManageCardsScreen() {
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Which card in the stack is expanded (brought to full height with actions).
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   // Card form — PCI-DSS: we no longer hold PAN/CVC/expiry in JS state.
   // Stripe's <CardField> keeps raw card data inside its own native view;
@@ -96,6 +117,24 @@ export default function ManageCardsScreen() {
   useEffect(() => {
     fetchCards();
   }, []);
+
+  // Keep exactly one valid card expanded: preserve the user's pick if it still
+  // exists, otherwise open the default card (or the first one).
+  useEffect(() => {
+    if (cards.length === 0) {
+      setSelectedId(null);
+      return;
+    }
+    setSelectedId(prev => {
+      if (prev && cards.some(c => c.id === prev)) return prev;
+      return (cards.find(c => c.is_default) ?? cards[0]).id;
+    });
+  }, [cards]);
+
+  const selectCard = (id: string) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setSelectedId(id);
+  };
 
   const fetchCards = async () => {
     setLoading(true);
@@ -175,25 +214,17 @@ export default function ManageCardsScreen() {
   };
 
   const handleDeleteCard = (card: Card) => {
-    // Standard wallet rule (Uber/Amazon/etc.): the default card cannot be
-    // removed while other cards exist — the user must promote another card to
-    // default first, so there is always a valid card to charge. Removing the
-    // *only* card is allowed, since there is nothing to fall back to.
-    if (card.is_default && cards.length > 1) {
-      setConfirmState({
-        visible: true,
-        title: 'Set a New Default First',
-        message: 'This is your default card. Choose another card as your default before removing this one.',
-        variant: 'info',
-        buttons: [{ text: 'Got It', style: 'default' }],
-      });
-      return;
-    }
-
+    // Any card can be removed. If this is the default and other cards remain,
+    // the backend auto-promotes the most recently added card to default, so
+    // the user is never left with cards but no default. Removing the only card
+    // simply empties the wallet.
+    const isDefaultWithOthers = card.is_default && cards.length > 1;
     setConfirmState({
       visible: true,
       title: 'Remove Card',
-      message: 'Are you sure you want to remove this card?',
+      message: isDefaultWithOthers
+        ? 'This is your default card. Another card will become your default after it is removed.'
+        : 'Are you sure you want to remove this card?',
       variant: 'warning',
       buttons: [
         { text: 'Cancel', style: 'cancel' },
@@ -235,18 +266,26 @@ export default function ManageCardsScreen() {
         <View style={styles.sheenTop} pointerEvents="none" />
         <View style={styles.sheenBottom} pointerEvents="none" />
 
-        {/* Top row: contactless + default pill */}
+        {/* Peek bar (always visible when the card is collapsed in the stack):
+            brand identity + last4 on the left, default flag + contactless on
+            the right. */}
         <View style={styles.faceTop}>
-          <MaterialCommunityIcons name="contactless-payment" size={26} color="rgba(255,255,255,0.85)" />
-          {item.is_default && (
-            <View style={styles.defaultPill}>
-              <Ionicons name="star" size={10} color="#1A1A1A" />
-              <Text style={styles.defaultPillText}>DEFAULT</Text>
-            </View>
-          )}
+          <View style={styles.faceBrandRow}>
+            <FontAwesome name={bs.logo} size={26} color="#FFFFFF" style={styles.faceLogoTop} />
+            <Text style={styles.faceTopLast4}>•••• {item.last4}</Text>
+          </View>
+          <View style={styles.faceTopRight}>
+            {item.is_default && (
+              <View style={styles.defaultPill}>
+                <Ionicons name="star" size={10} color="#1A1A1A" />
+                <Text style={styles.defaultPillText}>DEFAULT</Text>
+              </View>
+            )}
+            <MaterialCommunityIcons name="contactless-payment" size={24} color="rgba(255,255,255,0.85)" />
+          </View>
         </View>
 
-        {/* EMV chip */}
+        {/* EMV chip (revealed when expanded) */}
         <View style={styles.chip}>
           <View style={styles.chipLine} />
           <View style={styles.chipLineH} />
@@ -257,12 +296,12 @@ export default function ManageCardsScreen() {
           ••••  ••••  ••••  <Text style={styles.faceNumberLast4}>{item.last4}</Text>
         </Text>
 
-        {/* Bottom row: holder / expiry / brand logo */}
+        {/* Bottom row: holder / expiry */}
         <View style={styles.faceBottom}>
           <View style={styles.faceBottomLeft}>
             <Text style={styles.faceMetaLabel}>CARD HOLDER</Text>
             <Text style={styles.faceMetaValue} numberOfLines={1}>
-              {cardName && item.is_default ? cardName.toUpperCase() : 'SPINR RIDER'}
+              {(item.cardholder_name || '').trim().toUpperCase() || 'SPINR RIDER'}
             </Text>
           </View>
           <View style={styles.faceExpiry}>
@@ -271,52 +310,61 @@ export default function ManageCardsScreen() {
               {String(item.exp_month).padStart(2, '0')}/{String(item.exp_year).slice(-2)}
             </Text>
           </View>
-          <FontAwesome name={bs.logo} size={38} color="#FFFFFF" style={styles.faceLogo} />
         </View>
       </LinearGradient>
     );
   };
 
-  const renderCard = ({ item }: { item: Card }) => {
-    // Default card is "locked" from removal while other cards exist.
-    const lockedDefault = item.is_default && cards.length > 1;
-    return (
-    <View style={styles.cardRow}>
-      {renderCardFace(item)}
+  // One entry in the overlapping card stack. Collapsed cards peek from under the
+  // card above (only CARD_PEEK tall is visible); the selected card expands to
+  // its full face and reveals its action row. When the previous card is the
+  // selected one, this card drops to a normal gap so the selection sits proud
+  // of the stack.
+  const renderStackItem = (item: Card, index: number) => {
+    const selected = item.id === selectedId;
+    const prevSelected = index > 0 && cards[index - 1].id === selectedId;
+    // First card sits flush; the expanded card and the card right after it get
+    // a clear gap; every other collapsed card tucks under the one above.
+    const marginTop = index === 0 ? 0 : selected || prevSelected ? SELECTED_GAP : -STACK_TUCK;
 
-      {/* Action strip beneath the card face */}
-      <View style={styles.actionStrip}>
-        <Text style={styles.actionBrand}>
-          {brandStyle(item.brand).label} •••• {item.last4}
-        </Text>
-        <View style={styles.actionButtons}>
-          {payForRide ? (
-            <TouchableOpacity style={styles.payWithBtn} onPress={() => payRideWithCard(item.id)} activeOpacity={0.85}>
-              <Ionicons name="flash" size={14} color="#FFF" />
-              <Text style={styles.payWithText}>Use &amp; Pay</Text>
-            </TouchableOpacity>
-          ) : (
-            !item.is_default && (
-              <TouchableOpacity style={styles.setDefaultBtn} onPress={() => handleSetDefault(item.id)} activeOpacity={0.7}>
-                <Ionicons name="star-outline" size={13} color={colors.primary} />
-                <Text style={styles.setDefaultText}>Set Default</Text>
+    return (
+      <View
+        key={item.id}
+        style={[
+          { marginTop, zIndex: selected ? cards.length + 1 : index },
+          !selected && styles.stackItemCollapsed,
+        ]}
+      >
+        <TouchableOpacity activeOpacity={0.92} onPress={() => selectCard(item.id)}>
+          {renderCardFace(item)}
+        </TouchableOpacity>
+
+        {selected && (
+          <View style={styles.actionStrip}>
+            <Text style={styles.actionBrand}>
+              {brandStyle(item.brand).label} •••• {item.last4}
+            </Text>
+            <View style={styles.actionButtons}>
+              {payForRide ? (
+                <TouchableOpacity style={styles.payWithBtn} onPress={() => payRideWithCard(item.id)} activeOpacity={0.85}>
+                  <Ionicons name="flash" size={14} color="#FFF" />
+                  <Text style={styles.payWithText}>Use &amp; Pay</Text>
+                </TouchableOpacity>
+              ) : (
+                !item.is_default && (
+                  <TouchableOpacity style={styles.setDefaultBtn} onPress={() => handleSetDefault(item.id)} activeOpacity={0.7}>
+                    <Ionicons name="star-outline" size={13} color={colors.primary} />
+                    <Text style={styles.setDefaultText}>Set Default</Text>
+                  </TouchableOpacity>
+                )
+              )}
+              <TouchableOpacity style={styles.deleteBtn} onPress={() => handleDeleteCard(item)} activeOpacity={0.7}>
+                <Ionicons name="trash-outline" size={18} color={colors.error} />
               </TouchableOpacity>
-            )
-          )}
-          <TouchableOpacity
-            style={[styles.deleteBtn, lockedDefault && styles.deleteBtnLocked]}
-            onPress={() => handleDeleteCard(item)}
-            activeOpacity={0.7}
-          >
-            <Ionicons
-              name={lockedDefault ? 'lock-closed-outline' : 'trash-outline'}
-              size={lockedDefault ? 16 : 18}
-              color={lockedDefault ? colors.textSecondary : colors.error}
-            />
-          </TouchableOpacity>
-        </View>
+            </View>
+          </View>
+        )}
       </View>
-    </View>
     );
   };
 
@@ -344,23 +392,21 @@ export default function ManageCardsScreen() {
         </View>
       ) : (
         <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
-          <FlatList
-            data={cards}
-            renderItem={renderCard}
-            keyExtractor={(item) => item.id}
+          <ScrollView
             contentContainerStyle={styles.list}
             showsVerticalScrollIndicator={false}
-            ListHeaderComponent={
-              !payForRide && cards.length > 0 ? (
-                <View style={styles.listHeader}>
-                  <Text style={styles.listHeaderTitle}>Your cards</Text>
-                  <Text style={styles.listHeaderSub}>
-                    {cards.length} saved • tap a card to manage it
-                  </Text>
-                </View>
-              ) : null
-            }
-            ListEmptyComponent={
+            keyboardShouldPersistTaps="handled"
+          >
+            {!payForRide && cards.length > 0 && (
+              <View style={styles.listHeader}>
+                <Text style={styles.listHeaderTitle}>Your cards</Text>
+                <Text style={styles.listHeaderSub}>
+                  {cards.length} saved • tap a card to bring it forward
+                </Text>
+              </View>
+            )}
+
+            {cards.length === 0 ? (
               <View style={styles.emptyState}>
                 {/* Ghost card illustration */}
                 <View style={styles.ghostCard}>
@@ -379,9 +425,13 @@ export default function ManageCardsScreen() {
                   Add a credit or debit card for a faster, cashless checkout on every ride.
                 </Text>
               </View>
-            }
-            ListFooterComponent={
-              showAdd ? (
+            ) : (
+              <View style={styles.stack}>
+                {cards.map((item, index) => renderStackItem(item, index))}
+              </View>
+            )}
+
+            {showAdd ? (
                 <View style={styles.addForm}>
                   <View style={styles.addFormHeader}>
                     <MaterialCommunityIcons name="credit-card-plus" size={20} color={colors.primary} />
@@ -460,9 +510,8 @@ export default function ManageCardsScreen() {
                   </View>
                   <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
                 </TouchableOpacity>
-              )
-            }
-          />
+              )}
+          </ScrollView>
         </KeyboardAvoidingView>
       )}
       <ConfirmSheet
@@ -495,14 +544,19 @@ function createStyles(colors: ThemeColors) {
     listHeaderTitle: { fontSize: 22, fontWeight: '800', color: colors.text, letterSpacing: -0.3 },
     listHeaderSub: { fontSize: 13, color: colors.textDim, marginTop: 2 },
 
-    // Card row (face + action strip)
-    cardRow: { marginBottom: 22 },
+    // Card stack (Apple-Wallet-style overlap)
+    stack: { marginBottom: 16 },
+    stackItemCollapsed: {
+      height: CARD_PEEK,
+      overflow: 'hidden',
+      borderRadius: 20,
+    },
 
     // Realistic card face
     cardFace: {
       borderRadius: 20,
       padding: 20,
-      aspectRatio: 1.586,           // standard ISO 7810 ID-1 card ratio
+      height: CARD_FACE_HEIGHT,     // ISO 7810 ID-1 ratio (width / 1.586)
       justifyContent: 'space-between',
       overflow: 'hidden',
       // Elevation for a "floating card" feel
@@ -523,6 +577,15 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: 'rgba(255,255,255,0.06)',
     },
     faceTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    faceBrandRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    faceLogoTop: {
+      textShadowColor: 'rgba(0,0,0,0.3)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3,
+    },
+    faceTopLast4: {
+      fontSize: 15, fontWeight: '800', color: '#FFFFFF', letterSpacing: 1.5,
+      textShadowColor: 'rgba(0,0,0,0.25)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 2,
+    },
+    faceTopRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     defaultPill: {
       flexDirection: 'row', alignItems: 'center', gap: 4,
       backgroundColor: colors.gold, borderRadius: 20, paddingHorizontal: 8, paddingVertical: 3,
@@ -557,9 +620,6 @@ function createStyles(colors: ThemeColors) {
     faceExpiry: { marginRight: 12 },
     faceMetaLabel: { fontSize: 8, fontWeight: '700', color: 'rgba(255,255,255,0.6)', letterSpacing: 0.8 },
     faceMetaValue: { fontSize: 13, fontWeight: '700', color: '#FFFFFF', marginTop: 2, letterSpacing: 0.5 },
-    faceLogo: {
-      textShadowColor: 'rgba(0,0,0,0.3)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3,
-    },
 
     // Action strip under each card
     actionStrip: {
@@ -584,10 +644,6 @@ function createStyles(colors: ThemeColors) {
       width: 34, height: 34, borderRadius: 17,
       justifyContent: 'center', alignItems: 'center',
       backgroundColor: colors.surfaceLight,
-    },
-    deleteBtnLocked: {
-      backgroundColor: 'transparent',
-      borderWidth: 1, borderColor: colors.border,
     },
 
     payBanner: {

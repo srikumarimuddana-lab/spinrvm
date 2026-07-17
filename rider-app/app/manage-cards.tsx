@@ -174,7 +174,22 @@ export default function ManageCardsScreen() {
     }
   };
 
-  const handleDeleteCard = (cardId: string) => {
+  const handleDeleteCard = (card: Card) => {
+    // Standard wallet rule (Uber/Amazon/etc.): the default card cannot be
+    // removed while other cards exist — the user must promote another card to
+    // default first, so there is always a valid card to charge. Removing the
+    // *only* card is allowed, since there is nothing to fall back to.
+    if (card.is_default && cards.length > 1) {
+      setConfirmState({
+        visible: true,
+        title: 'Set a New Default First',
+        message: 'This is your default card. Choose another card as your default before removing this one.',
+        variant: 'info',
+        buttons: [{ text: 'Got It', style: 'default' }],
+      });
+      return;
+    }
+
     setConfirmState({
       visible: true,
       title: 'Remove Card',
@@ -186,7 +201,7 @@ export default function ManageCardsScreen() {
           text: 'Remove', style: 'destructive',
           onPress: async () => {
             try {
-              await api.delete(`/payments/cards/${cardId}`);
+              await api.delete(`/payments/cards/${card.id}`);
               fetchCards();
             } catch (err) {
               showToast('Remove Failed', getApiErrorMessage(err, 'Could not remove card. Please try again.'), 'danger');
@@ -262,7 +277,10 @@ export default function ManageCardsScreen() {
     );
   };
 
-  const renderCard = ({ item }: { item: Card }) => (
+  const renderCard = ({ item }: { item: Card }) => {
+    // Default card is "locked" from removal while other cards exist.
+    const lockedDefault = item.is_default && cards.length > 1;
+    return (
     <View style={styles.cardRow}>
       {renderCardFace(item)}
 
@@ -285,13 +303,22 @@ export default function ManageCardsScreen() {
               </TouchableOpacity>
             )
           )}
-          <TouchableOpacity style={styles.deleteBtn} onPress={() => handleDeleteCard(item.id)} activeOpacity={0.7}>
-            <Ionicons name="trash-outline" size={18} color={colors.error} />
+          <TouchableOpacity
+            style={[styles.deleteBtn, lockedDefault && styles.deleteBtnLocked]}
+            onPress={() => handleDeleteCard(item)}
+            activeOpacity={0.7}
+          >
+            <Ionicons
+              name={lockedDefault ? 'lock-closed-outline' : 'trash-outline'}
+              size={lockedDefault ? 16 : 18}
+              color={lockedDefault ? colors.textSecondary : colors.error}
+            />
           </TouchableOpacity>
         </View>
       </View>
     </View>
-  );
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -557,6 +584,10 @@ function createStyles(colors: ThemeColors) {
       width: 34, height: 34, borderRadius: 17,
       justifyContent: 'center', alignItems: 'center',
       backgroundColor: colors.surfaceLight,
+    },
+    deleteBtnLocked: {
+      backgroundColor: 'transparent',
+      borderWidth: 1, borderColor: colors.border,
     },
 
     payBanner: {

@@ -429,9 +429,14 @@ async def get_driver_documents(current_user: dict = Depends(get_current_user)):
 @documents_router.post("/documents")
 async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict = Depends(get_current_user)):
     """Link an uploaded document to the current driver."""
-    if not current_user.get("is_driver"):
-        raise HTTPException(status_code=403, detail="User is not a driver")
-
+    # Look up the driver profile directly rather than trusting the is_driver
+    # flag. During onboarding the drivers row may not exist yet, and even right
+    # after registration a stale "no driver" cache sentinel can leave is_driver
+    # false for the rest of the cache TTL. Guarding on is_driver here made the
+    # auto-create path below unreachable — the exact condition it handles (no
+    # drivers row) is precisely when is_driver is false — so a driver mid-
+    # onboarding always got a 403 "User is not a driver". Mirror the GET
+    # sibling and resolve the row from the source of truth instead.
     driver = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
     )

@@ -40,12 +40,23 @@ async def test_no_double_accept(client, ride_id, driver_1_headers, driver_2_head
     """Two simultaneous accept calls for the same ride: one wins (200), one is rejected (409)."""
     from backend.routes import drivers as drv_mod
 
-    driver = {"id": "driver_001", "user_id": "user_driver_001"}
+    # Distinct driver rows per user: a blanket get_rows mock that returns the
+    # same driver for both users would make the loser look like the WINNER
+    # replaying their own accept — which is (correctly) an idempotent 200 now,
+    # not the distinct-driver race this test pins.
+    driver_1 = {"id": "driver_001", "user_id": "user_driver_001"}
+    driver_2 = {"id": "driver_002", "user_id": "user_driver_002"}
     ride = {"id": ride_id, "status": "searching", "driver_id": None, "rider_id": "rider_001"}
     accepted_ride = {**ride, "status": "driver_accepted", "driver_id": "driver_001"}
 
+    async def _get_rows(table, filters=None, **kwargs):
+        if table == "drivers":
+            return [driver_2] if (filters or {}).get("user_id") == "user_driver_002" else [driver_1]
+        # ride_offers lookup on the broadcast/searching path — pending for both.
+        return [{"id": "offer-1", "ride_id": ride_id, "status": "pending"}]
+
     with (
-        patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+        patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
         patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
         patch("backend.routes.drivers._deps.db.update_one", AsyncMock(side_effect=[accepted_ride, None])),
         patch("backend.routes.drivers._deps.db.find_one", AsyncMock(return_value=accepted_ride)),

@@ -788,11 +788,28 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         }
         break;
       }
-      case 'ride_taken':
+      case 'ride_taken': {
+        // Guard: never tell the WINNING driver their own ride was taken. If we
+        // already accepted this ride (or any ride — post-accept states), a
+        // stray/stale ride_taken must not reset the navigation state or show
+        // the misleading "another driver accepted" toast.
+        const { rideState: _takenState, activeRide: _takenActive, incomingRide: _takenIncoming } =
+          useDriverStore.getState();
+        const _postAccept = ['navigating_to_pickup', 'arrived_at_pickup', 'trip_in_progress'].includes(_takenState);
+        if (_postAccept) {
+          console.warn('[WS] ignoring ride_taken in state:', _takenState, 'ride_id:', data.ride_id,
+            'active_ride:', _takenActive?.ride?.id);
+          break;
+        }
+        // Ignore events for a different ride than the offer on screen.
+        if (data.ride_id && _takenIncoming?.ride_id && _takenIncoming.ride_id !== data.ride_id) {
+          break;
+        }
         offerSound.stop();
         resetRideState();
         showToast('info', 'Ride taken', 'Another driver accepted this ride.');
         break;
+      }
       case 'auto_offline':
         // Backend took the driver offline after N consecutive missed offers.
         offerSound.stop();

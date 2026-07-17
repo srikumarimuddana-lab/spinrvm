@@ -305,15 +305,22 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     #     variant reports whether the presence store actually answered.
     #   - reachable=True, non-empty set → apply the filter; ghosts among the
     #     non-present candidates get no offer.
-    #   - reachable=True, empty set → ambiguous (all heartbeats expired /
-    #     bootstrap / dev in-process dict). Fail open and keep DB-online
-    #     drivers rather than report a false "no drivers"; the accept-time
-    #     atomic claim is the ghost backstop.
+    #   - reachable=True, empty set → the answer depends on WHERE presence
+    #     lives. A configured, answering Redis is the authoritative multi-
+    #     replica source: an empty set means every candidate's heartbeat has
+    #     expired (all ghosts), so drop them and let the no-drivers / cascade
+    #     retry fire immediately rather than burn 15s offer timeouts on phones
+    #     that can't receive. The in-process dict (no REDIS_URL — dev / single
+    #     replica / tests) is only a single-process view and is empty until a
+    #     heartbeat is recorded, so an empty set there is NOT authoritative →
+    #     fail open and keep DB-online drivers.
     try:
         try:
             from ...utils.driver_presence import present_driver_ids_checked as _present_ids_checked  # type: ignore
+            from ...utils.redis_client import _get_redis as _rc_get_redis  # type: ignore
         except ImportError:
             from utils.driver_presence import present_driver_ids_checked as _present_ids_checked  # type: ignore
+            from utils.redis_client import _get_redis as _rc_get_redis  # type: ignore
         _present_ids_set, _presence_reachable = await _present_ids_checked([d["id"] for d in all_drivers])
         if not _presence_reachable:
             logger.warning("[DISPATCH] Redis unavailable — presence filter skipped, using all DB-online drivers")
@@ -322,8 +329,19 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
             before_presence = len(all_drivers)
             all_drivers = [d for d in all_drivers if d["id"] in _present_ids_set]
             logger.info(f"[DISPATCH] presence filter: {len(all_drivers)}/{before_presence} driver(s) reachable")
+        elif await _rc_get_redis() is not None:
+            # Redis is configured and answered with zero live heartbeats — every
+            # candidate is a ghost. Empty the pool so cascade / no-drivers retry
+            # fires instead of offering to phones that can't receive.
+            logger.info(
+                f"[DISPATCH] presence: 0/{len(all_drivers)} live heartbeats "
+                f"(Redis authoritative) — all candidates are ghosts, deferring to cascade/retry"
+            )
+            all_drivers = []
         else:
-            logger.info("[DISPATCH] presence set empty but store reachable — keeping all DB-online drivers")
+            # In-process presence dict (no REDIS_URL): single-process view, not
+            # authoritative for dispatch. Fail open and keep DB-online drivers.
+            logger.info("[DISPATCH] presence set empty (in-process dict, no Redis) — keeping all DB-online drivers")
     except Exception as _pres_exc:
         logger.warning(f"[DISPATCH] presence filter failed, using all DB-online drivers: {_pres_exc}")
         _metric_inc("spinr_dispatch_presence_filter_failed_total")

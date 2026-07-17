@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { Linking } from 'react-native';
 import { showToast } from './toastStore';
-import api, { SpinrApiError, hasAuthToken } from '@shared/api/client';
+import api, { SpinrApiError, hasAuthToken, getApiErrorMessage } from '@shared/api/client';
 import { useAuthStore, registerLogoutCallback } from '@shared/store/authStore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { RideStatus } from '../constants/rideStatus';
@@ -462,7 +462,7 @@ export const useRideStore = create<RideState>((set, get) => ({
       }
     } catch (error: unknown) {
       console.error('fetchEstimates error:', error);
-      set({ isLoading: false, error: isErrorLike(error) ? error.message : 'Failed to fetch estimates' });
+      set({ isLoading: false, error: getApiErrorMessage(error, 'Failed to fetch estimates') });
     }
   },
 
@@ -696,7 +696,7 @@ export const useRideStore = create<RideState>((set, get) => ({
       return ride;
     } catch (error: unknown) {
       recordNonFatal(error, { store: 'rideStore', action: 'createRide' });
-      set({ isLoading: false, error: isErrorLike(error) ? error.message : 'Failed to create ride' });
+      set({ isLoading: false, error: getApiErrorMessage(error, 'Failed to create ride') });
       throw error;
     }
   },
@@ -734,7 +734,7 @@ export const useRideStore = create<RideState>((set, get) => ({
       set({ currentRide: ride, currentDriver: driver, isLoading: false });
       _persistRide(ride, driver);
     } catch (error: unknown) {
-      console.log('fetchRide error:', isErrorLike(error) ? error.message : error);
+      console.log('fetchRide error:', error);
       // Don't clear currentRide on poll errors — keep showing last known state
       set({ isLoading: false });
     }
@@ -777,7 +777,7 @@ export const useRideStore = create<RideState>((set, get) => ({
         return;
       }
       recordNonFatal(error, { store: 'rideStore', action: 'cancelRide' });
-      set({ isLoading: false, error: isErrorLike(error) ? error.message : 'Failed to cancel ride' });
+      set({ isLoading: false, error: getApiErrorMessage(error, 'Failed to cancel ride') });
       throw error;
     }
   },
@@ -792,7 +792,7 @@ export const useRideStore = create<RideState>((set, get) => ({
         currentRide: { ...currentRide, status: RideStatus.DRIVER_ARRIVED, pickup_otp: response.data.pickup_otp ?? currentRide.pickup_otp },
       });
     } catch (error: unknown) {
-      set({ error: isErrorLike(error) ? error.message : 'Failed to simulate arrival' });
+      set({ error: getApiErrorMessage(error, 'Failed to simulate arrival') });
     }
   },
 
@@ -806,7 +806,7 @@ export const useRideStore = create<RideState>((set, get) => ({
         currentRide: { ...currentRide, status: RideStatus.IN_PROGRESS },
       });
     } catch (error: unknown) {
-      set({ error: isErrorLike(error) ? error.message : 'Failed to start ride' });
+      set({ error: getApiErrorMessage(error, 'Failed to start ride') });
     }
   },
 
@@ -826,7 +826,7 @@ export const useRideStore = create<RideState>((set, get) => ({
       return response.data;
     } catch (error: unknown) {
       recordNonFatal(error, { store: 'rideStore', action: 'completeRide' });
-      set({ error: isErrorLike(error) ? error.message : 'Failed to complete ride' });
+      set({ error: getApiErrorMessage(error, 'Failed to complete ride') });
     }
   },
 
@@ -839,7 +839,7 @@ export const useRideStore = create<RideState>((set, get) => ({
       });
     } catch (error: unknown) {
       recordNonFatal(error, { store: 'rideStore', action: 'rateRide' });
-      set({ error: isErrorLike(error) ? error.message : 'Failed to rate ride' });
+      set({ error: getApiErrorMessage(error, 'Failed to rate ride') });
       throw error;
     }
   },
@@ -885,7 +885,7 @@ export const useRideStore = create<RideState>((set, get) => ({
       const response = await api.post<SavedAddress>('/addresses', address);
       set({ savedAddresses: [...get().savedAddresses, response.data as SavedAddress] });
     } catch (error: unknown) {
-      set({ error: isErrorLike(error) ? error.message : 'Failed to add address' });
+      set({ error: getApiErrorMessage(error, 'Failed to add address') });
       throw error;
     }
   },
@@ -895,7 +895,7 @@ export const useRideStore = create<RideState>((set, get) => ({
       await api.delete(`/addresses/${id}`);
       set({ savedAddresses: get().savedAddresses.filter((a) => a.id !== id) });
     } catch (error: unknown) {
-      set({ error: isErrorLike(error) ? error.message : 'Failed to delete address' });
+      set({ error: getApiErrorMessage(error, 'Failed to delete address') });
     }
   },
 
@@ -1007,7 +1007,7 @@ export const useRideStore = create<RideState>((set, get) => ({
       const response = await api.get<Ride[]>('/rides/scheduled');
       set({ scheduledRides: response.data as Ride[] });
     } catch (error: unknown) {
-      console.log('Error fetching scheduled rides:', isErrorLike(error) ? error.message : error);
+      console.log('Error fetching scheduled rides:', error);
     }
   },
 
@@ -1018,7 +1018,7 @@ export const useRideStore = create<RideState>((set, get) => ({
         scheduledRides: state.scheduledRides.filter((r) => r.id !== rideId),
       }));
     } catch (error: unknown) {
-      set({ error: isErrorLike(error) ? error.message : 'Failed to cancel scheduled ride' });
+      set({ error: getApiErrorMessage(error, 'Failed to cancel scheduled ride') });
     }
   },
 

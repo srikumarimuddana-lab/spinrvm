@@ -18,6 +18,7 @@ from ._deps import (  # noqa: F401
     RideNotFoundException,
     RideStatus,
     datetime,
+    driver_tax_portion,
     get_current_user,
     logger,
     ride_read_limit,
@@ -558,8 +559,8 @@ async def get_ride(
             + float(ride.get("time_fare") or 0)
         )
         cancel_fee = float(ride.get("cancellation_fee_driver") or 0)
-        tax = float(ride.get("tax_amount") or 0)
-        if tax == 0:
+        tax = float(driver_tax_portion(ride) or 0)
+        if tax == 0 and not ride.get("tax_split"):
             snap = ride.get("fare_breakdown_snapshot") or {}
             for ln in snap.get("lines") or []:
                 if ln.get("type") in ("tax", "gst", "pst"):

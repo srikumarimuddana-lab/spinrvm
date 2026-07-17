@@ -58,6 +58,12 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
                 + _d(r.get("distance_fare") or 0)
                 + _d(r.get("time_fare") or 0)
                 + _d(r.get("tip_amount") or 0)
+                # Driver's GST share, tax_split rides only (migration 233):
+                # the driver receives the GST collected on their fare share
+                # and remits it to CRA themselves. Legacy rides without a
+                # split keep the historical fare+tip-only balance — never
+                # retroactively add tax to already-settled rides.
+                + _d(((r.get("tax_split") or {}).get("driver_total")) or 0)
                 for r in rides
             ),
             Decimal("0"),

@@ -16,6 +16,16 @@ export const SOS_FRESH_FIX_TIMEOUT_MS = 3000;
 /** Max wait for the cached last-known position (reads local state; should be
  * near-instant, but nothing on this path is allowed to hang). */
 export const SOS_LAST_KNOWN_TIMEOUT_MS = 1000;
+/**
+ * Max age of an acceptable cached fix, in ms. A fix older than this is
+ * rejected (expo returns null) so we never report a precise-but-wrong
+ * location — e.g. one cached from a previous trip or an earlier day — as the
+ * SOS incident location. Better to send the alert with no coordinates (the
+ * backend tolerates that) than to send responders to a stale position. During
+ * an active ride the OS cache is refreshed constantly, so a genuine fix is
+ * almost always well within this bound.
+ */
+export const SOS_LAST_KNOWN_MAX_AGE_MS = 120_000; // 2 minutes
 
 export interface SOSCoords {
   lat?: number;
@@ -54,7 +64,9 @@ export async function getSOSLocation(
   }
 
   const lastKnown = await withTimeout(
-    Location.getLastKnownPositionAsync(),
+    // maxAge rejects a stale cached fix (returns null) so we never report a
+    // previous trip's location as the current emergency position.
+    Location.getLastKnownPositionAsync({ maxAge: SOS_LAST_KNOWN_MAX_AGE_MS }),
     SOS_LAST_KNOWN_TIMEOUT_MS
   );
   if (lastKnown) {

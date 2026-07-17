@@ -74,6 +74,11 @@ def test_customer_creation_routes_offload_stripe(route_file: str) -> None:
     assert blocking_calls == [], f"{route_file} blocks on Stripe SDK calls at lines {blocking_calls}"
 
 
+def test_dispute_refund_offloads_stripe() -> None:
+    blocking_calls = _blocking_stripe_lines("disputes.py", stripe_name="_stripe")
+    assert blocking_calls == [], f"disputes.py blocks on Stripe SDK calls at lines {blocking_calls}"
+
+
 def _blocking_stripe_lines(route_file: str, stripe_name: str = "stripe") -> list[int]:
     source_path = Path(__file__).parents[1] / "routes" / route_file
     tree = ast.parse(source_path.read_text(encoding="utf-8"))

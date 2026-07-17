@@ -229,7 +229,7 @@ async def record_refund_event(
                 meta["stripe_tax_reversal_pending"] = True
         except Exception as tax_err:
             meta["stripe_tax_reversal_pending"] = True
-            logger.error(f"[PAYMENT] stripe tax reversal failed for ride {ride_id}: {tax_err}")
+            logger.error(f"[PAYMENT] stripe tax reversal failed for ride {ride_id}: {tax_err}", exc_info=True)
     try:
         await db_supabase.insert_one(
             "financial_events",

@@ -260,8 +260,11 @@ highest value.
 **Phase 2 — Per-driver GST statements**: a driver-facing (and admin) periodic statement of
 GST collected on their fares — the amount they must remit. Data already exists; this is a
 reporting feature (`tax_exports.py` is the natural home, alongside the earnings CSV).
-_Prerequisite: resolve the §3.1 finding on GST-on-platform-fees first — the statement must
-report the correct driver-attributable portion, which depends on that accountant decision._
+_Prerequisite resolved: the split is implemented, so statements report
+`tax_split.driver_total`._ Phase 2 also includes two follow-ups from the money audit:
+surface `stripe_tax_reversal_pending` (partial-refund tax reversals, currently only a
+`financial_events` metadata flag finance must query manually) in the daily reconcile loop,
+and link up any `error:recorded_unlinked` sentinel rides by Stripe reference.
 
 **Phase 3 — Admin "Tax Reports" page**: consolidate the GST/PST metrics, subscription tax
 totals, per-driver GST summaries, and closeout CSVs into one admin surface with period

@@ -152,6 +152,8 @@ async def create_company_guest_booking(
     ride_data["area_fees_total"] = fare.get("area_fees_total", 0)
     ride_data["tax_amount"] = fare.get("tax_amount", 0)
     ride_data["tax_breakdown"] = fare.get("tax_breakdown", {})
+    if fare.get("tax_split"):
+        ride_data["tax_split"] = fare["tax_split"]
     ride_data["grand_total"] = fare["grand_total"]
     if fare.get("service_area_id"):
         ride_data["service_area_id"] = fare["service_area_id"]

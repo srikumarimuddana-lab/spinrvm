@@ -18,6 +18,7 @@ from ._deps import (  # noqa: F401
     ZoneInfo,
     datetime,
     db_supabase,
+    driver_tax_portion,
     get_current_user,
     logger,
     timedelta,
@@ -240,11 +241,12 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
         _cancelled_rides = await db_supabase.get_rows("rides", _cancel_filters, limit=10000)
         _cancel_fees_total = sum(Decimal(str(r.get("cancellation_fee_driver") or 0)) for r in _cancelled_rides)
 
-        # Tax collected from riders — passed through to driver as their income
+        # Tax collected from riders — only the driver's share of the split is
+        # their income (tax_split rides); legacy rides pass the full amount.
         _total_tax = Decimal("0")
         for r in rides:
-            _t = Decimal(str(r.get("tax_amount") or 0))
-            if _t == 0:
+            _t = Decimal(str(driver_tax_portion(r) or 0))
+            if _t == 0 and not r.get("tax_split"):
                 _snap = r.get("fare_breakdown_snapshot") or {}
                 for _ln in _snap.get("lines") or []:
                     if _ln.get("type") in ("tax", "gst", "pst"):

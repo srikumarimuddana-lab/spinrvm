@@ -21,9 +21,12 @@ Hourly backlog scan (replay-safe per the CLAUDE.md loop recipe):
 
 Refunds: routes/webhooks charge.refunded → payment_service.record_refund_event
 calls ``reverse_platform_ride_tax``. Full refunds create a mode="full" tax
-reversal; partial refunds are flagged for the daily reconciliation to
-resolve manually (Stripe partial reversals need line-item allocation that a
-proportional rider refund does not map onto cleanly).
+reversal; partial refunds only set ``stripe_tax_reversal_pending`` in the
+financial_events metadata (Stripe partial reversals need line-item
+allocation that a proportional rider refund does not map onto cleanly).
+NOTE: nothing consumes that flag automatically yet — finance must query
+financial_events for it until the reconcile-loop surfacing ships (tracked
+in docs/stripe-tax-cra-compliance.md §4 Phase 2).
 
 Gated on the ``stripe_tax_enabled`` app setting (default OFF): enabling it
 requires Spinr's GST/PST registrations to exist in the Stripe Tax dashboard

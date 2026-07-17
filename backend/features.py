@@ -1054,6 +1054,7 @@ async def compute_fare_estimate(
         dropoff_lng,
         distance_km,
         subtotal,
+        driver_subtotal=_fare_f(fb.driver_earnings),
         _all_areas=all_areas,
         # P5: reuse the pickup area we already resolved above — avoids
         # calculate_all_fees re-running point-in-polygon over every area.
@@ -1073,6 +1074,7 @@ async def compute_fare_estimate(
         "area_fees_total": fees_result["fees_total"],
         "tax_amount": fees_result["tax_amount"],
         "tax_breakdown": fees_result["tax_breakdown"],
+        "tax_split": fees_result.get("tax_split"),
         "grand_total": grand_total,
         "service_area": fees_result.get("service_area_name"),
         # Consumed by server-side bookers (corporate guest booking) that turn

@@ -563,6 +563,11 @@ def _apply_filters(q, filters: Optional[Dict[str, Any]]):
                 q = q.neq(k, _unwrap_enum(v["$ne"]))
             elif "$nin" in v and isinstance(v["$nin"], (list, tuple)):
                 q = q.not_.in_(k, [_unwrap_enum(x) for x in v["$nin"]])
+            elif "$notnull" in v:
+                # {"col": {"$notnull": True}} → PostgREST not.is.null. A
+                # {"col": {"$ne": None}} would emit neq.null, which never
+                # matches in PostgREST — this is the only correct spelling.
+                q = q.not_.is_(k, "null")
             elif "$regex" in v:
                 # Escape LIKE wildcards in user input so `%`/`_` can't over-match
                 # or be used as a cheap scan vector (C6).

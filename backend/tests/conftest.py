@@ -4,6 +4,7 @@ This file provides shared fixtures for all test modules.
 """
 
 import asyncio
+import inspect
 import os
 import sys
 from typing import Any, Dict, Generator
@@ -30,9 +31,9 @@ os.environ["ADMIN_PASSWORD"] = os.environ.get("ADMIN_PASSWORD") or "TestAdminPas
 os.environ["ADMIN_EMAIL"] = os.environ.get("ADMIN_EMAIL") or "admin@spinr.ca"
 os.environ["ENV"] = os.environ.get("ENV") or "test"
 
-# Pre-import backend.server with REAL slowapi so all route module-level decorators
-# bind real types. rate_limiter.py does `from slowapi import Limiter` at module
-# level — if that runs inside the slowapi mock context below, MagicMock children
+# Pre-import backend.server with real rate-limit dependencies so all route
+# module-level decorators bind real types. If that runs inside the slowapi mock
+# context below, MagicMock children
 # flow into FastAPI's route registration and cause FastAPIError at test setup.
 # Since Python caches modules in sys.modules, fixtures that later do
 # `from backend.server import app` get the already-built app with correct bindings.
@@ -429,11 +430,13 @@ def reset_db_circuit_breaker() -> None:
 
 
 def _reset_limiter_storage(limiter_obj) -> None:
-    """Reset MemoryStorage on a SlowAPI Limiter instance (if present)."""
+    """Reset sync SlowAPI or async limits storage before a test."""
     inner = getattr(limiter_obj, "_limiter", None)
     storage = getattr(inner, "storage", None) if inner is not None else None
     if storage is not None and callable(getattr(storage, "reset", None)):
-        storage.reset()
+        result = storage.reset()
+        if inspect.isawaitable(result):
+            asyncio.run(result)
 
 
 @pytest.fixture(autouse=True)

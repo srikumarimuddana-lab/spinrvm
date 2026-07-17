@@ -295,28 +295,30 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
     # facing /drivers/nearby endpoint so the cars a rider sees on the map are
     # exactly the drivers who can receive an offer.
     # Presence filter: only dispatch to drivers whose Redis heartbeat key is
-    # alive. We distinguish two empty-set cases:
-    #   - Redis reachable, set empty → all candidates' heartbeats have expired
+    # alive. We distinguish two empty-set cases via the reachable flag:
+    #   - reachable=True, set empty → all candidates' heartbeats have expired
     #     (ghost drivers) → apply the filter so they get no offer
-    #   - Redis unavailable (in-process fallback or connection error) → skip
-    #     the filter so a Redis outage can't halt dispatching entirely
+    #   - reachable=False (Redis configured but unavailable) → skip the filter
+    #     so a Redis outage can't halt dispatching entirely. A liveness probe
+    #     on the client object is NOT sufficient here — the lazy client looks
+    #     live mid-outage while MGET fails; only the checked variant reports
+    #     whether the presence store actually answered.
     try:
         try:
-            from ...utils.driver_presence import present_driver_ids as _present_ids  # type: ignore
-            from ...utils.redis_client import _get_redis as _check_redis  # type: ignore
+            from ...utils.driver_presence import present_driver_ids_checked as _present_ids_checked  # type: ignore
         except ImportError:
-            from utils.driver_presence import present_driver_ids as _present_ids  # type: ignore
-            from utils.redis_client import _get_redis as _check_redis  # type: ignore
-        _redis_live = await _check_redis() is not None
-        _present_ids_set = await _present_ids([d["id"] for d in all_drivers])
-        if _redis_live:
+            from utils.driver_presence import present_driver_ids_checked as _present_ids_checked  # type: ignore
+        _present_ids_set, _presence_reachable = await _present_ids_checked([d["id"] for d in all_drivers])
+        if _presence_reachable:
             before_presence = len(all_drivers)
             all_drivers = [d for d in all_drivers if d["id"] in _present_ids_set]
             logger.info(f"[DISPATCH] presence filter: {len(all_drivers)}/{before_presence} driver(s) reachable")
         else:
             logger.warning("[DISPATCH] Redis unavailable — presence filter skipped, using all DB-online drivers")
+            _metric_inc("spinr_dispatch_presence_filter_failed_total")
     except Exception as _pres_exc:
         logger.warning(f"[DISPATCH] presence filter failed, using all DB-online drivers: {_pres_exc}")
+        _metric_inc("spinr_dispatch_presence_filter_failed_total")
 
     # Skip drivers who recently timed out or declined this specific offer
     # so the same driver is not hammered with repeat notifications. Batch the

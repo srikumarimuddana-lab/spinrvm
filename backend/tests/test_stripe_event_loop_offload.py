@@ -1,0 +1,105 @@
+"""Stripe SDK calls in async routes must not block the event loop."""
+
+from __future__ import annotations
+
+import ast
+import asyncio
+import threading
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+
+def _load_payments_function(name: str, **globals_override):
+    """Compile one real route function without importing the full app graph."""
+    source_path = Path(__file__).parents[1] / "routes" / "payments.py"
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    function = next(
+        node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name
+    )
+    isolated = ast.Module(body=[function], type_ignores=[])
+    ast.fix_missing_locations(isolated)
+    namespace = {"asyncio": asyncio, **globals_override}
+    exec(compile(isolated, source_path, "exec"), namespace)
+    return namespace[name]
+
+
+@pytest.mark.anyio
+async def test_customer_creation_yields_to_event_loop() -> None:
+    release = threading.Event()
+
+    def blocking_create(**_kwargs):
+        assert release.wait(timeout=1)
+        return SimpleNamespace(id="cus_created")
+
+    db = SimpleNamespace(
+        get_user_by_id=AsyncMock(
+            side_effect=[
+                {"id": "user-1", "stripe_customer_id": None},
+                {"id": "user-1", "stripe_customer_id": "cus_created"},
+            ]
+        ),
+        update_one=AsyncMock(),
+    )
+    stripe = SimpleNamespace(Customer=SimpleNamespace(create=blocking_create))
+    get_or_create_stripe_customer = _load_payments_function(
+        "get_or_create_stripe_customer",
+        db_supabase=db,
+        stripe=stripe,
+        HTTPException=RuntimeError,
+    )
+
+    timer = threading.Timer(0.1, release.set)
+    timer.start()
+    ticker = asyncio.create_task(asyncio.sleep(0.01))
+    try:
+        assert await get_or_create_stripe_customer("user-1", "sk_test") == "cus_created"
+    finally:
+        release.set()
+        timer.cancel()
+
+    assert ticker.done(), "synchronous Stripe call blocked the event loop"
+    await ticker
+
+
+def test_all_payments_stripe_sdk_calls_are_offloaded() -> None:
+    source_path = Path(__file__).parents[1] / "routes" / "payments.py"
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    parents: dict[ast.AST, ast.AST] = {}
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            parents[child] = parent
+
+    blocking_calls: list[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Attribute)
+            and isinstance(func.value.value, ast.Name)
+            and func.value.value.id == "stripe"
+        ):
+            continue
+
+        ancestor = parents.get(node)
+        while ancestor is not None and not isinstance(ancestor, ast.Lambda):
+            ancestor = parents.get(ancestor)
+        if ancestor is None:
+            blocking_calls.append(node.lineno)
+            continue
+
+        wrapper = parents.get(ancestor)
+        if not (
+            isinstance(wrapper, ast.Call)
+            and isinstance(wrapper.func, ast.Attribute)
+            and isinstance(wrapper.func.value, ast.Name)
+            and wrapper.func.value.id == "asyncio"
+            and wrapper.func.attr == "to_thread"
+        ):
+            blocking_calls.append(node.lineno)
+
+    assert blocking_calls == [], f"Stripe SDK calls still run on the event loop at lines {blocking_calls}"

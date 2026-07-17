@@ -22,6 +22,7 @@ All DB calls are mocked so no real Supabase is needed.
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -93,7 +94,9 @@ def _enable_real_limiter():
     inner = getattr(default_limiter, "_limiter", None)
     storage = getattr(inner, "storage", None) if inner is not None else None
     if storage is not None and callable(getattr(storage, "reset", None)):
-        storage.reset()
+        result = storage.reset()
+        if result is not None:
+            asyncio.run(result)
     yield
     default_limiter.enabled = False
 

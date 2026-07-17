@@ -643,7 +643,17 @@ async def insert_one(table: str, doc: Dict[str, Any]):
     if not isinstance(doc, dict):
         raise TypeError(f"insert_one({table!r}) doc must be a dict, got {type(doc).__name__}: {doc!r}")
     doc = _serialize_for_api(doc)
-    return await run_sync(lambda: _single_row_from_res(supabase.table(table).insert(doc).execute()))
+    result = await run_sync(lambda: _single_row_from_res(supabase.table(table).insert(doc).execute()))
+    # A freshly inserted drivers/users row must evict any negative-cache
+    # sentinel (e.g. a cached "no driver for this user_id" empty-dict) so the
+    # new row is visible on the very next authenticated request instead of only
+    # after the cache TTL expires. update_one/delete already do this; insert did
+    # not, which left a just-registered driver looking like is_driver=false.
+    if table == "drivers":
+        await invalidate_driver_cache(driver_id=doc.get("id"), user_id=doc.get("user_id"))
+    elif table == "users":
+        await invalidate_user_cache(doc.get("id"))
+    return result
 
 
 async def insert_many(table: str, docs: List[Dict[str, Any]]):

@@ -371,7 +371,8 @@ async def admin_login(request: Request, response: Response, body: LoginRequest):
         if ok:
             if not staff.get("is_active", True):
                 raise HTTPException(status_code=403, detail="Account is deactivated")
-            updates: dict = {"last_login": datetime.now(timezone.utc).isoformat()}
+            _now_iso = datetime.now(timezone.utc).isoformat()
+            updates: dict = {"last_login": _now_iso}
             if needs_upgrade:
                 updates["password_hash"] = hash_password(body.password)
                 logger.info(
@@ -379,6 +380,32 @@ async def admin_login(request: Request, response: Response, body: LoginRequest):
                     staff["id"],
                 )
             await db_supabase.update_one("admin_staff", {"id": staff["id"]}, updates)
+            # Reset the idle-session clock on every fresh authentication. Without
+            # this a staff member who idles past the 30-minute timeout is locked
+            # out forever: _verify_admin_payload raises ERR_IDLE_TIMEOUT before it
+            # reaches the line that refreshes last_activity_at, and nothing else
+            # writes the column — so the stale timestamp 401s every request
+            # (login → 401 → refresh → 401 → logout). This covers all three
+            # session paths (direct login, MFA challenge, forced enrollment):
+            # they all pass through here before a session is minted or gated.
+            #
+            # Kept as a separate best-effort write, NOT folded into the atomic
+            # `updates` above: if last_activity_at hasn't been migrated yet
+            # (233), folding it in would 500 every staff login. And that failure
+            # mode is benign — a missing column means _verify_admin_payload reads
+            # None and skips the idle check entirely, so there is no lockout to
+            # recover from. The missing column is already surfaced loudly in
+            # _verify_admin_payload's per-request log, so nothing is masked here.
+            try:
+                await db_supabase.update_one(
+                    "admin_staff", {"id": staff["id"]}, {"last_activity_at": _now_iso}
+                )
+            except Exception as _idle_err:
+                logger.warning(
+                    "Could not reset last_activity_at on login for staff %s: %s",
+                    staff["id"],
+                    _idle_err,
+                )
             if staff.get("mfa_enabled"):
                 mfa_token = _mint_mfa_challenge_token(staff["id"], token_version=int(staff.get("token_version") or 0))
                 await _clear_login_failures(body.email)

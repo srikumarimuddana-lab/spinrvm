@@ -26,6 +26,15 @@ export const SOS_LAST_KNOWN_TIMEOUT_MS = 1000;
  * almost always well within this bound.
  */
 export const SOS_LAST_KNOWN_MAX_AGE_MS = 120_000; // 2 minutes
+/**
+ * Max acceptable uncertainty radius (metres) for a cached fix. The SOS backend
+ * stores only lat/lng — not the accuracy radius — so a coarse cell-tower / Wi-Fi
+ * fix (kilometre-scale) would be treated downstream as a precise position.
+ * Reject anything coarser so support/responders are never handed a km-scale
+ * cell as the exact emergency location; the alert still fires with no
+ * coordinates. GPS (~5–50 m) and decent Wi-Fi fixes pass; cell-only does not.
+ */
+export const SOS_LAST_KNOWN_MAX_ACCURACY_M = 500;
 
 export interface SOSCoords {
   lat?: number;
@@ -64,9 +73,13 @@ export async function getSOSLocation(
   }
 
   const lastKnown = await withTimeout(
-    // maxAge rejects a stale cached fix (returns null) so we never report a
-    // previous trip's location as the current emergency position.
-    Location.getLastKnownPositionAsync({ maxAge: SOS_LAST_KNOWN_MAX_AGE_MS }),
+    // maxAge rejects a stale cached fix (previous trip) and requiredAccuracy
+    // rejects a coarse cell/Wi-Fi fix; expo returns null in either case so we
+    // never report a wrong-or-imprecise location as the emergency position.
+    Location.getLastKnownPositionAsync({
+      maxAge: SOS_LAST_KNOWN_MAX_AGE_MS,
+      requiredAccuracy: SOS_LAST_KNOWN_MAX_ACCURACY_M,
+    }),
     SOS_LAST_KNOWN_TIMEOUT_MS
   );
   if (lastKnown) {

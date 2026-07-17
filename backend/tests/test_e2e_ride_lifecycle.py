@@ -182,12 +182,22 @@ class TestRideLifecycleConcurrency:
 
         from backend.routes import drivers as drv_mod
 
-        driver = {"id": "driver_a", "user_id": "user_a"}
+        # Distinct driver rows per user — a blanket mock returning one driver
+        # for both users would turn the loser into the winner replaying their
+        # own accept, which is an idempotent 200 by design, not this race.
+        driver_a = {"id": "driver_a", "user_id": "user_a"}
+        driver_b = {"id": "driver_b", "user_id": "user_b"}
         ride = {"id": RIDE_ID, "status": "searching", "driver_id": None, "rider_id": RIDER_ID}
         accepted = {**ride, "status": "driver_accepted", "driver_id": "driver_a"}
 
+        async def _get_rows(table, filters=None, **kwargs):
+            if table == "drivers":
+                return [driver_b] if (filters or {}).get("user_id") == "user_b" else [driver_a]
+            # ride_offers lookup on the broadcast/searching path — pending for both.
+            return [{"id": "offer-1", "ride_id": RIDE_ID, "status": "pending"}]
+
         with (
-            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+            patch("backend.routes.drivers._deps.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
             patch("backend.routes.drivers._deps.db_supabase.get_ride", AsyncMock(return_value=ride)),
             patch("backend.routes.drivers._deps.db.update_one", AsyncMock(side_effect=[accepted, None])),
             patch("backend.routes.drivers._deps.db.find_one", AsyncMock(return_value=accepted)),

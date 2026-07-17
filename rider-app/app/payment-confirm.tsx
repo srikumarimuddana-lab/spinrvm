@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
@@ -13,9 +13,11 @@ import {
 import CustomToggle from '../components/CustomToggle';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
 import { useStripe } from '@stripe/stripe-react-native';
+import { selectDefaultCardId } from '../utils/selectDefaultCard';
 import { useWalletStore } from '../store/walletStore';
 import { useWorkProfileStore } from '../store/workProfileStore';
 import { showToast } from '../store/toastStore';
@@ -94,16 +96,21 @@ function PaymentConfirmScreenContent() {
     fetchWallet();
   }, []);
 
-  useEffect(() => {
+  // Refetch saved cards on focus so a card added on /manage-cards (pushed,
+  // then returned via router.back()) shows up and is auto-selected without
+  // remounting this screen. Keep an explicit still-valid selection; otherwise
+  // fall back to the default card (the backend marks the first card default).
+  const loadSavedCards = useCallback(() => {
     api.get('/payments/cards').then((res) => {
       const cards: SavedCard[] = Array.isArray(res.data) ? res.data : [];
       setSavedCards(cards);
-      const defaultCard = cards.find((c) => c.is_default) ?? cards[0];
-      if (defaultCard) setSelectedCardId(defaultCard.id);
+      setSelectedCardId((prev) => selectDefaultCardId(prev, cards));
     }).catch((e) => {
       console.warn('[PaymentConfirm] Failed to load saved cards:', e?.message ?? e);
     });
   }, []);
+
+  useFocusEffect(loadSavedCards);
 
   // Keep corporate toggle in sync when work mode is toggled elsewhere
   useEffect(() => {
@@ -295,26 +302,25 @@ function PaymentConfirmScreenContent() {
             );
           })}
 
-          {/* Show generic card option if no saved cards loaded yet */}
+          {/* No saved cards yet: tapping "Credit Card" takes the rider
+              straight to the add-card screen instead of selecting an empty
+              option. On return, the focus refetch auto-selects the new card. */}
           {savedCards.length === 0 && (
             <TouchableOpacity
-              style={[styles.paymentOption, selectedPayment === 'card' && styles.paymentOptionSelected]}
-              onPress={() => setSelectedPayment('card')}
-              accessibilityRole="radio"
-              accessibilityLabel="Credit card"
-              accessibilityState={{ checked: selectedPayment === 'card' }}
+              style={styles.paymentOption}
+              onPress={() => { setSelectedPayment('card'); router.push('/manage-cards' as any); }}
+              accessibilityRole="button"
+              accessibilityLabel="Add a credit card"
+              accessibilityHint="Opens the manage cards screen"
             >
               <View style={styles.paymentIconContainer}>
-                <Ionicons name="card" size={24} color={selectedPayment === 'card' ? colors.primary : colors.textDim} />
+                <Ionicons name="card" size={24} color={colors.textDim} />
               </View>
               <View style={styles.paymentInfo}>
                 <Text style={styles.paymentName}>Credit Card</Text>
+                <Text style={styles.paymentDetails}>Tap to add a card</Text>
               </View>
-              {selectedPayment === 'card' && (
-                <View style={styles.paymentCheck}>
-                  <Ionicons name="checkmark" size={18} color="#FFFFFF" />
-                </View>
-              )}
+              <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
             </TouchableOpacity>
           )}
 

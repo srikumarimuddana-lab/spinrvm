@@ -18,6 +18,7 @@ import BottomSheet, { BottomSheetScrollView, BottomSheetBackdrop, BottomSheetTex
 import CustomToggle from '../components/CustomToggle';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Circle, Polyline, Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
@@ -38,6 +39,7 @@ import api, { getApiErrorMessage } from '@shared/api/client';
 import Analytics from '@shared/analytics';
 import { useScheduledRideReminder } from '../hooks/useScheduledRideReminder';
 import { promoDiscountForEstimate, grandTotalOf } from '../utils/promoDiscount';
+import { selectDefaultCardId } from '../utils/selectDefaultCard';
 
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
@@ -289,19 +291,33 @@ function RideOptionsScreenContent() {
     }
   }, [pickup, dropoff, nearbyDrivers, routeCoordinates, mapReady]);
 
-  // Payment data fetch
+  // Work profiles + wallet: load once on mount.
   useEffect(() => {
     fetchWorkProfiles();
     fetchWallet();
+  }, []);
+
+  // Load saved cards on mount AND every time this screen regains focus.
+  // The rider adds a card on /manage-cards (reached via router.push) and
+  // returns via router.back(), which re-focuses this screen without
+  // remounting it — so a mount-only fetch would never see the new card and
+  // the payment selector would stay empty. Refetching on focus makes the
+  // freshly added card appear and auto-selects it so the rider can confirm
+  // their vehicle type without restarting the booking.
+  const loadSavedCards = useCallback(() => {
     api.get('/payments/cards').then((res) => {
       const cards: SavedCard[] = Array.isArray(res.data) ? res.data : [];
       setSavedCards(cards);
-      const defaultCard = cards.find(c => c.is_default) ?? cards[0];
-      if (defaultCard) setSelectedCardId(defaultCard.id);
+      // Preserve the rider's explicit selection if it's still valid; otherwise
+      // fall back to the default card (the backend marks the first card as
+      // default), so a new customer's first card is auto-selected.
+      setSelectedCardId((prev) => selectDefaultCardId(prev, cards));
     }).catch((e) => {
       console.warn('[RideOptions] Failed to load saved cards:', e?.message ?? e);
     });
   }, []);
+
+  useFocusEffect(loadSavedCards);
 
   useEffect(() => {
     if (workModeEnabled && corporateAccounts.length > 0) {
@@ -987,17 +1003,16 @@ function RideOptionsScreenContent() {
 
               {savedCards.length === 0 && (
                 <TouchableOpacity
-                  style={[styles.paymentOption, selectedPayment === 'card' && !useCorporate && styles.paymentOptionSelected]}
-                  onPress={() => { setSelectedPayment('card'); setUseCorporate(false); }}>
+                  style={styles.paymentOption}
+                  onPress={() => { setSelectedPayment('card'); setUseCorporate(false); setShowPaymentSheet(false); router.push('/manage-cards' as any); }}>
                   <View style={styles.paymentOptionIcon}>
                     <Ionicons name="card" size={22} color={colors.textDim} />
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.paymentOptionName}>Credit Card</Text>
+                    <Text style={styles.paymentOptionDetail}>Tap to add a card</Text>
                   </View>
-                  {selectedPayment === 'card' && !useCorporate && (
-                    <View style={styles.paymentCheck}><Ionicons name="checkmark" size={16} color="#FFF" /></View>
-                  )}
+                  <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                 </TouchableOpacity>
               )}
 

@@ -16,15 +16,19 @@ from typing import Callable, Dict
 
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
+from limits.aio.storage import MemoryStorage
 from loguru import logger
-from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_ipaddr
 
 try:
     from core.config import settings
+    from utils.async_limiter import AsyncLimiter
+    from utils.metrics import inc as _metric_inc
 except ImportError:  # pragma: no cover — package-relative fallback for tests
     from ..core.config import settings  # type: ignore[no-redef]
+    from .async_limiter import AsyncLimiter  # type: ignore[no-redef]
+    from .metrics import inc as _metric_inc  # type: ignore[no-redef]
 
 # ============================================================================
 # Rate Limiter Configuration
@@ -43,36 +47,8 @@ if _rate_limit_storage_uri == "memory://":
         "replicas. Set RATE_LIMIT_REDIS_URL for production deployments."
     )
 else:
-    # Verify Redis is reachable at startup with retry. A cold-start race
-    # (Redis container still booting) previously caused a permanent fallback
-    # to memory:// — weakening OTP brute-force protection for the entire
-    # process lifetime. Three attempts with backoff cover typical container
-    # orchestration delays.
-    _redis_connected = False
-    for _attempt in range(3):
-        try:
-            import redis as _redis_sync
-
-            _probe = _redis_sync.from_url(_rate_limit_storage_uri, socket_connect_timeout=2)
-            _probe.ping()
-            _probe.close()
-            scheme = _rate_limit_storage_uri.split("://", 1)[0]
-            logger.info(f"Rate limiter using distributed storage backend: {scheme}://…")
-            _redis_connected = True
-            break
-        except Exception as _redis_err:
-            if _attempt < 2:
-                logger.warning(
-                    f"Redis not ready (attempt {_attempt + 1}/3): {_redis_err} — retrying in {(_attempt + 1) * 2}s"
-                )
-                time.sleep((_attempt + 1) * 2)
-            else:
-                logger.error(
-                    f"Redis unavailable after 3 attempts — rate limiter degraded to in-memory fallback ({_redis_err}); "
-                    "OTP brute-force protection weakened on multi-replica deployments"
-                )
-    if not _redis_connected:
-        _rate_limit_storage_uri = "memory://"
+    scheme = _rate_limit_storage_uri.split("://", 1)[0]
+    logger.info(f"Rate limiter configured with async distributed storage: {scheme}://…")
 
 # ---------------------------------------------------------------------------
 # OTP fail-closed policy
@@ -94,6 +70,17 @@ def _is_otp_key(key: str) -> bool:
     """Return True if *key* belongs to an OTP rate-limit bucket."""
     lower = key.lower()
     return any(fragment in lower for fragment in _OTP_KEY_FRAGMENTS)
+
+
+def _is_security_scope(scope: str) -> bool:
+    normalized = scope.lower()
+    return _is_otp_key(normalized) or "/auth/" in normalized
+
+
+def _record_storage_error(scope: str, error: Exception, fail_closed: bool) -> None:
+    policy = "fail_closed" if fail_closed else "fallback"
+    logger.error(f"Async rate-limit storage failed; policy={policy}; scope={scope}", exc_info=error)
+    _metric_inc("spinr_rate_limit_storage_errors_total", {"policy": policy})
 
 
 def get_real_client_ip(request: Request) -> str:
@@ -121,10 +108,13 @@ def get_real_client_ip(request: Request) -> str:
 
 # Default limiter — keyed on the authoritative client IP (CF-Connecting-IP when
 # behind Cloudflare) instead of the spoofable leftmost X-Forwarded-For. (P2-7, C5)
-default_limiter = Limiter(
+default_limiter = AsyncLimiter(
     key_func=get_real_client_ip,
     default_limits=["100/minute", "1000/hour"],
     storage_uri=_rate_limit_storage_uri,
+    fallback_storage=MemoryStorage(),
+    fail_closed_predicate=_is_security_scope,
+    on_storage_error=_record_storage_error,
 )
 
 # ============================================================================

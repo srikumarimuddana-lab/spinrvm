@@ -1,6 +1,8 @@
 """Behavioral contract for the async endpoint limiter."""
 
 import asyncio
+import importlib
+import sys
 
 import pytest
 from fastapi import HTTPException
@@ -133,3 +135,23 @@ async def test_general_scope_degrades_to_async_memory_limit() -> None:
     with pytest.raises(RateLimitExceeded):
         await endpoint(request=request)
     assert failures == [("/rides", False), ("/rides", False)]
+
+
+def test_default_limiter_uses_async_storage_and_records_degradation(monkeypatch) -> None:
+    monkeypatch.setenv("JWT_SECRET", "test-secret-that-is-at-least-thirty-two-characters")
+    monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
+    monkeypatch.delenv("RATE_LIMIT_REDIS_URL", raising=False)
+    sys.modules.pop("backend.utils.rate_limiter", None)
+
+    module = importlib.import_module("backend.utils.rate_limiter")
+    assert isinstance(module.default_limiter, AsyncLimiter)
+    assert module.default_limiter._fail_closed_predicate("/auth/login") is True
+    assert module.default_limiter._fail_closed_predicate("/rides") is False
+
+    from backend.utils import metrics
+
+    labels = (("policy", "fallback"),)
+    before = metrics.snapshot()["counters"].get("spinr_rate_limit_storage_errors_total", {}).get(labels, 0)
+    module._record_storage_error("/rides", ConnectionError("redis unavailable"), False)
+    after = metrics.snapshot()["counters"]["spinr_rate_limit_storage_errors_total"][labels]
+    assert after == before + 1

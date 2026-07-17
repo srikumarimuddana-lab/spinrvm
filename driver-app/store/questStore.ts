@@ -1,9 +1,5 @@
 import { create } from 'zustand';
-import api from '@shared/api/client';
-
-function isAxiosError(e: unknown): e is { response?: { data?: { detail?: string } }; message?: string } {
-  return typeof e === 'object' && e !== null && ('response' in e || 'message' in e);
-}
+import api, { getApiErrorMessage } from '@shared/api/client';
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null;
@@ -88,7 +84,7 @@ export const useQuestStore = create<QuestState>((set, get) => ({
       const availableQuests = arrayFromApi<Quest>(res.data, ['quests', 'available_quests', 'data']);
       set({ availableQuests, isLoadingAvailable: false });
     } catch (error: unknown) {
-      set({ error: isAxiosError(error) ? (error.message ?? 'Failed to fetch quests') : 'Failed to fetch quests', isLoadingAvailable: false });
+      set({ error: getApiErrorMessage(error, 'Failed to fetch quests'), isLoadingAvailable: false });
     }
   },
 
@@ -110,7 +106,7 @@ export const useQuestStore = create<QuestState>((set, get) => ({
       await get().fetchAvailableQuests();
       await get().fetchMyQuests();
     } catch (error: unknown) {
-      set({ error: isAxiosError(error) ? (error.response?.data?.detail || error.message || 'Failed to join quest') : 'Failed to join quest', isLoadingAvailable: false });
+      set({ error: getApiErrorMessage(error, 'Failed to join quest'), isLoadingAvailable: false });
       throw error;
     }
   },
@@ -122,7 +118,7 @@ export const useQuestStore = create<QuestState>((set, get) => ({
       await get().fetchMyQuests();
       return res.data;
     } catch (error: unknown) {
-      set({ error: isAxiosError(error) ? (error.response?.data?.detail || error.message || 'Failed to claim reward') : 'Failed to claim reward', isLoadingMine: false });
+      set({ error: getApiErrorMessage(error, 'Failed to claim reward'), isLoadingMine: false });
       throw error;
     }
   },

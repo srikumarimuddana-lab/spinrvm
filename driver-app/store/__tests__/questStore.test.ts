@@ -17,16 +17,8 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
     removeItem: jest.fn(() => Promise.resolve()),
 }));
 
-jest.mock('@shared/api/client', () => ({
-    __esModule: true,
-    default: {
-        get: jest.fn(),
-        post: jest.fn(),
-        put: jest.fn(),
-        patch: jest.fn(),
-        delete: jest.fn(),
-    },
-}));
+// @shared/api/client resolves to the shared stub via moduleNameMapper, which
+// also mirrors getApiErrorMessage (backend detail wins, else the fallback).
 
 import { useQuestStore } from '../questStore';
 import api from '@shared/api/client';
@@ -192,13 +184,13 @@ describe('questStore — joinQuest', () => {
         expect(useQuestStore.getState().isLoadingAvailable).toBe(false);
     });
 
-    it('falls back to error.message when response detail is absent', async () => {
+    it('uses the friendly fallback (never raw error.message) when response detail is absent', async () => {
         const err = new Error('Timeout');
         mockPost.mockRejectedValue(err);
 
         await expect(useQuestStore.getState().joinQuest('q1')).rejects.toThrow('Timeout');
 
-        expect(useQuestStore.getState().error).toBe('Timeout');
+        expect(useQuestStore.getState().error).toBe('Failed to join quest');
     });
 });
 
@@ -226,13 +218,13 @@ describe('questStore — claimReward', () => {
         expect(useQuestStore.getState().isLoadingMine).toBe(false);
     });
 
-    it('falls back to error.message when response detail is absent', async () => {
+    it('uses the friendly fallback (never raw error.message) when response detail is absent', async () => {
         const err = new Error('Network failure');
         mockPost.mockRejectedValue(err);
 
         await expect(useQuestStore.getState().claimReward('p1')).rejects.toThrow('Network failure');
 
-        expect(useQuestStore.getState().error).toBe('Network failure');
+        expect(useQuestStore.getState().error).toBe('Failed to claim reward');
     });
 });
 

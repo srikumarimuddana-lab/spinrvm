@@ -51,9 +51,15 @@ export default function BecomeDriverScreen() {
   const [currentStep, setCurrentStep] = useState(0);
 
   // Personal Info
-  const [firstName, setFirstName] = useState(user?.first_name || '');
-  const [lastName, setLastName] = useState(user?.last_name || '');
-  const [email, setEmail] = useState(user?.email || '');
+  // Start blank so the driver enters their own name/email during registration.
+  // We deliberately do NOT pre-fill from the logged-in account: a signup only
+  // needs a phone number, so the account's first/last/email are often stale or
+  // placeholder-looking values (e.g. "John Doe" / "john@gmail.com") that then
+  // showed up as if they were real, filled-in fields. An in-progress draft
+  // (loadDraft) still restores whatever the driver typed themselves.
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [email, setEmail] = useState('');
   const [gender, setGender] = useState(user?.gender || '');
   const [city, setCity] = useState(user?.city || 'Saskatoon');
   const [serviceAreaId, setServiceAreaId] = useState('');

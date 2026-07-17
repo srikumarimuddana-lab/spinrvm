@@ -9,9 +9,9 @@ coroutine runs.
 
 Any code inside that request coroutine can then call
 ``remaining_seconds()`` to get the time budget left. The canonical
-consumer today is ``db_supabase.run_sync``, which skips retry sleeps
-once the deadline is exhausted — freeing the worker thread for a
-request that isn't already doomed from the client's point of view.
+consumer is ``db_supabase.run_sync``: it rejects expired work before
+queue submission, bounds executor waits by the remaining budget, and
+skips retry sleeps that would outlive the request.
 
 A contextvar is used (not ``request.state``) so the value is implicitly
 carried through ``asyncio.create_task`` / background coroutines spawned

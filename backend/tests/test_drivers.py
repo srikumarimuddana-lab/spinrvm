@@ -380,3 +380,69 @@ class TestDriverVehicle:
         result = await get_rows("vehicle_types")
 
         assert len(result) == 3
+
+
+class TestRegisterDriverName:
+    """Regression tests for driver name resolution in register_driver.
+
+    A driver row must never be stored with the generic "Driver" placeholder as
+    its first_name — that rendered brand-new drivers literally as "Driver" in
+    the admin panel. The name must come from the register body, then the user's
+    account profile, and only the display `name` may fall back (to the phone).
+    """
+
+    async def _run_register(self, body, current_user):
+        from unittest.mock import AsyncMock, patch
+
+        from backend.routes.drivers import profile
+
+        captured = {}
+
+        async def _capture_insert(table, doc):
+            if table == "drivers":
+                captured["driver"] = doc
+            return doc
+
+        with (
+            patch.object(profile.db_supabase, "get_rows", AsyncMock(return_value=[])),
+            patch.object(profile.db_supabase, "insert_one", AsyncMock(side_effect=_capture_insert)),
+            patch.object(profile.db_supabase, "update_one", AsyncMock(return_value={})),
+            patch.object(profile, "generate_driver_code", lambda: "TESTCODE"),
+            patch.object(profile._shared, "_encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
+        ):
+            await profile.register_driver(body=body, current_user=current_user)
+        return captured["driver"]
+
+    @pytest.mark.asyncio
+    async def test_name_from_register_body(self):
+        driver = await self._run_register(
+            body={"first_name": "Gurbir", "last_name": "Singh"},
+            current_user={"id": "u1", "phone": "+13061112222"},
+        )
+        assert driver["first_name"] == "Gurbir"
+        assert driver["last_name"] == "Singh"
+        assert driver["name"] == "Gurbir Singh"
+
+    @pytest.mark.asyncio
+    async def test_name_falls_back_to_account_profile(self):
+        # Body omits the name, but the users account has it — use the account.
+        driver = await self._run_register(
+            body={},
+            current_user={"id": "u2", "phone": "+13062223333", "first_name": "Chintan", "last_name": "Patel"},
+        )
+        assert driver["first_name"] == "Chintan"
+        assert driver["last_name"] == "Patel"
+        assert driver["name"] == "Chintan Patel"
+
+    @pytest.mark.asyncio
+    async def test_no_name_never_stores_driver_placeholder(self):
+        # No name anywhere: first_name/last_name must be NULL (not "Driver"),
+        # and the display name falls back to the phone.
+        driver = await self._run_register(
+            body={},
+            current_user={"id": "u3", "phone": "+13062929175"},
+        )
+        assert driver["first_name"] is None
+        assert driver["last_name"] is None
+        assert driver["name"] == "+13062929175"
+        assert driver["name"] != "Driver"

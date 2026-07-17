@@ -4,7 +4,7 @@ import {
   Linking, Vibration,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import * as Location from 'expo-location';
+import { getSOSLocation } from '../utils/sosLocation';
 
 interface SOSButtonProps {
   rideId?: string;
@@ -109,15 +109,11 @@ export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps)
     setSending(true);
     Vibration.vibrate([0, 200, 100, 200, 100, 200]);
 
-    let lat: number | undefined;
-    let lng: number | undefined;
-    try {
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      lat = loc.coords.latitude;
-      lng = loc.coords.longitude;
-    } catch (locationErr) {
-      console.warn('[SOS] Location fetch failed — proceeding without coordinates:',
-        locationErr instanceof Error ? locationErr.message : String(locationErr));
+    // Hard-bounded lookup: fresh fix raced against a short deadline, then
+    // last-known, then no coords — a GPS dead zone must never delay the alert.
+    const { lat, lng } = await getSOSLocation();
+    if (lat === undefined) {
+      console.warn('[SOS] No location fix within deadline — sending alert without coordinates');
     }
 
     // Attempt backend call with two retries (3 total attempts) using

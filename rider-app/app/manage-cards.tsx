@@ -22,6 +22,7 @@ interface Card {
   exp_month: number;
   exp_year: number;
   is_default: boolean;
+  cardholder_name?: string | null;
 }
 
 /**
@@ -175,25 +176,17 @@ export default function ManageCardsScreen() {
   };
 
   const handleDeleteCard = (card: Card) => {
-    // Standard wallet rule (Uber/Amazon/etc.): the default card cannot be
-    // removed while other cards exist — the user must promote another card to
-    // default first, so there is always a valid card to charge. Removing the
-    // *only* card is allowed, since there is nothing to fall back to.
-    if (card.is_default && cards.length > 1) {
-      setConfirmState({
-        visible: true,
-        title: 'Set a New Default First',
-        message: 'This is your default card. Choose another card as your default before removing this one.',
-        variant: 'info',
-        buttons: [{ text: 'Got It', style: 'default' }],
-      });
-      return;
-    }
-
+    // Any card can be removed. If this is the default and other cards remain,
+    // the backend auto-promotes the most recently added card to default, so
+    // the user is never left with cards but no default. Removing the only card
+    // simply empties the wallet.
+    const isDefaultWithOthers = card.is_default && cards.length > 1;
     setConfirmState({
       visible: true,
       title: 'Remove Card',
-      message: 'Are you sure you want to remove this card?',
+      message: isDefaultWithOthers
+        ? 'This is your default card. Another card will become your default after it is removed.'
+        : 'Are you sure you want to remove this card?',
       variant: 'warning',
       buttons: [
         { text: 'Cancel', style: 'cancel' },
@@ -262,7 +255,7 @@ export default function ManageCardsScreen() {
           <View style={styles.faceBottomLeft}>
             <Text style={styles.faceMetaLabel}>CARD HOLDER</Text>
             <Text style={styles.faceMetaValue} numberOfLines={1}>
-              {cardName && item.is_default ? cardName.toUpperCase() : 'SPINR RIDER'}
+              {(item.cardholder_name || '').trim().toUpperCase() || 'SPINR RIDER'}
             </Text>
           </View>
           <View style={styles.faceExpiry}>
@@ -277,10 +270,7 @@ export default function ManageCardsScreen() {
     );
   };
 
-  const renderCard = ({ item }: { item: Card }) => {
-    // Default card is "locked" from removal while other cards exist.
-    const lockedDefault = item.is_default && cards.length > 1;
-    return (
+  const renderCard = ({ item }: { item: Card }) => (
     <View style={styles.cardRow}>
       {renderCardFace(item)}
 
@@ -303,22 +293,13 @@ export default function ManageCardsScreen() {
               </TouchableOpacity>
             )
           )}
-          <TouchableOpacity
-            style={[styles.deleteBtn, lockedDefault && styles.deleteBtnLocked]}
-            onPress={() => handleDeleteCard(item)}
-            activeOpacity={0.7}
-          >
-            <Ionicons
-              name={lockedDefault ? 'lock-closed-outline' : 'trash-outline'}
-              size={lockedDefault ? 16 : 18}
-              color={lockedDefault ? colors.textSecondary : colors.error}
-            />
+          <TouchableOpacity style={styles.deleteBtn} onPress={() => handleDeleteCard(item)} activeOpacity={0.7}>
+            <Ionicons name="trash-outline" size={18} color={colors.error} />
           </TouchableOpacity>
         </View>
       </View>
     </View>
-    );
-  };
+  );
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -584,10 +565,6 @@ function createStyles(colors: ThemeColors) {
       width: 34, height: 34, borderRadius: 17,
       justifyContent: 'center', alignItems: 'center',
       backgroundColor: colors.surfaceLight,
-    },
-    deleteBtnLocked: {
-      backgroundColor: 'transparent',
-      borderWidth: 1, borderColor: colors.border,
     },
 
     payBanner: {

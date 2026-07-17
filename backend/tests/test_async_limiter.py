@@ -145,11 +145,11 @@ def test_default_limiter_uses_async_storage_and_records_degradation(monkeypatch)
     sys.modules.pop("backend.utils.rate_limiter", None)
 
     module = importlib.import_module("backend.utils.rate_limiter")
-    assert isinstance(module.default_limiter, AsyncLimiter)
+    assert isinstance(module.default_limiter, module.AsyncLimiter)
     assert module.default_limiter._fail_closed_predicate("/auth/login") is True
     assert module.default_limiter._fail_closed_predicate("/rides") is False
 
-    from backend.utils import metrics
+    metrics = importlib.import_module(module._metric_inc.__module__)
 
     labels = (("policy", "fallback"),)
     before = metrics.snapshot()["counters"].get("spinr_rate_limit_storage_errors_total", {}).get(labels, 0)

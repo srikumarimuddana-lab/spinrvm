@@ -792,6 +792,45 @@ class TestAdminUpdateDriver:
         assert writes["users"]["first_name"] == "New"
         assert writes["users"]["last_name"] == "Driver"
 
+    def test_null_vehicle_fields_coalesced_not_constraint_violation(self):
+        """Regression: vehicle_make/model/color/license_plate are NOT NULL
+        DEFAULT '' on drivers. The admin edit form posts the whole driver object,
+        so editing only the name still sends those vehicle fields as JSON null
+        for a driver with no vehicle yet. Writing null raised 23502 and 500'd the
+        entire edit. Explicit nulls must be coalesced to '' before the write."""
+        from backend.routes.admin import drivers as admin_drivers
+
+        driver = _driver(first_name="Kiran", last_name="Muddana")
+        update_mock = AsyncMock(return_value=driver)
+
+        with (
+            patch("backend.routes.admin.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            patch("backend.routes.admin.drivers.db_supabase.update_one", update_mock),
+            patch("backend.routes.admin.drivers._log_driver_activity", AsyncMock()),
+        ):
+            # Admin only changed the last name; the form still posts the empty
+            # vehicle fields as null (the full object round-trip).
+            asyncio.run(
+                admin_drivers.admin_update_driver(
+                    driver_id=DRIVER_ID,
+                    updates={
+                        "first_name": "Kiran",
+                        "last_name": "Reddy",
+                        "vehicle_make": None,
+                        "vehicle_model": None,
+                        "vehicle_color": None,
+                        "license_plate": None,
+                    },
+                    admin=ADMIN_USER,
+                )
+            )
+
+        drivers_writes = [c.args[2] for c in update_mock.call_args_list if c.args[0] == "drivers"]
+        assert drivers_writes, "expected a drivers update to be written"
+        payload = drivers_writes[0]
+        for col in ("vehicle_make", "vehicle_model", "vehicle_color", "license_plate"):
+            assert payload[col] == "", f"{col} must be coalesced to '' (NOT NULL column), got {payload[col]!r}"
+
     def test_409_when_user_only_field_but_no_linked_user(self):
         from fastapi import HTTPException
 

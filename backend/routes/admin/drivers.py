@@ -1101,6 +1101,16 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
     user_updates = {k: v for k, v in filtered.items() if k in user_fields}
     driver_updates = {k: v for k, v in filtered.items() if k in driver_fields}
 
+    # These drivers columns are `TEXT NOT NULL DEFAULT ''` (supabase_schema.sql),
+    # but the admin form posts an empty/absent vehicle field as JSON null.
+    # Writing null violates the not-null constraint (23502) and 500s the whole
+    # edit for any driver without full vehicle details (e.g. a pending driver who
+    # hasn't entered a vehicle yet). Coalesce an explicit null back to the column
+    # default so clearing a field stores '' instead of blowing up the update.
+    for _col in ("vehicle_make", "vehicle_model", "vehicle_color", "license_plate"):
+        if _col in driver_updates and driver_updates[_col] is None:
+            driver_updates[_col] = ""
+
     # Keep the legacy `drivers.name` atom in sync when either name part changes,
     # since enrichment falls back to it when there is no linked user row.
     # Coalesce explicit JSON nulls to "" so a cleared part never renders as the

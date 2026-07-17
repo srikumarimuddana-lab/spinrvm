@@ -214,10 +214,19 @@ export default function ManageCardsScreen() {
   };
 
   const handleDeleteCard = (card: Card) => {
-    // Any card can be removed. If this is the default and other cards remain,
-    // the backend auto-promotes the most recently added card to default, so
-    // the user is never left with cards but no default. Removing the only card
-    // simply empties the wallet.
+    // Keep at least one card on file — block removing the last one.
+    if (cards.length <= 1) {
+      setConfirmState({
+        visible: true,
+        title: 'Add a Card First',
+        message: 'You need at least one card on your account. Add another card before removing this one.',
+        variant: 'info',
+        buttons: [{ text: 'Got It', style: 'default' }],
+      });
+      return;
+    }
+    // With other cards present, removing the default auto-promotes the most
+    // recently added card to default on the backend.
     const isDefaultWithOthers = card.is_default && cards.length > 1;
     setConfirmState({
       visible: true,

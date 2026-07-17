@@ -489,9 +489,21 @@ async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict
                 area_req = next((d for d in required_docs if d.get("key") == doc_data.requirement_id), None)
                 logger.info(f"Area requirement found: {area_req is not None}")
 
-        if not area_req:
-            # Fallback: allow common document types even if not configured in service area
-            # This handles cases where service areas haven't been set up yet
+        if area_req:
+            # Service area explicitly configured this requirement — synthesise a
+            # req-like dict so downstream code works uniformly.
+            req = {
+                "id": area_req.get("key"),
+                "name": area_req.get("label", doc_data.requirement_id),
+                "requires_back_side": area_req.get("requires_back_side", False),
+            }
+        else:
+            # Fallback: allow common document types even if not configured in the
+            # service area. This handles areas that haven't been set up yet.
+            # NOTE: this branch must NOT fall through to an area_req.get(...) —
+            # area_req is None here, and doing so raised AttributeError (500) on
+            # every common-requirement upload (e.g. a driver's licence uploaded
+            # before the service area configured its required documents).
             common_requirements = {
                 "drivers_license": {"name": "Driver's License", "requires_back_side": False},
                 "vehicle_insurance": {"name": "Vehicle Insurance", "requires_back_side": False},
@@ -512,18 +524,6 @@ async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict
                     f"Requirement '{doc_data.requirement_id}' not found in global table, service area, or common types"
                 )
                 raise HTTPException(status_code=404, detail=f"Requirement '{doc_data.requirement_id}' not found")
-        # Synthesise a req-like dict so downstream code works uniformly
-        req = {
-            "id": area_req.get("key"),
-            "name": area_req.get("label", doc_data.requirement_id),
-            "requires_back_side": area_req.get("requires_back_side", False),
-        }
-        # Synthesise a req-like dict so downstream code works uniformly
-        req = {
-            "id": area_req.get("key"),
-            "name": area_req.get("label", doc_data.requirement_id),
-            "requires_back_side": area_req.get("requires_back_side", False),
-        }
 
     # Supersede any prior docs for this requirement+side and flip the
     # driver back to unverified so admin re-reviews this upload.

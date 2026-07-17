@@ -7,6 +7,7 @@ import inspect
 from functools import wraps
 from typing import Callable
 
+from fastapi import HTTPException
 from limits import parse_many
 from limits.aio.storage import MemoryStorage, RedisStorage
 from limits.aio.strategies import FixedWindowRateLimiter
@@ -26,12 +27,25 @@ def _storage_from_uri(uri: str):
 class AsyncLimiter:
     """Await rate-limit storage without changing route decorator call sites."""
 
-    def __init__(self, *, key_func, default_limits=None, storage_uri="memory://", storage=None) -> None:
+    def __init__(
+        self,
+        *,
+        key_func,
+        default_limits=None,
+        storage_uri="memory://",
+        storage=None,
+        fallback_storage=None,
+        fail_closed_predicate=None,
+        on_storage_error=None,
+    ) -> None:
         self.enabled = True
         self._key_func = key_func
         self._default_limits = [item for value in (default_limits or []) for item in parse_many(value)]
         self._storage = storage or _storage_from_uri(storage_uri)
         self._limiter = FixedWindowRateLimiter(self._storage)
+        self._fallback_limiter = FixedWindowRateLimiter(fallback_storage) if fallback_storage is not None else None
+        self._fail_closed_predicate = fail_closed_predicate or (lambda _scope: False)
+        self._on_storage_error = on_storage_error
 
     def limit(
         self,
@@ -111,8 +125,21 @@ class AsyncLimiter:
             if limit_for_header is None or item < limit_for_header[0]:
                 limit_for_header = (item, identifiers)
             request_cost = cost(request) if callable(cost) else cost
-            if not await self._limiter.hit(item, *identifiers, cost=request_cost):
+            if not await self._hit(item, identifiers, request_cost, scope):
                 request.state.view_rate_limit = (item, identifiers)
                 raise RateLimitExceeded(wrapped)
 
         request.state.view_rate_limit = limit_for_header
+
+    async def _hit(self, item, identifiers, request_cost, scope) -> bool:
+        try:
+            return await self._limiter.hit(item, *identifiers, cost=request_cost)
+        except Exception as error:
+            fail_closed = bool(self._fail_closed_predicate(scope))
+            if self._on_storage_error is not None:
+                self._on_storage_error(scope, error, fail_closed)
+            if fail_closed:
+                raise HTTPException(status_code=503, detail="Rate limiting unavailable, please retry") from None
+            if self._fallback_limiter is None:
+                raise
+            return await self._fallback_limiter.hit(item, *identifiers, cost=request_cost)

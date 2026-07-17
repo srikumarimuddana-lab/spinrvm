@@ -308,7 +308,7 @@ function PaymentConfirmScreenContent() {
           {savedCards.length === 0 && (
             <TouchableOpacity
               style={styles.paymentOption}
-              onPress={() => { setSelectedPayment('card'); router.push('/manage-cards' as any); }}
+              onPress={() => { setSelectedPayment('card'); setUseCorporate(false); router.push('/manage-cards' as any); }}
               accessibilityRole="button"
               accessibilityLabel="Add a credit card"
               accessibilityHint="Opens the manage cards screen"

@@ -30,6 +30,7 @@ try:
     from ..core.config import settings as app_config
     from ..features import send_push_notification
     from ..utils.pii import area_only
+    from ..utils.stripe_tax import reverse_platform_ride_tax
 except ImportError:
     from core.config import settings as app_config  # type: ignore
     from features import send_push_notification  # type: ignore
@@ -216,6 +217,19 @@ async def record_refund_event(
                 "driver_earnings_retained": str(_round(_d(ride.get("driver_earnings") or 0))),
             }
         )
+        # Reverse the platform's recorded Stripe Tax transaction so Spinr's
+        # filing report nets out with the refund. Full refunds reverse
+        # immediately; partial refunds leave the txn flagged here for the
+        # daily reconciliation to resolve manually.
+        try:
+            _reversal_id = await reverse_platform_ride_tax(ride, refund_cents)
+            if _reversal_id:
+                meta["stripe_tax_reversal_id"] = _reversal_id
+            elif ride.get("stripe_tax_transaction_id"):
+                meta["stripe_tax_reversal_pending"] = True
+        except Exception as tax_err:
+            meta["stripe_tax_reversal_pending"] = True
+            logger.error(f"[PAYMENT] stripe tax reversal failed for ride {ride_id}: {tax_err}")
     try:
         await db_supabase.insert_one(
             "financial_events",

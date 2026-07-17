@@ -345,6 +345,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to import Stripe reconciliation loop: {e}")
 
+    # Stripe Tax recorder — hourly. Mirrors the platform share of ride GST
+    # (tax_split.platform_*, migration 233) into Stripe Tax transactions so
+    # the Stripe Tax report is the filing source for Spinr's ride-side GST.
+    # Gated on the stripe_tax_enabled app setting (default OFF). Replay-safe:
+    # unique Stripe reference per ride + NULL-stamp claim filter.
+    try:
+        from utils.stripe_tax import stripe_tax_recorder_loop
+
+        _spawn("stripe_tax_recorder (1h)", stripe_tax_recorder_loop)
+    except Exception as e:
+        logger.warning(f"Failed to import Stripe Tax recorder loop: {e}")
+
     # T4A annual issuance — runs on the last day of February each year at
     # 08:00 UTC. Identifies drivers with ≥ $500 prior-year earnings, sends
     # each a push notification that their T4A slip is available, and logs

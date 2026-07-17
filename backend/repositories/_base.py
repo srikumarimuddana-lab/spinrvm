@@ -40,12 +40,14 @@ except ImportError:
 
 try:
     from ..utils.deadline import deadline_exhausted as _deadline_exhausted  # type: ignore
+    from ..utils.deadline import remaining_seconds as _remaining_seconds
     from ..utils.error_handling import DatabaseError, DuplicateRecordError, ServiceUnavailableException  # type: ignore
     from ..utils.metrics import inc as _metric_inc  # type: ignore
     from ..utils.metrics import set_gauge as _metric_gauge
     from ..utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set  # type: ignore
 except ImportError:
     from utils.deadline import deadline_exhausted as _deadline_exhausted  # type: ignore
+    from utils.deadline import remaining_seconds as _remaining_seconds
     from utils.error_handling import DatabaseError, DuplicateRecordError, ServiceUnavailableException  # type: ignore
     from utils.metrics import inc as _metric_inc  # type: ignore
     from utils.metrics import set_gauge as _metric_gauge
@@ -137,6 +139,12 @@ _DB_THREAD_POOL_SIZE = int(_os.environ.get("DB_THREAD_POOL_SIZE") or _os.environ
 _DB_EXECUTOR = _ThreadPoolExecutor(max_workers=_DB_THREAD_POOL_SIZE, thread_name_prefix="spinr-db")
 
 
+def _record_db_queue_depth() -> None:
+    queue = getattr(_DB_EXECUTOR, "_work_queue", None)
+    if queue is not None:
+        _metric_gauge("spinr_db_thread_pool_queue_depth", queue.qsize())
+
+
 # ── Retry policy ────────────────────────────────────────────────────
 
 RetryPolicy = Literal["read", "idempotent_write", "write"]
@@ -182,6 +190,11 @@ async def run_sync(
       - idempotent_write: 2 attempts, 750ms with jitter.
       - write: 1 attempt, no retry.
     """
+    remaining = _remaining_seconds()
+    if remaining is not None and remaining <= 0:
+        _metric_inc("spinr_db_calls_rejected_total", {"reason": "deadline_exhausted"})
+        raise ServiceUnavailableException("database")
+
     if not _breaker.should_allow():
         _metric_inc("spinr_db_calls_rejected_total", {"reason": "circuit_open"})
         raise ServiceUnavailableException("database")
@@ -194,12 +207,33 @@ async def run_sync(
 
     for attempt in range(len(backoffs) + 1):
         try:
-            result = await loop.run_in_executor(_DB_EXECUTOR, func)  # type: ignore
+            remaining = _remaining_seconds()
+            if remaining is not None and remaining <= 0:
+                _metric_inc("spinr_db_calls_rejected_total", {"reason": "deadline_exhausted"})
+                raise ServiceUnavailableException("database")
+
+            future = loop.run_in_executor(_DB_EXECUTOR, func)  # type: ignore
+            _record_db_queue_depth()
+            try:
+                if remaining is None:
+                    result = await future
+                else:
+                    result = await asyncio.wait_for(future, timeout=remaining)
+            except TimeoutError:
+                future.cancel()
+                _metric_inc("spinr_db_calls_rejected_total", {"reason": "deadline_timeout"})
+                logger.error("[DB] Executor wait exceeded the request deadline")
+                raise ServiceUnavailableException("database") from None
+            finally:
+                _record_db_queue_depth()
+
             _breaker.record_success()
             _metric_gauge("spinr_db_circuit_state", 0, {"state": "closed"})
             _metric_gauge("spinr_db_thread_pool_threads", len(_DB_EXECUTOR._threads))
             _metric_gauge("spinr_db_thread_pool_max_workers", _DB_EXECUTOR._max_workers)
             return result
+        except ServiceUnavailableException:
+            raise
         except Exception as exc:
             if isinstance(exc, ValueError):
                 raise

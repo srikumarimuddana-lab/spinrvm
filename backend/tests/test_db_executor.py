@@ -13,18 +13,19 @@ Contract:
 
 from __future__ import annotations
 
+import asyncio
 import threading
 
 import pytest
 
 
 def test_db_executor_has_explicit_size_default_64():
-    import db_supabase
+    from repositories import _base
 
     # _DB_EXECUTOR is a ThreadPoolExecutor — its max_workers is what we set.
     # ThreadPoolExecutor stores it in private attribute `_max_workers`.
-    assert db_supabase._DB_THREAD_POOL_SIZE == 64
-    assert db_supabase._DB_EXECUTOR._max_workers == 64
+    assert _base._DB_THREAD_POOL_SIZE == 64
+    assert _base._DB_EXECUTOR._max_workers == 64
 
 
 def test_single_db_executor_no_gauge_only_twin():
@@ -72,8 +73,6 @@ async def test_run_sync_dispatches_to_db_executor(monkeypatch):
 
     # Patch the bound method on the running loop. Easiest path: monkey-patch
     # asyncio.get_running_loop().run_in_executor to capture the executor arg.
-    import asyncio
-
     real_loop = asyncio.get_running_loop()
     real_run_in_executor = real_loop.run_in_executor
 
@@ -90,3 +89,60 @@ async def test_run_sync_dispatches_to_db_executor(monkeypatch):
 
     assert result == 42
     assert seen["executor"] is db_supabase._DB_EXECUTOR, f"run_sync should pass _DB_EXECUTOR, got {seen['executor']!r}"
+
+
+@pytest.mark.anyio
+async def test_expired_deadline_rejects_before_executor_submission(monkeypatch):
+    from repositories import _base
+    from utils.error_handling import ServiceUnavailableException
+
+    _base._breaker.record_success()
+    monkeypatch.setattr(_base, "_remaining_seconds", lambda: 0.0, raising=False)
+    loop = asyncio.get_running_loop()
+    original = loop.run_in_executor
+
+    def unexpected_submission(*_args, **_kwargs):
+        raise AssertionError("expired work must not enter the DB queue")
+
+    loop.run_in_executor = unexpected_submission  # type: ignore[method-assign]
+    try:
+        with pytest.raises(ServiceUnavailableException):
+            await _base.run_sync(lambda: 42)
+    finally:
+        loop.run_in_executor = original  # type: ignore[method-assign]
+
+    assert _base._breaker._state == "closed"
+
+
+@pytest.mark.anyio
+async def test_slow_executor_wait_respects_deadline_without_tripping_breaker(monkeypatch):
+    from repositories import _base
+    from utils.error_handling import ServiceUnavailableException
+
+    _base._breaker.record_success()
+    monkeypatch.setattr(_base, "_remaining_seconds", lambda: 0.01, raising=False)
+    loop = asyncio.get_running_loop()
+    original = loop.run_in_executor
+    pending = loop.create_future()
+    loop.run_in_executor = lambda *_args, **_kwargs: pending  # type: ignore[method-assign]
+    try:
+        with pytest.raises(ServiceUnavailableException):
+            await asyncio.wait_for(_base.run_sync(lambda: 42), timeout=0.1)
+    finally:
+        loop.run_in_executor = original  # type: ignore[method-assign]
+
+    assert pending.cancelled()
+    assert _base._breaker._state == "closed"
+
+
+@pytest.mark.anyio
+async def test_run_sync_emits_queue_depth_gauge(monkeypatch):
+    from repositories import _base
+
+    _base._breaker.record_success()
+    monkeypatch.setattr(_base, "_remaining_seconds", lambda: None, raising=False)
+    gauges = []
+    monkeypatch.setattr(_base, "_metric_gauge", lambda name, value, labels=None: gauges.append((name, value)))
+
+    assert await _base.run_sync(lambda: 42) == 42
+    assert any(name == "spinr_db_thread_pool_queue_depth" for name, _value in gauges)

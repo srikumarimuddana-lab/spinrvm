@@ -6,7 +6,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -136,8 +136,8 @@ export default function LoyaltyScreen() {
       setSelectedReward(null);
       setRedeemAlert({ visible: true, title: 'Redeemed!', message: `${selectedReward.points_required.toLocaleString()} pts redeemed for $${selectedReward.reward_value} ride credit. It will apply on your next booking.`, variant: 'success' });
       loadData(true);
-    } catch (err: any) {
-      setRedeemAlert({ visible: true, title: 'Error', message: err.message || 'Redemption failed. Please try again.', variant: 'danger' });
+    } catch (err: unknown) {
+      setRedeemAlert({ visible: true, title: 'Error', message: getApiErrorMessage(err, 'Redemption failed. Please try again.'), variant: 'danger' });
     } finally {
       setRedeeming(false);
     }

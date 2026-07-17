@@ -449,14 +449,20 @@ export function getApiErrorMessage(
   // No usable response body. Some callers (e.g. authStore.createProfile) extract
   // the backend detail themselves and re-throw `new Error(detail)`, so a
   // meaningful err.message should still win. Ignore Axios's generic
-  // "Request failed with status code N" and "Network Error".
+  // "Request failed with status code N" and "Network Error", and JSON-parse
+  // SyntaxErrors from a malformed/HTML response body ("JSON Parse error: …"
+  // on Hermes, "Unexpected token …" on V8/web) — technical noise, not a
+  // message for the user.
   const raw = anyErr?.message;
   if (
     raw &&
+    anyErr?.name !== 'SyntaxError' &&
     raw !== 'Request failed' && // extractError's no-detail sentinel
     !/^Request failed with status code/i.test(raw) &&
     !/^Network Error$/i.test(raw) &&
-    !/^timeout of /i.test(raw)
+    !/^timeout of /i.test(raw) &&
+    !/^JSON Parse error/i.test(raw) &&
+    !/^Unexpected token/i.test(raw)
   ) {
     return clampToastMessage(raw);
   }

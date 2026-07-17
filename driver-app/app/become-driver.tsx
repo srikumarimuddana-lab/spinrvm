@@ -221,17 +221,12 @@ export default function BecomeDriverScreen() {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
       const data = await response.json();
-      let types = Array.isArray(data) ? data : [];
-      // A service area with no fare configs filters out every type
-      // (backend returns 200 + []). Fall back to the unfiltered active
-      // list so onboarding isn't blocked by missing fare configuration.
-      if (types.length === 0) {
-        const fallback = await fetch(`${SpinrConfig.backendUrl}/api/v1/vehicle-types`);
-        if (fallback.ok) {
-          const fallbackData = await fallback.json();
-          if (Array.isArray(fallbackData)) types = fallbackData;
-        }
-      }
+      const types = Array.isArray(data) ? data : [];
+      // Show only the vehicle types configured for the selected service area.
+      // An empty result used to fall back to the unfiltered global list, which
+      // surfaced every seeded type (Economy / Premium / Van / XL) regardless of
+      // the area — the bug drivers reported. The empty state below handles a
+      // genuinely unconfigured area instead of masking it.
       setVehicleTypes(types);
     } catch (e: any) {
       console.log('Error fetching vehicle types:', e);

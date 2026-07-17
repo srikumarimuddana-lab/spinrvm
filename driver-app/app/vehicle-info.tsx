@@ -80,16 +80,15 @@ export default function VehicleInfoScreen() {
         setVehicleTypesStatus('loading');
         try {
             const areaId = driver?.service_area_id;
+            // Only offer the vehicle types configured for the driver's selected
+            // service area. Previously an empty filtered result fell back to the
+            // unfiltered global list, which showed every seeded type (Economy /
+            // Premium / Van / XL) regardless of what the area actually serves —
+            // exactly the bug drivers hit. If the area serves no types (or none
+            // is selected), show an empty state rather than masking it.
             let types: VehicleType[] = [];
             if (areaId) {
                 const response = await api.get<VehicleType[]>(`/vehicle-types?service_area_id=${areaId}`);
-                types = response.data || [];
-            }
-            // A service area with no fare configs filters out every type
-            // (backend returns 200 + []). The driver still needs to classify
-            // their vehicle, so fall back to the unfiltered active list.
-            if (types.length === 0) {
-                const response = await api.get<VehicleType[]>('/vehicle-types');
                 types = response.data || [];
             }
             setVehicleTypes(types);
@@ -405,7 +404,7 @@ export default function VehicleInfoScreen() {
                                             <Text style={styles.vehicleTypeEmptyText}>
                                                 {vehicleTypesStatus === 'error'
                                                     ? "Couldn't load vehicle types. Check your connection and try again."
-                                                    : 'No vehicle types are available yet. Please contact support.'}
+                                                    : 'No vehicle types are set up for your service area yet. Please contact support.'}
                                             </Text>
                                             <TouchableOpacity style={styles.vehicleTypeRetryBtn} onPress={fetchVehicleTypes} activeOpacity={0.8}>
                                                 <Text style={styles.vehicleTypeRetryText}>Try Again</Text>

@@ -2,8 +2,15 @@ name: EAS Mobile Update
 
 # ─── What this does ────────────────────────────────────────────────────────
 # On every push to main that touches rider-app / driver-app / shared:
-#   → Publishes an OTA JS-only update to the `production` channel for the
+#   → Publishes an OTA JS-only update to the `preview` channel for the
 #     affected app. Phones on that channel pick it up on next launch.
+#     (ADR-008: preview builds point EXPO_PUBLIC_BACKEND_URL at staging, so
+#     this is the staging-facing mobile track.)
+#
+# Publishing to the `production` channel is manual only: workflow_dispatch
+# with profile=production, run it as part of (or right after) a
+# promote-production.yml rollout so production JS never ships ahead of the
+# backend it needs.
 #
 # OTA updates are JS-only. Native changes (new deps with native side, plugin
 # changes, Info.plist, permission additions, runtimeVersion bumps) still

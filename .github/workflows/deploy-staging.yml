@@ -1,0 +1,134 @@
+name: Deploy Backend to Staging
+
+# ADR-008 staging tier: every push to main auto-migrates the staging Supabase
+# project, deploys the spinr-backend-staging Fly app, and smoke-tests it at
+# https://api-staging.spinr.ca. Passing staging is the precondition for
+# running promote-production.yml.
+#
+# Dormant until provisioned: every job is gated on the repository variable
+# STAGING_ENABLED == 'true' (Settings → Secrets and variables → Actions →
+# Variables). Provisioning steps: docs/runbooks/staging-canary-provisioning.md.
+#
+# GitHub Environment `staging` secrets:
+#   STAGING_FLY_API_TOKEN          — deploy token for spinr-backend-staging
+#   STAGING_PG_CONNECTION_STRING   — staging Supabase session-pooler DSN
+#   STAGING_SUPABASE_URL           — https://<staging-ref>.supabase.co
+#   STAGING_SENTRY_DSN             — optional; staged into Fly secrets when set
+#   STAGING_EXPECTED_PROJECT_REF   — optional wrong-database guard for migrate.py
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'backend/**'
+      - '.github/workflows/deploy-staging.yml'
+  workflow_dispatch:
+
+env:
+  STAGING_URL: https://api-staging.spinr.ca
+
+jobs:
+  migrate-staging:
+    name: Migrate staging DB
+    if: vars.STAGING_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install psycopg2
+        run: pip install psycopg2-binary
+
+      - name: Apply migrations to staging
+        env:
+          PG_CONNECTION_STRING: ${{ secrets.STAGING_PG_CONNECTION_STRING }}
+          SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          EXPECTED_PROJECT_REF: ${{ secrets.STAGING_EXPECTED_PROJECT_REF }}
+        run: |
+          python backend/scripts/migrate.py --env staging --yes --dry-run | tee -a "$GITHUB_STEP_SUMMARY"
+          python backend/scripts/migrate.py --env staging --yes
+
+  deploy-staging:
+    name: Deploy to Fly (staging)
+    needs: migrate-staging
+    runs-on: ubuntu-latest
+    environment: staging
+    # Hoisted to job env because the `secrets` context is not available in a
+    # step `if:` conditional (same pattern as deploy-fly.yml).
+    env:
+      FLY_APP: spinr-backend-staging
+      SENTRY_DSN: ${{ secrets.STAGING_SENTRY_DSN }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Stage Sentry DSN in Fly secrets
+        if: ${{ env.SENTRY_DSN != '' }}
+        run: flyctl secrets set SENTRY_DSN="${SENTRY_DSN}" --stage -a "${FLY_APP}"
+        env:
+          FLY_API_TOKEN: ${{ secrets.STAGING_FLY_API_TOKEN }}
+
+      # Run from backend/ so the Docker build context is backend/ (same
+      # reasoning as deploy-fly.yml). RELEASE_SHA is asserted by the health
+      # check below and surfaced at /health for the promote pipeline.
+      - name: Deploy to Fly.io (staging)
+        working-directory: backend
+        run: flyctl deploy --remote-only --config fly.staging.toml --env RELEASE_SHA=${{ github.sha }}
+        env:
+          FLY_API_TOKEN: ${{ secrets.STAGING_FLY_API_TOKEN }}
+
+      - name: Health check (env + release assertion)
+        run: |
+          echo "Polling ${STAGING_URL}/health …"
+          for i in $(seq 1 18); do
+            BODY=$(curl -sf --max-time 5 "${STAGING_URL}/health" || echo "")
+            if [ -n "$BODY" ]; then
+              ENV_FIELD=$(echo "$BODY" | jq -r '.env // empty')
+              RELEASE=$(echo "$BODY" | jq -r '.release // empty')
+              echo "  attempt ${i}/18 → env=${ENV_FIELD} release=${RELEASE}"
+              if [ "$ENV_FIELD" = "staging" ] && [ "$RELEASE" = "${{ github.sha }}" ]; then
+                echo "Staging is healthy and serving this commit."
+                exit 0
+              fi
+            else
+              echo "  attempt ${i}/18 → not healthy yet"
+            fi
+            sleep 10
+          done
+          echo "::error::Staging health/release assertion failed after 3 minutes."
+          exit 1
+
+  smoke-staging:
+    name: Smoke test staging
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install smoke dependencies
+        run: pip install requests websockets
+
+      # OTP dispatch is skipped: staging refuses the static-OTP fallback
+      # (ADR-008) and CI shouldn't burn SMS. Auth-dependent flows are covered
+      # by the REVIEW_LOGIN_ACCOUNTS-based checks run manually per the
+      # canary-deploy runbook.
+      - name: Run full-stack smoke
+        run: |
+          python scripts/smoke/full_stack_smoke.py \
+            --backend "${STAGING_URL}" \
+            --with-ws \
+            --skip otp \
+            --strict \
+            --verbose | tee -a "$GITHUB_STEP_SUMMARY"

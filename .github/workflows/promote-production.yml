@@ -1,0 +1,258 @@
+name: Promote to Production (canary → stable)
+
+# ADR-008 gated production promotion. Run manually AFTER deploy-staging is
+# green for the commit being promoted. Two human approvals:
+#
+#   1. GitHub Environment `production-canary` (required reviewers) gates the
+#      production DB migration + canary deploy + bake.
+#   2. GitHub Environment `production` (required reviewers) gates the full
+#      rollout to the stable Fly app + Railway standby — approve it only
+#      after reading the bake summary.
+#
+# Rollback before approval #2 = do nothing (canary still runs the new SHA on
+# ~5% traffic — either re-run this workflow with the previous SHA to reset
+# the canary, or drop the canary pool weight to 0 in Cloudflare). See
+# docs/runbooks/canary-deploy.md.
+#
+# Dormant until provisioned: gated on repo variable CANARY_PIPELINE_ENABLED.
+#
+# Environment secrets:
+#   production-canary: CANARY_FLY_API_TOKEN, PROD_PG_CONNECTION_STRING,
+#                      PROD_SUPABASE_URL, EXPECTED_PROD_PROJECT_REF,
+#                      CANARY_METRICS_TOKEN (optional)
+#   production:        FLY_API_TOKEN, RAILWAY_TOKEN, SENTRY_DSN,
+#                      FLY_HEALTH_URL, BACKEND_HEALTH_URL
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit SHA to promote (must be green on staging)"
+        required: true
+      bake_minutes:
+        description: "Canary bake duration in minutes"
+        required: true
+        default: "20"
+
+env:
+  CANARY_URL: https://spinr-backend-canary.fly.dev
+
+jobs:
+  migrate-prod:
+    name: Migrate production DB
+    if: vars.CANARY_PIPELINE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: production-canary
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install psycopg2
+        run: pip install psycopg2-binary
+
+      # Expand/contract discipline: every migration applied here must be
+      # compatible with the STILL-RUNNING stable release (it keeps serving
+      # throughout the bake). Contract/destructive steps ship one release
+      # after the code that stops using the old shape — migration-check.yml
+      # reviews this on the PR.
+      - name: Apply migrations to production
+        env:
+          PG_CONNECTION_STRING: ${{ secrets.PROD_PG_CONNECTION_STRING }}
+          SUPABASE_URL: ${{ secrets.PROD_SUPABASE_URL }}
+          EXPECTED_PROJECT_REF: ${{ secrets.EXPECTED_PROD_PROJECT_REF }}
+        run: |
+          echo "## Production migration plan" >> "$GITHUB_STEP_SUMMARY"
+          python backend/scripts/migrate.py --env production --yes --dry-run | tee -a "$GITHUB_STEP_SUMMARY"
+          python backend/scripts/migrate.py --env production --yes
+
+  deploy-canary:
+    name: Deploy canary (~5% traffic)
+    needs: migrate-prod
+    runs-on: ubuntu-latest
+    environment: production-canary
+    env:
+      FLY_APP: spinr-backend-canary
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.sha }}
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to Fly.io (canary)
+        working-directory: backend
+        run: flyctl deploy --remote-only --config fly.canary.toml --env RELEASE_SHA=${{ github.event.inputs.sha }}
+        env:
+          FLY_API_TOKEN: ${{ secrets.CANARY_FLY_API_TOKEN }}
+
+      - name: Health check (stage + release assertion)
+        run: |
+          echo "Polling ${CANARY_URL}/health …"
+          for i in $(seq 1 18); do
+            BODY=$(curl -sf --max-time 5 "${CANARY_URL}/health" || echo "")
+            if [ -n "$BODY" ]; then
+              STAGE=$(echo "$BODY" | jq -r '.stage // empty')
+              RELEASE=$(echo "$BODY" | jq -r '.release // empty')
+              echo "  attempt ${i}/18 → stage=${STAGE} release=${RELEASE}"
+              if [ "$STAGE" = "canary" ] && [ "$RELEASE" = "${{ github.event.inputs.sha }}" ]; then
+                echo "Canary is healthy and serving the promoted commit."
+                exit 0
+              fi
+            else
+              echo "  attempt ${i}/18 → not healthy yet"
+            fi
+            sleep 10
+          done
+          echo "::error::Canary health/release assertion failed after 3 minutes."
+          exit 1
+
+  bake:
+    name: Bake canary
+    needs: deploy-canary
+    runs-on: ubuntu-latest
+    environment: production-canary
+    steps:
+      - name: Watch canary for the bake window
+        env:
+          METRICS_TOKEN: ${{ secrets.CANARY_METRICS_TOKEN }}
+          BAKE_MINUTES: ${{ github.event.inputs.bake_minutes }}
+        run: |
+          snapshot_metrics() {
+            if [ -n "$METRICS_TOKEN" ]; then
+              curl -sf --max-time 10 -H "Authorization: Bearer ${METRICS_TOKEN}" "${CANARY_URL}/metrics" || true
+            else
+              curl -sf --max-time 10 "${CANARY_URL}/metrics" || true
+            fi
+          }
+          echo "Baking canary for ${BAKE_MINUTES} minute(s)…"
+          START_METRICS=$(snapshot_metrics)
+          FAILS=0
+          TICKS=$(( BAKE_MINUTES * 2 ))
+          for i in $(seq 1 "$TICKS"); do
+            STATUS=$(curl -sf --max-time 5 "${CANARY_URL}/health" -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
+            if [ "$STATUS" != "200" ]; then
+              FAILS=$(( FAILS + 1 ))
+              echo "  tick ${i}/${TICKS} → UNHEALTHY (HTTP ${STATUS}, consecutive fails: ${FAILS})"
+              # Three consecutive failed probes (~90s unhealthy) fails the bake.
+              if [ "$FAILS" -ge 3 ]; then
+                echo "::error::Canary went unhealthy during bake — do NOT promote."
+                exit 1
+              fi
+            else
+              FAILS=0
+              echo "  tick ${i}/${TICKS} → healthy"
+            fi
+            sleep 30
+          done
+          END_METRICS=$(snapshot_metrics)
+          {
+            echo "## Canary bake summary (${BAKE_MINUTES} min)"
+            echo ""
+            echo "Before approving the \`production\` environment, review:"
+            echo "- Sentry filter: \`environment:production deploy_stage:canary\` (new issue types = stop)"
+            echo "- Metrics deltas below (error counters and payment outcomes especially)"
+            echo ""
+            echo "<details><summary>Metrics at bake start</summary>"
+            echo ""
+            echo '```'
+            echo "${START_METRICS:-<unavailable>}"
+            echo '```'
+            echo "</details>"
+            echo "<details><summary>Metrics at bake end</summary>"
+            echo ""
+            echo '```'
+            echo "${END_METRICS:-<unavailable>}"
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Bake complete — review the job summary, then approve the production environment."
+
+  promote-stable:
+    name: Full rollout (stable Fly + Railway)
+    needs: bake
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      FLY_APP: spinr-backend-yyz
+      FLY_HEALTH_URL: ${{ secrets.FLY_HEALTH_URL }}
+      BACKEND_HEALTH_URL: ${{ secrets.BACKEND_HEALTH_URL }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.sha }}
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Stage Sentry DSN in Fly secrets
+        run: flyctl secrets set SENTRY_DSN="${SENTRY_DSN}" --stage -a "${FLY_APP}"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+
+      # Rolling deploy — same guarantees as deploy-fly.yml: new machines must
+      # pass /health before old ones are replaced.
+      - name: Deploy to Fly.io (stable)
+        working-directory: backend
+        run: flyctl deploy --remote-only --config fly.toml --env RELEASE_SHA=${{ github.event.inputs.sha }}
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Health check (stable)
+        if: ${{ env.FLY_HEALTH_URL != '' }}
+        run: |
+          echo "Polling ${FLY_HEALTH_URL}/health …"
+          for i in $(seq 1 18); do
+            BODY=$(curl -sf --max-time 5 "${FLY_HEALTH_URL}/health" || echo "")
+            RELEASE=$(echo "$BODY" | jq -r '.release // empty' 2>/dev/null || echo "")
+            echo "  attempt ${i}/18 → release=${RELEASE:-<none>}"
+            if [ "$RELEASE" = "${{ github.event.inputs.sha }}" ]; then
+              echo "Stable is healthy and serving the promoted commit."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::Stable health/release assertion failed after 3 minutes."
+          exit 1
+
+      - name: Install Railway CLI v4
+        run: npm i -g @railway/cli@4.40.2
+
+      - name: Deploy to Railway (standby)
+        run: railway up --service spinr-backend
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+      - name: Health check (Railway)
+        id: railway_health
+        if: ${{ env.BACKEND_HEALTH_URL != '' }}
+        env:
+          HEALTH_URL: ${{ secrets.BACKEND_HEALTH_URL }}
+        run: |
+          echo "Polling ${HEALTH_URL}/health …"
+          for i in $(seq 1 18); do
+            STATUS=$(curl -sf --max-time 5 "${HEALTH_URL}/health" \
+              -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
+            echo "  attempt ${i}/18 → HTTP ${STATUS}"
+            if [ "$STATUS" = "200" ]; then
+              echo "Railway standby is healthy."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::Railway health check timed out after 3 minutes."
+          exit 1
+
+      - name: Rollback Railway on health check failure
+        if: failure() && steps.railway_health.outcome == 'failure'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          echo "::warning::Railway health check failed — rolling back the standby."
+          railway rollback --service spinr-backend || true

@@ -1,8 +1,8 @@
 """PII retention purge — daily background loop (B-P1-6).
 
-Calls the SECURITY DEFINER Postgres function `purge_pii_retention()`
-(migration 50) once per day at ~03:00 UTC. The SQL function is naturally
-idempotent (anonymization gated on `gps_anonymized_at IS NULL`, deletes
+Calls the SECURITY DEFINER Postgres functions `purge_pii_retention()` and
+`purge_trip_route_geometry()` once per day at ~03:00 UTC. The SQL functions
+are naturally idempotent (anonymization gated by durable markers, deletes
 filter on a moving time cutoff), so running on every replica is safe.
 The Redis leader lock is belt-and-braces: it cuts the noise in the
 audit_logs table (one row per day instead of N replicas worth) without
@@ -97,6 +97,25 @@ async def run_retention_purge_tick(dry_run: bool = False) -> Optional[dict]:
         )
         return None
 
+    def _call_trip_route_geometry() -> Any:
+        return supabase.rpc("purge_trip_route_geometry", {"p_dry_run": dry_run}).execute()
+
+    try:
+        route_result = await run_sync(_call_trip_route_geometry)
+    except Exception:
+        logger.exception("retention_purge: rpc(purge_trip_route_geometry) failed")
+        raise
+
+    route_data = getattr(route_result, "data", None)
+    if route_data is None and isinstance(route_result, dict):
+        route_data = route_result.get("data")
+    if not isinstance(route_data, dict):
+        logger.error(
+            "retention_purge: unexpected trip-route geometry response shape: %r",
+            type(route_data).__name__,
+        )
+        raise RuntimeError("purge_trip_route_geometry returned an invalid response")
+
     skipped_fk = data.get("dsar_users_skipped_fk") or 0
     logger.info(
         "retention_purge complete dry_run=%s rides_anon=%s rides_del=%s "
@@ -112,6 +131,12 @@ async def run_retention_purge_tick(dry_run: bool = False) -> Optional[dict]:
         data.get("dsar_users_purged"),
         skipped_fk,
     )
+    logger.info(
+        "trip_route_geometry_purge complete dry_run=%s routes_anon=%s gap_events_del=%s",
+        route_data.get("dry_run"),
+        route_data.get("ride_routes_anonymized"),
+        route_data.get("ride_location_gap_events_deleted"),
+    )
     if skipped_fk:
         # A DSAR account past its 7y window could not be hard-deleted because an
         # unhandled RESTRICT FK still references it (Step H caught the violation
@@ -123,7 +148,7 @@ async def run_retention_purge_tick(dry_run: bool = False) -> Optional[dict]:
             "hard-delete blocked; add the offending table to purge_pii_retention Step H",
             skipped_fk,
         )
-    return data
+    return {**data, "trip_route_geometry": route_data}
 
 
 INTERVAL_SECONDS = 86400  # 24 h nominal; actual sleep includes ±10% jitter

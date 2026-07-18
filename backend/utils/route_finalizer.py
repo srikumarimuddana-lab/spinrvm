@@ -53,6 +53,13 @@ async def mark_route_pending(ride_id: str, completion_point: Optional[Dict[str, 
             "completion_point": completion_point,
             "processing_claimed_at": None,
             "next_retry_at": _now(),
+            # A queued re-finalization may contain new evidence. Hide the old
+            # image immediately; only the finalizer's current claim may attach
+            # a revision-matched private snapshot again.
+            "snapshot_revision": 0,
+            "snapshot_object_path": None,
+            "snapshot_url": None,
+            "finalized_at": None,
         },
         upsert=True,
     )

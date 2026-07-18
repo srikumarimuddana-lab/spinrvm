@@ -63,6 +63,10 @@ def test_mark_route_pending_upserts_versioned_completion_metadata(monkeypatch):
     assert args[2]["route_schema_version"] == 2
     assert args[2]["processing_status"] == "pending"
     assert args[2]["completion_point"] == {"missing_tail": True}
+    assert args[2]["snapshot_revision"] == 0
+    assert args[2]["snapshot_object_path"] is None
+    assert args[2]["snapshot_url"] is None
+    assert args[2]["finalized_at"] is None
     assert kwargs["upsert"] is True
 
 

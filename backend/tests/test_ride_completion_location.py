@@ -195,3 +195,12 @@ def test_legacy_completion_without_a_tail_remains_supported(monkeypatch: pytest.
         {"route_schema_version": 2, "completion_point": {"missing_tail": True}},
         upsert=True,
     )
+
+
+def test_completion_queues_v2_finalization_instead_of_publishing_legacy_geometry():
+    source = (Path(__file__).resolve().parents[1] / "routes" / "drivers" / "ride_complete.py").read_text()
+
+    assert "await mark_route_pending(" in source
+    assert "spawn(finalize_route(ride_id))" in source
+    assert "spawn(_validate_ride_route" not in source
+    assert "spawn(_shared._generate_and_store_ride_snapshot" not in source

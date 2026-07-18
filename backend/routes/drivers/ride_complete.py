@@ -51,9 +51,9 @@ except ImportError:
     from utils.breadcrumbs import persist_trip_location_batch  # type: ignore
 
 try:
-    from ...utils.route_finalizer import finalize_route, mark_route_pending
+    from ...utils.route_finalizer import mark_route_pending
 except ImportError:
-    from utils.route_finalizer import finalize_route, mark_route_pending  # type: ignore
+    from utils.route_finalizer import mark_route_pending  # type: ignore
 
 
 _COMPLETION_MAX_CAPTURE_AGE_SECONDS = 120
@@ -816,7 +816,6 @@ async def complete_ride(
         }
     try:
         await mark_route_pending(ride_id, finalization_completion_point)
-        spawn(finalize_route(ride_id))
     except Exception:
         # Completion is already atomically settled. Surface the finalizer
         # failure with the ride ID so the durable loop can recover it; no GPS

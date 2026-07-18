@@ -206,11 +206,19 @@ async def health():
     from starlette.responses import JSONResponse
 
     ok, detail = await _db_ready()
+    # env/stage/release let the deploy pipeline assert exactly what is
+    # serving (ADR-008): deploy-staging checks env=staging + release=sha,
+    # the canary bake checks stage=canary + release=sha before promotion.
+    build = {
+        "env": settings.ENV,
+        "stage": settings.DEPLOY_STAGE,
+        "release": settings.RELEASE_SHA,
+    }
     if ok:
-        return {"status": "healthy", "db": {"status": "ok", **detail}}
+        return {"status": "healthy", "db": {"status": "ok", **detail}, **build}
     return JSONResponse(
         status_code=503,
-        content={"status": "unhealthy", "db": {"status": "error"}},
+        content={"status": "unhealthy", "db": {"status": "error"}, **build},
     )
 
 
@@ -244,9 +252,10 @@ async def metrics(request: _Request) -> _MetricsResponse:
         presented = auth[7:].strip() if auth.lower().startswith("bearer ") else request.query_params.get("token", "")
         if not hmac.compare_digest(presented, _token):
             raise HTTPException(status_code=401, detail="Unauthorized")
-    elif settings.ENV.lower() == "production":
+    elif settings.is_production_like:
         _logging.getLogger("spinr.metrics").warning(
-            "/metrics is exposed without authentication in production — set METRICS_AUTH_TOKEN to restrict it."
+            "/metrics is exposed without authentication in %s — set METRICS_AUTH_TOKEN to restrict it.",
+            settings.ENV,
         )
 
     from utils.metrics import render_prometheus, set_gauge
@@ -464,6 +473,11 @@ if sentry_dsn:
         before_send=scrub_event,
         before_breadcrumb=scrub_breadcrumb,
     )
+    # ADR-008: distinguish canary from stable within environment=production
+    # (Sentry filter: environment:production deploy_stage:canary during bake).
+    sentry_sdk.set_tag("deploy_stage", settings.DEPLOY_STAGE)
+    if settings.RELEASE_SHA:
+        sentry_sdk.set_tag("release_sha", settings.RELEASE_SHA)
 
     # Bridge loguru → Sentry. The LoggingIntegration above only captures
     # stdlib `logging` records; the rest of the backend uses loguru and
@@ -495,9 +509,9 @@ if sentry_dsn:
     # first real production error to find out the integration is broken.
     # (Merge note: main added an unconditional capture_message here; this
     # branch's production-gated version supersedes it — dev boots stay quiet.)
-    if getattr(settings, "ENV", "development") == "production":
+    if settings.is_production_like:
         sentry_sdk.capture_message("spinr backend started — Sentry pipeline verified", level="info")
-elif getattr(settings, "ENV", "development") == "production":
+elif settings.is_production_like:
     # Same precedent as the Redis-missing check (L-P1-1): observability
     # degradation must not take the API down, but it must be impossible to
     # miss. A production replica without Sentry means payment/dispatch/auth

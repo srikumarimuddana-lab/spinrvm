@@ -97,6 +97,26 @@ class TestStagingRefusesUnconfiguredSettlement:
         assert "failed" in statuses
 
 
+class TestHealthBuildFields:
+    """/health must expose env/stage/release so the deploy pipeline can
+    assert exactly which build is serving (ADR-008)."""
+
+    def test_health_reports_env_stage_release(self):
+        from backend import server
+
+        with (
+            patch("backend.server._db_ready", AsyncMock(return_value=(True, {"cached": True}))),
+            patch.object(server.settings, "ENV", "production"),
+            patch.object(server.settings, "DEPLOY_STAGE", "canary"),
+            patch.object(server.settings, "RELEASE_SHA", "abc1234"),
+        ):
+            body = asyncio.run(server.health())
+
+        assert body["env"] == "production"
+        assert body["stage"] == "canary"
+        assert body["release"] == "abc1234"
+
+
 class TestAdminLoginRateLimit:
     @pytest.mark.parametrize(
         "env,expected",

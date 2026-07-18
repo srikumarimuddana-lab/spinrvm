@@ -185,6 +185,10 @@ async def _generate_and_store_ride_snapshot(
     dropoff_lng,
     phase_polylines,
     route_polyline,
+    route_segments=None,
+    completion_point=None,
+    route_quality=None,
+    route_revision=None,
 ) -> None:
     """Render the ride's route PNG and upload to Supabase Storage.
 
@@ -199,9 +203,10 @@ async def _generate_and_store_ride_snapshot(
         logger.warning(f"Snapshot skipped for ride {ride_id}: missing coordinates")
         return
     poly_len = len(route_polyline) if isinstance(route_polyline, list) else 0
+    segment_count = len(route_segments) if isinstance(route_segments, list) else 0
     phase_keys = list((phase_polylines or {}).keys()) if phase_polylines else []
     logger.info(
-        f"Snapshot pipeline start for ride {ride_id}: route_polyline={poly_len} pts, phase_polylines={phase_keys}"
+        f"Snapshot pipeline start for ride {ride_id}: route_polyline={poly_len} pts, route_segments={segment_count}, phase_polylines={phase_keys}"
     )
     try:
         try:
@@ -231,6 +236,9 @@ async def _generate_and_store_ride_snapshot(
                     dropoff_lng=float(dropoff_lng),
                     phase_polylines=phase_polylines,
                     route_polyline=route_polyline,
+                    route_segments=route_segments,
+                    completion_point=completion_point,
+                    route_quality=route_quality,
                 )
                 logger.info(
                     f"Google Static Maps for ride {ride_id}: "
@@ -253,17 +261,21 @@ async def _generate_and_store_ride_snapshot(
                     dropoff_lng=float(dropoff_lng),
                     phase_polylines=phase_polylines,
                     route_polyline=route_polyline,
+                    route_segments=route_segments,
+                    completion_point=completion_point,
+                    route_quality=route_quality,
                 ),
             )
 
         if not png_bytes:
             return
 
-        # Supabase Storage upload. Public bucket, stable filename so a
-        # re-run for the same ride_id overwrites cleanly via upsert.
-        # The public URL never expires — safe for email embeds.
+        # Supabase Storage upload. Legacy snapshots retain their stable path;
+        # finalized v2 snapshots are revisioned and immutable so a delayed GPS
+        # upload cannot replace a receipt image for an older route revision.
         bucket = "ride-snapshots"
-        storage_path = f"ride_{ride_id}.png"
+        revision = int(route_revision) if route_revision is not None else 0
+        storage_path = f"ride-routes/{ride_id}/route-v{revision}.png" if revision > 0 else f"ride_{ride_id}.png"
         try:
             await loop.run_in_executor(
                 None,
@@ -306,13 +318,22 @@ async def _generate_and_store_ride_snapshot(
         digest = hashlib.sha256(png_bytes).hexdigest()[:12]
         url = f"{base}/storage/v1/object/public/{bucket}/{storage_path}?v={digest}"
 
-        # Persist the URL. Wrap in try/except so if migration 41 hasn't
-        # landed yet the write fails gracefully instead of raising.
+        # Persist URL and revision atomically on the v2 route row. Legacy
+        # planned snapshots remain on rides.route_snapshot_url for backward
+        # compatibility until all old readers are retired.
         try:
-            await db_supabase.update_one("rides", {"id": ride_id}, {"route_snapshot_url": url})
+            if revision > 0:
+                await db_supabase.update_one(
+                    "ride_routes",
+                    {"ride_id": ride_id},
+                    {"snapshot_url": url, "snapshot_revision": revision},
+                    upsert=False,
+                )
+            else:
+                await db_supabase.update_one("rides", {"id": ride_id}, {"route_snapshot_url": url})
         except Exception as exc:
             logger.error(
-                f"route_snapshot_url write failed for ride {ride_id} (migration 41 missing?): {exc}",
+                f"route snapshot reference write failed for ride {ride_id}: {exc}",
                 exc_info=True,
             )
     except Exception as exc:

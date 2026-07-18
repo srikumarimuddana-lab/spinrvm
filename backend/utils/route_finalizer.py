@@ -133,6 +133,44 @@ async def _schedule_retry(ride_id: str, route_row: Optional[Dict[str, Any]], rea
     return {"processing_status": "pending", "retry_count": retry_count, "next_retry_at": next_retry_at}
 
 
+async def _publish_finalized_snapshot(
+    ride_id: str,
+    ride: Dict[str, Any],
+    route_revision: int,
+    route_segments: list[dict],
+    route_quality: dict,
+    completion_point: Optional[dict],
+) -> None:
+    """Publish the route image for one immutable finalization revision.
+
+    Snapshot publishing is intentionally downstream of finalization. Failure to
+    render or upload an image never reopens a settled route or retries its map
+    matcher; consumers instead show the route segment data or an unavailable
+    snapshot state.
+    """
+    try:
+        try:
+            from ..routes.drivers._shared import _generate_and_store_ride_snapshot
+        except ImportError:
+            from routes.drivers._shared import _generate_and_store_ride_snapshot  # type: ignore
+
+        await _generate_and_store_ride_snapshot(
+            ride_id=ride_id,
+            pickup_lat=ride.get("pickup_lat"),
+            pickup_lng=ride.get("pickup_lng"),
+            dropoff_lat=ride.get("dropoff_lat"),
+            dropoff_lng=ride.get("dropoff_lng"),
+            phase_polylines=None,
+            route_polyline=None,
+            route_segments=route_segments,
+            completion_point=completion_point,
+            route_quality=route_quality,
+            route_revision=route_revision,
+        )
+    except Exception:
+        logger.error("route snapshot publishing failed for ride_id=%s", ride_id, exc_info=True)
+
+
 def _is_due(route: Dict[str, Any], now: datetime) -> bool:
     retry_at = parse_iso_utc(route.get("next_retry_at"))
     return retry_at is None or retry_at <= now
@@ -254,6 +292,14 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
                 "computed_at": now,
             },
             upsert=True,
+        )
+        await _publish_finalized_snapshot(
+            ride_id,
+            ride,
+            revision,
+            (matched_route.get("segments") and _matched_projection(matched_route)) or _observed_projection(segmented),
+            quality,
+            (route_row or {}).get("completion_point"),
         )
         return {"processing_status": processing_status, "route_revision": revision, "route_quality": quality}
     except Exception:

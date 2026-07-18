@@ -4,11 +4,17 @@ Split from ``backend/routes/drivers.py`` (god-file refactor). Pure code
 motion — no behaviour changes. See docs/refactors/god-file-split.md.
 """
 
+import uuid
+
+from pydantic import ValidationError, model_validator
+
 from . import _deps
 from ._deps import (  # noqa: F401
     APIRouter,
+    BaseModel,
     Depends,
     Driver,
+    Field,
     HTTPException,
     List,
     Query,
@@ -21,7 +27,9 @@ from ._deps import (  # noqa: F401
     get_current_user,
     intent_online,
     logger,
+    parse_iso_utc,
     present_driver_ids_checked,
+    timedelta,
     timezone,
 )
 from ._shared import (  # noqa: F401
@@ -29,6 +37,134 @@ from ._shared import (  # noqa: F401
 )
 
 router = APIRouter()
+
+_V2_ACTIVE_RIDE_STATUSES = {"driver_assigned", "driver_accepted", "driver_arrived", "in_progress"}
+_RAW_LOCATION_RETENTION = timedelta(days=90)
+
+
+class TripLocationPoint(BaseModel):
+    """One immutable driver sensor fix submitted by the durable outbox."""
+
+    sequence_number: int = Field(ge=0)
+    captured_at: datetime
+    lat: float | None = None
+    lng: float | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    accuracy: float | None = None
+    speed: float | None = None
+    heading: float | None = None
+    altitude: float | None = None
+    monotonic_ms: int | None = Field(default=None, ge=0)
+    source: str | None = None
+    mocked: bool = False
+    is_completion_fix: bool = False
+
+
+class LocationBatchRequest(BaseModel):
+    """Strict v2 payload: exactly one ordered recording session for one ride."""
+
+    ride_id: str = Field(min_length=1)
+    recording_session_id: uuid.UUID
+    points: List[TripLocationPoint] = Field(min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def _sequences_are_contiguous(self):
+        sequences = [point.sequence_number for point in self.points]
+        if len(set(sequences)) != len(sequences):
+            raise ValueError("sequence_number values must be unique")
+        expected = list(range(sequences[0], sequences[0] + len(sequences)))
+        if sequences != expected:
+            raise ValueError("sequence_number values must be contiguous and ordered")
+        return self
+
+
+def _parse_v2_location_batch(batch: Union[List[dict], dict, LocationBatchRequest]) -> LocationBatchRequest | None:
+    """Identify v2 bodies while preserving historical list/points payloads."""
+    if isinstance(batch, LocationBatchRequest):
+        return batch
+    if not isinstance(batch, dict) or not ({"ride_id", "recording_session_id"} & set(batch)):
+        return None
+    try:
+        return LocationBatchRequest.model_validate(batch)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+
+
+def _completed_batch_is_within_retention(request: LocationBatchRequest, ride: dict) -> bool:
+    """Allow delayed offline delivery only inside the completed ride lifecycle."""
+    completed_at = parse_iso_utc(ride.get("ride_completed_at"))
+    if completed_at is None or datetime.now(timezone.utc) - completed_at > _RAW_LOCATION_RETENTION:
+        return False
+    window_start = parse_iso_utc(ride.get("driver_accepted_at")) or parse_iso_utc(ride.get("created_at"))
+    return all(
+        (window_start is None or point.captured_at >= window_start) and point.captured_at <= completed_at
+        for point in request.points
+    )
+
+
+async def _persist_v2_location_batch(request: LocationBatchRequest, current_user: dict) -> dict:
+    """Authorize and persist one acknowledged v2 outbox batch before marker updates."""
+    driver_rows = await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    if not driver_rows:
+        raise HTTPException(status_code=403, detail="Driver profile required")
+    driver = driver_rows[0]
+
+    rides = await db_supabase.get_rows(
+        "rides",
+        {"id": request.ride_id, "driver_id": driver["id"]},
+        limit=1,
+    )
+    if not rides:
+        raise HTTPException(status_code=404, detail="Assigned ride not found")
+    ride = rides[0]
+    if ride.get("status") == "completed":
+        if not _completed_batch_is_within_retention(request, ride):
+            raise HTTPException(status_code=422, detail="Points fall outside completed ride retention window")
+    elif ride.get("status") not in _V2_ACTIVE_RIDE_STATUSES:
+        raise HTTPException(status_code=409, detail="Ride cannot accept location points in its current state")
+
+    try:
+        try:
+            from ...utils.breadcrumbs import persist_trip_location_batch
+        except ImportError:
+            from utils.breadcrumbs import persist_trip_location_batch  # type: ignore
+
+        result = await persist_trip_location_batch(
+            driver["id"],
+            request.ride_id,
+            str(request.recording_session_id),
+            [point.model_dump(mode="json") for point in request.points],
+            active_ride=ride,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(
+            "location-batch durable persistence failed for driver_id=%s ride_id=%s",
+            driver["id"],
+            request.ride_id,
+            exc_info=True,
+        )
+        raise HTTPException(status_code=503, detail="Location persistence unavailable") from exc
+
+    rejected_sequences = {rejection.sequence_number for rejection in result.ack.rejected}
+    latest = next(
+        (point for point in reversed(request.points) if point.sequence_number not in rejected_sequences),
+        None,
+    )
+    if latest is not None:
+        lat = latest.latitude if latest.latitude is not None else latest.lat
+        lng = latest.longitude if latest.longitude is not None else latest.lng
+        if lat is not None and lng is not None:
+            update_data = {"lat": lat, "lng": lng, "updated_at": datetime.now(timezone.utc)}
+            if latest.heading is not None:
+                update_data["heading"] = latest.heading % 360
+            await db_supabase.update_one("drivers", {"id": driver["id"]}, update_data)
+
+    if driver.get("is_online"):
+        await _deps.mark_present(driver["id"])
+    return result.ack.to_dict()
 
 
 @router.get("/nearby")
@@ -190,8 +326,14 @@ async def create_driver(driver: Driver, admin_user: dict = Depends(get_admin_use
 
 
 @router.post("/location-batch")
-async def update_location_batch(batch: Union[List[dict], dict], current_user: dict = Depends(get_current_user)):
+async def update_location_batch(
+    batch: Union[List[dict], dict, LocationBatchRequest], current_user: dict = Depends(get_current_user)
+):
     """Update driver location in batch (from background tracking)."""
+    v2_request = _parse_v2_location_batch(batch)
+    if v2_request is not None:
+        return await _persist_v2_location_batch(v2_request, current_user)
+
     try:
         from ...utils.location_integrity import check_location_integrity
     except ImportError:

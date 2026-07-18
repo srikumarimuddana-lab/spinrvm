@@ -24,9 +24,12 @@ recomputed line item — re-deriving the uplift would round-trip through
 floats and risk a 1¢ mismatch on the rendered total.
 """
 
+import asyncio
 import logging
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, Optional
+
+import httpx
 
 try:
     from .datetime_utils import parse_iso_utc
@@ -36,6 +39,8 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 _TWO_PLACES = Decimal("0.01")
+_ROUTE_FINALIZATION_WAIT_SECONDS = 4.0
+_ROUTE_FINALIZATION_POLL_SECONDS = 0.5
 
 
 def _d(v: Any) -> Decimal:
@@ -162,6 +167,92 @@ def _build_fare_rows(ride: Dict[str, Any], tip: Decimal) -> tuple[str, Decimal]:
     return "".join(rows), grand_total_d
 
 
+def _route_snapshot_presentation(ride: Dict[str, Any]) -> tuple[str, str, bool]:
+    """Return ``(url, note, is_actual)`` without ever mislabeling a map.
+
+    A legacy ride-level image was generated before completion and is therefore
+    only a planned route. V2 images may be called actual only if their stored
+    revision equals the finalized route revision.
+    """
+    schema_version = int(ride.get("route_schema_version") or 1)
+    url = str(ride.get("route_snapshot_url") or "")
+    if schema_version < 2:
+        return (url, "Planned route" if url else "", False)
+
+    revision = int(ride.get("route_revision") or 0)
+    snapshot_revision = int(ride.get("snapshot_revision") or 0)
+    quality = ride.get("route_quality") if isinstance(ride.get("route_quality"), dict) else {}
+    coverage = quality.get("coverage_ratio")
+    coverage_text = (
+        f"{round(float(coverage) * 100)}% GPS coverage" if coverage is not None else "GPS coverage unavailable"
+    )
+    if url and revision > 0 and snapshot_revision == revision:
+        return url, f"Actual route (revision {revision}) — {coverage_text}", True
+    if quality.get("missing_tail") or quality.get("incomplete_reason"):
+        coverage_note = f"{round(float(coverage) * 100)}% coverage" if coverage is not None else "coverage unavailable"
+        return "", f"Route snapshot unavailable — GPS capture was incomplete ({coverage_note}).", False
+    return "", "Route snapshot unavailable — actual route processing is still pending.", False
+
+
+async def _await_route_receipt_projection(ride: Dict[str, Any]) -> Dict[str, Any]:
+    """Boundedly wait for v2 finalization before composing a completed receipt.
+
+    Route rendering remains presentation-only: a database or renderer problem
+    is logged loudly but never blocks payment settlement or the rest of the
+    receipt email.
+    """
+    if ride.get("status") != "completed" or not ride.get("id"):
+        return dict(ride)
+
+    try:
+        try:
+            from .. import db_supabase
+        except ImportError:
+            import db_supabase  # type: ignore
+
+        result = dict(ride)
+        deadline = asyncio.get_running_loop().time() + _ROUTE_FINALIZATION_WAIT_SECONDS
+        while True:
+            rows = await db_supabase.get_rows("ride_routes", {"ride_id": ride["id"]}, limit=1)
+            route = rows[0] if rows else None
+            if route:
+                for key in (
+                    "route_schema_version",
+                    "route_revision",
+                    "processing_status",
+                    "route_quality",
+                    "snapshot_revision",
+                    "snapshot_url",
+                ):
+                    if key in route:
+                        result[key] = route[key]
+                if result.get("snapshot_url"):
+                    result["route_snapshot_url"] = result["snapshot_url"]
+                if route.get("processing_status") in {"complete", "incomplete", "failed"}:
+                    return result
+            if asyncio.get_running_loop().time() >= deadline:
+                return result
+            await asyncio.sleep(_ROUTE_FINALIZATION_POLL_SECONDS)
+    except Exception:
+        logger.error("receipt route projection lookup failed for ride_id=%s", ride.get("id"), exc_info=True)
+        return dict(ride)
+
+
+async def _download_route_snapshot(url: str) -> Optional[bytes]:
+    """Fetch a previously-published image for the PDF attachment only."""
+    if not url:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(url)
+        if response.status_code == 200 and response.headers.get("content-type", "").startswith("image/"):
+            return response.content
+        logger.error("receipt route snapshot download failed with status=%s", response.status_code)
+    except Exception:
+        logger.error("receipt route snapshot download failed", exc_info=True)
+    return None
+
+
 def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: Decimal = Decimal(0)) -> str:
     """Generate HTML receipt for a completed ride."""
     tip_d = _d(tip)
@@ -189,22 +280,22 @@ def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: Dec
     # receipt so the rider can quote it to support.
     ride_ref = ride.get("ride_code") or (str(ride.get("id", ""))[:8].upper() or "—")
 
-    # Route map snapshot (migration 41). Rendered from phase_polylines at
-    # ride completion and uploaded to Cloudinary. Present only when the
-    # snapshot pipeline succeeded; legacy rides without a snapshot get a
-    # receipt without the map section (the route addresses below still
-    # carry the essential info).
-    route_snapshot_url = ride.get("route_snapshot_url") or ""
-    route_snapshot_html = (
-        f"""
+    route_snapshot_url, route_snapshot_note, _route_snapshot_is_actual = _route_snapshot_presentation(ride)
+    route_snapshot_html = ""
+    if route_snapshot_url:
+        route_snapshot_html = f"""
         <tr><td style="padding:0 24px 16px;">
-          <img src="{route_snapshot_url}" alt="Your route" width="472"
+          <p style="font-size:12px;color:#666;margin:0 0 6px;">{route_snapshot_note}</p>
+          <img src="{route_snapshot_url}" alt="{route_snapshot_note}" width="472"
                style="width:100%;max-width:472px;height:auto;border-radius:12px;display:block;" />
         </td></tr>
         """
-        if route_snapshot_url
-        else ""
-    )
+    elif route_snapshot_note:
+        route_snapshot_html = f"""
+        <tr><td style="padding:0 24px 16px;">
+          <p style="font-size:12px;color:#8a3412;margin:0;">{route_snapshot_note}</p>
+        </td></tr>
+        """
 
     return f"""
     <!DOCTYPE html>
@@ -314,6 +405,7 @@ async def send_receipt_email(
     different email"). When omitted, the receipt goes to the rider on file.
     The receipt body still reflects the rider — only the To: address changes.
     """
+    ride = await _await_route_receipt_projection(ride)
     email = (recipient_email or rider.get("email") or "").strip()
     if not email:
         logger.warning(f"No email for rider {rider.get('id')} — skipping receipt")
@@ -335,7 +427,17 @@ async def send_receipt_email(
             from .receipt_pdf import generate_receipt_pdf
         except ImportError:
             from utils.receipt_pdf import generate_receipt_pdf  # type: ignore
-        pdf_bytes = generate_receipt_pdf(ride, rider, driver, tip)
+        snapshot_url, snapshot_note, snapshot_is_actual = _route_snapshot_presentation(ride)
+        snapshot_bytes = await _download_route_snapshot(snapshot_url) if snapshot_url else None
+        pdf_bytes = generate_receipt_pdf(
+            ride,
+            rider,
+            driver,
+            tip,
+            route_snapshot_bytes=snapshot_bytes,
+            route_snapshot_note=snapshot_note,
+            route_snapshot_is_actual=snapshot_is_actual,
+        )
         ref = ride.get("ride_code") or str(ride.get("id", ""))[:8].upper() or "receipt"
         attachments = [{"filename": f"Spinr-receipt-{ref}.pdf", "content": pdf_bytes, "mime": "application/pdf"}]
     except Exception:

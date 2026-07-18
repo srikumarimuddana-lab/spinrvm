@@ -293,7 +293,9 @@ async def get_ride(
     current_user: dict = Depends(get_current_user),
 ):
     """Fetch details of a specific ride"""
-    ride = await _deps.db_supabase.get_ride(ride_id)
+    # Detail is authorization-gated below; list queries intentionally avoid
+    # route geometry. The projection preserves v2 segment boundaries.
+    ride = await _deps.db_supabase.get_ride(ride_id, include_route=True)
     if not ride:
         raise RideNotFoundException(
             ride_id=ride_id,

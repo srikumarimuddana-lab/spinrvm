@@ -6,7 +6,14 @@ Applies SQL migration files in alphanumeric order, skipping any that have
 already been recorded in the schema_migrations tracking table.
 
 Usage:
-    python backend/scripts/migrate.py [--dry-run]
+    python backend/scripts/migrate.py [--dry-run] [--env ENV] [--yes]
+
+    --env labels the run (development|test|staging|production) and is printed
+        in the logs; --env production additionally requires typing the word
+        "production" at an interactive prompt unless --yes is passed
+        (CI passes --yes; its human gate is the GitHub Environment approval).
+        The flag does NOT select the database — connection info comes from the
+        environment variables below, so export the right DSN for the tier.
 
 Environment variables required:
     SUPABASE_URL              — e.g. https://xxxx.supabase.co
@@ -20,6 +27,10 @@ Optional:
         (user postgres.<ref> @ aws-N-<region>.pooler.supabase.com:5432). Takes
         precedence over SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY.
     MIGRATIONS_DIR — path to migration files (default: backend/migrations)
+    EXPECTED_PROJECT_REF — when set, the run refuses to proceed unless the
+        Supabase project ref appears in the DSN/SUPABASE_URL. Cheap guard
+        against pointing a production migration at the wrong database
+        (CI sets this per GitHub Environment, ADR-008).
 """
 
 import argparse
@@ -231,6 +242,47 @@ def _apply_migration_autocommit(conn, version: str, sql: str) -> bool:
         conn.autocommit = False
 
 
+def _check_expected_project_ref() -> None:
+    """Refuse to run when EXPECTED_PROJECT_REF doesn't match the target DB.
+
+    The ref (the xxxx in https://xxxx.supabase.co) must appear in whichever
+    connection source will be used. Unset = no check (backward compatible).
+    """
+    expected = os.environ.get("EXPECTED_PROJECT_REF", "").strip()
+    if not expected:
+        return
+    target = (
+        os.environ.get("PG_CONNECTION_STRING")
+        or os.environ.get("DATABASE_URL")
+        or os.environ.get("SUPABASE_URL", "")
+    )
+    if expected not in target:
+        logger.error(
+            f"EXPECTED_PROJECT_REF={expected!r} does not appear in the configured "
+            "connection target — refusing to migrate what looks like the wrong "
+            "database. Fix the DSN or unset EXPECTED_PROJECT_REF."
+        )
+        sys.exit(1)
+
+
+def _confirm_production(env: str, assume_yes: bool, dry_run: bool) -> None:
+    """Interactive guard for --env production (ADR-008).
+
+    CI passes --yes (its human gate is the GitHub Environment approval).
+    A human on a TTY must type the literal word "production"; a non-TTY
+    run without --yes is refused outright.
+    """
+    if env != "production" or assume_yes or dry_run:
+        return
+    if not sys.stdin.isatty():
+        logger.error("--env production requires --yes when stdin is not a TTY.")
+        sys.exit(1)
+    answer = input("Type 'production' to confirm migrating the PRODUCTION database: ")
+    if answer.strip() != "production":
+        logger.error("Confirmation did not match — aborting.")
+        sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Spinr database migration runner")
     parser.add_argument(
@@ -238,7 +290,26 @@ def main():
         action="store_true",
         help="Print what would be applied without executing anything",
     )
+    parser.add_argument(
+        "--env",
+        choices=["development", "test", "staging", "production"],
+        help="Label the run with its target tier; production prompts unless --yes. "
+        "Connection is still selected by env vars (PG_CONNECTION_STRING etc.).",
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the interactive production confirmation (for CI)",
+    )
     args = parser.parse_args()
+
+    if args.env:
+        logger.info(f"Migration target tier: {args.env}")
+    else:
+        logger.warning("No --env given — consider labelling the run (see --help).")
+    _confirm_production(args.env, args.yes, args.dry_run)
+    load_dotenv()
+    _check_expected_project_ref()
 
     # Resolve migrations directory
     script_dir = Path(__file__).parent

@@ -44,6 +44,8 @@ def _route_row(**overrides) -> dict:
         "route_revision": 3,
         "completion_point": _point(2, 600),
         "retry_count": 0,
+        "processing_status": "processing",
+        "processing_claimed_at": "2026-07-17T21:11:00+00:00",
     }
     route.update(overrides)
     return route
@@ -79,6 +81,7 @@ def test_finalizer_orders_by_capture_time_and_writes_a_new_revision(monkeypatch)
 
     async def update_one(*args, **kwargs):
         updates.append((args, kwargs))
+        return {"ride_id": "ride_1"}
 
     monkeypatch.setattr(route_finalizer.db_supabase, "get_rows", get_rows)
     monkeypatch.setattr(route_finalizer.db_supabase, "get_ride", get_ride)
@@ -123,6 +126,38 @@ def test_finalizer_orders_by_capture_time_and_writes_a_new_revision(monkeypatch)
     assert snapshot_args[2] == 4
     assert snapshot_args[3] == payload["road_matched_segments"]
     assert snapshot_args[4] == payload["route_quality"]
+
+
+def test_finalizer_does_not_publish_when_a_late_batch_supersedes_its_claim(monkeypatch):
+    updates = []
+    publish_snapshot = AsyncMock()
+
+    async def update_one(_table, filters, payload, **_kwargs):
+        updates.append((filters, payload))
+        # A late batch changed the row from processing back to pending before
+        # this worker could persist its projection.
+        return None
+
+    monkeypatch.setattr(route_finalizer.db_supabase, "get_rows", AsyncMock(return_value=[_point(0, 0), _point(1, 10)]))
+    monkeypatch.setattr(route_finalizer.db_supabase, "get_ride", AsyncMock(return_value=_ride()))
+    monkeypatch.setattr(route_finalizer.db_supabase, "update_one", update_one)
+    monkeypatch.setattr(route_finalizer, "_publish_finalized_snapshot", publish_snapshot)
+    monkeypatch.setattr(route_finalizer, "_get_route_row", AsyncMock(return_value=_route_row()))
+    monkeypatch.setattr(
+        route_finalizer,
+        "compute_segmented_road_route",
+        AsyncMock(return_value={"segments": [], "distance_km": 0.0, "provider": None, "failures": []}),
+    )
+
+    result = _run(route_finalizer.finalize_route("ride_1"))
+
+    assert result["processing_status"] == "superseded"
+    assert updates[0][0] == {
+        "ride_id": "ride_1",
+        "processing_status": "processing",
+        "processing_claimed_at": "2026-07-17T21:11:00+00:00",
+    }
+    publish_snapshot.assert_not_awaited()
 
 
 def test_finalizer_marks_missing_tail_incomplete_without_mutating_fare(monkeypatch):

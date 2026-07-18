@@ -114,13 +114,30 @@ def _final_status(segmented: SegmentedRoute, matched_route: Dict[str, Any]) -> s
     return "complete"
 
 
+def _claim_filters(ride_id: str, route_row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Build the compare-and-set filter for a worker-owned route claim."""
+    if not route_row or route_row.get("processing_status") != "processing":
+        return None
+    claimed_at = route_row.get("processing_claimed_at")
+    if claimed_at is None:
+        return None
+    return {
+        "ride_id": ride_id,
+        "processing_status": "processing",
+        "processing_claimed_at": claimed_at,
+    }
+
+
 async def _schedule_retry(ride_id: str, route_row: Optional[Dict[str, Any]], reason: str) -> Dict[str, Any]:
+    claim_filters = _claim_filters(ride_id, route_row)
+    if claim_filters is None:
+        return {"processing_status": "superseded"}
     retry_count = int((route_row or {}).get("retry_count") or 0) + 1
     retry_seconds = min(300, 15 * (2 ** min(retry_count - 1, 4)))
     next_retry_at = _now() + timedelta(seconds=retry_seconds)
-    await db_supabase.update_one(
+    updated = await db_supabase.update_one(
         "ride_routes",
-        {"ride_id": ride_id},
+        claim_filters,
         {
             "processing_status": "pending",
             "processing_claimed_at": None,
@@ -128,8 +145,10 @@ async def _schedule_retry(ride_id: str, route_row: Optional[Dict[str, Any]], rea
             "next_retry_at": next_retry_at,
             "route_quality": {"finalization_reason": reason},
         },
-        upsert=True,
+        upsert=False,
     )
+    if updated is None:
+        return {"processing_status": "superseded"}
     return {"processing_status": "pending", "retry_count": retry_count, "next_retry_at": next_retry_at}
 
 
@@ -255,12 +274,16 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
     """Produce a revisioned route projection from durable evidence only.
 
     It deliberately never updates ride fare, duration, or lifecycle columns.
-    An upstream loop supplies replay-safe claims; direct calls are useful for
-    tests and one-off recovery after a deferred upload.
+    Only the durable worker may invoke it after atomically claiming the route.
+    Every write keeps the claim token in its filter so later GPS evidence can
+    requeue the route without being overwritten by an in-flight projection.
     """
     route_row: Optional[Dict[str, Any]] = None
     try:
         route_row = await _get_route_row(ride_id)
+        claim_filters = _claim_filters(ride_id, route_row)
+        if claim_filters is None:
+            return {"processing_status": "superseded"}
         ride = await db_supabase.get_ride(ride_id)
         if not ride:
             raise ValueError("ride_not_found")
@@ -276,9 +299,9 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
         quality = _quality_projection(segmented, matched_route)
         revision = int((route_row or {}).get("route_revision") or 0) + 1
         now = _now()
-        await db_supabase.update_one(
+        updated = await db_supabase.update_one(
             "ride_routes",
-            {"ride_id": ride_id},
+            claim_filters,
             {
                 "route_schema_version": 2,
                 "route_revision": revision,
@@ -291,8 +314,10 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
                 "finalized_at": now,
                 "computed_at": now,
             },
-            upsert=True,
+            upsert=False,
         )
+        if updated is None:
+            return {"processing_status": "superseded"}
         await _publish_finalized_snapshot(
             ride_id,
             ride,

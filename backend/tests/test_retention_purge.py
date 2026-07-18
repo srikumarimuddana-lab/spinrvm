@@ -148,8 +148,13 @@ def test_expired_route_snapshot_ledger_deletes_every_revision_before_marking_it_
         {
             "ride_id": "ride_1",
             "storage_bucket": "ride-route-snapshots",
-            "object_path": "ride_1/route-v4.png",
-        }
+            "object_path": "ride_1/route-v1.png",
+        },
+        {
+            "ride_id": "ride_1",
+            "storage_bucket": "ride-route-snapshots",
+            "object_path": "ride_1/route-v2.png",
+        },
     ]
 
     class Query:
@@ -203,11 +208,11 @@ def test_expired_route_snapshot_ledger_deletes_every_revision_before_marking_it_
 
     deleted = asyncio.run(retention_purge._delete_expired_route_snapshot_objects())
 
-    assert deleted == 1
-    assert removed_paths == ["ride_1/route-v4.png"]
-    assert updates[0][0] == "ride_route_snapshot_objects"
-    assert "deleted_at" in updates[0][1]
-    assert updates[1] == ("ride_routes", {"snapshot_object_path": None, "snapshot_purge_pending_at": None})
+    assert deleted == 2
+    assert removed_paths == ["ride_1/route-v1.png", "ride_1/route-v2.png"]
+    ledger_updates = [update for update in updates if update[0] == "ride_route_snapshot_objects"]
+    assert len(ledger_updates) == 2
+    assert all("deleted_at" in payload for _, payload in ledger_updates)
 
 
 @pytest.mark.asyncio

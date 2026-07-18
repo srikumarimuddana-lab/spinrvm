@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-MIGRATION = ROOT / "migrations" / "236_trip_route_integrity_retention.sql"
+MIGRATION = ROOT / "migrations" / "238_trip_route_integrity_retention.sql"
 RETENTION_LOOP = ROOT / "utils" / "retention_purge.py"
 
 

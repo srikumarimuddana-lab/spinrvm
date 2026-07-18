@@ -1,29 +1,24 @@
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import * as SecureStore from 'expo-secure-store';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Platform } from 'react-native';
-import SpinrConfig from '@shared/config/spinr.config';
+import spinrConfig from '@shared/config/spinr.config';
 import { getAppCheckToken, initFirebaseServices } from '@shared/services/firebase';
+import { tripLocationRecorder, type TripLocationBatchRequest } from './tripLocationRecorder';
 
 // Use the same backend-URL resolver as the shared API client — it carries the
 // production fallback (api-spinr.spinr.ca) and the expoConfig.extra value.
 // @shared/config's API_URL is env-var-only and resolves to '' on production /
 // OTA builds that rely on the hardcoded fallback, which would make every
 // headless request (token refresh, location batch) a silent no-op.
-const API_URL = SpinrConfig.backendUrl;
+const API_URL = spinrConfig.backendUrl;
 
 const TASK_NAME = 'spinr-background-location';
-const BG_LOCATION_QUEUE_KEY = 'spinr_bg_location_queue';
-const BG_LOCATION_QUEUE_MAX_POINTS = 1000;
 
-// ── Geofence-based killed-app recovery ─────────────────────────────────
-// When the user force-swipes the app, Expo's foreground service is killed
-// on Android and the iOS background task is suspended. Without recovery,
-// the driver becomes invisible to dispatch until they manually reopen the
-// app. Geofencing is OS-level and survives app kill: when the driver
-// crosses the boundary, the OS wakes the app process, our task handler
-// re-arms the foreground service, and tracking resumes.
+// ── Geofence-based future-capture re-arm ────────────────────────────────
+// A force-quit can suspend location delivery. Geofence re-entry may wake the
+// app and re-arm future tracking, but it cannot reconstruct samples missed
+// while the process was not running. Durable samples already queued in SQLite
+// remain available for later upload.
 const GEOFENCE_TASK = 'spinr-geofence-recovery';
 const GEOFENCE_RADIUS_M = 500;          // 500m boundary — re-arms ~1 block away
 const GEOFENCE_ID = 'spinr-recovery';
@@ -34,40 +29,6 @@ const TRIP_ACTIVE_KEY = 'spinr_bg_trip_active';
 type LocationTaskData = {
   locations: Location.LocationObject[];
 };
-
-type BackgroundLocationPoint = {
-  lat: number;
-  lng: number;
-  speed: number | null;
-  heading: number | null;
-  accuracy: number | null;
-  timestamp: string;
-  tracking_phase: 'background';
-};
-
-async function loadQueuedBackgroundPoints(): Promise<BackgroundLocationPoint[]> {
-  try {
-    const raw = await AsyncStorage.getItem(BG_LOCATION_QUEUE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-async function saveQueuedBackgroundPoints(points: BackgroundLocationPoint[]): Promise<void> {
-  const capped = points.slice(-BG_LOCATION_QUEUE_MAX_POINTS);
-  try {
-    if (capped.length === 0) {
-      await AsyncStorage.removeItem(BG_LOCATION_QUEUE_KEY);
-    } else {
-      await AsyncStorage.setItem(BG_LOCATION_QUEUE_KEY, JSON.stringify(capped));
-    }
-  } catch (e) {
-    console.warn('[BgLocation] Failed to persist offline queue:', e);
-  }
-}
 
 /**
  * Get a valid access token for the background task.
@@ -147,59 +108,41 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
     console.error('[BgLocation] Task error:', error.message);
     return;
   }
-  if (!data?.locations?.length) return;
-
-  // Filter out spoofed/mock locations
-  const trusted = data.locations.filter((loc) => {
-    if (Platform.OS === 'android' && loc.mocked === true) return false;
-    if ((loc.coords.accuracy ?? 0) === 0) return false;
-    if ((loc.coords.speed ?? 0) > 90) return false;
-    return true;
-  });
-  if (!trusted.length) return;
-
-  const points: BackgroundLocationPoint[] = trusted.map((loc) => ({
-    lat: loc.coords.latitude,
-    lng: loc.coords.longitude,
-    speed: loc.coords.speed ?? null,
-    heading: loc.coords.heading ?? null,
-    accuracy: loc.coords.accuracy ?? null,
-    timestamp: new Date(loc.timestamp).toISOString(),
-    tracking_phase: 'background',
-  }));
-  const queued = await loadQueuedBackgroundPoints();
-  const pointsToUpload = [...queued, ...points].slice(-BG_LOCATION_QUEUE_MAX_POINTS);
-
-  const token = await getBackgroundAuthToken();
-  if (!token || !API_URL) {
-    await saveQueuedBackgroundPoints(pointsToUpload);
-    return;
+  for (const location of data?.locations ?? []) {
+    try {
+      // Durable persistence is deliberately before auth/network work. The
+      // recorder keeps every accepted native sample across process restarts.
+      await tripLocationRecorder.recordNativeFix(location, 'background');
+    } catch {
+      // No raw coordinates in logs; a later native callback can still queue.
+      console.warn('[BgLocation] Failed to persist a native location sample');
+    }
   }
 
+  const token = await getBackgroundAuthToken();
+  if (!token || !API_URL) return;
+
   try {
-    // App Check is enforced on /api/* in production. Initialize it (idempotent;
-    // this headless task doesn't mount _layout) and attach the token so the
-    // breadcrumb upload isn't 401'd — otherwise rider ETA / the period audit
-    // go stale while the task logs the points as sent.
-    await initFirebaseServices();
-    const appCheckToken = await getAppCheckToken();
-    const resp = await fetch(`${API_URL}/api/v1/drivers/location-batch`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-        ...(appCheckToken ? { 'X-Firebase-AppCheck': appCheckToken } : {}),
-      },
-      body: JSON.stringify({ points: pointsToUpload }),
-    });
-    if (!resp.ok) {
-      throw new Error(`location-batch ${resp.status}`);
-    }
-    await saveQueuedBackgroundPoints([]);
-    console.log(`[BgLocation] Sent ${pointsToUpload.length} points`);
-  } catch (e) {
-    console.warn('[BgLocation] Upload failed:', e);
-    await saveQueuedBackgroundPoints(pointsToUpload);
+    await tripLocationRecorder.flushPending(async (request: TripLocationBatchRequest) => {
+      // App Check is enforced on /api/* in production. Initialize it
+      // idempotently because this headless task does not mount the app shell.
+      await initFirebaseServices();
+      const appCheckToken = await getAppCheckToken();
+      const response = await fetch(`${API_URL}/api/v1/drivers/location-batch`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          ...(appCheckToken ? { 'X-Firebase-AppCheck': appCheckToken } : {}),
+        },
+        body: JSON.stringify(request),
+      });
+      if (!response.ok) throw new Error(`location-batch ${response.status}`);
+      return response.json();
+    }, { force: true });
+  } catch {
+    // Points stay in SQLite until the server returns a durable acknowledgement.
+    console.warn('[BgLocation] Durable upload deferred');
   }
 }
 
@@ -251,7 +194,7 @@ async function _applyTaskOptions(config?: BgLocationConfig): Promise<void> {
 }
 
 export async function startBackgroundLocation(config?: BgLocationConfig): Promise<boolean> {
-  const isRunning = await TaskManager.isTaskRegisteredAsync(TASK_NAME);
+  const isRunning = await Location.hasStartedLocationUpdatesAsync(TASK_NAME);
   if (isRunning) {
     console.log('[BgLocation] Already running');
     return true;
@@ -281,7 +224,7 @@ export async function startBackgroundLocation(config?: BgLocationConfig): Promis
  * options in place — the task identity and handler are unchanged.
  */
 export async function updateBackgroundLocationCadence(config: BgLocationConfig): Promise<void> {
-  const isRunning = await TaskManager.isTaskRegisteredAsync(TASK_NAME);
+  const isRunning = await Location.hasStartedLocationUpdatesAsync(TASK_NAME);
   if (!isRunning) return;
   const { status } = await Location.getBackgroundPermissionsAsync();
   if (status !== 'granted') return;
@@ -293,7 +236,7 @@ export async function updateBackgroundLocationCadence(config: BgLocationConfig):
 }
 
 export async function stopBackgroundLocation(): Promise<void> {
-  const isRunning = await TaskManager.isTaskRegisteredAsync(TASK_NAME);
+  const isRunning = await Location.hasStartedLocationUpdatesAsync(TASK_NAME);
   if (!isRunning) return;
 
   await Location.stopLocationUpdatesAsync(TASK_NAME);
@@ -305,9 +248,8 @@ export async function stopBackgroundLocation(): Promise<void> {
 }
 
 /**
- * Persist whether a ride is active so the headless geofence-recovery task can
- * re-arm tracking at trip cadence after a force-kill (it has no access to the
- * React/zustand ride state). Best-effort.
+ * Persist whether a ride is active so the headless geofence task can re-arm
+ * future tracking at trip cadence. It has no access to React/zustand state.
  */
 export async function setBackgroundTripActive(active: boolean): Promise<void> {
   try {
@@ -317,7 +259,7 @@ export async function setBackgroundTripActive(active: boolean): Promise<void> {
       await SecureStore.deleteItemAsync(TRIP_ACTIVE_KEY);
     }
   } catch {
-    // best-effort — recovery falls back to idle cadence if unreadable
+    // Best-effort — future tracking falls back to idle cadence if unreadable.
   }
 }
 
@@ -337,17 +279,15 @@ TaskManager.defineTask(GEOFENCE_TASK, async ({ data, error }) => {
   if (!payload || payload.eventType !== Location.GeofencingEventType.Exit) return;
 
   try {
-    // 1. Re-arm background tracking if it was killed. startBackgroundLocation
-    //    short-circuits if the task is already running, so this is cheap.
-    const isRunning = await TaskManager.isTaskRegisteredAsync(TASK_NAME);
+    // 1. Re-arm future background tracking if it is no longer running.
+    //    startBackgroundLocation short-circuits if it is already running.
+    const isRunning = await Location.hasStartedLocationUpdatesAsync(TASK_NAME);
     if (!isRunning) {
-      // Re-arm at trip cadence if a ride was active when the app was killed,
-      // otherwise the rest of the trip is sampled at the coarse idle cadence
-      // and undercounts. The flag is persisted by setBackgroundTripActive
-      // since this headless task can't read the React/zustand ride state.
+      // Use trip cadence when the persisted flag says a ride is active. This
+      // affects only subsequent fixes; it does not claim to recover missed ones.
       const tripActive = (await SecureStore.getItemAsync(TRIP_ACTIVE_KEY).catch(() => null)) === 'true';
       await startBackgroundLocation(tripActive ? TRIP_CADENCE : undefined);
-      console.log(`[Geofence] Recovered background tracking after kill (cadence=${tripActive ? 'trip' : 'idle'})`);
+      console.log(`[Geofence] Re-armed future background tracking (cadence=${tripActive ? 'trip' : 'idle'})`);
     }
 
     // 2. Refresh the geofence around the current location so subsequent

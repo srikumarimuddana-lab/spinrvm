@@ -74,7 +74,7 @@ export function buildReceiptHtml(ride: any): string {
     routeRevision > 0 &&
     _num(ride?.snapshot_revision) === routeRevision;
   const routeSnapshotUrl = ride?.route_snapshot_url && isActualSnapshot ? ride.route_snapshot_url : '';
-  const routeQuality = routeQualityLabel(ride?.route_quality);
+  const routeQuality = routeQualityLabel(ride?.route_geometry_status, ride?.route_quality);
   const routeMap = routeSnapshotUrl
     ? `<tr><td style="padding:0 24px 12px"><p style="color:#666;font-size:12px;margin:0 0 6px">Actual route (revision ${routeRevision}) · ${routeQuality}</p><img src="${routeSnapshotUrl}" alt="Actual route" width="472" style="width:100%;max-width:472px;border-radius:12px;display:block" /></td></tr>`
     : _num(ride?.route_schema_version) >= 2
@@ -227,7 +227,7 @@ export default function RideDetailsScreen() {
     _num(ride?.snapshot_revision) === _num(ride?.route_revision);
   const routeSnapshotUrl = ride?.route_snapshot_url && isActualSnapshot ? ride.route_snapshot_url : '';
   const routeLabel = hasActualRoute ? 'Actual route' : 'Planned route';
-  const routeQuality = routeQualityLabel(ride?.route_quality);
+  const routeQuality = routeQualityLabel(ride?.route_geometry_status, ride?.route_quality);
 
   const formatDate = (d: string) => {
     try {
@@ -358,7 +358,11 @@ export default function RideDetailsScreen() {
         )}
         {isCompleted && (
           <Text style={styles.routeQualityText}>
-            {hasActualRoute ? `${routeLabel} · ${routeQuality}` : `${routeLabel} · Actual GPS route unavailable`}
+            {/* routeQuality is the shared canonical "Actual route ..." string, so
+                it is rendered ONCE (never prefixed by routeLabel, which would
+                read "Actual route · Actual route"). A GPS-less completed ride is
+                shown as the planned route. */}
+            {hasActualRoute ? routeQuality : routeLabel}
           </Text>
         )}
 

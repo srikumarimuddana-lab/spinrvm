@@ -19,7 +19,7 @@ import Analytics from '@shared/analytics';
 import { useStripe } from '@stripe/stripe-react-native';
 import { attemptRidePayment, PaymentAlertButton } from '../utils/attemptRidePayment';
 import { useSpinrPaymentSheet } from '../hooks/useSpinrPaymentSheet';
-import { routeQualityLabel, toReactNativeSegments } from '@shared/utils/routeSegments';
+import { routeQualityLabel, toReactNativeSegments, type ReactNativeRouteCoordinate } from '@shared/utils/routeSegments';
 
 // PR #664 stringified Decimal money fields in API responses (e.g. total_fare,
 // base_fare, tip_amount). The receipt UI needs them as numbers for arithmetic
@@ -91,7 +91,7 @@ function RideCompletedScreenContent() {
     [currentRide?.planned_route_polyline],
   );
   const mapCoordinates = useMemo(
-    () => (actualSegments.length ? actualSegments : plannedSegments).reduce<any[]>((all, segment) => all.concat(segment), []),
+    () => (actualSegments.length ? actualSegments : plannedSegments).reduce<ReactNativeRouteCoordinate[]>((all, segment) => all.concat(segment), []),
     [actualSegments, plannedSegments],
   );
   const routeRevision = toNum(currentRide?.route_revision);
@@ -103,14 +103,17 @@ function RideCompletedScreenContent() {
     ? currentRide.route_snapshot_url
     : '';
   const hasActualRoute = actualSegments.length > 0;
-  const routeLabel = hasActualRoute ? 'Actual route' : 'Planned route';
-  const routeQuality = routeQualityLabel(currentRide?.route_quality);
+  // Canonical, self-contained note. The shared routeQualityLabel already yields
+  // a full "Actual route ..." / "Route recording incomplete ..." / "Actual route
+  // is still processing" string, so it is rendered ONCE — never prefixed by a
+  // separate label (that produced "Actual route · Actual route · revision N").
+  const routeQuality = routeQualityLabel(currentRide?.route_geometry_status, currentRide?.route_quality);
   const routeStatus = routeSnapshotUrl
     ? `Actual route · revision ${routeRevision}`
     : hasActualRoute
       ? routeQuality
       : toNum(currentRide?.route_schema_version) >= 2
-        ? 'Route snapshot unavailable · GPS route is still processing'
+        ? `Route snapshot unavailable · ${routeQuality}`
         : 'Planned route preview';
 
 
@@ -639,8 +642,8 @@ function RideCompletedScreenContent() {
             {/* Address overlay */}
             <View style={styles.mapOverlay}>
               <View style={styles.mapRouteStatus}>
-                <Ionicons name={hasActualRoute ? 'navigate-circle-outline' : 'map-outline'} size={14} color="#2563EB" />
-                <Text style={styles.mapRouteStatusText} numberOfLines={1}>{routeLabel} · {routeStatus}</Text>
+                <Ionicons name={hasActualRoute || routeSnapshotUrl ? 'navigate-circle-outline' : 'map-outline'} size={14} color="#2563EB" />
+                <Text style={styles.mapRouteStatusText} numberOfLines={1}>{routeStatus}</Text>
               </View>
               <View style={styles.mapAddrRow}>
                 <View style={[styles.mapAddrDot, { backgroundColor: '#10B981' }]} />

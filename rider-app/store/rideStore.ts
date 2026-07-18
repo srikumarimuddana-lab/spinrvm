@@ -289,6 +289,15 @@ interface RideState {
   // WebSocket-driven updates (see rider-app/hooks/useRiderSocket.ts).
   updateDriverLocation: (lat: number, lng: number, speed?: number | null, heading?: number | null, etaSeconds?: number | null) => void;
   applyRideStatusFromWS: (rideId: string, status: string, extra?: Record<string, unknown>) => void;
+  /**
+   * Handle a `route_finalized` WS push (Contract A). Route finalization lands a
+   * few seconds after completion; the ride-completed / ride-details screens
+   * fetched the route at mount (pre-finalization) and would otherwise show the
+   * "still processing" copy forever. Refetch the ride so the durable segments /
+   * quality / snapshot render — but only when the pushed revision is strictly
+   * newer than what is displayed, so a duplicate / replayed push cannot loop.
+   */
+  handleRouteFinalizedFromWS: (rideId: string, routeRevision: number) => void;
 
   _clearedRideId: string | null;
   wsConnected: boolean;
@@ -1103,6 +1112,17 @@ export const useRideStore = create<RideState>((set, get) => ({
       set({ currentRide: updated });
       _persistRide(updated, currentDriver);
     }
+  },
+
+  handleRouteFinalizedFromWS: (rideId, routeRevision) => {
+    const { currentRide } = get();
+    // No-op when the finalized ride is not the one currently displayed.
+    if (!currentRide || currentRide.id !== rideId) return;
+    // Refetch-loop guard: ignore any push that is not strictly newer than the
+    // revision already rendered (duplicate fan-out, reconnect replay).
+    const displayedRevision = Number(currentRide.route_revision ?? 0);
+    if (!(routeRevision > displayedRevision)) return;
+    get().fetchRide(rideId);
   },
 
   // ── Offline hydration ────────────────────────────────────────────

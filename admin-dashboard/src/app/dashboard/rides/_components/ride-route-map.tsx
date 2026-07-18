@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
@@ -60,7 +60,11 @@ export default function RideRouteMap({
 }: Props) {
     const containerRef = useRef<HTMLDivElement>(null);
     const mapRef = useRef<maplibregl.Map | null>(null);
-    const actualGeometry = toGeoJsonMultiLineString(actualSegments);
+    // Memoize so the object identity is stable across parent re-renders. It is a
+    // dependency of the map-init effect whose cleanup does `map.remove()`; a fresh
+    // identity every render would tear down and rebuild the MapLibre map on every
+    // parent render. Keyed on the raw segments prop, which is stable per ride.
+    const actualGeometry = useMemo(() => toGeoJsonMultiLineString(actualSegments), [actualSegments]);
 
     useEffect(() => {
         if (!containerRef.current || mapRef.current) return;

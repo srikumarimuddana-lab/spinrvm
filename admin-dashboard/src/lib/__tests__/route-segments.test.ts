@@ -39,9 +39,14 @@ describe('segmented route geometry', () => {
     });
   });
 
-  it('uses clear incomplete coverage copy', () => {
-    expect(routeQualityLabel({ coverage_ratio: 0.54, missing_tail: true })).toBe(
-      'Route incomplete · 54% GPS coverage',
+  it('uses the shared canonical coverage copy keyed on geometry status', () => {
+    // Shared routeQualityLabel(status, quality) is the single source of truth —
+    // status drives the copy, coverage_ratio the percentage, never "verified".
+    expect(routeQualityLabel('complete', { coverage_ratio: 0.87 })).toBe('Actual route');
+    expect(routeQualityLabel('incomplete', { coverage_ratio: 0.54 })).toBe(
+      'Route recording incomplete — 54% GPS coverage',
     );
+    expect(routeQualityLabel('pending', undefined)).toBe('Actual route is still processing');
+    expect(routeQualityLabel('complete', { coverage_ratio: 1 })).not.toMatch(/verified/i);
   });
 });

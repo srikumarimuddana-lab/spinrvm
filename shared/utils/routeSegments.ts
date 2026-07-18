@@ -1,6 +1,9 @@
 /** Safe route-geometry conversions shared by every ride-detail surface. */
 
-export type LatLng = readonly [latitude: number, longitude: number];
+import type { RouteCoordinate, RouteGeometryStatus, RouteQuality } from '../types/api/route';
+
+/** [lat, lng] — the order the backend persists every route coordinate in. */
+export type LatLng = RouteCoordinate;
 
 export interface NormalizedRouteSegment {
   id: string;
@@ -42,6 +45,10 @@ function validCoordinate(value: unknown): value is readonly [number, number] {
  * Normalize each durable route segment without ever flattening its boundary.
  * A malformed segment is rejected wholesale so invalid GPS cannot create an
  * artificial chord between its neighbouring segments.
+ *
+ * Consumes the backend `coordinates` [lat, lng] shape emitted for every
+ * segment variant (observed / matched / observed_fallback). A legacy `points`
+ * key and a bare coordinate array are also tolerated.
  */
 export function normalizeActualRouteSegments(input: unknown): NormalizedRouteSegment[] {
   if (!Array.isArray(input)) return [];
@@ -75,28 +82,38 @@ export function toGeoJsonMultiLineString(input: unknown): GeoJsonMultiLineString
   return {
     type: 'MultiLineString',
     coordinates: normalizeActualRouteSegments(input).map((segment) =>
+      // Storage is [lat, lng]; GeoJSON positions are [lng, lat] — flip here only.
       segment.coordinates.map(([latitude, longitude]) => [longitude, latitude]),
     ),
   };
 }
 
-/** Plain, approved quality copy for rider, driver, admin, and receipts. */
-export function routeQualityLabel(quality: unknown): string {
-  const value = quality as {
-    coverage_ratio?: unknown;
-    coverage_pct?: unknown;
-    missing_tail?: unknown;
-    incomplete_reason?: unknown;
-  } | undefined;
-  const ratio =
-    typeof value?.coverage_ratio === 'number'
-      ? value.coverage_ratio
-      : typeof value?.coverage_pct === 'number'
-        ? value.coverage_pct / 100
-        : undefined;
-  const coverage = ratio === undefined ? 'GPS coverage unavailable' : `${Math.round(ratio * 100)}% GPS coverage`;
-  if (value?.missing_tail || typeof value?.incomplete_reason === 'string') {
-    return `Route incomplete · ${coverage}`;
+/**
+ * Canonical, approved route note for rider, driver, admin, and receipts.
+ *
+ * This is the SINGLE source of truth for the user-facing route string — do not
+ * hand-roll this copy at a call site. It is keyed on the ride's geometry status
+ * (`route_geometry_status`); the coverage percentage is derived from
+ * `route_quality.coverage_ratio`. It never emits the word "verified".
+ *
+ *   complete              → "Actual route"
+ *   pending | processing   → "Actual route is still processing"
+ *   incomplete | anything  → "Route recording incomplete — {pct}% GPS coverage"
+ *   else                     (or "…— GPS coverage unavailable" when unknown)
+ */
+export function routeQualityLabel(
+  status: RouteGeometryStatus | string | null | undefined,
+  quality?: RouteQuality | { coverage_ratio?: number | null } | null,
+): string {
+  if (status === 'complete') return 'Actual route';
+  if (status === 'pending' || status === 'processing') return 'Actual route is still processing';
+
+  // 'incomplete', 'failed', or any unknown/absent status → a coverage-qualified
+  // note that never over-claims a finished route.
+  const raw = quality?.coverage_ratio;
+  const ratio = typeof raw === 'number' && Number.isFinite(raw) ? raw : null;
+  if (ratio === null) {
+    return 'Route recording incomplete — GPS coverage unavailable';
   }
-  return `Route verified · ${coverage}`;
+  return `Route recording incomplete — ${Math.round(ratio * 100)}% GPS coverage`;
 }

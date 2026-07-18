@@ -9,6 +9,10 @@ const rideStoreSource = fs.readFileSync(
   path.resolve(__dirname, '..', '..', 'store', 'rideStore.ts'),
   'utf8',
 );
+const socketSource = fs.readFileSync(
+  path.resolve(__dirname, '..', '..', 'hooks', 'useRiderSocket.ts'),
+  'utf8',
+);
 
 describe('completed ride route presentation contract', () => {
   it('renders each captured route segment without requesting a replacement route', () => {
@@ -29,5 +33,26 @@ describe('completed ride route presentation contract', () => {
     expect(screenSource).toContain('routeQualityLabel');
     expect(rideStoreSource).toContain('actual_route_segments?:');
     expect(rideStoreSource).toContain('actual_duration_minutes?:');
+  });
+
+  it('renders the canonical quality note once (no duplicated label)', () => {
+    // M-H: the overlay must not prepend a separate label to a status string that
+    // already begins "Actual route ...", which produced "Actual route · Actual
+    // route · revision N".
+    expect(screenSource).not.toContain('{routeLabel} · {routeStatus}');
+    expect(screenSource).toContain('>{routeStatus}</Text>');
+  });
+
+  it('types the flattened map coordinates instead of any[]', () => {
+    expect(screenSource).toContain('reduce<ReactNativeRouteCoordinate[]>');
+    expect(screenSource).not.toContain('reduce<any[]>');
+  });
+
+  it('refetches on the route_finalized push via a revision-guarded store action', () => {
+    // The screen reads currentRide from the store; the socket handler drives the
+    // refetch through handleRouteFinalizedFromWS (revision-guarded, loop-safe).
+    expect(rideStoreSource).toContain('handleRouteFinalizedFromWS');
+    expect(socketSource).toContain("case 'route_finalized':");
+    expect(socketSource).toContain('handleRouteFinalizedFromWS');
   });
 });

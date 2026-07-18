@@ -22,6 +22,13 @@ describe('admin route replay contract', () => {
     expect(mapSource).not.toContain('coordinates: [[pickupLng, pickupLat], [dropoffLng, dropoffLat]]');
   });
 
+  it('memoizes the actual geometry so the map is not rebuilt every render', () => {
+    // MINOR 3b: actualGeometry is a dependency of the map-init effect whose
+    // cleanup does `map.remove()`. A fresh identity each render tears down and
+    // rebuilds the MapLibre map on every parent re-render — memoize it.
+    expect(mapSource).toContain('useMemo(() => toGeoJsonMultiLineString(actualSegments), [actualSegments])');
+  });
+
   it('passes the v2 actual segments and their quality label from the admin detail', () => {
     expect(detailSource).toContain('actual_route_segments');
     expect(detailSource).toContain('routeQualityLabel');

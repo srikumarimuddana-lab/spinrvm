@@ -73,11 +73,21 @@ export interface Ride {
   cancellation_fee_admin: MoneyString;
   rider_rating?: number;
   rider_comment?: string;
+  // ── Versioned actual-route projection (ride_routes side-table) ──
+  // Attached by backend/repositories/ride_repo.py::_project_route_detail on the
+  // authorized ride-detail read. Declared here so rider/driver/admin surfaces
+  // consume one shared contract instead of re-declaring these locally.
   actual_route_segments?: ActualRouteSegment[];
   route_quality?: RouteQuality;
+  /** Monotonic finalization revision (0 until the first projection lands). */
   route_revision?: number;
+  /** Signed, short-lived route-image URL; present only when the snapshot revision matches `route_revision`. */
   route_snapshot_url?: string;
+  /** Revision of the currently published snapshot image (0 when none/stale). */
+  snapshot_revision?: number;
   route_geometry_status?: RouteGeometryStatus;
+  /** Geometry schema version; `>= 2` means segmented (never join across segments). */
+  route_schema_version?: number;
   created_at: string;
   updated_at: string;
 }

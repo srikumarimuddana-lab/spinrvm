@@ -5,6 +5,10 @@ const source = fs.readFileSync(
   path.resolve(__dirname, '..', 'ride-detail.tsx'),
   'utf8',
 );
+const dashboardSource = fs.readFileSync(
+  path.resolve(__dirname, '..', '..', '..', 'hooks', 'useDriverDashboard.ts'),
+  'utf8',
+);
 
 describe('driver ride detail route presentation contract', () => {
   it('renders durable actual route segments without a directions fallback', () => {
@@ -23,5 +27,23 @@ describe('driver ride detail route presentation contract', () => {
   it('keeps a no-GPS route visibly planned or incomplete', () => {
     expect(source).toContain('Planned route');
     expect(source).toContain('routeQualityLabel');
+  });
+
+  it('renders the canonical quality note once (no duplicated label)', () => {
+    // M-H: the pill must not prepend routeLabel to a status that already starts
+    // "Actual route ..." — that produced "Actual route · Actual route · revision N".
+    expect(source).not.toContain('{routeLabel} · {routeStatus}');
+    expect(source).toContain('>{routeStatus}</Text>');
+    expect(source).toContain('reduce<ReactNativeRouteCoordinate[]>');
+    expect(source).not.toContain('reduce<any[]>');
+  });
+
+  it('refetches on the route_finalized push (revision-guarded, no-op if unmounted)', () => {
+    // Dashboard WS handler fans the push out on routeFinalizedBus; the screen
+    // subscribes and refetches only when the pushed revision is newer.
+    expect(dashboardSource).toContain("case 'route_finalized':");
+    expect(dashboardSource).toContain('emitRouteFinalized');
+    expect(source).toContain('subscribeRouteFinalized');
+    expect(source).toContain('event.routeRevision > rideRevisionRef.current');
   });
 });

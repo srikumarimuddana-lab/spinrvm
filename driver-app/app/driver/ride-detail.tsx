@@ -18,7 +18,8 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import { routeQualityLabel, toReactNativeSegments } from '@shared/utils/routeSegments';
+import { routeQualityLabel, toReactNativeSegments, type ReactNativeRouteCoordinate } from '@shared/utils/routeSegments';
+import { subscribeRouteFinalized } from '../../utils/routeFinalizedBus';
 
 export default function RideDetailScreen() {
     const { id } = useLocalSearchParams<{ id: string }>();
@@ -44,6 +45,26 @@ export default function RideDetailScreen() {
         }
         setLoading(false);
     };
+
+    // Route finalization (Contract A) lands a few seconds after completion via a
+    // WS push handled in useDriverDashboard, which fans it out on routeFinalizedBus.
+    // The route fetched at mount was pre-finalization, so refetch when a strictly
+    // newer revision is announced for THIS ride. Revision-guarded so a duplicate /
+    // replayed push can't loop; a screen viewing a different ride is a no-op.
+    const rideRevisionRef = useRef(0);
+    useEffect(() => {
+        rideRevisionRef.current = Number(ride?.route_revision || 0);
+    }, [ride?.route_revision]);
+    useEffect(() => {
+        return subscribeRouteFinalized((event) => {
+            if (event.rideId !== id) return;
+            if (event.routeRevision > rideRevisionRef.current) {
+                loadRide();
+            }
+        });
+        // loadRide closes over `id`; re-subscribing on `id` keeps it fresh.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [id]);
 
     const hasPickup = ride?.pickup_lat && ride?.pickup_lng;
     const hasDropoff = ride?.dropoff_lat && ride?.dropoff_lng;
@@ -85,7 +106,7 @@ export default function RideDetailScreen() {
         [ride?.planned_route_polyline],
     );
     const mapCoordinates = useMemo(
-        () => (actualSegments.length ? actualSegments : plannedSegments).reduce<any[]>((all, segment) => all.concat(segment), []),
+        () => (actualSegments.length ? actualSegments : plannedSegments).reduce<ReactNativeRouteCoordinate[]>((all, segment) => all.concat(segment), []),
         [actualSegments, plannedSegments],
     );
     const routeRevision = Number(ride?.route_revision || 0);
@@ -95,14 +116,16 @@ export default function RideDetailScreen() {
         Number(ride?.snapshot_revision || 0) === routeRevision;
     const routeSnapshotUrl = ride?.route_snapshot_url && isActualSnapshot ? ride.route_snapshot_url : '';
     const hasActualRoute = actualSegments.length > 0;
-    const routeLabel = hasActualRoute ? 'Actual route' : 'Planned route';
-    const routeQuality = routeQualityLabel(ride?.route_quality);
+    // Canonical, self-contained note. The shared routeQualityLabel already yields
+    // a full "Actual route ..." string, so it is rendered ONCE — never prefixed by
+    // a separate label (that produced "Actual route · Actual route · revision N").
+    const routeQuality = routeQualityLabel(ride?.route_geometry_status, ride?.route_quality);
     const routeStatus = routeSnapshotUrl
         ? `Actual route · revision ${routeRevision}`
         : hasActualRoute
             ? routeQuality
             : Number(ride?.route_schema_version || 0) >= 2
-                ? 'Route snapshot unavailable · GPS route is still processing'
+                ? `Route snapshot unavailable · ${routeQuality}`
                 : 'Planned route preview';
 
     if (loading) {
@@ -209,8 +232,8 @@ export default function RideDetailScreen() {
                             <Ionicons name="arrow-back" size={22} color="#fff" />
                         </TouchableOpacity>
                         <View style={styles.routeStatusPill}>
-                            <Ionicons name={hasActualRoute ? 'navigate-circle-outline' : 'map-outline'} size={14} color="#2563EB" />
-                            <Text style={styles.routeStatusText} numberOfLines={1}>{routeLabel} · {routeStatus}</Text>
+                            <Ionicons name={hasActualRoute || routeSnapshotUrl ? 'navigate-circle-outline' : 'map-outline'} size={14} color="#2563EB" />
+                            <Text style={styles.routeStatusText} numberOfLines={1}>{routeStatus}</Text>
                         </View>
                     </View>
                 )}

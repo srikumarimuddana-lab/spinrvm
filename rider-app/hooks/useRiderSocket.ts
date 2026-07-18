@@ -25,6 +25,7 @@ import { RideStatus } from '../constants/rideStatus';
  * | `driver_arrived`        | Same — screens transition to driver-arrived            |
  * | `ride_started`          | Same — screens transition to ride-in-progress          |
  * | `ride_completed`        | Same — screens transition to ride-completed             |
+ * | `route_finalized`       | Refetch ride so finalized segments/quality/snapshot show|
  * | `ride_cancelled`        | Clear ride + alert                                     |
  * | `ride_status_changed`   | Generic catch-all: apply status + fetchRide fallback   |
  * | `chat_message`          | Log (chat screen polls its own messages for now)       |
@@ -127,6 +128,22 @@ export function useRiderSocket() {
             grand_total: data.grand_total,
           });
           fetchRide(rideId);
+        }
+        break;
+
+      // Route finalization (Contract A). Emitted a few seconds after completion,
+      // once the durable route geometry + quality + snapshot are persisted. The
+      // ride-completed / ride-details screens fetched the route at mount (before
+      // finalization) so without this they show the "still processing" copy and
+      // planned-dashed line forever. Refetch so the real segments/quality/
+      // snapshot render; the store guards against refetch loops by revision and
+      // no-ops when the finalized ride isn't the one on screen.
+      case 'route_finalized':
+        if (data.ride_id) {
+          useRideStore.getState().handleRouteFinalizedFromWS(
+            data.ride_id,
+            Number(data.route_revision ?? 0),
+          );
         }
         break;
 

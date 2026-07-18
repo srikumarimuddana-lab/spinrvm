@@ -38,6 +38,7 @@ import {
   type TripLocationBatchAck,
   type TripLocationBatchRequest,
 } from '../utils/tripLocationRecorder';
+import { emitRouteFinalized } from '../utils/routeFinalizedBus';
 
 const { height } = Dimensions.get('window');
 // Each tier doubles; last-tier jitter must be large enough to disperse a
@@ -808,6 +809,23 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         }
         break;
       }
+
+      // Route finalization (Contract A). Emitted a few seconds after completion,
+      // once the durable route geometry + quality + snapshot are persisted. The
+      // ride-detail screen fetched its route at mount (before finalization) so
+      // without this it shows the "still processing" copy forever. Notify the
+      // mounted ride-detail screen (if any) to refetch; the screen guards the
+      // refetch by revision. No subscriber => no-op.
+      case 'route_finalized':
+        if (typeof data.ride_id === 'string' && data.ride_id) {
+          emitRouteFinalized({
+            rideId: data.ride_id,
+            routeRevision: Number(data.route_revision ?? 0),
+            routeGeometryStatus:
+              typeof data.route_geometry_status === 'string' ? data.route_geometry_status : undefined,
+          });
+        }
+        break;
 
       // Unified status event from socket_manager.broadcast_ride_status().
       // Currently emitted to drivers on admin-initiated cancellations.

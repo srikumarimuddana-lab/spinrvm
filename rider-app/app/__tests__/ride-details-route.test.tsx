@@ -23,4 +23,11 @@ describe('ride-details v2 route rendering contract', () => {
     expect(source).toContain('Route snapshot unavailable');
     expect(source).toContain('routeQualityLabel');
   });
+
+  it('renders the shared quality label once (no duplicated "Actual route" prefix)', () => {
+    // M-H: routeQuality is already a full "Actual route ..." string, so prefixing
+    // it with routeLabel produced "Actual route · Actual route".
+    expect(source).not.toContain('`${routeLabel} · ${routeQuality}`');
+    expect(source).not.toContain('${routeLabel} · Actual GPS route unavailable');
+  });
 });

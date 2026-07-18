@@ -57,8 +57,7 @@ ALTER TABLE driver_location_history
   ADD COLUMN IF NOT EXISTS source text,
   ADD COLUMN IF NOT EXISTS is_completion_fix boolean NOT NULL DEFAULT false;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_dlh_ride_driver_session_sequence
-  ON driver_location_history(ride_id, driver_id, recording_session_id, sequence_number)
-  WHERE ride_id IS NOT NULL AND recording_session_id IS NOT NULL AND sequence_number IS NOT NULL;
+  ON driver_location_history(ride_id, driver_id, recording_session_id, sequence_number);
 CREATE INDEX IF NOT EXISTS idx_dlh_ride_captured
   ON driver_location_history(ride_id, captured_at, recording_session_id, sequence_number);
 

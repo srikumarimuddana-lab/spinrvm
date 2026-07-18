@@ -167,22 +167,27 @@ def generate_receipt_pdf(
     pdf.cell(W, 5, f"Ride {ride_ref}", align="C", ln=True)
     pdf.ln(3)
 
-    # The image is supplied only from a revision-matched route snapshot. A
-    # planned fallback must never be captioned as an actual trip trace.
+    # The image is supplied only from a revision-matched route snapshot. Both
+    # the image caption and the standalone note reuse the canonical quality
+    # string (Contract B) so an INCOMPLETE route is never captioned like a
+    # complete "Actual route", and a planned fallback is never captioned as an
+    # actual trip trace. fpdf core fonts are latin-1, so the em dash is folded
+    # to a hyphen for encoding only.
+    snapshot_caption = route_snapshot_note or ("Actual route" if route_snapshot_is_actual else "Planned route")
     if route_snapshot_bytes:
         try:
             import io
 
             pdf.set_font("Helvetica", "B", 10)
             pdf.set_text_color(30, 30, 30)
-            pdf.cell(W, 6, "Actual route" if route_snapshot_is_actual else "Planned route", ln=True)
+            pdf.multi_cell(W, 6, snapshot_caption.replace("—", "-"))
             pdf.image(io.BytesIO(route_snapshot_bytes), x=left, w=W)
             pdf.ln(2)
         except Exception:
             # Image is supplemental; the printable text note below remains
             # available even if corrupt image bytes cannot be embedded.
             logger.error("receipt PDF route snapshot embedding failed", exc_info=True)
-    if route_snapshot_note:
+    elif route_snapshot_note:
         pdf.set_font("Helvetica", "", 8)
         pdf.set_text_color(120, 80, 20)
         pdf.multi_cell(W, 4, route_snapshot_note.replace("—", "-"))

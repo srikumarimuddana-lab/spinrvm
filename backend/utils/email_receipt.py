@@ -41,8 +41,23 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 _TWO_PLACES = Decimal("0.01")
-_ROUTE_FINALIZATION_WAIT_SECONDS = 4.0
-_ROUTE_FINALIZATION_POLL_SECONDS = 0.5
+
+# Bounded window the receipt-generation path holds for v2 route finalization.
+#
+# The route finalizer drains its pending queue on a ~5s poll (see
+# ``route_finalizer.ROUTE_FINALIZER_INTERVAL_SECONDS``). After completion it
+# needs one poll to build route revision 1 and a second, downstream step to
+# render + upload the revisioned snapshot, so a matched snapshot realistically
+# lands ~5-10s after completion. The automatic receipt is spawned as a
+# fire-and-forget task seconds after payment submit, so with the old 4.0s
+# deadline it almost always beat finalization and shipped a permanent
+# "still processing" email with no map. We hold the RECEIPT path (never fare
+# settlement or the completion response — that stays fully non-blocking) for a
+# window that covers the finalize + snapshot-publish P95. If the window is
+# still exceeded we fall through to the honest "still processing" note rather
+# than block delivery, and any later resend re-reads the newest revision.
+_ROUTE_FINALIZATION_WAIT_SECONDS = 14.0
+_ROUTE_FINALIZATION_POLL_SECONDS = 1.0
 
 
 def _d(v: Any) -> Decimal:
@@ -169,12 +184,39 @@ def _build_fare_rows(ride: Dict[str, Any], tip: Decimal) -> tuple[str, Decimal]:
     return "".join(rows), grand_total_d
 
 
-def _route_snapshot_presentation(ride: Dict[str, Any]) -> tuple[str, str, bool]:
-    """Return ``(url, note, is_actual)`` without ever mislabeling a map.
+# ── Canonical route-quality copy (Contract B) ─────────────────────────────
+# These strings MUST stay in lockstep with
+# ``shared/utils/routeSegments.ts::routeQualityLabel`` so the rider app, driver
+# app, admin, and every receipt surface word route quality identically. Rules:
+#   - complete  → "Actual route" (a trailing "· revision N" is allowed, but
+#                 never imply completeness beyond that — no coverage %).
+#   - incomplete → "Route recording incomplete — {pct}% GPS coverage"
+#                 ({pct} = round(coverage_ratio*100); "GPS coverage unavailable"
+#                 when the ratio is absent).
+#   - not yet finalized within the window → "Actual route is still processing".
+# Never use the word "verified".
+_ROUTE_PROCESSING_NOTE = "Actual route is still processing"
 
-    A legacy ride-level image was generated before completion and is therefore
-    only a planned route. V2 images may be called actual only if their stored
-    revision equals the finalized route revision.
+
+def _complete_route_note(revision: int) -> str:
+    return f"Actual route · revision {revision}" if revision > 0 else "Actual route"
+
+
+def _incomplete_route_note(quality: Dict[str, Any]) -> str:
+    coverage = quality.get("coverage_ratio")
+    if coverage is None:
+        return "Route recording incomplete — GPS coverage unavailable"
+    return f"Route recording incomplete — {round(float(coverage) * 100)}% GPS coverage"
+
+
+def _route_snapshot_presentation(ride: Dict[str, Any]) -> tuple[str, str, bool]:
+    """Return ``(url, note, is_actual)`` using the canonical Contract B copy.
+
+    ``is_actual`` is True only when a revision-matched v2 snapshot image exists
+    to embed/attach. A legacy (v1) ride-level image was generated before
+    completion and is therefore only a planned route — never labelled actual.
+    An incomplete recording is always stated as incomplete, and no wording ever
+    uses "verified".
     """
     schema_version = int(ride.get("route_schema_version") or 1)
     url = str(ride.get("route_snapshot_url") or "")
@@ -184,16 +226,28 @@ def _route_snapshot_presentation(ride: Dict[str, Any]) -> tuple[str, str, bool]:
     revision = int(ride.get("route_revision") or 0)
     snapshot_revision = int(ride.get("snapshot_revision") or 0)
     quality = ride.get("route_quality") if isinstance(ride.get("route_quality"), dict) else {}
-    coverage = quality.get("coverage_ratio")
-    coverage_text = (
-        f"{round(float(coverage) * 100)}% GPS coverage" if coverage is not None else "GPS coverage unavailable"
-    )
-    if url and revision > 0 and snapshot_revision == revision:
-        return url, f"Actual route (revision {revision}) — {coverage_text}", True
-    if quality.get("missing_tail") or quality.get("incomplete_reason"):
-        coverage_note = f"{round(float(coverage) * 100)}% coverage" if coverage is not None else "coverage unavailable"
-        return "", f"Route snapshot unavailable — GPS capture was incomplete ({coverage_note}).", False
-    return "", "Route snapshot unavailable — actual route processing is still pending.", False
+    status = str(ride.get("processing_status") or "")
+
+    # The only image we may show/attach is a revision-matched v2 snapshot.
+    snapshot_matched = bool(url) and revision > 0 and snapshot_revision == revision
+
+    # Trust processing_status when the finalizer set it; otherwise infer from
+    # persisted quality (a matched snapshot or real coverage/gap data means a
+    # revision was produced even if the projected ride dict omits the status).
+    if status == "complete":
+        finalized, incomplete = True, False
+    elif status == "incomplete":
+        finalized, incomplete = True, True
+    else:
+        incomplete = bool(quality.get("missing_tail") or quality.get("incomplete_reason"))
+        finalized = snapshot_matched or quality.get("coverage_ratio") is not None or incomplete
+
+    if finalized:
+        note = _incomplete_route_note(quality) if incomplete else _complete_route_note(revision)
+        return (url if snapshot_matched else ""), note, snapshot_matched
+
+    # Finalization has not landed within the bounded receipt window.
+    return "", _ROUTE_PROCESSING_NOTE, False
 
 
 async def _await_route_receipt_projection(ride: Dict[str, Any]) -> Dict[str, Any]:
@@ -227,14 +281,27 @@ async def _await_route_receipt_projection(ride: Dict[str, Any]) -> Dict[str, Any
                 ):
                     if key in route:
                         result[key] = route[key]
-                if route.get("processing_status") in {"complete", "incomplete", "failed"}:
-                    object_path = route.get("snapshot_object_path")
-                    if object_path and int(result.get("snapshot_revision") or 0) == int(
-                        result.get("route_revision") or 0
-                    ):
-                        result["route_snapshot_url"] = await create_route_snapshot_signed_url(str(object_path))
-                    else:
-                        result.pop("route_snapshot_url", None)
+                # ``processing_status`` flips to complete/incomplete BEFORE the
+                # revisioned snapshot is rendered and uploaded, so we must poll
+                # for the published object — not just a terminal status — or the
+                # immutable email ships without the map. Exit early only once the
+                # snapshot for the CURRENT revision exists.
+                object_path = route.get("snapshot_object_path")
+                snapshot_ready = (
+                    bool(object_path)
+                    and int(result.get("snapshot_revision") or 0) > 0
+                    and int(result.get("snapshot_revision") or 0) == int(result.get("route_revision") or 0)
+                )
+                if snapshot_ready:
+                    result["route_snapshot_url"] = await create_route_snapshot_signed_url(str(object_path))
+                    return result
+                if int(result.get("route_schema_version") or 1) >= 2:
+                    # A v2 route's only valid image is a freshly-signed,
+                    # revision-matched snapshot. Drop any inherited/stale URL so
+                    # the honest note (never a mismatched map) is what renders.
+                    result.pop("route_snapshot_url", None)
+                if route.get("processing_status") == "failed":
+                    # Terminal: no snapshot will be published for this revision.
                     return result
             if asyncio.get_running_loop().time() >= deadline:
                 return result
@@ -266,8 +333,15 @@ def generate_receipt_html(
     tip: Decimal = Decimal(0),
     *,
     include_route_snapshot: bool = True,
+    route_map_attached: bool = False,
 ) -> str:
-    """Generate HTML receipt for a completed ride."""
+    """Generate HTML receipt for a completed ride.
+
+    ``route_map_attached`` gates the "A permanent map copy is attached" line so
+    it only appears when the caller actually embedded the snapshot bytes as an
+    attachment (see :func:`send_receipt_email`) — never merely because a URL was
+    available.
+    """
     tip_d = _d(tip)
     fare_rows, total_d = _build_fare_rows(ride, tip_d)
     total_str = _fmt(total_d)
@@ -305,7 +379,7 @@ def generate_receipt_html(
         """
     elif route_snapshot_note:
         attached_copy_note = ""
-        if route_snapshot_url and _route_snapshot_is_actual:
+        if route_map_attached:
             attached_copy_note = " A permanent map copy is attached to this receipt."
         route_snapshot_html = f"""
         <tr><td style="padding:0 24px 16px;">
@@ -429,10 +503,16 @@ async def send_receipt_email(
 
     snapshot_url, snapshot_note, snapshot_is_actual = _route_snapshot_presentation(ride)
     snapshot_bytes = await _download_route_snapshot(snapshot_url) if snapshot_url else None
+    # The map is a permanent attachment only if we actually pulled its bytes
+    # while the signed URL was valid; the "map attached" line must not over-claim
+    # when the download failed.
+    route_map_attached = bool(snapshot_bytes and snapshot_is_actual)
     # Private Storage URLs expire. The email body must remain valid long after
     # delivery, so it contains only the quality note; the PDF and PNG contain
     # the immutable bytes downloaded while the signed URL was valid.
-    html = generate_receipt_html(ride, rider, driver, tip, include_route_snapshot=False)
+    html = generate_receipt_html(
+        ride, rider, driver, tip, include_route_snapshot=False, route_map_attached=route_map_attached
+    )
     total = _receipt_total(ride, tip)
 
     try:
@@ -462,7 +542,7 @@ async def send_receipt_email(
     except Exception:
         logger.error("Receipt PDF generation failed — sending receipt without attachment", exc_info=True)
 
-    if snapshot_bytes and snapshot_is_actual:
+    if route_map_attached:
         ref = ride.get("ride_code") or str(ride.get("id", ""))[:8].upper() or "receipt"
         attachments.append({"filename": f"Spinr-route-{ref}.png", "content": snapshot_bytes, "mime": "image/png"})
 

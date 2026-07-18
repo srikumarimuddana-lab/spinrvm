@@ -24,7 +24,7 @@ async def init_database():
     """
     if not supabase:
         msg = "Supabase client not configured (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY missing)"
-        if settings.ENV.lower() == "production":
+        if settings.is_production_like:
             raise RuntimeError(msg)
         logger.warning(f"{msg} — continuing in {settings.ENV} mode")
         return None
@@ -34,7 +34,7 @@ async def init_database():
     # so we rely on the explicit SUPABASE_REGION env var. A missing or non-CA
     # value logs ERROR in production so this surfaces in SRE alerting.
     supabase_region = getattr(settings, "SUPABASE_REGION", "") or ""
-    if settings.ENV.lower() == "production":
+    if settings.is_production_like:
         if not supabase_region:
             logger.error(
                 "PIPEDA 22-2: SUPABASE_REGION is not set. "
@@ -59,7 +59,7 @@ async def init_database():
         logger.info("Supabase connection verified")
     except Exception as e:
         logger.error(f"Supabase health check failed: {e}")
-        if settings.ENV.lower() == "production":
+        if settings.is_production_like:
             raise
         logger.warning(f"Continuing in {settings.ENV} mode despite health-check failure")
 
@@ -113,7 +113,7 @@ async def lifespan(app: FastAPI):
     # Warn operators if Redis is absent in production. Without Redis, OTP
     # lockout state and per-user rate-limit counters are in-process only and
     # are lost on every restart — brute-force protection degrades silently.
-    if settings.ENV.lower() == "production" and not any(
+    if settings.is_production_like and not any(
         [settings.REDIS_URL, settings.RATE_LIMIT_REDIS_URL, settings.WS_REDIS_URL]
     ):
         logger.error(
@@ -129,7 +129,7 @@ async def lifespan(app: FastAPI):
         configure_stripe()
     except Exception as e:
         logger.error(f"Failed to configure Stripe SDK: {e}", exc_info=True)
-        if settings.ENV.lower() == "production":
+        if settings.is_production_like:
             raise
 
     # Start background tasks
@@ -153,6 +153,17 @@ async def lifespan(app: FastAPI):
                 await asyncio.sleep(5)
 
     def _spawn(name: str, coro_factory):
+        # ADR-008: the canary deploy stage sets BACKGROUND_LOOPS_ENABLED=false
+        # so no loop (payment retry, auto-topup, purge, watchdog, ...) runs new
+        # code against the shared production data plane before full promotion.
+        # This also skips the loop watchdog, so a loop-less replica never posts
+        # stale-loop alerts.
+        if not settings.BACKGROUND_LOOPS_ENABLED:
+            logger.warning(
+                f"Background loops disabled (ENV={settings.ENV}, "
+                f"DEPLOY_STAGE={settings.DEPLOY_STAGE}) — skipping {name}"
+            )
+            return
         try:
             task = asyncio.create_task(_restartable(name, coro_factory), name=name)
             background_tasks.append(task)
@@ -506,7 +517,7 @@ async def lifespan(app: FastAPI):
         # Keep a reference so the task isn't garbage-collected mid-flight.
         app.state.redis_diag_task = asyncio.create_task(_run_redis_diagnosis(), name="redis_startup_diagnosis")
 
-        if not ws_started and settings.ENV.lower() == "production":
+        if not ws_started and settings.is_production_like:
             # Production without distributed WS is a correctness
             # hazard, but not a boot-blocker — a single-machine prod
             # deploy is still coherent. Log at WARNING so the operator

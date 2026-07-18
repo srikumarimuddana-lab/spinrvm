@@ -32,8 +32,10 @@ from typing import Any, Dict, Optional
 import httpx
 
 try:
+    from ..repositories.ride_repo import create_route_snapshot_signed_url
     from .datetime_utils import parse_iso_utc
 except ImportError:
+    from repositories.ride_repo import create_route_snapshot_signed_url  # type: ignore
     from utils.datetime_utils import parse_iso_utc
 
 logger = logging.getLogger(__name__)
@@ -222,13 +224,17 @@ async def _await_route_receipt_projection(ride: Dict[str, Any]) -> Dict[str, Any
                     "processing_status",
                     "route_quality",
                     "snapshot_revision",
-                    "snapshot_url",
                 ):
                     if key in route:
                         result[key] = route[key]
-                if result.get("snapshot_url"):
-                    result["route_snapshot_url"] = result["snapshot_url"]
                 if route.get("processing_status") in {"complete", "incomplete", "failed"}:
+                    object_path = route.get("snapshot_object_path")
+                    if object_path and int(result.get("snapshot_revision") or 0) == int(
+                        result.get("route_revision") or 0
+                    ):
+                        result["route_snapshot_url"] = await create_route_snapshot_signed_url(str(object_path))
+                    else:
+                        result.pop("route_snapshot_url", None)
                     return result
             if asyncio.get_running_loop().time() >= deadline:
                 return result

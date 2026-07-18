@@ -317,14 +317,15 @@ async def send_otp(request: Request, body: SendOTPRequest):
 
     # OTP code selection:
     #  - Twilio configured  → real random OTP delivered via SMS.
-    #  - Twilio NOT configured + non-production (development/preview/staging)
+    #  - Twilio NOT configured + development/test
     #                        → fixed code "1234" so testing works without SMS.
-    #  - Twilio NOT configured + production
-    #                        → refuse. A missing Twilio config in production is a
+    #  - Twilio NOT configured + staging/production (ADR-008)
+    #                        → refuse. A missing Twilio config there is a
     #                          misconfiguration; falling back to a static "1234"
     #                          would let anyone log in as any phone number, so we
     #                          fail loudly instead of silently bypassing auth.
-    is_production = settings.ENV.lower() == "production"
+    #                          Staging smoke logins use REVIEW_LOGIN_ACCOUNTS.
+    is_production = settings.is_production_like
     review_otp = settings.review_login_map().get(phone)
     deliver_via_sms = True
     if review_otp is not None:
@@ -350,7 +351,8 @@ async def send_otp(request: Request, body: SendOTPRequest):
         )
     else:
         logger.error(
-            "Twilio not configured in production — refusing to issue OTP (static-code bypass is disabled in production)"
+            "Twilio not configured in %s — refusing to issue OTP (static-code bypass is disabled in staging/production)",
+            settings.ENV,
         )
         raise SpinrException(
             message="Verification is temporarily unavailable, please try again later",
@@ -570,7 +572,7 @@ async def _issue_company_email_session(
     set_csrf_cookie(
         response,
         csrf,
-        secure=settings.ENV == "production",
+        secure=settings.is_production_like,
         max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
     return _make_auth_response(
@@ -943,7 +945,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
             set_csrf_cookie(
                 response,
                 csrf,
-                secure=settings.ENV == "production",
+                secure=settings.is_production_like,
                 max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
             )
             try:
@@ -1016,7 +1018,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
             set_csrf_cookie(
                 response,
                 csrf,
-                secure=settings.ENV == "production",
+                secure=settings.is_production_like,
                 max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
             )
             try:
@@ -1143,7 +1145,7 @@ async def reactivate_account(request: Request, response: Response, body: Reactiv
         user_obj = user
     csrf = generate_csrf_token()
     set_csrf_cookie(
-        response, csrf, secure=settings.ENV == "production", max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        response, csrf, secure=settings.is_production_like, max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
     )
     logger.info(f"Account reactivated for user {user_id}")
     return _make_auth_response(
@@ -1323,7 +1325,7 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
     set_csrf_cookie(
         response,
         csrf,
-        secure=settings.ENV == "production",
+        secure=settings.is_production_like,
         max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
     try:
@@ -1539,7 +1541,7 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
     set_csrf_cookie(
         response,
         csrf,
-        secure=settings.ENV == "production",
+        secure=settings.is_production_like,
         max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
 

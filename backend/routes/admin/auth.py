@@ -297,9 +297,10 @@ async def get_session(authorization: Optional[str] = Header(None)):
 
 
 def _admin_login_rate_limit() -> str:
-    # Strict in production (brute-force defence); permissive in dev/staging
-    # so a developer doesn't get locked out after a few mistyped passwords.
-    return "3/30minutes" if settings.ENV.lower() == "production" else "20/minute"
+    # Strict in staging + production (brute-force defence, ADR-008);
+    # permissive in dev/test so a developer doesn't get locked out after a
+    # few mistyped passwords.
+    return "3/30minutes" if settings.is_production_like else "20/minute"
 
 
 @admin_auth_router.post("/login")

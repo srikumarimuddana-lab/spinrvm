@@ -130,6 +130,7 @@ def test_finalizer_orders_by_capture_time_and_writes_a_new_revision(monkeypatch)
     assert snapshot_args[2] == 4
     assert snapshot_args[3] == payload["road_matched_segments"]
     assert snapshot_args[4] == payload["route_quality"]
+    assert isinstance(publish_snapshot.await_args.kwargs["finalized_at"], datetime)
 
 
 def test_finalizer_does_not_publish_when_a_late_batch_supersedes_its_claim(monkeypatch):

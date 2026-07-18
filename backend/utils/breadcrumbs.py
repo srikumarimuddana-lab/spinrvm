@@ -35,8 +35,9 @@ import json
 import logging
 import math
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     from .. import db_supabase
@@ -184,6 +185,174 @@ def _bounded_capture_time(captured_at: Optional[datetime], received_at: datetime
     return captured_at
 
 
+@dataclass(frozen=True)
+class LocationPointRejection:
+    """A permanent per-point rejection that an outbox may safely discard."""
+
+    sequence_number: int
+    reason: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"sequence_number": self.sequence_number, "reason": self.reason}
+
+
+@dataclass(frozen=True)
+class LocationBatchAck:
+    """Contiguous v2 outbox acknowledgement returned after durable persistence."""
+
+    recording_session_id: str
+    acked_through: Optional[int]
+    accepted_count: int
+    rejected: Tuple[LocationPointRejection, ...]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "recording_session_id": self.recording_session_id,
+            "acked_through": self.acked_through,
+            "accepted_count": self.accepted_count,
+            "rejected": [rejection.to_dict() for rejection in self.rejected],
+        }
+
+
+@dataclass(frozen=True)
+class LocationBatchPersistResult:
+    """Internal persistence result; API callers expose only ``ack``."""
+
+    ack: LocationBatchAck
+    inserted_count: int
+
+
+def _batch_acked_through(sequence_numbers: List[int]) -> Optional[int]:
+    """Return the last sequence in the contiguous submitted range."""
+    if not sequence_numbers:
+        return None
+
+    ordered = sorted(sequence_numbers)
+    acked_through = ordered[0]
+    for sequence_number in ordered[1:]:
+        if sequence_number != acked_through + 1:
+            break
+        acked_through = sequence_number
+    return acked_through
+
+
+def _point_capture_time(point: Dict[str, Any]) -> Optional[datetime]:
+    """Read a v2 sensor timestamp without replacing it with server receipt time."""
+    return parse_iso_utc(point.get("captured_at") or point.get("device_timestamp") or point.get("timestamp"))
+
+
+async def persist_trip_location_batch(
+    driver_id: str,
+    ride_id: str,
+    recording_session_id: str,
+    points: List[Dict[str, Any]],
+    *,
+    active_ride: Optional[Dict[str, Any]] | object = _ACTIVE_RIDE_NOT_PROVIDED,
+) -> LocationBatchPersistResult:
+    """Persist one v2 active-trip location batch with an idempotent acknowledgement.
+
+    The server-provided ``ride_id`` and ``active_ride`` are authoritative. Client
+    phase and ride fields are intentionally ignored, while the immutable sensor
+    timestamp is kept in ``captured_at`` and server receipt in ``received_at``.
+    """
+    if not isinstance(points, list) or not points:
+        raise ValueError("points must be a non-empty list")
+    if len(points) > MAX_BREADCRUMB_BATCH:
+        raise ValueError(f"location batch exceeds {MAX_BREADCRUMB_BATCH} points")
+    try:
+        normalized_session_id = str(uuid.UUID(recording_session_id))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError("recording_session_id must be a UUID") from exc
+
+    ride = await resolve_active_ride(driver_id) if active_ride is _ACTIVE_RIDE_NOT_PROVIDED else active_ride
+    if not isinstance(ride, dict) or ride.get("id") != ride_id:
+        raise ValueError("ride must be assigned to the authenticated driver")
+
+    current_phase = RIDE_STATUS_TO_PHASE.get(ride.get("status", ""), "online_idle")
+    window_start = parse_iso_utc(ride.get("driver_accepted_at")) or parse_iso_utc(ride.get("created_at"))
+    window_end = parse_iso_utc(ride.get("ride_completed_at"))
+    received_at = datetime.now(timezone.utc)
+    rows: List[Dict[str, Any]] = []
+    rejections: List[LocationPointRejection] = []
+    sequence_numbers: List[int] = []
+    seen_sequences = set()
+
+    for point in points:
+        if not isinstance(point, dict):
+            raise TypeError("location batch points must be objects")
+        sequence_number = point.get("sequence_number")
+        if isinstance(sequence_number, bool) or not isinstance(sequence_number, int) or sequence_number < 0:
+            raise ValueError("sequence_number must be a non-negative integer")
+        if sequence_number in seen_sequences:
+            raise ValueError("sequence_number must be unique within a batch")
+        seen_sequences.add(sequence_number)
+        sequence_numbers.append(sequence_number)
+
+        lat = _coord(point, "lat", "latitude")
+        lng = _coord(point, "lng", "longitude")
+        if lat is None or lng is None or not _valid_lat_lng(lat, lng):
+            rejections.append(LocationPointRejection(sequence_number, "invalid_coordinate"))
+            continue
+
+        captured_at = _point_capture_time(point)
+        if captured_at is None:
+            rejections.append(LocationPointRejection(sequence_number, "invalid_capture_time"))
+            continue
+        if window_start is not None and captured_at < window_start:
+            rejections.append(LocationPointRejection(sequence_number, "before_ride_window"))
+            continue
+        if window_end is not None and captured_at > window_end:
+            rejections.append(LocationPointRejection(sequence_number, "after_ride_window"))
+            continue
+
+        monotonic_ms = point.get("monotonic_ms")
+        if monotonic_ms is not None and (isinstance(monotonic_ms, bool) or not isinstance(monotonic_ms, int)):
+            rejections.append(LocationPointRejection(sequence_number, "invalid_monotonic_time"))
+            continue
+
+        rows.append(
+            {
+                "driver_id": driver_id,
+                "ride_id": ride_id,
+                "recording_session_id": normalized_session_id,
+                "sequence_number": sequence_number,
+                "captured_at": captured_at,
+                "received_at": received_at,
+                # ``timestamp`` remains populated for legacy settlement readers
+                # until the finalizer migrates them to captured_at ordering.
+                "timestamp": captured_at,
+                "monotonic_ms": monotonic_ms,
+                "source": point.get("source") or "driver_app",
+                "mocked": bool(point.get("mocked", False)),
+                "is_completion_fix": bool(point.get("is_completion_fix", False)),
+                "lat": lat,
+                "lng": lng,
+                "speed": point.get("speed"),
+                "heading": point.get("heading"),
+                "accuracy": point.get("accuracy"),
+                "altitude": point.get("altitude"),
+                "tracking_phase": _phase_for_timestamp(ride, captured_at, current_phase),
+            }
+        )
+
+    inserted = (
+        await db_supabase.insert_many_ignore_conflicts(
+            "driver_location_history",
+            rows,
+            on_conflict="ride_id,driver_id,recording_session_id,sequence_number",
+        )
+        if rows
+        else []
+    )
+    ack = LocationBatchAck(
+        recording_session_id=normalized_session_id,
+        acked_through=_batch_acked_through(sequence_numbers),
+        accepted_count=len(rows),
+        rejected=tuple(rejections),
+    )
+    return LocationBatchPersistResult(ack=ack, inserted_count=len(inserted))
+
+
 async def persist_ride_breadcrumbs(
     driver_id: str,
     points: List[Dict[str, Any]],
@@ -208,6 +377,24 @@ async def persist_ride_breadcrumbs(
         return 0
 
     ride = await resolve_active_ride(driver_id) if active_ride is _ACTIVE_RIDE_NOT_PROVIDED else active_ride
+
+    v2_points = [point for point in points if "recording_session_id" in point or "sequence_number" in point]
+    if v2_points:
+        if len(v2_points) != len(points):
+            raise ValueError("v2 location batches cannot mix identified and legacy points")
+        if not isinstance(ride, dict):
+            return 0
+        session_ids = {point.get("recording_session_id") for point in points}
+        if len(session_ids) != 1:
+            raise ValueError("v2 location batch must use one recording session")
+        result = await persist_trip_location_batch(
+            driver_id,
+            str(ride["id"]),
+            str(session_ids.pop()),
+            points,
+            active_ride=ride,
+        )
+        return result.inserted_count
 
     ride_id = ride.get("id") if isinstance(ride, dict) else None
     current_phase = (

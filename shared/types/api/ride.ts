@@ -1,4 +1,5 @@
 import type { MoneyString } from './money';
+import type { ActualRouteSegment, RouteGeometryStatus, RouteQuality } from './route';
 
 export type RideStatus =
   | 'scheduled'
@@ -72,6 +73,11 @@ export interface Ride {
   cancellation_fee_admin: MoneyString;
   rider_rating?: number;
   rider_comment?: string;
+  actual_route_segments?: ActualRouteSegment[];
+  route_quality?: RouteQuality;
+  route_revision?: number;
+  route_snapshot_url?: string;
+  route_geometry_status?: RouteGeometryStatus;
   created_at: string;
   updated_at: string;
 }

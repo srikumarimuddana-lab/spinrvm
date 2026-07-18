@@ -36,10 +36,20 @@ jest.mock('expo-router', () => ({
   router: { push: jest.fn(), replace: jest.fn() },
 }));
 
+jest.mock('../../utils/tripLocationRecorder', () => ({
+  tripLocationRecorder: {
+    captureCompletionFix: jest.fn(),
+    applyAcknowledgement: jest.fn(),
+    closeRide: jest.fn(),
+  },
+}));
+
 import { useDriverStore } from '../driverStore';
 import api from '@shared/api/client';
+import { tripLocationRecorder } from '../../utils/tripLocationRecorder';
 
 const mockApi = api as jest.Mocked<typeof api>;
+const mockTripLocationRecorder = tripLocationRecorder as jest.Mocked<typeof tripLocationRecorder>;
 
 /** Reset store to idle baseline before each test */
 const resetStore = () =>
@@ -67,6 +77,27 @@ const resetStore = () =>
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockTripLocationRecorder.captureCompletionFix.mockResolvedValue({
+    point: {
+      ride_id: 'ride-123',
+      recording_session_id: 'session-123',
+      sequence_number: 9,
+      captured_at: '2026-07-17T22:45:00.000Z',
+      monotonic_ms: 1,
+      lat: 52.1,
+      lng: -106.6,
+      accuracy: 5,
+      speed: 10,
+      heading: 90,
+      altitude: null,
+      source: 'completion',
+      mocked: false,
+      is_completion_fix: true,
+    },
+    pendingCount: 3,
+  });
+  mockTripLocationRecorder.applyAcknowledgement.mockResolvedValue(1);
+  mockTripLocationRecorder.closeRide.mockResolvedValue(undefined);
   resetStore();
 });
 
@@ -368,7 +399,60 @@ describe('driverStore — ride state machine', () => {
     expect(state.rideState).toBe('trip_completed');
     expect(state.completedRide).toEqual(completedData);
     expect(state.activeRide).toBeNull();
-    expect(mockApi.post).toHaveBeenCalledWith('/drivers/rides/ride-123/complete');
+    expect(mockTripLocationRecorder.captureCompletionFix).toHaveBeenCalledWith('ride-123');
+    expect(mockApi.post).toHaveBeenCalledWith('/drivers/rides/ride-123/complete', expect.objectContaining({
+      final_session_id: 'session-123',
+      final_sequence_number: 9,
+      pending_outbox_count: 3,
+      off_route_confirmation: null,
+      completion_fix: expect.objectContaining({ is_completion_fix: true }),
+    }));
+  });
+
+  test('completeRide applies the server acknowledgement before closing the local recording session', async () => {
+    const completedData = {
+      ride_id: 'ride-123',
+      status: 'completed',
+      location_ack: {
+        recording_session_id: 'session-123',
+        acked_through: 9,
+        rejected: [],
+      },
+    };
+    useDriverStore.setState({ rideState: 'trip_in_progress' });
+    mockApi.post.mockResolvedValueOnce({ data: completedData, status: 200 } as any);
+
+    await act(async () => {
+      await useDriverStore.getState().completeRide('ride-123');
+    });
+
+    expect(mockTripLocationRecorder.applyAcknowledgement).toHaveBeenCalledWith(completedData.location_ack);
+    expect(mockTripLocationRecorder.closeRide).toHaveBeenCalledWith('ride-123');
+  });
+
+  test('completeRide returns a confirmation request instead of treating an off-route 409 as completed', async () => {
+    useDriverStore.setState({ rideState: 'trip_in_progress' });
+    mockApi.post.mockRejectedValueOnce({
+      response: {
+        status: 409,
+        data: {
+          detail: {
+            code: 'completion_confirmation_required',
+            distance_band: 'off_route',
+          },
+        },
+      },
+    } as any);
+
+    let result: unknown;
+    await act(async () => {
+      result = await useDriverStore.getState().completeRide('ride-123');
+    });
+
+    expect(result).toEqual({ confirmationRequired: true, distanceBand: 'off_route' });
+    expect(useDriverStore.getState().rideState).toBe('trip_in_progress');
+    expect(useDriverStore.getState().error).toBeNull();
+    expect(mockApi.get).not.toHaveBeenCalled();
   });
 
   test('resetRideState returns everything to idle', () => {

@@ -14,7 +14,9 @@ The Postgres function `purge_pii_retention()` is exercised via migration
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -50,7 +52,10 @@ async def test_run_tick_parses_jsonb_result_and_forwards_dry_run():
         result = await run_retention_purge_tick(dry_run=False)
 
     assert result == expected
-    supa.rpc.assert_called_once_with("purge_pii_retention", {"p_dry_run": False})
+    assert supa.rpc.call_args_list == [
+        call("purge_pii_retention", {"p_dry_run": False}),
+        call("purge_trip_route_geometry", {"p_dry_run": False}),
+    ]
 
 
 @pytest.mark.asyncio
@@ -68,7 +73,10 @@ async def test_run_tick_dry_run_true_passed_to_sql():
 
         result = await run_retention_purge_tick(dry_run=True)
 
-    supa.rpc.assert_called_once_with("purge_pii_retention", {"p_dry_run": True})
+    assert supa.rpc.call_args_list == [
+        call("purge_pii_retention", {"p_dry_run": True}),
+        call("purge_trip_route_geometry", {"p_dry_run": True}),
+    ]
     assert result["dry_run"] is True
 
 
@@ -129,6 +137,82 @@ def test_seconds_until_next_returns_positive():
     for hour in (0, 3, 12, 23):
         assert _seconds_until_next(hour) > 0
         assert _seconds_until_next(hour) <= 24 * 3600
+
+
+def test_expired_route_snapshot_ledger_deletes_every_revision_before_marking_it_deleted(monkeypatch):
+    from utils import retention_purge
+
+    removed_paths = []
+    updates = []
+    pending = [
+        {
+            "ride_id": "ride_1",
+            "storage_bucket": "ride-route-snapshots",
+            "object_path": "ride_1/route-v1.png",
+        },
+        {
+            "ride_id": "ride_1",
+            "storage_bucket": "ride-route-snapshots",
+            "object_path": "ride_1/route-v2.png",
+        },
+    ]
+
+    class Query:
+        def __init__(self, table):
+            self.table = table
+
+        def select(self, _columns):
+            return self
+
+        def is_(self, _column, _value):
+            return self
+
+        def lte(self, _column, _value):
+            return self
+
+        def limit(self, _size):
+            return self
+
+        def update(self, payload):
+            updates.append((self.table, payload))
+            return self
+
+        def eq(self, _column, _value):
+            return self
+
+        def execute(self):
+            return SimpleNamespace(data=pending)
+
+    class Bucket:
+        def remove(self, paths):
+            removed_paths.extend(paths)
+            return SimpleNamespace(data=[])
+
+    class Storage:
+        def from_(self, bucket):
+            assert bucket == "ride-route-snapshots"
+            return Bucket()
+
+    class Supabase:
+        storage = Storage()
+
+        def table(self, table):
+            assert table in {"ride_routes", "ride_route_snapshot_objects"}
+            return Query(table)
+
+    async def run_sync(operation):
+        return operation()
+
+    monkeypatch.setattr(retention_purge, "supabase", Supabase())
+    monkeypatch.setattr(retention_purge, "run_sync", run_sync)
+
+    deleted = asyncio.run(retention_purge._delete_expired_route_snapshot_objects())
+
+    assert deleted == 2
+    assert removed_paths == ["ride_1/route-v1.png", "ride_1/route-v2.png"]
+    ledger_updates = [update for update in updates if update[0] == "ride_route_snapshot_objects"]
+    assert len(ledger_updates) == 2
+    assert all("deleted_at" in payload for _, payload in ledger_updates)
 
 
 @pytest.mark.asyncio

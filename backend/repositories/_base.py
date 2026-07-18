@@ -667,6 +667,28 @@ async def insert_many(table: str, docs: List[Dict[str, Any]]):
     return await run_sync(lambda: _rows_from_res(supabase.table(table).insert(serialized).execute()))
 
 
+async def insert_many_ignore_conflicts(
+    table: str, docs: List[Dict[str, Any]], on_conflict: str
+) -> List[Dict[str, Any]]:
+    """Upsert a batch once, retaining the first row for each conflict key."""
+    if not docs:
+        return []
+    if not isinstance(on_conflict, str) or not on_conflict.strip():
+        raise ValueError("on_conflict is required")
+    if any(not isinstance(doc, dict) for doc in docs):
+        raise TypeError(f"insert_many_ignore_conflicts({table!r}) requires dict rows")
+    if not supabase:
+        return []
+
+    rows = [_serialize_for_api(doc) for doc in docs]
+    return await run_sync(
+        lambda: _rows_from_res(
+            supabase.table(table).upsert(rows, on_conflict=on_conflict, ignore_duplicates=True).execute()
+        ),
+        retry_policy="idempotent_write",
+    )
+
+
 async def update_one(table: str, filters: Dict[str, Any], update: Dict[str, Any], upsert: bool = False):
     if not supabase:
         if table == "drivers":

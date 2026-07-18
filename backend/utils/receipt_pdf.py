@@ -14,6 +14,7 @@ Decimal-only money math (CLAUDE.md): never float.
 
 from __future__ import annotations
 
+import logging
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, Optional
 
@@ -24,6 +25,7 @@ except ImportError:
 
 _CENT = Decimal("0.01")
 _BRAND = (238, 43, 43)  # #ee2b2b
+logger = logging.getLogger(__name__)
 
 
 def _d(v: Any) -> Decimal:
@@ -112,6 +114,9 @@ def generate_receipt_pdf(
     rider: Dict[str, Any],
     driver: Optional[Dict[str, Any]] = None,
     tip: Any = Decimal(0),
+    route_snapshot_bytes: Optional[bytes] = None,
+    route_snapshot_note: Optional[str] = None,
+    route_snapshot_is_actual: bool = False,
 ) -> bytes:
     """Return a branded ride-receipt PDF as raw bytes (starts with b'%PDF')."""
     from fpdf import FPDF  # type: ignore[import-untyped]
@@ -161,6 +166,27 @@ def generate_receipt_pdf(
         pdf.cell(W, 5, date_str, align="C", ln=True)
     pdf.cell(W, 5, f"Ride {ride_ref}", align="C", ln=True)
     pdf.ln(3)
+
+    # The image is supplied only from a revision-matched route snapshot. A
+    # planned fallback must never be captioned as an actual trip trace.
+    if route_snapshot_bytes:
+        try:
+            import io
+
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.set_text_color(30, 30, 30)
+            pdf.cell(W, 6, "Actual route" if route_snapshot_is_actual else "Planned route", ln=True)
+            pdf.image(io.BytesIO(route_snapshot_bytes), x=left, w=W)
+            pdf.ln(2)
+        except Exception:
+            # Image is supplemental; the printable text note below remains
+            # available even if corrupt image bytes cannot be embedded.
+            logger.error("receipt PDF route snapshot embedding failed", exc_info=True)
+    if route_snapshot_note:
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_text_color(120, 80, 20)
+        pdf.multi_cell(W, 4, route_snapshot_note.replace("—", "-"))
+        pdf.ln(2)
 
     # Route
     pdf.set_text_color(0, 0, 0)

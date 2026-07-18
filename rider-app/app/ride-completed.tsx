@@ -8,7 +8,6 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
-import MapViewDirections from 'react-native-maps-directions';
 import { useRideStore } from '../store/rideStore';
 import { useAuthStore } from '@shared/store/authStore';
 import { showToast } from '../store/toastStore';
@@ -20,6 +19,7 @@ import Analytics from '@shared/analytics';
 import { useStripe } from '@stripe/stripe-react-native';
 import { attemptRidePayment, PaymentAlertButton } from '../utils/attemptRidePayment';
 import { useSpinrPaymentSheet } from '../hooks/useSpinrPaymentSheet';
+import { routeQualityLabel, toReactNativeSegments } from '@shared/utils/routeSegments';
 
 // PR #664 stringified Decimal money fields in API responses (e.g. total_fare,
 // base_fare, tip_amount). The receipt UI needs them as numbers for arithmetic
@@ -31,7 +31,6 @@ const fmt = (v: string | number | null | undefined): string =>
   toNum(v).toFixed(2);
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
-const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
 function RideCompletedScreenContent() {
   const router = useRouter();
@@ -72,7 +71,6 @@ function RideCompletedScreenContent() {
   const [alreadyPaid, setAlreadyPaid] = useState(false);
   const [paymentProcessed, setPaymentProcessed] = useState(false);
 
-  const [fallbackCoords, setFallbackCoords] = useState<any[]>([]);
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;
     title: string;
@@ -84,18 +82,36 @@ function RideCompletedScreenContent() {
   const successScale = useRef(new Animated.Value(0)).current;
   const successOpacity = useRef(new Animated.Value(0)).current;
 
-  const savedPolyline = useMemo(() => {
-    if (!currentRide) return [];
-    const raw = (Array.isArray((currentRide as any).route_polyline) && (currentRide as any).route_polyline.length >= 2)
-      ? (currentRide as any).route_polyline
-      : (currentRide as any).planned_route_polyline;
-    if (!Array.isArray(raw) || raw.length < 2) return [];
-    return raw
-      .filter((p: any) => Array.isArray(p) && p.length >= 2)
-      .map((p: any) => ({ latitude: p[0], longitude: p[1] }));
-  }, [currentRide]);
-
-  const polylineToRender = savedPolyline.length >= 2 ? savedPolyline : fallbackCoords;
+  const actualSegments = useMemo(
+    () => toReactNativeSegments(currentRide?.actual_route_segments),
+    [currentRide?.actual_route_segments],
+  );
+  const plannedSegments = useMemo(
+    () => toReactNativeSegments(currentRide?.planned_route_polyline ? [currentRide.planned_route_polyline] : []),
+    [currentRide?.planned_route_polyline],
+  );
+  const mapCoordinates = useMemo(
+    () => (actualSegments.length ? actualSegments : plannedSegments).reduce<any[]>((all, segment) => all.concat(segment), []),
+    [actualSegments, plannedSegments],
+  );
+  const routeRevision = toNum(currentRide?.route_revision);
+  const isActualSnapshot =
+    toNum(currentRide?.route_schema_version) >= 2 &&
+    routeRevision > 0 &&
+    toNum(currentRide?.snapshot_revision) === routeRevision;
+  const routeSnapshotUrl = currentRide?.route_snapshot_url && isActualSnapshot
+    ? currentRide.route_snapshot_url
+    : '';
+  const hasActualRoute = actualSegments.length > 0;
+  const routeLabel = hasActualRoute ? 'Actual route' : 'Planned route';
+  const routeQuality = routeQualityLabel(currentRide?.route_quality);
+  const routeStatus = routeSnapshotUrl
+    ? `Actual route · revision ${routeRevision}`
+    : hasActualRoute
+      ? routeQuality
+      : toNum(currentRide?.route_schema_version) >= 2
+        ? 'Route snapshot unavailable · GPS route is still processing'
+        : 'Planned route preview';
 
 
   useEffect(() => {
@@ -107,7 +123,10 @@ function RideCompletedScreenContent() {
 
   const tipOptions = [2, 5, 10];
   const fare = toNum((currentRide as any)?.grand_total || currentRide?.total_fare);
-  const duration = currentRide?.duration_minutes || 0;
+  // The lifecycle duration is recorded independently of GPS coverage. A gap in
+  // location reporting must never turn a completed 40-minute ride into a
+  // shorter trip in the rider's summary.
+  const duration = toNum(currentRide?.actual_duration_minutes ?? currentRide?.duration_minutes);
   const distance = currentRide?.distance_km || 0;
   // A card hold placed at booking is captured on submit — the payment method is
   // already chosen, so we don't show a payment picker (Google Pay) at the end.
@@ -553,12 +572,12 @@ function RideCompletedScreenContent() {
           </View>
         </View>
 
-        {/* ═══ 4. Route Map — snapshot image first, live MapView as fallback ═══ */}
+        {/* ═══ 4. Route Map — actual GPS geometry only; planned preview is explicit ═══ */}
         {currentRide && Number(currentRide.pickup_lat) && Number(currentRide.dropoff_lat) && (
           <View style={styles.mapCard}>
-            {(currentRide as any).route_snapshot_url ? (
+            {routeSnapshotUrl ? (
               <Image
-                source={{ uri: (currentRide as any).route_snapshot_url }}
+                source={{ uri: routeSnapshotUrl }}
                 style={styles.map}
                 resizeMode="cover"
               />
@@ -579,50 +598,34 @@ function RideCompletedScreenContent() {
                   longitudeDelta: Math.abs(Number(currentRide.pickup_lng) - Number(currentRide.dropoff_lng)) * 2.5 + 0.01,
                 }}
                 onMapReady={() => {
-                  if (savedPolyline.length >= 2) {
-                    mapRef.current?.fitToCoordinates(savedPolyline, {
+                  if (mapCoordinates.length >= 2) {
+                    mapRef.current?.fitToCoordinates(mapCoordinates, {
                       edgePadding: { top: 30, right: 30, bottom: 30, left: 30 }, animated: false,
                     });
                   }
                 }}
               >
-                {savedPolyline.length < 2 && GOOGLE_MAPS_API_KEY && (
-                  <MapViewDirections
-                    origin={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
-                    destination={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
-                    apikey={GOOGLE_MAPS_API_KEY}
-                    strokeWidth={0}
-                    strokeColor="transparent"
-                    onReady={(result: any) => {
-                      setFallbackCoords(result.coordinates);
-                      if (mapRef.current && result.coordinates?.length > 1) {
-                        mapRef.current.fitToCoordinates(result.coordinates, {
-                          edgePadding: { top: 30, right: 30, bottom: 30, left: 30 },
-                          animated: false,
-                        });
-                      }
-                    }}
+                {actualSegments.map((coordinates, index) => (
+                  <Polyline
+                    key={`actual-segment-${index}`}
+                    coordinates={coordinates}
+                    strokeWidth={4}
+                    strokeColor="#2563EB"
+                    lineCap="round"
+                    lineJoin="round"
                   />
-                )}
-
-                {polylineToRender.length > 1 && (() => {
-                  const total = polylineToRender.length;
-                  const SEGS = 15;
-                  const chunk = Math.max(1, Math.floor(total / SEGS));
-                  const segments: { coords: any[]; color: string }[] = [];
-                  for (let i = 0; i < total - 1; i += chunk) {
-                    const end = Math.min(i + chunk + 1, total);
-                    const t = i / Math.max(total - 1, 1);
-                    const r = Math.round(255 + (238 - 255) * t);
-                    const g = Math.round(149 + (43 - 149) * t);
-                    const b = Math.round(0 + (43 - 0) * t);
-                    segments.push({ coords: polylineToRender.slice(i, end), color: `rgb(${r},${g},${b})` });
-                  }
-                  return segments.map((seg, idx) => (
-                    <Polyline key={`seg-${idx}`} coordinates={seg.coords} strokeWidth={4}
-                      strokeColor={seg.color} lineCap="round" lineJoin="round" />
-                  ));
-                })()}
+                ))}
+                {!hasActualRoute && plannedSegments.map((coordinates, index) => (
+                  <Polyline
+                    key={`planned-segment-${index}`}
+                    coordinates={coordinates}
+                    strokeWidth={3}
+                    strokeColor="#6B7280"
+                    lineDashPattern={[8, 6]}
+                    lineCap="round"
+                    lineJoin="round"
+                  />
+                ))}
 
                 <Marker coordinate={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }} anchor={{ x: 0.5, y: 0.5 }}>
                   <View style={styles.mapPin}><Ionicons name="location" size={14} color="#FFF" /></View>
@@ -635,6 +638,10 @@ function RideCompletedScreenContent() {
 
             {/* Address overlay */}
             <View style={styles.mapOverlay}>
+              <View style={styles.mapRouteStatus}>
+                <Ionicons name={hasActualRoute ? 'navigate-circle-outline' : 'map-outline'} size={14} color="#2563EB" />
+                <Text style={styles.mapRouteStatusText} numberOfLines={1}>{routeLabel} · {routeStatus}</Text>
+              </View>
               <View style={styles.mapAddrRow}>
                 <View style={[styles.mapAddrDot, { backgroundColor: '#10B981' }]} />
                 <Text style={styles.mapAddrText} numberOfLines={1}>{currentRide?.pickup_address || 'Pickup'}</Text>
@@ -1039,10 +1046,14 @@ function createStyles(colors: ThemeColors) {
       borderWidth: 2, borderColor: '#FFF',
       elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 2,
     },
-    mapOverlay: {
+        mapOverlay: {
       position: 'absolute', bottom: 8, left: 8, right: 8,
       backgroundColor: 'rgba(255,255,255,0.95)', borderRadius: 10, padding: 10, paddingHorizontal: 14,
-    },
+        },
+        mapRouteStatus: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 7 },
+        mapRouteStatusText: {
+          flex: 1, fontSize: 11, fontFamily: 'PlusJakartaSans_600SemiBold', color: '#2563EB',
+        },
     mapAddrRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     mapAddrDot: { width: 8, height: 8, borderRadius: 4 },
     mapAddrText: {

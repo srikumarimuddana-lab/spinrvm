@@ -22,6 +22,15 @@ from ._deps import (  # noqa: F401
 _TWO_PLACES = Decimal("0.01")
 
 
+def _route_snapshot_retention_due_at(finalized_at):
+    """Return the exact calendar three-year GPS-retention deadline."""
+    try:
+        return finalized_at.replace(year=finalized_at.year + 3)
+    except ValueError:
+        # Feb 29 has no equivalent in a non-leap target year.
+        return finalized_at.replace(year=finalized_at.year + 3, day=28)
+
+
 def _d(v) -> Decimal:
     """Parse a money value to an exact 2-dp Decimal. Money is Decimal-only —
     never accumulate fares/bonuses/payouts as float."""
@@ -185,6 +194,11 @@ async def _generate_and_store_ride_snapshot(
     dropoff_lng,
     phase_polylines,
     route_polyline,
+    route_segments=None,
+    completion_point=None,
+    route_quality=None,
+    route_revision=None,
+    finalized_at=None,
 ) -> None:
     """Render the ride's route PNG and upload to Supabase Storage.
 
@@ -192,16 +206,19 @@ async def _generate_and_store_ride_snapshot(
     polyline drawn server-side. Falls back to OSM/staticmap if the Google
     API key is unavailable.
 
-    Requires a public ``ride-snapshots`` bucket in Supabase Storage.
+    V2 actual-route images use the private ``ride-route-snapshots`` bucket.
+    Legacy planned images remain in the established public ``ride-snapshots``
+    bucket until their readers are migrated.
     See backend/docs/STORAGE_BUCKETS.md for one-time setup.
     """
     if pickup_lat is None or pickup_lng is None or dropoff_lat is None or dropoff_lng is None:
         logger.warning(f"Snapshot skipped for ride {ride_id}: missing coordinates")
         return
     poly_len = len(route_polyline) if isinstance(route_polyline, list) else 0
+    segment_count = len(route_segments) if isinstance(route_segments, list) else 0
     phase_keys = list((phase_polylines or {}).keys()) if phase_polylines else []
     logger.info(
-        f"Snapshot pipeline start for ride {ride_id}: route_polyline={poly_len} pts, phase_polylines={phase_keys}"
+        f"Snapshot pipeline start for ride {ride_id}: route_polyline={poly_len} pts, route_segments={segment_count}, phase_polylines={phase_keys}"
     )
     try:
         try:
@@ -231,6 +248,9 @@ async def _generate_and_store_ride_snapshot(
                     dropoff_lng=float(dropoff_lng),
                     phase_polylines=phase_polylines,
                     route_polyline=route_polyline,
+                    route_segments=route_segments,
+                    completion_point=completion_point,
+                    route_quality=route_quality,
                 )
                 logger.info(
                     f"Google Static Maps for ride {ride_id}: "
@@ -253,17 +273,50 @@ async def _generate_and_store_ride_snapshot(
                     dropoff_lng=float(dropoff_lng),
                     phase_polylines=phase_polylines,
                     route_polyline=route_polyline,
+                    route_segments=route_segments,
+                    completion_point=completion_point,
+                    route_quality=route_quality,
                 ),
             )
 
         if not png_bytes:
             return
 
-        # Supabase Storage upload. Public bucket, stable filename so a
-        # re-run for the same ride_id overwrites cleanly via upsert.
-        # The public URL never expires — safe for email embeds.
-        bucket = "ride-snapshots"
-        storage_path = f"ride_{ride_id}.png"
+        # Supabase Storage upload. Legacy snapshots retain their stable path;
+        # finalized v2 snapshots are revisioned and immutable so a delayed GPS
+        # upload cannot replace a receipt image for an older route revision.
+        revision = int(route_revision) if route_revision is not None else 0
+        bucket = "ride-route-snapshots" if revision > 0 else "ride-snapshots"
+        storage_path = f"{ride_id}/route-v{revision}.png" if revision > 0 else f"ride_{ride_id}.png"
+        if revision > 0:
+            if finalized_at is None:
+                logger.error("route snapshot finalization token missing for ride %s", ride_id)
+                return
+            try:
+                # Write the deletion inventory before uploading. Even if the
+                # process dies during upload or a late batch invalidates this
+                # revision, every possible private object has a durable purge
+                # record and can never become an untracked retention orphan.
+                await db_supabase.insert_many_ignore_conflicts(
+                    "ride_route_snapshot_objects",
+                    [
+                        {
+                            "ride_id": ride_id,
+                            "storage_bucket": bucket,
+                            "object_path": storage_path,
+                            "route_revision": revision,
+                            "route_finalized_at": finalized_at,
+                            "retention_due_at": _route_snapshot_retention_due_at(finalized_at),
+                        }
+                    ],
+                    on_conflict="storage_bucket,object_path",
+                )
+            except Exception as exc:
+                logger.error(
+                    f"route snapshot ledger write failed for ride {ride_id}: {exc}",
+                    exc_info=True,
+                )
+                return
         try:
             await loop.run_in_executor(
                 None,
@@ -290,6 +343,36 @@ async def _generate_and_store_ride_snapshot(
             )
             return
 
+        if revision > 0:
+            # Persist only the private object path. Readers create a short-lived
+            # signed URL after authorizing the rider, driver, admin, or receipt.
+            try:
+                updated = await db_supabase.update_one(
+                    "ride_routes",
+                    {"ride_id": ride_id, "route_revision": revision, "finalized_at": finalized_at},
+                    {
+                        "snapshot_object_path": storage_path,
+                        "snapshot_url": None,
+                        "snapshot_revision": revision,
+                    },
+                    upsert=False,
+                )
+                if updated is None:
+                    # A newer evidence batch invalidated this revision before
+                    # the upload completed. Delete the unreachable object so it
+                    # cannot outlive the current route evidence.
+                    await loop.run_in_executor(
+                        None,
+                        lambda: supabase.storage.from_(bucket).remove([storage_path]),
+                    )
+                return
+            except Exception as exc:
+                logger.error(
+                    f"private route snapshot reference write failed for ride {ride_id}: {exc}",
+                    exc_info=True,
+                )
+                raise
+
         base = (settings.SUPABASE_URL or "").rstrip("/")
         if not base:
             logger.error("SUPABASE_URL not configured; cannot build public snapshot URL")
@@ -306,13 +389,13 @@ async def _generate_and_store_ride_snapshot(
         digest = hashlib.sha256(png_bytes).hexdigest()[:12]
         url = f"{base}/storage/v1/object/public/{bucket}/{storage_path}?v={digest}"
 
-        # Persist the URL. Wrap in try/except so if migration 41 hasn't
-        # landed yet the write fails gracefully instead of raising.
+        # Legacy planned snapshots remain on rides.route_snapshot_url for
+        # backward compatibility until all old readers are migrated.
         try:
             await db_supabase.update_one("rides", {"id": ride_id}, {"route_snapshot_url": url})
         except Exception as exc:
             logger.error(
-                f"route_snapshot_url write failed for ride {ride_id} (migration 41 missing?): {exc}",
+                f"route snapshot reference write failed for ride {ride_id}: {exc}",
                 exc_info=True,
             )
     except Exception as exc:

@@ -140,7 +140,9 @@ def _osrm_radius(point: dict) -> str:
 
 def _osrm_timestamp(point: dict) -> Optional[int]:
     """Return a Unix timestamp for OSRM /match, or None when unavailable."""
-    ts = point.get("timestamp") or point.get("recorded_at") or point.get("created_at")
+    # v2 breadcrumbs retain immutable device capture time. Prefer it over
+    # server receipt time so OSRM's speed plausibility follows actual travel.
+    ts = point.get("captured_at") or point.get("timestamp") or point.get("recorded_at") or point.get("created_at")
     if ts is None:
         return None
     if isinstance(ts, (int, float)):
@@ -179,22 +181,17 @@ def _osrm_bearing(point: dict) -> str:
         return ""
 
 
-async def _compute_via_osrm(trip_points: list[dict], osrm_url: str) -> Optional[RoadMatch]:
-    """Map-match the trace with OSRM /match; return (distance_km, [[lat,lng],...]).
+async def _compute_osrm_chunk_matchings(trip_points: list[dict], osrm_url: str) -> Optional[List[RoadMatch]]:
+    """Return each OSRM matching independently for one bounded input chunk.
 
-    OSRM expects {lng},{lat} order. We sum every matching's distance and
-    concatenate their geometries because a sparse/messy trace can be split into
-    several matchings. gaps=split keeps OSRM from force-joining questionable
-    traces across GPS dropouts, timestamps improve speed plausibility, bearings
-    help stay on the correct carriageway on divided roads, and tidy=true drops
-    outliers before matching.
-    overview=full + geometries=geojson returns the snapped road geometry.
+    A matching boundary is evidence of an OSRM discontinuity. The segmented
+    finalizer must retain that boundary; only the legacy single-route adapter
+    below flattens these results for backwards compatibility.
     """
-    sampled = _downsample(trip_points, _OSRM_MAX_POINTS)
-    coords = ";".join(f"{p['lng']},{p['lat']}" for p in sampled)
-    radiuses = ";".join(_osrm_radius(p) for p in sampled)
-    timestamps = [_osrm_timestamp(p) for p in sampled]
-    bearings = [_osrm_bearing(p) for p in sampled]
+    coords = ";".join(f"{p['lng']},{p['lat']}" for p in trip_points)
+    radiuses = ";".join(_osrm_radius(p) for p in trip_points)
+    timestamps = [_osrm_timestamp(p) for p in trip_points]
+    bearings = [_osrm_bearing(p) for p in trip_points]
     url = f"{osrm_url.rstrip('/')}/match/v1/driving/{coords}"
     params = {
         "overview": "full",  # return the snapped road geometry, not just distance
@@ -225,21 +222,37 @@ async def _compute_via_osrm(trip_points: list[dict], osrm_url: str) -> Optional[
         logger.warning("[route_distance] OSRM code=%s", data.get("code"))
         return None
 
-    total_m = 0.0
-    polyline: List[List[float]] = []
+    matchings: List[RoadMatch] = []
     for m in data.get("matchings") or []:
         d = m.get("distance")
-        if isinstance(d, (int, float)) and d > 0:
-            total_m += float(d)
-        # geometry.coordinates is [[lng, lat], ...] for geojson.
+        if not isinstance(d, (int, float)) or d <= 0:
+            continue
+        # geometry.coordinates is [[lng, lat], ...] for geojson. De-duplicate
+        # only inside this matching; never join separate matchings here.
+        polyline: List[List[float]] = []
         for lng, lat in (m.get("geometry") or {}).get("coordinates") or []:
             point = [round(float(lat), 6), round(float(lng), 6)]
             if not polyline or polyline[-1] != point:
                 polyline.append(point)
+        if len(polyline) >= 2:
+            matchings.append((round(float(d) / 1000.0, 3), _cap_polyline(polyline, _MAX_ROAD_POLYLINE_POINTS)))
 
-    if total_m <= 0:
+    return matchings or None
+
+
+async def _compute_via_osrm(trip_points: list[dict], osrm_url: str) -> Optional[RoadMatch]:
+    """Legacy single-route adapter that flattens bounded OSRM matchings."""
+    sampled = _downsample(trip_points, _OSRM_MAX_POINTS)
+    matchings = await _compute_osrm_chunk_matchings(sampled, osrm_url)
+    if not matchings:
         return None
-    return round(total_m / 1000.0, 3), _cap_polyline(polyline, _MAX_ROAD_POLYLINE_POINTS)
+    total_km = sum(distance_km for distance_km, _ in matchings)
+    polyline: List[List[float]] = []
+    for _, matching_geometry in matchings:
+        for point in matching_geometry:
+            if not polyline or polyline[-1] != point:
+                polyline.append(point)
+    return round(total_km, 3), _cap_polyline(polyline, _MAX_ROAD_POLYLINE_POINTS)
 
 
 async def _compute_via_google_roads(trip_points: list[dict], api_key: str) -> Optional[RoadMatch]:
@@ -290,6 +303,117 @@ async def _compute_via_google_roads(trip_points: list[dict], api_key: str) -> Op
     if total_km <= 0:
         return None
     return round(total_km, 3), _cap_polyline(polyline, _MAX_ROAD_POLYLINE_POINTS)
+
+
+def _overlapping_chunks(points: list[dict], size: int = 90, overlap: int = 10):
+    """Yield provider-safe chunks while retaining context at internal edges."""
+    if size < 2 or overlap < 0 or overlap >= size:
+        raise ValueError("chunk overlap must be non-negative and smaller than the chunk size")
+    start = 0
+    while start < len(points):
+        yield points[start : start + size]
+        if start + size >= len(points):
+            break
+        start += size - overlap
+
+
+def _observed_segment_points(segment: Any) -> list[dict]:
+    """Accept route-segment dataclasses, dict projections, or raw point lists."""
+    if hasattr(segment, "points"):
+        raw_points = segment.points
+    elif isinstance(segment, dict):
+        raw_points = segment.get("points") or segment.get("observed_points") or []
+    else:
+        raw_points = segment
+    return [
+        point
+        for point in (raw_points or [])
+        if isinstance(point, dict) and point.get("lat") is not None and point.get("lng") is not None
+    ]
+
+
+async def compute_segmented_road_route(observed_segments: list[Any]) -> dict:
+    """Map-match each observed segment independently with bounded chunks.
+
+    The returned ``matched_segments`` arrays are intentionally nested by
+    observed segment and provider matching. Callers must render/snapshot each
+    array separately, which prevents a straight chord across missing GPS data.
+    """
+    app_settings = await get_app_settings() or {}
+    osrm_url = (app_settings.get("osrm_url") or settings.OSRM_URL or "").strip()
+    google_api_key = (app_settings.get("google_maps_api_key") or "").strip()
+    completed_segments: List[dict] = []
+    failures: List[dict] = []
+    providers = set()
+    total_distance_km = 0.0
+
+    for segment_index, observed_segment in enumerate(observed_segments):
+        points = _observed_segment_points(observed_segment)
+        matched_segments: List[dict] = []
+        segment_distance_km = 0.0
+        if len(points) < 2:
+            failures.append({"segment_index": segment_index, "reason": "insufficient_points"})
+            completed_segments.append(
+                {"segment_index": segment_index, "distance_km": 0.0, "matched_segments": matched_segments}
+            )
+            continue
+
+        for chunk_index, chunk in enumerate(_overlapping_chunks(points)):
+            matchings: Optional[List[RoadMatch]] = None
+            provider: Optional[str] = None
+            if osrm_url:
+                matchings = await _compute_osrm_chunk_matchings(chunk, osrm_url)
+                if matchings:
+                    provider = "osrm_match"
+            if not matchings and google_api_key:
+                google_match = await _compute_via_google_roads(chunk, google_api_key)
+                if google_match:
+                    matchings = [google_match]
+                    provider = "google_roads"
+            if not matchings or provider is None:
+                failures.append(
+                    {"segment_index": segment_index, "chunk_index": chunk_index, "reason": "provider_unavailable"}
+                )
+                continue
+
+            for distance_km, polyline in matchings:
+                # A provider must return an actual geometry; distance without
+                # geometry cannot truthfully appear in an actual-route display.
+                if distance_km <= 0 or len(polyline) < 2:
+                    failures.append(
+                        {
+                            "segment_index": segment_index,
+                            "chunk_index": chunk_index,
+                            "reason": "invalid_provider_geometry",
+                        }
+                    )
+                    continue
+                matched_segments.append(
+                    {
+                        "chunk_index": chunk_index,
+                        "provider": provider,
+                        "distance_km": distance_km,
+                        "polyline": [list(point) for point in polyline],
+                    }
+                )
+                providers.add(provider)
+                segment_distance_km += distance_km
+
+        completed_segments.append(
+            {
+                "segment_index": segment_index,
+                "distance_km": round(segment_distance_km, 3),
+                "matched_segments": matched_segments,
+            }
+        )
+        total_distance_km += segment_distance_km
+
+    return {
+        "segments": completed_segments,
+        "distance_km": round(total_distance_km, 3),
+        "provider": next(iter(providers)) if len(providers) == 1 else "mixed" if providers else None,
+        "failures": failures,
+    }
 
 
 async def compute_road_route(breadcrumbs: list[dict], phase: str = "trip_in_progress") -> Optional[dict]:

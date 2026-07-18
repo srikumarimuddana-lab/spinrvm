@@ -9,12 +9,19 @@ Regression guards:
   - batch capped at MAX_BREADCRUMB_BATCH (no unbounded REST insert)
 """
 
+import asyncio
+import logging
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from backend.utils.breadcrumbs import MAX_BREADCRUMB_BATCH, persist_ride_breadcrumbs
+from backend.utils.breadcrumbs import (
+    MAX_BREADCRUMB_BATCH,
+    persist_ride_breadcrumbs,
+    persist_trip_location_batch,
+)
 
 ACCEPTED = "2026-06-01T23:00:00Z"
 ARRIVED = "2026-06-01T23:03:00Z"
@@ -35,6 +42,36 @@ def _ride(**over):
     }
     r.update(over)
     return r
+
+
+def _v2_point(sequence_number, **over):
+    point = {
+        "sequence_number": sequence_number,
+        "captured_at": "2026-06-01T23:06:00Z",
+        "lat": 50.42,
+        "lng": -104.62,
+        "accuracy": 7.5,
+    }
+    point.update(over)
+    return point
+
+
+def _run(coroutine):
+    return asyncio.run(coroutine)
+
+
+@pytest.fixture(autouse=True)
+def _disable_active_ride_cache(monkeypatch):
+    """Keep persistence tests independent of the in-process Redis fallback."""
+
+    async def _cache_miss(_key):
+        return None
+
+    async def _cache_write(_key, _value, *, ttl):
+        return True
+
+    monkeypatch.setattr("backend.utils.breadcrumbs.redis_get", _cache_miss)
+    monkeypatch.setattr("backend.utils.breadcrumbs.redis_set", _cache_write)
 
 
 def _patches(ride_rows, capture):
@@ -91,8 +128,6 @@ async def test_no_active_ride_persists_nothing():
         n = await persist_ride_breadcrumbs("drv_1", [_pt(50.45, -104.62, "2026-06-01T23:06:17Z")])
     assert n == 0
     insert.assert_not_called()
-
-
 
 
 @pytest.mark.asyncio
@@ -261,3 +296,218 @@ async def test_invalid_coordinate_ranges_and_no_fix_are_skipped():
 
     assert n == 1
     assert cap["docs"][0]["lat"] == 50.45
+
+
+def test_v2_replay_keeps_acknowledgement_stable_and_reports_insert_count():
+    calls = []
+
+    async def _insert_many_ignore_conflicts(table, docs, on_conflict):
+        calls.append((table, docs, on_conflict))
+        return docs if len(calls) == 1 else []
+
+    with patch(
+        "backend.utils.breadcrumbs.db_supabase.insert_many_ignore_conflicts",
+        _insert_many_ignore_conflicts,
+    ):
+        first = _run(
+            persist_trip_location_batch(
+                "drv_1",
+                "ride_1",
+                "6fe8dc5c-3448-46a1-aa7c-d081ce7f1d9f",
+                [_v2_point(1), _v2_point(2)],
+                active_ride=_ride(),
+            )
+        )
+        replay = _run(
+            persist_trip_location_batch(
+                "drv_1",
+                "ride_1",
+                "6fe8dc5c-3448-46a1-aa7c-d081ce7f1d9f",
+                [_v2_point(1), _v2_point(2)],
+                active_ride=_ride(),
+            )
+        )
+
+    assert first.inserted_count == 2
+    assert replay.inserted_count == 0
+    assert first.ack.to_dict() == replay.ack.to_dict()
+    assert first.ack.acked_through == 2
+    assert calls[0][0] == "driver_location_history"
+    assert calls[0][2] == "ride_id,driver_id,recording_session_id,sequence_number"
+
+
+def test_v2_preserves_capture_time_and_derives_phase_from_server_ride():
+    captured = {}
+
+    async def _insert_many_ignore_conflicts(table, docs, on_conflict):
+        captured["docs"] = docs
+        return docs
+
+    with patch(
+        "backend.utils.breadcrumbs.db_supabase.insert_many_ignore_conflicts",
+        _insert_many_ignore_conflicts,
+    ):
+        result = _run(
+            persist_trip_location_batch(
+                "drv_1",
+                "ride_1",
+                "6fe8dc5c-3448-46a1-aa7c-d081ce7f1d9f",
+                [_v2_point(1, captured_at="2099-01-01T00:00:00Z", tracking_phase="trip_in_progress")],
+                active_ride=_ride(),
+            )
+        )
+
+    row = captured["docs"][0]
+    assert result.ack.accepted_count == 1
+    assert row["captured_at"].isoformat() == "2099-01-01T00:00:00+00:00"
+    assert row["received_at"] < row["captured_at"]
+    assert row["tracking_phase"] == "trip_in_progress"
+
+
+def test_legacy_writer_delegates_identified_v2_batches():
+    captured = {}
+
+    async def _persist_v2(driver_id, ride_id, session_id, points, *, active_ride):
+        captured.update(
+            driver_id=driver_id,
+            ride_id=ride_id,
+            session_id=session_id,
+            points=points,
+            active_ride=active_ride,
+        )
+        return SimpleNamespace(inserted_count=1)
+
+    with patch("backend.utils.breadcrumbs.persist_trip_location_batch", _persist_v2):
+        inserted = _run(
+            persist_ride_breadcrumbs(
+                "drv_1",
+                [
+                    _v2_point(
+                        1,
+                        recording_session_id="6fe8dc5c-3448-46a1-aa7c-d081ce7f1d9f",
+                    )
+                ],
+                active_ride=_ride(),
+            )
+        )
+
+    assert inserted == 1
+    assert captured["driver_id"] == "drv_1"
+    assert captured["ride_id"] == "ride_1"
+    assert captured["session_id"] == "6fe8dc5c-3448-46a1-aa7c-d081ce7f1d9f"
+
+
+def test_v2_acknowledges_past_permanently_rejected_coordinate():
+    captured = {}
+
+    async def _insert_many_ignore_conflicts(table, docs, on_conflict):
+        captured["docs"] = docs
+        return docs
+
+    with patch(
+        "backend.utils.breadcrumbs.db_supabase.insert_many_ignore_conflicts",
+        _insert_many_ignore_conflicts,
+    ):
+        result = _run(
+            persist_trip_location_batch(
+                "drv_1",
+                "ride_1",
+                "6fe8dc5c-3448-46a1-aa7c-d081ce7f1d9f",
+                [_v2_point(1), _v2_point(2, lat=91), _v2_point(3)],
+                active_ride=_ride(),
+            )
+        )
+
+    assert result.ack.acked_through == 3
+    assert result.ack.accepted_count == 2
+    assert result.ack.to_dict()["rejected"] == [{"sequence_number": 2, "reason": "invalid_coordinate"}]
+    assert [row["sequence_number"] for row in captured["docs"]] == [1, 3]
+
+
+def test_v2_invalid_coordinate_never_enters_logs(caplog: pytest.LogCaptureFixture):
+    async def _insert_many_ignore_conflicts(table, docs, on_conflict):
+        raise AssertionError("invalid points must not reach the database")
+
+    with (
+        caplog.at_level(logging.INFO),
+        patch(
+            "backend.utils.breadcrumbs.db_supabase.insert_many_ignore_conflicts",
+            _insert_many_ignore_conflicts,
+        ),
+    ):
+        result = _run(
+            persist_trip_location_batch(
+                "drv_1",
+                "ride_1",
+                "6fe8dc5c-3448-46a1-aa7c-d081ce7f1d9f",
+                [_v2_point(1, lat=91.123456, lng=-104.987654)],
+                active_ride=_ride(),
+            )
+        )
+
+    assert result.ack.to_dict()["rejected"] == [{"sequence_number": 1, "reason": "invalid_coordinate"}]
+    assert "91.123456" not in caplog.text
+    assert "-104.987654" not in caplog.text
+
+
+def test_new_late_completed_points_debounce_route_re_finalization():
+    update = AsyncMock()
+
+    async def _insert_many_ignore_conflicts(_table, docs, *, on_conflict):
+        assert on_conflict == "ride_id,driver_id,recording_session_id,sequence_number"
+        return docs
+
+    completed_ride = _ride(status="completed", ride_completed_at="2026-06-01T23:10:00Z")
+    with (
+        patch(
+            "backend.utils.breadcrumbs.db_supabase.insert_many_ignore_conflicts",
+            _insert_many_ignore_conflicts,
+        ),
+        patch("backend.utils.breadcrumbs.db_supabase.update_one", update),
+    ):
+        result = _run(
+            persist_trip_location_batch(
+                "drv_1",
+                "ride_1",
+                "6fe8dc5c-3448-46a1-aa7c-d081ce7f1d9f",
+                [_v2_point(4)],
+                active_ride=completed_ride,
+            )
+        )
+
+    assert result.inserted_count == 1
+    args, kwargs = update.await_args
+    assert args[:2] == ("ride_routes", {"ride_id": "ride_1"})
+    assert args[2]["processing_status"] == "pending"
+    assert args[2]["processing_claimed_at"] is None
+    assert "route_revision" not in args[2]
+    assert kwargs["upsert"] is False
+
+
+def test_duplicate_late_completed_replay_does_not_requeue_route():
+    update = AsyncMock()
+
+    async def _insert_many_ignore_conflicts(_table, _docs, *, on_conflict):
+        assert on_conflict == "ride_id,driver_id,recording_session_id,sequence_number"
+        return []
+
+    completed_ride = _ride(status="completed", ride_completed_at="2026-06-01T23:10:00Z")
+    with (
+        patch(
+            "backend.utils.breadcrumbs.db_supabase.insert_many_ignore_conflicts",
+            _insert_many_ignore_conflicts,
+        ),
+        patch("backend.utils.breadcrumbs.db_supabase.update_one", update),
+    ):
+        result = _run(
+            persist_trip_location_batch(
+                "drv_1",
+                "ride_1",
+                "6fe8dc5c-3448-46a1-aa7c-d081ce7f1d9f",
+                [_v2_point(4)],
+                active_ride=completed_ride,
+            )
+        )
+
+    assert result.inserted_count == 0
+    update.assert_not_awaited()

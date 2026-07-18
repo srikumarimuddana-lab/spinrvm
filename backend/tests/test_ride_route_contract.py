@@ -2,6 +2,7 @@
 
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from backend.repositories import ride_repo
 
@@ -59,7 +60,7 @@ def test_ride_detail_projects_matched_v2_segments_without_legacy_geometry(monkey
                     "route_quality": {"coverage_ratio": 0.91, "missing_tail": False},
                     "route_revision": 4,
                     "processing_status": "complete",
-                    "snapshot_url": "https://maps.example/ride-v4.png",
+                    "snapshot_object_path": "ride_1/route-v4.png",
                     "snapshot_revision": 4,
                     "road_polyline": [[1, 2]],
                 }
@@ -72,6 +73,11 @@ def test_ride_detail_projects_matched_v2_segments_without_legacy_geometry(monkey
 
     monkeypatch.setattr(ride_repo, "supabase", client)
     monkeypatch.setattr(ride_repo, "run_sync", _run_sync)
+    monkeypatch.setattr(
+        ride_repo,
+        "create_route_snapshot_signed_url",
+        AsyncMock(return_value="https://storage.example/signed/ride-v4.png"),
+    )
 
     ride = _run(ride_repo.get_ride("ride_1", include_route=True))
 

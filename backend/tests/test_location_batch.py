@@ -166,6 +166,34 @@ def test_active_ride_rejects_future_captured_at_before_persisting(monkeypatch: p
     inserted.assert_not_awaited()
 
 
+def test_late_completed_point_hides_the_previous_snapshot_before_refinalizing(monkeypatch: pytest.MonkeyPatch):
+    update = AsyncMock()
+
+    async def insert_many(_table, docs, **_kwargs):
+        return docs
+
+    monkeypatch.setattr(breadcrumbs.db_supabase, "insert_many_ignore_conflicts", insert_many)
+    monkeypatch.setattr(breadcrumbs.db_supabase, "update_one", update)
+    completed_ride = _ride(status="completed", ride_completed_at="2026-06-01T23:10:00Z")
+
+    _run(
+        breadcrumbs.persist_trip_location_batch(
+            "driver_1",
+            "ride_1",
+            "6fe8dc5c-3448-46a1-aa7c-d081ce7f1d9f",
+            [_point(1)],
+            active_ride=completed_ride,
+        )
+    )
+
+    payload = update.await_args.args[2]
+    assert payload["processing_status"] == "pending"
+    assert payload["snapshot_revision"] == 0
+    assert payload["snapshot_object_path"] is None
+    assert payload["snapshot_url"] is None
+    assert payload["finalized_at"] is None
+
+
 def test_legacy_points_remain_compatible(monkeypatch: pytest.MonkeyPatch):
     _install_driver_and_ride(monkeypatch, _ride())
 

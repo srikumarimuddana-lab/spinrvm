@@ -363,6 +363,10 @@ async def persist_trip_location_batch(
                 "processing_status": "pending",
                 "processing_claimed_at": None,
                 "next_retry_at": datetime.now(timezone.utc) + _LATE_ROUTE_REFINALIZE_DEBOUNCE,
+                "snapshot_revision": 0,
+                "snapshot_object_path": None,
+                "snapshot_url": None,
+                "finalized_at": None,
             },
             upsert=False,
         )

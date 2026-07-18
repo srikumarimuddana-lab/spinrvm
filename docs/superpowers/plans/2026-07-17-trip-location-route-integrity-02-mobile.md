@@ -6,8 +6,8 @@ Required context: read the [master plan](2026-07-17-trip-location-route-integrit
 
 **Files:** Modify `driver-app/package.json`, `driver-app/yarn.lock`.
 
-- [ ] From `driver-app`, run `npx expo install expo-sqlite`; do not hand-select a version.
-- [ ] Run `yarn why expo-sqlite` and `npx expo-doctor`; expect one SDK-compatible resolved package and no new dependency warning.
+- [ ] From `driver-app`, run `npx expo install expo-sqlite expo-crypto`; do not hand-select versions. Use `expo-crypto.randomUUID()` for valid session UUIDs.
+- [ ] Run `yarn why expo-sqlite`, `yarn why expo-crypto`, and `npx expo-doctor`; expect one SDK-compatible package for each and no new dependency warning.
 - [ ] Inspect the lockfile diff and confirm no unrelated package upgrade.
 - [ ] Commit: `build(driver): add durable location storage`.
 
@@ -38,7 +38,7 @@ export interface TripLocationPoint {
 ```
 
 - [ ] Implement SQLite tables `trip_location_sessions`, `trip_location_outbox`, and `trip_location_quarantine`; make `(session_id, sequence_number)` the primary key and allocate sequences inside `withExclusiveTransactionAsync`.
-- [ ] Implement `startSession(rideId)`, `enqueue(fix)`, `peek(sessionId, 500)`, `acknowledge(sessionId, ackedThrough, rejected)`, `pendingCount(rideId)`, and `closeSession(rideId)`. Never cap or clear pending active-ride rows.
+- [ ] Implement `startSession(rideId)`, `enqueue(fix)`, `peek(sessionId, 500)`, `acknowledge(sessionId, ackedThrough, rejected)`, `pendingCount(rideId)`, and `closeSession(rideId)`. Closing marks the session closed but never deletes pending rows.
 - [ ] Run the targeted test and `npx tsc --noEmit -p tsconfig.json`; expect PASS. Commit: `feat(driver): add durable trip location outbox`.
 
 ### Task 8: Unified recorder and background liveness
@@ -49,7 +49,7 @@ export interface TripLocationPoint {
 
 - [ ] Update tests to require `Location.hasStartedLocationUpdatesAsync(TASK_NAME)`, sensor timestamps, outbox enqueue before fetch, retained points on network/401/503 failure, and acknowledgement-driven deletion.
 - [ ] Run `yarn test utils/__tests__/backgroundLocation.test.ts --runInBand`; expect failures against registration checks and AsyncStorage queues.
-- [ ] Implement native-fix conversion with `captured_at: new Date(loc.timestamp).toISOString()` and enqueue before network I/O. `flushPending` sends one session batch and applies only the returned acknowledgement.
+- [ ] Implement native-fix conversion with `captured_at: new Date(loc.timestamp).toISOString()` and enqueue before network I/O. Serialize `flushPending`; run it at most every 10 seconds or at 25 queued points, plus background/completion flushes, and apply only returned acknowledgements.
 - [ ] Replace background AsyncStorage queue functions with recorder calls. Replace every liveness use of `TaskManager.isTaskRegisteredAsync(TASK_NAME)` with `Location.hasStartedLocationUpdatesAsync(TASK_NAME)`; registration may remain only for task-definition diagnostics.
 - [ ] Add a 30-second active-trip watchdog that exposes degraded health without logging coordinates. Do not claim force-quit recovery; geofence re-entry may only restart future capture.
 - [ ] Run the targeted test and driver lint; expect PASS. Commit: `feat(driver): unify background trip recording`.
@@ -94,7 +94,7 @@ if data.get("durable", True):
 
 **Produces:** `completeRide(rideId, offRouteConfirmation?)` with the approved `RideCompletionRequest`.
 
-- [ ] Add tests that completion captures/enqueues a fresh fix, sends final session/sequence and pending count, preserves a null fix with explicit confirmation, and retries only after an off-route confirmation response.
+- [ ] Add tests that completion captures/enqueues a fresh fix, sends final session/sequence and pending count, applies returned `location_ack`, preserves a null fix with explicit confirmation, and retries only after an off-route confirmation response.
 - [ ] Run the focused `completeRide` tests; expect the API-body assertions to fail.
 - [ ] Call `tripLocationRecorder.captureCompletionFix(rideId)` before POST and send:
 
@@ -109,4 +109,5 @@ if data.get("durable", True):
 ```
 
 - [ ] In the tab screen, handle backend `completion_confirmation_required`: 200 m–1 km uses confirmation; >1 km requires a selected reason (`rider_requested_stop`, `changed_destination`, or `emergency`). GPS-unavailable confirmation uses `location_unavailable`.
+- [ ] After success, apply `location_ack` before closing the session; older pending points remain queued for the completed-ride REST path.
 - [ ] Run the store tests, relevant component test, and lint; expect PASS. Commit: `feat(driver): anchor ride completion to a fresh fix`.

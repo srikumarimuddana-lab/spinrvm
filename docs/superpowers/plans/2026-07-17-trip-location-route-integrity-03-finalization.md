@@ -6,11 +6,11 @@ Required context: complete Tasks 1–11. Execute Tasks 12–20 in order.
 
 **Files:** Modify `backend/routes/drivers/ride_complete.py`; create `backend/tests/test_ride_completion_location.py`.
 
-- [ ] Add failing async tests for fresh/accurate fix acceptance, stale fix, missing fix, 200 m/1 km confirmation bands, invalid reason, inline idempotent persistence, and legacy-client incomplete completion.
+- [ ] Add failing async tests for fresh/accurate fix acceptance, stale fix, missing fix, 200 m/1 km confirmation bands, invalid reason, inline idempotent persistence, returned `location_ack`, and legacy-client incomplete completion.
 - [ ] Run `pytest backend/tests/test_ride_completion_location.py -q`; expect request-body failures.
 - [ ] Add optional `RideCompletionRequest` models. Validate capture age and integrity, persist `completion_fix` through `persist_trip_location_batch` before aggregation, and upsert `ride_routes.completion_point`.
 - [ ] In `on` mode, return `409` with `code=completion_confirmation_required`, `band`, and distance only when required confirmation is absent. Never return coordinates. In `shadow` mode, record the same reason without blocking.
-- [ ] Legacy/no-fix completion remains possible and records `missing_tail=true`; the ride state transition still uses `_require_ride_in_state`.
+- [ ] Return inline persistence as `location_ack`. Legacy/no-fix completion remains possible and records `missing_tail=true`; the ride state transition still uses `_require_ride_in_state`.
 - [ ] Run the targeted test and Ruff; expect PASS. Commit: `feat(rides): validate completion location`.
 
 ### Task 13: Deterministic route segmentation
@@ -81,7 +81,7 @@ def _overlapping_chunks(points: list[dict], size: int = 90, overlap: int = 10):
 **Files:** Modify `backend/utils/breadcrumbs.py`, `backend/tests/test_breadcrumb_persistence.py`.
 
 - [ ] Add failing tests that newly inserted points for a completed ride debounce a pending revision by 30 seconds, while duplicate replay does not.
-- [ ] Track rows actually returned from conflict-safe insert. Only when at least one new row was inserted, update existing `ride_routes` to `pending` without changing `route_revision`.
+- [ ] Use `LocationBatchPersistResult.inserted_count`. Only when at least one new row was inserted, update existing `ride_routes` to `pending` without changing `route_revision`.
 - [ ] Run breadcrumb tests and Ruff; expect PASS. Commit: `feat(routes): revise routes for late GPS uploads`.
 
 ### Task 18: Route-detail API projection

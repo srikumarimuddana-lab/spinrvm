@@ -25,7 +25,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // 'fingerprint'/'appVersion' rejected by EAS CLI). Bump manually when
     // shipping native changes that break JS-bundle compatibility. Pre-launch
     // with no production users, OTA compatibility risk is zero.
-    runtimeVersion: '2.4.0', // bump from 2.3.0: react-native-screens was re-pinned 4.24.0 -> 4.23.0 (a native module change). 4.24.0's New-Arch/Bridgeless codegen resolved an expo-router <Screen> to a non-renderable object ("Element type is invalid ... got: object") in release builds. Because 2.3.0 spanned both native versions, an OTA of 4.23.0 JS could land on a 4.24.0 binary (and vice versa) and crash every screen. Isolating the 4.23.0 native line under 2.4.0 keeps that JS from ever reaching a 4.24.0 binary over-the-air. Prior 2.2.0 -> 2.3.0 bump added react-native-webview (Stripe embedded onboarding) + Android CAMERA, plus @iternio/react-native-auto-play + react-native-nitro-modules (Android Auto).
+    runtimeVersion: '2.5.0', // bump from 2.4.0: expo-sqlite adds a native module for the durable trip-location outbox, so SQLite-dependent JS must never reach a pre-SQLite binary over the air. 2.4.0 isolated the react-native-screens 4.23.0 native line after 4.24.0 New-Arch/Bridgeless codegen resolved an expo-router <Screen> to a non-renderable object in release builds. Prior 2.2.0 -> 2.3.0 added react-native-webview (Stripe embedded onboarding) + Android CAMERA, plus @iternio/react-native-auto-play + react-native-nitro-modules (Android Auto).
     splash: {
         image: './assets/images/splash-blank.png',
         resizeMode: 'contain',
@@ -221,6 +221,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             backgroundColor: '#FFFFFF',
         }],
         'expo-font',
+        'expo-sqlite',
         'expo-secure-store',
         '@react-native-firebase/app',
         '@react-native-firebase/messaging',

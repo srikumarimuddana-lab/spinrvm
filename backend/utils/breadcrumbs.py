@@ -72,6 +72,7 @@ _ACTIVE_STATUSES = list(RIDE_STATUS_TO_PHASE.keys())
 # arbitrarily large single insert (worker stall + breadcrumb-table bloat).
 MAX_BREADCRUMB_BATCH = 500
 _MAX_CLIENT_CLOCK_SKEW = timedelta(minutes=5)
+_MAX_ACTIVE_TRIP_FUTURE_SKEW = timedelta(seconds=30)
 _LATE_ROUTE_REFINALIZE_DEBOUNCE = timedelta(seconds=30)
 _ACTIVE_RIDE_NOT_PROVIDED = object()
 
@@ -298,6 +299,12 @@ async def persist_trip_location_batch(
         captured_at = _point_capture_time(point)
         if captured_at is None:
             rejections.append(LocationPointRejection(sequence_number, "invalid_capture_time"))
+            continue
+        if window_end is None and captured_at > received_at + _MAX_ACTIVE_TRIP_FUTURE_SKEW:
+            # Future active-trip points can suppress the gap monitor and make a
+            # missing route tail look healthy. Completed rides are instead
+            # bounded by their immutable server completion timestamp below.
+            rejections.append(LocationPointRejection(sequence_number, "future_capture_time"))
             continue
         if window_start is not None and captured_at < window_start:
             rejections.append(LocationPointRejection(sequence_number, "before_ride_window"))

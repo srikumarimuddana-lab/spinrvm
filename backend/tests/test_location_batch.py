@@ -19,6 +19,7 @@ from fastapi import HTTPException
 
 from routes.drivers import location
 from routes.drivers.location import LocationBatchRequest
+from utils import breadcrumbs
 from utils.breadcrumbs import LocationBatchAck, LocationBatchPersistResult
 
 
@@ -143,6 +144,26 @@ def test_completed_ride_accepts_delayed_points_inside_lifecycle_and_retention(mo
 
     assert response["acked_through"] == 2
     assert captured["ride"]["status"] == "completed"
+
+
+def test_active_ride_rejects_future_captured_at_before_persisting(monkeypatch: pytest.MonkeyPatch):
+    inserted = AsyncMock(return_value=[])
+    monkeypatch.setattr(breadcrumbs.db_supabase, "insert_many_ignore_conflicts", inserted)
+    future = (datetime.now(timezone.utc) + timedelta(seconds=31)).isoformat()
+
+    result = _run(
+        breadcrumbs.persist_trip_location_batch(
+            "driver_1",
+            "ride_1",
+            "6fe8dc5c-3448-46a1-aa7c-d081ce7f1d9f",
+            [_point(1, future)],
+            active_ride=_ride(),
+        )
+    )
+
+    assert result.inserted_count == 0
+    assert result.ack.rejected[0].reason == "future_capture_time"
+    inserted.assert_not_awaited()
 
 
 def test_legacy_points_remain_compatible(monkeypatch: pytest.MonkeyPatch):

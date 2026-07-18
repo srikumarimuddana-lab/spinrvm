@@ -14,6 +14,8 @@ The Postgres function `purge_pii_retention()` is exercised via migration
 
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
@@ -135,6 +137,67 @@ def test_seconds_until_next_returns_positive():
     for hour in (0, 3, 12, 23):
         assert _seconds_until_next(hour) > 0
         assert _seconds_until_next(hour) <= 24 * 3600
+
+
+def test_pending_route_snapshot_objects_are_deleted_before_their_paths_are_cleared(monkeypatch):
+    from utils import retention_purge
+
+    removed_paths = []
+    updates = []
+    pending = [{"ride_id": "ride_1", "snapshot_object_path": "ride_1/route-v4.png"}]
+
+    class Query:
+        @property
+        def not_(self):
+            return self
+
+        def select(self, _columns):
+            return self
+
+        def is_(self, _column, _value):
+            return self
+
+        def limit(self, _size):
+            return self
+
+        def update(self, payload):
+            updates.append(payload)
+            return self
+
+        def eq(self, _column, _value):
+            return self
+
+        def execute(self):
+            return SimpleNamespace(data=pending)
+
+    class Bucket:
+        def remove(self, paths):
+            removed_paths.extend(paths)
+            return SimpleNamespace(data=[])
+
+    class Storage:
+        def from_(self, bucket):
+            assert bucket == "ride-route-snapshots"
+            return Bucket()
+
+    class Supabase:
+        storage = Storage()
+
+        def table(self, table):
+            assert table == "ride_routes"
+            return Query()
+
+    async def run_sync(operation):
+        return operation()
+
+    monkeypatch.setattr(retention_purge, "supabase", Supabase())
+    monkeypatch.setattr(retention_purge, "run_sync", run_sync)
+
+    deleted = asyncio.run(retention_purge._delete_pending_route_snapshot_objects())
+
+    assert deleted == 1
+    assert removed_paths == ["ride_1/route-v4.png"]
+    assert updates == [{"snapshot_object_path": None, "snapshot_purge_pending_at": None}]
 
 
 @pytest.mark.asyncio

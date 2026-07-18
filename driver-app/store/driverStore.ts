@@ -4,6 +4,7 @@ import SpinrConfig from '@shared/config/spinr.config';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { recordNonFatal } from '../utils/crashlytics';
 import { RideStatus } from '../constants/rideStatus';
+import { tripLocationRecorder } from '../utils/tripLocationRecorder';
 
 function isAxiosError(e: unknown): e is { response?: { status?: number; data?: { detail?: string } }; message?: string } {
   return typeof e === 'object' && e !== null;
@@ -145,6 +146,12 @@ export interface CompletedRideData {
     dropoff_address?: string;
     ride_completed_at?: string;
 }
+
+export type OffRouteConfirmation =
+    | 'rider_requested_stop'
+    | 'changed_destination'
+    | 'emergency'
+    | 'location_unavailable';
 
 export interface RideHistoryItem {
     id?: string;
@@ -380,7 +387,7 @@ interface DriverState {
     arriveAtPickup: (rideId: string, driverLat?: number, driverLng?: number) => Promise<{ success: boolean; distance?: number; error?: string }>;
     verifyOTP: (rideId: string, otp: string) => Promise<boolean>;
     startRide: (rideId: string) => Promise<void>;
-    completeRide: (rideId: string) => Promise<void>;
+    completeRide: (rideId: string, offRouteConfirmation?: OffRouteConfirmation) => Promise<void>;
     cancelRide: (rideId: string, reason?: string) => Promise<void>;
 
     // Fetch
@@ -653,10 +660,17 @@ export const useDriverStore = create<DriverState>((set, get) => ({
         }
     },
 
-    completeRide: async (rideId: string) => {
+    completeRide: async (rideId: string, offRouteConfirmation?: OffRouteConfirmation) => {
         set({ isLoading: true, error: null });
         try {
-            const res = await api.post<CompletedRideData>(`/drivers/rides/${rideId}/complete`);
+            const completion = await tripLocationRecorder.captureCompletionFix(rideId);
+            const res = await api.post<CompletedRideData>(`/drivers/rides/${rideId}/complete`, {
+                completion_fix: completion.point,
+                final_session_id: completion.point?.recording_session_id ?? null,
+                final_sequence_number: completion.point?.sequence_number ?? null,
+                pending_outbox_count: completion.pendingCount,
+                off_route_confirmation: offRouteConfirmation ?? null,
+            });
             // chatMessages belongs to the just-finished ride — drop it so a
             // long shift doesn't accumulate every prior conversation in
             // memory. Same for incomingRide which can linger from a stale

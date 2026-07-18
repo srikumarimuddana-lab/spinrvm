@@ -220,3 +220,34 @@ class TestComputeRoadDistanceKm:
         # exceeds _MAX_POINTS_PER_REQUEST.
         sent_count = len(sent_path[0].split("|"))
         assert sent_count <= 100, f"Sent {sent_count} points, expected <=100"
+
+    def test_segmented_google_fallback_preserves_each_observed_boundary_and_sums_only_successes(self):
+        from backend.utils import route_distance as rd
+
+        first_segment = [_crumb(52.10 + i * 0.001, -106.70) for i in range(6)]
+        second_segment = [_crumb(52.20 + i * 0.001, -106.70) for i in range(6)]
+        google_calls = []
+
+        async def fake_osrm(_points, _url):
+            return None
+
+        async def fake_google(points, _key):
+            google_calls.append(points)
+            distance = 1.0 if points[0]["lat"] < 52.15 else 2.0
+            return distance, [[points[0]["lat"], points[0]["lng"]], [points[-1]["lat"], points[-1]["lng"]]]
+
+        with (
+            patch.object(
+                rd,
+                "get_app_settings",
+                AsyncMock(return_value={"osrm_url": "http://osrm", "google_maps_api_key": "key"}),
+            ),
+            patch.object(rd, "_compute_osrm_chunk_matchings", fake_osrm),
+            patch.object(rd, "_compute_via_google_roads", fake_google),
+        ):
+            result = asyncio.run(rd.compute_segmented_road_route([first_segment, second_segment]))
+
+        assert len(google_calls) == 2
+        assert result["distance_km"] == 3.0
+        assert [segment["distance_km"] for segment in result["segments"]] == [1.0, 2.0]
+        assert result["segments"][0]["matched_segments"] is not result["segments"][1]["matched_segments"]

@@ -28,6 +28,34 @@ except ImportError:
 
 # ============ Ride Helpers ============
 
+_PRIVATE_ROUTE_SNAPSHOT_BUCKET = "ride-route-snapshots"
+_PRIVATE_ROUTE_SNAPSHOT_TTL_SECONDS = 15 * 60
+
+
+async def create_route_snapshot_signed_url(object_path: str) -> str:
+    """Create a short-lived URL for one private route image.
+
+    Callers must authorize access to the ride before invoking this helper. The
+    durable database row stores only the object path, never a bearer URL.
+    """
+    if not isinstance(object_path, str) or not object_path.strip():
+        raise ValueError("route snapshot object path is required")
+    if not supabase:
+        raise RuntimeError("Supabase client not configured")
+
+    response = await run_sync(
+        lambda: supabase.storage.from_(_PRIVATE_ROUTE_SNAPSHOT_BUCKET).create_signed_url(
+            object_path, _PRIVATE_ROUTE_SNAPSHOT_TTL_SECONDS
+        )
+    )
+    if isinstance(response, dict):
+        signed_url = response.get("signedURL") or response.get("signedUrl")
+    else:
+        signed_url = getattr(response, "signedURL", None) or getattr(response, "signed_url", None)
+    if not isinstance(signed_url, str) or not signed_url:
+        raise RuntimeError("Supabase Storage did not return a route snapshot signed URL")
+    return signed_url
+
 
 async def _driver_profile_image(user_id: Optional[str]) -> str:
     """Driver avatar = the driver's users.profile_image (base64). Empty if none.
@@ -44,14 +72,69 @@ async def _driver_profile_image(user_id: Optional[str]) -> str:
     return (row or {}).get("profile_image", "") or ""
 
 
-async def get_ride(ride_id: str) -> Optional[Dict[str, Any]]:
+async def _project_route_detail(ride: Dict[str, Any], route: Dict[str, Any]) -> None:
+    """Attach a safe, display-ready route projection to one authorized detail.
+
+    Version 2 geometry is intentionally segmented.  Consumers must never join
+    its arrays: each boundary represents a gap or a separate capture session.
+    Legacy fields remain available only for pre-v2 route rows while historic
+    receipts are within their retention window.
+    """
+    schema_version = int(route.get("route_schema_version") or 1)
+    if schema_version >= 2:
+        # Do not let an old denormalized column present a misleading continuous
+        # line beside the v2 segmented route.
+        for key in ("road_polyline", "road_polyline_pickup", "phase_polylines"):
+            ride.pop(key, None)
+        ride["actual_route_segments"] = route.get("road_matched_segments") or route.get("observed_segments") or []
+        ride["route_quality"] = route.get("route_quality") or {}
+        ride["route_schema_version"] = schema_version
+        ride["route_revision"] = int(route.get("route_revision") or 0)
+        ride["route_geometry_status"] = route.get("processing_status") or "pending"
+
+        snapshot_revision = int(route.get("snapshot_revision") or 0)
+        ride["snapshot_revision"] = snapshot_revision
+        object_path = route.get("snapshot_object_path")
+        if snapshot_revision == ride["route_revision"] and object_path:
+            ride["route_snapshot_url"] = await create_route_snapshot_signed_url(str(object_path))
+        else:
+            ride.pop("route_snapshot_url", None)
+        return
+
+    # Legacy rows retain the shape existing admin views and historical
+    # receipts understand; new routes never fall back to these fields.
+    ride["road_polyline"] = route.get("road_polyline") or []
+    ride["road_polyline_pickup"] = route.get("road_polyline_pickup") or []
+    for key in ("phase_polylines", "phase_distances", "phase_durations", "route_quality"):
+        if route.get(key):
+            ride[key] = route[key]
+    ride["route_geometry_status"] = route.get("save_status") or ride.get("route_geometry_status")
+    ride["route_geometry_error"] = route.get("save_error") or ride.get("route_geometry_error")
+
+
+async def get_ride(ride_id: str, *, include_route: bool = False) -> Optional[Dict[str, Any]]:
+    """Read a ride, optionally adding its lightweight, versioned route detail.
+
+    Lists deliberately keep ``include_route`` false to avoid loading geometry
+    for every card.  The authorized ``GET /rides/{ride_id}`` endpoint opts in
+    after it performs its rider/driver ownership check.
+    """
     if not supabase:
         return None
-    return await run_sync(
+    ride = await run_sync(
         lambda: _single_row_from_res(
             supabase.table("rides").select("*").eq("id", ride_id).is_("deleted_at", "null").execute()
         )
     )
+    if not ride or not include_route:
+        return ride
+
+    route = await run_sync(
+        lambda: _single_row_from_res(supabase.table("ride_routes").select("*").eq("ride_id", ride_id).execute())
+    )
+    if route:
+        await _project_route_detail(ride, route)
+    return ride
 
 
 async def insert_ride(payload: Dict[str, Any]):
@@ -506,22 +589,16 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
     ride["incentive_total"] = round(sum(float(c.get("bonus_amount") or 0) for c in incentive_claims), 2)
 
     # --- Route geometry (ride_routes side-table; off the hot rides row) ---
-    # New rides store phase_polylines + the OSRM road_polyline (and a copy of the
-    # per-phase scalars) in ride_routes; merge them under the keys the admin
-    # modal already reads. Old rides have no ride_routes row, so they keep
-    # whatever is still on the rides row (graceful fallback).
+    # Reuse the public detail projection so rider, driver, receipt, and admin
+    # surfaces receive the exact same versioned geometry contract. In
+    # particular, v2 route segments must never be collapsed into a continuous
+    # legacy polyline for a support or dispute review.
     def _get_route():
         return _single_row_from_res(supabase.table("ride_routes").select("*").eq("ride_id", ride_id).execute())
 
     route = await run_sync(_get_route)
     if route:
-        ride["road_polyline"] = route.get("road_polyline") or []
-        ride["road_polyline_pickup"] = route.get("road_polyline_pickup") or []
-        for _k in ("phase_polylines", "phase_distances", "phase_durations", "route_quality"):
-            if route.get(_k):
-                ride[_k] = route[_k]
-        ride["route_geometry_status"] = route.get("save_status") or ride.get("route_geometry_status")
-        ride["route_geometry_error"] = route.get("save_error") or ride.get("route_geometry_error")
+        await _project_route_detail(ride, route)
 
     return ride
 

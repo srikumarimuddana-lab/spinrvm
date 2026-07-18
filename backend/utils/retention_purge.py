@@ -1,8 +1,8 @@
 """PII retention purge — daily background loop (B-P1-6).
 
-Calls the SECURITY DEFINER Postgres function `purge_pii_retention()`
-(migration 50) once per day at ~03:00 UTC. The SQL function is naturally
-idempotent (anonymization gated on `gps_anonymized_at IS NULL`, deletes
+Calls the SECURITY DEFINER Postgres functions `purge_pii_retention()` and
+`purge_trip_route_geometry()` once per day at ~03:00 UTC. The SQL functions
+are naturally idempotent (anonymization gated by durable markers, deletes
 filter on a moving time cutoff), so running on every replica is safe.
 The Redis leader lock is belt-and-braces: it cuts the noise in the
 audit_logs table (one row per day instead of N replicas worth) without
@@ -54,12 +54,91 @@ logger = logging.getLogger(__name__)
 # scheduled tick, so a stuck pod can't hold the lock forever.
 _LOCK_TTL_SECONDS = 23 * 60 * 60
 _LOCK_KEY = "spinr:retention:purge:lock"
+_PRIVATE_ROUTE_SNAPSHOT_BUCKET = "ride-route-snapshots"
+_ROUTE_SNAPSHOT_PURGE_BATCH_SIZE = 100
 
 
 def _pod_id() -> str:
     """Stable-ish identifier for the current replica, written into the
     leader-lock value so a debug session can see who held it."""
     return f"{socket.gethostname()}:{os.getpid()}"
+
+
+async def _delete_expired_route_snapshot_objects() -> int:
+    """Delete every private route image whose durable retention deadline passed.
+
+    The append-only ledger retains every revision's object path, even after a
+    late GPS batch clears the current route projection. If Storage removal
+    fails, ``deleted_at`` remains NULL and the next daily run retries it.
+    """
+    if not supabase:
+        raise RuntimeError("Supabase client not configured")
+
+    def _pending_rows() -> list[dict]:
+        response = (
+            supabase.table("ride_route_snapshot_objects")
+            .select("ride_id,storage_bucket,object_path")
+            .is_("deleted_at", "null")
+            .lte("retention_due_at", datetime.now(timezone.utc).isoformat())
+            .limit(_ROUTE_SNAPSHOT_PURGE_BATCH_SIZE)
+            .execute()
+        )
+        rows = getattr(response, "data", None)
+        if not isinstance(rows, list):
+            raise RuntimeError("route snapshot ledger query returned an invalid response")
+        return [
+            row
+            for row in rows
+            if isinstance(row, dict)
+            and isinstance(row.get("storage_bucket"), str)
+            and isinstance(row.get("object_path"), str)
+            and row.get("storage_bucket") == _PRIVATE_ROUTE_SNAPSHOT_BUCKET
+        ]
+
+    try:
+        pending = await run_sync(_pending_rows)
+    except Exception:
+        logger.exception("retention_purge: route snapshot ledger query failed")
+        raise
+    if not pending:
+        return 0
+
+    paths = [str(row["object_path"]) for row in pending]
+    try:
+        await run_sync(lambda: supabase.storage.from_(_PRIVATE_ROUTE_SNAPSHOT_BUCKET).remove(paths))
+    except Exception:
+        logger.exception("retention_purge: private route snapshot storage deletion failed")
+        raise
+
+    for row in pending:
+        try:
+            await run_sync(
+                lambda row=row: (
+                    supabase.table("ride_route_snapshot_objects")
+                    .update({"deleted_at": datetime.now(timezone.utc).isoformat()})
+                    .eq("storage_bucket", row["storage_bucket"])
+                    .eq("object_path", row["object_path"])
+                    .execute()
+                )
+            )
+        except Exception:
+            logger.exception("retention_purge: route snapshot ledger acknowledgement failed")
+            raise
+        if row.get("ride_id"):
+            try:
+                await run_sync(
+                    lambda row=row: (
+                        supabase.table("ride_routes")
+                        .update({"snapshot_object_path": None, "snapshot_purge_pending_at": None})
+                        .eq("ride_id", row["ride_id"])
+                        .eq("snapshot_object_path", row["object_path"])
+                        .execute()
+                    )
+                )
+            except Exception:
+                logger.exception("retention_purge: current route snapshot reference clear failed")
+                raise
+    return len(pending)
 
 
 async def run_retention_purge_tick(dry_run: bool = False) -> Optional[dict]:
@@ -97,6 +176,46 @@ async def run_retention_purge_tick(dry_run: bool = False) -> Optional[dict]:
         )
         return None
 
+    def _call_trip_route_geometry() -> Any:
+        return supabase.rpc("purge_trip_route_geometry", {"p_dry_run": dry_run}).execute()
+
+    try:
+        route_result = await run_sync(_call_trip_route_geometry)
+    except Exception:
+        logger.exception("retention_purge: rpc(purge_trip_route_geometry) failed")
+        raise
+
+    route_data = getattr(route_result, "data", None)
+    if route_data is None and isinstance(route_result, dict):
+        route_data = route_result.get("data")
+    if not isinstance(route_data, dict):
+        logger.error(
+            "retention_purge: unexpected trip-route geometry response shape: %r",
+            type(route_data).__name__,
+        )
+        raise RuntimeError("purge_trip_route_geometry returned an invalid response")
+
+    deleted_snapshot_objects = 0
+    if not dry_run:
+        deleted_snapshot_objects = await _delete_expired_route_snapshot_objects()
+        if deleted_snapshot_objects:
+            # Mark rows anonymous only after their actual Storage objects were
+            # deleted and their durable paths cleared above.
+            try:
+                route_result = await run_sync(_call_trip_route_geometry)
+            except Exception:
+                logger.exception("retention_purge: post-storage trip-route geometry purge failed")
+                raise
+            route_data = getattr(route_result, "data", None)
+            if route_data is None and isinstance(route_result, dict):
+                route_data = route_result.get("data")
+            if not isinstance(route_data, dict):
+                logger.error(
+                    "retention_purge: unexpected post-storage trip-route geometry response shape: %r",
+                    type(route_data).__name__,
+                )
+                raise RuntimeError("post-storage purge_trip_route_geometry returned an invalid response")
+
     skipped_fk = data.get("dsar_users_skipped_fk") or 0
     logger.info(
         "retention_purge complete dry_run=%s rides_anon=%s rides_del=%s "
@@ -112,6 +231,13 @@ async def run_retention_purge_tick(dry_run: bool = False) -> Optional[dict]:
         data.get("dsar_users_purged"),
         skipped_fk,
     )
+    logger.info(
+        "trip_route_geometry_purge complete dry_run=%s routes_anon=%s snapshots_deleted=%s gap_events_del=%s",
+        route_data.get("dry_run"),
+        route_data.get("ride_routes_anonymized"),
+        deleted_snapshot_objects,
+        route_data.get("ride_location_gap_events_deleted"),
+    )
     if skipped_fk:
         # A DSAR account past its 7y window could not be hard-deleted because an
         # unhandled RESTRICT FK still references it (Step H caught the violation
@@ -123,6 +249,8 @@ async def run_retention_purge_tick(dry_run: bool = False) -> Optional[dict]:
             "hard-delete blocked; add the offending table to purge_pii_retention Step H",
             skipped_fk,
         )
+    # Preserve the established wrapper response contract for callers that use
+    # the PII-purge counters. Route-geometry counts are logged independently.
     return data
 
 

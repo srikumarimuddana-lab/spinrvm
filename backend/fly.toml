@@ -1,6 +1,11 @@
-# Fly.io backend (Toronto/yyz). Deploys in parallel with Railway from main via
-# .github/workflows/deploy-fly.yml. Failover/cutover is a Cloudflare CNAME swap —
-# see docs/runbooks/railway-fly-failover.md and docs/adr/007-fly-primary-railway-standby.md.
+# Fly.io STABLE production backend (Toronto/yyz). Once the ADR-008 pipeline is
+# live, this app is deployed by the gated promote workflow
+# (.github/workflows/promote-production.yml) and sits behind the Cloudflare
+# Load Balancer on api-spinr.spinr.ca (~95% weight; spinr-backend-canary takes
+# the rest, Railway is the auto-failover pool). Until cutover it still deploys
+# from main via .github/workflows/deploy-fly.yml. See
+# docs/adr/008-staging-canary-production-pipeline.md and
+# docs/runbooks/railway-fly-failover.md.
 #
 # Secrets (SUPABASE_*, JWT_SECRET, ADMIN_PASSWORD, FIREBASE_*, REDIS_URL,
 # RATE_LIMIT_REDIS_URL, WS_REDIS_URL, ALLOWED_ORIGINS) are NOT set here — they

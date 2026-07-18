@@ -1,0 +1,52 @@
+# Fly.io STAGING backend (Toronto/yyz) — ADR-008. Deployed automatically on
+# every push to main via .github/workflows/deploy-staging.yml, behind
+# api-staging.spinr.ca (plain Cloudflare CNAME, not the production LB).
+#
+# Staging is fully isolated: its own Supabase project (ca-central-1), its own
+# Redis, and Stripe TEST-mode keys in its own app_settings row. Secrets are
+# set via `fly secrets set -a spinr-backend-staging` and are DISTINCT from
+# production (own JWT_SECRET, own ADMIN creds,
+# ALLOWED_ORIGINS=https://admin-staging.spinr.ca). ENV=staging runs every
+# production security guard (config.py is_production_like).
+app = "spinr-backend-staging"
+primary_region = "yyz"
+kill_signal = "SIGINT"
+kill_timeout = "30s"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  ENV = "staging"
+  PORT = "8000"
+  SUPABASE_REGION = "ca-central-1"
+  UVICORN_WORKERS = "2"
+  PYTHONUNBUFFERED = "1"
+
+[deploy]
+  strategy = "rolling"
+  max_unavailable = 1
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 200
+    hard_limit = 250
+
+  [[http_service.checks]]
+    grace_period = "30s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"

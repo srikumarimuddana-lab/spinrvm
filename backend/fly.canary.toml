@@ -1,0 +1,60 @@
+# Fly.io CANARY backend (Toronto/yyz) — ADR-008. Deployed by
+# .github/workflows/promote-production.yml as the first gated step of a
+# production promotion; takes ~5% of real traffic via the Cloudflare Load
+# Balancer weighted pool on api-spinr.spinr.ca.
+#
+# The canary is ENV=production with secrets BYTE-IDENTICAL to
+# spinr-backend-yyz (`fly secrets set -a spinr-backend-canary`, applied from
+# the canonical secret store in the same change window as stable — Fly
+# secrets are not readable, so parity is procedural; see
+# docs/runbooks/canary-deploy.md). It shares the production Supabase and
+# Redis deliberately: the hardcoded WS pub/sub channel is how riders on
+# canary and drivers on stable still see each other's events.
+#
+# BACKGROUND_LOOPS_ENABLED=false is the one behavioral difference: no loop
+# (payment retry, auto-topup, purge, watchdog, ...) runs unpromoted code
+# against the shared production data plane.
+app = "spinr-backend-canary"
+primary_region = "yyz"
+kill_signal = "SIGINT"
+kill_timeout = "30s"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  ENV = "production"
+  DEPLOY_STAGE = "canary"
+  BACKGROUND_LOOPS_ENABLED = "false"
+  PORT = "8000"
+  SUPABASE_REGION = "ca-central-1"
+  UVICORN_WORKERS = "2"
+  PYTHONUNBUFFERED = "1"
+
+[deploy]
+  strategy = "rolling"
+  max_unavailable = 1
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 200
+    hard_limit = 250
+
+  [[http_service.checks]]
+    grace_period = "30s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"

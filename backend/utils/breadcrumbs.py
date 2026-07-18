@@ -72,6 +72,7 @@ _ACTIVE_STATUSES = list(RIDE_STATUS_TO_PHASE.keys())
 # arbitrarily large single insert (worker stall + breadcrumb-table bloat).
 MAX_BREADCRUMB_BATCH = 500
 _MAX_CLIENT_CLOCK_SKEW = timedelta(minutes=5)
+_LATE_ROUTE_REFINALIZE_DEBOUNCE = timedelta(seconds=30)
 _ACTIVE_RIDE_NOT_PROVIDED = object()
 
 
@@ -344,6 +345,20 @@ async def persist_trip_location_batch(
         if rows
         else []
     )
+    # A completed ride can receive a delayed offline batch inside its retention
+    # window. Re-finalize only when this call added new evidence; an idempotent
+    # replay must not churn revisions or starve the worker's pending queue.
+    if inserted and ride.get("status") == "completed":
+        await db_supabase.update_one(
+            "ride_routes",
+            {"ride_id": ride_id},
+            {
+                "processing_status": "pending",
+                "processing_claimed_at": None,
+                "next_retry_at": datetime.now(timezone.utc) + _LATE_ROUTE_REFINALIZE_DEBOUNCE,
+            },
+            upsert=False,
+        )
     ack = LocationBatchAck(
         recording_session_id=normalized_session_id,
         acked_through=_batch_acked_through(sequence_numbers),

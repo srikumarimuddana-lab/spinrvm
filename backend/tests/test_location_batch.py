@@ -146,6 +146,72 @@ def test_completed_ride_accepts_delayed_points_inside_lifecycle_and_retention(mo
     assert captured["ride"]["status"] == "completed"
 
 
+def test_completed_ride_batch_does_not_move_the_live_driver_marker(monkeypatch: pytest.MonkeyPatch):
+    # M-B: a delayed offline outbox flush for a COMPLETED ride (inside the 90-day
+    # retention window) must persist breadcrumbs but must NOT advance the live
+    # driver marker — the driver may now be online on a new trip and would be
+    # teleported to these stale coordinates.
+    completed_at = datetime.now(timezone.utc) - timedelta(days=1)
+    ride = _ride(status="completed", ride_completed_at=completed_at.isoformat())
+    update_one = _install_driver_and_ride(monkeypatch, ride)
+
+    async def persist(*args, **kwargs):
+        return _result()
+
+    monkeypatch.setattr("utils.breadcrumbs.persist_trip_location_batch", persist)
+
+    response = _run(location.update_location_batch(_payload(), current_user={"id": "user_1"}))
+
+    assert response["acked_through"] == 2
+    update_one.assert_not_awaited()  # the driver marker was never advanced
+
+
+def test_active_ride_batch_still_moves_the_live_driver_marker(monkeypatch: pytest.MonkeyPatch):
+    # M-B: the ACTIVE trip still advances the live marker to the newest point.
+    update_one = _install_driver_and_ride(monkeypatch, _ride(status="in_progress"))
+
+    async def persist(*args, **kwargs):
+        return _result()
+
+    monkeypatch.setattr("utils.breadcrumbs.persist_trip_location_batch", persist)
+
+    _run(location.update_location_batch(_payload(), current_user={"id": "user_1"}))
+
+    update_one.assert_awaited_once()
+    table, filters, payload = update_one.await_args.args[:3]
+    assert table == "drivers"
+    assert filters == {"id": "driver_1"}
+    assert payload["lat"] == 50.42
+    assert payload["lng"] == -104.62
+
+
+def test_active_ride_batch_does_not_rewind_a_fresher_marker(monkeypatch: pytest.MonkeyPatch):
+    # M-B: an out-of-order late chunk (captured before the driver's current
+    # position time) must not rewind the marker even on the active ride.
+    driver_row = {"id": "driver_1", "user_id": "user_1", "is_online": False, "updated_at": "2026-06-01T23:10:00Z"}
+
+    async def get_rows(table, filters, **kwargs):
+        if table == "drivers":
+            return [driver_row]
+        if table == "rides":
+            return [_ride(status="in_progress")]
+        raise AssertionError(f"unexpected table: {table}")
+
+    update_one = AsyncMock()
+    monkeypatch.setattr(location.db_supabase, "get_rows", get_rows)
+    monkeypatch.setattr(location.db_supabase, "update_one", update_one)
+
+    async def persist(*args, **kwargs):
+        return _result()
+
+    monkeypatch.setattr("utils.breadcrumbs.persist_trip_location_batch", persist)
+
+    # Points captured at 23:06, older than the driver's 23:10 position stamp.
+    _run(location.update_location_batch(_payload(), current_user={"id": "user_1"}))
+
+    update_one.assert_not_awaited()
+
+
 def test_active_ride_rejects_future_captured_at_before_persisting(monkeypatch: pytest.MonkeyPatch):
     inserted = AsyncMock(return_value=[])
     monkeypatch.setattr(breadcrumbs.db_supabase, "insert_many_ignore_conflicts", inserted)

@@ -153,10 +153,25 @@ async def _persist_v2_location_batch(request: LocationBatchRequest, current_user
         (point for point in reversed(request.points) if point.sequence_number not in rejected_sequences),
         None,
     )
-    if latest is not None:
+    # M-B: the live driver marker (drivers.lat/lng/heading) may only be advanced
+    # by points from the driver's CURRENT trip. A durable outbox can deliver a
+    # completed/cancelled ride's buffered points up to 90 days late (the
+    # retention window above); if the driver is by then online on a NEW trip,
+    # moving the marker to those stale coordinates teleports their dispatch/map
+    # position. We also refuse to move the marker backwards in time, so an
+    # out-of-order late chunk inside the active ride cannot rewind a fresher
+    # position. The breadcrumb persistence above still stored every point either
+    # way — only the live-marker projection is gated here.
+    ride_is_active = ride.get("status") in _V2_ACTIVE_RIDE_STATUSES
+    if latest is not None and ride_is_active:
         lat = latest.latitude if latest.latitude is not None else latest.lat
         lng = latest.longitude if latest.longitude is not None else latest.lng
-        if lat is not None and lng is not None:
+        # ``updated_at`` is the timestamp both the WS and REST marker writers
+        # stamp on the driver row, so it is the driver's current position time.
+        # When it is unset/unparseable we accept the point.
+        current_position_at = parse_iso_utc(driver.get("updated_at"))
+        point_is_newer = current_position_at is None or latest.captured_at > current_position_at
+        if lat is not None and lng is not None and point_is_newer:
             update_data = {"lat": lat, "lng": lng, "updated_at": datetime.now(timezone.utc)}
             if latest.heading is not None:
                 update_data["heading"] = latest.heading % 360

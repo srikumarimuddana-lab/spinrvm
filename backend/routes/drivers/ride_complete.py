@@ -39,6 +39,8 @@ from ._deps import (  # noqa: F401
 )
 from ._shared import (  # noqa: F401
     COMPLETE_FROM_STATES,
+    _snap_pickup_leg_async,
+    _validate_ride_route,
     serialize_doc,
 )
 
@@ -49,11 +51,6 @@ try:
     from ...utils.breadcrumbs import persist_trip_location_batch
 except ImportError:
     from utils.breadcrumbs import persist_trip_location_batch  # type: ignore
-
-try:
-    from ...utils.route_finalizer import mark_route_pending
-except ImportError:
-    from utils.route_finalizer import mark_route_pending  # type: ignore
 
 
 _COMPLETION_MAX_CAPTURE_AGE_SECONDS = 120
@@ -180,6 +177,83 @@ def _completion_distance_band(ride: Dict[str, Any], fix: CompletionFix) -> tuple
     return "off_route", distance_meters
 
 
+async def _ride_has_v2_evidence(ride_id: str) -> bool:
+    """True when durable breadcrumbs already carry a v2 recording session.
+
+    Legacy WS/REST breadcrumbs have no ``recording_session_id``; only the v2
+    outbox path stamps one. M-F: a shadow-mode completion of a legacy-app ride
+    must not stamp ``route_schema_version=2``, because the v2 reader would then
+    look for segmented geometry the legacy path never produced and render an
+    empty route. We therefore only treat a ride as v2 when it actually emitted
+    v2 evidence (or the rollout mode forces it on — decided by the caller).
+    """
+    if not db_supabase.supabase:
+        return False
+
+    def _probe():
+        return (
+            db_supabase.supabase.table("driver_location_history")
+            .select("recording_session_id")
+            .eq("ride_id", ride_id)
+            .not_.is_("recording_session_id", "null")
+            .limit(1)
+            .execute()
+        )
+
+    try:
+        res = await db_supabase.run_sync(_probe)
+    except Exception as exc:
+        logger.error("route-integrity v2 evidence probe failed for ride %s", ride_id, exc_info=True)
+        raise HTTPException(status_code=503, detail="Unable to determine route evidence") from exc
+    data = getattr(res, "data", None)
+    return bool(data) if isinstance(data, (list, tuple)) else False
+
+
+async def _completion_uses_v2(ride_id: str, *, fix_is_v2_evidence: bool) -> bool:
+    """Decide whether this completion engages the v2 route pipeline.
+
+    v2 is engaged when the client supplied a trusted device tail (itself v2
+    evidence), when the ride already has v2 breadcrumbs, or when the rollout
+    mode is fully ``on``. Otherwise the ride stays schema v1 so the legacy
+    polylines computed at settlement keep rendering.
+    """
+    if fix_is_v2_evidence:
+        return True
+    if await _ride_has_v2_evidence(ride_id):
+        return True
+    return await _get_route_integrity_mode() == "on"
+
+
+def _completion_route_write(completion_point: Dict[str, Any], *, use_v2: bool, now: datetime) -> Dict[str, Any]:
+    """Build the ``ride_routes`` completion write.
+
+    M-G: when v2 is engaged the write ALSO atomically queues finalization
+    (``processing_status='pending'`` + ``next_retry_at``) and hides any stale
+    snapshot — folding what used to be a separate ``mark_route_pending`` call
+    into the same row write. That eliminates the window where the schema stamp
+    landed but the pending-queue write failed, stranding the route at
+    schema v2 / status ``complete`` (the migration default) and rendering empty
+    forever. A v1 (legacy) completion writes only the completion point.
+    """
+    payload: Dict[str, Any] = {"completion_point": completion_point}
+    if use_v2:
+        payload.update(
+            {
+                "route_schema_version": 2,
+                "processing_status": "pending",
+                "processing_claimed_at": None,
+                "next_retry_at": now,
+                # A queued (re-)finalization may carry new evidence; hide the old
+                # image immediately so only the finalizer's claim reattaches one.
+                "snapshot_revision": 0,
+                "snapshot_object_path": None,
+                "snapshot_url": None,
+                "finalized_at": None,
+            }
+        )
+    return payload
+
+
 async def prepare_completion_location(
     ride: Dict[str, Any], driver_id: str, request: RideCompletionRequest
 ) -> CompletionLocationOutcome:
@@ -188,21 +262,32 @@ async def prepare_completion_location(
     Older apps are allowed through with an explicit missing-tail marker. A new
     fix that is stale, mocked, or too imprecise is retained nowhere as a final
     endpoint and is reported as a non-sensitive rejection code for telemetry.
+
+    The ``ride_routes`` write also carries the v2 schema stamp + finalization
+    queue when — and only when — this completion engages the v2 pipeline
+    (trusted device tail, pre-existing v2 evidence, or mode ``on``). Legacy
+    shadow-mode completions stay schema v1 so their settlement-computed
+    polylines keep rendering (M-F), and the pending-queue is folded into the
+    same write so a persisted completion point is always queued (M-G).
     """
+    now = datetime.now(timezone.utc)
+    ride_id = ride["id"]
     fix = request.completion_fix
+
     if fix is None:
+        # The endpoint remains backward compatible, but the finalizer and
+        # receipts need an explicit audit signal that this route has no
+        # device-captured tail rather than silently treating it as full.
+        use_v2 = await _completion_uses_v2(ride_id, fix_is_v2_evidence=False)
         try:
-            # The endpoint remains backward compatible, but the finalizer and
-            # receipts need an explicit audit signal that this route has no
-            # device-captured tail rather than silently treating it as full.
             await db_supabase.update_one(
                 "ride_routes",
-                {"ride_id": ride["id"]},
-                {"route_schema_version": 2, "completion_point": {"missing_tail": True}},
+                {"ride_id": ride_id},
+                _completion_route_write({"missing_tail": True}, use_v2=use_v2, now=now),
                 upsert=True,
             )
         except Exception as exc:
-            logger.error("completion missing-tail marker failed for ride %s", ride.get("id"), exc_info=True)
+            logger.error("completion missing-tail marker failed for ride %s", ride_id, exc_info=True)
             raise HTTPException(status_code=503, detail="Unable to record completion location status") from exc
         return CompletionLocationOutcome(
             location_ack=None,
@@ -210,8 +295,23 @@ async def prepare_completion_location(
             distance_band=None,
         )
 
-    rejection = _completion_fix_rejection(fix, datetime.now(timezone.utc))
+    rejection = _completion_fix_rejection(fix, now)
     if rejection is not None:
+        # An untrusted final fix is never stored as the completion tail, but the
+        # route still needs the missing-tail audit marker (and, when this ride
+        # is v2, the finalization queue) so the durable worker can project the
+        # trip breadcrumbs without waiting on a tail that will never arrive.
+        use_v2 = await _completion_uses_v2(ride_id, fix_is_v2_evidence=False)
+        try:
+            await db_supabase.update_one(
+                "ride_routes",
+                {"ride_id": ride_id},
+                _completion_route_write({"missing_tail": True, "rejection": rejection}, use_v2=use_v2, now=now),
+                upsert=True,
+            )
+        except Exception as exc:
+            logger.error("completion rejected-fix marker failed for ride %s", ride_id, exc_info=True)
+            raise HTTPException(status_code=503, detail="Unable to record completion location status") from exc
         return CompletionLocationOutcome(
             location_ack=None,
             legacy_client_missing_tail=False,
@@ -236,28 +336,27 @@ async def prepare_completion_location(
     try:
         persisted = await persist_trip_location_batch(
             driver_id,
-            str(ride["id"]),
+            str(ride_id),
             str(fix.recording_session_id),
             [point],
             active_ride=ride,
         )
+        # A trusted device tail is itself v2 evidence: engage the v2 pipeline and
+        # queue finalization atomically with persisting the completion point.
         await db_supabase.update_one(
             "ride_routes",
-            {"ride_id": ride["id"]},
-            {
-                "route_schema_version": 2,
-                "completion_point": {
-                    **point,
-                    "distance_band": distance_band,
-                    "distance_meters": distance_meters,
-                },
-            },
+            {"ride_id": ride_id},
+            _completion_route_write(
+                {**point, "distance_band": distance_band, "distance_meters": distance_meters},
+                use_v2=True,
+                now=now,
+            ),
             upsert=True,
         )
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error("completion final fix persistence failed for ride %s", ride.get("id"), exc_info=True)
+        logger.error("completion final fix persistence failed for ride %s", ride_id, exc_info=True)
         raise HTTPException(status_code=503, detail="Unable to persist completion location") from exc
 
     return CompletionLocationOutcome(
@@ -800,27 +899,24 @@ async def complete_ride(
             f"Ride {ride_id} is no longer in_progress — completion already processed by a concurrent request"
         )
 
-    # Route geometry is deliberately finalized outside the settlement request.
-    # The finalizer consumes timestamp-ordered durable points, preserves every
-    # gap as a segment boundary, and is the only v2 publisher for rider,
-    # driver, admin, and receipt route artifacts.
-    finalization_completion_point: Dict[str, Any]
-    if completion_location.location_ack is not None and parsed_completion_request.completion_fix is not None:
-        finalization_completion_point = parsed_completion_request.completion_fix.model_dump(mode="json")
-        finalization_completion_point["is_completion_fix"] = True
-        finalization_completion_point["distance_band"] = completion_location.distance_band
-    else:
-        finalization_completion_point = {
-            "missing_tail": True,
-            "rejection": completion_location.completion_fix_rejection,
-        }
-    try:
-        await mark_route_pending(ride_id, finalization_completion_point)
-    except Exception:
-        # Completion is already atomically settled. Surface the finalizer
-        # failure with the ride ID so the durable loop can recover it; no GPS
-        # data is logged here.
-        logger.error("route finalization queue failed for ride_id=%s", ride_id, exc_info=True)
+    # Route geometry is deliberately finalized outside the settlement request by
+    # the durable route-finalizer loop. When this completion engages v2, the
+    # completion point AND the ``processing_status='pending'`` queue were written
+    # atomically in prepare_completion_location above (before the CAS), so a
+    # settled completion is always queued — there is no longer a separate
+    # mark_route_pending write that could fail and strand the row at schema v2 /
+    # status 'complete' (M-G). A legacy (v1) completion is intentionally left
+    # unqueued so its settlement-computed polylines render (M-F).
+
+    # M-C: fire-and-forget post-completion GPS analysis. Both are non-blocking
+    # spawns so they never delay settlement:
+    #   * _validate_ride_route flags spoofed/suspicious traces for admin review
+    #   * _snap_pickup_leg_async backfills the admin map's Phase-2 road polyline
+    # (road_polyline_pickup). all_breadcrumbs may be unset if aggregation raised
+    # before it was assigned, so guard with locals() exactly as before.
+    _breadcrumbs_for_validation = all_breadcrumbs if "all_breadcrumbs" in locals() else []
+    spawn(_validate_ride_route(ride_id, _breadcrumbs_for_validation, driver["id"]))
+    spawn(_snap_pickup_leg_async(ride_id, _breadcrumbs_for_validation))
 
     # Corporate guest rides settle server-side: the guest customer has no app
     # and never calls /process-payment. Fire-and-forget — the atomic

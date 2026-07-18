@@ -86,7 +86,7 @@ actual_route_segments, route_quality, route_revision,
 route_snapshot_url, route_geometry_status
 ```
 
-Legacy single-polyline fields remain readable during rollout but are no longer written by the new finalizer. Existing historical rides are not reclassified as complete routes.
+Legacy single-polyline fields remain readable during rollout but are no longer written by the new finalizer. For v2 routes, `route_quality` is canonical and the finalizer derives any legacy `route_validation` summary from it; the older validator cannot overwrite an incomplete or low-coverage result with `clean`. Existing historical rides are not reclassified as complete routes.
 
 ## Timestamp Ordering
 

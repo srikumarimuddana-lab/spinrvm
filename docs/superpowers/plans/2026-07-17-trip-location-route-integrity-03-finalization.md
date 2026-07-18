@@ -60,10 +60,10 @@ def _overlapping_chunks(points: list[dict], size: int = 90, overlap: int = 10):
 
 **Files:** Create `backend/utils/route_finalizer.py`, `backend/tests/test_route_finalizer.py`; modify `backend/routes/drivers/ride_complete.py`.
 
-- [ ] Add failing tests for pending creation, timestamp-ordered query, segmenter/matcher composition, revision increment, shadow/on exposure, incomplete quality, provider failure retry state, and no fare mutation.
+- [ ] Add failing tests for pending creation, timestamp-ordered query, segmenter/matcher composition, revision increment, shadow/on exposure, incomplete quality, provider failure retry state, no fare mutation, and no legacy validator scheduling for v2 routes.
 - [ ] Run `pytest backend/tests/test_route_finalizer.py -q`; expect module-not-found.
-- [ ] Implement `mark_route_pending(ride_id, completion_point)` and `finalize_route(ride_id)`. Persist `observed_segments`, `road_matched_segments`, `route_quality`, revision, final status, and timestamps in one update.
-- [ ] Make completion mark the route pending after settlement inputs are frozen. Remove snapshot/geometry publication from the request hot path; do not change charged fare or lifecycle duration in the async finalizer.
+- [ ] Implement `mark_route_pending(ride_id, completion_point)` and `finalize_route(ride_id)`. Persist `observed_segments`, `road_matched_segments`, canonical `route_quality`, a compatible `rides.route_validation` summary, revision, final status, and timestamps in one update.
+- [ ] Make completion mark the route pending after settlement inputs are frozen. Remove snapshot/geometry publication and legacy `_validate_ride_route` scheduling for v2 routes from the request hot path; do not change charged fare or lifecycle duration in the async finalizer.
 - [ ] On failure, set `pending`, increment retry count, set exponential `next_retry_at`, and log only IDs/reason codes.
 - [ ] Run the targeted test and Ruff; expect PASS. Commit: `feat(routes): finalize versioned route geometry`.
 

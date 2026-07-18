@@ -12,4 +12,5 @@ ADRs capture the context, decision, and consequences of significant technical ch
 | [ADR-004](004-redis-in-process-fallback.md) | Transparent in-process Redis fallback for dev/test | Accepted |
 | [ADR-005](005-jwt-firebase-dual-auth.md) | Dual auth: Firebase ID token + short-lived HS256 JWT | Accepted |
 | [ADR-006](006-railway-deployment.md) | Railway as the primary hosting platform | Accepted (amended by ADR-007) |
-| [ADR-007](007-fly-primary-railway-standby.md) | Fly.io primary with Railway as warm standby (DNS cutover) | Accepted |
+| [ADR-007](007-fly-primary-railway-standby.md) | Fly.io primary with Railway as warm standby (DNS cutover) | Accepted (amended by ADR-008) |
+| [ADR-008](008-staging-canary-production-pipeline.md) | Staging → canary → production promotion pipeline | Accepted |

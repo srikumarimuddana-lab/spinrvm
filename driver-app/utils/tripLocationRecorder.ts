@@ -164,6 +164,34 @@ export class TripLocationRecorder {
     }
   }
 
+  async applyAcknowledgement(acknowledgement: TripLocationBatchAck): Promise<number> {
+    if (!isAcknowledgement(acknowledgement)) return 0;
+
+    const pendingPoints = await this.outbox.peek(acknowledgement.recording_session_id);
+    if (!pendingPoints.length) return 0;
+
+    const highestPersistedSequence = pendingPoints[pendingPoints.length - 1]?.sequence_number;
+    if (
+      highestPersistedSequence === undefined
+      || acknowledgement.acked_through > highestPersistedSequence
+    ) {
+      throw new Error('Trip location server acknowledgement exceeded the persisted point range.');
+    }
+
+    const acknowledgedPoints = pendingPoints.filter(
+      (point) => point.sequence_number <= acknowledgement.acked_through,
+    ).length;
+    if (!acknowledgedPoints) return 0;
+
+    await this.outbox.acknowledge(
+      acknowledgement.recording_session_id,
+      acknowledgement.acked_through,
+      acknowledgement.rejected ?? [],
+    );
+    this.lastFlushAt = this.now();
+    return acknowledgedPoints;
+  }
+
   async getRecorderHealth(rideId?: string): Promise<RecorderHealth> {
     const activeRideId = rideId ?? this.activeRideId ?? await this.resolveActiveRideId();
     const now = this.now();

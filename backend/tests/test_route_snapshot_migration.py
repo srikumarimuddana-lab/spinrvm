@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "234_ride_route_snapshot_revision.sql"
+MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "236_ride_route_snapshot_revision.sql"
 
 
 def test_snapshot_url_is_stored_with_its_route_revision() -> None:

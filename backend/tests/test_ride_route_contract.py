@@ -147,6 +147,40 @@ def test_ride_detail_keeps_legacy_route_fields_only_for_legacy_rows(monkeypatch)
     assert "actual_route_segments" not in ride
 
 
+def test_admin_detail_projects_the_same_v2_route_contract(monkeypatch):
+    matched = [{"coordinates": [[50.45, -104.62], [50.46, -104.63]]}]
+    client = _RouteSupabase(
+        {
+            "rides": [{"id": "ride_admin", "status": "completed"}],
+            "ride_routes": [
+                {
+                    "ride_id": "ride_admin",
+                    "route_schema_version": 2,
+                    "road_matched_segments": matched,
+                    "route_quality": {"coverage_ratio": 0.88, "missing_tail": True},
+                    "route_revision": 7,
+                    "processing_status": "incomplete",
+                    "snapshot_revision": 6,
+                    "road_polyline": [[50.45, -104.62], [50.46, -104.63]],
+                }
+            ],
+        }
+    )
+
+    async def _run_sync(operation):
+        return operation()
+
+    monkeypatch.setattr(ride_repo, "supabase", client)
+    monkeypatch.setattr(ride_repo, "run_sync", _run_sync)
+
+    ride = _run(ride_repo.get_ride_details_enriched("ride_admin"))
+
+    assert ride["actual_route_segments"] == matched
+    assert ride["route_geometry_status"] == "incomplete"
+    assert ride["snapshot_revision"] == 6
+    assert "road_polyline" not in ride
+
+
 def test_list_queries_do_not_load_route_geometry(monkeypatch):
     client = _RouteSupabase({"rides": [{"id": "ride_1", "status": "completed"}]})
 

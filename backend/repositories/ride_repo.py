@@ -560,22 +560,16 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
     ride["incentive_total"] = round(sum(float(c.get("bonus_amount") or 0) for c in incentive_claims), 2)
 
     # --- Route geometry (ride_routes side-table; off the hot rides row) ---
-    # New rides store phase_polylines + the OSRM road_polyline (and a copy of the
-    # per-phase scalars) in ride_routes; merge them under the keys the admin
-    # modal already reads. Old rides have no ride_routes row, so they keep
-    # whatever is still on the rides row (graceful fallback).
+    # Reuse the public detail projection so rider, driver, receipt, and admin
+    # surfaces receive the exact same versioned geometry contract. In
+    # particular, v2 route segments must never be collapsed into a continuous
+    # legacy polyline for a support or dispute review.
     def _get_route():
         return _single_row_from_res(supabase.table("ride_routes").select("*").eq("ride_id", ride_id).execute())
 
     route = await run_sync(_get_route)
     if route:
-        ride["road_polyline"] = route.get("road_polyline") or []
-        ride["road_polyline_pickup"] = route.get("road_polyline_pickup") or []
-        for _k in ("phase_polylines", "phase_distances", "phase_durations", "route_quality"):
-            if route.get(_k):
-                ride[_k] = route[_k]
-        ride["route_geometry_status"] = route.get("save_status") or ride.get("route_geometry_status")
-        ride["route_geometry_error"] = route.get("save_error") or ride.get("route_geometry_error")
+        _project_route_detail(ride, route)
 
     return ride
 

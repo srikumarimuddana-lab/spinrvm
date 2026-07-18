@@ -59,7 +59,7 @@ altitude, source, mocked, is_completion_fix
 - `captured_at` comes from the native location object and is immutable.
 - `received_at` is assigned by the backend and never replaces `captured_at`.
 - `sequence_number` increases within one recording session.
-- A new app process creates a new `recording_session_id`.
+- Foreground, headless, and restarted processes atomically resume the open ride session from SQLite; a new session is created only when no open session exists.
 - Foreground and background callbacks deduplicate through the same session/sequence contract.
 - The outbox has no retry-count deletion. It removes only server-acknowledged sequences.
 - Going offline stops new idle collection but does not delete unacknowledged active-ride points.

@@ -16,7 +16,7 @@ jobs:
   backend-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -24,7 +24,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Cache pip
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements.txt') }}
@@ -52,14 +52,14 @@ jobs:
   rider-app-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Cache node_modules
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: rider-app/node_modules
           key: rider-${{ runner.os }}-${{ hashFiles('rider-app/package-lock.json', 'rider-app/yarn.lock', 'rider-app/patches/**') }}
@@ -79,14 +79,14 @@ jobs:
   driver-app-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Cache node_modules
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: driver-app/node_modules
           key: driver-${{ runner.os }}-${{ hashFiles('driver-app/package-lock.json', 'driver-app/yarn.lock', 'driver-app/patches/**') }}
@@ -109,7 +109,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # Railway auto-deploys on push to develop. Poll /health until healthy
       # (up to 3 min) rather than sleeping a fixed 30s and eating the error.
@@ -138,7 +138,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup EAS
         uses: expo/expo-github-action@v8
@@ -146,7 +146,7 @@ jobs:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -181,7 +181,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/develop' && !contains(github.event.head_commit.message, '[build]')
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup EAS
         uses: expo/expo-github-action@v8
@@ -189,7 +189,7 @@ jobs:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 

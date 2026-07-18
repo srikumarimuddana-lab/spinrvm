@@ -77,7 +77,9 @@ def test_ride_detail_projects_matched_v2_segments_without_legacy_geometry(monkey
 
     assert ride["actual_route_segments"] == matched
     assert ride["route_quality"]["coverage_ratio"] == 0.91
+    assert ride["route_schema_version"] == 2
     assert ride["route_revision"] == 4
+    assert ride["snapshot_revision"] == 4
     assert ride["route_geometry_status"] == "complete"
     assert ride["route_snapshot_url"].endswith("ride-v4.png")
     assert "road_polyline" not in ride

@@ -55,7 +55,7 @@ Execute the appendices strictly in this order:
 
 - Migration `233_trip_location_route_integrity.sql` adds idempotency, route-revision, processing-state, completion, and quality fields plus indexes and feature settings.
 - `repositories/_base.py` provides conflict-safe bulk insert.
-- `utils/breadcrumbs.py` provides `persist_trip_location_batch(...) -> LocationBatchAck`.
+- `utils/breadcrumbs.py` provides `persist_trip_location_batch(...) -> LocationBatchPersistResult`; REST exposes only its `LocationBatchAck`.
 - `POST /drivers/location-batch` accepts one ordered session batch and returns a contiguous acknowledgement.
 
 ### Route finalization
@@ -84,24 +84,27 @@ Execute the appendices strictly in this order:
 7. Durable trip-location outbox.
 8. Unified recorder and background-task liveness.
 9. Foreground recorder integration and sensor timestamps.
-10. Driver completion-fix request.
-11. Backend completion-fix validation and persistence.
-12. Deterministic route segmentation.
-13. Chunked per-segment road matching.
-14. Replay-safe route finalizer.
-15. Finalizer loop and atomic recovery.
-16. Route-detail API projection.
-17. Segmented, revisioned snapshot generation.
-18. HTML and backend PDF route receipts.
-19. Shared route rendering utility.
-20. Rider ride details and client PDF.
-21. Rider ride-completed surface.
-22. Driver ride-details surface.
-23. Admin route map and lifecycle/coverage labels.
-24. Active-ride location-gap monitor.
-25. Three-year derived-route retention.
-26. End-to-end regression and physical-device matrix.
-27. Full verification, Graphify rebuild, and rollout gates.
+10. Separate ephemeral WebSocket live markers.
+11. Driver completion-fix request.
+12. Backend completion-fix validation and persistence.
+13. Deterministic route segmentation.
+14. Chunked per-segment road matching.
+15. Replay-safe route finalizer.
+16. Finalizer loop and atomic recovery.
+17. Re-finalization after late acknowledged points.
+18. Route-detail API projection.
+19. Segmented, revisioned snapshot generation.
+20. HTML and backend PDF route receipts.
+21. Shared route rendering utility.
+22. Rider ride details and client PDF.
+23. Rider ride-completed surface.
+24. Driver ride-details surface.
+25. Admin route map and lifecycle/coverage labels.
+26. Active-ride GPS heartbeat and monitor.
+27. Gap-monitor lifecycle wiring.
+28. Three-year derived-route retention.
+29. End-to-end regression and physical-device matrix.
+30. Full verification, Graphify rebuild, and rollout gates.
 
 ## Cross-Task Data Contracts
 

@@ -60,10 +60,12 @@ def _project_route_detail(ride: Dict[str, Any], route: Dict[str, Any]) -> None:
             ride.pop(key, None)
         ride["actual_route_segments"] = route.get("road_matched_segments") or route.get("observed_segments") or []
         ride["route_quality"] = route.get("route_quality") or {}
+        ride["route_schema_version"] = schema_version
         ride["route_revision"] = int(route.get("route_revision") or 0)
         ride["route_geometry_status"] = route.get("processing_status") or "pending"
 
         snapshot_revision = int(route.get("snapshot_revision") or 0)
+        ride["snapshot_revision"] = snapshot_revision
         if snapshot_revision == ride["route_revision"] and route.get("snapshot_url"):
             ride["route_snapshot_url"] = route["snapshot_url"]
         else:

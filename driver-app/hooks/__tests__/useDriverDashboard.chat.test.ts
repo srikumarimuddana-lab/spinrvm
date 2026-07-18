@@ -22,6 +22,14 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
   removeItem: jest.fn(() => Promise.resolve()),
 }));
 
+// driverStore now imports tripLocationRecorder → expo-location; without a stub
+// the native module init throws at import ("Cannot read properties of undefined")
+// and the whole suite fails to load.
+jest.mock('expo-location', () => ({
+  getCurrentPositionAsync: jest.fn(() => Promise.resolve(null)),
+  Accuracy: { High: 6, Balanced: 4 },
+}));
+
 jest.mock('../../config', () => ({ API_URL: 'http://localhost:8000' }));
 jest.mock('@shared/api/client', () => ({
   __esModule: true,

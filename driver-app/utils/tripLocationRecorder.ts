@@ -13,6 +13,12 @@ const ACTIVE_RIDE_KEY = 'spinr_trip_location_active_ride';
 const FLUSH_INTERVAL_MS = 10_000;
 const FLUSH_POINT_THRESHOLD = 25;
 const ACTIVE_TRIP_WATCHDOG_MS = 30_000;
+const COMPLETION_FIX_TIMEOUT_MS = 10_000;
+// Server rejections the outbox can never satisfy by retrying: 409 (ride no
+// longer active, e.g. cancelled), 410 (gone), 422 (points outside the
+// completed-ride retention window). These quarantine the session instead of
+// blocking the flush queue behind it forever.
+const PERMANENT_REJECTION_STATUSES = new Set([409, 410, 422]);
 
 export interface TripLocationBatchRequest {
   ride_id: string;
@@ -54,7 +60,7 @@ export interface RecorderHealth {
 
 type TripLocationOutbox = Pick<
   typeof tripLocationOutbox,
-  'startSession' | 'enqueue' | 'listPendingSessions' | 'peek' | 'acknowledge' | 'pendingCount' | 'closeSession'
+  'startSession' | 'enqueue' | 'listPendingSessions' | 'peek' | 'acknowledge' | 'quarantineSession' | 'pendingCount' | 'closeSession'
 >;
 
 export interface TripLocationRecorderOptions {
@@ -68,7 +74,15 @@ type NativeLocationWithElapsedTime = Location.LocationObject & {
 };
 
 function isAcknowledgement(value: TripLocationBatchAck): value is TripLocationBatchAck & { acked_through: number } {
-  return Number.isInteger(value.acked_through) && value.acked_through >= 0;
+  return value.acked_through !== null && Number.isInteger(value.acked_through) && value.acked_through >= 0;
+}
+
+/** Best-effort HTTP status extraction from an unknown transport error (Axios or fetch-shaped). */
+function httpStatusFromError(error: unknown): number | null {
+  if (typeof error !== 'object' || error === null) return null;
+  const candidate = error as { status?: unknown; response?: { status?: unknown } };
+  const status = candidate.response?.status ?? candidate.status;
+  return typeof status === 'number' && Number.isInteger(status) ? status : null;
 }
 
 function sensorMonotonicMilliseconds(location: NativeLocationWithElapsedTime): number {
@@ -153,14 +167,51 @@ export class TripLocationRecorder {
   }
 
   async captureCompletionFix(rideId: string): Promise<CompletionCaptureResult> {
+    // The completion POST must never be blocked by a hanging GPS request or a
+    // broken local outbox — the driver has to be able to end the ride. A null
+    // point falls through to the server's missing-tail path; the driver then
+    // confirms completion with a reason.
+    const location = await this.currentPositionWithinTimeout(COMPLETION_FIX_TIMEOUT_MS);
+    let point: TripLocationPoint | null = null;
+    if (location) {
+      try {
+        point = await this.recordNativeFix(location, 'completion', rideId, true);
+      } catch {
+        point = null;
+      }
+    }
+    return { point, pendingCount: await this.safePendingCount(rideId) };
+  }
+
+  private async currentPositionWithinTimeout(timeoutMs: number): Promise<Location.LocationObject | null> {
+    // getCurrentPositionAsync has no timeout and can hang indefinitely on a weak
+    // fix (parkade, urban canyon); racing it guarantees completion stays reachable.
+    return new Promise<Location.LocationObject | null>((resolve) => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const finish = (value: Location.LocationObject | null) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        resolve(value);
+      };
+      timer = setTimeout(() => finish(null), timeoutMs);
+      try {
+        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
+          .then(finish)
+          .catch(() => finish(null));
+      } catch {
+        // A synchronously-throwing/absent native module must not trap the ride.
+        finish(null);
+      }
+    });
+  }
+
+  private async safePendingCount(rideId: string): Promise<number> {
     try {
-      const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      const point = await this.recordNativeFix(location, 'completion', rideId, true);
-      return { point, pendingCount: await this.outbox.pendingCount(rideId) };
+      return await this.outbox.pendingCount(rideId);
     } catch {
-      // Completion remains possible after the driver explicitly explains why a
-      // fresh fix is unavailable. The caller receives no coordinate from this path.
-      return { point: null, pendingCount: await this.outbox.pendingCount(rideId) };
+      return 0;
     }
   }
 
@@ -178,14 +229,21 @@ export class TripLocationRecorder {
       throw new Error('Trip location server acknowledgement exceeded the persisted point range.');
     }
 
+    // The completion endpoint persists only the single completion fix it was
+    // sent, so its acknowledgement licenses deleting just that point
+    // (sequence === acked_through). The queued trip tail below it was captured
+    // in-ride and must survive for the regular flush loop — deleting the whole
+    // `<= acked_through` prefix here silently destroyed never-uploaded
+    // breadcrumbs, losing exactly the route tail this pipeline exists to keep.
     const acknowledgedPoints = pendingPoints.filter(
-      (point) => point.sequence_number <= acknowledgement.acked_through,
+      (point) => point.sequence_number === acknowledgement.acked_through,
     ).length;
     if (!acknowledgedPoints) return 0;
 
     await this.outbox.acknowledge(
       acknowledgement.recording_session_id,
       acknowledgement.acked_through,
+      { from: acknowledgement.acked_through, to: acknowledgement.acked_through },
       acknowledgement.rejected ?? [],
     );
     this.lastFlushAt = this.now();
@@ -242,8 +300,8 @@ export class TripLocationRecorder {
     let uploadedPoints = 0;
     let acknowledgedPoints = 0;
     this.lastFlushAttemptAt = this.now();
-    try {
-      for (const session of sessions) {
+    for (const session of sessions) {
+      try {
         while (true) {
           const points = await this.outbox.peek(session.recording_session_id);
           if (!points.length) break;
@@ -261,13 +319,19 @@ export class TripLocationRecorder {
             return { uploaded_points: uploadedPoints, acknowledged_points: acknowledgedPoints, skipped: false };
           }
 
+          const lowestSubmittedSequence = points[0]?.sequence_number;
           const highestSubmittedSequence = points[points.length - 1]?.sequence_number;
-          if (highestSubmittedSequence === undefined || acknowledgement.acked_through > highestSubmittedSequence) {
+          if (
+            lowestSubmittedSequence === undefined
+            || highestSubmittedSequence === undefined
+            || acknowledgement.acked_through > highestSubmittedSequence
+          ) {
             throw new Error('Trip location server acknowledgement exceeded the submitted batch.');
           }
           await this.outbox.acknowledge(
             session.recording_session_id,
             acknowledgement.acked_through,
+            { from: lowestSubmittedSequence, to: highestSubmittedSequence },
             acknowledgement.rejected ?? [],
           );
           acknowledgedPoints += points.filter((point) => point.sequence_number <= acknowledgement.acked_through).length;
@@ -275,12 +339,23 @@ export class TripLocationRecorder {
 
           if (acknowledgement.acked_through < highestSubmittedSequence) break;
         }
+      } catch (error) {
+        const status = httpStatusFromError(error);
+        if (status !== null && PERMANENT_REJECTION_STATUSES.has(status)) {
+          // The server will never accept this session (e.g. the ride was
+          // cancelled, or its points fall outside the retention window).
+          // Quarantine it and continue so it can't wedge every later session
+          // at the head of the durable queue forever.
+          await this.outbox.quarantineSession(session.recording_session_id, `http_${status}`);
+          continue;
+        }
+        // Retryable failure (network, timeout, 5xx, throttling): stop here and
+        // let the next scheduled flush retry from the same durable queue.
+        this.lastUploadFailureAt = this.now();
+        throw error;
       }
-      return { uploaded_points: uploadedPoints, acknowledged_points: acknowledgedPoints, skipped: false };
-    } catch (error) {
-      this.lastUploadFailureAt = this.now();
-      throw error;
     }
+    return { uploaded_points: uploadedPoints, acknowledged_points: acknowledgedPoints, skipped: false };
   }
 
   private async resolveActiveRideId(): Promise<string | null> {

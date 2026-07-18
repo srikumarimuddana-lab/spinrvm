@@ -1,5 +1,7 @@
-import * as Crypto from 'expo-crypto';
-import * as SQLite from 'expo-sqlite';
+// Type-only imports: the native expo modules are require()d lazily at call
+// time so importing this module (via driverStore in Jest / Expo Go contexts
+// without the native runtime) never touches native bindings.
+import type * as SQLite from 'expo-sqlite';
 
 export type TripLocationSource = 'foreground' | 'background' | 'completion';
 
@@ -33,6 +35,18 @@ export interface PendingTripLocationSession {
 export interface TripLocationRejection {
   sequence_number: number;
   reason: string;
+}
+
+/**
+ * The inclusive sequence range that was actually submitted in the batch a
+ * server acknowledgement refers to. Acknowledgements only license deleting
+ * points the server has actually seen — never the whole `<= acked_through`
+ * prefix, which would destroy queued-but-never-uploaded points (e.g. the
+ * pending tail behind a completion fix).
+ */
+export interface TripLocationSubmittedRange {
+  from: number;
+  to: number;
 }
 
 type TripLocationOutboxRow = TripLocationPoint & {
@@ -164,8 +178,23 @@ export class TripLocationOutbox {
   private databasePromise: Promise<TripLocationOutboxDatabase> | null = null;
 
   constructor(options: TripLocationOutboxOptions = {}) {
-    this.openDatabase = options.openDatabase ?? (async () => SQLite.openDatabaseAsync(DATABASE_NAME));
-    this.randomUUID = options.randomUUID ?? Crypto.randomUUID;
+    // TODO(ios-backup): expo-sqlite / expo-file-system (SDK 55: 55.0.18 /
+    // 55.0.22) expose no API to set NSURLIsExcludedFromBackupKey, so on iOS
+    // this raw-GPS database (and its -wal/-shm siblings) is still included in
+    // iCloud/iTunes device backups. Android backup is disabled app-wide via
+    // android.allowBackup=false in app.config.ts. Residual risk is iOS-only;
+    // revisit when Expo ships a backup-exclusion API (new FileSystem
+    // File/Directory surface) or add a tiny config plugin/native module that
+    // flags the file after first open.
+    this.openDatabase = options.openDatabase ?? (async () => {
+      // Lazy require keeps native module resolution out of module load.
+      const sqlite: typeof SQLite = require('expo-sqlite');
+      return sqlite.openDatabaseAsync(DATABASE_NAME);
+    });
+    this.randomUUID = options.randomUUID ?? (() => {
+      const crypto: typeof import('expo-crypto') = require('expo-crypto');
+      return crypto.randomUUID();
+    });
     this.now = options.now ?? (() => new Date().toISOString());
   }
 
@@ -282,10 +311,17 @@ export class TripLocationOutbox {
   async acknowledge(
     recordingSessionId: string,
     acknowledgedThrough: number,
+    submitted: TripLocationSubmittedRange,
     rejected: TripLocationRejection[] = [],
   ): Promise<void> {
     if (!Number.isInteger(acknowledgedThrough) || acknowledgedThrough < 0) {
       throw new Error('Trip location acknowledgements require a non-negative sequence number.');
+    }
+    if (
+      !Number.isInteger(submitted.from) || !Number.isInteger(submitted.to)
+      || submitted.from < 0 || submitted.to < submitted.from
+    ) {
+      throw new Error('Trip location acknowledgements require the submitted sequence range.');
     }
     if (rejected.some(({ sequence_number }) => !Number.isInteger(sequence_number) || sequence_number < 0)) {
       throw new Error('Trip location rejection sequence numbers must be non-negative integers.');
@@ -310,9 +346,50 @@ export class TripLocationOutbox {
           [rejection.reason, this.now(), recordingSessionId, rejection.sequence_number],
         );
       }
+      // Delete only what was actually submitted in the acknowledged batch and
+      // is covered by acked_through — never the whole prefix. A completion-fix
+      // ack (single high sequence) must leave the queued tail below it intact
+      // for the next flush; a flush ack (contiguous prefix batch) deletes the
+      // exact same rows it always did.
       await transaction.runAsync(
-        'DELETE FROM trip_location_outbox WHERE session_id = ? AND sequence_number <= ?',
-        [recordingSessionId, acknowledgedThrough],
+        'DELETE FROM trip_location_outbox WHERE session_id = ? AND sequence_number >= ? AND sequence_number <= ?',
+        [recordingSessionId, submitted.from, Math.min(acknowledgedThrough, submitted.to)],
+      );
+    });
+  }
+
+  /**
+   * Permanently dispose of a session the server has terminally rejected
+   * (e.g. 409 ride-not-active, 422 outside the retention window): copy every
+   * still-pending point into the quarantine table with the given reason, then
+   * remove them from the upload queue so the session can no longer poison the
+   * head of the flush loop.
+   */
+  async quarantineSession(recordingSessionId: string, reason: string): Promise<void> {
+    if (!recordingSessionId || !reason) {
+      throw new Error('Quarantining a trip location session requires a session id and a reason.');
+    }
+
+    const database = await this.getDatabase();
+    await database.withExclusiveTransactionAsync(async (transaction) => {
+      await transaction.runAsync(
+        `INSERT INTO trip_location_quarantine (
+          session_id, sequence_number, ride_id, captured_at, monotonic_ms,
+          lat, lng, accuracy, speed, heading, altitude, source, mocked,
+          is_completion_fix, rejection_reason, quarantined_at
+        )
+        SELECT
+          session_id, sequence_number, ride_id, captured_at, monotonic_ms,
+          lat, lng, accuracy, speed, heading, altitude, source, mocked,
+          is_completion_fix, ?, ?
+        FROM trip_location_outbox
+        WHERE session_id = ?
+        ON CONFLICT(session_id, sequence_number) DO NOTHING`,
+        [reason, this.now(), recordingSessionId],
+      );
+      await transaction.runAsync(
+        'DELETE FROM trip_location_outbox WHERE session_id = ?',
+        [recordingSessionId],
       );
     });
   }

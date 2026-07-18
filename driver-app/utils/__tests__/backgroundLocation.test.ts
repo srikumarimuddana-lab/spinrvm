@@ -196,7 +196,7 @@ describe('background durable trip recording', () => {
   it('deletes only after the server returns an acknowledgement', async () => {
     await handleBackgroundLocationTask({ data: { locations: [makeLocation(0)] } as any });
 
-    expect(mockedOutbox.acknowledge).toHaveBeenCalledWith('session-1', 0, []);
+    expect(mockedOutbox.acknowledge).toHaveBeenCalledWith('session-1', 0, { from: 0, to: 0 }, []);
     expect(mockQueuedPoints).toHaveLength(0);
     expect(AsyncStorage.setItem).not.toHaveBeenCalledWith('spinr_bg_location_queue', expect.anything());
   });

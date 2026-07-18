@@ -171,6 +171,14 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             backgroundColor: '#FFFFFF'
         },
         package: BUNDLE_ID,
+        // Exclude the app from Android Auto Backup: the durable trip-location
+        // outbox (expo-sqlite: spinr-trip-location-outbox.db) persists raw
+        // continuous GPS, which must never replicate to Google's cloud backup
+        // outside the consented Canadian-residency data flow (PIPEDA). Tokens
+        // already live in SecureStore (backup-excluded); nothing else here
+        // depends on autobackup. iOS backup exclusion is tracked at the DB-open
+        // site in tripLocationOutbox.ts (no Expo API for it yet).
+        allowBackup: false,
         // CAMERA is needed for in-WebView getUserMedia — Stripe's embedded
         // identity onboarding (stripe-onboarding.tsx) captures the driver's
         // government ID live in the page. (The native expo-image-picker

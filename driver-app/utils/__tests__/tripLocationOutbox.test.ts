@@ -137,15 +137,47 @@ class MemorySqliteDatabase {
       return;
     }
     if (sql.includes('INSERT INTO trip_location_quarantine')) {
-      const [rejectionReason, , sessionId, sequence] = params as [string, string, string, number];
-      const point = this.outbox.get(`${sessionId}:${sequence}`);
-      if (point) this.quarantine.set(`${sessionId}:${sequence}`, { ...point, rejection_reason: rejectionReason });
+      const rejectionReason = params[0] as string;
+      if (sql.includes('sequence_number = ?')) {
+        // Per-point rejection: params [reason, quarantined_at, session_id, sequence].
+        const sessionId = params[2] as string;
+        const sequence = params[3] as number;
+        const point = this.outbox.get(`${sessionId}:${sequence}`);
+        if (point && !this.quarantine.has(`${sessionId}:${sequence}`)) {
+          this.quarantine.set(`${sessionId}:${sequence}`, { ...point, rejection_reason: rejectionReason });
+        }
+      } else {
+        // Whole-session quarantine: params [reason, quarantined_at, session_id].
+        const sessionId = params[2] as string;
+        for (const [key, point] of this.outbox) {
+          if (point.recording_session_id === sessionId && !this.quarantine.has(key)) {
+            this.quarantine.set(key, { ...point, rejection_reason: rejectionReason });
+          }
+        }
+      }
       return;
     }
-    if (sql.includes('DELETE FROM trip_location_outbox') && sql.includes('sequence_number <= ?')) {
-      const [sessionId, acknowledgedThrough] = params as [string, number];
-      for (const [key, point] of this.outbox) {
-        if (point.recording_session_id === sessionId && point.sequence_number <= acknowledgedThrough) this.outbox.delete(key);
+    if (sql.includes('DELETE FROM trip_location_outbox')) {
+      const sessionId = params[0] as string;
+      if (sql.includes('sequence_number >= ?')) {
+        // Acknowledgement range delete: params [session_id, from, to].
+        const from = params[1] as number;
+        const to = params[2] as number;
+        for (const [key, point] of this.outbox) {
+          if (point.recording_session_id === sessionId && point.sequence_number >= from && point.sequence_number <= to) {
+            this.outbox.delete(key);
+          }
+        }
+      } else if (sql.includes('sequence_number <= ?')) {
+        const acknowledgedThrough = params[1] as number;
+        for (const [key, point] of this.outbox) {
+          if (point.recording_session_id === sessionId && point.sequence_number <= acknowledgedThrough) this.outbox.delete(key);
+        }
+      } else {
+        // Whole-session delete: params [session_id].
+        for (const [key, point] of this.outbox) {
+          if (point.recording_session_id === sessionId) this.outbox.delete(key);
+        }
       }
       return;
     }
@@ -245,15 +277,48 @@ describe('TripLocationOutbox', () => {
     const rejected = await outbox.enqueue(makeFix());
     const remaining = await outbox.enqueue(makeFix());
 
-    await outbox.acknowledge(first.recording_session_id, rejected.sequence_number, [
-      { sequence_number: rejected.sequence_number, reason: 'invalid_coordinate' },
-    ]);
+    await outbox.acknowledge(
+      first.recording_session_id,
+      rejected.sequence_number,
+      { from: first.sequence_number, to: remaining.sequence_number },
+      [{ sequence_number: rejected.sequence_number, reason: 'invalid_coordinate' }],
+    );
 
     expect(database.outbox.has(`${first.recording_session_id}:${first.sequence_number}`)).toBe(false);
     expect(database.outbox.has(`${rejected.recording_session_id}:${rejected.sequence_number}`)).toBe(false);
     expect(database.outbox.has(`${remaining.recording_session_id}:${remaining.sequence_number}`)).toBe(true);
     expect(database.quarantine.get(`${rejected.recording_session_id}:${rejected.sequence_number}`)?.rejection_reason)
       .toBe('invalid_coordinate');
+  });
+
+  it('only deletes what a batch actually submitted, preserving the pending tail', async () => {
+    const outbox = createOutbox();
+    const tail = await outbox.enqueue(makeFix());
+    const completion = await outbox.enqueue(makeFix({ is_completion_fix: true }));
+
+    // A completion acknowledgement covers only the completion fix's own
+    // sequence — the in-ride tail below it must remain queued for the next flush.
+    await outbox.acknowledge(
+      completion.recording_session_id,
+      completion.sequence_number,
+      { from: completion.sequence_number, to: completion.sequence_number },
+    );
+
+    expect(database.outbox.has(`${completion.recording_session_id}:${completion.sequence_number}`)).toBe(false);
+    expect(database.outbox.has(`${tail.recording_session_id}:${tail.sequence_number}`)).toBe(true);
+  });
+
+  it('quarantines an entire poisoned session and clears it from the queue', async () => {
+    const outbox = createOutbox();
+    const a = await outbox.enqueue(makeFix());
+    const b = await outbox.enqueue(makeFix());
+
+    await outbox.quarantineSession(a.recording_session_id, 'http_409');
+
+    expect(database.outbox.has(`${a.recording_session_id}:${a.sequence_number}`)).toBe(false);
+    expect(database.outbox.has(`${b.recording_session_id}:${b.sequence_number}`)).toBe(false);
+    expect(database.quarantine.get(`${a.recording_session_id}:${a.sequence_number}`)?.rejection_reason).toBe('http_409');
+    expect(await outbox.pendingCount('ride-1')).toBe(0);
   });
 
   it('surfaces local disk failures instead of treating a point as queued', async () => {

@@ -188,6 +188,19 @@ async def prepare_completion_location(
     """
     fix = request.completion_fix
     if fix is None:
+        try:
+            # The endpoint remains backward compatible, but the finalizer and
+            # receipts need an explicit audit signal that this route has no
+            # device-captured tail rather than silently treating it as full.
+            await db_supabase.update_one(
+                "ride_routes",
+                {"ride_id": ride["id"]},
+                {"route_schema_version": 2, "completion_point": {"missing_tail": True}},
+                upsert=True,
+            )
+        except Exception as exc:
+            logger.error("completion missing-tail marker failed for ride %s", ride.get("id"), exc_info=True)
+            raise HTTPException(status_code=503, detail="Unable to record completion location status") from exc
         return CompletionLocationOutcome(
             location_ack=None,
             legacy_client_missing_tail=True,

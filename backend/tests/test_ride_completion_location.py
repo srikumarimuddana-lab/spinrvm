@@ -189,4 +189,9 @@ def test_legacy_completion_without_a_tail_remains_supported(monkeypatch: pytest.
     assert outcome.legacy_client_missing_tail is True
     assert outcome.location_ack is None
     persist.assert_not_awaited()
-    update.assert_not_awaited()
+    update.assert_awaited_once_with(
+        "ride_routes",
+        {"ride_id": "ride_1"},
+        {"route_schema_version": 2, "completion_point": {"missing_tail": True}},
+        upsert=True,
+    )

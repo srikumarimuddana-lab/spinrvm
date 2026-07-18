@@ -64,43 +64,46 @@ def _pod_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}"
 
 
-async def _delete_pending_route_snapshot_objects() -> int:
-    """Delete queued private route images before their DB rows are scrubbed.
+async def _delete_expired_route_snapshot_objects() -> int:
+    """Delete every private route image whose durable retention deadline passed.
 
-    The SQL purge marks expired objects pending but deliberately retains their
-    paths. If Storage removal fails, the next daily run sees the same durable
-    queue entry and retries instead of forgetting an image that still exists.
+    The append-only ledger retains every revision's object path, even after a
+    late GPS batch clears the current route projection. If Storage removal
+    fails, ``deleted_at`` remains NULL and the next daily run retries it.
     """
     if not supabase:
         raise RuntimeError("Supabase client not configured")
 
     def _pending_rows() -> list[dict]:
         response = (
-            supabase.table("ride_routes")
-            .select("ride_id,snapshot_object_path")
-            .not_.is_("snapshot_purge_pending_at", "null")
-            .not_.is_("snapshot_object_path", "null")
+            supabase.table("ride_route_snapshot_objects")
+            .select("ride_id,storage_bucket,object_path")
+            .is_("deleted_at", "null")
+            .lte("retention_due_at", datetime.now(timezone.utc).isoformat())
             .limit(_ROUTE_SNAPSHOT_PURGE_BATCH_SIZE)
             .execute()
         )
         rows = getattr(response, "data", None)
         if not isinstance(rows, list):
-            raise RuntimeError("route snapshot purge query returned an invalid response")
+            raise RuntimeError("route snapshot ledger query returned an invalid response")
         return [
             row
             for row in rows
-            if isinstance(row, dict) and row.get("ride_id") and isinstance(row.get("snapshot_object_path"), str)
+            if isinstance(row, dict)
+            and isinstance(row.get("storage_bucket"), str)
+            and isinstance(row.get("object_path"), str)
+            and row.get("storage_bucket") == _PRIVATE_ROUTE_SNAPSHOT_BUCKET
         ]
 
     try:
         pending = await run_sync(_pending_rows)
     except Exception:
-        logger.exception("retention_purge: route snapshot purge query failed")
+        logger.exception("retention_purge: route snapshot ledger query failed")
         raise
     if not pending:
         return 0
 
-    paths = [str(row["snapshot_object_path"]) for row in pending]
+    paths = [str(row["object_path"]) for row in pending]
     try:
         await run_sync(lambda: supabase.storage.from_(_PRIVATE_ROUTE_SNAPSHOT_BUCKET).remove(paths))
     except Exception:
@@ -111,16 +114,30 @@ async def _delete_pending_route_snapshot_objects() -> int:
         try:
             await run_sync(
                 lambda row=row: (
-                    supabase.table("ride_routes")
-                    .update({"snapshot_object_path": None, "snapshot_purge_pending_at": None})
-                    .eq("ride_id", row["ride_id"])
-                    .eq("snapshot_object_path", row["snapshot_object_path"])
+                    supabase.table("ride_route_snapshot_objects")
+                    .update({"deleted_at": datetime.now(timezone.utc).isoformat()})
+                    .eq("storage_bucket", row["storage_bucket"])
+                    .eq("object_path", row["object_path"])
                     .execute()
                 )
             )
         except Exception:
-            logger.exception("retention_purge: route snapshot purge acknowledgement failed")
+            logger.exception("retention_purge: route snapshot ledger acknowledgement failed")
             raise
+        if row.get("ride_id"):
+            try:
+                await run_sync(
+                    lambda row=row: (
+                        supabase.table("ride_routes")
+                        .update({"snapshot_object_path": None, "snapshot_purge_pending_at": None})
+                        .eq("ride_id", row["ride_id"])
+                        .eq("snapshot_object_path", row["object_path"])
+                        .execute()
+                    )
+                )
+            except Exception:
+                logger.exception("retention_purge: current route snapshot reference clear failed")
+                raise
     return len(pending)
 
 
@@ -179,8 +196,8 @@ async def run_retention_purge_tick(dry_run: bool = False) -> Optional[dict]:
         raise RuntimeError("purge_trip_route_geometry returned an invalid response")
 
     deleted_snapshot_objects = 0
-    if not dry_run and int(route_data.get("route_snapshot_objects_pending") or 0) > 0:
-        deleted_snapshot_objects = await _delete_pending_route_snapshot_objects()
+    if not dry_run:
+        deleted_snapshot_objects = await _delete_expired_route_snapshot_objects()
         if deleted_snapshot_objects:
             # Mark rows anonymous only after their actual Storage objects were
             # deleted and their durable paths cleared above.

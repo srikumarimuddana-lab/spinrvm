@@ -7,6 +7,7 @@ and is safe to replay as a newer route revision arrives.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
@@ -17,14 +18,19 @@ except ImportError:
     import db_supabase  # type: ignore
 
 try:
+    from .datetime_utils import parse_iso_utc
     from .route_distance import compute_segmented_road_route
     from .route_segments import SegmentedRoute, segment_route
 except ImportError:
+    from utils.datetime_utils import parse_iso_utc  # type: ignore
     from utils.route_distance import compute_segmented_road_route  # type: ignore
     from utils.route_segments import SegmentedRoute, segment_route  # type: ignore
 
 
 logger = logging.getLogger(__name__)
+
+ROUTE_FINALIZER_INTERVAL_SECONDS = 15
+ROUTE_CLAIM_STALE_SECONDS = 5 * 60
 
 
 def _now() -> datetime:
@@ -125,6 +131,86 @@ async def _schedule_retry(ride_id: str, route_row: Optional[Dict[str, Any]], rea
         upsert=True,
     )
     return {"processing_status": "pending", "retry_count": retry_count, "next_retry_at": next_retry_at}
+
+
+def _is_due(route: Dict[str, Any], now: datetime) -> bool:
+    retry_at = parse_iso_utc(route.get("next_retry_at"))
+    return retry_at is None or retry_at <= now
+
+
+async def claim_next_pending_route(candidates: Optional[list[Dict[str, Any]]] = None) -> Optional[str]:
+    """Atomically claim one due pending route; losers receive ``None``."""
+    if candidates is None:
+        candidates = await db_supabase.get_rows(
+            "ride_routes",
+            {"processing_status": "pending"},
+            order="next_retry_at",
+            limit=20,
+        )
+    now = _now()
+    for route in candidates:
+        ride_id = route.get("ride_id")
+        if not ride_id or not _is_due(route, now):
+            continue
+        updated = await db_supabase.update_one(
+            "ride_routes",
+            {"ride_id": ride_id, "processing_status": "pending"},
+            {"processing_status": "processing", "processing_claimed_at": now},
+        )
+        if updated is not None:
+            return str(ride_id)
+    return None
+
+
+async def recover_stale_route_claims() -> int:
+    """Return processing claims older than five minutes to the durable queue."""
+    routes = await db_supabase.get_rows(
+        "ride_routes",
+        {"processing_status": "processing"},
+        order="processing_claimed_at",
+        limit=100,
+    )
+    recovered = 0
+    now = _now()
+    for route in routes:
+        claimed_at = parse_iso_utc(route.get("processing_claimed_at"))
+        ride_id = route.get("ride_id")
+        if not ride_id or claimed_at is None or (now - claimed_at).total_seconds() <= ROUTE_CLAIM_STALE_SECONDS:
+            continue
+        updated = await db_supabase.update_one(
+            "ride_routes",
+            {
+                "ride_id": ride_id,
+                "processing_status": "processing",
+                "processing_claimed_at": route.get("processing_claimed_at"),
+            },
+            {"processing_status": "pending", "processing_claimed_at": None, "next_retry_at": now},
+        )
+        if updated is not None:
+            recovered += 1
+    return recovered
+
+
+async def route_finalizer_tick() -> int:
+    """Recover stale work, atomically claim one route, then finalize it."""
+    await recover_stale_route_claims()
+    ride_id = await claim_next_pending_route()
+    if not ride_id:
+        return 0
+    await finalize_route(ride_id)
+    return 1
+
+
+async def route_finalizer_loop(interval_seconds: int = ROUTE_FINALIZER_INTERVAL_SECONDS) -> None:
+    """Replay-safe 15-second loop for versioned route finalization."""
+    while True:
+        try:
+            await route_finalizer_tick()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.error("route finalizer tick failed", exc_info=True)
+        await asyncio.sleep(interval_seconds)
 
 
 async def finalize_route(ride_id: str) -> Dict[str, Any]:

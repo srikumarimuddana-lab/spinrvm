@@ -23,11 +23,11 @@ Required context: complete Tasks 1–20. Execute Tasks 21–30 in order.
 
 ### Task 23: Rider ride-completed surface
 
-**Files:** Modify `rider-app/app/ride-completed.tsx`; create `rider-app/app/__tests__/ride-completed-route.test.tsx`.
+**Files:** Modify `rider-app/app/ride-completed.tsx`, `rider-app/store/rideStore.ts`; create `rider-app/app/__tests__/ride-completed-route.test.tsx`.
 
 - [ ] Test one polyline per actual segment, snapshot revision, incomplete note, planned label, and lifecycle duration independent from GPS coverage.
 - [ ] Run the targeted test; expect flat-polyline/fallback failures.
-- [ ] Use the shared segment utility and remove transparent Directions reconstruction for completed actual routes. Keep planned preview separate and labelled.
+- [ ] Add the optional v2 route fields to the local `Ride` interface. Use the shared segment utility and remove transparent Directions reconstruction for completed actual routes. Keep planned preview separate and labelled.
 - [ ] Run test and lint; expect PASS. Commit: `fix(rider): preserve route gaps after completion`.
 
 ### Task 24: Driver ride-details surface

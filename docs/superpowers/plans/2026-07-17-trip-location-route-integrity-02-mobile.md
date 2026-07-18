@@ -17,7 +17,7 @@ Required context: read the [master plan](2026-07-17-trip-location-route-integrit
 
 **Produces:** `TripLocationPoint`, `TripLocationOutbox`, `getTripLocationOutbox()`.
 
-- [ ] Write failing tests for atomic sequence allocation, sensor-time preservation, ordered 500-point peek, restart recovery, contiguous acknowledgement, permanent-rejection quarantine, and no retry deletion.
+- [ ] Write failing tests for atomic sequence allocation, reuse of one open session per ride across JS contexts, sensor-time preservation, ordered 500-point peek, restart recovery, contiguous acknowledgement, permanent-rejection quarantine, surfaced disk-write failure, and no retry deletion.
 - [ ] Run `yarn test utils/__tests__/tripLocationOutbox.test.ts --runInBand`; expect module-not-found.
 - [ ] Define the persisted contract:
 
@@ -45,11 +45,13 @@ export interface TripLocationPoint {
 
 **Files:** Create `driver-app/utils/tripLocationRecorder.ts`; modify `driver-app/utils/backgroundLocation.ts`, `driver-app/utils/__tests__/backgroundLocation.test.ts`.
 
-**Consumes:** `TripLocationOutbox`. **Produces:** `recordNativeFix`, `flushPending`, `captureCompletionFix`, `getRecorderHealth`.
+**Consumes:** `TripLocationOutbox`. **Produces:** `startRide`, `recordNativeFix`, `flushPending(transport)`, `captureCompletionFix`, `getRecorderHealth`.
 
 - [ ] Update tests to require `Location.hasStartedLocationUpdatesAsync(TASK_NAME)`, sensor timestamps, outbox enqueue before fetch, retained points on network/401/503 failure, and acknowledgement-driven deletion.
 - [ ] Run `yarn test utils/__tests__/backgroundLocation.test.ts --runInBand`; expect failures against registration checks and AsyncStorage queues.
-- [ ] Implement native-fix conversion with `captured_at: new Date(loc.timestamp).toISOString()` and enqueue before network I/O. Serialize `flushPending`; run it at most every 10 seconds or at 25 queued points, plus background/completion flushes, and apply only returned acknowledgements.
+- [ ] `startRide(rideId)` atomically reuses/creates the open SQLite session, allowing foreground and headless JS contexts to share sequence state. Background `recordNativeFix` resolves that open session when no ride ID is available.
+- [ ] Implement native-fix conversion with `captured_at: new Date(loc.timestamp).toISOString()` and enqueue before network I/O. Inject the upload transport into `flushPending` so foreground uses the shared API client while the headless task reuses its refresh-token/App Check fetch path without circular imports.
+- [ ] Serialize flushes; run at most every 10 seconds or at 25 queued points, plus background/completion flushes, and apply only returned acknowledgements.
 - [ ] Replace background AsyncStorage queue functions with recorder calls. Replace every liveness use of `TaskManager.isTaskRegisteredAsync(TASK_NAME)` with `Location.hasStartedLocationUpdatesAsync(TASK_NAME)`; registration may remain only for task-definition diagnostics.
 - [ ] Add a 30-second active-trip watchdog that exposes degraded health without logging coordinates. Do not claim force-quit recovery; geofence re-entry may only restart future capture.
 - [ ] Run the targeted test and driver lint; expect PASS. Commit: `feat(driver): unify background trip recording`.
@@ -60,7 +62,7 @@ export interface TripLocationPoint {
 
 - [ ] Rewrite tests to assert foreground fixes use `loc.timestamp`, enter the durable recorder regardless of WebSocket state, survive more than three upload failures, and send only a non-durable live marker over WebSocket.
 - [ ] Run both test files; expect failures because the hook uses `new Date()`, clears after three retries, and owns two capped buffers.
-- [ ] Remove `LOCATION_BUFFER_KEY`, `MAX_LOCATION_RETRIES`, REST-buffer clearing, and durable `wsBatchRef` behavior. In the watcher callback call:
+- [ ] On active-ride phase entry call `tripLocationRecorder.startRide(rideId)`. Remove `LOCATION_BUFFER_KEY`, `MAX_LOCATION_RETRIES`, REST-buffer clearing, and durable `wsBatchRef` behavior. In the watcher callback call:
 
 ```ts
 void tripLocationRecorder.recordNativeFix(loc, 'foreground', rideId).then((point) => {

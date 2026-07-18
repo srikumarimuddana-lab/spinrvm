@@ -14,7 +14,7 @@ The Postgres function `purge_pii_retention()` is exercised via migration
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -50,7 +50,10 @@ async def test_run_tick_parses_jsonb_result_and_forwards_dry_run():
         result = await run_retention_purge_tick(dry_run=False)
 
     assert result == expected
-    supa.rpc.assert_called_once_with("purge_pii_retention", {"p_dry_run": False})
+    assert supa.rpc.call_args_list == [
+        call("purge_pii_retention", {"p_dry_run": False}),
+        call("purge_trip_route_geometry", {"p_dry_run": False}),
+    ]
 
 
 @pytest.mark.asyncio
@@ -68,7 +71,10 @@ async def test_run_tick_dry_run_true_passed_to_sql():
 
         result = await run_retention_purge_tick(dry_run=True)
 
-    supa.rpc.assert_called_once_with("purge_pii_retention", {"p_dry_run": True})
+    assert supa.rpc.call_args_list == [
+        call("purge_pii_retention", {"p_dry_run": True}),
+        call("purge_trip_route_geometry", {"p_dry_run": True}),
+    ]
     assert result["dry_run"] is True
 
 

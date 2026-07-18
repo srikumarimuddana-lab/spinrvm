@@ -148,7 +148,9 @@ async def run_retention_purge_tick(dry_run: bool = False) -> Optional[dict]:
             "hard-delete blocked; add the offending table to purge_pii_retention Step H",
             skipped_fk,
         )
-    return {**data, "trip_route_geometry": route_data}
+    # Preserve the established wrapper response contract for callers that use
+    # the PII-purge counters. Route-geometry counts are logged independently.
+    return data
 
 
 INTERVAL_SECONDS = 86400  # 24 h nominal; actual sleep includes ±10% jitter

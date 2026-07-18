@@ -22,6 +22,15 @@ from ._deps import (  # noqa: F401
 _TWO_PLACES = Decimal("0.01")
 
 
+def _route_snapshot_retention_due_at(finalized_at):
+    """Return the exact calendar three-year GPS-retention deadline."""
+    try:
+        return finalized_at.replace(year=finalized_at.year + 3)
+    except ValueError:
+        # Feb 29 has no equivalent in a non-leap target year.
+        return finalized_at.replace(year=finalized_at.year + 3, day=28)
+
+
 def _d(v) -> Decimal:
     """Parse a money value to an exact 2-dp Decimal. Money is Decimal-only —
     never accumulate fares/bonuses/payouts as float."""
@@ -279,6 +288,35 @@ async def _generate_and_store_ride_snapshot(
         revision = int(route_revision) if route_revision is not None else 0
         bucket = "ride-route-snapshots" if revision > 0 else "ride-snapshots"
         storage_path = f"{ride_id}/route-v{revision}.png" if revision > 0 else f"ride_{ride_id}.png"
+        if revision > 0:
+            if finalized_at is None:
+                logger.error("route snapshot finalization token missing for ride %s", ride_id)
+                return
+            try:
+                # Write the deletion inventory before uploading. Even if the
+                # process dies during upload or a late batch invalidates this
+                # revision, every possible private object has a durable purge
+                # record and can never become an untracked retention orphan.
+                await db_supabase.insert_many_ignore_conflicts(
+                    "ride_route_snapshot_objects",
+                    [
+                        {
+                            "ride_id": ride_id,
+                            "storage_bucket": bucket,
+                            "object_path": storage_path,
+                            "route_revision": revision,
+                            "route_finalized_at": finalized_at,
+                            "retention_due_at": _route_snapshot_retention_due_at(finalized_at),
+                        }
+                    ],
+                    on_conflict="storage_bucket,object_path",
+                )
+            except Exception as exc:
+                logger.error(
+                    f"route snapshot ledger write failed for ride {ride_id}: {exc}",
+                    exc_info=True,
+                )
+                return
         try:
             await loop.run_in_executor(
                 None,
@@ -306,9 +344,6 @@ async def _generate_and_store_ride_snapshot(
             return
 
         if revision > 0:
-            if finalized_at is None:
-                logger.error("route snapshot finalization token missing for ride %s", ride_id)
-                return
             # Persist only the private object path. Readers create a short-lived
             # signed URL after authorizing the rider, driver, admin, or receipt.
             try:

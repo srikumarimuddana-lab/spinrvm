@@ -154,6 +154,36 @@ def test_completed_receipt_signs_a_private_v2_snapshot(monkeypatch) -> None:
     assert "snapshot_object_path" not in resolved
 
 
+def test_email_receipt_attaches_private_snapshot_without_an_expiring_html_url(monkeypatch) -> None:
+    """The receipt remains viewable after a temporary storage URL expires."""
+    from backend.utils import email_provider, email_receipt, receipt_pdf
+
+    signed_url = "https://storage.example/signed/route-v4.png?expires=900"
+    route = {
+        **RIDE,
+        "route_schema_version": 2,
+        "route_revision": 4,
+        "snapshot_revision": 4,
+        "route_snapshot_url": signed_url,
+        "route_quality": {"coverage_ratio": 0.91},
+    }
+    send = AsyncMock(return_value=True)
+    monkeypatch.setattr(email_receipt, "_await_route_receipt_projection", AsyncMock(return_value=route))
+    monkeypatch.setattr(email_receipt, "_download_route_snapshot", AsyncMock(return_value=_png_bytes()))
+    monkeypatch.setattr(receipt_pdf, "generate_receipt_pdf", lambda *_args, **_kwargs: b"pdf")
+    monkeypatch.setattr(email_provider, "send_transactional_email", send)
+
+    assert asyncio.run(email_receipt.send_receipt_email(RIDE, RIDER, recipient_email="rider@example.test"))
+
+    payload = send.await_args.kwargs
+    assert signed_url not in payload["html"]
+    assert "Actual route (revision 4)" in payload["html"]
+    assert payload["attachments"] == [
+        {"filename": "Spinr-receipt-SPIN-1.pdf", "content": b"pdf", "mime": "application/pdf"},
+        {"filename": "Spinr-route-SPIN-1.png", "content": _png_bytes(), "mime": "image/png"},
+    ]
+
+
 def test_pdf_embeds_snapshot_bytes_and_prints_truthful_quality_note() -> None:
     pdf = generate_receipt_pdf(
         RIDE,

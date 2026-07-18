@@ -255,7 +255,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // reading storage first lets the foreground pick up a rotation the
     // background already performed instead of replaying a stale in-memory
     // token (which the backend then 401s as a benign rotation race).
-    let candidate = (await storage.getItem('refresh_token')) ?? get().refreshToken ?? null;
+    // Explicit annotation: `candidate` is reassigned from `latest` in the
+    // rotation-race loop below, and `latest` is initialised from `candidate` —
+    // without this, TS can't resolve the type non-circularly and falls back to
+    // implicit-any on `latest` (TS7022).
+    let candidate: string | null = (await storage.getItem('refresh_token')) ?? get().refreshToken ?? null;
     if (!candidate) {
       // No refresh token but an active session: the session cannot be
       // recovered, so tear it down here — the interceptor's G2 backstop no

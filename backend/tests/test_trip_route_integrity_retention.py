@@ -14,6 +14,8 @@ def test_route_geometry_retention_scrubs_v2_coordinate_surfaces_at_three_years()
     assert "road_matched_segments = '[]'::jsonb" in sql
     assert "completion_point = NULL" in sql
     assert "snapshot_url = NULL" in sql
+    assert "snapshot_purge_pending_at" in sql
+    assert "snapshot_object_path = NULL" in sql
     assert "route_geometry_anonymized_at" in sql
 
 
@@ -22,3 +24,6 @@ def test_retention_loop_invokes_the_trip_route_geometry_purge() -> None:
 
     assert 'rpc("purge_trip_route_geometry", {"p_dry_run": dry_run})' in source
     assert "trip_route_geometry_purge" in source
+    assert "_delete_pending_route_snapshot_objects" in source
+    assert "ride-route-snapshots" in source
+    assert ".remove(paths)" in source

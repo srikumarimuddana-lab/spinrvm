@@ -139,17 +139,22 @@ def test_seconds_until_next_returns_positive():
         assert _seconds_until_next(hour) <= 24 * 3600
 
 
-def test_pending_route_snapshot_objects_are_deleted_before_their_paths_are_cleared(monkeypatch):
+def test_expired_route_snapshot_ledger_deletes_every_revision_before_marking_it_deleted(monkeypatch):
     from utils import retention_purge
 
     removed_paths = []
     updates = []
-    pending = [{"ride_id": "ride_1", "snapshot_object_path": "ride_1/route-v4.png"}]
+    pending = [
+        {
+            "ride_id": "ride_1",
+            "storage_bucket": "ride-route-snapshots",
+            "object_path": "ride_1/route-v4.png",
+        }
+    ]
 
     class Query:
-        @property
-        def not_(self):
-            return self
+        def __init__(self, table):
+            self.table = table
 
         def select(self, _columns):
             return self
@@ -157,11 +162,14 @@ def test_pending_route_snapshot_objects_are_deleted_before_their_paths_are_clear
         def is_(self, _column, _value):
             return self
 
+        def lte(self, _column, _value):
+            return self
+
         def limit(self, _size):
             return self
 
         def update(self, payload):
-            updates.append(payload)
+            updates.append((self.table, payload))
             return self
 
         def eq(self, _column, _value):
@@ -184,8 +192,8 @@ def test_pending_route_snapshot_objects_are_deleted_before_their_paths_are_clear
         storage = Storage()
 
         def table(self, table):
-            assert table == "ride_routes"
-            return Query()
+            assert table in {"ride_routes", "ride_route_snapshot_objects"}
+            return Query(table)
 
     async def run_sync(operation):
         return operation()
@@ -193,11 +201,13 @@ def test_pending_route_snapshot_objects_are_deleted_before_their_paths_are_clear
     monkeypatch.setattr(retention_purge, "supabase", Supabase())
     monkeypatch.setattr(retention_purge, "run_sync", run_sync)
 
-    deleted = asyncio.run(retention_purge._delete_pending_route_snapshot_objects())
+    deleted = asyncio.run(retention_purge._delete_expired_route_snapshot_objects())
 
     assert deleted == 1
     assert removed_paths == ["ride_1/route-v4.png"]
-    assert updates == [{"snapshot_object_path": None, "snapshot_purge_pending_at": None}]
+    assert updates[0][0] == "ride_route_snapshot_objects"
+    assert "deleted_at" in updates[0][1]
+    assert updates[1] == ("ride_routes", {"snapshot_object_path": None, "snapshot_purge_pending_at": None})
 
 
 @pytest.mark.asyncio

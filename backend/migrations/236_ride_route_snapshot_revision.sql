@@ -1,18 +1,28 @@
 -- 234_ride_route_snapshot_revision.sql
 --
--- Stores an immutable public snapshot URL beside the exact v2 route revision
--- it depicts. The detail API exposes it only when the revisions agree, so a
--- late GPS upload can never leave an older, misleading route image attached.
+-- Stores a private immutable snapshot-object path beside the exact v2 route
+-- revision it depicts. Detail and receipt readers sign this path only for an
+-- authorized request; v2 route images are never placed in a public bucket.
 --
 -- Rollback plan:
---   Deploy readers that ignore snapshot_url first. After snapshot publishing
---   is disabled and existing URLs have expired from receipts, drop only the
---   snapshot_url column. Keep snapshot_revision because migration 233 owns it.
+--   Deploy readers that ignore snapshot_object_path first. After snapshot
+--   publishing is disabled and existing signed URLs have expired, drop only
+--   snapshot_object_path. Keep snapshot_revision because migration 235 owns it.
 
 ALTER TABLE public.ride_routes
-    ADD COLUMN IF NOT EXISTS snapshot_url text;
+    ADD COLUMN IF NOT EXISTS snapshot_url text,
+    ADD COLUMN IF NOT EXISTS snapshot_object_path text;
 
 COMMENT ON COLUMN public.ride_routes.snapshot_url IS
-    'Public immutable PNG URL for snapshot_revision; route readers must require revision equality.';
+    'Legacy snapshot URL only. New v2 snapshots persist a private object path and are signed at read time.';
+COMMENT ON COLUMN public.ride_routes.snapshot_object_path IS
+    'Private ride-route-snapshots object path for snapshot_revision; never expose this field to clients.';
+
+-- ``storage.objects`` has RLS enabled. No anon/authenticated policy is added:
+-- only the backend service role can upload, sign, and remove trip snapshots.
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('ride-route-snapshots', 'ride-route-snapshots', false)
+ON CONFLICT (id) DO UPDATE
+    SET public = false;
 
 NOTIFY pgrst, 'reload schema';

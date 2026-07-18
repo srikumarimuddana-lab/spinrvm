@@ -189,6 +189,7 @@ async def _generate_and_store_ride_snapshot(
     completion_point=None,
     route_quality=None,
     route_revision=None,
+    finalized_at=None,
 ) -> None:
     """Render the ride's route PNG and upload to Supabase Storage.
 
@@ -305,12 +306,15 @@ async def _generate_and_store_ride_snapshot(
             return
 
         if revision > 0:
+            if finalized_at is None:
+                logger.error("route snapshot finalization token missing for ride %s", ride_id)
+                return
             # Persist only the private object path. Readers create a short-lived
             # signed URL after authorizing the rider, driver, admin, or receipt.
             try:
                 updated = await db_supabase.update_one(
                     "ride_routes",
-                    {"ride_id": ride_id, "route_revision": revision},
+                    {"ride_id": ride_id, "route_revision": revision, "finalized_at": finalized_at},
                     {
                         "snapshot_object_path": storage_path,
                         "snapshot_url": None,

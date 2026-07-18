@@ -192,6 +192,8 @@ async def _publish_finalized_snapshot(
     route_segments: list[dict],
     route_quality: dict,
     completion_point: Optional[dict],
+    *,
+    finalized_at: datetime,
 ) -> None:
     """Publish the route image for one immutable finalization revision.
 
@@ -218,6 +220,7 @@ async def _publish_finalized_snapshot(
             completion_point=completion_point,
             route_quality=route_quality,
             route_revision=route_revision,
+            finalized_at=finalized_at,
         )
     except Exception:
         logger.error("route snapshot publishing failed for ride_id=%s", ride_id, exc_info=True)
@@ -359,6 +362,7 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
             display_segments,
             quality,
             (route_row or {}).get("completion_point"),
+            finalized_at=now,
         )
         return {"processing_status": processing_status, "route_revision": revision, "route_quality": quality}
     except Exception:

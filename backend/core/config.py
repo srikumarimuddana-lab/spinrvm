@@ -15,6 +15,12 @@ logger = logging.getLogger(__name__)
 # reviewer login. Validate against the same rule before allow-listing.
 _REVIEW_OTP_LEN = 4
 
+# Recognised environment tiers (ADR-008). "staging" and "production" are
+# production-like: every security guard applies to both. Canary is NOT an
+# environment — it is ENV=production with DEPLOY_STAGE=canary.
+_ALLOWED_ENVS = frozenset({"development", "test", "staging", "production"})
+_ALLOWED_DEPLOY_STAGES = frozenset({"stable", "canary"})
+
 
 def _is_valid_review_otp(otp: str) -> bool:
     return otp.isascii() and otp.isdigit() and len(otp) == _REVIEW_OTP_LEN
@@ -160,8 +166,26 @@ class Settings(BaseSettings):
     # File storage
     STORAGE_BUCKET: str = "driver-documents"
 
-    # Environment
+    # Environment — one of _ALLOWED_ENVS; anything else refuses to boot
+    # (ADR-008). "staging" is production-like: every security guard that
+    # applies to production applies to staging as well.
     ENV: str = "development"
+
+    # Deploy stage within an environment (ADR-008). "canary" marks the small
+    # Fly app taking ~5% of production traffic behind the Cloudflare LB; it
+    # runs ENV=production with byte-identical secrets. Used for Sentry
+    # tagging, logs, and /health — never for security decisions.
+    DEPLOY_STAGE: str = "stable"
+
+    # When false, core/lifespan.py spawns none of the background loops.
+    # The canary app sets this false so money-mutating loops never run two
+    # code versions concurrently against the shared production data plane.
+    BACKGROUND_LOOPS_ENABLED: bool = True
+
+    # Git SHA of the running build, injected by CI at deploy time
+    # (flyctl deploy -e RELEASE_SHA=...). Surfaced in /health so the promote
+    # pipeline can assert exactly which build is serving.
+    RELEASE_SHA: str = ""
 
     # App Store / Google Play reviewer login accounts. Comma-separated
     # "phone:otp" pairs — E.164 phone and a 4-digit numeric OTP (must match
@@ -194,6 +218,32 @@ class Settings(BaseSettings):
     PORTAL_BASE_URL: str = "https://admin-spinr.spinr.ca"
 
     @model_validator(mode="after")
+    def _validate_env_names(self) -> "Settings":
+        """Refuse unknown ENV / DEPLOY_STAGE values (ADR-008).
+
+        A typo like ENV=prod or ENV=Staging would otherwise silently skip
+        every production guard. Values are normalized to lowercase so
+        downstream comparisons are exact.
+        """
+        env = (self.ENV or "").strip().lower()
+        if env not in _ALLOWED_ENVS:
+            raise ValueError(
+                f"ENV='{self.ENV}' is not a recognised environment. "
+                f"Allowed values: {', '.join(sorted(_ALLOWED_ENVS))}. "
+                "An unknown value would silently bypass production guards."
+            )
+        self.ENV = env
+
+        stage = (self.DEPLOY_STAGE or "").strip().lower()
+        if stage not in _ALLOWED_DEPLOY_STAGES:
+            raise ValueError(
+                f"DEPLOY_STAGE='{self.DEPLOY_STAGE}' is not recognised. "
+                f"Allowed values: {', '.join(sorted(_ALLOWED_DEPLOY_STAGES))}."
+            )
+        self.DEPLOY_STAGE = stage
+        return self
+
+    @model_validator(mode="after")
     def _hash_admin_password(self) -> "Settings":
         """Hash ADMIN_PASSWORD with bcrypt at startup (A-P3-1).
 
@@ -207,15 +257,16 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _guard_production_secrets(self) -> "Settings":
-        """Refuse to start in production with weak placeholder values, short
-        secrets, or missing Firebase audience identifiers.
+        """Refuse to start in production-like envs (staging + production) with
+        weak placeholder values, short secrets, or missing Firebase audience
+        identifiers (ADR-008: staging runs every guard production does).
 
         - JWT_SECRET: ≥32 chars (B-P1-2 / CLAUDE.md). HS256 with a short shared
           secret is brute-forceable in seconds on a modern GPU.
         - FIREBASE_DRIVER_APP_ID / FIREBASE_RIDER_APP_ID: required so the manual
           audience check (B-P1-1 / DV-10) cannot be silently skipped.
         """
-        if self.ENV.lower() == "production":
+        if self.is_production_like:
             weak = {
                 "JWT_SECRET": ("your-strong-secret-key",),
                 "ADMIN_PASSWORD": ("admin123", "password", "changeme"),
@@ -283,6 +334,26 @@ class Settings(BaseSettings):
     @property
     def debug(self) -> bool:
         return self.ENV.lower() == "development"
+
+    @property
+    def is_production(self) -> bool:
+        """True for real production only — including the canary stage."""
+        return self.ENV.lower() == "production"
+
+    @property
+    def is_production_like(self) -> bool:
+        """True for staging and production (ADR-008).
+
+        Gates security strictness: secret guards, PIPEDA region, HSTS,
+        secure cookies, CORS wildcard refusal, real rate limits, and
+        payment-settlement refusals all key off this — staging must fail
+        the same way production would.
+        """
+        return self.ENV.lower() in ("staging", "production")
+
+    @property
+    def is_canary(self) -> bool:
+        return self.is_production and self.DEPLOY_STAGE.lower() == "canary"
 
     def review_login_map(self) -> dict[str, str]:
         """Parse REVIEW_LOGIN_ACCOUNTS into {phone: fixed_otp}.

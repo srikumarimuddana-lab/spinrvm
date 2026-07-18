@@ -196,7 +196,9 @@ async def _generate_and_store_ride_snapshot(
     polyline drawn server-side. Falls back to OSM/staticmap if the Google
     API key is unavailable.
 
-    Requires a public ``ride-snapshots`` bucket in Supabase Storage.
+    V2 actual-route images use the private ``ride-route-snapshots`` bucket.
+    Legacy planned images remain in the established public ``ride-snapshots``
+    bucket until their readers are migrated.
     See backend/docs/STORAGE_BUCKETS.md for one-time setup.
     """
     if pickup_lat is None or pickup_lng is None or dropoff_lat is None or dropoff_lng is None:
@@ -273,9 +275,9 @@ async def _generate_and_store_ride_snapshot(
         # Supabase Storage upload. Legacy snapshots retain their stable path;
         # finalized v2 snapshots are revisioned and immutable so a delayed GPS
         # upload cannot replace a receipt image for an older route revision.
-        bucket = "ride-snapshots"
         revision = int(route_revision) if route_revision is not None else 0
-        storage_path = f"ride-routes/{ride_id}/route-v{revision}.png" if revision > 0 else f"ride_{ride_id}.png"
+        bucket = "ride-route-snapshots" if revision > 0 else "ride-snapshots"
+        storage_path = f"{ride_id}/route-v{revision}.png" if revision > 0 else f"ride_{ride_id}.png"
         try:
             await loop.run_in_executor(
                 None,
@@ -302,6 +304,36 @@ async def _generate_and_store_ride_snapshot(
             )
             return
 
+        if revision > 0:
+            # Persist only the private object path. Readers create a short-lived
+            # signed URL after authorizing the rider, driver, admin, or receipt.
+            try:
+                updated = await db_supabase.update_one(
+                    "ride_routes",
+                    {"ride_id": ride_id, "route_revision": revision},
+                    {
+                        "snapshot_object_path": storage_path,
+                        "snapshot_url": None,
+                        "snapshot_revision": revision,
+                    },
+                    upsert=False,
+                )
+                if updated is None:
+                    # A newer evidence batch invalidated this revision before
+                    # the upload completed. Delete the unreachable object so it
+                    # cannot outlive the current route evidence.
+                    await loop.run_in_executor(
+                        None,
+                        lambda: supabase.storage.from_(bucket).remove([storage_path]),
+                    )
+                return
+            except Exception as exc:
+                logger.error(
+                    f"private route snapshot reference write failed for ride {ride_id}: {exc}",
+                    exc_info=True,
+                )
+                raise
+
         base = (settings.SUPABASE_URL or "").rstrip("/")
         if not base:
             logger.error("SUPABASE_URL not configured; cannot build public snapshot URL")
@@ -318,19 +350,10 @@ async def _generate_and_store_ride_snapshot(
         digest = hashlib.sha256(png_bytes).hexdigest()[:12]
         url = f"{base}/storage/v1/object/public/{bucket}/{storage_path}?v={digest}"
 
-        # Persist URL and revision atomically on the v2 route row. Legacy
-        # planned snapshots remain on rides.route_snapshot_url for backward
-        # compatibility until all old readers are retired.
+        # Legacy planned snapshots remain on rides.route_snapshot_url for
+        # backward compatibility until all old readers are migrated.
         try:
-            if revision > 0:
-                await db_supabase.update_one(
-                    "ride_routes",
-                    {"ride_id": ride_id},
-                    {"snapshot_url": url, "snapshot_revision": revision},
-                    upsert=False,
-                )
-            else:
-                await db_supabase.update_one("rides", {"id": ride_id}, {"route_snapshot_url": url})
+            await db_supabase.update_one("rides", {"id": ride_id}, {"route_snapshot_url": url})
         except Exception as exc:
             logger.error(
                 f"route snapshot reference write failed for ride {ride_id}: {exc}",

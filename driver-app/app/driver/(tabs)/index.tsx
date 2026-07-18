@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { View, Text, StyleSheet, Platform, Linking, Animated, TouchableOpacity, ActivityIndicator, AppState } from 'react-native';
+import { View, Text, StyleSheet, Platform, Linking, Animated, TouchableOpacity, ActivityIndicator, AppState, Modal } from 'react-native';
 import MapView, { Marker, Polyline, Polygon, Heatmap, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useDriverStore } from '../../../store/driverStore';
+import { useDriverStore, type OffRouteConfirmation } from '../../../store/driverStore';
 import { useAuthStore } from '@shared/store/authStore';
 import { useExitOnBackPress } from '@shared/hooks/useExitOnBackPress';
 import { useVehicleTypeStore } from '@shared/store/vehicleTypeStore';
@@ -83,6 +83,22 @@ function DriverDashboard() {
   } = useDriverStore();
 
   const isCancellingRide = useDriverStore((s) => s.isCancellingRide);
+  const [completionConfirmationVisible, setCompletionConfirmationVisible] = useState(false);
+  const [completionConfirmationRideId, setCompletionConfirmationRideId] = useState<string | null>(null);
+
+  const requestRideCompletion = async (confirmation?: OffRouteConfirmation) => {
+    const rideId = confirmation ? completionConfirmationRideId : activeRide?.ride.id;
+    if (!rideId) return;
+
+    const result = await completeRide(rideId, confirmation);
+    if (result.confirmationRequired) {
+      setCompletionConfirmationRideId(rideId);
+      setCompletionConfirmationVisible(true);
+      return;
+    }
+    setCompletionConfirmationVisible(false);
+    setCompletionConfirmationRideId(null);
+  };
 
   // Own-car marker, admin-configured per vehicle type. Resolved from the
   // shared vehicleTypeStore (synced once per app open by the root layout) —
@@ -956,9 +972,7 @@ function DriverDashboard() {
           )}
           onStartRide={() => startRide(activeRide!.ride.id)}
           onCompleteRide={async () => {
-            if (!activeRide) return;
-            const rideId = activeRide.ride.id;
-            await completeRide(rideId);
+            await requestRideCompletion();
           }}
           onCancelRide={(reason) => cancelRide(activeRide!.ride.id, reason)}
           routeEtaMinutes={routeEtaMinutes}
@@ -974,6 +988,48 @@ function DriverDashboard() {
           onRateRider={rateRider}
         />
       )}
+      <Modal
+        transparent
+        animationType="fade"
+        visible={completionConfirmationVisible}
+        onRequestClose={() => setCompletionConfirmationVisible(false)}
+      >
+        <View
+          style={{
+            flex: 1,
+            justifyContent: 'center',
+            padding: 24,
+            backgroundColor: 'rgba(0, 0, 0, 0.55)',
+          }}
+        >
+          <View style={{ backgroundColor: colors.surface, borderRadius: 20, padding: 20, gap: 12 }}>
+            <Text style={{ color: colors.text, fontSize: 18, fontWeight: '700' }}>Confirm trip completion</Text>
+            <Text style={{ color: colors.textDim, fontSize: 14, lineHeight: 20 }}>
+              Your final location is more than 1 km from the requested destination. Select the reason before completing this trip.
+            </Text>
+            {([
+              ['Rider asked to stop here', 'rider_requested_stop'],
+              ['Destination changed', 'changed_destination'],
+              ['Emergency', 'emergency'],
+              ['Location unavailable', 'location_unavailable'],
+            ] as const).map(([label, confirmation]) => (
+              <TouchableOpacity
+                key={confirmation}
+                onPress={() => void requestRideCompletion(confirmation)}
+                style={{ backgroundColor: colors.surfaceLight, borderRadius: 12, paddingVertical: 13, paddingHorizontal: 14 }}
+              >
+                <Text style={{ color: colors.text, fontSize: 15, fontWeight: '600' }}>{label}</Text>
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity
+              onPress={() => setCompletionConfirmationVisible(false)}
+              style={{ alignItems: 'center', paddingVertical: 10 }}
+            >
+              <Text style={{ color: colors.textDim, fontSize: 15, fontWeight: '600' }}>Keep trip open</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }

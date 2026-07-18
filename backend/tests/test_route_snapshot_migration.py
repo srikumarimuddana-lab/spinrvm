@@ -19,5 +19,8 @@ def test_snapshot_url_is_stored_with_its_route_revision() -> None:
     assert "snapshot_object_path" in writer
     assert "if revision > 0:" in writer
     assert '"snapshot_url": None' in writer
+    assert "ride_route_snapshot_objects" in writer
+    assert "insert_many_ignore_conflicts" in writer
+    assert "retention_due_at" in writer
     assert "Rollback plan" in sql
     assert "NOTIFY pgrst, 'reload schema'" in sql

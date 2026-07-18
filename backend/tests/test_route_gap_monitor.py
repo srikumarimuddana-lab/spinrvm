@@ -5,7 +5,7 @@ from backend.utils import route_gap_monitor
 from backend.utils.route_gap_monitor import assess_location_gap
 
 NOW = datetime(2026, 7, 18, 0, 0, tzinfo=timezone.utc)
-MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "235_ride_location_gap_events.sql"
+MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "237_ride_location_gap_events.sql"
 
 
 def test_gap_monitor_opens_an_alert_after_the_configured_interval() -> None:

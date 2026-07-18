@@ -69,7 +69,7 @@ One upload batch contains points from one session in sequence order. The server 
 
 ## Ingestion and Data Model
 
-`driver_location_history` remains the append-only raw store and gains capture identity and source metadata. A partial unique index on `(ride_id, driver_id, recording_session_id, sequence_number)` makes retries idempotent. Exact GPS coordinates never appear in application logs, metrics, or Sentry.
+`driver_location_history` remains the append-only raw store and gains capture identity and source metadata. A unique index on `(ride_id, driver_id, recording_session_id, sequence_number)` makes v2 retries idempotent; nullable legacy identity fields allow historical rows to coexist. Exact GPS coordinates never appear in application logs, metrics, or Sentry.
 
 `ride_routes` gains:
 

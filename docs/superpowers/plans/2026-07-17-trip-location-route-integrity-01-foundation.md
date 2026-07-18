@@ -117,23 +117,26 @@ async def insert_many_ignore_conflicts(table: str, docs: List[Dict[str, Any]], o
 
 **Files:** Modify `backend/utils/breadcrumbs.py`, `backend/tests/test_breadcrumb_persistence.py`.
 
-**Produces:** `LocationBatchAck` and `persist_trip_location_batch(driver_id, ride_id, session_id, points, active_ride=...)`.
+**Produces:** `LocationBatchAck`, internal `LocationBatchPersistResult`, and `persist_trip_location_batch(driver_id, ride_id, session_id, points, active_ride=...)`.
 
 - [ ] Add failing tests for duplicate replay, capture-time preservation, server-derived phase, contiguous acknowledgement, permanent invalid-coordinate rejection, and no raw coordinates in logs.
 - [ ] Run the six new tests; expect missing-symbol failures.
 - [ ] Add frozen acknowledgement dataclasses and implement the v2 writer using `captured_at`, validated sequence identity, the existing ride-window/phase helpers, and:
 
 ```py
-await db_supabase.insert_many_ignore_conflicts(
+inserted = await db_supabase.insert_many_ignore_conflicts(
     "driver_location_history",
     rows,
     on_conflict="ride_id,driver_id,recording_session_id,sequence_number",
 )
-return LocationBatchAck(
-    recording_session_id=session_id,
-    acked_through=max(p["sequence_number"] for p in points),
-    accepted_count=len(rows),
-    rejected=tuple(rejections),
+return LocationBatchPersistResult(
+    ack=LocationBatchAck(
+        recording_session_id=session_id,
+        acked_through=max(p["sequence_number"] for p in points),
+        accepted_count=len(rows),
+        rejected=tuple(rejections),
+    ),
+    inserted_count=len(inserted),
 )
 ```
 
@@ -148,6 +151,6 @@ return LocationBatchAck(
 
 - [ ] Replace mirror-only tests with async endpoint tests covering v2 success, non-contiguous sequence 422, batch over 500 points 422, DB failure 503, and legacy `{points:[...]}` compatibility.
 - [ ] Run `pytest backend/tests/test_location_batch.py -q`; expect FAIL because v2 requests return only `{"success": true}`.
-- [ ] Add Pydantic request models or equivalent strict parsing. For v2, bind driver from auth, verify the requested ride is active and assigned, call the v2 writer, and return `ack.to_dict()`.
+- [ ] Add strict request models. Bind driver from auth and verify assignment. Accept active rides plus completed rides whose capture timestamps remain inside that ride’s lifecycle and 90-day raw-retention window; this is required for delayed offline outboxes. Call the v2 writer and return `result.ack.to_dict()`.
 - [ ] Keep the last valid point as the live driver marker, but never acknowledge before persistence succeeds. Remove the current “log error and return success” behavior for v2 database failures.
 - [ ] Run the targeted test and `ruff check backend/routes/drivers/location.py`; expect PASS. Commit: `feat(api): acknowledge durable location batches`.

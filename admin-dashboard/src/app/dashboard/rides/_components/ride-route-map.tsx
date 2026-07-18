@@ -8,6 +8,7 @@ import {
     fitBoundsToPoints,
     makeCircleMarkerEl,
 } from "@/lib/map/maplibre-base";
+import { toGeoJsonMultiLineString } from "@spinr/shared/utils/routeSegments";
 
 interface Props {
     pickupLat: number;
@@ -29,9 +30,11 @@ interface Props {
      *  distinct blue road-following line. */
     tripTrail?: { lat: number; lng: number; timestamp?: string }[];
     /** Road-following planned route (rides.planned_route_polyline, from the
-     *  Directions API at booking). When present it replaces the dashed
-     *  straight-line reference with the real road geometry. */
+     *  Directions API at booking). */
     plannedTrail?: { lat: number; lng: number }[];
+    /** Version 2 captured route geometry. Each segment remains independent so
+     *  an offline gap is not rendered as a false straight-line connection. */
+    actualSegments?: unknown;
 }
 
 const PLANNED_SOURCE_ID = "ride-planned-src";
@@ -53,9 +56,11 @@ export default function RideRouteMap({
     pickupApprox,
     tripTrail,
     plannedTrail,
+    actualSegments,
 }: Props) {
     const containerRef = useRef<HTMLDivElement>(null);
     const mapRef = useRef<maplibregl.Map | null>(null);
+    const actualGeometry = toGeoJsonMultiLineString(actualSegments);
 
     useEffect(() => {
         if (!containerRef.current || mapRef.current) return;
@@ -63,7 +68,8 @@ export default function RideRouteMap({
         const hasPickupTrail = !!pickupTrail && pickupTrail.length > 1;
         const hasTripTrail = !!tripTrail && tripTrail.length > 1;
         const hasPlannedTrail = !!plannedTrail && plannedTrail.length > 1;
-        const hasPhaseTrails = hasPickupTrail || hasTripTrail || hasPlannedTrail;
+        const hasActualSegments = actualGeometry.coordinates.length > 0;
+        const hasRouteGeometry = hasActualSegments || hasPickupTrail || hasTripTrail || hasPlannedTrail;
 
         const map = new maplibregl.Map({
             container: containerRef.current,
@@ -122,33 +128,23 @@ export default function RideRouteMap({
                 });
             }
 
-            // Only draw the straight-line reference when we have no
-            // phase-specific GPS trail (or planned route) to render instead.
-            // When real geometry is available it carries the visual; the
-            // dashed straight line would just be noise.
-            if (!hasPhaseTrails) {
-                map.addSource(PLANNED_SOURCE_ID, {
+            // V2 captured trail. A MultiLineString preserves every recorded
+            // capture gap; MapLibre will not draw a chord between segments.
+            if (hasActualSegments) {
+                map.addSource(ACTUAL_SOURCE_ID, {
                     type: "geojson",
                     data: {
                         type: "Feature",
                         properties: {},
-                        geometry: {
-                            type: "LineString",
-                            coordinates: [[pickupLng, pickupLat], [dropoffLng, dropoffLat]],
-                        },
+                        geometry: actualGeometry,
                     },
                 });
                 map.addLayer({
-                    id: PLANNED_LAYER_ID,
+                    id: ACTUAL_LAYER_ID,
                     type: "line",
-                    source: PLANNED_SOURCE_ID,
+                    source: ACTUAL_SOURCE_ID,
                     layout: { "line-cap": "round", "line-join": "round" },
-                    paint: {
-                        "line-color": "#9ca3af",
-                        "line-width": 2,
-                        "line-opacity": 0.6,
-                        "line-dasharray": ["literal", [2, 2]],
-                    },
+                    paint: { "line-color": "#2563eb", "line-width": 3, "line-opacity": 0.9 },
                 });
             }
 
@@ -207,10 +203,10 @@ export default function RideRouteMap({
                 });
             }
 
-            // Legacy combined trail — only render when neither phase
+            // Legacy combined trail — only render when no v2/phase
             // trail is available (pre-migration-39 rides still go through
             // this path via route_polyline).
-            if (!hasPhaseTrails && locationTrail && locationTrail.length > 1) {
+            if (!hasRouteGeometry && locationTrail && locationTrail.length > 1) {
                 map.addSource(ACTUAL_SOURCE_ID, {
                     type: "geojson",
                     data: {
@@ -242,7 +238,11 @@ export default function RideRouteMap({
                 ...(pickupTrail ?? []).map((p) => ({ lat: p.lat, lng: p.lng })),
                 ...(tripTrail ?? []).map((p) => ({ lat: p.lat, lng: p.lng })),
                 ...(plannedTrail ?? []).map((p) => ({ lat: p.lat, lng: p.lng })),
-                ...(!hasPhaseTrails ? (locationTrail ?? []).map((p) => ({ lat: p.lat, lng: p.lng })) : []),
+                ...actualGeometry.coordinates.reduce<{ lat: number; lng: number }[]>(
+                    (points, segment) => points.concat(segment.map(([lng, lat]) => ({ lat, lng }))),
+                    [],
+                ),
+                ...(!hasRouteGeometry ? (locationTrail ?? []).map((p) => ({ lat: p.lat, lng: p.lng })) : []),
             ];
             fitBoundsToPoints(map, allPoints, 40);
         });
@@ -251,7 +251,7 @@ export default function RideRouteMap({
             map.remove();
             mapRef.current = null;
         };
-    }, [pickupLat, pickupLng, dropoffLat, dropoffLng, locationTrail, pickupTrail, pickupApprox, tripTrail, plannedTrail]);
+    }, [pickupLat, pickupLng, dropoffLat, dropoffLng, locationTrail, pickupTrail, pickupApprox, tripTrail, plannedTrail, actualGeometry]);
 
     return <div ref={containerRef} className="w-full h-[280px] rounded-xl overflow-hidden" />;
 }

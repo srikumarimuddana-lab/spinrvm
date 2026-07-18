@@ -1,4 +1,4 @@
--- 234_ride_route_snapshot_revision.sql
+-- 236_ride_route_snapshot_revision.sql
 --
 -- Stores a private immutable snapshot-object path beside the exact v2 route
 -- revision it depicts. Detail and receipt readers sign this path only for an

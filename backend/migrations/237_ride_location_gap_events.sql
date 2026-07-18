@@ -1,4 +1,4 @@
--- 235_ride_location_gap_events.sql
+-- 237_ride_location_gap_events.sql
 -- Timestamp-only alerts for active-trip GPS capture gaps.
 --
 -- Rollback plan:

@@ -36,10 +36,18 @@ jest.mock('expo-router', () => ({
   router: { push: jest.fn(), replace: jest.fn() },
 }));
 
+jest.mock('../../utils/tripLocationRecorder', () => ({
+  tripLocationRecorder: {
+    captureCompletionFix: jest.fn(),
+  },
+}));
+
 import { useDriverStore } from '../driverStore';
 import api from '@shared/api/client';
+import { tripLocationRecorder } from '../../utils/tripLocationRecorder';
 
 const mockApi = api as jest.Mocked<typeof api>;
+const mockTripLocationRecorder = tripLocationRecorder as jest.Mocked<typeof tripLocationRecorder>;
 
 /** Reset store to idle baseline before each test */
 const resetStore = () =>
@@ -67,6 +75,25 @@ const resetStore = () =>
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockTripLocationRecorder.captureCompletionFix.mockResolvedValue({
+    point: {
+      ride_id: 'ride-123',
+      recording_session_id: 'session-123',
+      sequence_number: 9,
+      captured_at: '2026-07-17T22:45:00.000Z',
+      monotonic_ms: 1,
+      lat: 52.1,
+      lng: -106.6,
+      accuracy: 5,
+      speed: 10,
+      heading: 90,
+      altitude: null,
+      source: 'completion',
+      mocked: false,
+      is_completion_fix: true,
+    },
+    pendingCount: 3,
+  });
   resetStore();
 });
 
@@ -368,7 +395,14 @@ describe('driverStore — ride state machine', () => {
     expect(state.rideState).toBe('trip_completed');
     expect(state.completedRide).toEqual(completedData);
     expect(state.activeRide).toBeNull();
-    expect(mockApi.post).toHaveBeenCalledWith('/drivers/rides/ride-123/complete');
+    expect(mockTripLocationRecorder.captureCompletionFix).toHaveBeenCalledWith('ride-123');
+    expect(mockApi.post).toHaveBeenCalledWith('/drivers/rides/ride-123/complete', expect.objectContaining({
+      final_session_id: 'session-123',
+      final_sequence_number: 9,
+      pending_outbox_count: 3,
+      off_route_confirmation: null,
+      completion_fix: expect.objectContaining({ is_completion_fix: true }),
+    }));
   });
 
   test('resetRideState returns everything to idle', () => {

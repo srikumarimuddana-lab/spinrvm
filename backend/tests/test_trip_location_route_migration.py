@@ -6,7 +6,7 @@ import pytest
 
 pytestmark = pytest.mark.unit
 
-MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "233_trip_location_route_integrity.sql"
+MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "235_trip_location_route_integrity.sql"
 
 
 def _sql() -> str:

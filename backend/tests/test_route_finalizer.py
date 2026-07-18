@@ -66,6 +66,7 @@ def test_mark_route_pending_upserts_versioned_completion_metadata(monkeypatch):
 
 def test_finalizer_orders_by_capture_time_and_writes_a_new_revision(monkeypatch):
     updates = []
+    publish_snapshot = AsyncMock()
     observed = [_point(1, 10), _point(0, 0), _point(2, 600)]
 
     async def get_rows(table, _filters, **kwargs):
@@ -82,6 +83,7 @@ def test_finalizer_orders_by_capture_time_and_writes_a_new_revision(monkeypatch)
     monkeypatch.setattr(route_finalizer.db_supabase, "get_rows", get_rows)
     monkeypatch.setattr(route_finalizer.db_supabase, "get_ride", get_ride)
     monkeypatch.setattr(route_finalizer.db_supabase, "update_one", update_one)
+    monkeypatch.setattr(route_finalizer, "_publish_finalized_snapshot", publish_snapshot)
     monkeypatch.setattr(route_finalizer, "_get_route_row", AsyncMock(return_value=_route_row()))
     monkeypatch.setattr(
         route_finalizer,
@@ -115,6 +117,12 @@ def test_finalizer_orders_by_capture_time_and_writes_a_new_revision(monkeypatch)
     assert payload["route_quality"]["distance_provider"] == "osrm_match"
     assert payload["observed_segments"][0]["coordinates"][0] == [50.445, -104.618]
     assert payload["road_matched_segments"][0]["coordinates"] == [[50.445, -104.618], [50.446, -104.618]]
+    publish_snapshot.assert_awaited_once()
+    snapshot_args = publish_snapshot.await_args.args
+    assert snapshot_args[0] == "ride_1"
+    assert snapshot_args[2] == 4
+    assert snapshot_args[3] == payload["road_matched_segments"]
+    assert snapshot_args[4] == payload["route_quality"]
 
 
 def test_finalizer_marks_missing_tail_incomplete_without_mutating_fare(monkeypatch):
@@ -122,6 +130,7 @@ def test_finalizer_marks_missing_tail_incomplete_without_mutating_fare(monkeypat
     monkeypatch.setattr(route_finalizer.db_supabase, "get_rows", AsyncMock(return_value=[_point(0, 0)]))
     monkeypatch.setattr(route_finalizer.db_supabase, "get_ride", AsyncMock(return_value=_ride()))
     monkeypatch.setattr(route_finalizer.db_supabase, "update_one", update)
+    monkeypatch.setattr(route_finalizer, "_publish_finalized_snapshot", AsyncMock())
     monkeypatch.setattr(
         route_finalizer, "_get_route_row", AsyncMock(return_value=_route_row(completion_point={"missing_tail": True}))
     )

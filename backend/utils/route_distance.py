@@ -84,6 +84,14 @@ _OSRM_RADIUS_DEFAULT_M = 20
 # can contain hundreds of vertices; ~300 is plenty for a faithful map replay.
 _MAX_ROAD_POLYLINE_POINTS = 300
 
+# Segmented map-matching splits a long observed segment into bounded chunks for
+# the provider's per-request coordinate cap. Internal chunks overlap by
+# _CHUNK_OVERLAP input points so the matcher has boundary context; that shared
+# head is trimmed from the counted distance and emitted geometry of every chunk
+# after the first, so the overlap span is never billed or drawn twice (M-D).
+_CHUNK_SIZE = 90
+_CHUNK_OVERLAP = 10
+
 # A road match: (distance_km, polyline) where polyline is [[lat, lng], ...].
 RoadMatch = Tuple[float, List[List[float]]]
 
@@ -305,7 +313,7 @@ async def _compute_via_google_roads(trip_points: list[dict], api_key: str) -> Op
     return round(total_km, 3), _cap_polyline(polyline, _MAX_ROAD_POLYLINE_POINTS)
 
 
-def _overlapping_chunks(points: list[dict], size: int = 90, overlap: int = 10):
+def _overlapping_chunks(points: list[dict], size: int = _CHUNK_SIZE, overlap: int = _CHUNK_OVERLAP):
     """Yield provider-safe chunks while retaining context at internal edges."""
     if size < 2 or overlap < 0 or overlap >= size:
         raise ValueError("chunk overlap must be non-negative and smaller than the chunk size")
@@ -315,6 +323,55 @@ def _overlapping_chunks(points: list[dict], size: int = 90, overlap: int = 10):
         if start + size >= len(points):
             break
         start += size - overlap
+
+
+def _polyline_length_km(polyline: List[List[float]]) -> float:
+    """Haversine length of a [[lat,lng],...] line in km (distance, never money)."""
+    total = 0.0
+    for index in range(1, len(polyline)):
+        total += _haversine_km(polyline[index - 1][0], polyline[index - 1][1], polyline[index][0], polyline[index][1])
+    return total
+
+
+def _nearest_vertex_index(polyline: List[List[float]], point: dict) -> int:
+    """Index of the matched vertex closest to an input coordinate (planar approx)."""
+    try:
+        target_lat, target_lng = float(point["lat"]), float(point["lng"])
+    except (KeyError, TypeError, ValueError):
+        return 0
+    best_index, best_sq = 0, math.inf
+    for index, vertex in enumerate(polyline):
+        distance_sq = (vertex[0] - target_lat) ** 2 + (vertex[1] - target_lng) ** 2
+        if distance_sq < best_sq:
+            best_sq, best_index = distance_sq, index
+    return best_index
+
+
+def _trim_leading_overlap(matchings: List[RoadMatch], boundary_point: dict) -> List[RoadMatch]:
+    """Drop an internal chunk's carry-over head so overlap isn't double-counted.
+
+    An internal chunk re-submits ``_CHUNK_OVERLAP`` leading points the previous
+    chunk already matched. Trim the first matching's polyline to start at the
+    vertex nearest the last shared input point, scaling its distance to the kept
+    geometry, so neither the summed distance nor the emitted polyline counts the
+    overlap span twice (M-D). Matchings after the first are downstream of the
+    overlap and pass through untouched, preserving real OSRM discontinuities.
+    """
+    if not matchings:
+        return matchings
+    head_distance, head_polyline = matchings[0]
+    cut = _nearest_vertex_index(head_polyline, boundary_point)
+    if cut <= 0:
+        return matchings
+    trimmed_polyline = head_polyline[cut:]
+    if len(trimmed_polyline) < 2:
+        # The whole first matching fell inside the overlap the previous chunk
+        # already counted — drop it wholesale rather than keep a stub.
+        return matchings[1:]
+    full_length = _polyline_length_km(head_polyline)
+    kept_length = _polyline_length_km(trimmed_polyline)
+    trimmed_distance = round(head_distance * (kept_length / full_length), 3) if full_length > 0 else head_distance
+    return [(trimmed_distance, trimmed_polyline), *matchings[1:]]
 
 
 def _observed_segment_points(segment: Any) -> list[dict]:
@@ -375,6 +432,12 @@ async def compute_segmented_road_route(observed_segments: list[Any]) -> dict:
                     {"segment_index": segment_index, "chunk_index": chunk_index, "reason": "provider_unavailable"}
                 )
                 continue
+
+            # Internal chunks carry _CHUNK_OVERLAP leading points already matched
+            # by the previous chunk; trim that head so the shared span is neither
+            # summed nor drawn twice (M-D).
+            if chunk_index > 0 and len(chunk) > _CHUNK_OVERLAP:
+                matchings = _trim_leading_overlap(matchings, chunk[_CHUNK_OVERLAP - 1])
 
             for distance_km, polyline in matchings:
                 # A provider must return an actual geometry; distance without

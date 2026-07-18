@@ -17,7 +17,7 @@ BASE_TIME = datetime(2026, 7, 17, 21, 0, tzinfo=timezone.utc)
 
 
 def _point(
-    seconds: int,
+    seconds: float,
     *,
     session: str = "session-a",
     sequence: int = 0,
@@ -173,3 +173,65 @@ def test_49_minute_fixture_keeps_two_long_gaps_and_a_5km_jump_separate():
     assert len(flattened) == len(points)
     assert {(point["lat"], point["lng"]) for point in flattened} == {(point["lat"], point["lng"]) for point in points}
     assert segmented.quality.max_gap_seconds == 26 * 60
+
+
+def test_sub_second_capture_cadence_at_city_speed_stays_one_segment():
+    # A >=1 Hz client: 6 fixes 900 ms apart moving ~10 m each (~40 km/h).
+    points = [_point(0.9 * index, sequence=index, lat=50.445 + 0.00009 * index) for index in range(6)]
+
+    segmented = segment_route(points, _lifecycle(), completion_point=None)
+
+    assert [segment.boundary_reason for segment in segmented.observed_segments] == [None]
+    assert len(segmented.observed_segments[0].points) == len(points)
+
+
+def test_millisecond_timer_jitter_does_not_fragment_the_trace():
+    # Nominal 1 Hz cadence with 999 ms jitter and ~10 m hops (~36 km/h).
+    segmented = segment_route(
+        [
+            _point(0, sequence=0),
+            _point(0.999, sequence=1, lat=50.44509),
+            _point(1.998, sequence=2, lat=50.44518),
+        ],
+        _lifecycle(),
+        completion_point=None,
+    )
+
+    assert [segment.boundary_reason for segment in segmented.observed_segments] == [None]
+    assert len(segmented.observed_segments[0].points) == 3
+
+
+def test_sub_second_teleport_is_still_an_impossible_speed_boundary():
+    # ~167 m in 300 ms stays implausible even with the sub-second elapsed floor.
+    segmented = segment_route(
+        [_point(0, sequence=0), _point(0.3, sequence=1, lat=50.4465)],
+        _lifecycle(),
+        completion_point=None,
+    )
+
+    assert [segment.boundary_reason for segment in segmented.observed_segments] == [None, "impossible_speed"]
+
+
+def test_fractional_gap_just_over_the_continuity_threshold_is_a_boundary():
+    # 60.9 s must not truncate to 60 s and slip under the max-gap check.
+    segmented = segment_route(
+        [_point(0, sequence=0), _point(60.9, sequence=1, lat=50.44502)],
+        _lifecycle(),
+        completion_point=None,
+    )
+
+    assert [segment.boundary_reason for segment in segmented.observed_segments] == [None, "time_gap"]
+    assert segmented.quality.max_gap_seconds == 60.9
+
+
+def test_completion_fix_half_a_second_after_last_point_stays_continuous():
+    completion = _point(5.5, sequence=2, lat=50.44550)
+    segmented = segment_route(
+        [_point(0, sequence=0), _point(5, sequence=1, lat=50.44545), completion],
+        _lifecycle(),
+        completion_point=completion,
+    )
+
+    assert [segment.boundary_reason for segment in segmented.observed_segments] == [None]
+    assert len(segmented.observed_segments[0].points) == 3
+    assert segmented.quality.missing_tail is False

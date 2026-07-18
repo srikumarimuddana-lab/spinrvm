@@ -223,6 +223,130 @@ def test_provider_partial_failure_keeps_the_observed_segment_and_marks_it_incomp
     ]
 
 
+def _ride_with_parties() -> dict:
+    ride = _ride()
+    ride["rider_id"] = "rider_1"
+    # rides.driver_id is the driver PROFILE id; the WS key needs the user_id.
+    ride["driver_id"] = "driverprofile_1"
+    return ride
+
+
+class _FakeManager:
+    def __init__(self):
+        self.sent: list = []
+
+    async def send_personal_message(self, message, client_id, **_kwargs):
+        self.sent.append((client_id, message))
+
+
+def test_finalizer_scopes_route_to_trip_in_progress_points(monkeypatch):
+    nav = [
+        {**_point(0, 0), "tracking_phase": "navigating_to_pickup", "lat": 50.400},
+        {**_point(1, 5), "tracking_phase": "navigating_to_pickup", "lat": 50.401},
+    ]
+    trip = [
+        {**_point(2, 60), "tracking_phase": "trip_in_progress", "lat": 50.445},
+        {**_point(3, 65), "tracking_phase": "trip_in_progress", "lat": 50.4455},
+    ]
+    captured: dict = {}
+    update = AsyncMock(return_value={"ride_id": "ride_1"})
+
+    async def get_rows(_table, filters, **_kwargs):
+        captured["filters"] = filters
+        phase = filters.get("tracking_phase")
+        return [row for row in nav + trip if phase is None or row.get("tracking_phase") == phase]
+
+    monkeypatch.setattr(route_finalizer.db_supabase, "get_rows", get_rows)
+    monkeypatch.setattr(route_finalizer.db_supabase, "get_ride", AsyncMock(return_value=_ride()))
+    monkeypatch.setattr(route_finalizer.db_supabase, "update_one", update)
+    monkeypatch.setattr(route_finalizer, "_publish_finalized_snapshot", AsyncMock())
+    monkeypatch.setattr(route_finalizer, "_emit_route_finalized", AsyncMock())
+    monkeypatch.setattr(route_finalizer, "_get_route_row", AsyncMock(return_value=_route_row(completion_point=None)))
+    monkeypatch.setattr(
+        route_finalizer,
+        "compute_segmented_road_route",
+        AsyncMock(return_value={"segments": [], "distance_km": 0.0, "provider": None, "failures": []}),
+    )
+
+    _run(route_finalizer.finalize_route("ride_1"))
+
+    # M-A: the finalizer must scope its point set to the paid trip leg only.
+    assert captured["filters"] == {"ride_id": "ride_1", "tracking_phase": "trip_in_progress"}
+    payload = update.await_args.args[2]
+    coordinates = [coordinate for segment in payload["observed_segments"] for coordinate in segment["coordinates"]]
+    # Only the two trip_in_progress fixes survive; the pickup-nav leg is gone.
+    assert coordinates == [[50.445, -104.618], [50.4455, -104.618]]
+
+
+def test_finalize_publishes_route_finalized_event_across_replicas(monkeypatch):
+    fake_manager = _FakeManager()
+    monkeypatch.setattr(route_finalizer, "manager", fake_manager)
+    monkeypatch.setattr(
+        route_finalizer.db_supabase, "get_driver_by_id", AsyncMock(return_value={"user_id": "driveruser_1"})
+    )
+    monkeypatch.setattr(route_finalizer.db_supabase, "get_rows", AsyncMock(return_value=[_point(0, 0), _point(1, 10)]))
+    monkeypatch.setattr(route_finalizer.db_supabase, "get_ride", AsyncMock(return_value=_ride_with_parties()))
+    monkeypatch.setattr(route_finalizer.db_supabase, "update_one", AsyncMock(return_value={"ride_id": "ride_1"}))
+    monkeypatch.setattr(route_finalizer, "_publish_finalized_snapshot", AsyncMock())
+    monkeypatch.setattr(route_finalizer, "_get_route_row", AsyncMock(return_value=_route_row()))
+    monkeypatch.setattr(
+        route_finalizer,
+        "compute_segmented_road_route",
+        AsyncMock(
+            return_value={
+                "segments": [
+                    {
+                        "matched_segments": [
+                            {
+                                "provider": "osrm_match",
+                                "distance_km": 1.5,
+                                "polyline": [[50.445, -104.618], [50.446, -104.618]],
+                            }
+                        ]
+                    }
+                ],
+                "distance_km": 1.5,
+                "provider": "osrm_match",
+                "failures": [],
+            }
+        ),
+    )
+
+    result = _run(route_finalizer.finalize_route("ride_1"))
+
+    assert result["processing_status"] == "complete"
+    event = {
+        "type": "route_finalized",
+        "ride_id": "ride_1",
+        "route_revision": 4,
+        "route_geometry_status": "complete",
+    }
+    assert ("rider_rider_1", event) in fake_manager.sent
+    assert ("driver_driveruser_1", event) in fake_manager.sent
+    assert len(fake_manager.sent) == 2
+
+
+def test_finalize_does_not_publish_route_finalized_on_a_superseded_noop(monkeypatch):
+    fake_manager = _FakeManager()
+    monkeypatch.setattr(route_finalizer, "manager", fake_manager)
+    monkeypatch.setattr(route_finalizer.db_supabase, "get_rows", AsyncMock(return_value=[_point(0, 0), _point(1, 10)]))
+    monkeypatch.setattr(route_finalizer.db_supabase, "get_ride", AsyncMock(return_value=_ride_with_parties()))
+    # A late batch flipped the row back to pending before this claim could write.
+    monkeypatch.setattr(route_finalizer.db_supabase, "update_one", AsyncMock(return_value=None))
+    monkeypatch.setattr(route_finalizer, "_publish_finalized_snapshot", AsyncMock())
+    monkeypatch.setattr(route_finalizer, "_get_route_row", AsyncMock(return_value=_route_row()))
+    monkeypatch.setattr(
+        route_finalizer,
+        "compute_segmented_road_route",
+        AsyncMock(return_value={"segments": [], "distance_km": 0.0, "provider": None, "failures": []}),
+    )
+
+    result = _run(route_finalizer.finalize_route("ride_1"))
+
+    assert result["processing_status"] == "superseded"
+    assert fake_manager.sent == []
+
+
 def test_provider_failure_schedules_a_retry_without_exposing_coordinates(monkeypatch):
     update = AsyncMock()
     monkeypatch.setattr(route_finalizer.db_supabase, "get_rows", AsyncMock(return_value=[_point(0, 0), _point(1, 10)]))

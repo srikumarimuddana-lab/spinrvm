@@ -207,6 +207,54 @@ async def test_segmented_matching_chunks_293_points_with_overlap_and_keeps_osrm_
     assert result["distance_km"] == round(len(calls) * 1.5, 3)
 
 
+@pytest.mark.asyncio
+async def test_overlapping_chunks_do_not_double_count_the_shared_span():
+    # A straight ~180-point trace spans 3 overlapping chunks (size 90, step 80).
+    # Each chunk re-submits its 10 leading points; without trimming, the summed
+    # distance re-counts every overlap (~+11%). With the M-D trim it must equal
+    # the single-pass distance.
+    points = [
+        {"lat": 50.0 + i * 0.0009, "lng": -104.6, "accuracy": 8, "tracking_phase": "trip_in_progress"}
+        for i in range(180)
+    ]
+
+    async def _fake_app_settings():
+        return {"osrm_url": "http://osrm:5000"}
+
+    async def _fake_osrm_matchings(chunk, _url):
+        # Dense snapped geometry tracing the chunk; road distance == the
+        # polyline's own haversine length (an identity snap).
+        polyline = [[p["lat"], p["lng"]] for p in chunk]
+        length = sum(
+            rd._haversine_km(polyline[i - 1][0], polyline[i - 1][1], polyline[i][0], polyline[i][1])
+            for i in range(1, len(polyline))
+        )
+        return [(round(length, 3), polyline)]
+
+    with (
+        patch.object(rd, "get_app_settings", _fake_app_settings),
+        patch.object(rd, "_compute_osrm_chunk_matchings", _fake_osrm_matchings),
+    ):
+        result = await rd.compute_segmented_road_route([points])
+
+    single_pass_km = sum(
+        rd._haversine_km(points[i - 1]["lat"], points[i - 1]["lng"], points[i]["lat"], points[i]["lng"])
+        for i in range(1, len(points))
+    )
+    naive_double_counted_km = 0.0
+    for chunk in rd._overlapping_chunks(points):
+        naive_double_counted_km += sum(
+            rd._haversine_km(chunk[i - 1]["lat"], chunk[i - 1]["lng"], chunk[i]["lat"], chunk[i]["lng"])
+            for i in range(1, len(chunk))
+        )
+
+    # Trimmed sum tracks the single-pass distance, not the inflated one.
+    assert abs(result["distance_km"] - single_pass_km) < 0.02
+    # Sanity: the un-trimmed sum really is materially larger, so the tolerance
+    # above is meaningful rather than accidentally loose.
+    assert naive_double_counted_km > single_pass_km * 1.08
+
+
 # ── compute_road_route — provider selection ───────────────────────────────────
 
 

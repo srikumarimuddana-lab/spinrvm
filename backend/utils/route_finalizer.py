@@ -14,8 +14,10 @@ from typing import Any, Dict, Optional
 
 try:
     from .. import db_supabase
+    from ..socket_manager import manager
 except ImportError:
     import db_supabase  # type: ignore
+    from socket_manager import manager  # type: ignore
 
 try:
     from .datetime_utils import parse_iso_utc
@@ -29,8 +31,21 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-ROUTE_FINALIZER_INTERVAL_SECONDS = 15
+# A just-completed ride should reach revision 1 within a couple of ticks, and a
+# backlog must drain in one cycle rather than one-per-tick — so the loop polls
+# every ~5s and each tick claims+finalizes until no pending route remains.
+ROUTE_FINALIZER_INTERVAL_SECONDS = 5
 ROUTE_CLAIM_STALE_SECONDS = 5 * 60
+# Safety bound on a single drain cycle so a pathological requeue loop can never
+# starve the other background loops; a real backlog simply drains across ticks.
+ROUTE_FINALIZER_MAX_PER_CYCLE = 500
+
+# Only the paid trip leg is finalized. Billing attributes actual distance to
+# ``trip_in_progress`` breadcrumbs only (see drivers/ride_complete.py), so the
+# observed/matched geometry and matched_distance_km must exclude the pre-pickup
+# navigation leg. v1 rides never reach this deferred path (NULL identity /
+# tracking_phase rows are excluded upstream), so this filter is v2-only (M-A).
+_TRIP_TRACKING_PHASE = "trip_in_progress"
 
 
 def _now() -> datetime:
@@ -185,6 +200,38 @@ async def _schedule_retry(ride_id: str, route_row: Optional[Dict[str, Any]], rea
     return {"processing_status": "pending", "retry_count": retry_count, "next_retry_at": next_retry_at}
 
 
+async def _emit_route_finalized(ride: Dict[str, Any], route_revision: int, route_geometry_status: str) -> None:
+    """Notify rider and driver that a new immutable route revision is available.
+
+    The finalizer loop runs per-replica but the rider/driver socket may live on
+    another replica, so this fans out through ``manager.send_personal_message``
+    which publishes onto the shared ``ws_pubsub`` channel (cross-replica) and
+    only falls back to local delivery when Redis is unconfigured. ``rides``
+    stores the driver *profile* id, so the socket key needs the driver's
+    ``user_id`` resolved via ``get_driver_by_id`` (as cancellation/lost_found
+    do). A fan-out failure must never reopen a settled route, so it is logged
+    and swallowed here, mirroring snapshot publishing.
+    """
+    try:
+        ride_id = ride.get("id")
+        event = {
+            "type": "route_finalized",
+            "ride_id": str(ride_id),
+            "route_revision": route_revision,
+            "route_geometry_status": route_geometry_status,
+        }
+        rider_id = ride.get("rider_id")
+        if rider_id:
+            await manager.send_personal_message(event, f"rider_{rider_id}")
+        driver_id = ride.get("driver_id")
+        if driver_id:
+            driver = await db_supabase.get_driver_by_id(driver_id)
+            if driver and driver.get("user_id"):
+                await manager.send_personal_message(event, f"driver_{driver['user_id']}")
+    except Exception:
+        logger.error("route_finalized fan-out failed for ride_id=%s", ride.get("id"), exc_info=True)
+
+
 async def _publish_finalized_snapshot(
     ride_id: str,
     ride: Dict[str, Any],
@@ -285,17 +332,27 @@ async def recover_stale_route_claims() -> int:
 
 
 async def route_finalizer_tick() -> int:
-    """Recover stale work, atomically claim one route, then finalize it."""
+    """Recover stale work, then drain every due pending route this cycle.
+
+    Each claim still goes through the atomic pending→processing CAS in
+    ``claim_next_pending_route`` (backed by ``idx_ride_routes_processing``), so
+    draining stays replay-safe across replicas. ``ROUTE_FINALIZER_MAX_PER_CYCLE``
+    bounds a single cycle so a pathological requeue can't starve other loops;
+    any real backlog beyond it simply drains on the next ~5s tick.
+    """
     await recover_stale_route_claims()
-    ride_id = await claim_next_pending_route()
-    if not ride_id:
-        return 0
-    await finalize_route(ride_id)
-    return 1
+    finalized = 0
+    while finalized < ROUTE_FINALIZER_MAX_PER_CYCLE:
+        ride_id = await claim_next_pending_route()
+        if not ride_id:
+            break
+        await finalize_route(ride_id)
+        finalized += 1
+    return finalized
 
 
 async def route_finalizer_loop(interval_seconds: int = ROUTE_FINALIZER_INTERVAL_SECONDS) -> None:
-    """Replay-safe 15-second loop for versioned route finalization."""
+    """Replay-safe ~5-second drain loop for versioned route finalization."""
     while True:
         try:
             await route_finalizer_tick()
@@ -325,7 +382,7 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
             raise ValueError("ride_not_found")
         points = await db_supabase.get_rows(
             "driver_location_history",
-            {"ride_id": ride_id},
+            {"ride_id": ride_id, "tracking_phase": _TRIP_TRACKING_PHASE},
             order="captured_at",
             limit=10_000,
         )
@@ -355,6 +412,9 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
         )
         if updated is None:
             return {"processing_status": "superseded"}
+        # Only a claim that actually persisted a NEW revision notifies clients;
+        # a superseded no-op returns above without emitting (M-E).
+        await _emit_route_finalized(ride, revision, processing_status)
         await _publish_finalized_snapshot(
             ride_id,
             ride,

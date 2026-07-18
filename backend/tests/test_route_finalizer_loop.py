@@ -76,6 +76,79 @@ def test_future_retry_is_not_claimed(monkeypatch):
     update.assert_not_awaited()
 
 
+def test_tick_drains_every_pending_route_in_one_cycle(monkeypatch):
+    claims = ["ride_1", "ride_2", "ride_3", None]
+    finalized: list[str] = []
+    recovered: list[bool] = []
+
+    async def recover():
+        recovered.append(True)
+        return 0
+
+    async def claim(candidates=None):
+        return claims.pop(0)
+
+    async def finalize(ride_id):
+        finalized.append(ride_id)
+        return {"processing_status": "complete", "route_revision": 1}
+
+    monkeypatch.setattr(route_finalizer, "recover_stale_route_claims", recover)
+    monkeypatch.setattr(route_finalizer, "claim_next_pending_route", claim)
+    monkeypatch.setattr(route_finalizer, "finalize_route", finalize)
+
+    count = _run(route_finalizer.route_finalizer_tick())
+
+    assert count == 3
+    assert finalized == ["ride_1", "ride_2", "ride_3"]
+    # Stale-claim recovery still runs, once per cycle rather than per claim.
+    assert recovered == [True]
+
+
+def test_tick_returns_zero_when_no_route_is_pending(monkeypatch):
+    async def recover():
+        return 0
+
+    async def claim(candidates=None):
+        return None
+
+    async def finalize(_ride_id):
+        raise AssertionError("nothing pending — finalize must not run")
+
+    monkeypatch.setattr(route_finalizer, "recover_stale_route_claims", recover)
+    monkeypatch.setattr(route_finalizer, "claim_next_pending_route", claim)
+    monkeypatch.setattr(route_finalizer, "finalize_route", finalize)
+
+    assert _run(route_finalizer.route_finalizer_tick()) == 0
+
+
+def test_drain_is_bounded_so_a_requeue_storm_cannot_starve_other_loops(monkeypatch):
+    finalized: list[str] = []
+
+    async def recover():
+        return 0
+
+    async def claim(candidates=None):
+        return "ride_x"  # always pending — a pathological requeue
+
+    async def finalize(ride_id):
+        finalized.append(ride_id)
+        return {"processing_status": "complete"}
+
+    monkeypatch.setattr(route_finalizer, "recover_stale_route_claims", recover)
+    monkeypatch.setattr(route_finalizer, "claim_next_pending_route", claim)
+    monkeypatch.setattr(route_finalizer, "finalize_route", finalize)
+    monkeypatch.setattr(route_finalizer, "ROUTE_FINALIZER_MAX_PER_CYCLE", 5)
+
+    count = _run(route_finalizer.route_finalizer_tick())
+
+    assert count == 5
+    assert len(finalized) == 5
+
+
+def test_finalizer_loop_interval_is_reduced_to_five_seconds():
+    assert route_finalizer.ROUTE_FINALIZER_INTERVAL_SECONDS == 5
+
+
 def test_loop_survives_tick_failure_and_lifespan_registers_it(monkeypatch):
     ticks = []
 
@@ -96,4 +169,4 @@ def test_loop_survives_tick_failure_and_lifespan_registers_it(monkeypatch):
 
     assert ticks == ["tick", "tick"]
     lifespan_source = (Path(__file__).resolve().parents[1] / "core" / "lifespan.py").read_text()
-    assert '_spawn("route_finalizer (15s)", route_finalizer_loop)' in lifespan_source
+    assert '_spawn("route_finalizer (5s)", route_finalizer_loop)' in lifespan_source

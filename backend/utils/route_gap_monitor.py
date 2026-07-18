@@ -90,16 +90,32 @@ def _configured_threshold_seconds(settings: dict) -> int:
     return threshold
 
 
-async def _latest_capture_time(ride_id: str) -> Optional[datetime]:
+async def _latest_capture_times(ride_ids: list[str]) -> dict[str, datetime]:
+    """Latest accepted capture per active ride in ONE batched query.
+
+    Replaces the per-ride N+1 lookup (up to MAX_ACTIVE_RIDES_PER_TICK single-row
+    reads every tick, per replica — the exact anti-pattern CLAUDE.md calls out)
+    with a single ``.in_()`` scan. Rows come back newest-first, so the first row
+    seen for a ride_id is its latest and later rows for that ride are skipped.
+    """
+    if not ride_ids:
+        return {}
     rows = await db_supabase.get_rows(
         "driver_location_history",
-        {"ride_id": ride_id},
+        {"ride_id": {"$in": ride_ids}},
         order="captured_at",
         desc=True,
-        limit=1,
-        columns="captured_at",
+        columns="ride_id,captured_at",
     )
-    return parse_iso_utc(rows[0].get("captured_at")) if rows else None
+    latest: dict[str, datetime] = {}
+    for row in rows:
+        ride_id = row.get("ride_id")
+        if ride_id is None or str(ride_id) in latest:
+            continue
+        captured_at = parse_iso_utc(row.get("captured_at"))
+        if captured_at is not None:
+            latest[str(ride_id)] = captured_at
+    return latest
 
 
 async def _open_gap_event(ride: dict, decision: GapDecision, threshold_seconds: int, now: datetime) -> bool:
@@ -152,6 +168,7 @@ async def route_gap_monitor_tick() -> dict[str, int]:
         limit=MAX_ACTIVE_RIDES_PER_TICK,
         columns="id,driver_id,ride_started_at",
     )
+    latest_by_ride = await _latest_capture_times([str(ride["id"]) for ride in rides if ride.get("id")])
     result = {"scanned": 0, "opened": 0, "resolved": 0, "unknown": 0}
     current_open_gaps = 0
 
@@ -164,7 +181,7 @@ async def route_gap_monitor_tick() -> dict[str, int]:
         decision = assess_location_gap(
             now=now,
             trip_started_at=parse_iso_utc(ride.get("ride_started_at")),
-            last_captured_at=await _latest_capture_time(str(ride_id)),
+            last_captured_at=latest_by_ride.get(str(ride_id)),
             threshold_seconds=threshold_seconds,
         )
         if decision.state == "unknown":
@@ -174,7 +191,7 @@ async def route_gap_monitor_tick() -> dict[str, int]:
             current_open_gaps += 1
             if await _open_gap_event(ride, decision, threshold_seconds, now):
                 result["opened"] += 1
-                _metric_inc("spinr.routes.gps_gap_detected.count")
+                _metric_inc("spinr_routes_gps_gap_detected_total")
                 logger.warning(
                     "active trip GPS gap detected ride_id=%s gap_seconds=%s threshold_seconds=%s",
                     ride_id,
@@ -184,9 +201,9 @@ async def route_gap_monitor_tick() -> dict[str, int]:
             continue
         if await _resolve_open_gap_event(str(ride_id), now):
             result["resolved"] += 1
-            _metric_inc("spinr.routes.gps_gap_resolved.count")
+            _metric_inc("spinr_routes_gps_gap_resolved_total")
 
-    _metric_gauge("spinr.routes.gps_gap_open.count", current_open_gaps)
+    _metric_gauge("spinr_routes_gps_gap_open", current_open_gaps)
     return result
 
 
@@ -200,5 +217,5 @@ async def route_gap_monitor_loop(interval_seconds: int = ROUTE_GAP_MONITOR_INTER
             raise
         except Exception:
             logger.error("route gap monitor tick failed", exc_info=True)
-            _metric_inc("spinr.bgloop.errors.count", {"loop": "route_gap_monitor"})
+            _metric_inc("spinr_bgloop_errors_total", {"loop": "route_gap_monitor"})
         await asyncio.sleep(interval_seconds)

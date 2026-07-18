@@ -22,6 +22,12 @@ except ImportError:
 MAX_CONTINUOUS_GAP_SECONDS = 60
 MAX_CONTINUOUS_DISPLACEMENT_METERS = 300
 MAX_PLAUSIBLE_SPEED_KPH = 180
+# Sub-second capture cadence (>= 1 Hz clients, millisecond timer jitter) must
+# not read as infinite speed. Elapsed time is floored to this value for the
+# plausibility check only, so near-duplicate fixes stay continuous while a
+# genuine sub-second teleport still exceeds MAX_PLAUSIBLE_SPEED_KPH
+# (> 25 m displacement inside the floor window).
+MIN_SPEED_CHECK_ELAPSED_SECONDS = 0.5
 
 
 @dataclass(frozen=True)
@@ -47,7 +53,7 @@ class RouteSegmentationQuality:
     segment_count: int
     rejected_point_count: int
     coverage_ratio: float
-    max_gap_seconds: int
+    max_gap_seconds: float
     missing_tail: bool
     completion_distance_m: float | None
     completion_tolerance_m: float | None
@@ -170,21 +176,23 @@ def _parse_points(points: Iterable[Dict[str, Any]]) -> tuple[List[_ParsedPoint],
     return accepted, rejected
 
 
-def _boundary_reason(previous: _ParsedPoint, current: _ParsedPoint) -> tuple[str | None, int]:
+def _boundary_reason(previous: _ParsedPoint, current: _ParsedPoint) -> tuple[str | None, float]:
+    elapsed_seconds = max(0.0, (current.captured_at - previous.captured_at).total_seconds())
     if previous.recording_session_id != current.recording_session_id:
-        return "session_boundary", max(0, int((current.captured_at - previous.captured_at).total_seconds()))
+        return "session_boundary", elapsed_seconds
 
-    elapsed_seconds = max(0, int((current.captured_at - previous.captured_at).total_seconds()))
     if elapsed_seconds > MAX_CONTINUOUS_GAP_SECONDS:
         return "time_gap", elapsed_seconds
     displacement_meters = _distance_meters(previous.point, current.point)
     if displacement_meters > MAX_CONTINUOUS_DISPLACEMENT_METERS:
         return "distance_gap", elapsed_seconds
-    if elapsed_seconds == 0:
+    if elapsed_seconds == 0.0:
+        # Exactly-equal capture timestamps are ordered by sequence tie-break;
+        # any displacement at truly zero elapsed time is unattributable motion.
         if displacement_meters > 0:
             return "impossible_speed", elapsed_seconds
         return None, elapsed_seconds
-    speed_kph = displacement_meters / elapsed_seconds * 3.6
+    speed_kph = displacement_meters / max(elapsed_seconds, MIN_SPEED_CHECK_ELAPSED_SECONDS) * 3.6
     if speed_kph > MAX_PLAUSIBLE_SPEED_KPH:
         return "impossible_speed", elapsed_seconds
     return None, elapsed_seconds
@@ -232,7 +240,7 @@ def segment_route(
     segments: List[ObservedRouteSegment] = []
     current_points: List[Dict[str, Any]] = []
     current_boundary: str | None = None
-    max_gap_seconds = 0
+    max_gap_seconds = 0.0
     previous: _ParsedPoint | None = None
 
     for item in ordered:
@@ -261,7 +269,7 @@ def segment_route(
         segment_count=len(segments),
         rejected_point_count=len(rejected),
         coverage_ratio=_coverage_ratio(ordered, lifecycle),
-        max_gap_seconds=max_gap_seconds,
+        max_gap_seconds=round(max_gap_seconds, 3),
         missing_tail=missing_tail,
         completion_distance_m=completion_distance_m,
         completion_tolerance_m=completion_tolerance,

@@ -275,7 +275,7 @@ async def lifespan(app: FastAPI):
     try:
         from utils.route_finalizer import route_finalizer_loop
 
-        _spawn("route_finalizer (15s)", route_finalizer_loop)
+        _spawn("route_finalizer (5s)", route_finalizer_loop)
     except Exception as e:
         logger.error(f"Failed to import route finalizer loop: {e}", exc_info=True)
 

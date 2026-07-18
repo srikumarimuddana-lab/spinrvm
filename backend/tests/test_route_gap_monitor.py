@@ -79,7 +79,8 @@ def test_gap_monitor_tick_opens_one_idempotent_event_without_coordinates(monkeyp
                 {"id": "ride_1", "driver_id": "driver_1", "ride_started_at": (NOW - timedelta(minutes=4)).isoformat()}
             ]
         if table == "driver_location_history":
-            return [{"captured_at": (NOW - timedelta(seconds=45)).isoformat()}]
+            assert _filters == {"ride_id": {"$in": ["ride_1"]}}
+            return [{"ride_id": "ride_1", "captured_at": (NOW - timedelta(seconds=45)).isoformat()}]
         raise AssertionError(f"unexpected table {table}")
 
     async def insert_many_ignore_conflicts(_table, rows, _on_conflict):
@@ -112,7 +113,7 @@ def test_gap_monitor_tick_opens_one_idempotent_event_without_coordinates(monkeyp
             "source": "active_trip_monitor",
         }
     ]
-    assert gauges == [("spinr.routes.gps_gap_open.count", 1)]
+    assert gauges == [("spinr_routes_gps_gap_open", 1)]
 
 
 def test_gap_monitor_tick_resolves_an_open_event_after_capture_resumes(monkeypatch) -> None:
@@ -124,7 +125,7 @@ def test_gap_monitor_tick_resolves_an_open_event_after_capture_resumes(monkeypat
                 {"id": "ride_1", "driver_id": "driver_1", "ride_started_at": (NOW - timedelta(minutes=4)).isoformat()}
             ]
         if table == "driver_location_history":
-            return [{"captured_at": (NOW - timedelta(seconds=5)).isoformat()}]
+            return [{"ride_id": "ride_1", "captured_at": (NOW - timedelta(seconds=5)).isoformat()}]
         raise AssertionError(f"unexpected table {table}")
 
     async def update_one(*args, **kwargs):
@@ -149,6 +150,37 @@ def test_gap_monitor_tick_resolves_an_open_event_after_capture_resumes(monkeypat
         {"ride_id": "ride_1", "status": "open"},
         {"status": "resolved", "gap_resolved_at": NOW},
     )
+
+
+def test_latest_capture_times_batches_active_rides_in_one_query(monkeypatch) -> None:
+    calls: list[tuple] = []
+
+    async def get_rows(table, filters, **kwargs):
+        calls.append((table, filters, kwargs))
+        assert table == "driver_location_history"
+        assert filters == {"ride_id": {"$in": ["ride_1", "ride_2"]}}
+        assert kwargs.get("desc") is True
+        # Newest-first, interleaved across rides — the reducer keeps the first
+        # (latest) row it sees per ride_id.
+        return [
+            {"ride_id": "ride_1", "captured_at": (NOW - timedelta(seconds=5)).isoformat()},
+            {"ride_id": "ride_2", "captured_at": (NOW - timedelta(seconds=8)).isoformat()},
+            {"ride_id": "ride_1", "captured_at": (NOW - timedelta(seconds=50)).isoformat()},
+        ]
+
+    monkeypatch.setattr(route_gap_monitor.db_supabase, "get_rows", get_rows)
+
+    latest = _run(route_gap_monitor._latest_capture_times(["ride_1", "ride_2"]))
+
+    assert len(calls) == 1  # ONE batched query, not N+1
+    assert latest == {
+        "ride_1": NOW - timedelta(seconds=5),
+        "ride_2": NOW - timedelta(seconds=8),
+    }
+
+
+def test_latest_capture_times_returns_empty_without_active_rides() -> None:
+    assert _run(route_gap_monitor._latest_capture_times([])) == {}
 
 
 def test_lifespan_registers_the_route_gap_monitor_loop() -> None:

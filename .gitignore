@@ -33,6 +33,7 @@ status.txt
 status_check.txt
 status_full.txt
 .claude/worktrees/
+.worktrees/
 .claude/settings.local.json
 **/.claude/settings.local.json
 

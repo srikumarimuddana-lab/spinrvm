@@ -69,11 +69,33 @@ def _observed_projection(segmented: SegmentedRoute) -> list[dict]:
     ]
 
 
-def _matched_projection(matched_route: Dict[str, Any]) -> list[dict]:
-    """Convert matcher output to route-contract segments without cross-gap joins."""
+def _matched_projection(segmented: SegmentedRoute, matched_route: Dict[str, Any]) -> list[dict]:
+    """Project matched geometry, falling back per failed observed segment."""
     projection: list[dict] = []
-    for segment in matched_route.get("segments") or []:
-        observed_index = segment.get("segment_index")
+    failures_by_segment = {
+        int(failure["segment_index"])
+        for failure in (matched_route.get("failures") or [])
+        if isinstance(failure, dict) and isinstance(failure.get("segment_index"), int)
+    }
+    matched_by_segment = {
+        int(segment.get("segment_index", index)): segment
+        for index, segment in enumerate(matched_route.get("segments") or [])
+        if isinstance(segment, dict)
+    }
+    for observed_index, observed_segment in enumerate(segmented.observed_segments):
+        segment = matched_by_segment.get(observed_index)
+        if observed_index in failures_by_segment or not segment:
+            projection.append(
+                {
+                    "source_segment_index": observed_index,
+                    "provider": "observed_fallback",
+                    "coordinates": [
+                        [round(float(point["lat"]), 6), round(float(point["lng"]), 6)]
+                        for point in observed_segment.points
+                    ],
+                }
+            )
+            continue
         for matched in segment.get("matched_segments") or []:
             coordinates = matched.get("polyline") or []
             if len(coordinates) < 2:
@@ -92,6 +114,9 @@ def _matched_projection(matched_route: Dict[str, Any]) -> list[dict]:
 def _quality_projection(segmented: SegmentedRoute, matched_route: Dict[str, Any]) -> dict:
     quality = segmented.quality
     failures = matched_route.get("failures") or []
+    incomplete_reason = (
+        "missing_completion_fix" if quality.missing_tail else "road_match_partial_failure" if failures else None
+    )
     return {
         "coverage_ratio": quality.coverage_ratio,
         "point_count": quality.point_count,
@@ -105,6 +130,7 @@ def _quality_projection(segmented: SegmentedRoute, matched_route: Dict[str, Any]
         "matched_distance_km": matched_route.get("distance_km"),
         "matching_failure_count": len(failures),
         "finalization_reason": "complete" if not failures else "provider_partial_failure",
+        "incomplete_reason": incomplete_reason,
     }
 
 
@@ -297,6 +323,7 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
         matched_route = await compute_segmented_road_route(list(segmented.observed_segments))
         processing_status = _final_status(segmented, matched_route)
         quality = _quality_projection(segmented, matched_route)
+        display_segments = _matched_projection(segmented, matched_route)
         revision = int((route_row or {}).get("route_revision") or 0) + 1
         now = _now()
         updated = await db_supabase.update_one(
@@ -307,7 +334,7 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
                 "route_revision": revision,
                 "processing_status": processing_status,
                 "observed_segments": _observed_projection(segmented),
-                "road_matched_segments": _matched_projection(matched_route),
+                "road_matched_segments": display_segments,
                 "route_quality": quality,
                 "processing_claimed_at": None,
                 "next_retry_at": None,
@@ -322,7 +349,7 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
             ride_id,
             ride,
             revision,
-            (matched_route.get("segments") and _matched_projection(matched_route)) or _observed_projection(segmented),
+            display_segments,
             quality,
             (route_row or {}).get("completion_point"),
         )

@@ -82,7 +82,12 @@ export function toGeoJsonMultiLineString(input: unknown): GeoJsonMultiLineString
 
 /** Plain, approved quality copy for rider, driver, admin, and receipts. */
 export function routeQualityLabel(quality: unknown): string {
-  const value = quality as { coverage_ratio?: unknown; coverage_pct?: unknown; missing_tail?: unknown } | undefined;
+  const value = quality as {
+    coverage_ratio?: unknown;
+    coverage_pct?: unknown;
+    missing_tail?: unknown;
+    incomplete_reason?: unknown;
+  } | undefined;
   const ratio =
     typeof value?.coverage_ratio === 'number'
       ? value.coverage_ratio
@@ -90,6 +95,8 @@ export function routeQualityLabel(quality: unknown): string {
         ? value.coverage_pct / 100
         : undefined;
   const coverage = ratio === undefined ? 'GPS coverage unavailable' : `${Math.round(ratio * 100)}% GPS coverage`;
-  if (value?.missing_tail) return `Route incomplete · ${coverage}`;
+  if (value?.missing_tail || typeof value?.incomplete_reason === 'string') {
+    return `Route incomplete · ${coverage}`;
+  }
   return `Route verified · ${coverage}`;
 }

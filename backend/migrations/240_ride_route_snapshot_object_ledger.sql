@@ -13,7 +13,7 @@
 
 CREATE TABLE IF NOT EXISTS public.ride_route_snapshot_objects (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    ride_id uuid REFERENCES public.rides(id) ON DELETE SET NULL,
+    ride_id text REFERENCES public.rides(id) ON DELETE SET NULL,
     storage_bucket text NOT NULL,
     object_path text NOT NULL,
     route_revision integer NOT NULL,

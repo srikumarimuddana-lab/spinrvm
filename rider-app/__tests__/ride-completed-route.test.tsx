@@ -2,11 +2,11 @@ import fs from 'fs';
 import path from 'path';
 
 const screenSource = fs.readFileSync(
-  path.resolve(__dirname, '..', 'ride-completed.tsx'),
+  path.resolve(__dirname, '..', 'app', 'ride-completed.tsx'),
   'utf8',
 );
 const rideStoreSource = fs.readFileSync(
-  path.resolve(__dirname, '..', '..', 'store', 'rideStore.ts'),
+  path.resolve(__dirname, '..', 'store', 'rideStore.ts'),
   'utf8',
 );
 

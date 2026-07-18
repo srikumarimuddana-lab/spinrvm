@@ -8,8 +8,8 @@
 
 CREATE TABLE IF NOT EXISTS public.ride_location_gap_events (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    ride_id uuid NOT NULL REFERENCES public.rides(id) ON DELETE CASCADE,
-    driver_id uuid REFERENCES public.drivers(id) ON DELETE SET NULL,
+    ride_id text NOT NULL REFERENCES public.rides(id) ON DELETE CASCADE,
+    driver_id text REFERENCES public.drivers(id) ON DELETE SET NULL,
     gap_started_at timestamptz NOT NULL,
     detected_at timestamptz NOT NULL DEFAULT now(),
     gap_resolved_at timestamptz,

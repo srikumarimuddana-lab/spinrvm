@@ -2,7 +2,10 @@ import fs from 'fs';
 import path from 'path';
 
 describe('driver completion route confirmation', () => {
-  const screenSource = fs.readFileSync(path.resolve(__dirname, '..', 'index.tsx'), 'utf8');
+  const screenSource = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'app', 'driver', '(tabs)', 'index.tsx'),
+    'utf8',
+  );
 
   test('keeps a completion in progress until the driver chooses an allowed exception reason', () => {
     expect(screenSource).toContain('completionConfirmationVisible');

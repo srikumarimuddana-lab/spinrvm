@@ -1,4 +1,4 @@
--- 233_trip_location_route_integrity.sql
+-- 235_trip_location_route_integrity.sql
 --
 -- Durable active-trip breadcrumbs and versioned, segmented route geometry.
 -- New v2 identities are nullable on the legacy breadcrumb table so historical

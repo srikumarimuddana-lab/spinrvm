@@ -1,5 +1,12 @@
 # Deployment Guide: Vercel + Railway (or Render)
 
+> **Current release process (ADR-008):** production releases flow
+> `main → staging (auto) → canary (~5% traffic, gated) → production (gated)`.
+> See `docs/adr/008-staging-canary-production-pipeline.md`,
+> `docs/runbooks/canary-deploy.md`, and
+> `docs/runbooks/staging-canary-provisioning.md`. This guide remains the
+> reference for the underlying provider setup (Railway/Vercel/Render).
+
 This guide explains how to deploy the Spinr application using a hybrid approach:
 - **Backend (Python/FastAPI)**: Railway (Recommended) or Render
 - **Frontend (Expo Web)**: Vercel (Static Site)

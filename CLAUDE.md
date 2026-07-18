@@ -108,7 +108,7 @@ npm run lint
 
 ```bash
 cd backend
-python migrate.py --env production   # ordered SQL runner over backend/migrations/
+python scripts/migrate.py --env production   # ordered SQL runner over backend/migrations/; prompts unless --yes; DB selected via PG_CONNECTION_STRING
 ```
 
 ## Architecture
@@ -239,7 +239,7 @@ Rules:
 
 ## Database & Migration Conventions
 
-Migrations live in `backend/migrations/` and are applied in filename order by `backend/migrate.py`.
+Migrations live in `backend/migrations/` and are applied in filename order by `backend/scripts/migrate.py`.
 
 Naming: `NN_short_description.sql` where `NN` is a zero-padded sequence number (currently highest is `144_ai_conversations_admin_actor.sql`; **next free slot is `145`** — re-verify with `ls backend/migrations | sort -V | tail -1` since this note goes stale). Pick the next available number — never reuse or reorder existing numbers. If two PRs conflict on a number, the second one renames to the next free slot before merge. Note: the runner uses the full filename as the idempotency key, so already-applied migrations must never be renamed. (Pre-existing duplicate prefixes at 08, 28, 29, 48, 50, 51, 52, 54, 55, 56, 57, 58, 91, 92, 96, 138, 142, 143 are handled by full-filename keying — do not introduce new duplicates; a CI prefix-uniqueness check blocks them.)
 
@@ -487,9 +487,13 @@ Production health is measured against these targets. Code that risks breaching t
 
 ## Deployment
 
-- **Backend**: deployed to **both** Railway (Canada) and Fly.io (`yyz`, Toronto) from `main` in parallel. Fly.io is the intended primary; Railway is the warm standby. Routing is a Cloudflare CNAME on `api-spinr.spinr.ca` — fail-over/fail-back is a single DNS change (no load balancer). Shared Redis sits behind a `redis.spinr.ca` DNS alias so the Redis backend can be repointed on fail-back. See `docs/runbooks/railway-fly-failover.md` and `docs/adr/007-fly-primary-railway-standby.md`.
-- **Frontend/Admin**: Vercel
-- **Mobile builds**: Expo EAS — only triggered when commit message contains `[build]`
+Promotion pipeline (ADR-008): `main → staging (auto) → canary (gated, ~5% traffic) → production (gated)`.
+
+- **Staging**: push to `main` runs `.github/workflows/deploy-staging.yml` — migrates the staging Supabase project, deploys Fly app `spinr-backend-staging` (`ENV=staging`, `api-staging.spinr.ca`), and smoke-tests it. Staging is fully isolated (own Supabase in ca-central-1, own Redis, Stripe TEST keys in its own `app_settings` row) and runs every production security guard (`settings.is_production_like`).
+- **Canary → Production**: `.github/workflows/promote-production.yml` (manual dispatch, two GitHub Environment approvals) — prod migrations (expand/contract), then Fly app `spinr-backend-canary` (`ENV=production`, `DEPLOY_STAGE=canary`, `BACKGROUND_LOOPS_ENABLED=false`, shares prod Supabase/Redis, ~5% via Cloudflare weighted LB on `api-spinr.spinr.ca`), timed bake, then full rollout to Fly `spinr-backend-yyz` + Railway warm standby (LB fallback pool). Runbook: `docs/runbooks/canary-deploy.md`; provisioning: `docs/runbooks/staging-canary-provisioning.md`.
+- Until the pipeline infra is provisioned (repo vars `STAGING_ENABLED` / `CANARY_PIPELINE_ENABLED`), pushes to `main` still deploy prod directly via `deploy-fly.yml` + `deploy-backend.yml` (kept afterwards as break-glass `workflow_dispatch`). Shared Redis sits behind a `redis.spinr.ca` DNS alias. See also `docs/runbooks/railway-fly-failover.md`, `docs/adr/007-fly-primary-railway-standby.md`.
+- **Frontend/Admin**: Vercel (`admin-spinr.spinr.ca` prod; `admin-staging.spinr.ca` staging)
+- **Mobile builds**: Expo EAS — push-to-main OTA publishes to the `preview` channel (staging-facing); `production` channel OTA is manual dispatch only. Full native builds only when commit message contains `[build]`
 
 ## Agent Framework (`agents/`)
 

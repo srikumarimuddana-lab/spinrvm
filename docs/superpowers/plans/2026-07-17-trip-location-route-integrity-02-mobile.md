@@ -38,7 +38,7 @@ export interface TripLocationPoint {
 ```
 
 - [ ] Implement SQLite tables `trip_location_sessions`, `trip_location_outbox`, and `trip_location_quarantine`; make `(session_id, sequence_number)` the primary key and allocate sequences inside `withExclusiveTransactionAsync`.
-- [ ] Implement `startSession(rideId)`, `enqueue(fix)`, `peek(sessionId, 500)`, `acknowledge(sessionId, ackedThrough, rejected)`, `pendingCount(rideId)`, and `closeSession(rideId)`. Closing marks the session closed but never deletes pending rows.
+- [ ] Implement `startSession(rideId)`, `enqueue(fix)`, `listPendingSessions()`, `peek(sessionId, 500)`, `acknowledge(sessionId, ackedThrough, rejected)`, `pendingCount(rideId)`, and `closeSession(rideId)`. Closing marks the session closed but never deletes pending rows.
 - [ ] Run the targeted test and `npx tsc --noEmit -p tsconfig.json`; expect PASS. Commit: `feat(driver): add durable trip location outbox`.
 
 ### Task 8: Unified recorder and background liveness
@@ -51,7 +51,7 @@ export interface TripLocationPoint {
 - [ ] Run `yarn test utils/__tests__/backgroundLocation.test.ts --runInBand`; expect failures against registration checks and AsyncStorage queues.
 - [ ] `startRide(rideId)` atomically reuses/creates the open SQLite session, allowing foreground and headless JS contexts to share sequence state. Background `recordNativeFix` resolves that open session when no ride ID is available.
 - [ ] Implement native-fix conversion with `captured_at: new Date(loc.timestamp).toISOString()` and enqueue before network I/O. Inject the upload transport into `flushPending` so foreground uses the shared API client while the headless task reuses its refresh-token/App Check fetch path without circular imports.
-- [ ] Serialize flushes; run at most every 10 seconds or at 25 queued points, plus background/completion flushes, and apply only returned acknowledgements.
+- [ ] Serialize flushes; run at most every 10 seconds or at 25 queued points, plus background/completion flushes. Drain the oldest pending session first, continue through closed sessions, and apply only returned acknowledgements.
 - [ ] Replace background AsyncStorage queue functions with recorder calls. Replace every liveness use of `TaskManager.isTaskRegisteredAsync(TASK_NAME)` with `Location.hasStartedLocationUpdatesAsync(TASK_NAME)`; registration may remain only for task-definition diagnostics.
 - [ ] Add a 30-second active-trip watchdog that exposes degraded health without logging coordinates. Do not claim force-quit recovery; geofence re-entry may only restart future capture.
 - [ ] Run the targeted test and driver lint; expect PASS. Commit: `feat(driver): unify background trip recording`.

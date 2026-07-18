@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 
 const source = fs.readFileSync(
-  path.resolve(__dirname, '..', 'ride-detail.tsx'),
+  path.resolve(__dirname, '..', '..', 'app', 'driver', 'ride-detail.tsx'),
   'utf8',
 );
 

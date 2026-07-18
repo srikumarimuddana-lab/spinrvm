@@ -40,12 +40,12 @@ export interface RouteQuality {
 
 ### Task 2: Additive database schema
 
-**Files:** Create `backend/migrations/233_trip_location_route_integrity.sql`, `backend/tests/test_trip_location_route_migration.py`.
+**Files:** Create `backend/migrations/235_trip_location_route_integrity.sql`, `backend/tests/test_trip_location_route_migration.py`.
 
 **Produces:** Idempotent point identity, finalizer state, v2 geometry, indexes, and shadow-mode settings.
 
-- [ ] Write a failing SQL-contract test that asserts migration 233 contains the four-column unique index, `captured_at`, v2 segment columns, processing index, rollback comment, and settings defaults.
-- [ ] Run `pytest backend/tests/test_trip_location_route_migration.py -q`; expect FAIL because migration 233 is absent.
+- [ ] Write a failing SQL-contract test that asserts migration 235 contains the four-column unique index, `captured_at`, v2 segment columns, processing index, rollback comment, and settings defaults.
+- [ ] Run `pytest backend/tests/test_trip_location_route_migration.py -q`; expect FAIL because migration 235 is absent.
 - [ ] Create the migration with these core statements:
 
 ```sql

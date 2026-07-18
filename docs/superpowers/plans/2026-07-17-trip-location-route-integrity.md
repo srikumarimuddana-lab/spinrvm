@@ -53,7 +53,7 @@ Execute the appendices strictly in this order:
 
 ### Backend ingestion
 
-- Migration `233_trip_location_route_integrity.sql` adds idempotency, route-revision, processing-state, completion, and quality fields plus indexes and feature settings.
+- Migration `235_trip_location_route_integrity.sql` adds idempotency, route-revision, processing-state, completion, and quality fields plus indexes and feature settings.
 - `repositories/_base.py` provides conflict-safe bulk insert.
 - `utils/breadcrumbs.py` provides `persist_trip_location_batch(...) -> LocationBatchPersistResult`; REST exposes only its `LocationBatchAck`.
 - `POST /drivers/location-batch` accepts one ordered session batch and returns a contiguous acknowledgement.

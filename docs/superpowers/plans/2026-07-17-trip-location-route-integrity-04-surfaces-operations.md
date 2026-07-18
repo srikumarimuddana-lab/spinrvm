@@ -68,7 +68,7 @@ Required context: complete Tasks 1–20. Execute Tasks 21–30 in order.
 
 ### Task 28: Three-year derived-route retention
 
-**Files:** Create `backend/migrations/234_trip_route_integrity_retention.sql`; modify `backend/utils/retention_purge.py`, `backend/tests/test_retention_purge.py`.
+**Files:** Create `backend/migrations/238_trip_route_integrity_retention.sql`; modify `backend/utils/retention_purge.py`, `backend/tests/test_retention_purge.py`.
 
 - [ ] Test the migration defines a `SECURITY DEFINER` function with pinned `search_path`, dry-run behavior, audit output, and clearing of segments/completion/quality/snapshot fields after three years.
 - [ ] Test the daily purge invokes both existing `purge_pii_retention` and new `purge_trip_route_integrity_retention`, surfacing either DB failure.

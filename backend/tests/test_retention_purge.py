@@ -42,6 +42,12 @@ async def test_run_tick_parses_jsonb_result_and_forwards_dry_run():
     rpc_mock.execute.return_value = MagicMock(data=expected)
     supa = MagicMock()
     supa.rpc.return_value = rpc_mock
+    # dry_run=False also sweeps the ride_route_snapshot_objects ledger; the
+    # query's .data must be a real list (empty = no due objects) or the tick
+    # raises "route snapshot ledger query returned an invalid response".
+    (
+        supa.table.return_value.select.return_value.is_.return_value.lte.return_value.limit.return_value.execute.return_value
+    ) = MagicMock(data=[])
 
     with (
         patch("utils.retention_purge.supabase", supa),

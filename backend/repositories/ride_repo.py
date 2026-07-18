@@ -28,6 +28,34 @@ except ImportError:
 
 # ============ Ride Helpers ============
 
+_PRIVATE_ROUTE_SNAPSHOT_BUCKET = "ride-route-snapshots"
+_PRIVATE_ROUTE_SNAPSHOT_TTL_SECONDS = 15 * 60
+
+
+async def create_route_snapshot_signed_url(object_path: str) -> str:
+    """Create a short-lived URL for one private route image.
+
+    Callers must authorize access to the ride before invoking this helper. The
+    durable database row stores only the object path, never a bearer URL.
+    """
+    if not isinstance(object_path, str) or not object_path.strip():
+        raise ValueError("route snapshot object path is required")
+    if not supabase:
+        raise RuntimeError("Supabase client not configured")
+
+    response = await run_sync(
+        lambda: supabase.storage.from_(_PRIVATE_ROUTE_SNAPSHOT_BUCKET).create_signed_url(
+            object_path, _PRIVATE_ROUTE_SNAPSHOT_TTL_SECONDS
+        )
+    )
+    if isinstance(response, dict):
+        signed_url = response.get("signedURL") or response.get("signedUrl")
+    else:
+        signed_url = getattr(response, "signedURL", None) or getattr(response, "signed_url", None)
+    if not isinstance(signed_url, str) or not signed_url:
+        raise RuntimeError("Supabase Storage did not return a route snapshot signed URL")
+    return signed_url
+
 
 async def _driver_profile_image(user_id: Optional[str]) -> str:
     """Driver avatar = the driver's users.profile_image (base64). Empty if none.
@@ -44,7 +72,7 @@ async def _driver_profile_image(user_id: Optional[str]) -> str:
     return (row or {}).get("profile_image", "") or ""
 
 
-def _project_route_detail(ride: Dict[str, Any], route: Dict[str, Any]) -> None:
+async def _project_route_detail(ride: Dict[str, Any], route: Dict[str, Any]) -> None:
     """Attach a safe, display-ready route projection to one authorized detail.
 
     Version 2 geometry is intentionally segmented.  Consumers must never join
@@ -66,8 +94,9 @@ def _project_route_detail(ride: Dict[str, Any], route: Dict[str, Any]) -> None:
 
         snapshot_revision = int(route.get("snapshot_revision") or 0)
         ride["snapshot_revision"] = snapshot_revision
-        if snapshot_revision == ride["route_revision"] and route.get("snapshot_url"):
-            ride["route_snapshot_url"] = route["snapshot_url"]
+        object_path = route.get("snapshot_object_path")
+        if snapshot_revision == ride["route_revision"] and object_path:
+            ride["route_snapshot_url"] = await create_route_snapshot_signed_url(str(object_path))
         else:
             ride.pop("route_snapshot_url", None)
         return
@@ -104,7 +133,7 @@ async def get_ride(ride_id: str, *, include_route: bool = False) -> Optional[Dic
         lambda: _single_row_from_res(supabase.table("ride_routes").select("*").eq("ride_id", ride_id).execute())
     )
     if route:
-        _project_route_detail(ride, route)
+        await _project_route_detail(ride, route)
     return ride
 
 
@@ -569,7 +598,7 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
 
     route = await run_sync(_get_route)
     if route:
-        _project_route_detail(ride, route)
+        await _project_route_detail(ride, route)
 
     return ride
 

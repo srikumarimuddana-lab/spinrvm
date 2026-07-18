@@ -5,6 +5,7 @@ import io
 import re
 import zlib
 from decimal import Decimal
+from unittest.mock import AsyncMock
 
 from PIL import Image
 
@@ -98,7 +99,7 @@ def test_completed_receipt_waits_for_initial_route_finalization(monkeypatch) -> 
                     "route_schema_version": 2,
                     "route_revision": 4,
                     "snapshot_revision": 4,
-                    "snapshot_url": "https://maps.example/route-v4.png",
+                    "snapshot_object_path": "ride_1/route-v4.png",
                     "route_quality": {"coverage_ratio": 0.91},
                 }
             ],
@@ -113,11 +114,44 @@ def test_completed_receipt_waits_for_initial_route_finalization(monkeypatch) -> 
 
     monkeypatch.setattr(db_supabase, "get_rows", _get_rows)
     monkeypatch.setattr(email_receipt.asyncio, "sleep", _sleep)
+    monkeypatch.setattr(
+        email_receipt,
+        "create_route_snapshot_signed_url",
+        AsyncMock(return_value="https://storage.example/signed/route-v4.png"),
+    )
 
     resolved = asyncio.run(email_receipt._await_route_receipt_projection(RIDE))
 
     assert resolved["route_revision"] == 4
     assert resolved["route_snapshot_url"].endswith("route-v4.png")
+
+
+def test_completed_receipt_signs_a_private_v2_snapshot(monkeypatch) -> None:
+    from backend import db_supabase
+    from backend.utils import email_receipt
+
+    async def _get_rows(*_args, **_kwargs):
+        return [
+            {
+                "processing_status": "complete",
+                "route_schema_version": 2,
+                "route_revision": 4,
+                "snapshot_revision": 4,
+                "snapshot_object_path": "ride_1/route-v4.png",
+                "route_quality": {"coverage_ratio": 0.91},
+            }
+        ]
+
+    signed_url = "https://storage.example/signed/route-v4.png"
+    signer = AsyncMock(return_value=signed_url)
+    monkeypatch.setattr(db_supabase, "get_rows", _get_rows)
+    monkeypatch.setattr(email_receipt, "create_route_snapshot_signed_url", signer)
+
+    resolved = asyncio.run(email_receipt._await_route_receipt_projection(RIDE))
+
+    signer.assert_awaited_once_with("ride_1/route-v4.png")
+    assert resolved["route_snapshot_url"] == signed_url
+    assert "snapshot_object_path" not in resolved
 
 
 def test_pdf_embeds_snapshot_bytes_and_prints_truthful_quality_note() -> None:

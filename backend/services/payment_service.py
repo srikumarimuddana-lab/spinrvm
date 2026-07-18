@@ -646,11 +646,11 @@ async def _settle_against_hold(
     if cap.status == "unconfigured":
         # DEV/TEST ONLY below the guard: reached only when stripe_secret_key is
         # unset. The key lives in the app_settings DB row (not env), so there is
-        # no startup fail-fast — in production refuse to settle rather than
-        # marking the ride paid for free. In dev/test, mark paid with no
+        # no startup fail-fast — in staging/production refuse to settle rather
+        # than marking the ride paid for free. In dev/test, mark paid with no
         # financial_events row — mirroring the fresh-charge `unconfigured`
         # branch below — so flows don't wedge when Stripe isn't wired up.
-        if app_config.ENV.lower() == "production":
+        if app_config.is_production_like:
             return await _refuse_unconfigured_settlement(ride_id, "capture")
         logger.error("Stripe unconfigured — marking ride %s paid (held) without real capture", ride_id)
         await db_supabase.update_ride(
@@ -945,7 +945,7 @@ async def settle_card(
         )
 
     if outcome.status == "unconfigured":
-        if app_config.ENV.lower() == "production":
+        if app_config.is_production_like:
             return await _refuse_unconfigured_settlement(ride_id, "charge")
         logger.error("Stripe unconfigured — marking ride %s paid without real charge", ride_id)
         await db_supabase.update_ride(

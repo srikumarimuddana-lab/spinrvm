@@ -53,6 +53,50 @@ class TestStagingOtpFallbackRefused:
         assert exc.value.status_code == 503
 
 
+class TestStagingRefusesUnconfiguredSettlement:
+    """payment_service.settle_card: Stripe-unconfigured in staging must refuse
+    settlement (mark failed, 503) — never mark the ride paid for free."""
+
+    def test_staging_unconfigured_charge_refused(self):
+        from decimal import Decimal
+
+        from backend.services import payment_service as ps
+        from backend.utils.stripe_charge import ChargeOutcome
+
+        update_ride = AsyncMock()
+        with (
+            patch.object(ps.app_config, "ENV", "staging"),
+            patch(
+                "backend.services.payment_service.db_supabase.get_user_by_id",
+                AsyncMock(return_value={"id": "r1", "stripe_customer_id": "cus_1", "default_payment_method": "pm_1"}),
+            ),
+            patch("backend.services.payment_service.db_supabase.update_ride", update_ride),
+            patch(
+                "backend.services.payment_service.charge_ride",
+                AsyncMock(return_value=ChargeOutcome(status="unconfigured")),
+            ),
+            patch("backend.services.payment_service.record_payment_event", AsyncMock()),
+            patch("backend.services.payment_service.send_push_notification", AsyncMock()),
+        ):
+            result = asyncio.run(
+                ps.settle_card(
+                    ride={"id": "ride1", "rider_id": "r1", "payment_method_id": "pm_1"},
+                    ride_id="ride1",
+                    rider_id="r1",
+                    total_charge=Decimal("20.00"),
+                    tip_amount=Decimal("0.00"),
+                )
+            )
+
+        assert result.success is False
+        assert result.error_code == "stripe_unconfigured"
+        assert result.status_code == 503
+        # The refusal path marks the ride failed (collectible) — never paid.
+        statuses = [c.args[1].get("payment_status") for c in update_ride.call_args_list]
+        assert "paid" not in statuses
+        assert "failed" in statuses
+
+
 class TestAdminLoginRateLimit:
     @pytest.mark.parametrize(
         "env,expected",

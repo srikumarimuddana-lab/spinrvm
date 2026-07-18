@@ -39,7 +39,9 @@ async def simulate_driver_arrival(
     current_user: dict = Depends(get_current_user),
 ):
     """Dev/test only: Simulate driver arriving at pickup, returns OTP."""
-    if _deps._settings.ENV.lower() == "production":
+    # Deliberately is_production (NOT is_production_like, ADR-008): staging
+    # keeps the simulate path for automated ride-lifecycle smoke tests.
+    if _deps._settings.is_production:
         raise HTTPException(status_code=403, detail="Not available in production")
     ride = await _deps.db_supabase.get_ride(ride_id)
     if not ride:

@@ -704,7 +704,9 @@ async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user
     except ImportError:
         from core.config import settings as _settings  # type: ignore
 
-    if _settings.ENV.lower() == "production":
+    # Deliberately is_production (NOT is_production_like, ADR-008): staging
+    # keeps the simulate path for automated ride-lifecycle smoke tests.
+    if _settings.is_production:
         raise HTTPException(
             status_code=410,
             detail="Use POST /rides/{ride_id}/verify-otp to start a ride in production.",

@@ -322,7 +322,7 @@ async def confirm_payment(
     payment_intent_id = body.payment_intent_id
     ride_id = body.ride_id
 
-    # Mock-payment shortcut is allowed only outside production, OR for an
+    # Mock-payment shortcut is allowed only outside staging/production, OR for an
     # allow-listed app-store reviewer account (so a reviewer can reach a "paid"
     # confirmation without a real charge). Reject everyone else up front —
     # before claiming the ride into payment_status=processing — so a rejected
@@ -332,17 +332,17 @@ async def confirm_payment(
     if (
         payment_intent_id
         and payment_intent_id.startswith("pi_mock_")
-        and core_settings.ENV.lower() == "production"
+        and core_settings.is_production_like
         and not _is_reviewer
     ):
         logger.error(
-            "Rejected mock payment intent %s in production for ride %s",
+            "Rejected mock payment intent %s in production-like env for ride %s",
             payment_intent_id,
             ride_id,
         )
         raise HTTPException(
             status_code=400,
-            detail="Mock payments are not supported in production",
+            detail="Mock payments are not supported in this environment",
         )
 
     is_mock = bool(payment_intent_id and payment_intent_id.startswith("pi_mock_"))
@@ -578,14 +578,15 @@ async def get_cards(request: Request = None, current_user: dict = Depends(get_cu
 
     if not stripe_secret:
         # The Stripe key lives in the app_settings DB table (not env), so startup
-        # cannot fail-fast on it. In production an empty key is a misconfiguration,
-        # NOT demo mode — never hand a real rider the demo card (a pm_demo_card
-        # would later fail at settlement once the key is restored). Surface 503 so
-        # the client retries and ops notice.
-        if core_settings.ENV.lower() == "production":
-            logger.error("get_cards: stripe_secret_key empty in production — refusing to serve demo card")
+        # cannot fail-fast on it. In staging/production an empty key is a
+        # misconfiguration, NOT demo mode — never hand a real rider the demo card
+        # (a pm_demo_card would later fail at settlement once the key is
+        # restored). Surface 503 so the client retries and ops notice. Staging
+        # carries Stripe TEST-mode keys in its own app_settings row (ADR-008).
+        if core_settings.is_production_like:
+            logger.error("get_cards: stripe_secret_key empty in %s — refusing to serve demo card", core_settings.ENV)
             raise HTTPException(status_code=503, detail="Payments temporarily unavailable. Please try again.")
-        # Demo/local/staging mode (Stripe intentionally unconfigured): return a
+        # Demo/local mode (Stripe intentionally unconfigured): return a
         # single selectable demo card so the booking flow has a payment method to
         # attach. Settlement goes through charge_ride's "unconfigured" path, which
         # marks the ride paid without a real charge.

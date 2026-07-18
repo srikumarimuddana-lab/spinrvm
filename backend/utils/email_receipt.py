@@ -259,7 +259,14 @@ async def _download_route_snapshot(url: str) -> Optional[bytes]:
     return None
 
 
-def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: Decimal = Decimal(0)) -> str:
+def generate_receipt_html(
+    ride: dict,
+    rider: dict,
+    driver: dict = None,
+    tip: Decimal = Decimal(0),
+    *,
+    include_route_snapshot: bool = True,
+) -> str:
     """Generate HTML receipt for a completed ride."""
     tip_d = _d(tip)
     fare_rows, total_d = _build_fare_rows(ride, tip_d)
@@ -288,7 +295,7 @@ def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: Dec
 
     route_snapshot_url, route_snapshot_note, _route_snapshot_is_actual = _route_snapshot_presentation(ride)
     route_snapshot_html = ""
-    if route_snapshot_url:
+    if route_snapshot_url and include_route_snapshot:
         route_snapshot_html = f"""
         <tr><td style="padding:0 24px 16px;">
           <p style="font-size:12px;color:#666;margin:0 0 6px;">{route_snapshot_note}</p>
@@ -297,9 +304,12 @@ def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: Dec
         </td></tr>
         """
     elif route_snapshot_note:
+        attached_copy_note = ""
+        if route_snapshot_url and _route_snapshot_is_actual:
+            attached_copy_note = " A permanent map copy is attached to this receipt."
         route_snapshot_html = f"""
         <tr><td style="padding:0 24px 16px;">
-          <p style="font-size:12px;color:#8a3412;margin:0;">{route_snapshot_note}</p>
+          <p style="font-size:12px;color:#8a3412;margin:0;">{route_snapshot_note}{attached_copy_note}</p>
         </td></tr>
         """
 
@@ -417,7 +427,12 @@ async def send_receipt_email(
         logger.warning(f"No email for rider {rider.get('id')} — skipping receipt")
         return False
 
-    html = generate_receipt_html(ride, rider, driver, tip)
+    snapshot_url, snapshot_note, snapshot_is_actual = _route_snapshot_presentation(ride)
+    snapshot_bytes = await _download_route_snapshot(snapshot_url) if snapshot_url else None
+    # Private Storage URLs expire. The email body must remain valid long after
+    # delivery, so it contains only the quality note; the PDF and PNG contain
+    # the immutable bytes downloaded while the signed URL was valid.
+    html = generate_receipt_html(ride, rider, driver, tip, include_route_snapshot=False)
     total = _receipt_total(ride, tip)
 
     try:
@@ -427,14 +442,12 @@ async def send_receipt_email(
 
     # Attach a PDF copy of the receipt. Best-effort: a PDF-generation failure
     # must never block the receipt email itself.
-    attachments = None
+    attachments = []
     try:
         try:
             from .receipt_pdf import generate_receipt_pdf
         except ImportError:
             from utils.receipt_pdf import generate_receipt_pdf  # type: ignore
-        snapshot_url, snapshot_note, snapshot_is_actual = _route_snapshot_presentation(ride)
-        snapshot_bytes = await _download_route_snapshot(snapshot_url) if snapshot_url else None
         pdf_bytes = generate_receipt_pdf(
             ride,
             rider,
@@ -445,9 +458,13 @@ async def send_receipt_email(
             route_snapshot_is_actual=snapshot_is_actual,
         )
         ref = ride.get("ride_code") or str(ride.get("id", ""))[:8].upper() or "receipt"
-        attachments = [{"filename": f"Spinr-receipt-{ref}.pdf", "content": pdf_bytes, "mime": "application/pdf"}]
+        attachments.append({"filename": f"Spinr-receipt-{ref}.pdf", "content": pdf_bytes, "mime": "application/pdf"})
     except Exception:
         logger.error("Receipt PDF generation failed — sending receipt without attachment", exc_info=True)
+
+    if snapshot_bytes and snapshot_is_actual:
+        ref = ride.get("ride_code") or str(ride.get("id", ""))[:8].upper() or "receipt"
+        attachments.append({"filename": f"Spinr-route-{ref}.png", "content": snapshot_bytes, "mime": "image/png"})
 
     recipient_user_id = rider.get("id") or ride.get("rider_id")
     return await send_transactional_email(
@@ -458,5 +475,5 @@ async def send_receipt_email(
         log_id=str(recipient_user_id or "-"),
         email_type="receipt",
         recipient_user_id=str(recipient_user_id) if recipient_user_id else None,
-        attachments=attachments,
+        attachments=attachments or None,
     )

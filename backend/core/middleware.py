@@ -449,10 +449,10 @@ def _validate_production_config():
 
     Called at the top of init_middleware so the server never actually
     starts serving requests with a known-insecure configuration. All
-    checks only fire when ``ENV=production``; dev/local environments
-    get usable defaults.
+    checks fire in production-like envs (staging + production, ADR-008);
+    dev/local environments get usable defaults.
     """
-    if settings.ENV.lower() != "production":
+    if not settings.is_production_like:
         return
 
     errors: list[str] = []
@@ -562,7 +562,11 @@ def init_middleware(app):
     # or middleware are attached. See _validate_production_config.
     _validate_production_config()
 
-    is_production = settings.ENV.lower() == "production"
+    is_production = settings.is_production
+    # Staging shares production's transport-security posture (ADR-008):
+    # HSTS on, wildcard CORS refused. App Check enforcement stays
+    # production-only so staging smoke clients aren't blocked.
+    is_production_like = settings.is_production_like
 
     # CORS Middleware
     origins = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(",") if origin.strip()]
@@ -584,11 +588,11 @@ def init_middleware(app):
 
     wildcard = "*" in origins
 
-    if wildcard and is_production:
-        # Fail fast: refuse to start with wide-open CORS in production.
+    if wildcard and is_production_like:
+        # Fail fast: refuse to start with wide-open CORS in staging/production.
         # Set ALLOWED_ORIGINS in the environment to a comma-separated list.
         raise RuntimeError(
-            "CORS is configured with wildcard '*' while ENV=production. "
+            f"CORS is configured with wildcard '*' while ENV={settings.ENV}. "
             "Set ALLOWED_ORIGINS to an explicit comma-separated list of origins."
         )
 
@@ -623,9 +627,9 @@ def init_middleware(app):
 
     # Security headers — applied after CORS so that every response
     # (including CORS preflight 204s) carries the hardening headers.
-    # HSTS is only enabled in production because emitting it over
-    # plain-HTTP dev would cause browsers to pin the dev host to HTTPS.
-    app.add_middleware(SecurityHeadersMiddleware, enable_hsts=is_production)
+    # HSTS is enabled in staging + production (both HTTPS-only); emitting it
+    # over plain-HTTP dev would cause browsers to pin the dev host to HTTPS.
+    app.add_middleware(SecurityHeadersMiddleware, enable_hsts=is_production_like)
 
     # Request ID — outermost layer so X-Request-ID is present on every
     # response, including CORS preflights and error responses.
@@ -673,7 +677,7 @@ def init_middleware(app):
         # Error responses must also carry security headers — FastAPI's
         # exception handling can short-circuit before SecurityHeadersMiddleware
         # sees the final response in some edge cases.
-        _apply_security_headers(response, request.url.path, enable_hsts=is_production)
+        _apply_security_headers(response, request.url.path, enable_hsts=is_production_like)
 
         return response
 
@@ -752,6 +756,6 @@ def init_middleware(app):
     app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
     logger.info(
-        f"Middleware initialized: CORS, CSRF, Security Headers (HSTS={'on' if is_production else 'off'}), "
+        f"Middleware initialized: CORS, CSRF, Security Headers (HSTS={'on' if is_production_like else 'off'}), "
         f"App Check enforcement={'on' if is_production else 'off'}, Rate Limiting"
     )

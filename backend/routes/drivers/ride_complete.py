@@ -4,7 +4,7 @@ Split from ``backend/routes/drivers.py`` (god-file refactor). Pure code
 motion — no behaviour changes. See docs/refactors/god-file-split.md.
 """
 
-from . import _deps, _shared
+from . import _deps
 from ._deps import (  # noqa: F401
     EVENT_END,
     Any,
@@ -39,8 +39,6 @@ from ._deps import (  # noqa: F401
 )
 from ._shared import (  # noqa: F401
     COMPLETE_FROM_STATES,
-    _snap_pickup_leg_async,
-    _validate_ride_route,
     serialize_doc,
 )
 
@@ -51,6 +49,11 @@ try:
     from ...utils.breadcrumbs import persist_trip_location_batch
 except ImportError:
     from utils.breadcrumbs import persist_trip_location_batch  # type: ignore
+
+try:
+    from ...utils.route_finalizer import finalize_route, mark_route_pending
+except ImportError:
+    from utils.route_finalizer import finalize_route, mark_route_pending  # type: ignore
 
 
 _COMPLETION_MAX_CAPTURE_AGE_SECONDS = 120
@@ -324,7 +327,6 @@ async def complete_ride(
     phase_durations: Dict[str, int] = {}
     phase_polylines: Dict[str, list] = {}
     pickup_to_driver_km = 0.0
-    route_polyline = []
     road_polyline: list = []
     road_polyline_pickup: list = []
     gps_points_count = 0
@@ -518,7 +520,7 @@ async def complete_ride(
             # The PICKUP-leg road-snap (Phase 2, driver→pickup) is display-only
             # (admin map) and does NOT feed billing, so it must NOT add a second
             # provider round-trip to the /complete hot path. It is backgrounded
-            # after settlement (see _snap_pickup_leg_async below); road_polyline_pickup
+            # after settlement; road_polyline_pickup
             # stays empty here and the column is backfilled best-effort.
 
             # Per-phase polylines for SGI / dispute tooling. Each phase is
@@ -540,27 +542,6 @@ async def complete_ride(
                         round(p["lat"], 6),
                         round(p["lng"], 6),
                         str(p.get("timestamp") or ""),
-                    ]
-                    for p in sampled
-                ]
-
-            # Trip-leg polyline for the static map snapshot (route_snapshot_url)
-            # ONLY — kept in-memory, not persisted to rides (geometry now lives in
-            # ride_routes). [[lat, lng, phase], ...]. The navigating_to_pickup leg
-            # is excluded: the receipt map shows the travelled pickup→dropoff
-            # route only (drawing both legs read as two routes on the snapshot).
-            trip_points = [b for b in all_breadcrumbs if b.get("tracking_phase") == "trip_in_progress"]
-            if trip_points:
-                MAX_POINTS = 200
-                step = max(1, len(trip_points) // MAX_POINTS)
-                sampled = trip_points[::step]
-                if sampled and sampled[-1] is not trip_points[-1]:
-                    sampled.append(trip_points[-1])
-                route_polyline = [
-                    [
-                        round(p["lat"], 6),
-                        round(p["lng"], 6),
-                        p.get("tracking_phase", ""),
                     ]
                     for p in sampled
                 ]
@@ -819,6 +800,29 @@ async def complete_ride(
             f"Ride {ride_id} is no longer in_progress — completion already processed by a concurrent request"
         )
 
+    # Route geometry is deliberately finalized outside the settlement request.
+    # The finalizer consumes timestamp-ordered durable points, preserves every
+    # gap as a segment boundary, and is the only v2 publisher for rider,
+    # driver, admin, and receipt route artifacts.
+    finalization_completion_point: Dict[str, Any]
+    if completion_location.location_ack is not None and parsed_completion_request.completion_fix is not None:
+        finalization_completion_point = parsed_completion_request.completion_fix.model_dump(mode="json")
+        finalization_completion_point["is_completion_fix"] = True
+        finalization_completion_point["distance_band"] = completion_location.distance_band
+    else:
+        finalization_completion_point = {
+            "missing_tail": True,
+            "rejection": completion_location.completion_fix_rejection,
+        }
+    try:
+        await mark_route_pending(ride_id, finalization_completion_point)
+        spawn(finalize_route(ride_id))
+    except Exception:
+        # Completion is already atomically settled. Surface the finalizer
+        # failure with the ride ID so the durable loop can recover it; no GPS
+        # data is logged here.
+        logger.error("route finalization queue failed for ride_id=%s", ride_id, exc_info=True)
+
     # Corporate guest rides settle server-side: the guest customer has no app
     # and never calls /process-payment. Fire-and-forget — the atomic
     # pending→processing claim lives inside auto_settle_guest_corporate, and
@@ -908,52 +912,6 @@ async def complete_ride(
     rider = await db_supabase.get_user_by_id(ride.get("rider_id"))
     if rider and rider.get("email"):
         logger.info(f"Sending email receipt for ride {ride_id} (rider_id={rider.get('id')})")
-
-    # Fire-and-forget: render the route PNG from phase_polylines and
-    # upload to Supabase Storage so the admin drawer + email receipt can
-    # embed a permanent image URL. Only regenerate if we have enough GPS
-    # data to produce a meaningful route — otherwise preserve the planned-
-    # route snapshot from creation (which used the Google Directions polyline).
-    # A road-snapped trip geometry (sanity-gated above) always qualifies; a raw
-    # breadcrumb trail needs >= 10 trip_in_progress points, mirroring the
-    # renderer's own sparsity guard. Below that the Static Maps API draws
-    # straight chords between the few points — the "straight line P→D next to
-    # the real path" snapshot artifact — and the planned-route image from
-    # creation is more accurate than the GPS trace.
-    trip_points_for_snapshot = sum(
-        1
-        for b in (all_breadcrumbs if "all_breadcrumbs" in locals() else [])
-        if b.get("tracking_phase") == "trip_in_progress"
-    )
-    has_gps_trail = bool(road_polyline) or trip_points_for_snapshot >= 10
-    if has_gps_trail:
-        # Prefer the road-snapped trip polyline: it follows the road network
-        # even where raw GPS was sparse. phase_polylines is dropped in that
-        # case so the renderer can't pick the raw trail over it.
-        spawn(
-            _shared._generate_and_store_ride_snapshot(
-                ride_id=ride_id,
-                pickup_lat=ride.get("pickup_lat"),
-                pickup_lng=ride.get("pickup_lng"),
-                dropoff_lat=ride.get("dropoff_lat"),
-                dropoff_lng=ride.get("dropoff_lng"),
-                phase_polylines=None if road_polyline else phase_polylines,
-                route_polyline=road_polyline or route_polyline,
-            )
-        )
-    else:
-        logger.info(
-            f"Ride {ride_id}: skipping completion snapshot ({trip_points_for_snapshot} GPS points) "
-            "— planned-route snapshot from creation is preserved."
-        )
-
-    # Fire-and-forget: validate GPS trace against road network.
-    # Flags spoofed trips for admin review without blocking completion.
-    _breadcrumbs_for_validation = all_breadcrumbs if "all_breadcrumbs" in locals() else []
-    spawn(_validate_ride_route(ride_id, _breadcrumbs_for_validation, driver["id"]))
-    # Fire-and-forget: road-snap the pickup leg for the admin map (display-only;
-    # must not block completion on a provider round-trip).
-    spawn(_snap_pickup_leg_async(ride_id, _breadcrumbs_for_validation))
 
     # Update driver stats. Setting is_available=True is safe here because the
     # ride has just transitioned to `completed`, and the driver's row already

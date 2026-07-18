@@ -7,6 +7,7 @@ import pytest
 pytestmark = pytest.mark.unit
 
 MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "235_trip_location_route_integrity.sql"
+INDEX_MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "239_trip_location_route_indexes.sql"
 
 
 def _sql() -> str:
@@ -15,18 +16,21 @@ def _sql() -> str:
 
 def test_adds_idempotent_location_identity_and_capture_order_index() -> None:
     sql = _sql()
+    index_sql = INDEX_MIGRATION.read_text()
 
     assert "ADD COLUMN IF NOT EXISTS captured_at timestamptz" in sql
     assert "ADD COLUMN IF NOT EXISTS recording_session_id uuid" in sql
     assert "ADD COLUMN IF NOT EXISTS sequence_number bigint" in sql
-    assert "uq_dlh_ride_driver_session_sequence" in sql
-    assert "ride_id, driver_id, recording_session_id, sequence_number" in sql
-    assert "idx_dlh_ride_captured" in sql
-    assert "ride_id, captured_at, recording_session_id, sequence_number" in sql
+    assert "CREATE INDEX" not in sql
+    assert "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uq_dlh_ride_driver_session_sequence" in index_sql
+    assert "ride_id, driver_id, recording_session_id, sequence_number" in index_sql
+    assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_dlh_ride_captured" in index_sql
+    assert "ride_id, captured_at, recording_session_id, sequence_number" in index_sql
 
 
 def test_adds_versioned_segmented_route_finalizer_state() -> None:
     sql = _sql()
+    index_sql = INDEX_MIGRATION.read_text()
 
     for column in (
         "route_schema_version",
@@ -43,8 +47,8 @@ def test_adds_versioned_segmented_route_finalizer_state() -> None:
     ):
         assert column in sql
 
-    assert "idx_ride_routes_processing" in sql
-    assert "processing_status, next_retry_at, computed_at" in sql
+    assert "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ride_routes_processing" in index_sql
+    assert "processing_status, next_retry_at, computed_at" in index_sql
     assert "jsonb_typeof(observed_segments) = 'array'" in sql
     assert "jsonb_typeof(road_matched_segments) = 'array'" in sql
 

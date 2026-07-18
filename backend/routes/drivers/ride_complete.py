@@ -9,9 +9,12 @@ from ._deps import (  # noqa: F401
     EVENT_END,
     Any,
     APIRouter,
+    BaseModel,
+    Body,
     Decimal,
     Depends,
     Dict,
+    Field,
     HTTPException,
     Optional,
     RideStateError,
@@ -44,8 +47,216 @@ from ._shared import (  # noqa: F401
 router = APIRouter()
 
 
+try:
+    from ...utils.breadcrumbs import persist_trip_location_batch
+except ImportError:
+    from utils.breadcrumbs import persist_trip_location_batch  # type: ignore
+
+
+_COMPLETION_MAX_CAPTURE_AGE_SECONDS = 120
+_COMPLETION_MAX_FUTURE_SKEW_SECONDS = 30
+_COMPLETION_MAX_ACCURACY_METERS = 100
+_AT_DESTINATION_METERS = 200
+_NEAR_DESTINATION_METERS = 1000
+_OFF_ROUTE_CONFIRMATIONS = {
+    "rider_requested_stop",
+    "changed_destination",
+    "emergency",
+    "location_unavailable",
+}
+
+
+class CompletionFix(BaseModel):
+    """A final GPS sample captured immediately before driver completion."""
+
+    recording_session_id: uuid.UUID
+    sequence_number: int = Field(ge=0)
+    captured_at: datetime
+    lat: float = Field(ge=-90, le=90)
+    lng: float = Field(ge=-180, le=180)
+    accuracy: float | None = Field(default=None, ge=0)
+    speed: float | None = None
+    heading: float | None = None
+    altitude: float | None = None
+    monotonic_ms: int | None = Field(default=None, ge=0)
+    source: str | None = None
+    mocked: bool = False
+    is_completion_fix: bool = True
+
+
+class RideCompletionRequest(BaseModel):
+    """Backward-compatible body for endpoint-level route-integrity evidence."""
+
+    completion_fix: CompletionFix | None = None
+    final_session_id: uuid.UUID | None = None
+    final_sequence_number: int | None = Field(default=None, ge=0)
+    pending_outbox_count: int | None = Field(default=None, ge=0)
+    off_route_confirmation: str | None = None
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.off_route_confirmation is not None and self.off_route_confirmation not in _OFF_ROUTE_CONFIRMATIONS:
+            raise ValueError("off_route_confirmation is not recognized")
+        if self.completion_fix is not None:
+            if self.final_session_id is not None and self.final_session_id != self.completion_fix.recording_session_id:
+                raise ValueError("final_session_id must match completion_fix.recording_session_id")
+            if (
+                self.final_sequence_number is not None
+                and self.final_sequence_number != self.completion_fix.sequence_number
+            ):
+                raise ValueError("final_sequence_number must match completion_fix.sequence_number")
+
+
+class CompletionLocationOutcome:
+    """Safe completion-tail result returned to the driver, never containing GPS."""
+
+    def __init__(
+        self,
+        *,
+        location_ack: Dict[str, Any] | None,
+        legacy_client_missing_tail: bool,
+        distance_band: str | None,
+        completion_fix_rejection: str | None = None,
+    ) -> None:
+        self.location_ack = location_ack
+        self.legacy_client_missing_tail = legacy_client_missing_tail
+        self.distance_band = distance_band
+        self.completion_fix_rejection = completion_fix_rejection
+
+
+async def _get_route_integrity_mode() -> str:
+    """Read the rollout mode without silently weakening an enabled guard."""
+    try:
+        try:
+            from ...settings_loader import get_app_settings
+        except ImportError:
+            from settings_loader import get_app_settings  # type: ignore
+        settings = await get_app_settings()
+    except Exception as exc:
+        logger.error("completion route-integrity configuration read failed", exc_info=True)
+        raise HTTPException(status_code=503, detail="Route-integrity configuration is temporarily unavailable") from exc
+
+    mode = str((settings or {}).get("route_integrity_v2_mode", "shadow")).lower()
+    if mode not in {"off", "shadow", "on"}:
+        logger.error("completion route-integrity mode is invalid: %s", mode)
+        raise HTTPException(status_code=503, detail="Route-integrity configuration is invalid")
+    return mode
+
+
+def _completion_fix_rejection(fix: CompletionFix, now: datetime) -> str | None:
+    """Return an auditable rejection code for a non-authoritative final fix."""
+    captured_at = parse_iso_utc(fix.captured_at)
+    if captured_at is None:
+        return "invalid_capture_time"
+    age_seconds = (now - captured_at).total_seconds()
+    if age_seconds > _COMPLETION_MAX_CAPTURE_AGE_SECONDS:
+        return "stale_capture"
+    if age_seconds < -_COMPLETION_MAX_FUTURE_SKEW_SECONDS:
+        return "future_capture"
+    if fix.mocked:
+        return "mocked_location"
+    if fix.accuracy is not None and fix.accuracy > _COMPLETION_MAX_ACCURACY_METERS:
+        return "low_accuracy"
+    if fix.lat == 0 and fix.lng == 0:
+        return "invalid_coordinate"
+    return None
+
+
+def _completion_distance_band(ride: Dict[str, Any], fix: CompletionFix) -> tuple[str, int | None]:
+    """Classify final fix distance from the requested destination without logging it."""
+    try:
+        dropoff_lat = float(ride["dropoff_lat"])
+        dropoff_lng = float(ride["dropoff_lng"])
+    except (KeyError, TypeError, ValueError):
+        return "unknown", None
+
+    distance_meters = int(round(calculate_distance(fix.lat, fix.lng, dropoff_lat, dropoff_lng) * 1000))
+    if distance_meters <= _AT_DESTINATION_METERS:
+        return "at_destination", distance_meters
+    if distance_meters <= _NEAR_DESTINATION_METERS:
+        return "near_destination", distance_meters
+    return "off_route", distance_meters
+
+
+async def prepare_completion_location(
+    ride: Dict[str, Any], driver_id: str, request: RideCompletionRequest
+) -> CompletionLocationOutcome:
+    """Persist a trusted final fix before completion mutates ride state.
+
+    Older apps are allowed through with an explicit missing-tail marker. A new
+    fix that is stale, mocked, or too imprecise is retained nowhere as a final
+    endpoint and is reported as a non-sensitive rejection code for telemetry.
+    """
+    fix = request.completion_fix
+    if fix is None:
+        return CompletionLocationOutcome(
+            location_ack=None,
+            legacy_client_missing_tail=True,
+            distance_band=None,
+        )
+
+    rejection = _completion_fix_rejection(fix, datetime.now(timezone.utc))
+    if rejection is not None:
+        return CompletionLocationOutcome(
+            location_ack=None,
+            legacy_client_missing_tail=False,
+            distance_band=None,
+            completion_fix_rejection=rejection,
+        )
+
+    distance_band, distance_meters = _completion_distance_band(ride, fix)
+    mode = await _get_route_integrity_mode()
+    if mode == "on" and distance_band == "off_route" and not request.off_route_confirmation:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "completion_confirmation_required",
+                "distance_band": distance_band,
+                "distance_meters": distance_meters,
+            },
+        )
+
+    point = fix.model_dump(mode="json")
+    point["is_completion_fix"] = True
+    try:
+        persisted = await persist_trip_location_batch(
+            driver_id,
+            str(ride["id"]),
+            str(fix.recording_session_id),
+            [point],
+            active_ride=ride,
+        )
+        await db_supabase.update_one(
+            "ride_routes",
+            {"ride_id": ride["id"]},
+            {
+                "route_schema_version": 2,
+                "completion_point": {
+                    **point,
+                    "distance_band": distance_band,
+                    "distance_meters": distance_meters,
+                },
+            },
+            upsert=True,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("completion final fix persistence failed for ride %s", ride.get("id"), exc_info=True)
+        raise HTTPException(status_code=503, detail="Unable to persist completion location") from exc
+
+    return CompletionLocationOutcome(
+        location_ack=persisted.ack.to_dict(),
+        legacy_client_missing_tail=False,
+        distance_band=distance_band,
+    )
+
+
 @router.post("/rides/{ride_id}/complete")
-async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
+async def complete_ride(
+    ride_id: str,
+    completion_request: RideCompletionRequest | None = Body(default=None),
+    current_user: dict = Depends(get_current_user),
+):
     driver = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
     )
@@ -60,6 +271,22 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
 
     if ride.get("status") not in COMPLETE_FROM_STATES:
         raise RideStateError(f"Cannot complete ride from state '{ride.get('status')}'; ride must be in_progress")
+
+    # Persist the driver-captured endpoint before the status transition and
+    # before legacy aggregation reads the breadcrumb trail. This ensures a
+    # 40-minute trip cannot lose its final location merely because finalization
+    # starts before the normal outbox flush returns.
+    # Direct unit callers receive FastAPI's ``Body`` sentinel rather than
+    # ``None`` when omitting this parameter; production requests have already
+    # been parsed into RideCompletionRequest by FastAPI.
+    parsed_completion_request = (
+        completion_request if isinstance(completion_request, RideCompletionRequest) else RideCompletionRequest()
+    )
+    completion_location = await prepare_completion_location(
+        ride,
+        driver["id"],
+        parsed_completion_request,
+    )
 
     # B3.3: drain this driver's WS breadcrumb buffer before aggregating —
     # otherwise the last ~10s of the trip would miss the settled distance
@@ -834,4 +1061,9 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             )
         )
 
-    return serialize_doc(completed_ride)
+    response = serialize_doc(completed_ride)
+    response["location_ack"] = completion_location.location_ack
+    response["legacy_client_missing_tail"] = completion_location.legacy_client_missing_tail
+    response["completion_distance_band"] = completion_location.distance_band
+    response["completion_fix_rejection"] = completion_location.completion_fix_rejection
+    return response

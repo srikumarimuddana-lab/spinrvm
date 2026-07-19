@@ -561,6 +561,15 @@ def _apply_filters(q, filters: Optional[Dict[str, Any]]):
                 q = q.lte(k, _unwrap_enum(v["$lte"]))
             elif "$ne" in v:
                 q = q.neq(k, _unwrap_enum(v["$ne"]))
+            elif "$notnull" in v:
+                # SQL `<> NULL` never matches; PostgREST needs `not.is.null`.
+                # Lets callers filter server-side instead of scanning every row
+                # and dropping the nulls in Python (e.g. users with a
+                # referral_code_used). {"$notnull": False} mirrors {col: None}.
+                if v["$notnull"]:
+                    q = q.not_.is_(k, "null")
+                else:
+                    q = q.is_(k, "null")
             elif "$nin" in v and isinstance(v["$nin"], (list, tuple)):
                 q = q.not_.in_(k, [_unwrap_enum(x) for x in v["$nin"]])
             elif "$regex" in v:

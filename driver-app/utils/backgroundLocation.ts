@@ -4,6 +4,7 @@ import * as SecureStore from 'expo-secure-store';
 import spinrConfig from '@shared/config/spinr.config';
 import { getAppCheckToken, initFirebaseServices } from '@shared/services/firebase';
 import { tripLocationRecorder, type TripLocationBatchRequest } from './tripLocationRecorder';
+import { checkLocationIntegrity } from './locationIntegrity';
 
 // Use the same backend-URL resolver as the shared API client — it carries the
 // production fallback (api-spinr.spinr.ca) and the expoConfig.extra value.
@@ -109,6 +110,14 @@ export async function handleBackgroundLocationTask({ data, error }: { data?: Loc
     return;
   }
   for (const location of data?.locations ?? []) {
+    // Same trust gate as the foreground watcher (useDriverDashboard): a
+    // mocked/teleporting/impossibly-fast sample must not enter the durable
+    // route history from either path. Reason string only — never coordinates.
+    const integrity = checkLocationIntegrity(location);
+    if (!integrity.trusted) {
+      console.warn(`[BgLocation] Dropped untrusted sample: ${integrity.reason}`);
+      continue;
+    }
     try {
       // Durable persistence is deliberately before auth/network work. The
       // recorder keeps every accepted native sample across process restarts.

@@ -59,6 +59,9 @@ const LOCATION_CONFIGS: Record<string, { timeInterval: number; distanceInterval:
   trip_completed:        { timeInterval: 10_000, distanceInterval: 30, accuracy: Location.Accuracy.Balanced },
 };
 
+// Ride states in which the durable route recorder is active.
+const TRACKED_TRIP_PHASES = ['navigating_to_pickup', 'arrived_at_pickup', 'trip_in_progress'];
+
 /**
  * Coerce a value into a finite latitude/longitude or return null.
  *
@@ -527,6 +530,23 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     return () => clearInterval(interval);
   }, [foregroundLocationTransport, isOnline]);
 
+  // Flush the durable outbox on app-state transitions during a trip.
+  // Foreground→background: the watcher is about to stop firing, so drain what
+  // we have before the OS can suspend the JS thread. Background→foreground:
+  // drain whatever the background task captured while the driver navigated in
+  // Maps, so the server-visible tail never lags a whole backgrounded stretch.
+  useEffect(() => {
+    if (!isOnline || !TRACKED_TRIP_PHASES.includes(rideState)) return;
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active' || next === 'background') {
+        tripLocationRecorder.flushPending(foregroundLocationTransport, { force: true }).catch(() => {
+          // Durable samples remain in SQLite for the next acknowledgement attempt.
+        });
+      }
+    });
+    return () => sub.remove();
+  }, [foregroundLocationTransport, isOnline, rideState]);
+
   // Location subscription — frequency adapts to ride state
   useEffect(() => {
     if (!isOnline) {
@@ -552,8 +572,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // trip driven with the app backgrounded (driver in Maps / screen locked)
     // relies entirely on the background task — keep it dense during trip
     // phases, coarse when idle. No-op until go-online has started the task.
-    const TRIP_PHASES = ['navigating_to_pickup', 'arrived_at_pickup', 'trip_in_progress'];
-    const inTripPhase = TRIP_PHASES.includes(rideState);
+    const inTripPhase = TRACKED_TRIP_PHASES.includes(rideState);
     updateBackgroundLocationCadence(inTripPhase ? TRIP_CADENCE : IDLE_CADENCE).catch(() => {});
     // Persist the trip-active flag so a geofence wake can use trip cadence for
     // future capture; it cannot reconstruct samples missed after a force-quit.

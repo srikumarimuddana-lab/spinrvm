@@ -41,7 +41,12 @@ jest.mock('../../utils/tripLocationRecorder', () => ({
     captureCompletionFix: jest.fn(),
     applyAcknowledgement: jest.fn(),
     closeRide: jest.fn(),
+    flushPendingWithTimeout: jest.fn(),
   },
+}));
+
+jest.mock('../../utils/tripLocationTransport', () => ({
+  apiLocationBatchTransport: jest.fn(),
 }));
 
 import { useDriverStore } from '../driverStore';
@@ -98,6 +103,12 @@ beforeEach(() => {
   });
   mockTripLocationRecorder.applyAcknowledgement.mockResolvedValue(1);
   mockTripLocationRecorder.closeRide.mockResolvedValue(undefined);
+  mockTripLocationRecorder.flushPendingWithTimeout.mockResolvedValue({
+    uploaded_points: 0,
+    acknowledged_points: 0,
+    skipped: true,
+    timedOut: false,
+  });
   resetStore();
 });
 
@@ -407,6 +418,46 @@ describe('driverStore — ride state machine', () => {
       off_route_confirmation: null,
       completion_fix: expect.objectContaining({ is_completion_fix: true }),
     }));
+  });
+
+  test('completeRide drains the outbox before capturing the completion fix and posting', async () => {
+    const callOrder: string[] = [];
+    mockTripLocationRecorder.flushPendingWithTimeout.mockImplementation(async () => {
+      callOrder.push('flush');
+      return { uploaded_points: 5, acknowledged_points: 5, skipped: false, timedOut: false };
+    });
+    mockTripLocationRecorder.captureCompletionFix.mockImplementation(async () => {
+      callOrder.push('capture');
+      return { point: null, pendingCount: 0 };
+    });
+    useDriverStore.setState({ rideState: 'trip_in_progress' });
+    mockApi.post.mockImplementation(async () => {
+      callOrder.push('post');
+      return { data: { ride_id: 'ride-123', status: 'completed' }, status: 200 } as any;
+    });
+
+    await act(async () => {
+      await useDriverStore.getState().completeRide('ride-123');
+    });
+
+    expect(callOrder).toEqual(['flush', 'capture', 'post']);
+    expect(mockTripLocationRecorder.flushPendingWithTimeout).toHaveBeenCalledWith(
+      expect.anything(),
+      8_000,
+    );
+  });
+
+  test('completeRide still completes when the pre-flush times out or fails', async () => {
+    useDriverStore.setState({ rideState: 'trip_in_progress' });
+    mockTripLocationRecorder.flushPendingWithTimeout.mockRejectedValueOnce(new Error('network down'));
+    mockApi.post.mockResolvedValueOnce({ data: { ride_id: 'ride-123', status: 'completed' }, status: 200 } as any);
+
+    await act(async () => {
+      await useDriverStore.getState().completeRide('ride-123');
+    });
+
+    expect(useDriverStore.getState().rideState).toBe('trip_completed');
+    expect(mockApi.post).toHaveBeenCalledWith('/drivers/rides/ride-123/complete', expect.anything());
   });
 
   test('completeRide applies the server acknowledgement before closing the local recording session', async () => {

@@ -38,6 +38,10 @@ export interface FlushPendingResult {
   skipped: boolean;
 }
 
+export interface BoundedFlushResult extends FlushPendingResult {
+  timedOut: boolean;
+}
+
 export interface CompletionCaptureResult {
   point: TripLocationPoint | null;
   pendingCount: number;
@@ -150,6 +154,37 @@ export class TripLocationRecorder {
       this.flushPromise = null;
     });
     return this.flushPromise;
+  }
+
+  /**
+   * Force-flush the durable outbox with an upper time bound. Used on the
+   * ride-completion path so the server sees the full GPS tail before
+   * computing route quality/distance, while a dead network can never block
+   * the driver from completing the trip. On timeout the underlying flush
+   * keeps running and queued points stay durable in SQLite; transport
+   * errors propagate so the caller can record them.
+   */
+  async flushPendingWithTimeout(
+    transport: TripLocationTransport | undefined,
+    timeoutMs: number,
+  ): Promise<BoundedFlushResult> {
+    const flush = this.flushPending(transport, { force: true });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), timeoutMs);
+    });
+    try {
+      const result = await Promise.race([flush, timeout]);
+      if (result === null) {
+        // Detach without dropping the rejection on the floor — the shared
+        // flushPromise is already tracked for the next caller.
+        flush.catch(() => {});
+        return { uploaded_points: 0, acknowledged_points: 0, skipped: true, timedOut: true };
+      }
+      return { ...result, timedOut: false };
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
   }
 
   async captureCompletionFix(rideId: string): Promise<CompletionCaptureResult> {

@@ -5,6 +5,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { recordNonFatal } from '../utils/crashlytics';
 import { RideStatus } from '../constants/rideStatus';
 import { tripLocationRecorder, type TripLocationBatchAck } from '../utils/tripLocationRecorder';
+import { apiLocationBatchTransport } from '../utils/tripLocationTransport';
 
 function isAxiosError(e: unknown): e is { response?: { status?: number; data?: { detail?: unknown } }; message?: string } {
   return typeof e === 'object' && e !== null;
@@ -21,6 +22,10 @@ function completionConfirmationFromError(error: unknown): { distanceBand?: strin
 }
 
 const DRIVER_RIDE_KEY = '@spinr:driver_active_ride';
+// Upper bound on the pre-completion outbox drain. Long enough for a full
+// 500-point batch on a slow cell link, short enough that a dead network
+// never traps the driver on the completion screen.
+const COMPLETION_FLUSH_TIMEOUT_MS = 8_000;
 const DRIVER_TERMINAL_STATES = new Set<string>(['idle', 'trip_completed']);
 
 // Write activeRide + rideState to AsyncStorage so the driver can resume
@@ -682,6 +687,20 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     completeRide: async (rideId: string, offRouteConfirmation?: OffRouteConfirmation) => {
         set({ isLoading: true, error: null });
         try {
+            try {
+                // Drain the durable outbox before the server stamps
+                // ride_completed_at, so route quality/distance is computed
+                // from the full tail instead of whatever the last periodic
+                // flush happened to cover. Bounded and non-fatal: on
+                // timeout or upload failure the points stay in SQLite for
+                // the retention-bounded retry path.
+                await tripLocationRecorder.flushPendingWithTimeout(
+                    apiLocationBatchTransport,
+                    COMPLETION_FLUSH_TIMEOUT_MS,
+                );
+            } catch (flushError: unknown) {
+                recordNonFatal(flushError, { store: 'driverStore', action: 'completeRidePreFlush' });
+            }
             const completion = await tripLocationRecorder.captureCompletionFix(rideId);
             const res = await api.post<CompletedRideData>(`/drivers/rides/${rideId}/complete`, {
                 completion_fix: completion.point,

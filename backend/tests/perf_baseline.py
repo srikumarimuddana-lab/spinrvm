@@ -113,8 +113,6 @@ def make_mock_db():
         "wallet_transactions",
         "loyalty_accounts",
         "loyalty_transactions",
-        "fare_splits",
-        "fare_split_participants",
         "quests",
         "quest_progress",
         "scheduled_rides",
@@ -156,10 +154,8 @@ ENDPOINTS = [
     ("GET /api/v1/wallet", "GET", "/api/v1/wallet", None),
     ("GET /api/v1/loyalty", "GET", "/api/v1/loyalty", None),
     ("GET /api/v1/wallet/transactions", "GET", "/api/v1/wallet/transactions", None),
-    ("GET /api/v1/fare-split/ride/ride_perf_1", "GET", "/api/v1/fare-split/ride/ride_perf_1", None),
     ("GET /api/v1/quests/my-quests", "GET", "/api/v1/quests/my-quests", None),
     ("POST /api/v1/wallet/top-up", "POST", "/api/v1/wallet/top-up", {"amount": 10.0}),
-    ("POST /api/v1/loyalty/redeem", "POST", "/api/v1/loyalty/redeem", {"points": 100}),
 ]
 
 
@@ -176,7 +172,6 @@ async def bench_http(app, samples: int) -> list[dict]:
     with (
         patch("routes.wallet.db", mock_db),
         patch("routes.loyalty.db", mock_db),
-        patch("routes.fare_split.db", mock_db),
         patch("routes.quests.db", mock_db),
     ):
         # Temporarily override auth for the duration of this benchmark

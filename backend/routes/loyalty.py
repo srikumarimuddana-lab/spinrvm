@@ -1,4 +1,4 @@
-"""Rider loyalty / rewards program — earn points per ride, unlock tiers, redeem rewards.
+"""Rider loyalty / rewards program — earn points per ride, unlock tiers.
 
 Points earned: 1 point per $1 spent on rides. Tier thresholds:
   Bronze:   0-499 lifetime points
@@ -6,25 +6,24 @@ Points earned: 1 point per $1 spent on rides. Tier thresholds:
   Gold:     1500-4999
   Platinum: 5000+
 
-Tiers give bonus multipliers and can be redeemed for wallet credits.
+Tiers give bonus multipliers. Point redemption for wallet credit is currently
+disabled (see redeem_points) — the old flow could double-credit the wallet under
+concurrent requests. Earning and tier display are unaffected.
 """
 
 import logging
 import uuid
 from datetime import datetime, timezone
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
 
 try:
     from ..db import db
-    from ..db_supabase import wallet_increment_balance
     from ..dependencies import get_current_user
     from ..utils.error_handling import DuplicateRecordError
 except ImportError:
     from db import db
-    from db_supabase import wallet_increment_balance
     from dependencies import get_current_user
     from utils.error_handling import DuplicateRecordError
 
@@ -189,72 +188,17 @@ async def earn_points_for_ride(ride_id: str = Query(...), current_user: dict = D
     }
 
 
-class RedeemRequest(BaseModel):
-    points: int = Field(..., gt=0)
+@api_router.post("/redeem", deprecated=True)
+async def redeem_points(current_user: dict = Depends(get_current_user)):
+    """Loyalty point redemption is withdrawn.
 
-
-@api_router.post("/redeem")
-async def redeem_points(req: RedeemRequest, current_user: dict = Depends(get_current_user)):
-    """Redeem loyalty points for wallet credit."""
-    if req.points < REDEMPTION_RATE:
-        raise HTTPException(status_code=400, detail=f"Minimum redemption is {REDEMPTION_RATE} points")
-
-    account = await _get_or_create_account(current_user["id"])
-    if account.get("points", 0) < req.points:
-        raise HTTPException(status_code=400, detail="Insufficient points")
-
-    credit_amount = (Decimal(req.points) / Decimal(REDEMPTION_RATE)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
-    # Step 1: Credit the wallet first. If this fails the rider keeps their points.
-    from .wallet import _money_str, _record_transaction, get_or_create_wallet
-
-    wallet = await get_or_create_wallet(current_user["id"])
-    new_wallet_balance = await wallet_increment_balance(wallet["id"], credit_amount)
-    await _record_transaction(
-        wallet_id=wallet["id"],
-        user_id=current_user["id"],
-        txn_type="bonus",
-        amount=_money_str(credit_amount),
-        balance_after=_money_str(new_wallet_balance),
-        description=f"Loyalty redemption: {req.points} pts → ${credit_amount:.2f}",
-    )
-
-    # Step 2: Deduct points. If this fails, issue a compensating wallet debit so
-    # the rider isn't credited without losing points.
-    new_balance = account.get("points", 0) - req.points
-    try:
-        await db.update_one(
-            "loyalty_accounts",
-            {"id": account["id"]},
-            {
-                "$set": {
-                    "points": new_balance,
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                }
-            },
-        )
-    except Exception as deduct_err:
-        logger.error(f"Loyalty redeem points deduction failed, reversing wallet credit: {deduct_err}")
-        try:
-            await wallet_increment_balance(wallet["id"], -credit_amount)
-        except Exception as reverse_err:
-            logger.error(f"Loyalty redeem wallet reversal also failed: {reverse_err}")
-        raise HTTPException(status_code=503, detail="Redemption failed — please retry") from deduct_err
-
-    await db.insert_one(
-        "loyalty_transactions",
-        {
-            "id": str(uuid.uuid4()),
-            "user_id": current_user["id"],
-            "points": -req.points,
-            "type": "redeemed",
-            "description": f"Redeemed {req.points} pts for ${credit_amount:.2f} wallet credit",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        },
-    )
-
-    return {
-        "redeemed_points": req.points,
-        "credit_amount": credit_amount,
-        "remaining_points": new_balance,
-    }
+    The previous implementation credited the wallet, then debited points with a
+    non-atomic read-then-write (no conditional on the points balance). Two
+    concurrent redemptions both passed the balance check and both credited the
+    wallet — a real dollar loss plus a corrupt points ledger. Redemption stays
+    disabled until it is reimplemented as a single atomic points debit (e.g. a
+    ``UPDATE ... SET points = points - :n WHERE points >= :n RETURNING`` RPC that
+    only credits the wallet when a row is claimed). Points earning and the
+    balance/tier display are unaffected.
+    """
+    raise HTTPException(status_code=410, detail="Loyalty point redemption is currently unavailable.")

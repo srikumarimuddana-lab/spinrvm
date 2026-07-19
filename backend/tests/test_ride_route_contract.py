@@ -92,6 +92,53 @@ def test_ride_detail_projects_matched_v2_segments_without_legacy_geometry(monkey
     assert client.tables_requested == ["rides", "ride_routes"]
 
 
+def test_ride_detail_survives_snapshot_signing_failure(monkeypatch):
+    """A transient Storage/signing failure degrades the thumbnail, never the ride read.
+
+    Before the fix, an unhandled RuntimeError from create_route_snapshot_signed_url
+    propagated out of the projection and 500'd the entire GET /rides/{id}
+    (rider receipt + admin detail) on any Storage blip.
+    """
+    matched = [{"provider": "osrm_match", "coordinates": [[50.45, -104.62], [50.46, -104.63]]}]
+    client = _RouteSupabase(
+        {
+            "rides": [{"id": "ride_1", "status": "completed"}],
+            "ride_routes": [
+                {
+                    "ride_id": "ride_1",
+                    "route_schema_version": 2,
+                    "road_matched_segments": matched,
+                    "route_quality": {"coverage_ratio": 0.9, "missing_tail": False},
+                    "route_revision": 4,
+                    "processing_status": "complete",
+                    "snapshot_object_path": "ride_1/route-v4.png",
+                    "snapshot_revision": 4,
+                }
+            ],
+        }
+    )
+
+    async def _run_sync(operation):
+        return operation()
+
+    monkeypatch.setattr(ride_repo, "supabase", client)
+    monkeypatch.setattr(ride_repo, "run_sync", _run_sync)
+    monkeypatch.setattr(
+        ride_repo,
+        "create_route_snapshot_signed_url",
+        AsyncMock(side_effect=RuntimeError("Supabase Storage did not return a route snapshot signed URL")),
+    )
+
+    ride = _run(ride_repo.get_ride("ride_1", include_route=True))
+
+    # The whole ride read still succeeds, with its route geometry intact...
+    assert ride["actual_route_segments"] == matched
+    assert ride["route_revision"] == 4
+    assert ride["route_geometry_status"] == "complete"
+    # ...only the un-signable snapshot image is dropped.
+    assert "route_snapshot_url" not in ride
+
+
 def test_ride_detail_uses_observed_v2_segments_when_matching_is_unavailable(monkeypatch):
     observed = [{"boundary_reason": "time_gap", "coordinates": [[50.45, -104.62], [50.47, -104.64]]}]
     client = _RouteSupabase(

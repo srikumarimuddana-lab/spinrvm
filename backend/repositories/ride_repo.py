@@ -96,7 +96,15 @@ async def _project_route_detail(ride: Dict[str, Any], route: Dict[str, Any]) -> 
         ride["snapshot_revision"] = snapshot_revision
         object_path = route.get("snapshot_object_path")
         if snapshot_revision == ride["route_revision"] and object_path:
-            ride["route_snapshot_url"] = await create_route_snapshot_signed_url(str(object_path))
+            try:
+                ride["route_snapshot_url"] = await create_route_snapshot_signed_url(str(object_path))
+            except Exception:
+                # A transient Storage/signing failure must degrade only the route
+                # thumbnail, never fail the whole authorized ride read (rider
+                # receipt / admin detail). The segmented geometry above already
+                # conveys the route; the signed image is best-effort.
+                logger.exception("route snapshot signing failed for ride_id=%s", ride.get("id"))
+                ride.pop("route_snapshot_url", None)
         else:
             ride.pop("route_snapshot_url", None)
         return

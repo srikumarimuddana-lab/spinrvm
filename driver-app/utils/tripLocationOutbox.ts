@@ -317,6 +317,34 @@ export class TripLocationOutbox {
     });
   }
 
+  async latestPoint(rideId: string): Promise<TripLocationPoint | null> {
+    const database = await this.getDatabase();
+    const row = await database.getFirstAsync<TripLocationOutboxRow>(
+      `SELECT
+        ride_id,
+        session_id AS recording_session_id,
+        sequence_number,
+        captured_at,
+        monotonic_ms,
+        lat,
+        lng,
+        accuracy,
+        speed,
+        heading,
+        altitude,
+        source,
+        mocked,
+        is_completion_fix,
+        enqueued_at
+      FROM trip_location_outbox
+      WHERE ride_id = ?
+      ORDER BY captured_at DESC, sequence_number DESC
+      LIMIT 1`,
+      [rideId],
+    );
+    return row ? asPoint(row) : null;
+  }
+
   async pendingCount(rideId: string): Promise<number> {
     const database = await this.getDatabase();
     const result = await database.getFirstAsync<{ count: number }>(

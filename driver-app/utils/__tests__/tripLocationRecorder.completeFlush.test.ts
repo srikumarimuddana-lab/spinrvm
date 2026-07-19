@@ -39,6 +39,7 @@ function createOutbox(points: ReturnType<typeof point>[]) {
     }),
     pendingCount: jest.fn().mockImplementation(async () => pending.length),
     closeSession: jest.fn(),
+    latestPoint: jest.fn().mockImplementation(async () => pending[pending.length - 1] ?? null),
   };
 }
 
@@ -107,5 +108,42 @@ describe('flushPendingWithTimeout', () => {
     const result = await recorder.flushPendingWithTimeout(transport, 5_000);
     expect(result.skipped).toBe(false);
     expect(transport).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('captureCompletionFix outbox fallback', () => {
+  // expo-location is mocked to {}, so getCurrentPositionAsync throws — the
+  // recorder must fall back to durable outbox evidence instead of null.
+  const NOW = Date.parse('2026-07-19T10:04:00.000Z');
+
+  test('uses the newest outbox point when it is inside the 120s freshness bound', async () => {
+    const fresh = { ...point(9), captured_at: '2026-07-19T10:03:10.000Z' };
+    const outbox = createOutbox([point(8), fresh]);
+    const recorder = createTripLocationRecorder({ outbox: outbox as any, now: () => NOW });
+
+    const completion = await recorder.captureCompletionFix('ride-1');
+
+    expect(completion.point).toEqual(fresh);
+    expect(completion.pendingCount).toBe(2);
+  });
+
+  test('returns null when the newest outbox point is older than the server bound', async () => {
+    const stale = { ...point(9), captured_at: '2026-07-19T10:01:30.000Z' }; // 150s old
+    const outbox = createOutbox([stale]);
+    const recorder = createTripLocationRecorder({ outbox: outbox as any, now: () => NOW });
+
+    const completion = await recorder.captureCompletionFix('ride-1');
+
+    expect(completion.point).toBeNull();
+  });
+
+  test('returns null when the outbox is empty', async () => {
+    const outbox = createOutbox([]);
+    const recorder = createTripLocationRecorder({ outbox: outbox as any, now: () => NOW });
+
+    const completion = await recorder.captureCompletionFix('ride-1');
+
+    expect(completion.point).toBeNull();
+    expect(completion.pendingCount).toBe(0);
   });
 });

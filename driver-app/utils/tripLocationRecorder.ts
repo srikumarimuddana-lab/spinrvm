@@ -13,6 +13,10 @@ const ACTIVE_RIDE_KEY = 'spinr_trip_location_active_ride';
 const FLUSH_INTERVAL_MS = 10_000;
 const FLUSH_POINT_THRESHOLD = 25;
 const ACTIVE_TRIP_WATCHDOG_MS = 30_000;
+// Server-side freshness bound for a completion fix (ride_complete.py rejects
+// anything older as stale_capture). An outbox fallback point older than this
+// would be rejected anyway, so don't send it.
+const COMPLETION_FIX_MAX_AGE_MS = 120_000;
 
 export interface TripLocationBatchRequest {
   ride_id: string;
@@ -58,7 +62,14 @@ export interface RecorderHealth {
 
 type TripLocationOutbox = Pick<
   typeof tripLocationOutbox,
-  'startSession' | 'enqueue' | 'listPendingSessions' | 'peek' | 'acknowledge' | 'pendingCount' | 'closeSession'
+  | 'startSession'
+  | 'enqueue'
+  | 'listPendingSessions'
+  | 'peek'
+  | 'acknowledge'
+  | 'pendingCount'
+  | 'closeSession'
+  | 'latestPoint'
 >;
 
 export interface TripLocationRecorderOptions {
@@ -193,9 +204,28 @@ export class TripLocationRecorder {
       const point = await this.recordNativeFix(location, 'completion', rideId, true);
       return { point, pendingCount: await this.outbox.pendingCount(rideId) };
     } catch {
-      // Completion remains possible after the driver explicitly explains why a
-      // fresh fix is unavailable. The caller receives no coordinate from this path.
-      return { point: null, pendingCount: await this.outbox.pendingCount(rideId) };
+      // A fresh fix is unavailable (GPS off, provider timeout). Fall back to
+      // the newest durable point inside the server's freshness bound: an
+      // already-captured coordinate is strictly better endpoint evidence
+      // than none, and referencing its existing session/sequence means the
+      // server sees no duplicate row. Older-than-bound or absent → the
+      // caller still receives no coordinate and completion proceeds.
+      const fallback = await this.latestFreshOutboxPoint(rideId);
+      return { point: fallback, pendingCount: await this.outbox.pendingCount(rideId) };
+    }
+  }
+
+  private async latestFreshOutboxPoint(rideId: string): Promise<TripLocationPoint | null> {
+    try {
+      const latest = await this.outbox.latestPoint(rideId);
+      if (!latest) return null;
+      const capturedAtMs = Date.parse(latest.captured_at);
+      if (!Number.isFinite(capturedAtMs) || this.now() - capturedAtMs > COMPLETION_FIX_MAX_AGE_MS) {
+        return null;
+      }
+      return latest;
+    } catch {
+      return null;
     }
   }
 

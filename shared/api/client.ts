@@ -449,14 +449,20 @@ export function getApiErrorMessage(
   // No usable response body. Some callers (e.g. authStore.createProfile) extract
   // the backend detail themselves and re-throw `new Error(detail)`, so a
   // meaningful err.message should still win. Ignore Axios's generic
-  // "Request failed with status code N" and "Network Error".
+  // "Request failed with status code N" and "Network Error", and JSON-parse
+  // SyntaxErrors from a malformed/HTML response body ("JSON Parse error: …"
+  // on Hermes, "Unexpected token …" on V8/web) — technical noise, not a
+  // message for the user.
   const raw = anyErr?.message;
   if (
     raw &&
+    anyErr?.name !== 'SyntaxError' &&
     raw !== 'Request failed' && // extractError's no-detail sentinel
     !/^Request failed with status code/i.test(raw) &&
     !/^Network Error$/i.test(raw) &&
-    !/^timeout of /i.test(raw)
+    !/^timeout of /i.test(raw) &&
+    !/^JSON Parse error/i.test(raw) &&
+    !/^Unexpected token/i.test(raw)
   ) {
     return clampToastMessage(raw);
   }
@@ -718,6 +724,12 @@ const isSosUrl = (url: string): boolean => /^\/rides\/[^/]+\/emergency$/.test(ur
 const _inflight503Retries = new Set<string>();
 
 const handleApiError = async (response: Response, method: string, url: string, retryFn?: () => Promise<unknown>): Promise<never> => {
+  // Set when this 401 went through the silent-refresh path below. Once
+  // refreshTokens() has run, IT owns the logout decision (it logs out on a
+  // definitive 401 and deliberately keeps the session on transient
+  // network/5xx failures) — the G2 catch-all further down must not
+  // second-guess it by clearing the session anyway.
+  let refreshAttempted = false;
   // ── Guard: refresh endpoint itself returned 401 ──────────────────
   // If the /auth/refresh call is rejected by the server the refresh token is
   // expired or revoked. Sign the user out immediately to clear invalid state
@@ -759,16 +771,12 @@ const handleApiError = async (response: Response, method: string, url: string, r
   // On 401, attempt a single silent token refresh then retry the original request.
   // SOS is exempt (see isSosUrl) — its backend route tolerates expired tokens,
   // so the refresh round-trip only adds failure modes during an emergency.
-  //
-  // Once we enter this branch the refresh layer (authStore.refreshTokens) OWNS
-  // the logout-vs-keep decision: a genuine 401 from /auth/refresh tears the
-  // session down itself, while a TRANSIENT failure (network drop / timeout /
-  // 5xx) deliberately keeps the refresh token so the next attempt recovers.
-  // refreshAttempted records that so the global 401 handler below does NOT
-  // second-guess that decision and hard-logout on a transient blip — the bug
-  // that bounced users to /login on a single dropped connection mid-session.
-  let refreshAttempted = false;
   if (response.status === 401 && _refreshCallback && retryFn && !isSosUrl(url)) {
+    // Set before any await, so the fall-through to the G2 backstop below
+    // always sees it — covers both the first-caller path and the
+    // queued-subscriber path (a queued request whose shared refresh fails
+    // rejects inside this try and would otherwise fall through to G2 and
+    // get logged out).
     refreshAttempted = true;
     try {
       if (_refreshPromise) {
@@ -916,12 +924,12 @@ const handleApiError = async (response: Response, method: string, url: string, r
   // This prevents the "session limbo" state where API calls silently
   // fail 401 while the driver/rider still sees the dashboard.
   // SOS is exempt: never sign the user out mid-emergency (see isSosUrl).
-  //
-  // Skipped when refreshAttempted: the refresh branch above already ran the
-  // refresh layer, which logs out on a genuine 401 and INTENTIONALLY keeps
-  // the session on a transient failure. Forcing logout here would discard a
-  // still-valid refresh token on a network blip. We instead fall through and
-  // reject the original request with its 401 (SpinrApiError) below.
+  // Backstop ONLY for 401s where no silent refresh could be attempted
+  // (no _refreshCallback registered yet at cold start, or no retryFn).
+  // When a refresh ran, refreshTokens() owns the logout decision: it
+  // logs out on definitive rejection but keeps the session on transient
+  // failures — clearing here would hard-sign-out a driver mid-shift on
+  // a flaky connection and force a fresh OTP login.
   if (response.status === 401 && !isSosUrl(url) && !refreshAttempted) {
     console.log('[API] 401 Unauthorized — clearing session');
     setInMemoryToken(null);

@@ -1,10 +1,6 @@
 import { create } from 'zustand';
-import api from '@shared/api/client';
+import api, { getApiErrorMessage } from '@shared/api/client';
 import { recordNonFatal } from '../utils/crashlytics';
-
-function isAxiosError(e: unknown): e is { response?: { data?: { detail?: string } }; message?: string } {
-  return typeof e === 'object' && e !== null;
-}
 
 export interface WalletInfo {
   id: string;
@@ -83,7 +79,7 @@ export const useWalletStore = create<WalletState>((set, get) => ({
       const res = await api.get<WalletInfo>('/wallet');
       set({ wallet: res.data, walletLoading: false });
     } catch (error: unknown) {
-      set({ error: isAxiosError(error) ? (error.message ?? null) : null, walletLoading: false });
+      set({ error: getApiErrorMessage(error, 'Could not load your wallet. Please try again.'), walletLoading: false });
     }
   },
 
@@ -99,7 +95,7 @@ export const useWalletStore = create<WalletState>((set, get) => ({
       set({ isLoading: false });
       return res.data;
     } catch (error: unknown) {
-      set({ error: isAxiosError(error) ? (error.response?.data?.detail || error.message || null) : null, isLoading: false });
+      set({ error: getApiErrorMessage(error, 'Top-up failed. Please try again.'), isLoading: false });
       throw error;
     }
   },
@@ -112,7 +108,7 @@ export const useWalletStore = create<WalletState>((set, get) => ({
       set({ isLoading: false });
     } catch (error: unknown) {
       recordNonFatal(error, { store: 'walletStore', action: 'payWithWallet' });
-      set({ error: isAxiosError(error) ? (error.response?.data?.detail || error.message || null) : null, isLoading: false });
+      set({ error: getApiErrorMessage(error, 'Wallet payment failed. Please try again.'), isLoading: false });
       throw error;
     }
   },
@@ -123,7 +119,7 @@ export const useWalletStore = create<WalletState>((set, get) => ({
       const res = await api.get<{ transactions?: WalletTransaction[] }>(`/wallet/transactions?limit=${limit}`);
       set({ transactions: res.data.transactions || [], transactionsLoading: false });
     } catch (error: unknown) {
-      set({ error: isAxiosError(error) ? (error.message ?? null) : null, transactionsLoading: false });
+      set({ error: getApiErrorMessage(error, 'Could not load transactions. Please try again.'), transactionsLoading: false });
     }
   },
 
@@ -133,7 +129,7 @@ export const useWalletStore = create<WalletState>((set, get) => ({
       await api.post(`/rides/${rideId}/tip`, { amount });
       set({ isLoading: false });
     } catch (error: unknown) {
-      set({ error: isAxiosError(error) ? (error.response?.data?.detail || error.message || null) : null, isLoading: false });
+      set({ error: getApiErrorMessage(error, 'Could not add tip. Please try again.'), isLoading: false });
       throw error;
     }
   },

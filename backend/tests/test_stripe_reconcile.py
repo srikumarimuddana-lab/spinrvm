@@ -937,3 +937,102 @@ async def test_auto_heal_idempotent_when_claim_lost():
         )
 
     assert stats["healed"] == 0
+
+
+# ── Fare attribution invariant (total_fare == driver + admin, tip-adjusted) ──
+
+
+class TestFareAttributionMismatch:
+    """total_fare must equal driver_earnings + admin_earnings. Tips are added to
+    driver_earnings after settlement, so the invariant subtracts tip_amount."""
+
+    def test_flags_understated_driver_earnings(self):
+        from utils.stripe_reconcile import _attribution_mismatch
+
+        # The exact pre-fix bug: driver books base+dist+time (3.90) on an 8.00
+        # minimum-fare ride, leaving the 2.10 uplift attributed to nobody.
+        ride = {
+            "id": "r1",
+            "total_fare": "8.00",
+            "driver_earnings": "3.90",
+            "admin_earnings": "2.00",
+            "tip_amount": "0.00",
+        }
+        d = _attribution_mismatch(ride)
+        assert d is not None
+        assert d["type"] == "FARE_ATTRIBUTION_MISMATCH"
+        assert d["ride_id"] == "r1"
+        assert d["total_fare_cents"] == 800
+        assert d["attributed_cents"] == 590
+
+    def test_reconciled_ride_returns_none(self):
+        from utils.stripe_reconcile import _attribution_mismatch
+
+        ride = {
+            "id": "r1",
+            "total_fare": "8.00",
+            "driver_earnings": "6.00",  # post-fix: keeps the uplift
+            "admin_earnings": "2.00",
+            "tip_amount": "0.00",
+        }
+        assert _attribution_mismatch(ride) is None
+
+    def test_ok_with_tip_added_to_driver_earnings(self):
+        from utils.stripe_reconcile import _attribution_mismatch
+
+        # driver_earnings 7.00 = 6.00 fare share + 1.00 tip; subtract tip → 6.00.
+        ride = {
+            "id": "r1",
+            "total_fare": "8.00",
+            "driver_earnings": "7.00",
+            "admin_earnings": "2.00",
+            "tip_amount": "1.00",
+        }
+        assert _attribution_mismatch(ride) is None
+
+    def test_skips_legacy_rows_without_earnings(self):
+        from utils.stripe_reconcile import _attribution_mismatch
+
+        ride = {"id": "r1", "total_fare": "8.00", "tip_amount": "0.00"}
+        assert _attribution_mismatch(ride) is None
+
+
+@pytest.mark.asyncio
+async def test_fare_attribution_mismatch_flagged_in_tick():
+    """The per-ride reconciler surfaces FARE_ATTRIBUTION_MISMATCH for a paid
+    ride whose earnings don't reconcile, and selects the earnings columns."""
+    ride = {
+        "id": "r_attr",
+        "payment_intent_id": "pi_attr",
+        "grand_total": "8.00",
+        "total_fare": "8.00",
+        "tip_amount": "0.00",
+        "driver_earnings": "3.90",
+        "admin_earnings": "2.00",
+        "status": "completed",
+        "payment_status": "paid",
+        "ride_completed_at": _ts_yesterday(),
+    }
+    pi = _pi(pi_id="pi_attr", status="succeeded", amount_received=800)
+    db_mock = AsyncMock()
+    db_mock.get_rows.return_value = [ride]
+    db_mock.insert_one.return_value = {"id": "log1"}
+    stripe_mock = _make_stripe_mock([pi])
+
+    with (
+        patch("utils.stripe_reconcile.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test"})),
+        patch("utils.stripe_reconcile.db_supabase", db_mock),
+        patch.dict(sys.modules, {"stripe": stripe_mock}),
+    ):
+        from utils.stripe_reconcile import _run_reconciliation_tick
+
+        await _run_reconciliation_tick()
+
+    audit_detail = db_mock.insert_one.call_args[0][1]["details"]
+    types = [d["type"] for d in audit_detail["discrepancy_detail"]]
+    assert "FARE_ATTRIBUTION_MISMATCH" in types
+    # The rides query must select the earnings columns it now checks.
+    rides_calls = [c for c in db_mock.get_rows.await_args_list if c.args and c.args[0] == "rides"]
+    columns = rides_calls[0].kwargs.get("columns", "")
+    assert "driver_earnings" in columns
+    assert "admin_earnings" in columns

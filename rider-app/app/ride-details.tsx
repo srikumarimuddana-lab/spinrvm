@@ -480,7 +480,10 @@ export default function RideDetailsScreen() {
             <Text style={styles.statVal}>
               {(ride.actual_distance_km ?? ride.distance_km ?? 0).toFixed(1)} km
             </Text>
-            <Text style={styles.statLabel}>Distance</Text>
+            {/* The tile shows the GPS-measured trip distance; the receipt line
+                shows the billed distance. Label the measured one explicitly so
+                the two can never read as a contradiction under fare-lock. */}
+            <Text style={styles.statLabel}>{ride.actual_distance_km != null ? 'Distance (GPS)' : 'Distance'}</Text>
           </View>
           <View style={styles.statCard}>
             <Ionicons name="time-outline" size={22} color={colors.textDim} />

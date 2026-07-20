@@ -525,8 +525,11 @@ export const getDrivers = (opts: {
     is_available?: boolean;
     status?: string;
     service_area_id?: string;
+    vehicle_type_id?: string;
     search?: string;
     photo_status?: string;
+    sort_by?: string;
+    sort_dir?: "asc" | "desc";
 } = {}) => {
     const sp = new URLSearchParams();
     if (opts.limit != null) sp.set("limit", String(opts.limit));
@@ -536,8 +539,11 @@ export const getDrivers = (opts: {
     if (opts.is_available != null) sp.set("is_available", String(opts.is_available));
     if (opts.status) sp.set("status", opts.status);
     if (opts.service_area_id) sp.set("service_area_id", opts.service_area_id);
+    if (opts.vehicle_type_id) sp.set("vehicle_type_id", opts.vehicle_type_id);
     if (opts.search) sp.set("search", opts.search);
     if (opts.photo_status) sp.set("photo_status", opts.photo_status);
+    if (opts.sort_by) sp.set("sort_by", opts.sort_by);
+    if (opts.sort_dir) sp.set("sort_dir", opts.sort_dir);
     const qs = sp.toString();
     return request<any[]>(`/api/admin/drivers${qs ? `?${qs}` : ""}`);
 };

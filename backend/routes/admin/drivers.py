@@ -157,6 +157,31 @@ def _subscription_summary(sub: Optional[Dict[str, Any]], now: datetime) -> tuple
     return None, plan, expires
 
 
+# Whitelist of columns the admin drivers list may be sorted by. Keys are the
+# sort tokens the frontend sends; values are real columns on the `drivers`
+# table so the ORDER BY happens at the DB (across ALL pages), not per-page in
+# the browser. Derived/display columns map to their underlying column:
+#   - "name"         -> first_name mirror (display name comes from users, but
+#                       the mirror is kept in sync and is what we can order by)
+#   - "region"       -> service_area_id (groups drivers by area consistently
+#                       across pages; the area NAME lives in a separate table)
+#   - "vehicle_type" -> vehicle_type_id (same rationale as region)
+# Any token not in this map falls back to created_at so an unexpected value can
+# never inject an arbitrary column into the ORDER BY.
+_DRIVER_SORT_COLUMNS = {
+    "created_at": "created_at",
+    "name": "first_name",
+    "status": "status",
+    "is_online": "is_online",
+    "vehicle_type": "vehicle_type_id",
+    "vehicle_make": "vehicle_make",
+    "rating": "rating",
+    "total_rides": "total_rides",
+    "total_earnings": "total_earnings",
+    "region": "service_area_id",
+}
+
+
 @router.get("/drivers")
 async def admin_get_drivers(
     limit: int = 50,
@@ -167,9 +192,16 @@ async def admin_get_drivers(
     is_available: Optional[bool] = None,
     status: Optional[str] = None,
     service_area_id: Optional[str] = None,
+    vehicle_type_id: Optional[str] = None,
     photo_status: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_dir: Optional[str] = None,
 ):
     """Get drivers with filters, enriched with user name/email/phone.
+
+    Search, filtering, sorting and pagination all happen at the DB so the admin
+    UI operates over the ENTIRE drivers table, not just the rows already loaded
+    into the current page.
 
     Defense-in-depth dedup: migration 31 adds UNIQUE(drivers.phone) and
     UNIQUE(drivers.user_id) so duplicates can't exist at the DB level.
@@ -189,6 +221,8 @@ async def admin_get_drivers(
         filters["status"] = status
     if service_area_id:
         filters["service_area_id"] = service_area_id
+    if vehicle_type_id:
+        filters["vehicle_type_id"] = vehicle_type_id
 
     # Find matching user IDs first if search is provided
     if search:
@@ -209,10 +243,12 @@ async def admin_get_drivers(
 
             # Match driver rows by phone/plate directly OR by user_id from user search above.
             # `name` is not a column on drivers — it's derived from the joined users row.
-            # user_id is matched directly too (not just via the users $or above) so
-            # pasting a driver's user_id UUID finds them even if it doesn't happen
-            # to substring-match phone/email/name.
+            # Both the driver row `id` and `user_id` are matched directly (not just via
+            # the users $or above) so pasting either UUID finds the driver even when it
+            # doesn't substring-match phone/email/name. `id` preserves the parity the
+            # old client-side search had (it matched the driver row id too).
             filters["$or"] = [
+                {"id": {"$regex": re.escape(term), "$options": "i"}},
                 {"phone": {"$regex": re.escape(term), "$options": "i"}},
                 {"license_plate": {"$regex": re.escape(term), "$options": "i"}},
                 {"driver_code": {"$regex": re.escape(term), "$options": "i"}},
@@ -230,12 +266,19 @@ async def admin_get_drivers(
             return []
         filters["user_id"] = {"$in": photo_uids}
 
-    drivers = await db_supabase.get_rows("drivers", filters, order="created_at", desc=True, limit=limit, offset=offset)
+    order_col = _DRIVER_SORT_COLUMNS.get((sort_by or "").strip(), "created_at")
+    # Default direction is descending (newest-first) — the historical behaviour
+    # — unless the caller explicitly asks for ascending.
+    desc = (sort_dir or "desc").strip().lower() != "asc"
+    drivers = await db_supabase.get_rows("drivers", filters, order=order_col, desc=desc, limit=limit, offset=offset)
 
-    # Defensive dedup — keep the earliest-created row per (user_id, phone).
+    # Defensive dedup — keep the earliest-created row per (user_id, phone) while
+    # preserving the DB-returned ORDER BY. We decide which rows to KEEP by
+    # scanning oldest-first (so the earliest row wins per dup group), then filter
+    # the original list so the requested sort order is not clobbered.
     seen_user_ids: set = set()
     seen_phones: set = set()
-    deduped = []
+    kept_ids: set = set()
     for d in sorted(drivers, key=lambda r: r.get("created_at") or ""):
         uid = d.get("user_id")
         phone = d.get("phone")
@@ -245,9 +288,8 @@ async def admin_get_drivers(
             seen_user_ids.add(uid)
         if phone:
             seen_phones.add(phone)
-        deduped.append(d)
-    # Restore the original newest-first order expected by the UI.
-    deduped.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+        kept_ids.add(id(d))
+    deduped = [d for d in drivers if id(d) in kept_ids]
 
     user_ids = list({d.get("user_id") for d in deduped if d.get("user_id")})
     # Project only the columns the list renders. users.profile_image is

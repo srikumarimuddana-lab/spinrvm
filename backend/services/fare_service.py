@@ -207,10 +207,18 @@ def calculate_fare(
     time_fare = _round(per_min * _d(duration_minutes) * surge)
 
     subtotal = _round(base_fare + distance_fare + time_fare + booking + ap_fee)
-    total_fare = max(subtotal, minimum)
+    total_fare = _round(max(subtotal, minimum))
 
-    driver_earnings = _round(base_fare + distance_fare + time_fare)
+    # Attribution invariant: total_fare == driver_earnings + admin_earnings.
+    # admin_earnings is the platform's cut (booking + airport fees); the driver
+    # keeps everything else — including the minimum-fare uplift (minimum −
+    # subtotal). Spinr takes 0% commission on the ride fare, so any amount the
+    # rider is charged above the fee floor is the driver's. Deriving driver from
+    # (total − admin) — rather than base+distance+time — is what makes the
+    # payout ledger reconcile with the "Driver earns 100%" receipt line on a
+    # clamped ride. Both operands are 2-dp Decimals, so the invariant is exact.
     admin_earnings = _round(booking + ap_fee)
+    driver_earnings = _round(total_fare - admin_earnings)
 
     return FareBreakdown(
         base_fare=base_fare,
@@ -307,12 +315,19 @@ def build_fare_breakdown_lines(
 def recalculate_fare_for_distance(
     ride: Dict[str, Any],
     actual_distance_km: float,
+    minimum_fare: Optional[Decimal] = None,
 ) -> Dict[str, Any]:
     """Recalculate fare when actual distance differs from the estimate.
 
     Derives the effective per-km rate from the stored ride row, then
     reapplies it to the actual distance. Falls back to the default
     per-km rate (with surge) when planned distance is missing/zero.
+
+    Re-applies the minimum-fare floor so a short actual trip never settles
+    below what the rider was quoted, and keeps the attribution invariant
+    (total_fare == driver_earnings + admin_earnings) — the driver keeps the
+    minimum-fare uplift. Pass ``minimum_fare`` to enforce an explicit floor;
+    otherwise the floor is inferred from whether booking clamped the ride.
     """
     planned = _d(ride.get("distance_km") or ride.get("planned_distance_km") or 0)
     if planned <= 0:
@@ -329,14 +344,39 @@ def recalculate_fare_for_distance(
     else:
         per_km_rate = _d(ride.get("distance_fare", 0)) / planned
     new_distance_fare = _round(per_km_rate * _d(actual_distance_km))
+    booking = _d(ride.get("booking_fee", 0))
+    airport = _d(ride.get("airport_fee") or 0)
     new_total_fare = _round(
-        _d(ride.get("base_fare", 0))
-        + new_distance_fare
-        + _d(ride.get("time_fare", 0))
-        + _d(ride.get("booking_fee", 0))
-        + _d(ride.get("airport_fee") or 0)
+        _d(ride.get("base_fare", 0)) + new_distance_fare + _d(ride.get("time_fare", 0)) + booking + airport
     )
-    new_driver_earnings = _round(_d(ride.get("base_fare", 0)) + new_distance_fare + _d(ride.get("time_fare", 0)))
+
+    # Re-apply the minimum-fare floor at completion. The minimum isn't persisted
+    # on the ride row, so infer whether booking clamped it: a stored total_fare
+    # sitting above the sum of its own components means the ride was floored, so
+    # keep at least that floor now. Do NOT re-fetch the live fare config here —
+    # it may have changed since booking and the rider was quoted the
+    # booking-time minimum. An explicit ``minimum_fare`` (future callers) wins too.
+    booked_total = _d(ride.get("total_fare") or 0)
+    booked_components = _round(
+        _d(ride.get("base_fare", 0))
+        + _d(ride.get("distance_fare", 0))
+        + _d(ride.get("time_fare", 0))
+        + booking
+        + airport
+    )
+    floor = Decimal("0")
+    if booked_total - booked_components > Decimal("0.005"):
+        floor = booked_total
+    if minimum_fare is not None:
+        floor = max(floor, _d(minimum_fare))
+    if floor > new_total_fare:
+        new_total_fare = _round(floor)
+
+    # Attribution invariant (see calculate_fare): the driver keeps everything
+    # above the platform's fee cut — including any minimum-fare uplift. Booking
+    # and airport fees do not change at completion, so admin stays fixed.
+    new_admin_earnings = _round(booking + airport)
+    new_driver_earnings = _round(new_total_fare - new_admin_earnings)
 
     area_fees_total = _d(ride.get("area_fees_total", 0))
     if area_fees_total == 0:

@@ -58,3 +58,43 @@ def test_no_driver_phone_or_plate_in_pdf():
     # PIPEDA: even if a driver dict carries a phone, it must not be rendered.
     pdf = bytes(generate_receipt_pdf(_RIDE, _RIDER, {**_DRIVER, "phone": "+13065551212"}))
     assert b"3065551212" not in pdf
+
+
+def _amt(s: str) -> Decimal:
+    return Decimal(s.replace("$", ""))
+
+
+def test_minimum_fare_adjustment_row_reconciles_to_subtotal():
+    # base+dist+time+booking = 5.90, floored up to 8.00 at booking.
+    ride = {
+        **_RIDE,
+        "base_fare": "3.50",
+        "distance_fare": "0.15",
+        "time_fare": "0.25",
+        "booking_fee": "2.00",
+        "total_fare": "8.00",
+        "grand_total": "8.00",
+        "tax_breakdown": {},
+    }
+    rows, _grand = _fare_lines(ride, Decimal("0"))
+    labels = [r[0] for r in rows]
+    assert "Minimum fare adjustment" in labels
+    assert ("Minimum fare adjustment", "$2.10") in rows  # 8.00 − 5.90
+    # The rendered fare rows above the rule must sum to the printed Subtotal.
+    subtotal_idx = labels.index("Subtotal")
+    fare_sum = sum((_amt(a) for _l, a in rows[:subtotal_idx] if a), Decimal("0"))
+    assert fare_sum == _amt(dict(rows)["Subtotal"])
+
+
+def test_airport_surcharge_row_in_pdf():
+    ride = {**_RIDE, "airport_fee": "4.00", "total_fare": "15.00", "grand_total": "15.00", "tax_breakdown": {}}
+    rows, _grand = _fare_lines(ride, Decimal("0"))
+    assert ("Airport surcharge", "$4.00") in rows
+    # Not clamped once airport is counted → no adjustment row.
+    assert "Minimum fare adjustment" not in [r[0] for r in rows]
+
+
+def test_no_minimum_fare_row_when_not_clamped_pdf():
+    # Default _RIDE: total_fare 11.00 == component sum → no adjustment row.
+    rows, _grand = _fare_lines(_RIDE, Decimal("0"))
+    assert "Minimum fare adjustment" not in [r[0] for r in rows]

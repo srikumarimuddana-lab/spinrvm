@@ -85,12 +85,33 @@ def _build_fare_rows(ride: Dict[str, Any], tip: Decimal) -> tuple[str, Decimal]:
     duration_min = ride.get("duration_minutes", 0) or 0
     surge = _d(ride.get("surge_multiplier", 1.0) or 1.0)
 
+    airport_fee = _d(ride.get("airport_fee") or 0)
+
     rows: list[str] = []
     rows.append(_line("Base fare", f"${_fmt(base_fare)}"))
     rows.append(_line(f"Distance ({distance_km:.1f} km)", f"${_fmt(distance_fare)}"))
     rows.append(_line(f"Time ({duration_min} min)", f"${_fmt(time_fare)}"))
     if booking_fee > 0:
         rows.append(_line("Booking fee", f"${_fmt(booking_fee)}"))
+    # Airport surcharge is inside total_fare (calculate_fare) but is a distinct
+    # column from area_fees_breakdown — itemise it or the rows under-sum the
+    # header on airport rides.
+    if airport_fee > 0:
+        rows.append(_line("Airport surcharge", f"${_fmt(airport_fee)}"))
+
+    # Minimum-fare adjustment: when total_fare was clamped up to the floor at
+    # booking, the amount above the itemised components (which the driver keeps
+    # — 0% commission) must appear as its own disclosed line so the rendered
+    # rows reconcile to the charged total. Every charge maps to a line item
+    # (CLAUDE.md: "not a hidden-fee operator"). Legacy rows without total_fare
+    # yield 0. Excludes taxes/area fees, which are added below the subtotal.
+    total_fare = _d(ride.get("total_fare") or 0)
+    min_fare_uplift = max(
+        Decimal("0"),
+        total_fare - (base_fare + distance_fare + time_fare + booking_fee + airport_fee),
+    )
+    if min_fare_uplift > 0:
+        rows.append(_line("Minimum fare adjustment", f"${_fmt(min_fare_uplift)}"))
 
     # Itemised area fees (airport, night, custom). Falls back silently when
     # the column is missing on a legacy row — the underlying value is still
@@ -154,7 +175,17 @@ def _build_fare_rows(ride: Dict[str, Any], tip: Decimal) -> tuple[str, Decimal]:
                 (_d(f.get("calculated_value", 0)) for f in area_fees if isinstance(f, dict)),
                 Decimal("0"),
             )
-        grand_total_d = _q(base_fare + distance_fare + time_fare + booking_fee + area_fees_total + tax_total + tip)
+        grand_total_d = _q(
+            base_fare
+            + distance_fare
+            + time_fare
+            + booking_fee
+            + airport_fee
+            + min_fare_uplift
+            + area_fees_total
+            + tax_total
+            + tip
+        )
     else:
         # Persisted grand_total includes fees + tax but NOT tip — tip is
         # added at rating time after settlement.

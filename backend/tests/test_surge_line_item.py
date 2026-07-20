@@ -58,6 +58,35 @@ def test_surge_not_overstated_on_minimum_fare_ride():
     assert abs(float(_lines_total(lines)) - 20.0) < 0.011
 
 
+def test_min_fare_uplift_attributed_and_receipt_truthful():
+    """The bug this fixes: on a minimum-fare ride the receipt's 'Ride fare' line
+    (disclosed as 'Driver earns 100%') must equal the stored driver_earnings, and
+    driver_earnings + admin_earnings must equal the charged total_fare. Before the
+    fix the driver line was booked from the un-clamped subtotal, so the receipt
+    claimed driver income the payout ledger never recorded."""
+    floored = {
+        "base_fare": 3.0,
+        "per_km_rate": 1.5,
+        "per_minute_rate": 0.3,
+        "booking_fee": 1.0,
+        "minimum_fare": 20.0,  # floor above the natural fare
+    }
+    fb = calculate_fare(floored, distance_km=1.0, duration_minutes=2.0)
+    assert float(fb.total_fare) == 20.0  # clamped up to the floor
+
+    # Ledger reconciles: charged == driver + admin (admin = booking fee here).
+    assert fb.driver_earnings + fb.admin_earnings == fb.total_fare
+    assert fb.admin_earnings == Decimal("1.00")
+    assert fb.driver_earnings == Decimal("19.00")
+
+    # Receipt ride line (driver's 100% share) == the stored driver_earnings.
+    lines = build_fare_breakdown_lines(fb, distance_km=1.0, duration_minutes=2)
+    ride_line = next(x for x in lines if x["type"] == "ride")
+    assert ride_line["amount"] == float(fb.driver_earnings)
+    # And all lines still sum to the charged total.
+    assert abs(float(_lines_total(lines)) - float(fb.total_fare)) < 0.011
+
+
 def test_no_surge_line_when_multiplier_is_one():
     fb = calculate_fare(_FARE_INFO, distance_km=10.0, duration_minutes=15.0, surge=Decimal("1"))
     lines = build_fare_breakdown_lines(fb, distance_km=10.0, duration_minutes=15)

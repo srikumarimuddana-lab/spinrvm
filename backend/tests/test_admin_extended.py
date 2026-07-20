@@ -288,7 +288,11 @@ class TestAdminSendPayableInvoice:
         ride = _ride("completed", payment_status="refunded")
         with patch("backend.routes.admin.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
             with pytest.raises(HTTPException) as exc:
-                asyncio.run(admin_rides.admin_send_payable_invoice(request=_FAKE_REQUEST, ride_id=RIDE_ID, admin_user=ADMIN_USER))
+                asyncio.run(
+                    admin_rides.admin_send_payable_invoice(
+                        request=_FAKE_REQUEST, ride_id=RIDE_ID, admin_user=ADMIN_USER
+                    )
+                )
         assert exc.value.status_code == 409
         assert "terminal" in str(exc.value.detail).lower()
 
@@ -310,7 +314,11 @@ class TestAdminSendPayableInvoice:
             patch("backend.routes.admin.rides.db_supabase.update_one", AsyncMock(return_value=None)),
         ):
             with pytest.raises(HTTPException) as exc:
-                asyncio.run(admin_rides.admin_send_payable_invoice(request=_FAKE_REQUEST, ride_id=RIDE_ID, admin_user=ADMIN_USER))
+                asyncio.run(
+                    admin_rides.admin_send_payable_invoice(
+                        request=_FAKE_REQUEST, ride_id=RIDE_ID, admin_user=ADMIN_USER
+                    )
+                )
         assert exc.value.status_code == 409
         assert "already being created" in str(exc.value.detail).lower()
 
@@ -343,7 +351,9 @@ class TestAdminSendPayableInvoice:
             patch("stripe.Invoice.finalize_invoice", MagicMock(return_value=fin)),
             patch("stripe.Invoice.send_invoice", MagicMock(return_value=MagicMock())),
         ):
-            result = asyncio.run(admin_rides.admin_send_payable_invoice(request=_FAKE_REQUEST, ride_id=RIDE_ID, admin_user=ADMIN_USER))
+            result = asyncio.run(
+                admin_rides.admin_send_payable_invoice(request=_FAKE_REQUEST, ride_id=RIDE_ID, admin_user=ADMIN_USER)
+            )
 
         assert result["sent"] is True
         assert result["stripe_invoice_id"] == "in_new_1"
@@ -505,8 +515,9 @@ class TestAdminSendPayableInvoice:
         """Codex round-5 (81Sc): if the persisted invoice was deleted in Stripe,
         retrieve raises resource_missing — the endpoint clears the dead id and
         creates a fresh invoice rather than 502ing forever."""
-        import stripe
         from unittest.mock import MagicMock
+
+        import stripe
 
         from backend.routes.admin import rides as admin_rides
 
@@ -658,6 +669,106 @@ class TestAdminGetDrivers:
 
         or_clauses = captured_filters.get("$or", [])
         assert any(c.get("user_id", {}).get("$regex") == "uid\\-driver\\-target" for c in or_clauses)
+
+    def test_sort_by_maps_to_db_order_column(self):
+        """sort_by/sort_dir must drive the DB ORDER BY (mapped to a real
+        column) so sorting spans the whole table, not just the current page."""
+        from backend.routes.admin import drivers as admin_drivers
+
+        captured = {}
+
+        def get_rows_side(table, filters=None, **kw):
+            if table == "drivers":
+                captured.update(kw)
+                return [_driver()]
+            return [_user()]
+
+        with patch("backend.routes.admin.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side)):
+            asyncio.run(admin_drivers.admin_get_drivers(sort_by="total_earnings", sort_dir="asc", limit=10, offset=20))
+
+        # Derived/whitelisted key -> real column, ascending, and the page window
+        # (limit/offset) is preserved so pagination still applies AFTER sorting.
+        assert captured.get("order") == "total_earnings"
+        assert captured.get("desc") is False
+        assert captured.get("limit") == 10
+        assert captured.get("offset") == 20
+
+    def test_sort_by_derived_key_maps_to_underlying_column(self):
+        """'name'/'region'/'vehicle_type' are display columns — they must map
+        to the real underlying column the DB can order by."""
+        from backend.routes.admin import drivers as admin_drivers
+
+        captured = {}
+
+        def get_rows_side(table, filters=None, **kw):
+            if table == "drivers":
+                captured.update(kw)
+                return []
+            return []
+
+        with patch("backend.routes.admin.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side)):
+            asyncio.run(admin_drivers.admin_get_drivers(sort_by="region"))
+
+        assert captured.get("order") == "service_area_id"
+        assert captured.get("desc") is True  # default direction
+
+    def test_sort_by_unknown_column_falls_back_to_created_at(self):
+        """An unrecognised sort token can never inject an arbitrary column into
+        the ORDER BY — it falls back to created_at."""
+        from backend.routes.admin import drivers as admin_drivers
+
+        captured = {}
+
+        def get_rows_side(table, filters=None, **kw):
+            if table == "drivers":
+                captured.update(kw)
+                return []
+            return []
+
+        with patch("backend.routes.admin.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side)):
+            asyncio.run(admin_drivers.admin_get_drivers(sort_by="password; DROP TABLE"))
+
+        assert captured.get("order") == "created_at"
+
+    def test_filters_by_vehicle_type(self):
+        """vehicle_type_id must be pushed into the DB filter so the vehicle-type
+        narrowing spans the whole table, not just the loaded page."""
+        from backend.routes.admin import drivers as admin_drivers
+
+        captured_filters = {}
+
+        def get_rows_side(table, filters=None, **kw):
+            if table == "drivers":
+                captured_filters.update(filters or {})
+                return []
+            return []
+
+        with patch("backend.routes.admin.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side)):
+            asyncio.run(admin_drivers.admin_get_drivers(vehicle_type_id="sedan"))
+
+        assert captured_filters.get("vehicle_type_id") == "sedan"
+
+    def test_dedup_preserves_requested_sort_order(self):
+        """Dedup must keep the earliest row per (user_id, phone) WITHOUT
+        re-sorting by created_at — the DB's requested order must survive."""
+        from backend.routes.admin import drivers as admin_drivers
+
+        # DB returns rating-descending order; a duplicate user_id is mixed in.
+        rows = [
+            _driver(id="d1", user_id="u1", phone="p1", rating=5.0, created_at="2024-01-01"),
+            _driver(id="d2", user_id="u2", phone="p2", rating=4.0, created_at="2024-02-01"),
+            _driver(id="d3", user_id="u1", phone="p1", rating=3.0, created_at="2024-03-01"),  # dup of u1 (later)
+        ]
+
+        def get_rows_side(table, filters=None, **kw):
+            return rows if table == "drivers" else []
+
+        with patch("backend.routes.admin.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side)):
+            result = asyncio.run(admin_drivers.admin_get_drivers(sort_by="rating", sort_dir="desc"))
+
+        # d3 (the later duplicate of u1) is dropped; d1 and d2 stay in the
+        # DB-returned rating-desc order (d1 then d2) — NOT re-sorted by date.
+        assert [r["id"] for r in result] == ["d1", "d2"]
 
 
 class TestAdminSearchDrivers:

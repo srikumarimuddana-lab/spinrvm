@@ -8,6 +8,7 @@ a service layer.
 
 import os
 import sys
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -19,9 +20,11 @@ from services.fare_service import (  # noqa: E402
     FareService,
     _fd,
     build_default_fares,
+    calculate_fare,
     find_service_area_for_point,
     merge_fare_configs_with_vehicle_types,
     merge_vehicle_pricing_with_vehicle_types,
+    recalculate_fare_for_distance,
 )
 
 # ── Pure helpers ──────────────────────────────────────────────────────────────
@@ -252,3 +255,149 @@ class TestFareService:
         assert len(out) == 1
         assert out[0]["base_fare"] == 5.00
         assert out[0]["per_km_rate"] == 2.00
+
+
+# ── calculate_fare: earnings attribution & minimum-fare uplift ────────────────
+
+
+def _fare_info(**overrides):
+    """A complete fare_info dict for calculate_fare, tweakable per test."""
+    info = {
+        "base_fare": 3.50,
+        "per_km_rate": 1.50,
+        "per_minute_rate": 0.25,
+        "minimum_fare": 8.00,
+        "booking_fee": 2.00,
+    }
+    info.update(overrides)
+    return info
+
+
+class TestCalculateFare:
+    """The invariant: total_fare == driver_earnings + admin_earnings.
+
+    On a minimum-fare ride the charged total is clamped up to the floor; the
+    minimum − subtotal uplift belongs to the driver (0% commission — booking
+    and airport fees are the platform's admin_earnings). See the receipt's
+    'Driver earns 100%' disclosure in build_fare_breakdown_lines.
+    """
+
+    def test_min_fare_uplift_goes_to_driver(self):
+        # Tiny ride: base 3.50 + dist 0.15 + time 0.25 + booking 2.00 = 5.90
+        # subtotal, clamped up to the 8.00 floor. Driver gets the uplift.
+        fb = calculate_fare(_fare_info(), distance_km=0.1, duration_minutes=1)
+        assert fb.total_fare == Decimal("8.00")
+        assert fb.admin_earnings == Decimal("2.00")  # booking fee only
+        assert fb.driver_earnings == Decimal("6.00")  # 8.00 − 2.00
+
+    def test_earnings_sum_to_total_on_min_fare_ride(self):
+        fb = calculate_fare(_fare_info(), distance_km=0.1, duration_minutes=1)
+        assert fb.driver_earnings + fb.admin_earnings == fb.total_fare
+
+    def test_non_min_ride_attribution_unchanged(self):
+        # 10 km, 20 min: subtotal 25.50 > floor, driver == base+dist+time.
+        fb = calculate_fare(_fare_info(), distance_km=10, duration_minutes=20)
+        assert fb.total_fare == Decimal("25.50")
+        assert fb.admin_earnings == Decimal("2.00")
+        assert fb.driver_earnings == Decimal("23.50")
+        assert fb.driver_earnings + fb.admin_earnings == fb.total_fare
+
+    def test_surge_and_minimum_interaction_reconciles(self):
+        # Surge 2.0× but the ride still floors: uplift still goes to driver.
+        fb = calculate_fare(
+            _fare_info(minimum_fare=20.00),
+            distance_km=1,
+            duration_minutes=2,
+            surge=Decimal("2"),
+        )
+        assert fb.total_fare == Decimal("20.00")
+        assert fb.admin_earnings == Decimal("2.00")
+        assert fb.driver_earnings == Decimal("18.00")
+        assert fb.driver_earnings + fb.admin_earnings == fb.total_fare
+
+    def test_airport_fee_stays_with_admin_on_min_fare_ride(self):
+        # Airport fee is the platform's, even under the minimum-fare clamp.
+        fb = calculate_fare(
+            _fare_info(minimum_fare=20.00),
+            distance_km=0.1,
+            duration_minutes=1,
+            airport_fee=5.00,
+        )
+        assert fb.total_fare == Decimal("20.00")
+        assert fb.admin_earnings == Decimal("7.00")  # booking 2.00 + airport 5.00
+        assert fb.driver_earnings == Decimal("13.00")  # 20.00 − 7.00
+        assert fb.driver_earnings + fb.admin_earnings == fb.total_fare
+
+    def test_attribution_invariant_property(self):
+        # The invariant holds across a wide spread of inputs, Decimal-exact.
+        import random
+
+        rng = random.Random(20260719)
+        for _ in range(300):
+            info = _fare_info(
+                base_fare=round(rng.uniform(1.0, 6.0), 2),
+                per_km_rate=round(rng.uniform(0.5, 3.0), 2),
+                per_minute_rate=round(rng.uniform(0.1, 0.6), 2),
+                minimum_fare=round(rng.uniform(5.0, 25.0), 2),
+                booking_fee=round(rng.uniform(0.0, 4.0), 2),
+            )
+            fb = calculate_fare(
+                info,
+                distance_km=round(rng.uniform(0.0, 30.0), 2),
+                duration_minutes=round(rng.uniform(0.0, 45.0), 1),
+                surge=Decimal(str(round(rng.uniform(1.0, 2.5), 2))),
+                airport_fee=round(rng.choice([0.0, 3.5, 5.0]), 2),
+            )
+            assert fb.driver_earnings + fb.admin_earnings == fb.total_fare
+
+
+# ── recalculate_fare_for_distance: completion-time clamp & attribution ────────
+
+
+def _completed_ride(**overrides):
+    """A stored ride row as seen at trip completion, tweakable per test."""
+    ride = {
+        "id": "ride_1",
+        "base_fare": 3.50,
+        "distance_fare": 0.15,  # planned 0.1 km at 1.50/km
+        "time_fare": 0.25,
+        "booking_fee": 2.00,
+        "airport_fee": 0,
+        "distance_km": 0.1,
+        "total_fare": 8.00,  # clamped up to the 8.00 floor at booking
+    }
+    ride.update(overrides)
+    return ride
+
+
+class TestRecalculateFareForDistance:
+    """Completion recompute must keep the minimum-fare floor and stay reconciled.
+
+    A ride clamped to the minimum at booking must not settle below it just
+    because the actual distance came in short, and the recomputed earnings
+    must still satisfy total_fare == driver_earnings + admin_earnings.
+    """
+
+    def test_recalc_keeps_minimum_floor_on_shorter_actual_distance(self):
+        # Booked at the 8.00 floor; actual distance even shorter than planned.
+        out = recalculate_fare_for_distance(_completed_ride(), actual_distance_km=0.05)
+        assert out["total_fare"] == 8.00
+        assert out["driver_earnings"] == 6.00  # 8.00 − booking 2.00
+
+    def test_recalc_driver_earnings_reconcile_with_admin_share(self):
+        out = recalculate_fare_for_distance(_completed_ride(), actual_distance_km=0.05)
+        admin = 2.00  # booking + airport, unchanged at completion
+        assert round(out["driver_earnings"] + admin, 2) == out["total_fare"]
+
+    def test_recalc_unclamped_ride_behavior_preserved(self):
+        # A ride that was never floored: driver still == base + dist + time.
+        ride = _completed_ride(distance_fare=15.00, time_fare=5.00, distance_km=10, total_fare=25.50)
+        out = recalculate_fare_for_distance(ride, actual_distance_km=8)
+        assert out["total_fare"] == 22.50  # 3.50 + 12.00 + 5.00 + 2.00
+        assert out["driver_earnings"] == 20.50  # 22.50 − booking 2.00
+
+    def test_recalc_longer_actual_lifts_above_floor(self):
+        # Floored at booking, but the actual trip ran long — no artificial floor.
+        out = recalculate_fare_for_distance(_completed_ride(), actual_distance_km=20)
+        assert out["total_fare"] == 35.75  # 3.50 + 30.00 + 0.25 + 2.00
+        assert out["driver_earnings"] == 33.75  # 35.75 − booking 2.00

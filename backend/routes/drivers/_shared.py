@@ -104,16 +104,20 @@ def _ride_income(r: dict) -> Decimal:
 
 
 # ── Vault encryption for driver PII (P2-5) ───────────────────────────────────
-# licence_number and vehicle_vin live in plain TEXT columns, but the values
-# stored there are vault.secrets UUIDs, not plaintext — actual ciphertext is
-# held in vault.secrets under the drivers_pii_key pgsodium key.
+# licence_number lives in a plain TEXT column, but the value stored there is a
+# vault.secrets UUID, not plaintext — actual ciphertext is held in vault.secrets
+# under the drivers_pii_key pgsodium key.
 # The application passes plaintext to encrypt_driver_pii() before writing and
 # calls decrypt_driver_pii() after reading. Both are Postgres functions created
 # by migration 32_encrypt_sensitive_fields.sql and exposed via Supabase RPC.
 # Transparent column encryption (vault.encrypted_text) was removed by Supabase
 # in mid-2024; we intentionally keep the columns as TEXT and encrypt explicitly.
+#
+# vehicle_vin was moved OUT of this set (migration 244): it is now stored as
+# plaintext and treated as mask-in-UI PII (shown masked, revealed with Show
+# PII), like phone/plate — not encrypt-at-rest. license_number stays encrypted.
 
-_VAULT_PII_FIELDS: frozenset = frozenset({"license_number", "vehicle_vin"})
+_VAULT_PII_FIELDS: frozenset = frozenset({"license_number"})
 
 
 async def _vault_encrypt(value: str, hint: str = "") -> str:

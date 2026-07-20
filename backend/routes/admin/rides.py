@@ -2611,14 +2611,53 @@ async def admin_export_drivers(
     license_masked = [None if isinstance(m, BaseException) else m for m in license_masked]
     _license_exported = sum(1 for m in license_masked if m)
 
+    # Spinr Pass status — one batch query, newest row per driver (mirrors
+    # admin_get_drivers). Reuses the same summary reducer so the export shows
+    # the same status the list does.
+    _driver_ids = [d.get("id") for d in drivers if d.get("id")]
+    subs_map: dict = {}
+    if _driver_ids:
+        try:
+            _subs = await db_supabase.get_rows(
+                "driver_subscriptions",
+                {"driver_id": {"$in": _driver_ids}},
+                columns="driver_id,plan_name,status,expires_at,created_at",
+                order="created_at",
+                desc=True,
+                limit=max(len(_driver_ids) * 5, 100),
+            )
+            for s in _subs or []:
+                did = s.get("driver_id")
+                if did and did not in subs_map:
+                    subs_map[did] = s
+        except Exception as _sub_err:
+            logger.warning("admin_export_drivers: subscription enrichment failed: %s", _sub_err)
+    _sub_now = datetime.now(timezone.utc)
+    try:
+        from .drivers import _subscription_summary  # type: ignore
+    except ImportError:
+        from routes.admin.drivers import _subscription_summary  # type: ignore
+
+    def _mask_vin(v: Any) -> Optional[str]:
+        # VIN is plaintext at rest (migration 244) but still masked to last-4 in
+        # the export, matching the licence-number treatment — the full value is
+        # not written to the CSV.
+        if not v:
+            return None
+        s = str(v).strip()
+        return ("*" * max(len(s) - 4, 0)) + s[-4:] if len(s) > 4 else s
+
     out = []
     for i, d in enumerate(drivers):
         u = users_map.get(d.get("user_id"))
+        _sub_status, _sub_plan, _sub_expires = _subscription_summary(subs_map.get(d.get("id")), _sub_now)
         out.append(
             {
                 "id": d.get("id"),
                 "driver_code": d.get("driver_code"),
                 "name": _user_display_name(u),
+                "first_name": (u.get("first_name") if isinstance(u, dict) else None) or d.get("first_name"),
+                "last_name": (u.get("last_name") if isinstance(u, dict) else None) or d.get("last_name"),
                 "email": u.get("email") if isinstance(u, dict) else None,
                 "phone": u.get("phone") if isinstance(u, dict) else d.get("phone"),
                 "status": d.get("status"),
@@ -2626,17 +2665,45 @@ async def admin_export_drivers(
                 "is_online": d.get("is_online"),
                 "is_available": d.get("is_available"),
                 "service_area": sa_map.get(d.get("service_area_id")) or d.get("service_area_id"),
+                "city": d.get("city"),
+                "regulatory_region": d.get("regulatory_region"),
                 "vehicle_make": d.get("vehicle_make"),
                 "vehicle_model": d.get("vehicle_model"),
                 "vehicle_year": d.get("vehicle_year"),
                 "vehicle_color": d.get("vehicle_color"),
                 "vehicle_type": vt_map.get(d.get("vehicle_type_id")) or d.get("vehicle_type_id"),
                 "license_plate": d.get("license_plate"),
+                # VIN is plaintext at rest but exported masked to last-4.
+                "vehicle_vin": _mask_vin(d.get("vehicle_vin")),
+                # License number stays masked to last-4 (full value never exported).
                 "license_no": license_masked[i],
-                "acceptance_rate": d.get("acceptance_rate"),
+                "license_class": d.get("license_class"),
+                "rating": d.get("rating"),
                 "total_rides": d.get("total_rides"),
+                "total_earnings": d.get("total_earnings"),
+                "acceptance_rate": d.get("acceptance_rate"),
+                "license_expiry": d.get("license_expiry_date"),
+                "insurance_expiry": d.get("insurance_expiry_date"),
+                "vehicle_inspection_expiry": d.get("vehicle_inspection_expiry_date"),
+                "background_check_expiry": d.get("background_check_expiry_date"),
+                "work_eligibility_expiry": d.get("work_eligibility_expiry_date"),
+                "regulatory_authority": d.get("regulatory_authority"),
+                "regulatory_authority_approved": d.get("regulatory_authority_approved"),
+                "regulatory_authority_approved_at": d.get("regulatory_authority_approved_at"),
+                "sgi_approved": d.get("sgi_approved"),
+                "sgi_approved_at": d.get("sgi_approved_at"),
+                "work_authorization_status": d.get("work_authorization_status"),
+                "is_permanent_resident": d.get("is_permanent_resident"),
+                "is_citizen": d.get("is_citizen"),
+                "decals_sent": d.get("decals_sent"),
+                "decals_sent_at": d.get("decals_sent_at"),
+                "subscription_status": _sub_status,
+                "subscription_plan": _sub_plan,
+                "subscription_expires_at": _sub_expires,
                 "joined_at": d.get("created_at"),
                 "approved_at": d.get("verified_at"),
+                "last_status_changed_at": d.get("last_status_changed_at"),
+                "updated_at": d.get("updated_at"),
             }
         )
     await db_supabase.insert_one(

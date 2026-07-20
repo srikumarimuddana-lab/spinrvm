@@ -43,6 +43,7 @@ def _build_plain_text(ride: dict, rider: dict) -> str:
     distance_fare = _d(ride.get("distance_fare"))
     time_fare = _d(ride.get("time_fare"))
     booking_fee = _d(ride.get("booking_fee"))
+    airport_fee = _d(ride.get("airport_fee"))
     surge_multiplier = _d(ride.get("surge_multiplier") or "1.0")
     distance_km = _d(ride.get("distance_km"))
     duration_min = ride.get("duration_minutes") or 0
@@ -50,7 +51,16 @@ def _build_plain_text(ride: dict, rider: dict) -> str:
     # Subtotal before tax (what the fare engine recorded as total_fare)
     subtotal = _d(ride.get("total_fare"))
     if subtotal == Decimal("0"):
-        subtotal = base_fare + distance_fare + time_fare + booking_fee
+        subtotal = base_fare + distance_fare + time_fare + booking_fee + airport_fee
+
+    # Minimum-fare adjustment: when total_fare was clamped up to the floor at
+    # booking, the amount above the itemised components is the driver's uplift
+    # (0% commission). Disclose it (and the airport surcharge, which sits inside
+    # total_fare) so the fare lines reconcile to the Subtotal.
+    min_fare_uplift = max(
+        Decimal("0"),
+        subtotal - (base_fare + distance_fare + time_fare + booking_fee + airport_fee),
+    )
 
     gst = (subtotal * _GST_RATE).quantize(_CENT, rounding=ROUND_HALF_UP)
     pst = (subtotal * _PST_RATE).quantize(_CENT, rounding=ROUND_HALF_UP)
@@ -77,6 +87,11 @@ def _build_plain_text(ride: dict, rider: dict) -> str:
         f"  Time charge      {_fmt(time_fare)}",
         f"  Booking fee      {_fmt(booking_fee)}",
     ]
+
+    if airport_fee > Decimal("0"):
+        lines.append(f"  Airport surcharge {_fmt(airport_fee)}")
+    if min_fare_uplift > Decimal("0"):
+        lines.append(f"  Minimum fare adjustment {_fmt(min_fare_uplift)}")
 
     if surge_multiplier > Decimal("1.0"):
         lines.append(f"  Surge ({surge_multiplier}×)     (applied to fare above)")

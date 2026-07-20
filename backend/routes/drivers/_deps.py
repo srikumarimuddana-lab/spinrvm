@@ -54,7 +54,7 @@ try:
         present_driver_ids_checked,
         reset_miss_streak,
     )
-    from ...utils.earnings_snapshot import build_earnings_snapshot
+    from ...utils.earnings_snapshot import build_earnings_snapshot, fare_share
     from ...utils.error_handling import (
         AccountDisabledException,
         ErrorCode,
@@ -104,7 +104,7 @@ except ImportError:
         present_driver_ids_checked,
         reset_miss_streak,
     )
-    from utils.earnings_snapshot import build_earnings_snapshot
+    from utils.earnings_snapshot import build_earnings_snapshot, fare_share
     from utils.error_handling import (
         AccountDisabledException,
         ErrorCode,

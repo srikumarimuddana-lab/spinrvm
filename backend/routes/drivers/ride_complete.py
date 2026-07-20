@@ -25,6 +25,7 @@ from ._deps import (  # noqa: F401
     datetime,
     db_error_text,
     db_supabase,
+    fare_share,
     flush_driver_breadcrumbs,
     get_current_user,
     logger,
@@ -678,10 +679,21 @@ async def complete_ride(
     # _total_bonus comes from the incentive block above; default to 0 if
     # the variable wasn't set (incentive block errored before assignment).
     try:
-        _fare_d = (
+        # The driver's ride-fare share = total_fare − booking − airport (the
+        # driver keeps the minimum-fare uplift, 0% commission). Derive from the
+        # (possibly recalculated) total_fare so a floored ride books the full
+        # clamped amount; fall back to base+distance+time for legacy rows with
+        # no total_fare. Matches driver_earnings and the receipt ride line.
+        _fallback_components = (
             to_decimal(update_fields.get("base_fare") or ride.get("base_fare") or 0)
             + to_decimal(update_fields.get("distance_fare") or ride.get("distance_fare") or 0)
             + to_decimal(update_fields.get("time_fare") or ride.get("time_fare") or 0)
+        )
+        _fare_d = fare_share(
+            update_fields.get("total_fare") or ride.get("total_fare"),
+            ride.get("booking_fee"),
+            ride.get("airport_fee"),
+            fallback_components=_fallback_components,
         )
         _snapshot = build_earnings_snapshot(
             fare=_fare_d,

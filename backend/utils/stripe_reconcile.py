@@ -45,6 +45,32 @@ def _q2(v: Any) -> Decimal:
     return Decimal(str(v or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
+def _attribution_mismatch(ride: Dict[str, Any]) -> Dict[str, Any] | None:
+    """Flag a ride whose money doesn't reconcile.
+
+    Invariant: ``total_fare == driver_earnings + admin_earnings``. Tips are
+    added to ``driver_earnings`` after settlement, so subtract ``tip_amount``
+    before comparing. Returns a discrepancy dict, or ``None`` when the ride
+    reconciles (within a cent) or is a legacy row with neither earnings column
+    populated. Surfacing this catches the minimum-fare uplift being attributed
+    to nobody — the receipt would claim driver income the payout never books.
+    """
+    driver = ride.get("driver_earnings")
+    admin = ride.get("admin_earnings")
+    if driver is None and admin is None:
+        return None
+    total = _q2(ride.get("total_fare"))
+    attributed = _q2(driver) - _q2(ride.get("tip_amount")) + _q2(admin)
+    if abs(attributed - total) <= Decimal("0.01"):
+        return None
+    return {
+        "type": "FARE_ATTRIBUTION_MISMATCH",
+        "ride_id": ride.get("id"),
+        "total_fare_cents": int((total * 100).to_integral_value()),
+        "attributed_cents": int((attributed * 100).to_integral_value()),
+    }
+
+
 try:
     from utils.loop_monitor import record_heartbeat as _record_heartbeat
 except ImportError:
@@ -56,10 +82,12 @@ except ImportError:
 try:
     from .. import db_supabase  # type: ignore
     from ..settings_loader import get_app_settings  # type: ignore
+    from ..utils import metrics  # type: ignore
     from ..utils.redis_client import redis_set_nx  # type: ignore
 except ImportError:
     import db_supabase  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
+    from utils import metrics  # type: ignore
     from utils.redis_client import redis_set_nx  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -137,7 +165,7 @@ async def _run_reconciliation_tick() -> None:
                 {
                     "payment_status": "paid",
                 },
-                columns="id,payment_intent_id,grand_total,total_fare,tip_amount,authorized_amount,status,ride_completed_at",
+                columns="id,payment_intent_id,grand_total,total_fare,tip_amount,driver_earnings,admin_earnings,authorized_amount,status,ride_completed_at",
                 limit=2000,
             )
             or []
@@ -161,6 +189,19 @@ async def _run_reconciliation_tick() -> None:
 
     # ── 3a. Check each paid DB ride against Stripe ───────────────────────
     for ride in db_rides:
+        # DB-internal money invariant, independent of Stripe presence: the
+        # charged total must equal driver_earnings + admin_earnings (tip-adjusted).
+        _attr = _attribution_mismatch(ride)
+        if _attr:
+            discrepancies.append(_attr)
+            logger.error(
+                "stripe_reconcile: FARE_ATTRIBUTION_MISMATCH ride=%s total_cents=%d attributed_cents=%d",
+                _attr["ride_id"],
+                _attr["total_fare_cents"],
+                _attr["attributed_cents"],
+            )
+            metrics.inc("spinr_payment_fare_attribution_mismatch_total")
+
         pi_id = ride["payment_intent_id"]
         if pi_id not in stripe_pis:
             discrepancies.append(

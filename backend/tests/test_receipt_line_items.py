@@ -231,3 +231,47 @@ class TestReconciliation:
         html = generate_receipt_html(ride, _RIDER, _DRIVER, tip=2.00)
         # 14.21 + 2.00 = 16.21
         assert "$16.21" in html
+
+
+# ── Minimum-fare uplift & airport surcharge disclosure ──────────────────
+
+
+class TestMinimumFareAdjustment:
+    """A minimum-fare ride charges above the sum of its components; the uplift
+    (which the driver keeps) must appear as a disclosed row so the rendered
+    rows reconcile to the header total."""
+
+    def _min_ride(self, **overrides):
+        # base+dist+time+booking = 5.90, floored up to 8.00 at booking.
+        ride = _ride(
+            base_fare=3.50,
+            distance_fare=0.15,
+            time_fare=0.25,
+            booking_fee=2.00,
+            distance_km=0.1,
+            tax_amount=0,
+            tax_breakdown={},
+            total_fare=8.00,
+            grand_total=8.00,
+        )
+        ride.update(overrides)
+        return ride
+
+    def test_minimum_fare_adjustment_row_rendered(self):
+        html = generate_receipt_html(self._min_ride(), _RIDER, _DRIVER)
+        assert "Minimum fare adjustment" in html
+        assert "$2.10" in html  # 8.00 − 5.90
+        assert "$8.00" in html  # header total reconciles
+
+    def test_no_minimum_fare_row_when_not_clamped(self):
+        # Default ride: total_fare 12.80 == component sum → no adjustment.
+        html = generate_receipt_html(_ride(), _RIDER, _DRIVER)
+        assert "Minimum fare adjustment" not in html
+
+    def test_airport_fee_rendered_as_row(self):
+        # airport_fee column sits inside total_fare but was never itemised.
+        ride = _ride(airport_fee=4.00, total_fare=16.80, grand_total=18.21)
+        html = generate_receipt_html(ride, _RIDER, _DRIVER)
+        assert "Airport surcharge" in html
+        assert "$4.00" in html
+        assert "Minimum fare adjustment" not in html  # not clamped, only airport

@@ -66,6 +66,17 @@ function fmtDate(value?: string): string | null {
     return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
+/** Normalize a stored expiry (date-only or full ISO) to the YYYY-MM-DD a native
+ *  <input type="date"> expects, without a timezone shift on date-only values. */
+function toDateInputValue(value?: string): string {
+    if (!value) return "";
+    const m = /^(\d{4}-\d{2}-\d{2})/.exec(value);
+    if (m) return m[1];
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return "";
+    return d.toISOString().slice(0, 10);
+}
+
 export function DocumentUploadDialog({
     open,
     onClose,
@@ -114,6 +125,17 @@ export function DocumentUploadDialog({
 
     const updateRow = (id: string, patch: Partial<UploadRow>) =>
         setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+
+    // Selecting the document type seeds the expiry from what's already on file,
+    // so the admin edits the recorded date instead of re-typing it into an empty
+    // field (and immediately sees the current expiry, e.g. vehicle registration).
+    const selectRequirement = (id: string, key: string) => {
+        const req = reqByKey.get(key);
+        updateRow(id, {
+            requirementKey: key,
+            expiryDate: req?.has_expiry ? toDateInputValue(existing?.[key]?.expiry) : "",
+        });
+    };
 
     const removeRow = (id: string) => setRows((prev) => prev.filter((r) => r.id !== id));
 
@@ -243,7 +265,7 @@ export function DocumentUploadDialog({
                                             <span className="block text-xs font-medium">Document type</span>
                                             <Select
                                                 value={row.requirementKey}
-                                                onValueChange={(v) => updateRow(row.id, { requirementKey: v })}
+                                                onValueChange={(v) => selectRequirement(row.id, v)}
                                             >
                                                 <SelectTrigger aria-label={`Document type for ${row.file.name}`}>
                                                     <SelectValue placeholder="Select a document type" />

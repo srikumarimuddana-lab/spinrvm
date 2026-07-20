@@ -344,6 +344,15 @@ def _build_fare_breakdown(ride: dict) -> list[dict]:
     airport = _d(ride.get("airport_fee", 0) or 0)
     surge = _d(ride.get("surge_multiplier") or 1)
 
+    # Minimum-fare uplift: when total_fare was clamped up to the floor at
+    # booking, the amount above the component sum is the driver's (0%
+    # commission). Fold it into the ride-fare line so the shown items sum to
+    # the amount actually charged and the ride line equals the driver's share
+    # (total − booking − airport). Legacy rows without total_fare → 0 uplift.
+    components = base + dist_surged + time_surged + booking + airport
+    total_fare = _d(ride["total_fare"]) if ride.get("total_fare") not in (None, "") else components
+    uplift = max(Decimal("0"), total_fare - components)
+
     # C4: disclose surge as a real dollar line on the actual bill surfaces
     # (receipt / history / admin), matching the estimate — it was amount:None
     # here. surge multiplies only distance+time; the pre-surge ride fare + the
@@ -353,12 +362,10 @@ def _build_fare_breakdown(ride: dict) -> list[dict]:
     if surge > Decimal("1"):
         surged_dt = dist_surged + time_surged
         unsurged_dt = _round(surged_dt / surge)
-        surged_subtotal = base + surged_dt + booking + airport
-        total_fare = _d(ride.get("total_fare") or surged_subtotal)
-        min_clamped = (total_fare - surged_subtotal) > Decimal("0.005")
+        min_clamped = uplift > Decimal("0.005")
         surge_delta = Decimal("0") if min_clamped else _round(surged_dt - unsurged_dt)
 
-    ride_fare_d = base + dist_surged + time_surged - surge_delta
+    ride_fare_d = base + dist_surged + time_surged - surge_delta + uplift
     if ride_fare_d > 0:
         dist_km = round(float(ride.get("distance_km") or 0), 1)
         lines.append({"label": f"Ride fare ({dist_km} km)", "amount": _f(_round(ride_fare_d)), "type": "ride"})
@@ -383,9 +390,10 @@ def _build_fare_breakdown(ride: dict) -> list[dict]:
         # taxes. Cap the displayed discount at ride_fare so legacy rides with
         # an uncapped discount_amount still render a sane breakdown.
         raw_discount = float(ride["discount_amount"])
-        # Cap against the full (surged) ride fare — the driver's 100%-share base,
-        # which the promo discounts — not the pre-surge line shown above.
-        ride_fare = float(base + dist_surged + time_surged)
+        # Cap against the full (surged) ride fare including any minimum-fare
+        # uplift — the driver's 100%-share base, which the promo discounts —
+        # not the pre-surge line shown above.
+        ride_fare = float(base + dist_surged + time_surged + uplift)
         capped_discount = min(raw_discount, ride_fare) if ride_fare > 0 else raw_discount
         lines.append({"label": promo_label, "amount": -capped_discount, "type": "discount"})
     if ride.get("tip_amount") and float(ride["tip_amount"]) > 0:

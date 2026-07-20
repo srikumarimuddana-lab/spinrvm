@@ -11,6 +11,7 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useAuthStore } from '@shared/store/authStore';
 import { routeQualityLabel, toReactNativeSegments } from '@shared/utils/routeSegments';
+import { ACTUAL_ROUTE_STROKE, PLANNED_ROUTE_STROKE, ROUTE_PIN_COLORS } from '@shared/constants/routeMapStyle';
 import { showToast } from '../store/toastStore';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
@@ -325,8 +326,7 @@ export default function RideDetailsScreen() {
                     <Polyline
                       key={`actual-route-${index}`}
                       coordinates={coordinates}
-                      strokeWidth={4}
-                      strokeColor="#EE2B2B"
+                      {...ACTUAL_ROUTE_STROKE}
                       lineCap="round"
                       lineJoin="round"
                     />
@@ -335,20 +335,18 @@ export default function RideDetailsScreen() {
                   <Polyline
                     key={`planned-route-${index}`}
                     coordinates={coordinates}
-                    strokeWidth={4}
-                    strokeColor="#6B7280"
-                    lineDashPattern={[6, 4]}
+                    {...PLANNED_ROUTE_STROKE}
                     lineCap="round"
                     lineJoin="round"
                   />
                 ))}
                 <Marker coordinate={{ latitude: ride.pickup_lat, longitude: ride.pickup_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                  <View style={[styles.pin, { backgroundColor: '#10B981' }]}>
+                  <View style={[styles.pin, { backgroundColor: ROUTE_PIN_COLORS.pickup }]}>
                     <Ionicons name="location" size={14} color="#FFF" />
                   </View>
                 </Marker>
                 <Marker coordinate={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                  <View style={[styles.pin, { backgroundColor: '#EF4444' }]}>
+                  <View style={[styles.pin, { backgroundColor: ROUTE_PIN_COLORS.dropoff }]}>
                     <Ionicons name="flag" size={14} color="#FFF" />
                   </View>
                 </Marker>

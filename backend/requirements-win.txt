@@ -116,7 +116,7 @@ strictyaml==1.7.3         # via pyiceberg
 stripe==15.1.0            # via -r requirements.in
 supabase==2.29.0          # via -r requirements.in
 supabase-auth==2.29.0     # via supabase
-supabase-functions==2.29.0  # via supabase
+supabase-functions==2.31.0  # via supabase
 tenacity==9.1.4           # via -r requirements.in, pyiceberg
 tqdm==4.67.3              # via google-generativeai
 twilio==9.10.5            # via -r requirements.in

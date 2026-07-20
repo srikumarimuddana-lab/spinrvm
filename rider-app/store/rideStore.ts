@@ -149,6 +149,8 @@ export interface Ride {
   route_schema_version?: number;
   route_geometry_status?: string;
   actual_duration_minutes?: number;
+  /** Kilometres — GPS-measured trip distance; distance_km stays the billed basis. */
+  actual_distance_km?: number;
 }
 
 interface SavedAddress {

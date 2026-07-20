@@ -55,6 +55,11 @@ try:
 except ImportError:
     from utils.route_finalizer import mark_route_pending  # type: ignore
 
+try:
+    from ...utils.trip_distance import compute_trip_distances, load_ride_breadcrumbs
+except ImportError:
+    from utils.trip_distance import compute_trip_distances, load_ride_breadcrumbs  # type: ignore
+
 
 _COMPLETION_MAX_CAPTURE_AGE_SECONDS = 120
 _COMPLETION_MAX_FUTURE_SKEW_SECONDS = 30
@@ -330,245 +335,27 @@ async def complete_ride(
     road_polyline: list = []
     road_polyline_pickup: list = []
     gps_points_count = 0
-    trip_points_count = 0
-    rejected_segments = 0
-    max_segment_gap_s = 0
-    road_distance_provider = "haversine_filtered"
     route_quality: Dict[str, Any] = {"confidence": "low", "reason": "no_gps_breadcrumbs"}
     route_geometry_status = "pending"
     route_geometry_error: Optional[str] = None
 
     try:
-        # Page through ALL breadcrumbs for the ride (time-ordered). The old
-        # single limit=1000 read dropped the tail of long, densely-sampled
-        # trips (>~67 min at the 4s background cadence), under-reporting
-        # billable/phase distance and the SGI trail. Bounded by a hard ceiling
-        # so a pathological trail can't blow up settlement memory; the per-phase
-        # and route polylines are downsampled below regardless of input size.
-        _PAGE = 1000
-        _MAX_BREADCRUMBS = 10000  # ~11 h at 4s — beyond any real single trip
-        all_breadcrumbs = []
-        _offset = 0
-        while True:
-            _page = await db_supabase.get_rows(
-                "driver_location_history",
-                {"ride_id": ride_id},
-                order="timestamp",
-                limit=_PAGE,
-                offset=_offset,
-            )
-            if not _page:
-                break
-            all_breadcrumbs.extend(_page)
-            if len(_page) < _PAGE or len(all_breadcrumbs) >= _MAX_BREADCRUMBS:
-                break
-            _offset += _PAGE
-        if len(all_breadcrumbs) >= _MAX_BREADCRUMBS:
-            logger.warning(
-                f"GPS breadcrumbs hit ceiling {_MAX_BREADCRUMBS} for ride {ride_id}; tail beyond this is not summed"
-            )
-        all_breadcrumbs = [b for b in all_breadcrumbs if b.get("lat") is not None and b.get("lng") is not None]
-        all_breadcrumbs.sort(key=lambda b: str(b.get("timestamp", "")))
-        gps_points_count = len(all_breadcrumbs)
-
-        if gps_points_count >= 2:
-            # Compute per-phase distances (attribute each segment to the
-            # current point's phase) and per-phase durations from the
-            # timestamp deltas. Phase 1 (online_idle) is not expected
-            # against a ride_id but tolerated if it shows up.
-            # GPS sanity caps — reject segments that are physically impossible
-            # before summing. Without these, a single tower-handoff jump on a
-            # 7 km trip could inflate actual_distance_km to 90+ km (the
-            # ingestion-time filter in utils/location_integrity.py is not
-            # retroactively re-applied to stored breadcrumbs).
-            #   MAX_SEG_KM      — single ping-to-ping displacement. Even at
-            #                     240 km/h with a 30 s gap that's 2 km; 5 km
-            #                     is well above any realistic value.
-            #   MAX_SEG_KMH     — sustained ground speed. Saskatchewan max
-            #                     posted is 110 km/h; allow 150 for downhill
-            #                     /overtake transients before rejecting.
-            #   MAX_SEG_GAP_S   — long gaps (background, signal loss) make
-            #                     straight-line distance unreliable; treat
-            #                     same as the duration cap.
-            MAX_SEG_KM = 5.0
-            MAX_SEG_KMH = 150.0
-            MAX_SEG_GAP_S = 300
-            rejected_segments = 0
-            max_segment_gap_s = 0
-            phase_totals: Dict[str, float] = {}
-            phase_secs: Dict[str, float] = {}
-            for i in range(1, len(all_breadcrumbs)):
-                prev = all_breadcrumbs[i - 1]
-                curr = all_breadcrumbs[i]
-                phase = curr.get("tracking_phase") or "unknown"
-                seg_km = calculate_distance(prev["lat"], prev["lng"], curr["lat"], curr["lng"])
-
-                t_prev = parse_iso_utc(prev.get("timestamp"))
-                t_curr = parse_iso_utc(curr.get("timestamp"))
-                delta = None
-                if t_prev and t_curr:
-                    delta = (t_curr - t_prev).total_seconds()
-                    if delta is not None and delta > max_segment_gap_s:
-                        max_segment_gap_s = int(round(delta))
-
-                # Reject anomalous segments before adding to phase totals.
-                if seg_km > MAX_SEG_KM:
-                    rejected_segments += 1
-                    continue
-                if delta is not None and delta > MAX_SEG_GAP_S:
-                    rejected_segments += 1
-                    continue
-                if delta is not None and delta > 0:
-                    seg_kmh = seg_km / (delta / 3600.0)
-                    if seg_kmh > MAX_SEG_KMH:
-                        rejected_segments += 1
-                        continue
-
-                phase_totals[phase] = phase_totals.get(phase, 0.0) + seg_km
-                # Duration: only count if the gap is reasonable (< 5 min)
-                # to avoid one stale breadcrumb inflating a phase by hours.
-                if delta is not None and 0 < delta <= 300:
-                    phase_secs[phase] = phase_secs.get(phase, 0.0) + delta
-            if rejected_segments:
-                logger.info(
-                    f"Ride {ride_id}: dropped {rejected_segments}/{len(all_breadcrumbs) - 1} "
-                    "GPS segments as anomalous (speed/distance/gap caps)"
-                )
-            phase_distances = {k: round(v, 3) for k, v in phase_totals.items()}
-            phase_durations = {k: int(round(v)) for k, v in phase_secs.items()}
-
-            # Actual distance = trip_in_progress only (the paid portion).
-            # Guard against sparse GPS: if fewer than 5 trip_in_progress
-            # points were recorded the haversine sum is essentially just
-            # a straight-line from pickup to dropoff (equivalent to the
-            # booking-time haversine). In that case keep planned_distance
-            # so the displayed km matches what the fare was calculated on,
-            # rather than showing a misleadingly short GPS value.
-            trip_points_count = sum(1 for b in all_breadcrumbs if b.get("tracking_phase") == "trip_in_progress")
-            actual_distance_km = round(phase_distances.get("trip_in_progress", 0.0), 2)
-            if trip_points_count < 5:
-                logger.warning(
-                    f"Ride {ride_id}: only {trip_points_count} trip_in_progress GPS points "
-                    f"— GPS data too sparse for accurate distance; keeping planned={planned_distance}km"
-                )
-                actual_distance_km = planned_distance
-            elif actual_distance_km == 0:
-                # >= 5 points recorded but every segment was rejected by the
-                # speed/distance/gap caps (e.g. GPS dead zone, spoofed trace).
-                logger.warning(
-                    f"Ride {ride_id}: {trip_points_count} trip_in_progress GPS points but all "
-                    f"segments rejected by anomaly filter — keeping planned={planned_distance}km"
-                )
-                actual_distance_km = planned_distance
-
-            pickup_to_driver_km = round(phase_distances.get("navigating_to_pickup", 0.0), 2)
-
-            # Road-snapped recompute (P2): the haversine sum above is already
-            # spike-protected by the speed/distance/gap caps, but it still
-            # approximates straight-line distance between consecutive pings,
-            # missing road curvature and turns. Roads API snapToRoads with
-            # interpolate=true gives us the actual road-network distance and
-            # respects the driver's chosen route (detours included), so it's
-            # the structurally correct billable distance.
-            #
-            # When the recompute succeeds AND its value is within sanity range
-            # of the haversine baseline (1/3× to 3×), it wins. Otherwise we
-            # log the discrepancy and stick with the haversine value — Maps
-            # outage or an empty response can't be allowed to corrupt billing.
-            actual_distance_km_haversine = actual_distance_km
-            actual_distance_km_road = None
-            road_result = None
-            try:
-                try:
-                    from ...utils.route_distance import compute_road_route
-                except ImportError:
-                    from utils.route_distance import compute_road_route  # type: ignore
-                # Hard deadline: settlement targets <1s P95 and an unbounded
-                # provider call here (OSRM/Google over up to 10k breadcrumbs)
-                # previously held the driver's Complete tap for as long as the
-                # provider hung. On timeout we settle on the spike-protected
-                # haversine value — the same fallback as a provider error, and
-                # already an accepted billable baseline (the 1/3×–3× sanity
-                # band treats haversine as the reference).
-                road_result = await asyncio.wait_for(compute_road_route(all_breadcrumbs), timeout=1.5)
-            except asyncio.TimeoutError:
-                logger.warning(
-                    f"[complete_ride] road-snap recompute exceeded 1.5s for ride {ride_id}; keeping haversine"
-                )
-            except Exception:
-                logger.warning(
-                    "[complete_ride] road-snap recompute raised; keeping haversine",
-                    exc_info=True,
-                )
-            if road_result is not None:
-                actual_distance_km_road = road_result["distance_km"]
-                lo = max(0.1, actual_distance_km_haversine / 3.0)
-                hi = max(0.1, actual_distance_km_haversine * 3.0)
-                if lo <= actual_distance_km_road <= hi:
-                    actual_distance_km = round(actual_distance_km_road, 2)
-                    road_distance_provider = str(road_result.get("provider") or "road_snapped")
-                    # Trusted match → persist the road-snapped geometry (saved to
-                    # ride_routes below) for SGI / dispute map review.
-                    road_polyline = road_result.get("polyline") or []
-                else:
-                    logger.warning(
-                        f"Ride {ride_id}: road-snap distance {actual_distance_km_road}km "
-                        f"out of sanity range [{lo:.2f}, {hi:.2f}] from haversine "
-                        f"{actual_distance_km_haversine}km — keeping haversine value"
-                    )
-
-            # The PICKUP-leg road-snap (Phase 2, driver→pickup) is display-only
-            # (admin map) and does NOT feed billing, so it must NOT add a second
-            # provider round-trip to the /complete hot path. It is backgrounded
-            # after settlement; road_polyline_pickup
-            # stays empty here and the column is backfilled best-effort.
-
-            # Per-phase polylines for SGI / dispute tooling. Each phase is
-            # downsampled to MAX_PER_PHASE points so a long trip's payload
-            # stays bounded. Stored as [lat, lng, iso_ts] tuples so the
-            # admin can replay the trip with timing on the detail map.
-            MAX_PER_PHASE = 150
-            phases_to_split = ("navigating_to_pickup", "trip_in_progress")
-            for phase in phases_to_split:
-                pts = [b for b in all_breadcrumbs if b.get("tracking_phase") == phase]
-                if not pts:
-                    continue
-                step = max(1, len(pts) // MAX_PER_PHASE)
-                sampled = pts[::step]
-                if sampled and sampled[-1] is not pts[-1]:
-                    sampled.append(pts[-1])
-                phase_polylines[phase] = [
-                    [
-                        round(p["lat"], 6),
-                        round(p["lng"], 6),
-                        str(p.get("timestamp") or ""),
-                    ]
-                    for p in sampled
-                ]
-
-            rejected_ratio = rejected_segments / max(1, len(all_breadcrumbs) - 1)
-            if trip_points_count >= 20 and rejected_ratio <= 0.1 and max_segment_gap_s <= 120:
-                confidence = "high"
-            elif trip_points_count >= 5 and rejected_ratio <= 0.25 and max_segment_gap_s <= 300:
-                confidence = "medium"
-            else:
-                confidence = "low"
-            route_quality = {
-                "confidence": confidence,
-                "gps_points_count": gps_points_count,
-                "trip_points_count": trip_points_count,
-                "rejected_segments": rejected_segments,
-                "rejected_segment_ratio": round(rejected_ratio, 3),
-                "max_segment_gap_seconds": max_segment_gap_s,
-                "distance_provider": road_distance_provider,
-                "actual_distance_km_haversine": (
-                    round(float(actual_distance_km_haversine), 3) if actual_distance_km_haversine is not None else None
-                ),
-                "actual_distance_km_road_snapped": (
-                    round(float(actual_distance_km_road), 3) if actual_distance_km_road is not None else None
-                ),
-                "road_snap_accepted": bool(road_polyline),
-            }
+        all_breadcrumbs = await load_ride_breadcrumbs(ride_id)
+        distances = await compute_trip_distances(
+            all_breadcrumbs,
+            ride_id=ride_id,
+            planned_distance=planned_distance,
+        )
+        actual_distance_km = distances.actual_distance_km
+        actual_distance_km_haversine = distances.actual_distance_km_haversine
+        actual_distance_km_road = distances.actual_distance_km_road
+        phase_distances = distances.phase_distances
+        phase_durations = distances.phase_durations
+        phase_polylines = distances.phase_polylines
+        pickup_to_driver_km = distances.pickup_to_driver_km
+        road_polyline = distances.road_polyline
+        gps_points_count = distances.gps_points_count
+        route_quality = distances.route_quality
 
     except Exception as e:
         logger.error(f"Could not aggregate GPS data for ride {ride_id}: {e}", exc_info=True)

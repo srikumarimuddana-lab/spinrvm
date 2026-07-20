@@ -16,6 +16,7 @@ import api, { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import Analytics from '@shared/analytics';
+import { ACTUAL_ROUTE_STROKE, PLANNED_ROUTE_STROKE, ROUTE_PIN_COLORS } from '@shared/constants/routeMapStyle';
 import { useStripe } from '@stripe/stripe-react-native';
 import { attemptRidePayment, PaymentAlertButton } from '../utils/attemptRidePayment';
 import { useSpinrPaymentSheet } from '../hooks/useSpinrPaymentSheet';
@@ -127,7 +128,10 @@ function RideCompletedScreenContent() {
   // location reporting must never turn a completed 40-minute ride into a
   // shorter trip in the rider's summary.
   const duration = toNum(currentRide?.actual_duration_minutes ?? currentRide?.duration_minutes);
-  const distance = currentRide?.distance_km || 0;
+  // GPS-measured distance first, billed/booking distance as legacy fallback —
+  // the same source order as the ride-details history screen, so the number
+  // shown here never changes when the rider reopens the ride later.
+  const distance = currentRide?.actual_distance_km ?? currentRide?.distance_km ?? 0;
   // A card hold placed at booking is captured on submit — the payment method is
   // already chosen, so we don't show a payment picker (Google Pay) at the end.
   const hasHold =
@@ -609,8 +613,7 @@ function RideCompletedScreenContent() {
                   <Polyline
                     key={`actual-segment-${index}`}
                     coordinates={coordinates}
-                    strokeWidth={4}
-                    strokeColor="#2563EB"
+                    {...ACTUAL_ROUTE_STROKE}
                     lineCap="round"
                     lineJoin="round"
                   />
@@ -619,19 +622,17 @@ function RideCompletedScreenContent() {
                   <Polyline
                     key={`planned-segment-${index}`}
                     coordinates={coordinates}
-                    strokeWidth={3}
-                    strokeColor="#6B7280"
-                    lineDashPattern={[8, 6]}
+                    {...PLANNED_ROUTE_STROKE}
                     lineCap="round"
                     lineJoin="round"
                   />
                 ))}
 
                 <Marker coordinate={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                  <View style={styles.mapPin}><Ionicons name="location" size={14} color="#FFF" /></View>
+                  <View style={[styles.mapPin, { backgroundColor: ROUTE_PIN_COLORS.pickup }]}><Ionicons name="location" size={14} color="#FFF" /></View>
                 </Marker>
                 <Marker coordinate={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                  <View style={[styles.mapPin, { backgroundColor: '#EF4444' }]}><Ionicons name="flag" size={14} color="#FFF" /></View>
+                  <View style={[styles.mapPin, { backgroundColor: ROUTE_PIN_COLORS.dropoff }]}><Ionicons name="flag" size={14} color="#FFF" /></View>
                 </Marker>
               </MapView>
             )}

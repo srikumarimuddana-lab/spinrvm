@@ -83,6 +83,7 @@ import {
 } from '../backgroundLocation';
 import { tripLocationRecorder } from '../tripLocationRecorder';
 import { tripLocationOutbox as mockOutbox } from '../tripLocationOutbox';
+import { resetLocationIntegrity } from '../locationIntegrity';
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
@@ -154,7 +155,24 @@ describe('background durable trip recording', () => {
       status: 200,
       json: () => Promise.resolve({ recording_session_id: 'session-1', acked_through: 0, rejected: [] }),
     }));
+    resetLocationIntegrity();
     await tripLocationRecorder.startRide('ride-1');
+  });
+
+  it('drops untrusted samples before they reach the durable outbox', async () => {
+    const vague = makeLocation(0);
+    vague.coords.accuracy = 500; // beyond the 200m integrity bound
+    const impossible = makeLocation(1);
+    impossible.coords.speed = 120; // > 90 m/s
+
+    await handleBackgroundLocationTask({
+      data: { locations: [vague, impossible, makeLocation(2)] } as any,
+    });
+
+    expect(mockedOutbox.enqueue).toHaveBeenCalledTimes(1);
+    expect(mockedOutbox.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+      captured_at: new Date(makeLocation(2).timestamp).toISOString(),
+    }));
   });
 
   it('enqueues native sensor timestamps before attempting a headless upload', async () => {

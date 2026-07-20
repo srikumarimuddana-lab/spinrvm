@@ -42,10 +42,18 @@ export interface Ride {
   rider_notes?: string;
   scheduled_time?: string;
   corporate_account_id?: string;
-  /** Kilometres — not money. */
+  /** Kilometres — not money. Billed/fare-basis distance (booking-time estimate, kept under fare-lock). */
   distance_km: number;
+  /** Kilometres — not money. Booking-time straight-line estimate, frozen at booking. */
+  planned_distance_km?: number;
+  /** Kilometres — not money. GPS-measured trip distance written at completion (and refreshed by the route finalizer when a late tail batch arrives). */
+  actual_distance_km?: number;
   /** Minutes — not money. */
   duration_minutes: number;
+  /** Minutes — not money. Measured trip duration, lifted from ride_metrics by the API. */
+  actual_duration_minutes?: number;
+  /** True when the rider pays the booking-time fare regardless of the measured distance (SK fare-lock). */
+  fare_locked?: boolean;
   base_fare: MoneyString;
   distance_fare: MoneyString;
   time_fare: MoneyString;
@@ -75,7 +83,10 @@ export interface Ride {
   rider_comment?: string;
   actual_route_segments?: ActualRouteSegment[];
   route_quality?: RouteQuality;
+  route_schema_version?: number;
   route_revision?: number;
+  /** Matches route_revision only when the stored snapshot image reflects the current route projection. */
+  snapshot_revision?: number;
   route_snapshot_url?: string;
   route_geometry_status?: RouteGeometryStatus;
   created_at: string;

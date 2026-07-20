@@ -356,6 +356,14 @@ async def persist_trip_location_batch(
     # window. Re-finalize only when this call added new evidence; an idempotent
     # replay must not churn revisions or starve the worker's pending queue.
     if inserted and ride.get("status") == "completed":
+        try:
+            from .metrics import inc as _metric_inc
+        except ImportError:
+            from utils.metrics import inc as _metric_inc  # type: ignore
+        # Post-deploy signal for the completion pre-flush fix: how often a
+        # trip's tail still arrives after ride_completed_at. Should trend
+        # toward zero as the driver-app flush changes roll out.
+        _metric_inc("spinr_drivers_late_tail_batches_total")
         await db_supabase.update_one(
             "ride_routes",
             {"ride_id": ride_id},

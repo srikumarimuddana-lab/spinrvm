@@ -21,6 +21,7 @@ try:
     from .datetime_utils import parse_iso_utc
     from .route_distance import compute_segmented_road_route
     from .route_segments import SegmentedRoute, segment_route
+    from .trip_distance import compute_trip_distances, load_ride_breadcrumbs
 except ImportError:
     from utils.datetime_utils import parse_iso_utc  # type: ignore
     from utils.route_distance import compute_segmented_road_route  # type: ignore
@@ -31,6 +32,11 @@ logger = logging.getLogger(__name__)
 
 ROUTE_FINALIZER_INTERVAL_SECONDS = 15
 ROUTE_CLAIM_STALE_SECONDS = 5 * 60
+
+# Minimum change in measured distance before the stats columns on the rides
+# row are rewritten. Keeps idempotent replays (same evidence, new revision)
+# from churning the row and the audit table.
+DISTANCE_RECOMPUTE_EPSILON_KM = 0.05
 
 
 def _now() -> datetime:
@@ -306,6 +312,108 @@ async def route_finalizer_loop(interval_seconds: int = ROUTE_FINALIZER_INTERVAL_
         await asyncio.sleep(interval_seconds)
 
 
+async def _recompute_ride_distance_stats(ride_id: str, ride: Dict[str, Any], revision: int) -> None:
+    """Refresh measured-distance stats on a completed ride from full evidence.
+
+    Runs after a successful revisioned projection write, when a late tail
+    batch may have extended the breadcrumb trail past what ``complete_ride``
+    saw at settlement time. Updates stats/display columns ONLY:
+    ``actual_distance_km``, ``phase_distances``, ``phase_durations``,
+    ``pickup_to_driver_km``, ``gps_points_count`` and the ``ride_metrics``
+    actuals (plus ``distance_km`` under fare-lock, where it is display-only
+    because the rider paid the booking-time fare). Fare columns and
+    ``fare_breakdown_snapshot`` are NEVER touched — recomputing a settled
+    fare is out of scope by design. Every applied change writes an
+    append-only ``ride_distance_recomputes`` audit row.
+    """
+    if ride.get("status") != "completed":
+        return
+
+    breadcrumbs = await load_ride_breadcrumbs(ride_id)
+    planned_distance = ride.get("planned_distance_km") or ride.get("distance_km", 0) or 0
+    distances = await compute_trip_distances(
+        breadcrumbs,
+        ride_id=ride_id,
+        planned_distance=planned_distance,
+    )
+
+    previous_actual = float(ride.get("actual_distance_km") or 0)
+    new_actual = float(distances.actual_distance_km or 0)
+    if abs(new_actual - previous_actual) <= DISTANCE_RECOMPUTE_EPSILON_KM:
+        return
+
+    update_fields: Dict[str, Any] = {
+        "actual_distance_km": distances.actual_distance_km,
+        "phase_distances": distances.phase_distances,
+        "phase_durations": distances.phase_durations,
+        "pickup_to_driver_km": distances.pickup_to_driver_km,
+        "gps_points_count": distances.gps_points_count,
+    }
+
+    fare_lock = False
+    try:
+        try:
+            from ..settings_loader import get_app_settings
+        except ImportError:
+            from settings_loader import get_app_settings  # type: ignore
+        fare_lock = ((await get_app_settings()) or {}).get("fare_lock_enabled", False)
+    except Exception:
+        logger.debug("fare_lock_enabled check failed during recompute, defaulting to False", exc_info=True)
+    if fare_lock:
+        # Mirrors complete_ride: under fare-lock distance_km is display-only
+        # (the fare stays at the booking-time estimate), so keep it in step
+        # with the measured value. Without fare-lock, distance_km fed the
+        # settled fare and must not drift from it retroactively.
+        update_fields["distance_km"] = distances.actual_distance_km
+
+    # ride_metrics actuals (read cache for rider/admin detail UI).
+    metrics = dict(ride.get("ride_metrics") or {})
+    phases = dict(metrics.get("phases") or {})
+    nav_phase = dict(phases.get("navigating_to_pickup") or {})
+    nav_phase["actual_distance_km"] = round(float(distances.pickup_to_driver_km or 0), 3)
+    trip_phase = dict(phases.get("trip_in_progress") or {})
+    trip_phase["actual_distance_km"] = round(new_actual, 3)
+    if distances.actual_distance_km_haversine is not None:
+        trip_phase["actual_distance_km_haversine"] = round(float(distances.actual_distance_km_haversine), 3)
+    if distances.actual_distance_km_road is not None:
+        trip_phase["actual_distance_km_road_snapped"] = round(float(distances.actual_distance_km_road), 3)
+    phases["navigating_to_pickup"] = nav_phase
+    phases["trip_in_progress"] = trip_phase
+    metrics["phases"] = phases
+    update_fields["ride_metrics"] = metrics
+
+    # Status filter keeps this replay-safe against any concurrent lifecycle
+    # writer; a completed ride can never leave completed.
+    applied = await db_supabase.update_one(
+        "rides",
+        {"id": ride_id, "status": "completed"},
+        update_fields,
+        upsert=False,
+    )
+    if applied is None:
+        return
+
+    await db_supabase.insert_one(
+        "ride_distance_recomputes",
+        {
+            "ride_id": ride_id,
+            "route_revision": revision,
+            "previous_actual_distance_km": previous_actual,
+            "new_actual_distance_km": new_actual,
+            "previous_phase_distances": ride.get("phase_distances") or {},
+            "new_phase_distances": distances.phase_distances,
+            "trigger": "late_tail_refinalization",
+        },
+    )
+    logger.info(
+        "ride %s measured distance recomputed at route revision %s: %.2fkm -> %.2fkm",
+        ride_id,
+        revision,
+        previous_actual,
+        new_actual,
+    )
+
+
 async def finalize_route(ride_id: str) -> Dict[str, Any]:
     """Produce a revisioned route projection from durable evidence only.
 
@@ -355,6 +463,17 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
         )
         if updated is None:
             return {"processing_status": "superseded"}
+        try:
+            # Stats-only follow-up: late tail evidence changes the *measured*
+            # distance shown on receipts/tiles, never the settled fare.
+            await _recompute_ride_distance_stats(ride_id, ride, revision)
+        except Exception:
+            logger.error(
+                "distance stats recompute failed for ride_id=%s (route revision %s kept)",
+                ride_id,
+                revision,
+                exc_info=True,
+            )
         await _publish_finalized_snapshot(
             ride_id,
             ride,

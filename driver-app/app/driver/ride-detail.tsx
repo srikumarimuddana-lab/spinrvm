@@ -16,6 +16,7 @@ const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import api from '@shared/api/client';
+import { ACTUAL_ROUTE_STROKE, PLANNED_ROUTE_STROKE, ROUTE_PIN_COLORS } from '@shared/constants/routeMapStyle';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { routeQualityLabel, toReactNativeSegments } from '@shared/utils/routeSegments';
@@ -175,8 +176,7 @@ export default function RideDetailScreen() {
                                         <Polyline
                                             key={`actual-segment-${index}`}
                                             coordinates={coordinates}
-                                            strokeWidth={4}
-                                            strokeColor="#2563EB"
+                                            {...ACTUAL_ROUTE_STROKE}
                                             lineCap="round"
                                             lineJoin="round"
                                         />
@@ -185,20 +185,18 @@ export default function RideDetailScreen() {
                                         <Polyline
                                             key={`planned-segment-${index}`}
                                             coordinates={coordinates}
-                                            strokeWidth={3}
-                                            strokeColor="#6B7280"
-                                            lineDashPattern={[8, 6]}
+                                            {...PLANNED_ROUTE_STROKE}
                                             lineCap="round"
                                             lineJoin="round"
                                         />
                                     ))}
                                 <Marker coordinate={{ latitude: navPickupLat, longitude: navPickupLng }} anchor={{ x: 0.5, y: 0.5 }}>
-                                    <View style={[styles.markerDot, { backgroundColor: '#10B981' }]}>
+                                    <View style={[styles.markerDot, { backgroundColor: ROUTE_PIN_COLORS.pickup }]}>
                                         <Ionicons name="location" size={14} color="#fff" />
                                     </View>
                                 </Marker>
                                 <Marker coordinate={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                                    <View style={[styles.markerDot, { backgroundColor: '#EF4444' }]}>
+                                    <View style={[styles.markerDot, { backgroundColor: ROUTE_PIN_COLORS.dropoff }]}>
                                         <Ionicons name="flag" size={14} color="#fff" />
                                     </View>
                                 </Marker>

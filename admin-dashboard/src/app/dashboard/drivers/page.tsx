@@ -81,6 +81,11 @@ export default function DriversPage() {
     const [hasNextPage, setHasNextPage] = useState(false);
     const reqIdRef = useRef(0);
     const [search, setSearch] = useState("");
+    // Debounced copy of `search` that actually hits the DB. Searching and
+    // sorting are server-side (across the WHOLE drivers table, not just the
+    // rows on the current page), so we throttle keystrokes to avoid a request
+    // per character.
+    const [searchDebounced, setSearchDebounced] = useState("");
     const [showPii, setShowPii] = useState(false);
     const [statusFilter, setStatusFilter] = useState("all");
     const [sortKey, setSortKey] = useState<string>("created_at");
@@ -231,8 +236,13 @@ export default function DriversPage() {
     const loadDrivers = useCallback(() => {
         setTableLoading(true);
         const reqId = ++reqIdRef.current;
-        const opts: any = { limit: PAGE_SIZE + 1, offset: page * PAGE_SIZE };
+        // Everything the list narrows/orders by is sent to the server so the
+        // query runs over the entire table: search, service-area, vehicle-type,
+        // status, and sort. The browser only renders the returned page.
+        const opts: any = { limit: PAGE_SIZE + 1, offset: page * PAGE_SIZE, sort_by: sortKey, sort_dir: sortDir };
+        if (searchDebounced) opts.search = searchDebounced;
         if (serviceAreaId) opts.service_area_id = serviceAreaId;
+        if (vehicleTypeFilter) opts.vehicle_type_id = vehicleTypeFilter;
         if (statusFilter === "online") opts.is_online = true;
         else if (statusFilter === "photos_pending") opts.photo_status = "pending_review";
         else if (["active", "pending", "needs_review", "suspended", "banned"].includes(statusFilter)) opts.status = statusFilter;
@@ -245,12 +255,19 @@ export default function DriversPage() {
             })
             .catch(() => { if (reqId === reqIdRef.current) { setDrivers([]); setHasNextPage(false); } })
             .finally(() => { if (reqId === reqIdRef.current) setTableLoading(false); });
-    }, [page, serviceAreaId, statusFilter]);
+    }, [page, serviceAreaId, statusFilter, searchDebounced, vehicleTypeFilter, sortKey, sortDir]);
 
     useEffect(() => { loadData(); }, [loadData]);
     useEffect(() => { loadDrivers(); }, [loadDrivers]);
-    // Reset to first page when filters change.
-    useEffect(() => { setPage(0); }, [statusFilter, serviceAreaId]);
+    // Debounce the search box (300ms) into the value that drives the DB query.
+    useEffect(() => {
+        const t = setTimeout(() => setSearchDebounced(search.trim()), 300);
+        return () => clearTimeout(t);
+    }, [search]);
+    // Reset to first page whenever anything that changes the result set or its
+    // ordering changes — otherwise a new search/sort could land you on a page
+    // that no longer exists.
+    useEffect(() => { setPage(0); }, [statusFilter, serviceAreaId, searchDebounced, vehicleTypeFilter, sortKey, sortDir]);
     // Vehicle-type catalogue + areaId → allowed vt-id set. The map is
     // unioned from BOTH pricing stores because admins can configure
     // vehicles for an area either way:
@@ -524,45 +541,12 @@ export default function DriversPage() {
     const ef = (field: string) => editForm[field] ?? "";
     const setEf = (field: string, value: string) => setEditForm(prev => ({ ...prev, [field]: value }));
 
-    const filtered = drivers.filter(d => {
-        const matchSearch = !search || (d.first_name + " " + d.last_name).toLowerCase().includes(search.toLowerCase()) || d.email?.toLowerCase().includes(search.toLowerCase()) || d.license_plate?.toLowerCase().includes(search.toLowerCase()) || d.driver_code?.toLowerCase().includes(search.toLowerCase()) || d.id?.toLowerCase().includes(search.toLowerCase());
-        let matchStatus = true;
-        if (statusFilter === "online") matchStatus = d.is_online;
-        if (statusFilter === "active") matchStatus = d.status === "active";
-        if (statusFilter === "pending") matchStatus = d.status === "pending";
-        if (statusFilter === "needs_review") matchStatus = d.status === "needs_review";
-        if (statusFilter === "suspended") matchStatus = d.status === "suspended";
-        if (statusFilter === "banned") matchStatus = d.status === "banned";
-        if (statusFilter === "photos_pending") matchStatus = d.profile_image_status === "pending_review";
-        const matchVehicleType = !vehicleTypeFilter || d.vehicle_type_id === vehicleTypeFilter;
-        return matchSearch && matchStatus && matchVehicleType;
-    });
-
-    // Sort
-    const sorted = [...filtered].sort((a, b) => {
-        let av: any, bv: any;
-        if (sortKey === "name") { av = `${a.first_name} ${a.last_name}`.toLowerCase(); bv = `${b.first_name} ${b.last_name}`.toLowerCase(); }
-        else if (sortKey === "rating") { av = a.rating || 0; bv = b.rating || 0; }
-        else if (sortKey === "total_rides") { av = a.total_rides || 0; bv = b.total_rides || 0; }
-        else if (sortKey === "total_earnings") { av = a.total_earnings || 0; bv = b.total_earnings || 0; }
-        else if (sortKey === "created_at") { av = a.created_at || ""; bv = b.created_at || ""; }
-        else if (sortKey === "region") { av = (serviceAreas.find(sa => sa.id === a.service_area_id)?.name || "zzz").toLowerCase(); bv = (serviceAreas.find(sa => sa.id === b.service_area_id)?.name || "zzz").toLowerCase(); }
-        else if (sortKey === "vehicle_type") {
-            // Sort by vehicle-type NAME (resolved from the catalogue);
-            // drivers with no type go to the end of ascending / top of
-            // descending so "Not assigned" is easy to spot.
-            av = (vehicleTypes.find(vt => vt.id === a.vehicle_type_id)?.name || "zzz").toLowerCase();
-            bv = (vehicleTypes.find(vt => vt.id === b.vehicle_type_id)?.name || "zzz").toLowerCase();
-        }
-        else if (sortKey === "is_online") {
-            // Booleans compared as 0/1: desc → online first; asc → offline first.
-            av = a.is_online ? 1 : 0; bv = b.is_online ? 1 : 0;
-        }
-        else { av = (a[sortKey] || "").toString().toLowerCase(); bv = (b[sortKey] || "").toString().toLowerCase(); }
-        if (av < bv) return sortDir === "asc" ? -1 : 1;
-        if (av > bv) return sortDir === "asc" ? 1 : -1;
-        return 0;
-    });
+    // Search, status/vehicle-type filtering and sorting are all applied by the
+    // backend query (see loadDrivers) so `drivers` already holds exactly the
+    // rows for the current page, in the requested order. The list renders it
+    // directly — no per-page client filtering/sorting, which previously only
+    // ever saw the 50 rows already loaded.
+    const sorted = drivers;
 
     const handleSort = (key: string) => { if (sortKey === key) { setSortDir(d => d === "asc" ? "desc" : "asc"); } else { setSortKey(key); setSortDir(key === "created_at" || key === "total_earnings" || key === "total_rides" || key === "rating" ? "desc" : "asc"); } };
     const SortIcon = ({ col }: { col: string }) => { if (sortKey !== col) return <ArrowUpDown className="h-3 w-3 opacity-30 inline ml-1" />; return sortDir === "asc" ? <ArrowUp className="h-3 w-3 inline ml-1" /> : <ArrowDown className="h-3 w-3 inline ml-1" />; };
@@ -703,7 +687,7 @@ export default function DriversPage() {
                     </div>
                     {(serviceAreaId || vehicleTypeFilter || startDate || endDate) && <Button variant="ghost" size="sm" onClick={() => { setServiceAreaId(""); setVehicleTypeFilter(""); setStartDate(""); setEndDate(""); }}><X className="h-3.5 w-3.5" /> Clear</Button>}
                     <Button variant="outline" size="sm" onClick={() => { const next = !showPii; setShowPii(next); if (next) logPiiReveal("drivers", "page_toggle").catch(() => {}); }}>{showPii ? <EyeOff className="h-4 w-4 mr-1" /> : <Eye className="h-4 w-4 mr-1" />}{showPii ? "Hide PII" : "Show PII"}</Button>
-                    <Button variant="outline" size="sm" onClick={handleExport} disabled={filtered.length === 0}><Download className="h-4 w-4" /> Export</Button>
+                    <Button variant="outline" size="sm" onClick={handleExport} disabled={sorted.length === 0}><Download className="h-4 w-4" /> Export</Button>
                 </div>
             </div>
 

@@ -113,3 +113,99 @@ class TestSumFareBreakdown:
             {"label": "Promo", "amount": -8.00, "type": "discount"},
         ]
         assert _sum_fare_breakdown(lines) == 0.0
+
+
+class TestMinimumFareBreakdown:
+    """On a minimum-fare ride the line items must sum to the charged total and
+    the ride-fare line must equal the driver's share (total − booking − airport).
+
+    The estimate builder already folds the uplift into 'Ride fare'; this pins
+    the same truth for the get_ride / history / receipt / payments surfaces that
+    go through _build_fare_breakdown, which previously itemised only the
+    un-clamped components and under-summed the amount actually charged.
+    """
+
+    def _min_ride(self, **overrides):
+        # Tiny ride: base+dist+time+booking = 5.90, floored up to 8.00.
+        ride = {
+            "base_fare": 3.50,
+            "distance_fare": 0.15,
+            "time_fare": 0.25,
+            "booking_fee": 2.00,
+            "airport_fee": 0,
+            "distance_km": 0.1,
+            "surge_multiplier": 1,
+            "total_fare": 8.00,
+        }
+        ride.update(overrides)
+        return ride
+
+    def test_min_fare_lines_sum_to_charged_total(self):
+        from backend.routes.rides import _build_fare_breakdown, _sum_fare_breakdown
+
+        lines = _build_fare_breakdown(self._min_ride())
+        # No fees/tax/tip/discount → the charged total is total_fare exactly.
+        assert _sum_fare_breakdown(lines) == 8.00
+
+    def test_ride_line_equals_driver_share_on_min_fare_ride(self):
+        from backend.routes.rides import _build_fare_breakdown
+
+        lines = _build_fare_breakdown(self._min_ride())
+        ride_line = next(ln for ln in lines if ln["type"] == "ride")
+        # Driver keeps total − booking − airport = 8.00 − 2.00 − 0.
+        assert ride_line["amount"] == 6.00
+
+    def test_min_fare_with_surge_sums_to_charged_total(self):
+        from backend.routes.rides import _build_fare_breakdown, _sum_fare_breakdown
+
+        # Surged (2×) but still floored to 20.00; surge contributed $0.
+        ride = self._min_ride(distance_fare=3.00, time_fare=1.00, distance_km=1, surge_multiplier=2, total_fare=20.00)
+        lines = _build_fare_breakdown(ride)
+        assert _sum_fare_breakdown(lines) == 20.00
+        ride_line = next(ln for ln in lines if ln["type"] == "ride")
+        assert ride_line["amount"] == 18.00  # 20.00 − booking 2.00
+
+    def test_legacy_row_without_total_fare_unchanged(self):
+        from backend.routes.rides import _build_fare_breakdown
+
+        ride = {
+            "base_fare": 3.50,
+            "distance_fare": 5.00,
+            "time_fare": 2.00,
+            "booking_fee": 2.00,
+            "distance_km": 4,
+            "surge_multiplier": 1,
+            # no total_fare — legacy row, uplift must be 0
+        }
+        lines = _build_fare_breakdown(ride)
+        ride_line = next(ln for ln in lines if ln["type"] == "ride")
+        assert ride_line["amount"] == 10.50  # base + dist + time, unchanged
+
+    def test_min_fare_breakdown_sums_to_charged_total_property(self):
+        """Property: min-clamped rows still sum to the charged total (total_fare)."""
+        from backend.routes.rides import _build_fare_breakdown, _sum_fare_breakdown
+
+        rng = random.Random(4242)
+        for _ in range(300):
+            base = rng.randrange(200, 600) / 100
+            dist = rng.randrange(0, 3_000) / 100
+            time = rng.randrange(0, 1_500) / 100
+            booking = rng.choice([0, rng.randrange(0, 500) / 100])
+            airport = rng.choice([0, rng.randrange(0, 800) / 100])
+            surge = rng.choice([1, 1.25, 1.5, 2.5])
+            components = _dec(base) + _dec(dist) + _dec(time) + _dec(booking) + _dec(airport)
+            uplift = rng.choice([Decimal("0"), _dec(rng.randrange(0, 1_500) / 100)])
+            total_fare = float(components + uplift)
+            ride = {
+                "base_fare": base,
+                "distance_fare": dist,
+                "time_fare": time,
+                "booking_fee": booking,
+                "airport_fee": airport,
+                "distance_km": rng.randrange(1, 400) / 10,
+                "surge_multiplier": surge,
+                "total_fare": total_fare,
+                # no fees/tax/tip/discount → charged total == total_fare
+            }
+            lines = _build_fare_breakdown(ride)
+            assert _sum_fare_breakdown(lines) == round(total_fare, 2), ride

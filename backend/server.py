@@ -127,7 +127,6 @@ from routes.corporate_wallet import router as corporate_wallet_router
 from routes.disputes import api_router as disputes_router
 from routes.drivers import api_router as drivers_router
 from routes.faqs import api_router as faqs_router
-from routes.fare_split import api_router as fare_split_router
 from routes.fares import api_router as fares_router
 from routes.favorites import api_router as favorites_router
 from routes.legal_documents import api_router as legal_documents_router
@@ -325,7 +324,6 @@ v1_api_router.include_router(disputes_router)
 v1_api_router.include_router(favorites_router)
 v1_api_router.include_router(loyalty_router)
 v1_api_router.include_router(wallet_router)
-v1_api_router.include_router(fare_split_router)
 v1_api_router.include_router(quests_router)
 v1_api_router.include_router(webhooks_router)
 v1_api_router.include_router(marketing_router)

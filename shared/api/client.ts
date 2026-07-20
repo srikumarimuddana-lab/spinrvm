@@ -772,10 +772,11 @@ const handleApiError = async (response: Response, method: string, url: string, r
   // SOS is exempt (see isSosUrl) — its backend route tolerates expired tokens,
   // so the refresh round-trip only adds failure modes during an emergency.
   if (response.status === 401 && _refreshCallback && retryFn && !isSosUrl(url)) {
-    // Before any await, so the fall-through below always sees it — this
-    // covers both the first-caller path and the queued-subscriber path
-    // (a queued request whose shared refresh fails rejects inside this
-    // try and would otherwise fall through to G2 and get logged out).
+    // Set before any await, so the fall-through to the G2 backstop below
+    // always sees it — covers both the first-caller path and the
+    // queued-subscriber path (a queued request whose shared refresh fails
+    // rejects inside this try and would otherwise fall through to G2 and
+    // get logged out).
     refreshAttempted = true;
     try {
       if (_refreshPromise) {

@@ -1573,6 +1573,40 @@ class TestSnapshotTrailSelection:
         assert "path=" not in url
         assert "markers=color:green" in url and "markers=color:red" in url
 
+    def test_v2_segments_render_as_separate_paths_without_a_cross_gap_chord(self, monkeypatch):
+        url = self._render(
+            monkeypatch,
+            route_segments=[
+                {"coordinates": [[50.45, -104.61], [50.451, -104.611]]},
+                {"coordinates": [[50.49, -104.67], [50.491, -104.671]]},
+            ],
+        )
+
+        paths = [part for part in url.split("&") if part.startswith("path=")]
+        assert len(paths) == 2
+        assert all("50.451,-104.611|50.49,-104.67" not in path for path in paths)
+
+    def test_v2_snapshot_marks_planned_and_completion_locations_and_banners_incomplete_coverage(self, monkeypatch):
+        from backend.utils import route_snapshot
+
+        banner_calls = []
+        monkeypatch.setattr(
+            route_snapshot,
+            "_add_route_quality_banner",
+            lambda png, quality: banner_calls.append(quality) or png,
+        )
+
+        url = self._render(
+            monkeypatch,
+            route_segments=[{"coordinates": [[50.45, -104.61], [50.451, -104.611]]}],
+            completion_point={"lat": 50.452, "lng": -104.612},
+            route_quality={"missing_tail": True, "coverage_ratio": 0.54},
+        )
+
+        assert "markers=color:red|label:D|50.41,-104.63" in url
+        assert "markers=color:orange|label:C|50.452,-104.612" in url
+        assert banner_calls == [{"missing_tail": True, "coverage_ratio": 0.54}]
+
     def test_outlier_hop_not_bridged_by_straight_chord(self, monkeypatch):
         # A GPS dropout / OSRM multi-matching jump leaves one giant hop in the
         # middle of an otherwise dense trail. The renderer must split there and

@@ -225,49 +225,34 @@ class TestEarnPoints:
 
 
 class TestRedeemPoints:
-    """POST /api/v1/loyalty/redeem"""
+    """POST /api/v1/loyalty/redeem — redemption is withdrawn (returns 410).
 
-    def test_redeem_points_for_wallet_credit(self, client):
+    The old flow credited the wallet, then debited points with a non-atomic
+    read-then-write, so concurrent redemptions double-credited the wallet. The
+    endpoint now refuses every request until an atomic points-debit replaces it.
+    """
+
+    def test_redeem_is_gone_410(self, client):
         rich_account = {**SAMPLE_ACCOUNT, "points": 500}
         mock_db = make_mock_db()
-        # find_one called: loyalty_accounts (account), then wallets (wallet via imported helper)
         mock_db.find_one = AsyncMock(return_value=rich_account)
-        sample_wallet = {"id": "wallet_1", "user_id": "user_123", "balance": 10.0, "is_active": True}
 
-        with (
-            patch("routes.loyalty.db", mock_db),
-            patch("routes.wallet.db", mock_db),
-            patch(
-                "routes.loyalty.wallet_increment_balance",
-                AsyncMock(return_value=Decimal("11.00")),
-            ),
-        ):
-            mock_db.find_one = AsyncMock(side_effect=[rich_account, sample_wallet])
+        with patch("routes.loyalty.db", mock_db):
             resp = client.post("/api/v1/loyalty/redeem", json={"points": 100})
 
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["redeemed_points"] == 100
-        assert data["credit_amount"] == 1.0  # 100 pts / 100 rate = $1
-        assert data["remaining_points"] == 400
+        assert resp.status_code == 410
+        # No wallet was touched: a request with more than enough points still fails.
+        assert "unavailable" in resp.json()["detail"].lower()
 
-    def test_below_minimum_redemption_returns_400(self, client):
+    def test_redeem_does_not_credit_wallet_even_with_ample_points(self, client):
+        rich_account = {**SAMPLE_ACCOUNT, "points": 100_000}
         mock_db = make_mock_db()
-        mock_db.find_one = AsyncMock(return_value=SAMPLE_ACCOUNT)
+        mock_db.find_one = AsyncMock(return_value=rich_account)
+        credit = AsyncMock(return_value=Decimal("999.00"))
 
         with patch("routes.loyalty.db", mock_db):
-            resp = client.post("/api/v1/loyalty/redeem", json={"points": 50})
+            resp = client.post("/api/v1/loyalty/redeem", json={"points": 100})
 
-        assert resp.status_code == 400
-        assert "minimum" in resp.json()["detail"].lower()
-
-    def test_insufficient_points_returns_400(self, client):
-        low_balance_account = {**SAMPLE_ACCOUNT, "points": 50}
-        mock_db = make_mock_db()
-        mock_db.find_one = AsyncMock(return_value=low_balance_account)
-
-        with patch("routes.loyalty.db", mock_db):
-            resp = client.post("/api/v1/loyalty/redeem", json={"points": 200})
-
-        assert resp.status_code == 400
-        assert "insufficient" in resp.json()["detail"].lower()
+        assert resp.status_code == 410
+        credit.assert_not_awaited()  # the money path is unreachable
+        mock_db.update_one.assert_not_awaited()  # points ledger untouched

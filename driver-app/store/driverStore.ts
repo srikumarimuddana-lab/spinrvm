@@ -4,12 +4,28 @@ import SpinrConfig from '@shared/config/spinr.config';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { recordNonFatal } from '../utils/crashlytics';
 import { RideStatus } from '../constants/rideStatus';
+import { tripLocationRecorder, type TripLocationBatchAck } from '../utils/tripLocationRecorder';
+import { apiLocationBatchTransport } from '../utils/tripLocationTransport';
 
-function isAxiosError(e: unknown): e is { response?: { status?: number; data?: { detail?: string } }; message?: string } {
+function isAxiosError(e: unknown): e is { response?: { status?: number; data?: { detail?: unknown } }; message?: string } {
   return typeof e === 'object' && e !== null;
 }
 
+function completionConfirmationFromError(error: unknown): { distanceBand?: string } | null {
+    if (!isAxiosError(error) || error.response?.status !== 409) return null;
+    const detail = error.response.data?.detail;
+    if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return null;
+    const code = (detail as { code?: unknown }).code;
+    if (code !== 'completion_confirmation_required') return null;
+    const distanceBand = (detail as { distance_band?: unknown }).distance_band;
+    return { distanceBand: typeof distanceBand === 'string' ? distanceBand : undefined };
+}
+
 const DRIVER_RIDE_KEY = '@spinr:driver_active_ride';
+// Upper bound on the pre-completion outbox drain. Long enough for a full
+// 500-point batch on a slow cell link, short enough that a dead network
+// never traps the driver on the completion screen.
+const COMPLETION_FLUSH_TIMEOUT_MS = 8_000;
 const DRIVER_TERMINAL_STATES = new Set<string>(['idle', 'trip_completed']);
 
 // Write activeRide + rideState to AsyncStorage so the driver can resume
@@ -144,6 +160,21 @@ export interface CompletedRideData {
     pickup_address?: string;
     dropoff_address?: string;
     ride_completed_at?: string;
+    location_ack?: TripLocationBatchAck | null;
+    legacy_client_missing_tail?: boolean;
+    completion_distance_band?: string | null;
+    completion_fix_rejection?: string | null;
+}
+
+export type OffRouteConfirmation =
+    | 'rider_requested_stop'
+    | 'changed_destination'
+    | 'emergency'
+    | 'location_unavailable';
+
+export interface CompleteRideResult {
+    confirmationRequired: boolean;
+    distanceBand?: string;
 }
 
 export interface RideHistoryItem {
@@ -380,7 +411,7 @@ interface DriverState {
     arriveAtPickup: (rideId: string, driverLat?: number, driverLng?: number) => Promise<{ success: boolean; distance?: number; error?: string }>;
     verifyOTP: (rideId: string, otp: string) => Promise<boolean>;
     startRide: (rideId: string) => Promise<void>;
-    completeRide: (rideId: string) => Promise<void>;
+    completeRide: (rideId: string, offRouteConfirmation?: OffRouteConfirmation) => Promise<CompleteRideResult>;
     cancelRide: (rideId: string, reason?: string) => Promise<void>;
 
     // Fetch
@@ -653,10 +684,49 @@ export const useDriverStore = create<DriverState>((set, get) => ({
         }
     },
 
-    completeRide: async (rideId: string) => {
+    completeRide: async (rideId: string, offRouteConfirmation?: OffRouteConfirmation) => {
         set({ isLoading: true, error: null });
         try {
-            const res = await api.post<CompletedRideData>(`/drivers/rides/${rideId}/complete`);
+            try {
+                // Drain the durable outbox before the server stamps
+                // ride_completed_at, so route quality/distance is computed
+                // from the full tail instead of whatever the last periodic
+                // flush happened to cover. Bounded and non-fatal: on
+                // timeout or upload failure the points stay in SQLite for
+                // the retention-bounded retry path.
+                await tripLocationRecorder.flushPendingWithTimeout(
+                    apiLocationBatchTransport,
+                    COMPLETION_FLUSH_TIMEOUT_MS,
+                );
+            } catch (flushError: unknown) {
+                recordNonFatal(flushError, { store: 'driverStore', action: 'completeRidePreFlush' });
+            }
+            const completion = await tripLocationRecorder.captureCompletionFix(rideId);
+            const res = await api.post<CompletedRideData>(`/drivers/rides/${rideId}/complete`, {
+                completion_fix: completion.point,
+                final_session_id: completion.point?.recording_session_id ?? null,
+                final_sequence_number: completion.point?.sequence_number ?? null,
+                pending_outbox_count: completion.pendingCount,
+                off_route_confirmation: offRouteConfirmation ?? null,
+            });
+            try {
+                if (res.data.location_ack) {
+                    await tripLocationRecorder.applyAcknowledgement(res.data.location_ack);
+                }
+            } catch (outboxError: unknown) {
+                // The server completion is authoritative. Keep the durable
+                // points for the normal retry path and record the local sync
+                // failure without GPS values.
+                recordNonFatal(outboxError, { store: 'driverStore', action: 'completeRideLocationAck' });
+            } finally {
+                try {
+                    // Closing only ends future capture; queued history remains
+                    // available for delayed, retention-bounded upload.
+                    await tripLocationRecorder.closeRide(rideId);
+                } catch (outboxError: unknown) {
+                    recordNonFatal(outboxError, { store: 'driverStore', action: 'closeCompletedRideLocationSession' });
+                }
+            }
             // chatMessages belongs to the just-finished ride — drop it so a
             // long shift doesn't accumulate every prior conversation in
             // memory. Same for incomingRide which can linger from a stale
@@ -673,7 +743,12 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                 earningsByPeriod: {},
             });
             AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
+            return { confirmationRequired: false };
         } catch (err: unknown) {
+            const confirmation = completionConfirmationFromError(err);
+            if (confirmation) {
+                return { confirmationRequired: true, ...confirmation };
+            }
             // 409 means the ride is already in a terminal state (completed or
             // cancelled). This happens when the network drops between the
             // successful backend write and the client receiving the 200 —
@@ -688,11 +763,12 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                     // Ride is gone server-side — completion already happened.
                     set({ rideState: 'trip_completed', activeRide: null, incomingRide: null, chatMessages: [], earningsByPeriod: {} });
                     AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
-                    return;
+                    return { confirmationRequired: false };
                 }
             }
             recordNonFatal(err, { store: 'driverStore', action: 'completeRide' });
             set({ error: getApiErrorMessage(err, 'Failed to complete ride') });
+            return { confirmationRequired: false };
         } finally {
             set({ isLoading: false });
         }

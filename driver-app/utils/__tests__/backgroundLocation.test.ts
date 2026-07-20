@@ -1,20 +1,17 @@
+/* eslint-disable import/first */
 /**
- * Background-location cadence control — trip-distance capture fix.
- *
- * Pins that updateBackgroundLocationCadence re-tunes the *running* background
- * task to the dense TRIP_CADENCE during a trip (and is a no-op when the task
- * isn't registered). This is what keeps a backgrounded trip well-sampled now
- * that POST /drivers/location-batch persists every point as a breadcrumb — the
- * foreground watchPositionAsync stops firing the moment the app backgrounds.
+ * Background trip recording writes native samples to the durable SQLite outbox
+ * before attempting a headless network upload.
  */
 
-const mockStartUpdates = jest.fn((..._args: any[]) => Promise.resolve());
-let mockTaskRegistered = true;
 let mockBgPermission = 'granted';
 const mockAsyncStorage: Record<string, string> = {};
+const mockQueuedPoints: Record<string, unknown>[] = [];
+let mockSequence = 0;
 
 jest.mock('expo-location', () => ({
-  startLocationUpdatesAsync: (...args: any[]) => mockStartUpdates(...args),
+  startLocationUpdatesAsync: jest.fn(() => Promise.resolve()),
+  hasStartedLocationUpdatesAsync: jest.fn(() => Promise.resolve(true)),
   stopLocationUpdatesAsync: jest.fn(() => Promise.resolve()),
   getBackgroundPermissionsAsync: jest.fn(() => Promise.resolve({ status: mockBgPermission })),
   requestBackgroundPermissionsAsync: jest.fn(() => Promise.resolve({ status: 'granted' })),
@@ -28,7 +25,7 @@ jest.mock('expo-location', () => ({
 
 jest.mock('expo-task-manager', () => ({
   defineTask: jest.fn(),
-  isTaskRegisteredAsync: jest.fn(() => Promise.resolve(mockTaskRegistered)),
+  isTaskRegisteredAsync: jest.fn(() => Promise.resolve(false)),
 }));
 
 jest.mock('expo-secure-store', () => ({
@@ -53,7 +50,20 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
   }),
 }));
 
-jest.mock('@shared/config', () => ({ API_URL: 'https://example.test' }), { virtual: true });
+jest.mock('../tripLocationOutbox', () => ({
+  tripLocationOutbox: {
+    startSession: jest.fn(() => Promise.resolve({
+      recording_session_id: 'session-1', ride_id: 'ride-1', opened_at: '2026-07-17T22:44:00.000Z', closed_at: null,
+    })),
+    enqueue: jest.fn(),
+    listPendingSessions: jest.fn(),
+    peek: jest.fn(),
+    acknowledge: jest.fn(),
+    pendingCount: jest.fn(),
+    closeSession: jest.fn(),
+  },
+}));
+
 jest.mock('@shared/config/spinr.config', () => ({
   __esModule: true,
   default: { backendUrl: 'https://example.test' },
@@ -64,14 +74,23 @@ jest.mock('@shared/services/firebase', () => ({
 }));
 
 import {
+  startBackgroundLocation,
   updateBackgroundLocationCadence,
   setBackgroundTripActive,
   handleBackgroundLocationTask,
   TRIP_CADENCE,
   IDLE_CADENCE,
 } from '../backgroundLocation';
+import { tripLocationRecorder } from '../tripLocationRecorder';
+import { tripLocationOutbox as mockOutbox } from '../tripLocationOutbox';
+import { resetLocationIntegrity } from '../locationIntegrity';
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Location from 'expo-location';
+
+const mockedOutbox = mockOutbox as jest.Mocked<typeof mockOutbox>;
+const mockStartUpdates = Location.startLocationUpdatesAsync as jest.Mock;
+const mockHasStartedLocationUpdates = Location.hasStartedLocationUpdatesAsync as jest.Mock;
 
 const makeLocation = (i: number) => ({
   coords: {
@@ -80,11 +99,34 @@ const makeLocation = (i: number) => ({
     speed: 12,
     heading: 90 + i,
     accuracy: 8,
+    altitude: 578,
   },
   timestamp: Date.UTC(2026, 6, 9, 12, 0, i),
 });
 
-describe('setBackgroundTripActive (killed-app recovery cadence)', () => {
+function configureOutbox(): void {
+  mockedOutbox.enqueue.mockImplementation(async (fix) => {
+    const point = { ...fix, recording_session_id: 'session-1', sequence_number: mockSequence++ };
+    mockQueuedPoints.push(point);
+    return point;
+  });
+  mockedOutbox.listPendingSessions.mockImplementation(async () => (
+    mockQueuedPoints.length
+      ? [{ recording_session_id: 'session-1', ride_id: 'ride-1', opened_at: '2026-07-17T22:44:00.000Z', closed_at: null }]
+      : []
+  ));
+  mockedOutbox.peek.mockImplementation(async () => mockQueuedPoints as any);
+  mockedOutbox.acknowledge.mockImplementation(async (_sessionId, ackedThrough) => {
+    for (let index = mockQueuedPoints.length - 1; index >= 0; index -= 1) {
+      if (Number(mockQueuedPoints[index]?.sequence_number) <= ackedThrough) mockQueuedPoints.splice(index, 1);
+    }
+  });
+  mockedOutbox.pendingCount.mockImplementation(async (rideId) => (
+    mockQueuedPoints.filter((point) => point.ride_id === rideId).length
+  ));
+}
+
+describe('setBackgroundTripActive', () => {
   beforeEach(() => {
     (SecureStore.setItemAsync as jest.Mock).mockClear();
     (SecureStore.deleteItemAsync as jest.Mock).mockClear();
@@ -101,81 +143,112 @@ describe('setBackgroundTripActive (killed-app recovery cadence)', () => {
   });
 });
 
-describe('background location offline queue', () => {
-  beforeEach(() => {
+describe('background durable trip recording', () => {
+  beforeEach(async () => {
     for (const key of Object.keys(mockAsyncStorage)) delete mockAsyncStorage[key];
-    (global as any).fetch = jest.fn(() => Promise.resolve({ ok: true, status: 200 }));
-    (AsyncStorage.getItem as jest.Mock).mockClear();
-    (AsyncStorage.setItem as jest.Mock).mockClear();
-    (AsyncStorage.removeItem as jest.Mock).mockClear();
+    mockQueuedPoints.splice(0, mockQueuedPoints.length);
+    mockSequence = 0;
+    Object.values(mockedOutbox).forEach((mock) => (mock as jest.Mock).mockClear());
+    configureOutbox();
+    (global as any).fetch = jest.fn(() => Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ recording_session_id: 'session-1', acked_through: 0, rejected: [] }),
+    }));
+    resetLocationIntegrity();
+    await tripLocationRecorder.startRide('ride-1');
   });
 
-  it('persists background points when upload fails', async () => {
-    (global as any).fetch = jest.fn(() => Promise.reject(new Error('offline')));
+  it('drops untrusted samples before they reach the durable outbox', async () => {
+    const vague = makeLocation(0);
+    vague.coords.accuracy = 500; // beyond the 200m integrity bound
+    const impossible = makeLocation(1);
+    impossible.coords.speed = 120; // > 90 m/s
 
-    await handleBackgroundLocationTask({ data: { locations: [makeLocation(0), makeLocation(1)] } as any });
+    await handleBackgroundLocationTask({
+      data: { locations: [vague, impossible, makeLocation(2)] } as any,
+    });
 
-    expect(AsyncStorage.setItem).toHaveBeenCalledWith(
-      'spinr_bg_location_queue',
-      expect.stringContaining('"tracking_phase":"background"')
-    );
-    const queued = JSON.parse(mockAsyncStorage.spinr_bg_location_queue);
-    expect(queued).toHaveLength(2);
+    expect(mockedOutbox.enqueue).toHaveBeenCalledTimes(1);
+    expect(mockedOutbox.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+      captured_at: new Date(makeLocation(2).timestamp).toISOString(),
+    }));
   });
 
-  it('replays queued background points before new points and clears queue on success', async () => {
-    mockAsyncStorage.spinr_bg_location_queue = JSON.stringify([
-      {
-        lat: 52,
-        lng: -106,
-        speed: 10,
-        heading: 45,
-        accuracy: 9,
-        timestamp: '2026-07-09T11:59:00.000Z',
-        tracking_phase: 'background',
-      },
-    ]);
+  it('enqueues native sensor timestamps before attempting a headless upload', async () => {
+    const callOrder: string[] = [];
+    mockedOutbox.enqueue.mockImplementation(async (fix) => {
+      callOrder.push('enqueue');
+      const point = { ...fix, recording_session_id: 'session-1', sequence_number: mockSequence++ };
+      mockQueuedPoints.push(point);
+      return point;
+    });
+    (global as any).fetch = jest.fn(() => {
+      callOrder.push('fetch');
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ recording_session_id: 'session-1', acked_through: 0, rejected: [] }),
+      });
+    });
 
     await handleBackgroundLocationTask({ data: { locations: [makeLocation(0)] } as any });
 
-    expect(global.fetch).toHaveBeenCalledWith(
-      'https://example.test/api/v1/drivers/location-batch',
-      expect.objectContaining({
-        body: expect.any(String),
-      })
-    );
-    const body = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
-    expect(body.points).toHaveLength(2);
-    expect(body.points[0].timestamp).toBe('2026-07-09T11:59:00.000Z');
-    expect(AsyncStorage.removeItem).toHaveBeenCalledWith('spinr_bg_location_queue');
+    expect(mockedOutbox.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'background',
+      captured_at: new Date(makeLocation(0).timestamp).toISOString(),
+      altitude: 578,
+    }));
+    expect(callOrder).toEqual(['enqueue', 'fetch']);
+  });
+
+  it.each([401, 503])('retains queued points when the headless upload returns %i', async (status) => {
+    (global as any).fetch = jest.fn(() => Promise.resolve({ ok: false, status }));
+
+    await handleBackgroundLocationTask({ data: { locations: [makeLocation(0)] } as any });
+
+    expect(mockQueuedPoints).toHaveLength(1);
+    expect(mockedOutbox.acknowledge).not.toHaveBeenCalled();
+  });
+
+  it('deletes only after the server returns an acknowledgement', async () => {
+    await handleBackgroundLocationTask({ data: { locations: [makeLocation(0)] } as any });
+
+    expect(mockedOutbox.acknowledge).toHaveBeenCalledWith('session-1', 0, []);
+    expect(mockQueuedPoints).toHaveLength(0);
+    expect(AsyncStorage.setItem).not.toHaveBeenCalledWith('spinr_bg_location_queue', expect.anything());
   });
 });
 
 describe('updateBackgroundLocationCadence', () => {
   beforeEach(() => {
     mockStartUpdates.mockClear();
-    mockTaskRegistered = true;
+    mockHasStartedLocationUpdates.mockClear();
+    mockHasStartedLocationUpdates.mockResolvedValue(true);
     mockBgPermission = 'granted';
   });
 
-  it('re-tunes the running task to dense TRIP_CADENCE', async () => {
+  it('starts from native location-service liveness, not task registration', async () => {
+    mockHasStartedLocationUpdates.mockResolvedValue(false);
+
+    await expect(startBackgroundLocation()).resolves.toBe(true);
+
+    expect(mockHasStartedLocationUpdates).toHaveBeenCalledWith('spinr-background-location');
+    expect(mockStartUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-tunes the running task to dense TRIP_CADENCE using location-service liveness', async () => {
     await updateBackgroundLocationCadence(TRIP_CADENCE);
+    expect(mockHasStartedLocationUpdates).toHaveBeenCalledWith('spinr-background-location');
     expect(mockStartUpdates).toHaveBeenCalledTimes(1);
     const opts = mockStartUpdates.mock.calls[0][1];
-    expect(opts.timeInterval).toBe(TRIP_CADENCE.timeInterval); // 4000ms
-    expect(opts.distanceInterval).toBe(TRIP_CADENCE.distanceInterval); // 10m
-    expect(opts.accuracy).toBe(TRIP_CADENCE.accuracy); // High
+    expect(opts.timeInterval).toBe(TRIP_CADENCE.timeInterval);
+    expect(opts.distanceInterval).toBe(TRIP_CADENCE.distanceInterval);
+    expect(opts.accuracy).toBe(TRIP_CADENCE.accuracy);
   });
 
-  it('relaxes back to coarse IDLE_CADENCE', async () => {
-    await updateBackgroundLocationCadence(IDLE_CADENCE);
-    const opts = mockStartUpdates.mock.calls[0][1];
-    expect(opts.timeInterval).toBe(IDLE_CADENCE.timeInterval); // 30000ms
-    expect(opts.distanceInterval).toBe(IDLE_CADENCE.distanceInterval); // 50m
-  });
-
-  it('is a no-op when the background task is not registered', async () => {
-    mockTaskRegistered = false;
+  it('is a no-op when the native location service is not running', async () => {
+    mockHasStartedLocationUpdates.mockResolvedValue(false);
     await updateBackgroundLocationCadence(TRIP_CADENCE);
     expect(mockStartUpdates).not.toHaveBeenCalled();
   });

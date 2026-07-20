@@ -178,6 +178,35 @@ async def test_osrm_zero_distance_returns_none():
         assert await rd._compute_via_osrm(_trip(6), "http://osrm:5000") is None
 
 
+@pytest.mark.asyncio
+async def test_segmented_matching_chunks_293_points_with_overlap_and_keeps_osrm_matchings_separate():
+    calls = []
+
+    async def _fake_app_settings():
+        return {"osrm_url": "http://osrm:5000"}
+
+    async def _fake_osrm_matchings(points, _url):
+        calls.append(points)
+        return [
+            (1.0, [[points[0]["lat"], points[0]["lng"]], [points[-1]["lat"], points[-1]["lng"]]]),
+            (0.5, [[points[0]["lat"] + 0.0001, points[0]["lng"]], [points[-1]["lat"] + 0.0001, points[-1]["lng"]]]),
+        ]
+
+    points = _trip(293)
+    with (
+        patch.object(rd, "get_app_settings", _fake_app_settings),
+        patch.object(rd, "_compute_osrm_chunk_matchings", _fake_osrm_matchings),
+    ):
+        result = await rd.compute_segmented_road_route([points])
+
+    assert calls and all(len(call) <= 100 for call in calls)
+    assert calls[0][-10:] == calls[1][:10]
+    matched = result["segments"][0]["matched_segments"]
+    assert len(matched) == len(calls) * 2
+    assert matched[0]["polyline"] != matched[1]["polyline"]
+    assert result["distance_km"] == round(len(calls) * 1.5, 3)
+
+
 # ── compute_road_route — provider selection ───────────────────────────────────
 
 

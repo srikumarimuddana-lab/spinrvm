@@ -36,9 +36,15 @@ async def render_ride_snapshot_google(
     dropoff_lng: float,
     phase_polylines: Optional[dict] = None,
     route_polyline: Optional[list] = None,
+    route_segments: Optional[list] = None,
+    completion_point: Optional[dict] = None,
+    route_quality: Optional[dict] = None,
 ) -> Optional[bytes]:
-    """Fetch a PNG from Google Static Maps API with route drawn.
+    """Fetch a PNG from Google Static Maps API with a gap-safe route drawn.
 
+    ``route_segments`` is the v2 source of truth. Each segment is emitted as
+    an independent Static Maps ``path`` so the provider never draws a chord
+    across a capture gap. Legacy inputs retain their previous behavior.
     Returns PNG bytes or None on failure. Never raises.
     """
     params: list[str] = [
@@ -47,77 +53,26 @@ async def render_ride_snapshot_google(
         f"markers=color:green|label:P|{pickup_lat},{pickup_lng}",
         f"markers=color:red|label:D|{dropoff_lat},{dropoff_lng}",
     ]
+    completion = _coerce_coordinate(completion_point)
+    if completion:
+        params.append(f"markers=color:orange|label:C|{completion[0]},{completion[1]}")
 
-    # Build path from phase_polylines or route_polyline as (lat, lng) floats.
-    trail: list[tuple[float, float]] = []
-
-    trip_trail = _extract_trail((phase_polylines or {}).get("trip_in_progress"))
-
-    # The snapshot shows the travelled pickup→dropoff route ONLY. The
-    # navigating_to_pickup leg is deliberately excluded: drawn alongside the
-    # trip leg it reads as a second route on the receipt map (admin tooling
-    # replays per-phase trails from ride_routes instead).
-    #
-    # Require at least 10 trip-leg points before trusting the raw trail —
-    # gated on the trip leg ALONE, not the combined phase count: a dense
-    # pickup leg used to carry a sparse trip leg over the threshold, and the
-    # Static Maps API then drew straight chords between the few trip points
-    # (the reported "straight line between P and D" next to the real path).
-    # Fall through to route_polyline in that case.
-    if len(trip_trail) >= 10:
-        trail = trip_trail
-    elif route_polyline:
-        for pt in route_polyline:
-            try:
-                trail.append((float(pt[0]), float(pt[1])))
-            except (TypeError, ValueError, IndexError):
-                continue
+    # New route contracts preserve boundaries explicitly. Never flatten them:
+    # flattening caused the exact first-five-minutes-plus-straight-chord issue
+    # this pipeline replaces.
+    segmented_trails = _extract_segment_trails(route_segments)
+    if route_segments is not None:
+        _append_segmented_paths(params, segmented_trails)
+    else:
+        _append_legacy_paths(params, phase_polylines, route_polyline)
 
     logger.info(
-        "render_ride_snapshot_google: trail_points=%d, route_polyline=%s (len=%d), phase_polylines keys=%s",
-        len(trail),
+        "render_ride_snapshot_google: route_segments=%d, route_polyline=%s (len=%d), phase_polylines keys=%s",
+        len(segmented_trails),
         type(route_polyline).__name__ if route_polyline else "None",
         len(route_polyline) if isinstance(route_polyline, list) else 0,
         list((phase_polylines or {}).keys()),
     )
-
-    if trail:
-        # Sample down to keep URL under ~8192 chars.
-        if len(trail) > 80:
-            step = max(1, len(trail) // 80)
-            sampled = trail[::step]
-            if sampled[-1] != trail[-1]:
-                sampled.append(trail[-1])
-            trail = sampled
-
-        # Break the trail wherever one hop is a far outlier vs the typical
-        # spacing (GPS dropout, OSRM multi-matching jump). Without this, the
-        # Static Maps API connects the two sides with a straight chord that
-        # reads as a SECOND red line running across the map next to the real
-        # route — the "duplicate route line" artifact. Each gap-free run is
-        # drawn on its own; we never draw the bridging chord.
-        runs = _split_on_gaps(trail)
-
-        # Colour every run by its GLOBAL position along the trail so the
-        # gradient (orange #FF9500 → red #EE2B2B) stays continuous across the
-        # break, matching the app's MapView gradient polyline.
-        SEGS = 10
-        total = len(trail)
-        chunk = max(2, total // SEGS)
-        global_idx = 0
-        for run in runs:
-            n = len(run)
-            for i in range(0, n - 1, chunk):
-                end = min(i + chunk + 1, n)
-                t = (global_idx + i) / max(total - 1, 1)
-                r = int(255 + (238 - 255) * t)
-                g = int(149 + (43 - 149) * t)
-                b = int(0 + (43 - 0) * t)
-                seg = run[i:end]
-                if len(seg) >= 2:
-                    seg_str = "|".join(f"{lat},{lng}" for lat, lng in seg)
-                    params.append(f"path=color:0x{r:02X}{g:02X}{b:02X}FF|weight:4|{seg_str}")
-            global_idx += n
 
     params.append(f"key={api_key}")
     url = f"{_STATIC_MAPS_URL}?{'&'.join(params)}"
@@ -136,7 +91,7 @@ async def render_ride_snapshot_google(
         if "image" not in content_type:
             logger.warning("Google Static Maps returned non-image content-type: %s", content_type)
             return None
-        return resp.content
+        return _add_route_quality_banner(resp.content, route_quality) if _is_incomplete(route_quality) else resp.content
     except Exception as exc:
         logger.warning("Google Static Maps fetch failed: %s", exc)
         return None
@@ -153,6 +108,94 @@ def _extract_trail(raw: Optional[list]) -> list[tuple[float, float]]:
         except (TypeError, ValueError, IndexError):
             continue
     return out
+
+
+def _coerce_coordinate(raw: Optional[dict]) -> Optional[tuple[float, float]]:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return float(raw["lat"]), float(raw["lng"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _extract_segment_trails(raw_segments: Optional[list]) -> list[list[tuple[float, float]]]:
+    """Return each v2 segment independently; no segment is ever concatenated."""
+    trails: list[list[tuple[float, float]]] = []
+    for segment in raw_segments or []:
+        raw_points = segment.get("coordinates") or segment.get("points") if isinstance(segment, dict) else segment
+        trail = _extract_trail(raw_points if isinstance(raw_points, list) else None)
+        if len(trail) >= 2:
+            trails.append(trail)
+    return trails
+
+
+def _sample_trail(trail: list[tuple[float, float]], maximum: int = 80) -> list[tuple[float, float]]:
+    if len(trail) <= maximum:
+        return trail
+    step = max(1, len(trail) // maximum)
+    sampled = trail[::step]
+    if sampled[-1] != trail[-1]:
+        sampled.append(trail[-1])
+    return sampled
+
+
+def _append_path(params: list[str], trail: list[tuple[float, float]], color: str = "0xFF9500FF") -> None:
+    for run in _split_on_gaps(_sample_trail(trail)):
+        if len(run) >= 2:
+            coord_string = "|".join(f"{lat},{lng}" for lat, lng in run)
+            params.append(f"path=color:{color}|weight:4|{coord_string}")
+
+
+def _append_segmented_paths(params: list[str], trails: list[list[tuple[float, float]]]) -> None:
+    for index, trail in enumerate(trails):
+        # Keep the visual progression while ensuring each durable segment has
+        # its own `path=` argument. Static Maps cannot bridge between them.
+        color = "0xFF9500FF" if index == 0 else "0xEE2B2BFF"
+        _append_path(params, trail, color)
+
+
+def _append_legacy_paths(params: list[str], phase_polylines: Optional[dict], route_polyline: Optional[list]) -> None:
+    """Legacy fallback: preserve old trail selection plus its gap guard."""
+    trip_trail = _extract_trail((phase_polylines or {}).get("trip_in_progress"))
+    if len(trip_trail) >= 10:
+        _append_path(params, trip_trail)
+        return
+    _append_path(params, _extract_trail(route_polyline))
+
+
+def _is_incomplete(route_quality: Optional[dict]) -> bool:
+    if not isinstance(route_quality, dict):
+        return False
+    return bool(route_quality.get("missing_tail") or route_quality.get("incomplete_reason"))
+
+
+def _add_route_quality_banner(png_bytes: bytes, quality: dict) -> bytes:
+    """Overlay a truthful coverage note without failing the receipt pipeline."""
+    try:
+        import io
+
+        from PIL import Image, ImageDraw, ImageFont
+
+        image = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+        draw = ImageDraw.Draw(image, "RGBA")
+        coverage = quality.get("coverage_ratio")
+        coverage_text = (
+            f"{round(float(coverage) * 100)}% GPS coverage" if coverage is not None else "GPS coverage incomplete"
+        )
+        message = f"Route incomplete — {coverage_text}"
+        font = ImageFont.load_default()
+        left, top, right, bottom = draw.textbbox((0, 0), message, font=font)
+        padding = 10
+        y = image.height - (bottom - top) - 2 * padding
+        draw.rounded_rectangle((0, y, image.width, image.height), radius=0, fill=(127, 29, 29, 230))
+        draw.text((padding, y + padding), message, fill="white", font=font)
+        output = io.BytesIO()
+        image.convert("RGB").save(output, format="PNG", optimize=True)
+        return output.getvalue()
+    except Exception:
+        logger.warning("route quality banner failed; retaining unannotated snapshot", exc_info=True)
+        return png_bytes
 
 
 # A single hop longer than this AND more than _GAP_FACTOR× the trail's median
@@ -224,6 +267,9 @@ def render_ride_snapshot(
     dropoff_lng: float,
     phase_polylines: Optional[dict] = None,
     route_polyline: Optional[list] = None,
+    route_segments: Optional[list] = None,
+    completion_point: Optional[dict] = None,
+    route_quality: Optional[dict] = None,
 ) -> Optional[bytes]:
     """OSM/staticmap fallback — used only when Google API key is unavailable."""
     try:
@@ -255,6 +301,11 @@ def render_ride_snapshot(
         m.add_marker(CircleMarker((pickup_lng, pickup_lat), "#10b981", 10))
         m.add_marker(CircleMarker((dropoff_lng, dropoff_lat), "#ffffff", 14))
         m.add_marker(CircleMarker((dropoff_lng, dropoff_lat), "#ef4444", 10))
+        completion = _coerce_coordinate(completion_point)
+        if completion:
+            completion_lat, completion_lng = completion
+            m.add_marker(CircleMarker((completion_lng, completion_lat), "#ffffff", 14))
+            m.add_marker(CircleMarker((completion_lng, completion_lat), "#f59e0b", 10))
 
         # Same gap guard as the Google renderer: draw each contiguous run on
         # its own so a GPS dropout / matching jump doesn't get bridged by a
@@ -265,15 +316,19 @@ def render_ride_snapshot(
             for run in _split_on_gaps(latlng):
                 m.add_line(Line([(ln, la) for la, ln in run], "#3b82f6", 4))
 
-        if trip_trail:
+        if route_segments is not None:
+            for trail in _extract_segment_trails(route_segments):
+                _add_split_line([(lng, lat) for lat, lng in trail])
+        elif trip_trail:
             _add_split_line(trip_trail)
-        if legacy_trail:
+        elif legacy_trail:
             _add_split_line(legacy_trail)
 
         image = m.render()
         buf = io.BytesIO()
         image.save(buf, format="PNG", optimize=True)
-        return buf.getvalue()
+        png_bytes = buf.getvalue()
+        return _add_route_quality_banner(png_bytes, route_quality) if _is_incomplete(route_quality) else png_bytes
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"Ride snapshot render failed: {exc}")
         return None

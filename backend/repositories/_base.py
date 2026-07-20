@@ -561,6 +561,15 @@ def _apply_filters(q, filters: Optional[Dict[str, Any]]):
                 q = q.lte(k, _unwrap_enum(v["$lte"]))
             elif "$ne" in v:
                 q = q.neq(k, _unwrap_enum(v["$ne"]))
+            elif "$notnull" in v:
+                # SQL `<> NULL` never matches; PostgREST needs `not.is.null`.
+                # Lets callers filter server-side instead of scanning every row
+                # and dropping the nulls in Python (e.g. users with a
+                # referral_code_used). {"$notnull": False} mirrors {col: None}.
+                if v["$notnull"]:
+                    q = q.not_.is_(k, "null")
+                else:
+                    q = q.is_(k, "null")
             elif "$nin" in v and isinstance(v["$nin"], (list, tuple)):
                 q = q.not_.in_(k, [_unwrap_enum(x) for x in v["$nin"]])
             elif "$regex" in v:
@@ -665,6 +674,28 @@ async def insert_many(table: str, docs: List[Dict[str, Any]]):
         raise TypeError(f"insert_many({table!r}) every doc must be a dict, got {type(_bad).__name__}: {_bad!r}")
     serialized = [_serialize_for_api(d) for d in docs]
     return await run_sync(lambda: _rows_from_res(supabase.table(table).insert(serialized).execute()))
+
+
+async def insert_many_ignore_conflicts(
+    table: str, docs: List[Dict[str, Any]], on_conflict: str
+) -> List[Dict[str, Any]]:
+    """Upsert a batch once, retaining the first row for each conflict key."""
+    if not docs:
+        return []
+    if not isinstance(on_conflict, str) or not on_conflict.strip():
+        raise ValueError("on_conflict is required")
+    if any(not isinstance(doc, dict) for doc in docs):
+        raise TypeError(f"insert_many_ignore_conflicts({table!r}) requires dict rows")
+    if not supabase:
+        return []
+
+    rows = [_serialize_for_api(doc) for doc in docs]
+    return await run_sync(
+        lambda: _rows_from_res(
+            supabase.table(table).upsert(rows, on_conflict=on_conflict, ignore_duplicates=True).execute()
+        ),
+        retry_policy="idempotent_write",
+    )
 
 
 async def update_one(table: str, filters: Dict[str, Any], update: Dict[str, Any], upsert: bool = False):

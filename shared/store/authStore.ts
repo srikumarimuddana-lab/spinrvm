@@ -256,7 +256,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // background already performed instead of replaying a stale in-memory
     // token (which the backend then 401s as a benign rotation race).
     let candidate = (await storage.getItem('refresh_token')) ?? get().refreshToken ?? null;
-    if (!candidate) return false;
+    if (!candidate) {
+      // No refresh token but an active session: the session cannot be
+      // recovered, so tear it down here — the interceptor's G2 backstop no
+      // longer fires once a refresh was attempted, and without this the user
+      // would sit in auth limbo (API calls 401ing behind a live-looking UI).
+      // NOT awaited: logout()'s go-offline PUT can itself 401 and queue
+      // behind the interceptor's in-flight _refreshPromise — which is this
+      // very call — so awaiting would deadlock every queued request.
+      // Cold-start initialize() is unaffected (it only refreshes when a
+      // stored refresh token exists).
+      if (get().token || get().user) {
+        void get().logout();
+      }
+      return false;
+    }
 
     // Own the sign-out decision: a 401 from /auth/refresh during this attempt
     // must not auto-sign-out at the interceptor (see setSuppressRefreshSignOut)
@@ -298,7 +312,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             // yet; poll storage a few times (immediate, then short backoffs)
             // so we still recover on slower hardware instead of a single fixed
             // wait. Retry the moment a fresher token appears.
-            let latest = candidate;
+            // Explicit annotation: `candidate` is reassigned from `latest`
+            // below, and `latest` is initialised from `candidate` — without a
+            // type here TS can't resolve the mutual reference and falls back to
+            // implicit-any on `latest` (TS7022). `string` matches what TS
+            // originally inferred (candidate is narrowed to non-null by the
+            // guard above), so this doesn't perturb `candidate`'s type downstream.
+            let latest: string = candidate;
             for (const waitMs of [0, 150, 300]) {
               if (waitMs) await new Promise((r) => setTimeout(r, waitMs));
               const v = await storage.getItem('refresh_token');

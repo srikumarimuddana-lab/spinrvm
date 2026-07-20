@@ -73,6 +73,17 @@ describe('getApiErrorMessage', () => {
     expect(getApiErrorMessage(undefined, FALLBACK)).toBe(FALLBACK);
   });
 
+  it('falls back on JSON-parse SyntaxErrors instead of leaking parser noise', () => {
+    // Hermes wording (React Native)
+    expect(getApiErrorMessage(new SyntaxError('JSON Parse error: Unexpected token <'), FALLBACK)).toBe(FALLBACK);
+    // V8/web wording
+    expect(
+      getApiErrorMessage(new SyntaxError("Unexpected token '<', \"<html>\" is not valid JSON"), FALLBACK),
+    ).toBe(FALLBACK);
+    // Same wording arriving as a plain Error (re-wrapped upstream) is still noise
+    expect(getApiErrorMessage(new Error('JSON Parse error: Unexpected character: o'), FALLBACK)).toBe(FALLBACK);
+  });
+
   it('falls back when the response body carries no recognizable detail', () => {
     expect(getApiErrorMessage({ response: { status: 500, data: {} } }, FALLBACK)).toBe(FALLBACK);
   });

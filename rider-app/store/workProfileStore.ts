@@ -1,10 +1,6 @@
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import api from '@shared/api/client';
-
-function isErrorLike(e: unknown): e is { message: string } {
-  return typeof e === 'object' && e !== null && 'message' in e;
-}
+import api, { getApiErrorMessage } from '@shared/api/client';
 
 export interface AllowanceRequest {
   id: string;
@@ -115,7 +111,7 @@ export const useWorkProfileStore = create<WorkProfileState>((set, get) => ({
       const nextId = validId ?? firstId;
       set({ profiles, isLoading: false, activeCompanyId: nextId });
     } catch (e: unknown) {
-      set({ isLoading: false, error: isErrorLike(e) ? (e.message || 'Failed to load work profiles') : 'Failed to load work profiles' });
+      set({ isLoading: false, error: getApiErrorMessage(e, 'Failed to load work profiles') });
     }
   },
 

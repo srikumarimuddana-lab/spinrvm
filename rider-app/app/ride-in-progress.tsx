@@ -36,6 +36,7 @@ import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import BottomSheet, { BottomSheetScrollView } from '../components/SafeBottomSheet';
 import { useAppResumeKey } from '../hooks/useAppResumeKey';
+import { buildShareTripMessage } from '../lib/shareTripMessage';
 import { useRideStore } from '../store/rideStore';
 import { RideStatus } from '../constants/rideStatus';
 import api, { getApiErrorMessage } from '@shared/api/client';
@@ -63,8 +64,13 @@ function RideInProgressScreenContent() {
   // skips the fetch entirely if driver-arriving already retrieved the route.
   const [driverPhotoError, setDriverPhotoError] = useState(false);
   const [eta, setEta] = useState(lastEtaMin ?? 15);
-  const [estimatedTime, setEstimatedTime] = useState('12:45 PM');
-  const [currentLocation, setCurrentLocation] = useState('4th Avenue North');
+  // Derive the first paint from the seeded ETA rather than a placeholder —
+  // this string reaches the trip-share safety message, so it must be real.
+  const [estimatedTime, setEstimatedTime] = useState(() => {
+    const now = new Date();
+    now.setMinutes(now.getMinutes() + (lastEtaMin ?? 15));
+    return now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  });
   const [isSharingLocation, setIsSharingLocation] = useState(false);
   const [tripRouteCoords, setTripRouteCoords] = useState<any[]>(() => {
     if (activeRideRouteCoords && activeRideRouteCoords.length > 1) return activeRideRouteCoords;
@@ -323,30 +329,19 @@ function RideInProgressScreenContent() {
     }
 
     const liveTrackingUrl = `${trackBaseUrl}/${shareToken}`;
-    // Include the human-readable ride code so the recipient can quote it
-    // to support without guessing at a truncated UUID.
-    const rideRef = currentRide?.ride_code
-      ? `🆔 RIDE CODE: ${currentRide.ride_code}\n`
-      : '';
-    const tripDetails = `
-🚗 TRACK MY SPINR RIDE - LIVE LOCATION
-
-👤 DRIVER: ${currentDriver?.name || 'Unknown'}
-⭐ RATING: ${currentDriver?.rating || 'New'}
-
-🚙 VEHICLE: ${currentDriver?.vehicle_color || ''} ${currentDriver?.vehicle_make || 'Unknown'} ${currentDriver?.vehicle_model || 'Vehicle'}
-📋 LICENSE PLATE: ${currentDriver?.license_plate || 'Pending'}
-
-📍 CURRENT LOCATION: ${currentLocation}
-📍 HEADING TO: ${currentRide?.dropoff_address || '1055 Canada Place'}
-
-⏱️ ESTIMATED ARRIVAL: ${estimatedTime} (${eta} min left)
-
-${rideRef}🔴 LIVE TRACKING LINK:
-${liveTrackingUrl}
-
-I've shared my live location with you for safety.
-`.trim();
+    const tripDetails = buildShareTripMessage({
+      driverName: currentDriver?.name,
+      driverRating: currentDriver?.rating,
+      vehicleColor: currentDriver?.vehicle_color,
+      vehicleMake: currentDriver?.vehicle_make,
+      vehicleModel: currentDriver?.vehicle_model,
+      licensePlate: currentDriver?.license_plate,
+      dropoffAddress: currentRide?.dropoff_address,
+      estimatedTime,
+      etaMinutes: eta,
+      rideCode: currentRide?.ride_code,
+      liveTrackingUrl,
+    });
 
     try {
       await Share.share({

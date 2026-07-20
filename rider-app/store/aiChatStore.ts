@@ -228,6 +228,9 @@ export const useAiChatStore = create<AiChatState>((set, get) => ({
         signal: abortController.signal,
       });
     } catch (error: unknown) {
+      // error.message is an internal ERROR_MESSAGES lookup key here, never
+      // rendered to the user directly — safe to read raw.
+      // eslint-disable-next-line no-restricted-syntax
       const code = error instanceof Error ? error.message : 'default';
       appendToAssistant(ERROR_MESSAGES[code] ?? ERROR_MESSAGES.default);
     } finally {

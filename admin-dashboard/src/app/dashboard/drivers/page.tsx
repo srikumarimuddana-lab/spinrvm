@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Shield, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, EyeOff, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2, RefreshCw, GraduationCap, Award, Upload } from "lucide-react";
-import { maskEmail, maskPhone, maskPlate } from "@/lib/pii";
+import { maskEmail, maskPhone, maskPlate, maskVin } from "@/lib/pii";
 import { DocumentReviewer } from "./_components/document-reviewer";
 import { DocumentUploadDialog } from "./_components/document-upload-dialog";
 import DriverStatsCards from "./_components/driver-stats-cards";
@@ -575,7 +575,7 @@ export default function DriversPage() {
                 { key: "vehicle_make", label: "Vehicle Make" }, { key: "vehicle_model", label: "Vehicle Model" },
                 { key: "vehicle_year", label: "Vehicle Year" }, { key: "vehicle_color", label: "Vehicle Color" },
                 { key: "vehicle_type", label: "Vehicle Type" }, { key: "license_plate", label: "License Plate" },
-                { key: "vehicle_vin_on_file", label: "VIN On File" },
+                { key: "vehicle_vin", label: "VIN (last 4)" },
                 { key: "license_no", label: "License No (last 4)" }, { key: "license_class", label: "License Class" },
                 { key: "rating", label: "Rating" }, { key: "total_rides", label: "Rides" },
                 { key: "total_earnings", label: "Total Earnings" }, { key: "acceptance_rate", label: "Acceptance Rate" },
@@ -1132,7 +1132,7 @@ export default function DriversPage() {
                                                     <DetailField icon={FileText} label="License Plate" value={showPii ? (selected.license_plate || "\u2014") : maskPlate(selected.license_plate)} mono />
                                                 </div>
                                                 <div className="mt-2.5">
-                                                    <DetailField icon={FileText} label="VIN" value={selected.vehicle_vin || "\u2014"} mono />
+                                                    <DetailField icon={FileText} label="VIN" value={showPii ? (selected.vehicle_vin || "\u2014") : maskVin(selected.vehicle_vin)} mono />
                                                 </div>
                                             </>
                                         )}

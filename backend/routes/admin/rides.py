@@ -2638,6 +2638,15 @@ async def admin_export_drivers(
     except ImportError:
         from routes.admin.drivers import _subscription_summary  # type: ignore
 
+    def _mask_vin(v: Any) -> Optional[str]:
+        # VIN is plaintext at rest (migration 244) but still masked to last-4 in
+        # the export, matching the licence-number treatment — the full value is
+        # not written to the CSV.
+        if not v:
+            return None
+        s = str(v).strip()
+        return ("*" * max(len(s) - 4, 0)) + s[-4:] if len(s) > 4 else s
+
     out = []
     for i, d in enumerate(drivers):
         u = users_map.get(d.get("user_id"))
@@ -2664,9 +2673,8 @@ async def admin_export_drivers(
                 "vehicle_color": d.get("vehicle_color"),
                 "vehicle_type": vt_map.get(d.get("vehicle_type_id")) or d.get("vehicle_type_id"),
                 "license_plate": d.get("license_plate"),
-                # VIN is vault-encrypted PII — export only whether one is on file,
-                # never the value itself.
-                "vehicle_vin_on_file": "yes" if d.get("vehicle_vin") else "",
+                # VIN is plaintext at rest but exported masked to last-4.
+                "vehicle_vin": _mask_vin(d.get("vehicle_vin")),
                 # License number stays masked to last-4 (full value never exported).
                 "license_no": license_masked[i],
                 "license_class": d.get("license_class"),

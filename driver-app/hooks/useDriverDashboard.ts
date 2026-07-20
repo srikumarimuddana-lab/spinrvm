@@ -530,6 +530,40 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     return () => clearInterval(interval);
   }, [foregroundLocationTransport, isOnline]);
 
+  // GPS heartbeat: during a trip, if the recorder has captured nothing for
+  // its 30s watchdog window (standstill under distanceInterval, provider
+  // hiccup, watcher silently dead), actively request one fix so the durable
+  // route never develops a >60s gap the server would split into a dropped
+  // segment. Also re-checks device-wide location services so the existing
+  // 'unavailable' UI state surfaces mid-trip, not just on mount/resume.
+  useEffect(() => {
+    if (!isOnline || !TRACKED_TRIP_PHASES.includes(rideState)) return;
+    const interval = setInterval(async () => {
+      try {
+        const rideId = useDriverStore.getState().activeRide?.ride?.id;
+        if (!rideId) return;
+        const servicesOn = await Location.hasServicesEnabledAsync().catch(() => true);
+        if (!servicesOn) {
+          setLocation(null);
+          locationRef.current = null;
+          setLocationStatus('unavailable');
+          return;
+        }
+        const health = await tripLocationRecorder.getRecorderHealth(rideId);
+        if (health.degradationReason !== 'no_recent_fix') return;
+        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+        const integrity = checkLocationIntegrity(loc);
+        if (!integrity.trusted) return;
+        await tripLocationRecorder.recordNativeFix(loc, 'foreground', rideId);
+        tripLocationRecorder.flushPending(foregroundLocationTransport).catch(() => {});
+      } catch {
+        // Best-effort: a failed heartbeat leaves the recorder-health banner
+        // to surface persistent degradation; never crash the interval.
+      }
+    }, 30_000);
+    return () => clearInterval(interval);
+  }, [foregroundLocationTransport, isOnline, rideState]);
+
   // Flush the durable outbox on app-state transitions during a trip.
   // Foreground→background: the watcher is about to stop firing, so drain what
   // we have before the OS can suspend the JS thread. Background→foreground:

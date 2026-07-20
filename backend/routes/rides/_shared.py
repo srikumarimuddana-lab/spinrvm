@@ -284,6 +284,41 @@ def _redact_driver_location_fields(ride: dict) -> None:
                 pass
 
 
+# Minimum billed-vs-measured divergence before the receipt line says "booked".
+# Below this the two round to visually identical values and the suffix is noise.
+_BOOKED_DISTANCE_DIVERGENCE_KM = 0.5
+
+
+def relabel_booked_distance_lines(lines: list, ride: dict) -> list:
+    """Mark the frozen ride-fare line as booked-distance when GPS diverged.
+
+    Under fare-lock the served breakdown is the booking-time snapshot, whose
+    "Ride fare (X km)" label was built from the straight-line booking
+    estimate — while the stats tile shows the GPS-measured distance. When the
+    two diverge by more than the threshold, relabel the served line to
+    "Ride fare (X km booked)" so the receipt states its own basis instead of
+    silently contradicting the measured value. Served representation only:
+    the stored snapshot stays frozen and no amount is ever modified.
+    """
+    booked_km = ride.get("planned_distance_km")
+    actual_km = ride.get("actual_distance_km")
+    if booked_km is None or actual_km is None:
+        return lines
+    try:
+        if abs(float(actual_km) - float(booked_km)) <= _BOOKED_DISTANCE_DIVERGENCE_KM:
+            return lines
+        booked_label_km = round(float(booked_km), 1)
+    except (TypeError, ValueError):
+        return lines
+    relabeled = []
+    for line in lines:
+        if line.get("type") == "ride":
+            line = dict(line)
+            line["label"] = f"Ride fare ({booked_label_km} km booked)"
+        relabeled.append(line)
+    return relabeled
+
+
 def _actual_duration_minutes(ride: dict) -> int | None:
     """Derive the actual trip-in-progress duration in whole minutes.
 

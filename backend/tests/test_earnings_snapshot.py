@@ -16,7 +16,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.earnings_snapshot import build_earnings_snapshot  # noqa: E402
+from utils.earnings_snapshot import build_earnings_snapshot, fare_share  # noqa: E402
 
 pytestmark = pytest.mark.unit
 
@@ -97,3 +97,29 @@ class TestSnapshotShape:
     def test_decimal_inputs_accepted(self):
         snap = build_earnings_snapshot(fare=Decimal("19.99"), tip=Decimal("3.01"))
         assert snap["total"] == 23.0
+
+
+class TestFareShare:
+    """fare_share is the driver's ride-fare portion for the snapshot: the
+    driver keeps total_fare minus the platform's booking + airport fees (0%
+    commission), including any minimum-fare uplift."""
+
+    def test_fare_share_includes_minimum_fare_uplift(self):
+        # total_fare 8.00 clamped up; components base+dist+time = 3.90.
+        share = fare_share(total_fare=8.00, booking_fee=2.00, airport_fee=0, fallback_components=3.90)
+        assert share == Decimal("6.00")  # 8.00 − 2.00, i.e. driver keeps the uplift
+
+    def test_fare_share_excludes_booking_and_airport(self):
+        share = fare_share(total_fare=30.00, booking_fee=2.00, airport_fee=5.00, fallback_components=23.00)
+        assert share == Decimal("23.00")  # 30.00 − 2.00 − 5.00
+
+    def test_fare_share_falls_back_to_components_for_legacy_rows(self):
+        # No total_fare (legacy row) → itemised component sum.
+        share = fare_share(total_fare=0, booking_fee=2.00, airport_fee=0, fallback_components=17.25)
+        assert share == Decimal("17.25")
+
+    def test_fare_share_feeds_snapshot_ride_fare_line(self):
+        share = fare_share(total_fare=8.00, booking_fee=2.00, airport_fee=0, fallback_components=3.90)
+        snap = build_earnings_snapshot(fare=share)
+        assert snap["fare"] == 6.00
+        assert snap["lines"][0] == {"label": "Ride Fare", "amount": 6.00, "type": "fare"}

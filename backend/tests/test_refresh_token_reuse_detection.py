@@ -133,6 +133,62 @@ async def test_benign_rotation_replay_within_grace_does_not_cascade():
 
 
 @pytest.mark.asyncio
+async def test_rotation_replay_minutes_later_within_window_does_not_cascade():
+    """Mobile reality: a phone loses the rotation response in a dead zone and
+    only retries when foregrounded a few minutes later, still holding the
+    pre-rotation token. Within REFRESH_REUSE_GRACE_SECONDS this is benign — a
+    clean 401, no all-device cascade."""
+    from datetime import datetime, timedelta, timezone
+
+    from utils.refresh_tokens import REFRESH_REUSE_GRACE_SECONDS
+
+    # Half a window ago — comfortably inside the grace period.
+    revoked_at = datetime.now(timezone.utc) - timedelta(
+        seconds=REFRESH_REUSE_GRACE_SECONDS / 2
+    )
+    row = _recently_revoked_rotated_row(revoked_at=revoked_at.isoformat())
+    cascade_mock = AsyncMock()
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=row)),
+        patch("utils.refresh_tokens._handle_refresh_token_reuse", cascade_mock),
+    ):
+        from utils.refresh_tokens import lookup_refresh_token
+
+        result = await lookup_refresh_token("rotated-raw-mins-ago")
+
+    assert result is None
+    cascade_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_rotation_replay_past_grace_window_still_cascades():
+    """A rotated token replayed well AFTER the grace window is back to being a
+    theft signal — the legitimate client would have stepped forward long ago.
+    This pins the upper edge so the window can't silently grow unbounded."""
+    from datetime import datetime, timedelta, timezone
+
+    from utils.refresh_tokens import REFRESH_REUSE_GRACE_SECONDS
+
+    revoked_at = datetime.now(timezone.utc) - timedelta(
+        seconds=REFRESH_REUSE_GRACE_SECONDS + 120
+    )
+    row = _recently_revoked_rotated_row(revoked_at=revoked_at.isoformat())
+    cascade_mock = AsyncMock()
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value=row)),
+        patch("utils.refresh_tokens._handle_refresh_token_reuse", cascade_mock),
+    ):
+        from utils.refresh_tokens import lookup_refresh_token
+
+        result = await lookup_refresh_token("rotated-raw-too-late")
+
+    assert result is None
+    cascade_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_recent_revocation_without_rotation_still_cascades():
     """A token revoked WITHOUT a replacement (explicit logout / a prior
     cascade), even moments ago, is a real signal — replaying it MUST still

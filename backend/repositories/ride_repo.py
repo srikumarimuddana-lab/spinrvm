@@ -16,6 +16,7 @@ try:
         run_sync,
         supabase,
     )
+    from ..utils.pii import mask_vin
 except ImportError:
     from repositories._base import (  # type: ignore
         _rows_from_res,
@@ -24,6 +25,7 @@ except ImportError:
         run_sync,
         supabase,
     )
+    from utils.pii import mask_vin  # type: ignore
 
 
 # ============ Ride Helpers ============
@@ -503,7 +505,9 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
         ride["driver_vehicle_model"] = driver.get("vehicle_model", "")
         ride["driver_vehicle_color"] = driver.get("vehicle_color", "")
         ride["driver_vehicle_year"] = driver.get("vehicle_year")
-        ride["driver_vehicle_vin"] = driver.get("vehicle_vin", "")
+        # VIN is plaintext at rest (migration 244); the ride-detail surface has
+        # no Show-PII reveal, so only the masked last-4 leaves the server here.
+        ride["driver_vehicle_vin"] = mask_vin(driver.get("vehicle_vin")) or ""
         ride["driver_license_plate"] = driver.get("license_plate", "")
         ride["driver_rating"] = driver.get("rating", 0)
         ride["driver_status"] = driver.get("status", "active")

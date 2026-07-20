@@ -1190,8 +1190,8 @@ export default function DriversPage() {
                                                         <span className="text-muted-foreground whitespace-nowrap">{new Date(h.created_at).toLocaleDateString()}</span>
                                                         <span className="flex-1">
                                                             <span className="font-medium">{h.field.replace(/_/g, " ")}</span>:{" "}
-                                                            <span className="line-through text-muted-foreground">{h.old_value || "—"}</span>{" → "}
-                                                            <span className="font-semibold">{h.new_value || "—"}</span>
+                                                            <span className="line-through text-muted-foreground">{h.old_value ? (h.field === "vehicle_vin" && !showPii ? maskVin(h.old_value) : h.old_value) : "—"}</span>{" → "}
+                                                            <span className="font-semibold">{h.new_value ? (h.field === "vehicle_vin" && !showPii ? maskVin(h.new_value) : h.new_value) : "—"}</span>
                                                             <span className="ml-1 text-[10px] text-muted-foreground">({h.changed_by_role})</span>
                                                         </span>
                                                     </div>

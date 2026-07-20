@@ -9,9 +9,9 @@ from __future__ import annotations
 import pytest
 
 try:
-    from backend.utils.pii import first_name_only, redact_email, redact_phone
+    from backend.utils.pii import first_name_only, mask_vin, redact_email, redact_phone
 except ImportError:
-    from utils.pii import redact_email, redact_phone  # type: ignore
+    from utils.pii import mask_vin, redact_email, redact_phone  # type: ignore
 
 
 @pytest.mark.parametrize(
@@ -41,6 +41,34 @@ def test_redact_phone_never_returns_full_number():
     # Only last-4 digits exposed
     digits_in_mask = [c for c in masked if c.isdigit()]
     assert len(digits_in_mask) == 4
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("1HGBH41JXMN109186", "*************9186"),
+        ("2T1BURHE0JC123456", "*************3456"),
+        ("ABCD", "****"),  # short/malformed -> fully masked, never leaked
+        ("AB", "**"),
+    ],
+)
+def test_mask_vin_keeps_only_last_four(raw: str, expected: str):
+    assert mask_vin(raw) == expected
+
+
+@pytest.mark.parametrize("raw", ["", None])
+def test_mask_vin_empty_returns_none(raw):
+    assert mask_vin(raw) is None
+
+
+def test_mask_vin_never_returns_full_vin():
+    raw = "1HGBH41JXMN109186"
+    masked = mask_vin(raw)
+    assert masked is not None
+    assert raw not in masked
+    assert masked.endswith("9186")
+    # Everything before the last 4 is masked
+    assert set(masked[:-4]) == {"*"}
 
 
 @pytest.mark.parametrize(

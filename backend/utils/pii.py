@@ -28,6 +28,24 @@ def redact_email(email: str | None) -> str:
     return f"{local[0]}***@{domain}"
 
 
+def mask_vin(vin: str | None) -> str | None:
+    """Return a VIN masked to its last 4 (e.g. ``*************9186``).
+
+    VIN is stored as plaintext at rest (migration 244) but is shown masked in
+    admin surfaces that have no Show-PII reveal (ride detail, exports). Empty
+    input returns None; a short/malformed value is fully masked rather than
+    leaked. Mirrors the frontend ``maskVin`` in admin-dashboard/src/lib/pii.ts.
+    """
+    if not vin:
+        return None
+    s = str(vin).strip()
+    if not s:
+        return None
+    if len(s) <= 4:
+        return "*" * len(s)
+    return ("*" * (len(s) - 4)) + s[-4:]
+
+
 # A trailing country token to drop so "Saskatoon, SK, Canada" -> city, not
 # "Canada" (geocoder formatted_address strings usually end with the country).
 _COUNTRY_TOKENS = frozenset({"canada", "united states", "usa"})

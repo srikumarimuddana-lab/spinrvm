@@ -687,6 +687,35 @@ function RootLayout() {
     return () => sub.remove();
   }, [isAuthInitialized]);
 
+  // ── Proactive token refresh on foreground resume + periodic ──
+  // Mirrors the driver app. Without a proactive timer the rider only
+  // refreshes reactively (after a request already 401'd), so every ~15 min
+  // of activity ran the 401 → refresh → retry path. Refreshing ahead of
+  // expiry keeps the access token valid so foreground requests rarely 401,
+  // shrinking exposure to transient refresh failures around the boundary.
+  useEffect(() => {
+    if (!isAuthInitialized || !authToken) return;
+
+    const { ensureFreshToken } = require('@shared/api/client');
+
+    const sub = AppState.addEventListener('change', (nextState: string) => {
+      if (nextState === 'active') {
+        ensureFreshToken().catch(() => {});
+      }
+    });
+
+    // With a 15-min token TTL and 2-min refresh buffer, a 60s check
+    // guarantees the token is refreshed before it enters the danger zone.
+    const interval = setInterval(() => {
+      ensureFreshToken().catch(() => {});
+    }, 60_000);
+
+    return () => {
+      sub.remove();
+      clearInterval(interval);
+    };
+  }, [isAuthInitialized, authToken]);
+
   // Background notification tap routing
   useEffect(() => {
     if (!isAuthInitialized || !canUseNotifications || !Notifications) return;

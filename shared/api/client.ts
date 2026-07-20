@@ -759,7 +759,17 @@ const handleApiError = async (response: Response, method: string, url: string, r
   // On 401, attempt a single silent token refresh then retry the original request.
   // SOS is exempt (see isSosUrl) — its backend route tolerates expired tokens,
   // so the refresh round-trip only adds failure modes during an emergency.
+  //
+  // Once we enter this branch the refresh layer (authStore.refreshTokens) OWNS
+  // the logout-vs-keep decision: a genuine 401 from /auth/refresh tears the
+  // session down itself, while a TRANSIENT failure (network drop / timeout /
+  // 5xx) deliberately keeps the refresh token so the next attempt recovers.
+  // refreshAttempted records that so the global 401 handler below does NOT
+  // second-guess that decision and hard-logout on a transient blip — the bug
+  // that bounced users to /login on a single dropped connection mid-session.
+  let refreshAttempted = false;
   if (response.status === 401 && _refreshCallback && retryFn && !isSosUrl(url)) {
+    refreshAttempted = true;
     try {
       if (_refreshPromise) {
         // A refresh is already in-flight — queue this request and wait for
@@ -906,7 +916,13 @@ const handleApiError = async (response: Response, method: string, url: string, r
   // This prevents the "session limbo" state where API calls silently
   // fail 401 while the driver/rider still sees the dashboard.
   // SOS is exempt: never sign the user out mid-emergency (see isSosUrl).
-  if (response.status === 401 && !isSosUrl(url)) {
+  //
+  // Skipped when refreshAttempted: the refresh branch above already ran the
+  // refresh layer, which logs out on a genuine 401 and INTENTIONALLY keeps
+  // the session on a transient failure. Forcing logout here would discard a
+  // still-valid refresh token on a network blip. We instead fall through and
+  // reject the original request with its 401 (SpinrApiError) below.
+  if (response.status === 401 && !isSosUrl(url) && !refreshAttempted) {
     console.log('[API] 401 Unauthorized — clearing session');
     setInMemoryToken(null);
     try {

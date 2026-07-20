@@ -407,10 +407,10 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             if user:
                 if _firebase_session_revoked(payload, user.get("sessions_invalid_before")):
                     raise HTTPException(status_code=401, detail="ERR_SESSION_REVOKED")
-                token_session = payload.get("session_id")
-                db_session = user.get("current_session_id")
-                if db_session and token_session and token_session != db_session:
-                    raise HTTPException(status_code=401, detail="ERR_SESSION_EXPIRED")
+                # Multi-device: no current_session_id single-device check here
+                # either (see the JWT path). Firebase revocation is enforced
+                # above via the sessions_invalid_before watermark; logout-all
+                # still kills every device.
                 # Cached (30s) — get_current_user runs on every
                 # authenticated request so this lookup used to dominate
                 # the Supabase read load.
@@ -462,20 +462,12 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         raise DatabaseError(details={"original": str(e)}) from e
 
     if user:
-        token_session = payload.get("session_id")
-        # Fast-path Redis check: login writes session:{user_id} → session_id with
-        # the access-token TTL. A mismatch here means the user logged in from
-        # another device and this token is stale — reject immediately without
-        # the Postgres read latency. Falls back to the DB comparison when the
-        # key has expired or Redis is unavailable (redis_get returns None).
-        if token_session:
-            redis_session = await redis_get(f"session:{user['id']}")
-            if redis_session is not None and redis_session != token_session:
-                raise HTTPException(status_code=401, detail="ERR_SESSION_EXPIRED")
-        # Enforce single-device login: check if the session_id matches the one in DB
-        db_session = user.get("current_session_id")
-        if db_session and token_session != db_session:
-            raise HTTPException(status_code=401, detail="ERR_SESSION_EXPIRED")
+        # Multi-device sessions: rider/driver may stay signed in on several
+        # devices at once (like Uber/Lyft). We deliberately DO NOT reject an
+        # access token whose session_id differs from users.current_session_id —
+        # a login on a second device no longer invalidates the first. Genuine
+        # revocation still runs below (token_version) and via refresh-token
+        # revocation / logout-all; current_session_id is now only bookkeeping.
         # Revocation gate — if the user's token_version has been bumped
         # (admin force-logout-all, password reset, suspected compromise)
         # every access token issued before the bump must be rejected.
@@ -585,23 +577,13 @@ async def get_current_user_allow_expired(
         raise original
     if _token_version_mismatch(payload, user):
         raise original
-    # Single-device login still applies on the grace path. An expired token
-    # from a superseded session (the user logged in elsewhere, rotating
-    # current_session_id) must not trigger SOS for the account — mirror the
-    # Redis fast-path + DB comparison get_current_user does, INCLUDING the
-    # sessionless case: a legacy token with no session_id claim is rejected
-    # whenever the account has a current session, exactly as in
-    # get_current_user (`db_session and token_session != db_session`). A
-    # stolen old handset must not fire emergency alerts after the owner has
-    # re-logged-in on a new device.
-    token_session = payload.get("session_id")
-    if token_session:
-        redis_session = await redis_get(f"session:{user['id']}")
-        if redis_session is not None and redis_session != token_session:
-            raise original
-    db_session = user.get("current_session_id")
-    if db_session and token_session != db_session:
-        raise original
+    # Multi-device: no single-device (current_session_id) check on the grace
+    # path either. Now that several devices may be signed in concurrently, a
+    # session_id that differs from current_session_id just means "a different
+    # legitimate device" — rejecting it here would block a real SOS from a
+    # logged-in second device. A genuinely stolen/compromised handset is shut
+    # off by "log out all devices" (token_version bump, checked above) and
+    # refresh-token revocation, not by the single-device heuristic.
     # A deletion-requested / purged account is unusable even on the SOS grace
     # path. _enforce_account_active raises a 403 that propagates (the grace catch
     # only wraps the inner get_current_user call, not this body).

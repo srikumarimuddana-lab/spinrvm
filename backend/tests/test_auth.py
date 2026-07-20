@@ -190,6 +190,42 @@ class TestGetCurrentUser:
             assert user["id"] == "user_123"
             assert user["phone"] == "+1234567890"
 
+    async def test_get_current_user_allows_second_device_session(self, mock_credentials):
+        """Multi-device: a token whose session_id differs from the user's
+        current_session_id (and from the Redis session key) must NOT be
+        rejected. Logging in on a second device no longer kicks the first —
+        the single-device ERR_SESSION_EXPIRED gate has been removed. Genuine
+        revocation (token_version / logout-all) still applies elsewhere."""
+        from backend.dependencies import get_current_user
+
+        # DB records device B's session; this token belongs to device A.
+        mock_user = {
+            "id": "user_123",
+            "phone": "+1234567890",
+            "role": "rider",
+            "current_session_id": "sess-device-B",
+            "token_version": 0,
+        }
+
+        with (
+            patch("backend.dependencies.firebase_auth.verify_id_token", side_effect=ValueError("not firebase")),
+            patch("backend.dependencies.verify_jwt_token") as mock_verify,
+            patch("backend.dependencies.db_supabase.get_user_by_id", AsyncMock(return_value=mock_user)),
+            patch("backend.dependencies.db_supabase.get_driver_by_user_id_cached", AsyncMock(return_value=None)),
+            # Redis holds device B's session too — the old fast-path would 401 here.
+            patch("backend.dependencies.redis_get", AsyncMock(return_value="sess-device-B")),
+        ):
+            mock_verify.return_value = {
+                "user_id": "user_123",
+                "phone": "+1234567890",
+                "session_id": "sess-device-A",
+                "token_version": 0,
+            }
+
+            user = await get_current_user(mock_credentials)
+
+            assert user["id"] == "user_123"
+
     async def test_get_current_user_raises_503_not_phantom_user_on_missing_row(self, mock_credentials):
         """C2: a valid JWT whose user row is missing (a transient Supabase
         replica miss returns None rather than raising) must fail closed with

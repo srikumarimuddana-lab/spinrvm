@@ -221,21 +221,16 @@ async def prepare_completion_location(
         )
 
     distance_band, distance_meters = _completion_distance_band(ride, fix)
-    # The mode only gates the off_route confirmation. Read it (fail-loud on a
-    # settings outage) ONLY when the fix is off_route — otherwise a transient
-    # app_settings failure would 503 an on-route completion, leaving the ride
-    # in_progress with insurance Period 3 still running.
-    if distance_band == "off_route":
-        mode = await _get_route_integrity_mode()
-        if mode == "on" and not request.off_route_confirmation:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "completion_confirmation_required",
-                    "distance_band": distance_band,
-                    "distance_meters": distance_meters,
-                },
-            )
+    mode = await _get_route_integrity_mode()
+    if mode == "on" and distance_band == "off_route" and not request.off_route_confirmation:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "completion_confirmation_required",
+                "distance_band": distance_band,
+                "distance_meters": distance_meters,
+            },
+        )
 
     point = fix.model_dump(mode="json")
     point["is_completion_fix"] = True

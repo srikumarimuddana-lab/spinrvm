@@ -59,7 +59,18 @@ _REFRESH_TOKEN_BYTES = 48
 # a rotated-forward token is treated as a benign race (clean 401, no cascade); a
 # stolen token replayed later, or a token revoked WITHOUT rotation (explicit
 # logout / a prior cascade), still escalates.
-REFRESH_REUSE_GRACE_SECONDS = 60
+#
+# Sized for mobile reality, not just the sub-second concurrent-refresh race: a
+# phone can fire a refresh, lose the rotation response in a dead zone, and only
+# retry when the app is next foregrounded minutes later — still holding the
+# pre-rotation token. 60s classified that benign retry as theft and logged the
+# user out on EVERY device. 10 min covers the "lost response, app resumed
+# shortly after" case. The security cost is bounded: a genuinely stolen token
+# is already revoked, so a replay within the window yields NOTHING to the
+# attacker (lookup still returns None) — only the all-device cascade/alert is
+# deferred until the window lapses, at which point a persistent replay still
+# escalates.
+REFRESH_REUSE_GRACE_SECONDS = 600
 
 
 def _parse_iso_dt(value) -> Optional[datetime]:
@@ -85,7 +96,7 @@ def _is_benign_rotation_replay(row: dict) -> bool:
         refresh. A token revoked WITHOUT a replacement was killed by an explicit
         logout or a prior cascade, and replaying that is always a real signal.
       • It was revoked within ``REFRESH_REUSE_GRACE_SECONDS`` — a stolen token
-        replayed minutes/hours later still escalates.
+        replayed well after the window still escalates.
     """
     if not row.get("replaced_by"):
         return False

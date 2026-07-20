@@ -789,7 +789,12 @@ async def websocket_endpoint(
                     # the client's current message timing or phase tag. The
                     # buffer flushes early on ride-context change, and the
                     # disconnect/completion paths flush the remainder.
-                    await buffer_ride_breadcrumb(driver_id, data, active_ride=active_ride)
+                    # The driver app persists route samples through the v2
+                    # acknowledged outbox. WebSocket messages marked ephemeral
+                    # still update/fan out the live marker, but must not create
+                    # a second breadcrumb trail or inflate billed distance.
+                    if data.get("durable", True):
+                        await buffer_ride_breadcrumb(driver_id, data, active_ride=active_ride)
 
                     # Refresh the Maps API key from DB at most every 60 s.
                     now_mono = asyncio.get_event_loop().time()

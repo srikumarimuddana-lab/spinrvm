@@ -33,6 +33,11 @@ import {
 import { checkLocationIntegrity, resetLocationIntegrity } from '../utils/locationIntegrity';
 import { startSensorMonitoring, stopSensorMonitoring, checkMovementConsistency } from '../utils/sensorIntegrity';
 import { attestDeviceIntegrity } from '../utils/deviceIntegrity';
+import {
+  tripLocationRecorder,
+  type TripLocationBatchAck,
+  type TripLocationBatchRequest,
+} from '../utils/tripLocationRecorder';
 
 const { height } = Dimensions.get('window');
 // Each tier doubles; last-tier jitter must be large enough to disperse a
@@ -53,6 +58,9 @@ const LOCATION_CONFIGS: Record<string, { timeInterval: number; distanceInterval:
   trip_in_progress:      { timeInterval: 3_000,  distanceInterval: 8,  accuracy: Location.Accuracy.High },
   trip_completed:        { timeInterval: 10_000, distanceInterval: 30, accuracy: Location.Accuracy.Balanced },
 };
+
+// Ride states in which the durable route recorder is active.
+const TRACKED_TRIP_PHASES = ['navigating_to_pickup', 'arrived_at_pickup', 'trip_in_progress'];
 
 /**
  * Coerce a value into a finite latitude/longitude or return null.
@@ -118,7 +126,6 @@ interface UseDriverDashboardReturn {
   countdownRef: React.RefObject<ReturnType<typeof setInterval> | null>;
   reconnectTimeoutRef: React.RefObject<ReturnType<typeof setTimeout> | null>;
   reconnectAttemptRef: React.RefObject<number>;
-  locationBufferRef: React.RefObject<any[]>;
 
   // Animations
   pulseAnim: any;
@@ -295,11 +302,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // (lost first message, half-open TLS through a flaky proxy). The server only
   // times that out after ~30s; this self-heals far faster.
   const authWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const locationBufferRef = useRef<any[]>([]);
-  const wsBatchRef = useRef<any[]>([]);
-  const lastWsFlushRef = useRef<number>(Date.now());
-  const locationRetryCountRef = useRef(0);
-  const MAX_LOCATION_RETRIES = 3;
   const lastServerMsgRef = useRef<number>(Date.now());
   const pongSentAtRef = useRef<number>(0);
   const lastSeqRef = useRef<number>(0);
@@ -504,72 +506,80 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     return () => sub.remove();
   }, [refreshLocation]);
 
-  // ─── Batch Location Upload ───────────────────────────────────────
-  // G16: Persist buffer to AsyncStorage so crash doesn't lose GPS
-  // breadcrumbs. On upload success, clear both in-memory + persisted.
-  // On cold start, the buffer initializes from in-memory (empty) but
-  // a recovery effect below loads any persisted points.
-  const LOCATION_BUFFER_KEY = 'spinr_location_buffer';
+  // ─── Durable trip-location upload ─────────────────────────────────
+  // The recorder owns the only durable queue. This transport is deliberately
+  // injected so background/headless code can use its own refreshed-token path.
+  const foregroundLocationTransport = useCallback(async (
+    request: TripLocationBatchRequest,
+  ): Promise<TripLocationBatchAck> => {
+    const response = await api.post<TripLocationBatchAck>('/drivers/location-batch', request);
+    return response.data;
+  }, []);
 
   const uploadLocationBatch = useCallback(async () => {
-    if (locationBufferRef.current.length === 0) return;
+    await tripLocationRecorder.flushPending(foregroundLocationTransport, { force: true });
+  }, [foregroundLocationTransport]);
 
-    const pointsToUpload = [...locationBufferRef.current];
-    locationBufferRef.current = [];
-
-    try {
-      await api.post('/drivers/location-batch', {
-        points: pointsToUpload,
-      });
-      locationRetryCountRef.current = 0;
-      // Clear persisted buffer on success
-      try {
-        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-        await AsyncStorage.removeItem(LOCATION_BUFFER_KEY);
-      } catch {}
-    } catch (err) {
-      locationRetryCountRef.current += 1;
-      if (locationRetryCountRef.current >= MAX_LOCATION_RETRIES) {
-        console.warn(`[Location] Batch upload failed after ${MAX_LOCATION_RETRIES} retries — clearing buffer`);
-        locationRetryCountRef.current = 0;
-        locationBufferRef.current = [];
-        try {
-          const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-          await AsyncStorage.removeItem(LOCATION_BUFFER_KEY);
-        } catch {}
-      } else {
-        locationBufferRef.current = [...pointsToUpload, ...locationBufferRef.current];
-        // Persist to AsyncStorage so crash doesn't lose them
-        try {
-          const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-          await AsyncStorage.setItem(LOCATION_BUFFER_KEY, JSON.stringify(locationBufferRef.current.slice(-500)));
-        } catch {}
-      }
-    }
-  }, []);
-
-  // Recover persisted location buffer on cold start (G16)
-  useEffect(() => {
-    (async () => {
-      try {
-        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-        const saved = await AsyncStorage.getItem(LOCATION_BUFFER_KEY);
-        if (saved) {
-          const points = JSON.parse(saved);
-          if (Array.isArray(points) && points.length > 0) {
-            locationBufferRef.current = [...points, ...locationBufferRef.current];
-          }
-        }
-      } catch {}
-    })();
-  }, []);
-
-  // Upload batch every 30 seconds
   useEffect(() => {
     if (!isOnline) return;
-    const interval = setInterval(uploadLocationBatch, 30000);
+    const interval = setInterval(() => {
+      tripLocationRecorder.flushPending(foregroundLocationTransport).catch(() => {
+        // Durable samples remain in SQLite for the next acknowledgement attempt.
+      });
+    }, 10_000);
     return () => clearInterval(interval);
-  }, [isOnline, uploadLocationBatch]);
+  }, [foregroundLocationTransport, isOnline]);
+
+  // GPS heartbeat: during a trip, if the recorder has captured nothing for
+  // its 30s watchdog window (standstill under distanceInterval, provider
+  // hiccup, watcher silently dead), actively request one fix so the durable
+  // route never develops a >60s gap the server would split into a dropped
+  // segment. Also re-checks device-wide location services so the existing
+  // 'unavailable' UI state surfaces mid-trip, not just on mount/resume.
+  useEffect(() => {
+    if (!isOnline || !TRACKED_TRIP_PHASES.includes(rideState)) return;
+    const interval = setInterval(async () => {
+      try {
+        const rideId = useDriverStore.getState().activeRide?.ride?.id;
+        if (!rideId) return;
+        const servicesOn = await Location.hasServicesEnabledAsync().catch(() => true);
+        if (!servicesOn) {
+          setLocation(null);
+          locationRef.current = null;
+          setLocationStatus('unavailable');
+          return;
+        }
+        const health = await tripLocationRecorder.getRecorderHealth(rideId);
+        if (health.degradationReason !== 'no_recent_fix') return;
+        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+        const integrity = checkLocationIntegrity(loc);
+        if (!integrity.trusted) return;
+        await tripLocationRecorder.recordNativeFix(loc, 'foreground', rideId);
+        tripLocationRecorder.flushPending(foregroundLocationTransport).catch(() => {});
+      } catch {
+        // Best-effort: a failed heartbeat leaves the recorder-health banner
+        // to surface persistent degradation; never crash the interval.
+      }
+    }, 30_000);
+    return () => clearInterval(interval);
+  }, [foregroundLocationTransport, isOnline, rideState]);
+
+  // Flush the durable outbox on app-state transitions during a trip.
+  // Foreground→background: the watcher is about to stop firing, so drain what
+  // we have before the OS can suspend the JS thread. Background→foreground:
+  // drain whatever the background task captured while the driver navigated in
+  // Maps, so the server-visible tail never lags a whole backgrounded stretch.
+  useEffect(() => {
+    if (!isOnline || !TRACKED_TRIP_PHASES.includes(rideState)) return;
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active' || next === 'background') {
+        tripLocationRecorder.flushPending(foregroundLocationTransport, { force: true }).catch(() => {
+          // Durable samples remain in SQLite for the next acknowledgement attempt.
+        });
+      }
+    });
+    return () => sub.remove();
+  }, [foregroundLocationTransport, isOnline, rideState]);
 
   // Location subscription — frequency adapts to ride state
   useEffect(() => {
@@ -578,17 +588,13 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         try { locationSubRef.current.remove(); } catch (e) { console.log('[Location] subscription remove error:', e); }
         locationSubRef.current = null;
       }
-      // Privacy: when the driver goes offline, stop collecting AND purge any
-      // residual location state from device storage. Best-effort final flush
-      // first so we don't drop breadcrumbs the regulator audit expects, then
-      // wipe the in-memory buffer and both persisted keys so a stolen/offline
-      // phone can't yield recent location traces.
+      // Best-effort final flush. The recorder intentionally retains any
+      // unacknowledged trip sample for retry; only a server acknowledgement can
+      // remove it. The non-durable map cache remains safe to clear offline.
       (async () => {
         try { await uploadLocationBatch(); } catch {}
-        locationBufferRef.current = [];
         try {
           const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-          await AsyncStorage.removeItem(LOCATION_BUFFER_KEY);
           await AsyncStorage.removeItem('spinr_driver_last_location');
         } catch {}
       })();
@@ -600,12 +606,16 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // trip driven with the app backgrounded (driver in Maps / screen locked)
     // relies entirely on the background task — keep it dense during trip
     // phases, coarse when idle. No-op until go-online has started the task.
-    const TRIP_PHASES = ['navigating_to_pickup', 'arrived_at_pickup', 'trip_in_progress'];
-    const inTripPhase = TRIP_PHASES.includes(rideState);
+    const inTripPhase = TRACKED_TRIP_PHASES.includes(rideState);
     updateBackgroundLocationCadence(inTripPhase ? TRIP_CADENCE : IDLE_CADENCE).catch(() => {});
-    // Persist the trip-active flag so a force-kill geofence recovery re-arms at
-    // trip cadence rather than the coarse idle default.
+    // Persist the trip-active flag so a geofence wake can use trip cadence for
+    // future capture; it cannot reconstruct samples missed after a force-quit.
     setBackgroundTripActive(inTripPhase).catch(() => {});
+    if (inTripPhase && activeRide?.ride?.id) {
+      tripLocationRecorder.startRide(activeRide.ride.id).catch(() => {
+        setWsError('Trip location recording needs attention. Points will retry automatically.');
+      });
+    }
     (async () => {
       if (locationSubRef.current) {
         try { locationSubRef.current.remove(); } catch {}
@@ -642,62 +652,39 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
             setLocation(loc);
           }
 
-          const { rideState: currentRideState, activeRide: currentActiveRide } = useDriverStore.getState();
-          const rideId = currentActiveRide?.ride?.id || null;
-          const phaseMap: Record<string, string> = {
-            idle: 'online_idle',
-            ride_offered: 'online_idle',
-            navigating_to_pickup: 'navigating_to_pickup',
-            arrived_at_pickup: 'arrived_at_pickup',
-            trip_in_progress: 'trip_in_progress',
-            trip_completed: 'online_idle',
-          };
-
-          const payload = {
-            lat: loc.coords.latitude,
-            lng: loc.coords.longitude,
-            speed: loc.coords.speed ?? null,
-            heading: loc.coords.heading ?? null,
-            accuracy: loc.coords.accuracy ?? null,
-            altitude: loc.coords.altitude ?? null,
-            mocked: loc.mocked ?? false,
-            sensor_suspect: !sensorCheck.consistent,
-            ride_id: rideId,
-            tracking_phase: phaseMap[currentRideState] || 'online_idle',
-            timestamp: new Date().toISOString(),
-          };
-
-          wsBatchRef.current.push(payload);
-          const sinceLastFlush = Date.now() - lastWsFlushRef.current;
-          if (wsBatchRef.current.length >= 3 || sinceLastFlush > 10_000) {
-            if (wsRef.current?.readyState === WebSocket.OPEN) {
-              wsRef.current.send(JSON.stringify({
-                type: 'driver_location_batch',
-                points: wsBatchRef.current,
-              }));
-              wsBatchRef.current = [];
-              lastWsFlushRef.current = Date.now();
-            }
-          }
-          // C4 (P0 GPS OOM): the batch above is only cleared when the socket is
-          // OPEN. During a sustained outage the push keeps growing it without
-          // bound -> OOM on low-memory devices. Cap it like the REST buffer
-          // below: keep the most recent points, drop the oldest.
-          if (wsBatchRef.current.length > 500) {
-            wsBatchRef.current = wsBatchRef.current.slice(-500);
-          }
-
-          // Only buffer for the REST fallback when the socket is DOWN. When WS
-          // is open it already persists each point as a breadcrumb server-side,
-          // so also REST-flushing this buffer would double-write
-          // driver_location_history — inflating gps_points_count and hitting
-          // the settlement row cap sooner. Background-only/WS-down uploads are
-          // the sole REST persistence path.
-          if (wsRef.current?.readyState !== WebSocket.OPEN) {
-            locationBufferRef.current.push(payload);
-            if (locationBufferRef.current.length > 500) {
-              locationBufferRef.current = locationBufferRef.current.slice(-500);
-            }
+          const currentActiveRide = useDriverStore.getState().activeRide;
+          const rideId = currentActiveRide?.ride?.id;
+          if (rideId && inTripPhase) {
+            void tripLocationRecorder.recordNativeFix(loc, 'foreground', rideId).then((point) => {
+              if (!point) return;
+              if (wsRef.current?.readyState === WebSocket.OPEN) {
+                wsRef.current.send(JSON.stringify({
+                  type: 'driver_location',
+                  durable: false,
+                  ...point,
+                }));
+              }
+              return tripLocationRecorder.flushPending(foregroundLocationTransport);
+            }).catch(async () => {
+              const health = await tripLocationRecorder.getRecorderHealth(rideId);
+              if (health.degraded) {
+                setWsError('Trip location recording needs attention. Points will retry automatically.');
+              }
+            });
+          } else if (wsRef.current?.readyState === WebSocket.OPEN) {
+            // Idle markers are intentionally ephemeral. Route history comes only
+            // from the ride-scoped recorder above.
+            wsRef.current.send(JSON.stringify({
+              type: 'driver_location',
+              durable: false,
+              lat: loc.coords.latitude,
+              lng: loc.coords.longitude,
+              speed: loc.coords.speed ?? null,
+              heading: loc.coords.heading ?? null,
+              accuracy: loc.coords.accuracy ?? null,
+              altitude: loc.coords.altitude ?? null,
+              mocked: loc.mocked ?? false,
+            }));
           }
         }
       );
@@ -705,19 +692,12 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     })();
 
     return () => {
-      if (wsBatchRef.current.length > 0 && wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({
-          type: 'driver_location_batch',
-          points: wsBatchRef.current,
-        }));
-        wsBatchRef.current = [];
-      }
       if (locationSubRef.current) {
         try { locationSubRef.current.remove(); } catch (e) { console.log('[Location] subscription remove error (cleanup):', e); }
         locationSubRef.current = null;
       }
     };
-  }, [isOnline, rideState, uploadLocationBatch]);
+  }, [activeRide?.ride?.id, foregroundLocationTransport, isOnline, rideState, uploadLocationBatch]);
 
   // ─── WebSocket Message Handler ───────────────────────────────────
   const handleWSMessage = useCallback((data: any) => {
@@ -1369,13 +1349,9 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           stopSensorMonitoring();
           showToast('error', "Background location needed", "Enable 'Allow all the time' in Settings to go online and receive ride offers.");
         } else {
-          // Arm the killed-app geofence around the current position. If the
-          // user force-swipes Spinr, the OS still wakes the process when
-          // they cross the boundary and the geofence task re-arms tracking
-          // — without this, the driver is invisible to dispatch until they
-          // manually relaunch the app. Non-fatal: if location isn't ready
-          // yet we just skip; the next significant movement won't re-arm,
-          // but the foreground service is still running.
+          // Arm a geofence around the current position. A wake may re-arm
+          // future tracking after suspension, but cannot recover missed fixes.
+          // Non-fatal: if location is not ready we skip the best-effort re-arm.
           const loc = locationRef.current;
           if (loc) {
             await startGeofenceRecovery(loc.coords.latitude, loc.coords.longitude).catch((e) => {
@@ -1594,7 +1570,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     countdownRef,
     reconnectTimeoutRef,
     reconnectAttemptRef,
-    locationBufferRef,
 
     // Animations
     pulseAnim,

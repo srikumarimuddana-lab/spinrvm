@@ -73,13 +73,17 @@ import {
 
 import api from '../../api/client';
 
-// Mock authStore for ensureFreshToken tests
+// Mock authStore for ensureFreshToken tests. `mockLogout` is module-scoped
+// (the `mock` prefix lets the jest.mock factory reference it) and STABLE
+// across getState() calls so a test can assert whether the global 401
+// interceptor forced a logout.
+const mockLogout = jest.fn();
 jest.mock('../../store/authStore', () => ({
   useAuthStore: {
     getState: jest.fn(() => ({
       token: 'valid-token',
       tokenExpiresAt: Date.now() + 15 * 60 * 1000,
-      logout: jest.fn(),
+      logout: mockLogout,
     })),
   },
 }));
@@ -131,6 +135,33 @@ describe('shared/api/client — token refresh mid-trip (P1-11 / E11)', () => {
     expect(refreshCallback).toHaveBeenCalledTimes(1);
     // Only the initial call — no retry
     expect(_mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT force a logout when refresh fails transiently (returns false)', async () => {
+    // A transient refresh failure (network drop / timeout / 5xx) surfaces as
+    // the callback resolving false. The real authStore.refreshTokens keeps the
+    // session in that case; the interceptor must not override that decision by
+    // hard-logging-out at the global 401 handler. Before this fix, a single
+    // dropped connection mid-session bounced the user to /login.
+    const refreshCallback = jest.fn().mockResolvedValue(false);
+    setRefreshCallback(refreshCallback);
+
+    _mockFetch.mockResolvedValue(make401Response());
+
+    await expect(api.get('/notifications')).rejects.toThrow();
+
+    expect(refreshCallback).toHaveBeenCalledTimes(1);
+    expect(mockLogout).not.toHaveBeenCalled();
+  });
+
+  it('DOES force a logout on a 401 when no refresh path exists', async () => {
+    // With no refresh callback the interceptor can't recover, so the global
+    // 401 handler still clears the session (this behavior is unchanged).
+    setRefreshCallback(null as any);
+    _mockFetch.mockResolvedValue(make401Response());
+
+    await expect(api.get('/notifications')).rejects.toThrow();
+    expect(mockLogout).toHaveBeenCalledTimes(1);
   });
 
   it('does not trigger a refresh loop when /auth/refresh itself returns 401', async () => {

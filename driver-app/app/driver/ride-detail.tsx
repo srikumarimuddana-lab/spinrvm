@@ -7,23 +7,19 @@ import {
     Platform,
     ActivityIndicator,
     TouchableOpacity,
-    Dimensions,
     Image,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
-import MapViewDirections from 'react-native-maps-directions';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
-const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || '';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import api from '@shared/api/client';
+import { ACTUAL_ROUTE_STROKE, PLANNED_ROUTE_STROKE, ROUTE_PIN_COLORS } from '@shared/constants/routeMapStyle';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-
-const { width } = Dimensions.get('window');
+import { routeQualityLabel, toReactNativeSegments } from '@shared/utils/routeSegments';
 
 export default function RideDetailScreen() {
     const { id } = useLocalSearchParams<{ id: string }>();
@@ -31,7 +27,6 @@ export default function RideDetailScreen() {
     const insets = useSafeAreaInsets();
     const [ride, setRide] = useState<any>(null);
     const [loading, setLoading] = useState(true);
-    const [fallbackCoords, setFallbackCoords] = useState<{ latitude: number; longitude: number }[]>([]);
     const mapRef = useRef<MapView>(null);
     const { colors } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
@@ -82,27 +77,34 @@ export default function RideDetailScreen() {
         };
     }, [ride, hasPickup, hasDropoff]);
 
-    const routeCoords = useMemo(() => {
-        if (!ride) return [];
-        const coords: { latitude: number; longitude: number }[] = [];
-        if (hasPickup) coords.push({ latitude: ride.pickup_lat, longitude: ride.pickup_lng });
-        if (hasDropoff) coords.push({ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng });
-        return coords;
-    }, [ride, hasPickup, hasDropoff]);
-
-    const savedPolyline = useMemo(() => {
-        if (!ride) return [];
-        // Actual GPS path (completed rides) → planned route (all rides) → empty
-        const raw = (Array.isArray(ride.route_polyline) && ride.route_polyline.length >= 2)
-            ? ride.route_polyline
-            : ride.planned_route_polyline;
-        if (!Array.isArray(raw) || raw.length < 2) return [];
-        return raw
-            .filter((p: any) => Array.isArray(p) && p.length >= 2)
-            .map((p: any) => ({ latitude: p[0], longitude: p[1] }));
-    }, [ride]);
-
-    const polylineToRender = savedPolyline.length >= 2 ? savedPolyline : fallbackCoords;
+    const actualSegments = useMemo(
+        () => toReactNativeSegments(ride?.actual_route_segments),
+        [ride?.actual_route_segments],
+    );
+    const plannedSegments = useMemo(
+        () => toReactNativeSegments(ride?.planned_route_polyline ? [ride.planned_route_polyline] : []),
+        [ride?.planned_route_polyline],
+    );
+    const mapCoordinates = useMemo(
+        () => (actualSegments.length ? actualSegments : plannedSegments).reduce<any[]>((all, segment) => all.concat(segment), []),
+        [actualSegments, plannedSegments],
+    );
+    const routeRevision = Number(ride?.route_revision || 0);
+    const isActualSnapshot =
+        Number(ride?.route_schema_version || 0) >= 2 &&
+        routeRevision > 0 &&
+        Number(ride?.snapshot_revision || 0) === routeRevision;
+    const routeSnapshotUrl = ride?.route_snapshot_url && isActualSnapshot ? ride.route_snapshot_url : '';
+    const hasActualRoute = actualSegments.length > 0;
+    const routeLabel = hasActualRoute ? 'Actual route' : 'Planned route';
+    const routeQuality = routeQualityLabel(ride?.route_quality);
+    const routeStatus = routeSnapshotUrl
+        ? `Actual route · revision ${routeRevision}`
+        : hasActualRoute
+            ? routeQuality
+            : Number(ride?.route_schema_version || 0) >= 2
+                ? 'Route snapshot unavailable · GPS route is still processing'
+                : 'Planned route preview';
 
     if (loading) {
         return (
@@ -143,12 +145,12 @@ export default function RideDetailScreen() {
     return (
         <View style={styles.container}>
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}>
-                {/* Route Map — snapshot image first, live MapView as fallback */}
+                {/* Route Map — actual GPS evidence is never replaced with directions */}
                 {hasPickup && hasDropoff && (
                     <View style={styles.mapContainer}>
-                        {ride.route_snapshot_url ? (
+                        {routeSnapshotUrl ? (
                             <Image
-                                source={{ uri: ride.route_snapshot_url }}
+                                source={{ uri: routeSnapshotUrl }}
                                 style={styles.map}
                                 resizeMode="cover"
                             />
@@ -160,63 +162,41 @@ export default function RideDetailScreen() {
                                 initialRegion={mapRegion}
                                 scrollEnabled={false}
                                 zoomEnabled={false}
-                                rotateEnabled={false}
-                                onMapReady={() => {
-                                    if (savedPolyline.length >= 2) {
-                                        mapRef.current?.fitToCoordinates(savedPolyline, {
-                                            edgePadding: { top: 40, right: 40, bottom: 40, left: 40 },
-                                            animated: false,
-                                        });
-                                    }
-                                }}
-                            >
-                                {savedPolyline.length < 2 && GOOGLE_MAPS_API_KEY && (
-                                    <MapViewDirections
-                                        origin={{ latitude: navPickupLat, longitude: navPickupLng }}
-                                        destination={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }}
-                                        apikey={GOOGLE_MAPS_API_KEY}
-                                        strokeWidth={0}
-                                        strokeColor="transparent"
-                                        onReady={(r: any) => {
-                                            setFallbackCoords(r.coordinates);
-                                            mapRef.current?.fitToCoordinates(r.coordinates, {
+                                    rotateEnabled={false}
+                                    onMapReady={() => {
+                                        if (mapCoordinates.length >= 2) {
+                                            mapRef.current?.fitToCoordinates(mapCoordinates, {
                                                 edgePadding: { top: 40, right: 40, bottom: 40, left: 40 },
                                                 animated: false,
                                             });
-                                        }}
-                                    />
-                                )}
-                                {polylineToRender.length > 1 && (() => {
-                                    const total = polylineToRender.length;
-                                    const SEGS = 15;
-                                    const chunk = Math.max(1, Math.floor(total / SEGS));
-                                    const segments: { coords: any[]; color: string }[] = [];
-                                    for (let i = 0; i < total - 1; i += chunk) {
-                                        const end = Math.min(i + chunk + 1, total);
-                                        const t = i / Math.max(total - 1, 1);
-                                        const r = Math.round(255 + (238 - 255) * t);
-                                        const g = Math.round(149 + (43 - 149) * t);
-                                        const b = Math.round(0 + (43 - 0) * t);
-                                        segments.push({ coords: polylineToRender.slice(i, end), color: `rgb(${r},${g},${b})` });
-                                    }
-                                    return segments.map((seg, idx) => (
+                                        }
+                                    }}
+                                >
+                                    {actualSegments.map((coordinates, index) => (
                                         <Polyline
-                                            key={`seg-${idx}`}
-                                            coordinates={seg.coords}
-                                            strokeWidth={4}
-                                            strokeColor={seg.color}
+                                            key={`actual-segment-${index}`}
+                                            coordinates={coordinates}
+                                            {...ACTUAL_ROUTE_STROKE}
                                             lineCap="round"
                                             lineJoin="round"
                                         />
-                                    ));
-                                })()}
+                                    ))}
+                                    {!hasActualRoute && plannedSegments.map((coordinates, index) => (
+                                        <Polyline
+                                            key={`planned-segment-${index}`}
+                                            coordinates={coordinates}
+                                            {...PLANNED_ROUTE_STROKE}
+                                            lineCap="round"
+                                            lineJoin="round"
+                                        />
+                                    ))}
                                 <Marker coordinate={{ latitude: navPickupLat, longitude: navPickupLng }} anchor={{ x: 0.5, y: 0.5 }}>
-                                    <View style={[styles.markerDot, { backgroundColor: '#10B981' }]}>
+                                    <View style={[styles.markerDot, { backgroundColor: ROUTE_PIN_COLORS.pickup }]}>
                                         <Ionicons name="location" size={14} color="#fff" />
                                     </View>
                                 </Marker>
                                 <Marker coordinate={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                                    <View style={[styles.markerDot, { backgroundColor: '#EF4444' }]}>
+                                    <View style={[styles.markerDot, { backgroundColor: ROUTE_PIN_COLORS.dropoff }]}>
                                         <Ionicons name="flag" size={14} color="#fff" />
                                     </View>
                                 </Marker>
@@ -226,6 +206,10 @@ export default function RideDetailScreen() {
                         <TouchableOpacity style={[styles.backBtn, { top: insets.top + 12 }]} onPress={() => router.back()}>
                             <Ionicons name="arrow-back" size={22} color="#fff" />
                         </TouchableOpacity>
+                        <View style={styles.routeStatusPill}>
+                            <Ionicons name={hasActualRoute ? 'navigate-circle-outline' : 'map-outline'} size={14} color="#2563EB" />
+                            <Text style={styles.routeStatusText} numberOfLines={1}>{routeLabel} · {routeStatus}</Text>
+                        </View>
                     </View>
                 )}
 
@@ -264,7 +248,9 @@ export default function RideDetailScreen() {
                     <View style={styles.statsRow}>
                         <View style={styles.stat}>
                             <Ionicons name="speedometer" size={20} color={colors.primary} />
-                            <Text style={styles.statValue}>{(ride.distance_km || 0).toFixed(1)} km</Text>
+                            {/* GPS-measured first, billed/booking distance as legacy
+                                fallback — same source order as the rider screens. */}
+                            <Text style={styles.statValue}>{(ride.actual_distance_km ?? ride.distance_km ?? 0).toFixed(1)} km</Text>
                             <Text style={styles.statLabel}>Distance</Text>
                         </View>
                         <View style={styles.statDivider} />
@@ -542,15 +528,21 @@ function createStyles(colors: ThemeColors) {
             justifyContent: 'center',
             alignItems: 'center',
         },
-        markerDot: {
+            markerDot: {
             width: 28,
             height: 28,
             borderRadius: 14,
             justifyContent: 'center',
             alignItems: 'center',
             borderWidth: 2,
-            borderColor: '#fff',
-        },
+                borderColor: '#fff',
+            },
+            routeStatusPill: {
+                position: 'absolute', left: 12, right: 12, bottom: 12,
+                flexDirection: 'row', alignItems: 'center', gap: 5,
+                backgroundColor: 'rgba(255,255,255,0.95)', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7,
+            },
+            routeStatusText: { flex: 1, color: '#2563EB', fontSize: 11, fontWeight: '600' },
         content: { padding: 16 },
         statusRow: {
             flexDirection: 'row',

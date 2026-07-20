@@ -32,6 +32,7 @@ from ._shared import (  # noqa: F401
     _rider_visible_photo,
     _round,
     _sum_fare_breakdown,
+    relabel_booked_distance_lines,
 )
 
 router = APIRouter()
@@ -190,7 +191,7 @@ async def get_ride_history(
             has_tip_line = any(ln.get("type") == "tip" for ln in lines)
             if ride_tip > 0 and not has_tip_line:
                 lines.append({"label": "Tip", "amount": _f(_d(ride_tip)), "type": "tip"})
-            r["fare_breakdown"] = lines
+            r["fare_breakdown"] = relabel_booked_distance_lines(lines, r)
             r["grand_total"] = _sum_fare_breakdown(lines)
             r["fare_locked"] = True
         else:
@@ -296,7 +297,9 @@ async def get_ride(
     current_user: dict = Depends(get_current_user),
 ):
     """Fetch details of a specific ride"""
-    ride = await _deps.db_supabase.get_ride(ride_id)
+    # Detail is authorization-gated below; list queries intentionally avoid
+    # route geometry. The projection preserves v2 segment boundaries.
+    ride = await _deps.db_supabase.get_ride(ride_id, include_route=True)
     if not ride:
         raise RideNotFoundException(
             ride_id=ride_id,
@@ -510,7 +513,7 @@ async def get_ride(
         has_tip_line = any(ln.get("type") == "tip" for ln in lines)
         if ride_tip > 0 and not has_tip_line:
             lines.append({"label": "Tip", "amount": _f(_d(ride_tip)), "type": "tip"})
-        ride["fare_breakdown"] = lines
+        ride["fare_breakdown"] = relabel_booked_distance_lines(lines, ride)
         ride["grand_total"] = _sum_fare_breakdown(lines)
         ride["fare_locked"] = True
     else:

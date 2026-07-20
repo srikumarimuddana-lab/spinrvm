@@ -270,6 +270,25 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to import allowance reset loop: {e}", exc_info=True)
 
+    # Versioned actual-route finalizer — claims one pending route every 15s,
+    # retaining observed GPS gaps and never touching fare settlement.
+    try:
+        from utils.route_finalizer import route_finalizer_loop
+
+        _spawn("route_finalizer (15s)", route_finalizer_loop)
+    except Exception as e:
+        logger.error(f"Failed to import route finalizer loop: {e}", exc_info=True)
+
+    # GPS capture-gap monitor — records timestamp-only, idempotent audit
+    # events for active trips that stop reporting location. It never changes a
+    # ride lifecycle or fare and never logs raw coordinates.
+    try:
+        from utils.route_gap_monitor import route_gap_monitor_loop
+
+        _spawn("route_gap_monitor (15s)", route_gap_monitor_loop)
+    except Exception as e:
+        logger.error(f"Failed to import route gap monitor loop: {e}", exc_info=True)
+
     # Presence sweeper REMOVED — Uber/Lyft-style presence model.
     # We no longer flip drivers.is_online=False from a background loop.
     # `is_online` is now pure driver intent (only the driver or an admin

@@ -17,6 +17,7 @@ import RideLostFound from "./ride-lost-found";
 import RideFlagForm from "./ride-flag-form";
 import RideComplaintForm from "./ride-complaint-form";
 import dynamic from "next/dynamic";
+import { routeQualityLabel } from "@spinr/shared/utils/routeSegments";
 
 const RideRouteMap = dynamic(() => import("./ride-route-map"), { ssr: false });
 
@@ -248,8 +249,8 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                             {(() => {
                                                 const actualKm = ride.actual_distance_km ?? phaseMap.trip_in_progress ?? null;
                                                 const plannedKm = ride.planned_distance_km ?? null;
-                                                const actualSecs = ride.phase_durations?.trip_in_progress ?? null;
-                                                const actualMin = actualSecs != null ? Math.round(actualSecs / 60) : null;
+                                                    const actualSecs = ride.phase_durations?.trip_in_progress ?? null;
+                                                    const actualMin = ride.actual_duration_minutes ?? (actualSecs != null ? Math.round(actualSecs / 60) : null);
                                                 const plannedMin = ride.duration_minutes ?? null;
                                                 const hasActual = actualKm != null || actualMin != null;
                                                 return (
@@ -665,8 +666,8 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     type CardKey = "pickup" | "actual" | "planned";
                                                     const cards: { key: CardKey; label: string; km: string; sub: string | null; colorCls: string; }[] = [
                                                         { key: "pickup",  label: "Pickup",       km: fmtKm(ride.phase_distances?.navigating_to_pickup), sub: fmtDur(ride.phase_durations?.navigating_to_pickup), colorCls: PHASE_COLORS.navigating_to_pickup },
-                                                        { key: "actual",  label: "Actual Trip",  km: fmtKm(ride.phase_distances?.trip_in_progress ?? ride.actual_distance_km), sub: fmtDur(ride.phase_durations?.trip_in_progress), colorCls: PHASE_COLORS.trip_in_progress },
-                                                        { key: "planned", label: "Planned Trip", km: fmtKm(ride.planned_distance_km), sub: (Array.isArray(ride.planned_route_polyline) && ride.planned_route_polyline.length > 1) ? "Planned route" : "Straight-line reference", colorCls: "bg-muted/60 text-foreground" },
+                                                        { key: "actual",  label: "Actual Trip",  km: fmtKm(ride.phase_distances?.trip_in_progress ?? ride.actual_distance_km), sub: Number(ride.route_schema_version || 0) >= 2 ? routeQualityLabel(ride.route_quality) : fmtDur(ride.phase_durations?.trip_in_progress), colorCls: PHASE_COLORS.trip_in_progress },
+                                                        { key: "planned", label: "Planned Trip", km: fmtKm(ride.planned_distance_km), sub: (Array.isArray(ride.planned_route_polyline) && ride.planned_route_polyline.length > 1) ? "Planned route" : "No planned road geometry", colorCls: "bg-muted/60 text-foreground" },
                                                     ];
                                                     return cards.map(c => (
                                                         <button key={c.key} type="button" onClick={() => setSelectedPhase(c.key)}
@@ -693,6 +694,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                             let tripProp: typeof tripPts | undefined;
                                             let trailForMap: typeof tripPts | undefined;
                                             let plannedProp: { lat: number; lng: number }[] | undefined;
+                                            let actualSegmentsProp: unknown;
                                             let label = "";
                                             let emptyHint: string | null = null;
 
@@ -723,6 +725,16 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     }
                                                 }
                                             } else if (selectedPhase === "actual") {
+                                                const isV2Route = Number(ride.route_schema_version || 0) >= 2;
+                                                if (isV2Route) {
+                                                    actualSegmentsProp = ride.actual_route_segments;
+                                                    const segmentCount = Array.isArray(ride.actual_route_segments)
+                                                        ? ride.actual_route_segments.length : 0;
+                                                    label = `Pickup → Dropoff (actual GPS) · ${routeQualityLabel(ride.route_quality)}`;
+                                                    if (!segmentCount) {
+                                                        emptyHint = "No captured GPS segments are available for this ride";
+                                                    }
+                                                } else {
                                                 // Prefer the OSRM road-matched line (ride_routes.road_polyline) —
                                                 // the clean on-road route SGI / dispute review should see — then
                                                 // fall back to raw trip GPS, then the legacy combined polyline.
@@ -740,6 +752,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                         ? ride.route_polyline.map((p: any) => ({ lat: p[0], lng: p[1] })) : [];
                                                     if (legacy.length > 1) trailForMap = legacy;
                                                     else emptyHint = "No trip GPS trail for this ride";
+                                                }
                                                 }
                                             } else {
                                                 // Planned route: the road-following polyline captured from
@@ -773,6 +786,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                             tripTrail={tripProp}
                                                             plannedTrail={plannedProp}
                                                             locationTrail={trailForMap}
+                                                            actualSegments={actualSegmentsProp}
                                                         />
                                                     </div>
                                                 </div>

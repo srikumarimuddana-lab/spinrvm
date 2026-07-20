@@ -587,6 +587,21 @@ jobs:
               print("PASS: No obvious breaking API changes detected.")
           PYEOF
 
+  # ─── 6. Mobile test-placement gate ────────────────────────────────────────
+  # Blocks a test file (*.test.*, *.spec.*, __tests__/) from landing inside an
+  # Expo Router app/ tree, where require.context eagerly bundles it into the
+  # production JS bundle and breaks the iOS/Android EAS build at the
+  # "Bundle JavaScript" phase (Node built-in imports like fs fail to resolve).
+  mobile-test-placement-gate:
+    name: Mobile test placement check
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Ensure no test files under an Expo Router app/ tree
+        run: python3 scripts/check_mobile_test_placement.py
+
   # ─── Guard rail summary comment on PR ─────────────────────────────────────
   guardrail-summary:
     name: Post guard rail summary
@@ -597,6 +612,7 @@ jobs:
       - security-posture-gate
       - migration-safety-gate
       - breaking-change-gate
+      - mobile-test-placement-gate
     if: always() && github.event_name == 'pull_request'
     steps:
       - name: Summarise results
@@ -609,6 +625,7 @@ jobs:
               'Security Posture':    '${{ needs.security-posture-gate.result }}',
               'Migration Safety':    '${{ needs.migration-safety-gate.result }}',
               'Breaking Changes':    '${{ needs.breaking-change-gate.result }}',
+              'Test Placement':      '${{ needs.mobile-test-placement-gate.result }}',
             };
 
             const icon = r => r === 'success' ? '✅' : r === 'failure' ? '❌' : r === 'skipped' ? '⏭️' : '⚠️';

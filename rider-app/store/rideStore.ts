@@ -139,6 +139,18 @@ export interface Ride {
   ride_code?: string;
   ride_completed_at?: string;
   share_token?: string;
+  /** v2 durable route contract. Segments intentionally remain separate to avoid gap chords. */
+  actual_route_segments?: unknown;
+  planned_route_polyline?: Array<[number, number]>;
+  route_quality?: { coverage_ratio?: number; coverage_pct?: number; missing_tail?: boolean; [key: string]: unknown };
+  route_revision?: number;
+  snapshot_revision?: number;
+  route_snapshot_url?: string;
+  route_schema_version?: number;
+  route_geometry_status?: string;
+  actual_duration_minutes?: number;
+  /** Kilometres — GPS-measured trip distance; distance_km stays the billed basis. */
+  actual_distance_km?: number;
 }
 
 interface SavedAddress {

@@ -96,13 +96,15 @@ describe('questStore — fetchAvailableQuests', () => {
         expect(useQuestStore.getState().availableQuests).toEqual([sampleQuest]);
     });
 
-    it('sets error message on API failure', async () => {
+    it('uses the friendly fallback (never raw error.message) on API failure', async () => {
         const err = new Error('Network error');
         mockGet.mockRejectedValue(err);
 
         await useQuestStore.getState().fetchAvailableQuests();
 
-        expect(useQuestStore.getState().error).toBe('Network error');
+        // getApiErrorMessage treats transport noise like "Network error" as
+        // non-user-facing and returns the fallback instead.
+        expect(useQuestStore.getState().error).toBe('Failed to fetch quests');
         expect(useQuestStore.getState().isLoadingAvailable).toBe(false);
     });
 

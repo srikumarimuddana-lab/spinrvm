@@ -620,59 +620,31 @@ class TestLoyaltyEarn:
 
 @pytest.mark.e2e
 class TestLoyaltyRedeem:
-    """Pins redeem_points: points deducted, wallet credited, guards.
+    """Redemption is withdrawn: redeem_points always raises 410 and never moves money.
 
-    Code under test: backend/routes/loyalty.py::redeem_points (~line 187).
+    The old flow credited the wallet, then debited points with a non-atomic
+    read-then-write, so two concurrent redemptions both credited the wallet.
+    Code under test: backend/routes/loyalty.py::redeem_points.
     """
 
-    async def test_redeem_deducts_points_and_credits_wallet(self):
-        from backend.routes.loyalty import RedeemRequest, redeem_points
+    async def test_redeem_is_gone_and_touches_no_money(self):
+        from fastapi import HTTPException
 
-        req = RedeemRequest(points=200)
-        acc = _loyalty_account(points=500, lifetime=700, tier="silver")
-        wallet_row = _wallet(balance=10.00)
+        from backend.routes.loyalty import redeem_points
+
+        acc = _loyalty_account(points=100_000, lifetime=100_000, tier="platinum")
+        update_one = AsyncMock()
 
         with (
             patch("backend.routes.loyalty.db.find_one", AsyncMock(return_value=acc)),
-            patch("backend.routes.loyalty.db.update_one", AsyncMock()),
-            patch("backend.routes.loyalty.db.insert_one", AsyncMock(return_value={"id": "txn-001"})),
-            patch("backend.routes.loyalty.wallet_increment_balance", AsyncMock(return_value=Decimal("12.00"))),
-            # wallet.get_or_create_wallet / _record_transaction imported locally inside fn
-            patch("backend.routes.wallet.get_or_create_wallet", AsyncMock(return_value=wallet_row)),
-            patch("backend.routes.wallet._record_transaction", AsyncMock(return_value={"id": "t1"})),
+            patch("backend.routes.loyalty.db.update_one", update_one),
+            patch("backend.routes.loyalty.db.insert_one", AsyncMock()),
         ):
-            result = await redeem_points(req=req, current_user={"id": USER_ID})
-
-        # 200 points / 100 = $2.00 credit
-        assert float(result["credit_amount"]) == pytest.approx(2.00, abs=0.01)
-        assert result["redeemed_points"] == 200
-        assert result["remaining_points"] == 300
-
-    async def test_insufficient_points_raises_400(self):
-        from fastapi import HTTPException
-
-        from backend.routes.loyalty import RedeemRequest, redeem_points
-
-        req = RedeemRequest(points=500)
-        acc = _loyalty_account(points=100, lifetime=700, tier="silver")
-
-        with patch("backend.routes.loyalty.db.find_one", AsyncMock(return_value=acc)):
             with pytest.raises(HTTPException) as exc_info:
-                await redeem_points(req=req, current_user={"id": USER_ID})
+                # No RedeemRequest body anymore — the endpoint refuses outright.
+                await redeem_points(current_user={"id": USER_ID})
 
-        assert exc_info.value.status_code == 400
-        assert "insufficient" in exc_info.value.detail.lower()
-
-    async def test_below_minimum_redemption_raises_400(self):
-        from fastapi import HTTPException
-
-        from backend.routes.loyalty import REDEMPTION_RATE, RedeemRequest, redeem_points
-
-        # Request fewer points than the minimum (100 points = $1)
-        req = RedeemRequest(points=REDEMPTION_RATE - 1)
-
-        with pytest.raises(HTTPException) as exc_info:
-            await redeem_points(req=req, current_user={"id": USER_ID})
-
-        assert exc_info.value.status_code == 400
-        assert "minimum" in exc_info.value.detail.lower()
+        assert exc_info.value.status_code == 410
+        assert "unavailable" in exc_info.value.detail.lower()
+        # The points ledger and wallet are never written on the disabled path.
+        update_one.assert_not_awaited()

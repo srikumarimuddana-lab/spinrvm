@@ -37,6 +37,7 @@ from decimal import ROUND_HALF_UP, Decimal
 try:
     from .. import db_supabase  # type: ignore
     from ..utils.error_handling import DuplicateRecordError  # type: ignore
+    from ..utils.redis_client import redis_set_nx  # type: ignore
     from ..utils.referral_terms import (  # type: ignore
         area_id_for_rider,
         resolve_referral_terms,
@@ -44,15 +45,34 @@ try:
 except ImportError:
     import db_supabase  # type: ignore
     from utils.error_handling import DuplicateRecordError  # type: ignore
+    from utils.redis_client import redis_set_nx  # type: ignore
     from utils.referral_terms import (  # type: ignore
         area_id_for_rider,
         resolve_referral_terms,
     )
 
+try:
+    from .loop_monitor import record_heartbeat as _record_heartbeat  # type: ignore
+except ImportError:
+    try:
+        from utils.loop_monitor import record_heartbeat as _record_heartbeat  # type: ignore
+    except ImportError:
+
+        def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+            return None
+
+
 logger = logging.getLogger(__name__)
 
 INTERVAL_SECONDS = 300  # every 5 minutes
 _TWO = Decimal("0.01")
+# referral_payouts claims are looked up by referee_user_id IN (...) per chunk of
+# candidates; 200 text ids ≈ 7 KB of URL, safely under common 8-16 KB proxy caps.
+_CLAIM_LOOKUP_CHUNK = 200
+# Cap on the batched completed-rides prefetch per chunk. Hitting it flags the
+# chunk truncated, and affected referees fall back to exact per-referee counts
+# (an undercount at the deadline could wrongly expire a qualified referral).
+_RIDES_FETCH_LIMIT = 10_000
 
 
 def _d(v) -> Decimal:
@@ -72,10 +92,32 @@ def _parse_iso(value: str) -> datetime:
 async def referral_payout_loop() -> None:
     """Every 5 min, pay any newly-qualified referral rewards. Replay-safe."""
     while True:
+        # Single-writer across replicas (load-shedding, not correctness: the
+        # referral_payouts UNIQUE claim already prevents double-pays). Without
+        # this gate every replica runs the full candidate scan + per-referee
+        # ride counts every 5 minutes against the shared connection pool. Lock
+        # on a per-interval wall-clock bucket so exactly one replica handles
+        # each window (fresh bucket key each interval; TTL 2x absorbs jitter).
+        # Copies the surge_engine leader-lock pattern.
+        bucket = int(datetime.now(timezone.utc).timestamp() // INTERVAL_SECONDS)
         try:
-            await _tick()
-        except Exception:
-            logger.error("referral_payout tick failed", exc_info=True)
+            is_leader = await redis_set_nx(f"spinr:referral_payout:lock:{bucket}", "1", int(INTERVAL_SECONDS * 2))
+        except Exception as _lock_err:
+            # Redis unavailable (dev in-memory fallback / outage): proceed. Dev
+            # is single-process; a prod Redis outage degrades to per-replica
+            # ticks (safe via the UNIQUE claim) and self-heals once Redis
+            # returns. Mirrors the surge_engine degrade.
+            logger.warning(f"referral_payout: leader lock unavailable ({_lock_err}), proceeding without lock")
+            is_leader = True
+
+        if is_leader:
+            try:
+                await _tick()
+            except Exception:
+                logger.error("referral_payout tick failed", exc_info=True)
+        else:
+            # Not this window's leader — still alive, just idle.
+            _record_heartbeat("referral_payout (5min)")
         await asyncio.sleep(INTERVAL_SECONDS)
 
 
@@ -103,32 +145,174 @@ async def _tick() -> None:
     except Exception:
         logger.error("referral_payout: stale-claim sweep failed", exc_info=True)
 
+    # Referred users only, filtered server-side ($notnull → not.is.null; the
+    # partial index from migration 241 covers it). The empty-string guard stays:
+    # NOT NULL admits '' and a blank code is not a referral.
+    users = await db_supabase.get_rows(
+        "users",
+        {"referral_code_used": {"$notnull": True}},
+        columns="id,referral_code_used,referred_by,referral_applied_at",
+        limit=10000,
+    )
+    candidates = [u for u in users if u.get("referral_code_used")]
+    if not candidates:
+        return
+
     # Referees we've already claimed/paid/failed — skip them. ('failed' rows are
     # NOT deleted: they stay in the table (and in this `done` set) to block a
     # re-claim and the double-credit it would risk; they need manual
     # reconciliation, not auto-retry — see the credit-failure block below.)
-    existing = await db_supabase.get_rows("referral_payouts", {}, columns="referee_user_id", limit=20000)
-    done = {r["referee_user_id"] for r in existing}
+    # Looked up per candidate chunk via the UNIQUE(referee_user_id) index rather
+    # than scanning the whole (ever-growing) payouts table each tick; chunks
+    # keep the PostgREST in.() URL comfortably under proxy length limits.
+    done: set = set()
+    candidate_ids = [u["id"] for u in candidates]
+    for i in range(0, len(candidate_ids), _CLAIM_LOOKUP_CHUNK):
+        chunk = candidate_ids[i : i + _CLAIM_LOOKUP_CHUNK]
+        existing = await db_supabase.get_rows(
+            "referral_payouts",
+            {"referee_user_id": {"$in": chunk}},
+            columns="referee_user_id",
+            limit=len(chunk),
+        )
+        done.update(r["referee_user_id"] for r in existing)
 
-    # Referred users. A not-null filter isn't supported by the query translator,
-    # so project minimal columns and filter in memory (bounded; fine for the
-    # current fleet — move to an RPC/rollup if the user table grows large).
-    users = await db_supabase.get_rows(
-        "users", {}, columns="id,referral_code_used,referred_by,referral_applied_at", limit=10000
-    )
-    for u in users:
-        code = u.get("referral_code_used")
-        if not code or u["id"] in done:
-            continue
+    # Process the unclaimed referees chunk-by-chunk with batched lookups: one
+    # drivers query, one referrer-drivers query, and one completed-rides query
+    # per chunk replace the per-referee N+1. Terms are memoized per (area, kind)
+    # for the whole tick. A prefetch failure degrades loudly to the legacy
+    # per-referee queries (ctx=None) rather than skipping payouts.
+    pending = [u for u in candidates if u["id"] not in done]
+    terms_cache: dict = {}
+    for i in range(0, len(pending), _CLAIM_LOOKUP_CHUNK):
+        chunk = pending[i : i + _CLAIM_LOOKUP_CHUNK]
         try:
-            await _process_one(u, code)
+            ctx = await _prefetch_chunk(chunk, terms_cache)
         except Exception:
-            logger.error("referral_payout: processing referee failed", exc_info=True, extra={"referee_id": u["id"]})
+            logger.error("referral_payout: chunk prefetch failed — falling back to per-referee lookups", exc_info=True)
+            ctx = None
+        for u in chunk:
+            try:
+                await _process_one(u, u["referral_code_used"], ctx)
+            except Exception:
+                logger.error("referral_payout: processing referee failed", exc_info=True, extra={"referee_id": u["id"]})
 
 
-async def _process_one(referee: dict, code: str) -> None:
+def _is_rider_code(code: str) -> bool:
+    return str(code).upper().startswith("RIDE")
+
+
+async def _prefetch_chunk(chunk: list, terms_cache: dict) -> dict:
+    """Batch the per-referee lookups for one chunk of unclaimed referees.
+
+    Returns the context consumed by _process_one:
+      referrer_user_by_driver_id — driver referrals store referred_by = driver id
+      driver_row_by_user         — the referee's own driver row (driver kind)
+      rides_by_rider             — completed rides per rider referee
+                                   ({created_at, service_area_id}; area + count)
+      rides_by_driver            — completed-ride created_at list per driver row
+      riders_truncated /
+      drivers_truncated          — a rides fetch hit its limit, so Python-side
+                                   counts could UNDERcount; _process_one must
+                                   fall back to exact per-referee counting
+                                   (an undercount at the deadline could expire
+                                   a referral that actually qualified).
+    """
+    rider_ids = [u["id"] for u in chunk if _is_rider_code(u["referral_code_used"])]
+    driver_referees = [u for u in chunk if not _is_rider_code(u["referral_code_used"])]
+
+    ctx: dict = {
+        "terms_cache": terms_cache,
+        "referrer_user_by_driver_id": {},
+        "driver_row_by_user": {},
+        "rides_by_rider": {},
+        "rides_by_driver": {},
+        "riders_truncated": False,
+        "drivers_truncated": False,
+    }
+
+    referrer_driver_ids = sorted({u["referred_by"] for u in driver_referees if u.get("referred_by")})
+    if referrer_driver_ids:
+        rows = await db_supabase.get_rows(
+            "drivers", {"id": {"$in": referrer_driver_ids}}, columns="id,user_id", limit=len(referrer_driver_ids)
+        )
+        ctx["referrer_user_by_driver_id"] = {r["id"]: r.get("user_id") for r in rows}
+
+    if driver_referees:
+        referee_ids = [u["id"] for u in driver_referees]
+        rows = await db_supabase.get_rows(
+            "drivers",
+            {"user_id": {"$in": referee_ids}},
+            columns="id,user_id,service_area_id",
+            limit=len(referee_ids),
+        )
+        for r in rows:
+            ctx["driver_row_by_user"].setdefault(r["user_id"], r)
+
+        driver_row_ids = sorted({r["id"] for r in ctx["driver_row_by_user"].values()})
+        if driver_row_ids:
+            rides = await db_supabase.get_rows(
+                "rides",
+                {"driver_id": {"$in": driver_row_ids}, "status": "completed"},
+                columns="driver_id,created_at",
+                limit=_RIDES_FETCH_LIMIT,
+            )
+            ctx["drivers_truncated"] = len(rides) >= _RIDES_FETCH_LIMIT
+            for r in rides:
+                ctx["rides_by_driver"].setdefault(r["driver_id"], []).append(r)
+
+    if rider_ids:
+        rides = await db_supabase.get_rows(
+            "rides",
+            {"rider_id": {"$in": rider_ids}, "status": "completed"},
+            columns="rider_id,created_at,service_area_id",
+            limit=_RIDES_FETCH_LIMIT,
+        )
+        ctx["riders_truncated"] = len(rides) >= _RIDES_FETCH_LIMIT
+        for r in rides:
+            ctx["rides_by_rider"].setdefault(r["rider_id"], []).append(r)
+
+    if ctx["riders_truncated"] or ctx["drivers_truncated"]:
+        # Degraded but recovered per-referee below — warning + continue.
+        logger.warning(
+            "referral_payout: chunk rides prefetch hit its %s-row limit — using exact per-referee counts",
+            _RIDES_FETCH_LIMIT,
+        )
+    return ctx
+
+
+def _area_from_prefetched_rides(rides: list, since_iso) -> str | None:
+    """Replicate area_id_for_rider on prefetched rows: the newest completed ride
+    (created_at desc, only the newest 20 considered) at/after since_iso whose
+    service_area_id is set. Must stay behaviour-identical — the area picks the
+    money terms."""
+    since = _parse_iso(since_iso) if since_iso else None
+    eligible = [r for r in rides if since is None or _parse_iso(r["created_at"]) >= since]
+    eligible.sort(key=lambda r: _parse_iso(r["created_at"]), reverse=True)
+    for r in eligible[:20]:
+        if r.get("service_area_id"):
+            return r["service_area_id"]
+    return None
+
+
+def _count_prefetched_rides(rides: list, applied_at, deadline) -> int:
+    """Count prefetched completed rides within [applied_at, deadline] — the same
+    inclusive bounds count_documents applied server-side."""
+    applied = _parse_iso(applied_at) if applied_at else None
+    n = 0
+    for r in rides:
+        dt = _parse_iso(r["created_at"])
+        if applied is not None and dt < applied:
+            continue
+        if deadline is not None and dt > deadline:
+            continue
+        n += 1
+    return n
+
+
+async def _process_one(referee: dict, code: str, ctx: dict | None = None) -> None:
     referee_id = referee["id"]
-    is_rider = str(code).upper().startswith("RIDE")
+    is_rider = _is_rider_code(code)
     kind = "rider" if is_rider else "driver"
 
     # Resolve the referrer's USER id (wallets are per user).
@@ -140,8 +324,11 @@ async def _process_one(referee: dict, code: str) -> None:
         # driver referral stores referred_by = referrer's DRIVER id
         ref_driver_id = referee.get("referred_by")
         if ref_driver_id:
-            ref_driver = await db_supabase.get_driver_by_id(ref_driver_id)
-            referrer_user_id = (ref_driver or {}).get("user_id")
+            if ctx is not None:
+                referrer_user_id = ctx["referrer_user_by_driver_id"].get(ref_driver_id)
+            else:
+                ref_driver = await db_supabase.get_driver_by_id(ref_driver_id)
+                referrer_user_id = (ref_driver or {}).get("user_id")
     if not referrer_user_id or referrer_user_id == referee_id:
         return  # unresolved or self — nothing to pay
 
@@ -153,19 +340,38 @@ async def _process_one(referee: dict, code: str) -> None:
     # threshold AND the completion deadline are both per-area, so resolve terms
     # before counting. area_id == None → resolve_referral_terms falls back to the
     # global default.
+    prefetched_rides = None
     if is_rider:
-        area_id = await area_id_for_rider(referee_id, applied_at)
+        if ctx is not None and not ctx["riders_truncated"]:
+            prefetched_rides = ctx["rides_by_rider"].get(referee_id, [])
+            area_id = _area_from_prefetched_rides(prefetched_rides, applied_at)
+        else:
+            area_id = await area_id_for_rider(referee_id, applied_at)
         ride_filter: dict = {"rider_id": referee_id, "status": "completed"}
     else:
-        ref_as_driver = (lambda _r: _r[0] if _r else None)(
-            await db_supabase.get_rows("drivers", {"user_id": referee_id}, limit=1)
-        )
+        if ctx is not None:
+            ref_as_driver = ctx["driver_row_by_user"].get(referee_id)
+        else:
+            ref_as_driver = (lambda _r: _r[0] if _r else None)(
+                await db_supabase.get_rows("drivers", {"user_id": referee_id}, limit=1)
+            )
         if not ref_as_driver:
             return
         area_id = ref_as_driver.get("service_area_id")
         ride_filter = {"driver_id": ref_as_driver["id"], "status": "completed"}
+        if ctx is not None and not ctx["drivers_truncated"]:
+            prefetched_rides = ctx["rides_by_driver"].get(ref_as_driver["id"], [])
 
-    t = await resolve_referral_terms(area_id, kind)
+    # Terms are memoized per (area, kind) for the tick — areas are few, referees
+    # are many, and the terms row can't change mid-tick in a way we must honour
+    # (the claim snapshots the amounts anyway).
+    if ctx is not None:
+        terms_key = (area_id, kind)
+        if terms_key not in ctx["terms_cache"]:
+            ctx["terms_cache"][terms_key] = await resolve_referral_terms(area_id, kind)
+        t = ctx["terms_cache"][terms_key]
+    else:
+        t = await resolve_referral_terms(area_id, kind)
 
     # Completion deadline: the referee must reach the ride threshold within
     # window_days of referral_applied_at, or the referral expires unpaid. This is
@@ -179,17 +385,23 @@ async def _process_one(referee: dict, code: str) -> None:
 
     # Count completed rides from referral_applied_at, capped at the deadline so a
     # ride taken after the window closed can never qualify the referral. The
-    # filter translator honours only one operator per field, so AND the two
-    # bounds via $and (see repositories/_base._apply_filters).
-    bounds = []
-    if applied_at:
-        bounds.append({"created_at": {"$gte": applied_at}})
-    if deadline is not None:
-        bounds.append({"created_at": {"$lte": deadline.isoformat()}})
-    count_filter = dict(ride_filter)
-    if bounds:
-        count_filter["$and"] = bounds
-    completed = await db_supabase.count_documents("rides", count_filter)
+    # prefetched path applies the same inclusive bounds in Python; a truncated
+    # prefetch (prefetched_rides None) falls back to the exact server-side count
+    # — an undercount here could wrongly expire a qualified referral. The filter
+    # translator honours only one operator per field, so AND the two bounds via
+    # $and (see repositories/_base._apply_filters).
+    if prefetched_rides is not None:
+        completed = _count_prefetched_rides(prefetched_rides, applied_at, deadline)
+    else:
+        bounds = []
+        if applied_at:
+            bounds.append({"created_at": {"$gte": applied_at}})
+        if deadline is not None:
+            bounds.append({"created_at": {"$lte": deadline.isoformat()}})
+        count_filter = dict(ride_filter)
+        if bounds:
+            count_filter["$and"] = bounds
+        completed = await db_supabase.count_documents("rides", count_filter)
 
     if completed < t["rides"]:
         # Threshold not met. If the window has closed, the referral has expired:

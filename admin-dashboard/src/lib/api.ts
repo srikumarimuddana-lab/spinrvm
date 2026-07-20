@@ -1279,7 +1279,7 @@ export interface DriverImportReportItem {
 export interface DriverImportReport {
     batch: string;
     can_commit: boolean;
-    counts: { rows: number; users: number; drivers: number; skipped_resume: number };
+    counts: { rows: number; users: number; drivers: number; updated: number; skipped_resume: number };
     warnings: DriverImportReportItem[];
     errors: DriverImportReportItem[];
 }
@@ -1288,6 +1288,7 @@ export interface DriverImportCommitResult {
     committed: boolean;
     imported_users?: number;
     imported_drivers?: number;
+    updated_drivers?: number;
     warnings?: DriverImportReportItem[];
     // Present (with can_commit=false) when the commit was refused on errors.
     can_commit?: boolean;

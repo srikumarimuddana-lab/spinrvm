@@ -202,6 +202,7 @@ export default function BulkImportPage() {
             if (res.committed) {
                 setCommittedSummary(
                     `Imported ${res.imported_drivers ?? 0} drivers (${res.imported_users ?? 0} accounts).` +
+                        (res.updated_drivers ? ` Updated ${res.updated_drivers} existing driver(s).` : "") +
                         (res.warnings && res.warnings.length ? ` ${res.warnings.length} warning(s).` : ""),
                 );
                 setReport(null);
@@ -213,7 +214,7 @@ export default function BulkImportPage() {
                 setReport({
                     batch: res.batch,
                     can_commit: false,
-                    counts: res.counts ?? { rows: 0, users: 0, drivers: 0, skipped_resume: 0 },
+                    counts: res.counts ?? { rows: 0, users: 0, drivers: 0, updated: 0, skipped_resume: 0 },
                     warnings: res.warnings ?? [],
                     errors: res.errors ?? [],
                 });
@@ -342,9 +343,10 @@ export default function BulkImportPage() {
                         </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-5">
-                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-6">
                             <Stat label="Rows" value={counts?.rows ?? 0} />
                             <Stat label="To create" value={counts?.drivers ?? 0} />
+                            <Stat label="To update" value={counts?.updated ?? 0} />
                             <Stat label="Skipped (already imported)" value={counts?.skipped_resume ?? 0} />
                             <Stat label="Warnings" value={report.warnings.length} tone="warn" />
                             <Stat label="Errors" value={report.errors.length} tone="error" />

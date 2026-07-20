@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useTableSort, SortableHead } from "@/components/ui/sortable-table";
 import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Shield, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, EyeOff, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2, RefreshCw, GraduationCap, Award, Upload } from "lucide-react";
-import { maskEmail, maskPhone, maskPlate } from "@/lib/pii";
+import { maskEmail, maskPhone, maskPlate, maskVin } from "@/lib/pii";
 import { DocumentReviewer } from "./_components/document-reviewer";
 import { DocumentUploadDialog } from "./_components/document-upload-dialog";
 import DriverStatsCards from "./_components/driver-stats-cards";
@@ -566,16 +566,35 @@ export default function DriversPage() {
             const res = await exportDrivers();
             exportToCsv("drivers", res.drivers, [
                 { key: "id", label: "ID" }, { key: "driver_code", label: "Driver Code" },
-                { key: "name", label: "Name" }, { key: "email", label: "Email" }, { key: "phone", label: "Phone" },
+                { key: "name", label: "Name" }, { key: "first_name", label: "First Name" }, { key: "last_name", label: "Last Name" },
+                { key: "email", label: "Email" }, { key: "phone", label: "Phone" },
                 { key: "status", label: "Status" }, { key: "is_verified", label: "Verified" },
                 { key: "is_online", label: "Online" }, { key: "is_available", label: "Available" },
-                { key: "service_area", label: "Service Area" },
+                { key: "service_area", label: "Service Area" }, { key: "city", label: "City" },
+                { key: "regulatory_region", label: "Region" },
                 { key: "vehicle_make", label: "Vehicle Make" }, { key: "vehicle_model", label: "Vehicle Model" },
                 { key: "vehicle_year", label: "Vehicle Year" }, { key: "vehicle_color", label: "Vehicle Color" },
                 { key: "vehicle_type", label: "Vehicle Type" }, { key: "license_plate", label: "License Plate" },
-                { key: "license_no", label: "License No (last 4)" },
-                { key: "acceptance_rate", label: "Acceptance Rate" }, { key: "total_rides", label: "Rides" },
+                { key: "vehicle_vin", label: "VIN (last 4)" },
+                { key: "license_no", label: "License No (last 4)" }, { key: "license_class", label: "License Class" },
+                { key: "rating", label: "Rating" }, { key: "total_rides", label: "Rides" },
+                { key: "total_earnings", label: "Total Earnings" }, { key: "acceptance_rate", label: "Acceptance Rate" },
+                { key: "license_expiry", label: "License Expiry" }, { key: "insurance_expiry", label: "Insurance Expiry" },
+                { key: "vehicle_inspection_expiry", label: "Inspection Expiry" },
+                { key: "background_check_expiry", label: "Background Check Expiry" },
+                { key: "work_eligibility_expiry", label: "Work Eligibility Expiry" },
+                { key: "regulatory_authority", label: "Regulatory Authority" },
+                { key: "regulatory_authority_approved", label: "Regulator Approved" },
+                { key: "regulatory_authority_approved_at", label: "Regulator Approved At" },
+                { key: "sgi_approved", label: "SGI Approved" }, { key: "sgi_approved_at", label: "SGI Approved At" },
+                { key: "work_authorization_status", label: "Work Authorization" },
+                { key: "is_permanent_resident", label: "Permanent Resident" }, { key: "is_citizen", label: "Citizen" },
+                { key: "decals_sent", label: "Decals Sent" }, { key: "decals_sent_at", label: "Decals Sent At" },
+                { key: "subscription_status", label: "Subscription Status" },
+                { key: "subscription_plan", label: "Subscription Plan" },
+                { key: "subscription_expires_at", label: "Subscription Expires" },
                 { key: "joined_at", label: "Joined" }, { key: "approved_at", label: "Approved As Driver" },
+                { key: "last_status_changed_at", label: "Last Status Change" }, { key: "updated_at", label: "Updated At" },
             ]);
             toast({ title: "Export complete", description: `${res.count ?? res.drivers?.length ?? 0} drivers exported.` });
         } catch (e: any) {
@@ -1113,7 +1132,7 @@ export default function DriversPage() {
                                                     <DetailField icon={FileText} label="License Plate" value={showPii ? (selected.license_plate || "\u2014") : maskPlate(selected.license_plate)} mono />
                                                 </div>
                                                 <div className="mt-2.5">
-                                                    <DetailField icon={FileText} label="VIN" value={selected.vehicle_vin || "\u2014"} mono />
+                                                    <DetailField icon={FileText} label="VIN" value={showPii ? (selected.vehicle_vin || "\u2014") : maskVin(selected.vehicle_vin)} mono />
                                                 </div>
                                             </>
                                         )}

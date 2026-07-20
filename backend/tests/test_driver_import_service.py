@@ -197,9 +197,9 @@ def test_resume_updates_changed_vehicle_fields(monkeypatch):
     assert any(w.field == "update" for w in plan.warnings)
 
 
-def test_resume_unchanged_vin_is_not_reencrypted(monkeypatch):
-    # VIN column holds a vault secret id; decrypt to compare so an identical VIN
-    # isn't needlessly re-encrypted (which would mint a new secret every run).
+def test_resume_unchanged_vin_is_not_updated(monkeypatch):
+    # VIN is stored as plaintext (migration 244) — an identical VIN in the
+    # re-upload compares equal and produces no update.
     existing_driver = {
         "id": "drv-1",
         "phone": "+13065551234",
@@ -208,10 +208,9 @@ def test_resume_unchanged_vin_is_not_reencrypted(monkeypatch):
         "vehicle_model": "Corolla",
         "license_plate": "ABC123",
         "vehicle_year": 2020,
-        "vehicle_vin": "secret-uuid-123",
+        "vehicle_vin": "2T1BURHE0JC123456",
     }
     _install_fake(monkeypatch, drivers=[existing_driver])
-    monkeypatch.setattr(svc, "decrypt_pii", lambda _sid: "2T1BURHE0JC123456")
     row = _driver_row(vin="2T1BURHE0JC123456")  # same VIN as stored
     plan = svc.build_plan([row], [], None, SERVICE_AREA, "batch1")
     assert not plan.errors

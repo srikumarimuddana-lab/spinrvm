@@ -1,0 +1,45 @@
+-- Migration 244: Store vehicle_vin as plaintext at rest (masked in UI)
+--
+-- Reverses P2-5 for the VIN ONLY. license_number stays vault-encrypted.
+--
+-- Rationale: operational request — admins need to read VINs directly in the
+-- dashboard and exports. VIN is reclassified from "encrypt-at-rest" PII to
+-- "mask-in-UI" PII (handled like phone/plate: shown masked, revealed with the
+-- Show PII toggle). This is a deliberate privacy-posture change; a DB/backup
+-- leak now exposes VINs in plaintext, which vault encryption previously
+-- prevented. license_number remains encrypted at rest.
+--
+-- What this does: any drivers.vehicle_vin that currently holds a vault.secrets
+-- UUID is decrypted back into plaintext in the column. decrypt_driver_pii()
+-- returns non-UUID input unchanged (it casts to uuid and catches the failure),
+-- so rows that already store plaintext (legacy / pre-encryption) are left as-is
+-- and re-running this migration is safe (idempotent). A 17-char VIN is never a
+-- valid UUID, so a plaintext VIN is never re-decrypted into garbage.
+--
+-- Forward-compatible: decrypt_driver_pii() passes plaintext through untouched,
+-- so reads keep working whether or not the application still decrypts VIN
+-- during the deploy window. Deploy this together with the code that drops
+-- vehicle_vin from _VAULT_PII_FIELDS so new writes store plaintext.
+--
+-- Lock footprint: the migrate.py runner executes a non-CONCURRENTLY migration
+-- in ONE transaction, so row locks can't be released between batches from
+-- inside this file. Instead we minimise the working set: the WHERE clause only
+-- matches rows whose vehicle_vin is UUID-shaped (i.e. an actual vault.secrets
+-- id that needs decrypting). NULLs and rows already storing a plaintext VIN
+-- (legacy, or a re-run) match nothing, so they are never locked or rewritten.
+-- A VIN is 17 alphanumerics with no dashes and can never match the UUID shape.
+--
+-- Scale note: for a single-province launch the encrypted-VIN set is small. If
+-- the driver table later grows large, run the same UPDATE as a batched,
+-- commit-between-chunks backfill from a one-off backend script BEFORE this
+-- migration (which then matches nothing and no-ops) so it can't hold a
+-- multi-second lock against go_online / location writers during deploy.
+--
+-- Rollback (on paper, no down-migration file): re-encrypt by calling
+-- encrypt_driver_pii(vehicle_vin) per row and re-adding vehicle_vin to
+-- _VAULT_PII_FIELDS, or restore from PITR. Re-encryption mints new vault
+-- secrets, so it is not a clean inverse.
+
+UPDATE drivers
+   SET vehicle_vin = decrypt_driver_pii(vehicle_vin)
+ WHERE vehicle_vin ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';

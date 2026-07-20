@@ -289,24 +289,10 @@ def encrypt_pii(value: str | None) -> str | None:
     return getattr(res, "data", None)
 
 
-def decrypt_pii(secret_id: str | None) -> str | None:
-    """Return the plaintext for a ``vehicle_vin``/``license_number`` value.
-
-    The column holds the secret id returned by ``encrypt_driver_pii``; the
-    ``decrypt_driver_pii`` RPC resolves it back to plaintext (and returns the
-    value unchanged for legacy rows that still store plaintext). Used only to
-    compare an existing VIN against a re-uploaded one so an unchanged VIN isn't
-    needlessly re-encrypted (each encrypt call mints a new vault secret).
-    """
-    if not secret_id:
-        return None
-    res = supabase.rpc("decrypt_driver_pii", {"secret_id": secret_id}).execute()
-    return getattr(res, "data", None)
-
-
 # CSV column -> drivers plaintext column for the re-import vehicle-update path.
-# VIN is handled separately (encrypted). vehicle_type/approval/status/expiry are
-# intentionally excluded — a re-upload must not undo post-import admin changes.
+# VIN is handled separately (different CSV/column names). vehicle_type/approval/
+# status/expiry are intentionally excluded — a re-upload must not undo
+# post-import admin changes.
 _VEHICLE_UPDATE_COLUMNS = (
     ("vehicle_make", "vehicle_make"),
     ("vehicle_model", "vehicle_model"),
@@ -319,8 +305,9 @@ def vehicle_field_changes(row: dict[str, str], existing: dict[str, Any]) -> tupl
     """Diff a re-uploaded CSV row's vehicle fields against the existing driver.
 
     Returns ``(changes, vin_plain)`` where ``changes`` is the plaintext-column
-    updates and ``vin_plain`` is the plaintext VIN to re-encrypt (or None if
-    unchanged/absent). A blank CSV cell is treated as "no change" — it never
+    updates and ``vin_plain`` is the plaintext VIN to write (or None if
+    unchanged/absent). VIN is stored as plaintext (migration 244), so it is
+    compared directly. A blank CSV cell is treated as "no change" — it never
     wipes an existing value, so partially-filled re-uploads only add data.
     """
     changes: dict[str, Any] = {}
@@ -335,11 +322,9 @@ def vehicle_field_changes(row: dict[str, str], existing: dict[str, Any]) -> tupl
 
     vin_plain: str | None = None
     vin_csv = (row.get("vin") or "").strip()
-    if vin_csv:
-        existing_vin = existing.get("vehicle_vin")
-        existing_vin_plain = decrypt_pii(existing_vin) if existing_vin else None
-        if (existing_vin_plain or "").strip() != vin_csv:
-            vin_plain = vin_csv
+    existing_vin = str(existing.get("vehicle_vin")) if existing.get("vehicle_vin") is not None else ""
+    if vin_csv and vin_csv != existing_vin.strip():
+        vin_plain = vin_csv
 
     return changes, vin_plain
 
@@ -796,19 +781,21 @@ def commit_plan(plan: ImportPlan) -> None:
     drivers = []
     for driver in plan.drivers_to_insert:
         copied = dict(driver)
-        copied["vehicle_vin"] = encrypt_pii(copied.pop("_plain_vehicle_vin", None))
+        # VIN is stored as plaintext (migration 244); license_number stays
+        # vault-encrypted.
+        copied["vehicle_vin"] = copied.pop("_plain_vehicle_vin", None)
         copied["license_number"] = encrypt_pii(copied.pop("_plain_license_number", None))
         drivers.append(copied)
     if drivers:
         supabase.table("drivers").insert(drivers).execute()
 
-    # Apply vehicle-only updates to already-imported drivers. Encrypt the VIN
-    # (fresh vault secret) only when it actually changed; other fields are
-    # plaintext. Approval/status/expiry are never in ``changes`` by construction.
+    # Apply vehicle-only updates to already-imported drivers. All fields
+    # (including the plaintext VIN) are written as-is. Approval/status/expiry are
+    # never in ``changes`` by construction.
     for upd in plan.drivers_to_update:
         fields = dict(upd.get("changes") or {})
         if upd.get("vin_plain") is not None:
-            fields["vehicle_vin"] = encrypt_pii(upd["vin_plain"])
+            fields["vehicle_vin"] = upd["vin_plain"]
         if not fields:
             continue
         fields["updated_at"] = datetime.now(timezone.utc).isoformat()

@@ -18,3 +18,10 @@ export function maskPlate(plate: string | null | undefined): string {
   if (clean.length <= 3) return "***";
   return `***${clean.slice(-3)}`;
 }
+
+export function maskVin(vin: string | null | undefined): string {
+  if (!vin) return "—";
+  const clean = vin.replace(/\s/g, "");
+  if (clean.length <= 4) return "***";
+  return `***${clean.slice(-4)}`;
+}

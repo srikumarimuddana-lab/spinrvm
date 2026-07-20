@@ -59,6 +59,12 @@ def _fare_lines(ride: Dict[str, Any], tip: Decimal) -> tuple[list[tuple[str, str
     if booking > 0:
         rows.append(("Booking fee", _money(booking)))
 
+    # Airport surcharge is inside total_fare (calculate_fare) but is a distinct
+    # column from area_fees_breakdown — itemise it or the fare rows under-sum.
+    airport = _d(ride.get("airport_fee"))
+    if airport > 0:
+        rows.append(("Airport surcharge", _money(airport)))
+
     area_fees = ride.get("area_fees_breakdown") or []
     area_total = Decimal("0")
     for fee in area_fees:
@@ -70,7 +76,17 @@ def _fare_lines(ride: Dict[str, Any], tip: Decimal) -> tuple[list[tuple[str, str
         area_total += amount
         rows.append((str(fee.get("name") or fee.get("type") or "Area fee"), _money(amount)))
 
-    subtotal = _d(ride.get("total_fare")) or (base + dist + time_ + booking + area_total)
+    # Minimum-fare adjustment: the clamp in calculate_fare floors
+    # base+dist+time+booking+airport up to the minimum, and the driver keeps
+    # the uplift (0% commission). Itemise it so the fare rows reconcile to the
+    # Subtotal — every charge maps to a disclosed line (CLAUDE.md).
+    core = base + dist + time_ + booking + airport
+    total_fare_val = _d(ride.get("total_fare"))
+    min_fare_uplift = max(Decimal("0"), total_fare_val - core) if total_fare_val > 0 else Decimal("0")
+    if min_fare_uplift > 0:
+        rows.append(("Minimum fare adjustment", _money(min_fare_uplift)))
+
+    subtotal = total_fare_val or (core + area_total)
     rows.append(("__rule__", ""))
     rows.append(("Subtotal", _money(subtotal)))
 

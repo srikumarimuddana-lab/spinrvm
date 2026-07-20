@@ -100,6 +100,7 @@ def _report(plan: Any, batch: str, total_rows: int) -> dict[str, Any]:
             "rows": total_rows,
             "users": len(plan.users_to_insert),
             "drivers": len(plan.drivers_to_insert),
+            "updated": len(plan.drivers_to_update),
             "skipped_resume": skipped_resume,
         },
         "warnings": _serialize_items(plan.warnings),
@@ -150,18 +151,24 @@ async def commit_driver_import(
 
     imported_users = len(plan.users_to_insert)
     imported_drivers = len(plan.drivers_to_insert)
+    updated_drivers = len(plan.drivers_to_update)
     # Audit trail carries counts + batch only — never CSV contents or PII.
     await log_admin_action(
         admin,
         "driver_bulk_import",
         "drivers",
         batch,
-        {"imported_users": imported_users, "imported_drivers": imported_drivers},
+        {
+            "imported_users": imported_users,
+            "imported_drivers": imported_drivers,
+            "updated_drivers": updated_drivers,
+        },
     )
     return {
         "batch": batch,
         "committed": True,
         "imported_users": imported_users,
         "imported_drivers": imported_drivers,
+        "updated_drivers": updated_drivers,
         "warnings": _serialize_items(plan.warnings),
     }

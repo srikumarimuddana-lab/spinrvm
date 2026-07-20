@@ -104,6 +104,13 @@ class ImportErrorItem:
 class ImportPlan:
     users_to_insert: list[dict[str, Any]] = field(default_factory=list)
     drivers_to_insert: list[dict[str, Any]] = field(default_factory=list)
+    # Existing drivers (matched on old_driver_id + this importer's source) whose
+    # vehicle fields changed in the re-uploaded CSV. Each entry:
+    #   {"id": driver_id, "old_driver_id": str, "changes": {col: val}, "vin_plain": str|None}
+    # ``vin_plain`` is the plaintext VIN to (re)encrypt at commit; None means VIN
+    # is unchanged. Only vehicle fields are touched — approval/status/expiry are
+    # never overwritten by a re-import.
+    drivers_to_update: list[dict[str, Any]] = field(default_factory=list)
     docs_to_insert: list[dict[str, Any]] = field(default_factory=list)
     files_to_upload: list[tuple[Path, str, str]] = field(default_factory=list)  # path, storage_key, doc_id
     warnings: list[ImportErrorItem] = field(default_factory=list)
@@ -282,6 +289,61 @@ def encrypt_pii(value: str | None) -> str | None:
     return getattr(res, "data", None)
 
 
+def decrypt_pii(secret_id: str | None) -> str | None:
+    """Return the plaintext for a ``vehicle_vin``/``license_number`` value.
+
+    The column holds the secret id returned by ``encrypt_driver_pii``; the
+    ``decrypt_driver_pii`` RPC resolves it back to plaintext (and returns the
+    value unchanged for legacy rows that still store plaintext). Used only to
+    compare an existing VIN against a re-uploaded one so an unchanged VIN isn't
+    needlessly re-encrypted (each encrypt call mints a new vault secret).
+    """
+    if not secret_id:
+        return None
+    res = supabase.rpc("decrypt_driver_pii", {"secret_id": secret_id}).execute()
+    return getattr(res, "data", None)
+
+
+# CSV column -> drivers plaintext column for the re-import vehicle-update path.
+# VIN is handled separately (encrypted). vehicle_type/approval/status/expiry are
+# intentionally excluded — a re-upload must not undo post-import admin changes.
+_VEHICLE_UPDATE_COLUMNS = (
+    ("vehicle_make", "vehicle_make"),
+    ("vehicle_model", "vehicle_model"),
+    ("vehicle_color", "vehicle_color"),
+    ("vehicle_plate", "license_plate"),
+)
+
+
+def vehicle_field_changes(row: dict[str, str], existing: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    """Diff a re-uploaded CSV row's vehicle fields against the existing driver.
+
+    Returns ``(changes, vin_plain)`` where ``changes`` is the plaintext-column
+    updates and ``vin_plain`` is the plaintext VIN to re-encrypt (or None if
+    unchanged/absent). A blank CSV cell is treated as "no change" — it never
+    wipes an existing value, so partially-filled re-uploads only add data.
+    """
+    changes: dict[str, Any] = {}
+    for csv_key, col in _VEHICLE_UPDATE_COLUMNS:
+        val = (row.get(csv_key) or "").strip()
+        if val and val != (str(existing.get(col)) if existing.get(col) is not None else "").strip():
+            changes[col] = val
+
+    year_raw = (row.get("vehicle_year") or "").strip()
+    if year_raw.isdigit() and int(year_raw) != existing.get("vehicle_year"):
+        changes["vehicle_year"] = int(year_raw)
+
+    vin_plain: str | None = None
+    vin_csv = (row.get("vin") or "").strip()
+    if vin_csv:
+        existing_vin = existing.get("vehicle_vin")
+        existing_vin_plain = decrypt_pii(existing_vin) if existing_vin else None
+        if (existing_vin_plain or "").strip() != vin_csv:
+            vin_plain = vin_csv
+
+    return changes, vin_plain
+
+
 def get_service_area(service_area_id: str | None, service_area_name: str) -> dict[str, Any]:
     if service_area_id:
         rows = (
@@ -405,7 +467,11 @@ def _prefetch_existing(
             key = u.get("phone")
             if key is not None and key not in users_by_phone:
                 users_by_phone[key] = u
-        for d in _select_in("drivers", "id,phone,legacy_import_metadata", "phone", phones):
+        driver_cols = (
+            "id,phone,legacy_import_metadata,"
+            "vehicle_make,vehicle_model,vehicle_color,vehicle_year,license_plate,vehicle_vin"
+        )
+        for d in _select_in("drivers", driver_cols, "phone", phones):
             key = d.get("phone")
             if key is not None and key not in drivers_by_phone:
                 drivers_by_phone[key] = d
@@ -481,13 +547,30 @@ def build_plan(
             # whatever is missing, and skip the user/driver inserts.
             meta = (existing_drivers[0].get("legacy_import_metadata") or {}) if existing_drivers else {}
             if existing_drivers and meta.get("source") == IMPORT_SOURCE and str(meta.get("old_driver_id")) == old_id:
-                planned_driver_ids[old_id] = existing_drivers[0]["id"]
-                resumed_driver_ids.add(existing_drivers[0]["id"])
-                plan.warnings.append(
-                    ImportErrorItem(
-                        old_id, "resume", "driver already imported by a previous run; skipping user/driver insert"
+                existing = existing_drivers[0]
+                planned_driver_ids[old_id] = existing["id"]
+                resumed_driver_ids.add(existing["id"])
+                # Already imported by this importer. Instead of a blanket skip,
+                # diff the vehicle fields and queue an update when they changed
+                # (e.g. an operator re-uploads with VIN/colour filled in). A row
+                # with no vehicle changes is still just skipped.
+                changes, vin_plain = vehicle_field_changes(row, existing)
+                if changes or vin_plain is not None:
+                    plan.drivers_to_update.append(
+                        {"id": existing["id"], "old_driver_id": old_id, "changes": changes, "vin_plain": vin_plain}
                     )
-                )
+                    n_changed = len(changes) + (1 if vin_plain is not None else 0)
+                    plan.warnings.append(
+                        ImportErrorItem(
+                            old_id, "update", f"driver already imported; updating {n_changed} changed vehicle field(s)"
+                        )
+                    )
+                else:
+                    plan.warnings.append(
+                        ImportErrorItem(
+                            old_id, "resume", "driver already imported by a previous run; no changes to apply"
+                        )
+                    )
                 continue
             plan.errors.append(
                 ImportErrorItem(
@@ -719,6 +802,18 @@ def commit_plan(plan: ImportPlan) -> None:
     if drivers:
         supabase.table("drivers").insert(drivers).execute()
 
+    # Apply vehicle-only updates to already-imported drivers. Encrypt the VIN
+    # (fresh vault secret) only when it actually changed; other fields are
+    # plaintext. Approval/status/expiry are never in ``changes`` by construction.
+    for upd in plan.drivers_to_update:
+        fields = dict(upd.get("changes") or {})
+        if upd.get("vin_plain") is not None:
+            fields["vehicle_vin"] = encrypt_pii(upd["vin_plain"])
+        if not fields:
+            continue
+        fields["updated_at"] = datetime.now(timezone.utc).isoformat()
+        supabase.table("drivers").update(fields).eq("id", upd["id"]).execute()
+
     signed_by_doc: dict[str, str] = {}
     for file_path, storage_key, doc_id in plan.files_to_upload:
         content_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
@@ -743,6 +838,7 @@ def print_report(plan: ImportPlan, *, dry_run: bool) -> None:
     print(f"{mode} report")
     print(f"  users planned: {len(plan.users_to_insert)}")
     print(f"  drivers planned: {len(plan.drivers_to_insert)}")
+    print(f"  drivers to update: {len(plan.drivers_to_update)}")
     print(f"  documents planned: {len(plan.docs_to_insert)}")
     print(f"  files planned: {len(plan.files_to_upload)}")
     print(f"  warnings: {len(plan.warnings)}")

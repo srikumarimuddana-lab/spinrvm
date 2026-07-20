@@ -147,16 +147,94 @@ def test_existing_user_by_email_only_is_conflict(monkeypatch):
 
 
 def test_resume_path_skips_insert_with_warning(monkeypatch):
+    # Existing driver's vehicle fields match the CSV exactly -> nothing to
+    # update, so the row is skipped with a plain "resume" warning.
     existing_driver = {
         "id": "drv-1",
         "phone": "+13065551234",
         "legacy_import_metadata": {"source": IMPORT_SOURCE, "old_driver_id": "OLD-1"},
+        "vehicle_make": "Toyota",
+        "vehicle_model": "Corolla",
+        "license_plate": "ABC123",
+        "vehicle_year": 2020,
     }
     _install_fake(monkeypatch, drivers=[existing_driver])
     plan = svc.build_plan([_driver_row()], [], None, SERVICE_AREA, "batch1")
     assert not plan.errors
     assert not plan.users_to_insert
+    assert not plan.drivers_to_update
     assert any(w.field == "resume" for w in plan.warnings)
+
+
+def test_resume_updates_changed_vehicle_fields(monkeypatch):
+    # Existing driver imported earlier without colour/VIN; the re-upload adds
+    # them and changes the plate -> queue a vehicle-only update, not a skip.
+    existing_driver = {
+        "id": "drv-1",
+        "phone": "+13065551234",
+        "legacy_import_metadata": {"source": IMPORT_SOURCE, "old_driver_id": "OLD-1"},
+        "vehicle_make": "Toyota",
+        "vehicle_model": "Corolla",
+        "license_plate": "OLDPLATE",
+        "vehicle_year": 2020,
+        "vehicle_color": "",
+        "vehicle_vin": None,
+    }
+    _install_fake(monkeypatch, drivers=[existing_driver])
+    row = _driver_row(vehicle_plate="NEW999", vehicle_color="Black", vin="2T1BURHE0JC123456")
+    plan = svc.build_plan([row], [], None, SERVICE_AREA, "batch1")
+    assert not plan.errors
+    assert not plan.drivers_to_insert  # existing driver — no insert
+    assert len(plan.drivers_to_update) == 1
+    upd = plan.drivers_to_update[0]
+    assert upd["id"] == "drv-1"
+    assert upd["changes"]["license_plate"] == "NEW999"
+    assert upd["changes"]["vehicle_color"] == "Black"
+    assert upd["vin_plain"] == "2T1BURHE0JC123456"
+    # make/model/year unchanged -> not in the diff
+    assert "vehicle_make" not in upd["changes"]
+    assert "vehicle_year" not in upd["changes"]
+    assert any(w.field == "update" for w in plan.warnings)
+
+
+def test_resume_unchanged_vin_is_not_reencrypted(monkeypatch):
+    # VIN column holds a vault secret id; decrypt to compare so an identical VIN
+    # isn't needlessly re-encrypted (which would mint a new secret every run).
+    existing_driver = {
+        "id": "drv-1",
+        "phone": "+13065551234",
+        "legacy_import_metadata": {"source": IMPORT_SOURCE, "old_driver_id": "OLD-1"},
+        "vehicle_make": "Toyota",
+        "vehicle_model": "Corolla",
+        "license_plate": "ABC123",
+        "vehicle_year": 2020,
+        "vehicle_vin": "secret-uuid-123",
+    }
+    _install_fake(monkeypatch, drivers=[existing_driver])
+    monkeypatch.setattr(svc, "decrypt_pii", lambda _sid: "2T1BURHE0JC123456")
+    row = _driver_row(vin="2T1BURHE0JC123456")  # same VIN as stored
+    plan = svc.build_plan([row], [], None, SERVICE_AREA, "batch1")
+    assert not plan.errors
+    assert not plan.drivers_to_update
+    assert any(w.field == "resume" for w in plan.warnings)
+
+
+def test_resume_blank_csv_cell_never_wipes_existing(monkeypatch):
+    # A blank colour cell in the re-upload must not overwrite an existing colour.
+    existing_driver = {
+        "id": "drv-1",
+        "phone": "+13065551234",
+        "legacy_import_metadata": {"source": IMPORT_SOURCE, "old_driver_id": "OLD-1"},
+        "vehicle_make": "Toyota",
+        "vehicle_model": "Corolla",
+        "license_plate": "ABC123",
+        "vehicle_year": 2020,
+        "vehicle_color": "Red",
+    }
+    _install_fake(monkeypatch, drivers=[existing_driver])
+    plan = svc.build_plan([_driver_row(vehicle_color="")], [], None, SERVICE_AREA, "batch1")
+    assert not plan.errors
+    assert not plan.drivers_to_update
 
 
 def test_web_flow_rejects_document_rows(monkeypatch):

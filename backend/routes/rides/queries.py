@@ -32,6 +32,7 @@ from ._shared import (  # noqa: F401
     _rider_visible_photo,
     _round,
     _sum_fare_breakdown,
+    relabel_booked_distance_lines,
 )
 
 router = APIRouter()
@@ -190,7 +191,7 @@ async def get_ride_history(
             has_tip_line = any(ln.get("type") == "tip" for ln in lines)
             if ride_tip > 0 and not has_tip_line:
                 lines.append({"label": "Tip", "amount": _f(_d(ride_tip)), "type": "tip"})
-            r["fare_breakdown"] = lines
+            r["fare_breakdown"] = relabel_booked_distance_lines(lines, r)
             r["grand_total"] = _sum_fare_breakdown(lines)
             r["fare_locked"] = True
         else:
@@ -512,7 +513,7 @@ async def get_ride(
         has_tip_line = any(ln.get("type") == "tip" for ln in lines)
         if ride_tip > 0 and not has_tip_line:
             lines.append({"label": "Tip", "amount": _f(_d(ride_tip)), "type": "tip"})
-        ride["fare_breakdown"] = lines
+        ride["fare_breakdown"] = relabel_booked_distance_lines(lines, ride)
         ride["grand_total"] = _sum_fare_breakdown(lines)
         ride["fare_locked"] = True
     else:

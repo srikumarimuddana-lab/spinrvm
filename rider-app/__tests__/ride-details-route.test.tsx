@@ -23,4 +23,9 @@ describe('ride-details v2 route rendering contract', () => {
     expect(source).toContain('Route snapshot unavailable');
     expect(source).toContain('routeQualityLabel');
   });
+
+  it('shows the GPS-measured distance in the stats tile and labels it as measured', () => {
+    expect(source).toContain('(ride.actual_distance_km ?? ride.distance_km ?? 0).toFixed(1)');
+    expect(source).toContain("ride.actual_distance_km != null ? 'Distance (GPS)' : 'Distance'");
+  });
 });

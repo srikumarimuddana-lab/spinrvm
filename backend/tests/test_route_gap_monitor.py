@@ -112,7 +112,7 @@ def test_gap_monitor_tick_opens_one_idempotent_event_without_coordinates(monkeyp
             "source": "active_trip_monitor",
         }
     ]
-    assert gauges == [("spinr.routes.gps_gap_open.count", 1)]
+    assert gauges == [("spinr_rides_gps_gap_open", 1)]
 
 
 def test_gap_monitor_tick_resolves_an_open_event_after_capture_resumes(monkeypatch) -> None:

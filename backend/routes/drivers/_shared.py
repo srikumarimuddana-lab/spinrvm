@@ -21,6 +21,48 @@ from ._deps import (  # noqa: F401
 
 _TWO_PLACES = Decimal("0.01")
 
+# Google Static Maps render failures defer-and-retry this many times (via the
+# route finalizer's pending queue) before the explicit OSM last resort. Keeps
+# every receipt on the one first-class renderer instead of freezing a random
+# transient failure into a permanently different-looking snapshot.
+_SNAPSHOT_MAX_GOOGLE_ATTEMPTS = 5
+
+
+async def _defer_snapshot_retry(ride_id: str, route_revision, finalized_at) -> bool:
+    """Re-queue route finalization so the Google snapshot render retries later.
+
+    Returns True when the retry was scheduled. False means the caller must
+    fall through (legacy unrevisioned pipeline, superseded revision, or the
+    attempt budget is exhausted and the OSM last resort should render now).
+    """
+    from datetime import datetime, timedelta, timezone
+
+    revision = int(route_revision) if route_revision is not None else 0
+    if revision <= 0 or finalized_at is None:
+        return False
+    rows = await db_supabase.get_rows("ride_routes", {"ride_id": ride_id}, limit=1)
+    route_row = rows[0] if rows else None
+    if not route_row or int(route_row.get("route_revision") or 0) != revision:
+        return False
+    attempts = int(route_row.get("snapshot_attempts") or 0)
+    if attempts >= _SNAPSHOT_MAX_GOOGLE_ATTEMPTS:
+        return False
+    retry_seconds = min(300, 15 * (2 ** min(attempts, 4)))
+    updated = await db_supabase.update_one(
+        "ride_routes",
+        # Filter on revision + finalization token: a newer evidence batch
+        # supersedes this retry the same way it supersedes a snapshot upload.
+        {"ride_id": ride_id, "route_revision": revision, "finalized_at": finalized_at},
+        {
+            "processing_status": "pending",
+            "processing_claimed_at": None,
+            "next_retry_at": datetime.now(timezone.utc) + timedelta(seconds=retry_seconds),
+            "snapshot_attempts": attempts + 1,
+        },
+        upsert=False,
+    )
+    return updated is not None
+
 
 def _route_snapshot_retention_due_at(finalized_at):
     """Return the exact calendar three-year GPS-retention deadline."""
@@ -235,11 +277,16 @@ async def _generate_and_store_ride_snapshot(
         png_bytes = None
         loop = asyncio.get_event_loop()
 
-        # Try Google Static Maps first (proper Google Maps tiles + polyline)
-        try:
-            app_settings = await get_app_settings() or {}
-            gmap_key = app_settings.get("google_maps_api_key") or ""
-            if gmap_key:
+        # Renderer policy: Google Static Maps is the only first-class
+        # renderer. With a key configured, a failed render DEFERS (finalizer
+        # retry with backoff) instead of silently freezing the very different
+        # OSM look into an immutable receipt image; OSM renders only as the
+        # explicit last resort after the attempt budget, or when no key is
+        # configured at all (deliberate deployment choice, not a failure).
+        app_settings = await get_app_settings() or {}
+        gmap_key = app_settings.get("google_maps_api_key") or ""
+        if gmap_key:
+            try:
                 png_bytes = await render_ride_snapshot_google(
                     api_key=gmap_key,
                     pickup_lat=float(pickup_lat),
@@ -257,12 +304,25 @@ async def _generate_and_store_ride_snapshot(
                     f"{'success' if png_bytes else 'returned None'} "
                     f"({len(png_bytes) if png_bytes else 0} bytes)"
                 )
-            else:
-                logger.warning(f"No Google Maps API key found for ride {ride_id} snapshot")
-        except Exception as google_exc:
-            logger.warning(f"Google Static Maps failed for ride {ride_id}, trying OSM fallback: {google_exc}")
+            except Exception as google_exc:
+                logger.error(f"Google Static Maps render failed for ride {ride_id}: {google_exc}", exc_info=True)
+            if not png_bytes:
+                if await _defer_snapshot_retry(ride_id, route_revision, finalized_at):
+                    logger.error(f"Google snapshot render failed for ride {ride_id}; deferred for finalizer retry")
+                    return
+                try:
+                    from ...utils import metrics
+                except ImportError:
+                    from utils import metrics  # type: ignore
+                metrics.inc("spinr_rides_snapshot_fallback_total", {"renderer": "osm"})
+                logger.error(
+                    f"Google snapshot render exhausted {_SNAPSHOT_MAX_GOOGLE_ATTEMPTS} attempts "
+                    f"for ride {ride_id}; rendering OSM last resort"
+                )
+        else:
+            logger.info(f"No Google Maps API key configured; using OSM renderer for ride {ride_id} snapshot")
 
-        # Fallback to OSM/staticmap
+        # OSM/staticmap — explicit last resort or key-less deployment only
         if not png_bytes:
             png_bytes = await loop.run_in_executor(
                 None,
@@ -354,6 +414,8 @@ async def _generate_and_store_ride_snapshot(
                         "snapshot_object_path": storage_path,
                         "snapshot_url": None,
                         "snapshot_revision": revision,
+                        # A published image ends the defer-and-retry cycle.
+                        "snapshot_attempts": 0,
                     },
                     upsert=False,
                 )

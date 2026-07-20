@@ -13,6 +13,10 @@ const ACTIVE_RIDE_KEY = 'spinr_trip_location_active_ride';
 const FLUSH_INTERVAL_MS = 10_000;
 const FLUSH_POINT_THRESHOLD = 25;
 const ACTIVE_TRIP_WATCHDOG_MS = 30_000;
+// Server-side freshness bound for a completion fix (ride_complete.py rejects
+// anything older as stale_capture). An outbox fallback point older than this
+// would be rejected anyway, so don't send it.
+const COMPLETION_FIX_MAX_AGE_MS = 120_000;
 
 export interface TripLocationBatchRequest {
   ride_id: string;
@@ -38,6 +42,10 @@ export interface FlushPendingResult {
   skipped: boolean;
 }
 
+export interface BoundedFlushResult extends FlushPendingResult {
+  timedOut: boolean;
+}
+
 export interface CompletionCaptureResult {
   point: TripLocationPoint | null;
   pendingCount: number;
@@ -54,7 +62,14 @@ export interface RecorderHealth {
 
 type TripLocationOutbox = Pick<
   typeof tripLocationOutbox,
-  'startSession' | 'enqueue' | 'listPendingSessions' | 'peek' | 'acknowledge' | 'pendingCount' | 'closeSession'
+  | 'startSession'
+  | 'enqueue'
+  | 'listPendingSessions'
+  | 'peek'
+  | 'acknowledge'
+  | 'pendingCount'
+  | 'closeSession'
+  | 'latestPoint'
 >;
 
 export interface TripLocationRecorderOptions {
@@ -152,15 +167,65 @@ export class TripLocationRecorder {
     return this.flushPromise;
   }
 
+  /**
+   * Force-flush the durable outbox with an upper time bound. Used on the
+   * ride-completion path so the server sees the full GPS tail before
+   * computing route quality/distance, while a dead network can never block
+   * the driver from completing the trip. On timeout the underlying flush
+   * keeps running and queued points stay durable in SQLite; transport
+   * errors propagate so the caller can record them.
+   */
+  async flushPendingWithTimeout(
+    transport: TripLocationTransport | undefined,
+    timeoutMs: number,
+  ): Promise<BoundedFlushResult> {
+    const flush = this.flushPending(transport, { force: true });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), timeoutMs);
+    });
+    try {
+      const result = await Promise.race([flush, timeout]);
+      if (result === null) {
+        // Detach without dropping the rejection on the floor — the shared
+        // flushPromise is already tracked for the next caller.
+        flush.catch(() => {});
+        return { uploaded_points: 0, acknowledged_points: 0, skipped: true, timedOut: true };
+      }
+      return { ...result, timedOut: false };
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
   async captureCompletionFix(rideId: string): Promise<CompletionCaptureResult> {
     try {
       const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
       const point = await this.recordNativeFix(location, 'completion', rideId, true);
       return { point, pendingCount: await this.outbox.pendingCount(rideId) };
     } catch {
-      // Completion remains possible after the driver explicitly explains why a
-      // fresh fix is unavailable. The caller receives no coordinate from this path.
-      return { point: null, pendingCount: await this.outbox.pendingCount(rideId) };
+      // A fresh fix is unavailable (GPS off, provider timeout). Fall back to
+      // the newest durable point inside the server's freshness bound: an
+      // already-captured coordinate is strictly better endpoint evidence
+      // than none, and referencing its existing session/sequence means the
+      // server sees no duplicate row. Older-than-bound or absent → the
+      // caller still receives no coordinate and completion proceeds.
+      const fallback = await this.latestFreshOutboxPoint(rideId);
+      return { point: fallback, pendingCount: await this.outbox.pendingCount(rideId) };
+    }
+  }
+
+  private async latestFreshOutboxPoint(rideId: string): Promise<TripLocationPoint | null> {
+    try {
+      const latest = await this.outbox.latestPoint(rideId);
+      if (!latest) return null;
+      const capturedAtMs = Date.parse(latest.captured_at);
+      if (!Number.isFinite(capturedAtMs) || this.now() - capturedAtMs > COMPLETION_FIX_MAX_AGE_MS) {
+        return null;
+      }
+      return latest;
+    } catch {
+      return null;
     }
   }
 

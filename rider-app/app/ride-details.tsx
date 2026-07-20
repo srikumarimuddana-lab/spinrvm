@@ -11,6 +11,7 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useAuthStore } from '@shared/store/authStore';
 import { routeQualityLabel, toReactNativeSegments } from '@shared/utils/routeSegments';
+import { ACTUAL_ROUTE_STROKE, PLANNED_ROUTE_STROKE, ROUTE_PIN_COLORS } from '@shared/constants/routeMapStyle';
 import { showToast } from '../store/toastStore';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
@@ -325,8 +326,7 @@ export default function RideDetailsScreen() {
                     <Polyline
                       key={`actual-route-${index}`}
                       coordinates={coordinates}
-                      strokeWidth={4}
-                      strokeColor="#EE2B2B"
+                      {...ACTUAL_ROUTE_STROKE}
                       lineCap="round"
                       lineJoin="round"
                     />
@@ -335,20 +335,18 @@ export default function RideDetailsScreen() {
                   <Polyline
                     key={`planned-route-${index}`}
                     coordinates={coordinates}
-                    strokeWidth={4}
-                    strokeColor="#6B7280"
-                    lineDashPattern={[6, 4]}
+                    {...PLANNED_ROUTE_STROKE}
                     lineCap="round"
                     lineJoin="round"
                   />
                 ))}
                 <Marker coordinate={{ latitude: ride.pickup_lat, longitude: ride.pickup_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                  <View style={[styles.pin, { backgroundColor: '#10B981' }]}>
+                  <View style={[styles.pin, { backgroundColor: ROUTE_PIN_COLORS.pickup }]}>
                     <Ionicons name="location" size={14} color="#FFF" />
                   </View>
                 </Marker>
                 <Marker coordinate={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                  <View style={[styles.pin, { backgroundColor: '#EF4444' }]}>
+                  <View style={[styles.pin, { backgroundColor: ROUTE_PIN_COLORS.dropoff }]}>
                     <Ionicons name="flag" size={14} color="#FFF" />
                   </View>
                 </Marker>
@@ -480,7 +478,10 @@ export default function RideDetailsScreen() {
             <Text style={styles.statVal}>
               {(ride.actual_distance_km ?? ride.distance_km ?? 0).toFixed(1)} km
             </Text>
-            <Text style={styles.statLabel}>Distance</Text>
+            {/* The tile shows the GPS-measured trip distance; the receipt line
+                shows the billed distance. Label the measured one explicitly so
+                the two can never read as a contradiction under fare-lock. */}
+            <Text style={styles.statLabel}>{ride.actual_distance_km != null ? 'Distance (GPS)' : 'Distance'}</Text>
           </View>
           <View style={styles.statCard}>
             <Ionicons name="time-outline" size={22} color={colors.textDim} />

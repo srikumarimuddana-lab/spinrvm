@@ -174,7 +174,7 @@ async def route_gap_monitor_tick() -> dict[str, int]:
             current_open_gaps += 1
             if await _open_gap_event(ride, decision, threshold_seconds, now):
                 result["opened"] += 1
-                _metric_inc("spinr.routes.gps_gap_detected.count")
+                _metric_inc("spinr_rides_gps_gap_detected_total")
                 logger.warning(
                     "active trip GPS gap detected ride_id=%s gap_seconds=%s threshold_seconds=%s",
                     ride_id,
@@ -184,9 +184,9 @@ async def route_gap_monitor_tick() -> dict[str, int]:
             continue
         if await _resolve_open_gap_event(str(ride_id), now):
             result["resolved"] += 1
-            _metric_inc("spinr.routes.gps_gap_resolved.count")
+            _metric_inc("spinr_rides_gps_gap_resolved_total")
 
-    _metric_gauge("spinr.routes.gps_gap_open.count", current_open_gaps)
+    _metric_gauge("spinr_rides_gps_gap_open", current_open_gaps)
     return result
 
 
@@ -200,5 +200,5 @@ async def route_gap_monitor_loop(interval_seconds: int = ROUTE_GAP_MONITOR_INTER
             raise
         except Exception:
             logger.error("route gap monitor tick failed", exc_info=True)
-            _metric_inc("spinr.bgloop.errors.count", {"loop": "route_gap_monitor"})
+            _metric_inc("spinr_bgloop_errors_total", {"loop": "route_gap_monitor"})
         await asyncio.sleep(interval_seconds)

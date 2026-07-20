@@ -30,4 +30,10 @@ describe('completed ride route presentation contract', () => {
     expect(rideStoreSource).toContain('actual_route_segments?:');
     expect(rideStoreSource).toContain('actual_duration_minutes?:');
   });
+
+  it('shows the GPS-measured distance with the billed distance as legacy fallback', () => {
+    expect(screenSource).toContain(
+      'currentRide?.actual_distance_km ?? currentRide?.distance_km ?? 0',
+    );
+  });
 });

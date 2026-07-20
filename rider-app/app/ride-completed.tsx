@@ -127,7 +127,10 @@ function RideCompletedScreenContent() {
   // location reporting must never turn a completed 40-minute ride into a
   // shorter trip in the rider's summary.
   const duration = toNum(currentRide?.actual_duration_minutes ?? currentRide?.duration_minutes);
-  const distance = currentRide?.distance_km || 0;
+  // GPS-measured distance first, billed/booking distance as legacy fallback —
+  // the same source order as the ride-details history screen, so the number
+  // shown here never changes when the rider reopens the ride later.
+  const distance = currentRide?.actual_distance_km ?? currentRide?.distance_km ?? 0;
   // A card hold placed at booking is captured on submit — the payment method is
   // already chosen, so we don't show a payment picker (Google Pay) at the end.
   const hasHold =

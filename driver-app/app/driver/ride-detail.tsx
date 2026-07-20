@@ -250,7 +250,9 @@ export default function RideDetailScreen() {
                     <View style={styles.statsRow}>
                         <View style={styles.stat}>
                             <Ionicons name="speedometer" size={20} color={colors.primary} />
-                            <Text style={styles.statValue}>{(ride.distance_km || 0).toFixed(1)} km</Text>
+                            {/* GPS-measured first, billed/booking distance as legacy
+                                fallback — same source order as the rider screens. */}
+                            <Text style={styles.statValue}>{(ride.actual_distance_km ?? ride.distance_km ?? 0).toFixed(1)} km</Text>
                             <Text style={styles.statLabel}>Distance</Text>
                         </View>
                         <View style={styles.statDivider} />

@@ -64,6 +64,12 @@ const existing: Record<string, ExistingDocInfo> = {
   drivers_license: { expiry: '2027-05-01', status: 'approved' },
 };
 
+function selectType(label: string, value: string) {
+  const typeSelect = screen.getAllByTestId('select').find((s) => within(s).queryByText(label));
+  if (!typeSelect) throw new Error(`no type select listing ${label}`);
+  fireEvent.change(typeSelect, { target: { value } });
+}
+
 function selectFiles(names: string[]) {
   const input = document.getElementById('upload-files') as HTMLInputElement;
   const files = names.map((n) => new File(['x'], n, { type: 'application/pdf' }));
@@ -117,5 +123,30 @@ describe('DocumentUploadDialog', () => {
     expect(screen.getByText(/Map every file/i)).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /Upload/ }));
     expect(adminUploadDriverDocument).not.toHaveBeenCalled();
+  });
+
+  it('prefills the on-file expiry date when a type is selected', () => {
+    render(
+      <DocumentUploadDialog open onClose={() => {}} driverId="d1" driverName="Ada"
+        requirements={requirements} existing={existing} />,
+    );
+    selectFiles(['license.pdf']);
+    selectType("Driver's License", 'drivers_license');
+    // drivers_license already has expiry 2027-05-01 on file → the date input is
+    // seeded with it instead of starting empty.
+    const dateInput = screen.getByLabelText(/Expiry date for license.pdf/i) as HTMLInputElement;
+    expect(dateInput.value).toBe('2027-05-01');
+  });
+
+  it('does not prefill an expiry for a type that has none on file', () => {
+    render(
+      <DocumentUploadDialog open onClose={() => {}} driverId="d1" driverName="Ada"
+        requirements={requirements} existing={existing} />,
+    );
+    selectFiles(['insurance.pdf']);
+    // vehicle_insurance has no on-file expiry → the date input stays empty.
+    selectType('Vehicle Insurance', 'vehicle_insurance');
+    const dateInput = screen.getByLabelText(/Expiry date for insurance.pdf/i) as HTMLInputElement;
+    expect(dateInput.value).toBe('');
   });
 });

@@ -23,9 +23,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 try:
-    from utils.receipt_email import send_ride_receipt_email
+    from utils.receipt_email import _build_plain_text, send_ride_receipt_email
 except ImportError:
-    from backend.utils.receipt_email import send_ride_receipt_email  # type: ignore[no-redef]
+    from backend.utils.receipt_email import (  # type: ignore[no-redef]
+        _build_plain_text,
+        send_ride_receipt_email,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -95,6 +98,39 @@ def _make_async_client_mock(post_side_effect=None) -> MagicMock:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+class TestPlainTextMinimumFare:
+    """The plain-text body must disclose the minimum-fare uplift and airport
+    surcharge so the itemised fare lines reconcile to the printed Subtotal."""
+
+    _RIDER = {"first_name": "Alice", "last_name": "Rider"}
+
+    def test_minimum_fare_adjustment_line_present(self):
+        # base+dist+time+booking = 5.90, floored to 8.00.
+        ride = {
+            **_BASE_RIDE,
+            "base_fare": "3.50",
+            "distance_fare": "0.15",
+            "time_fare": "0.25",
+            "booking_fee": "2.00",
+            "total_fare": "8.00",
+            "grand_total": None,
+        }
+        body = _build_plain_text(ride, self._RIDER)
+        assert "Minimum fare adjustment" in body
+        assert "$2.10" in body  # 8.00 − 5.90
+
+    def test_no_minimum_fare_line_when_not_clamped(self):
+        # _BASE_RIDE: total_fare 11.00 == component sum → no adjustment line.
+        body = _build_plain_text(_BASE_RIDE, self._RIDER)
+        assert "Minimum fare adjustment" not in body
+
+    def test_airport_surcharge_line_present(self):
+        ride = {**_BASE_RIDE, "airport_fee": "4.00", "total_fare": "15.00"}
+        body = _build_plain_text(ride, self._RIDER)
+        assert "Airport surcharge" in body
+        assert "$4.00" in body
 
 
 @pytest.mark.anyio

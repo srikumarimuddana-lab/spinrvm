@@ -33,10 +33,10 @@ def _two_segment_evidence():
     completion = {"lat": 50.4600, "lng": -104.6300, "accuracy": 8}
     segmented = segment_route(
         [
-            _point(10, 0, 50.4510, -104.6210),
-            _point(20, 1, 50.4520, -104.6220),
-            _point(90, 2, 50.4550, -104.6250),
-            _point(100, 3, 50.4560, -104.6260),
+            _point(0, 0, 50.4510, -104.6210),
+            _point(10, 1, 50.4520, -104.6220),
+            _point(110, 2, 50.4550, -104.6250),
+            _point(120, 3, 50.4560, -104.6260),
         ],
         _lifecycle(),
         completion,
@@ -72,6 +72,7 @@ def _two_segment_evidence():
 @pytest.mark.asyncio
 async def test_reconstructs_missing_start_internal_gap_and_tail_in_order(monkeypatch):
     segmented, matched, completion = _two_segment_evidence()
+    assert segmented.quality.coverage_ratio == 1.0
     monkeypatch.setattr(
         reconstruction,
         "get_app_settings",

@@ -4,6 +4,7 @@
 import asyncio
 import os
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
@@ -271,3 +272,105 @@ def test_provider_failure_schedules_a_retry_without_exposing_coordinates(monkeyp
     assert payload["retry_count"] == 3
     assert payload["next_retry_at"] is not None
     assert payload["route_quality"]["finalization_reason"] == "provider_failure"
+
+
+def test_finalizer_persists_reconstructed_sections_and_distance_quality(monkeypatch):
+    updates = []
+    reconstructed = {
+        "segments": [
+            {
+                "id": "inferred-missing_start-1",
+                "provider": "osrm_inferred",
+                "geometry_kind": "inferred",
+                "gap_reason": "missing_start",
+                "distance_km": 1.25,
+                "coordinates": [[50.45, -104.62], [50.46, -104.63]],
+            }
+        ],
+        "distance_km": 1.25,
+        "observed_distance_km": 0.75,
+        "inferred_distance_km": 0.5,
+        "observed_distance_ratio": 0.6,
+        "inferred_distance_ratio": 0.4,
+        "inferred_gap_count": 1,
+        "endpoint_start_verified": True,
+        "endpoint_end_verified": True,
+        "failed_gaps": [],
+    }
+
+    async def update_one(table, filters, payload, **_kwargs):
+        updates.append((table, filters, payload))
+        return {"ride_id": "ride_1"}
+
+    ride = {**_ride(), "pickup_lat": 50.45, "pickup_lng": -104.62}
+    reconstruct = AsyncMock(return_value=reconstructed)
+    recompute = AsyncMock()
+    monkeypatch.setattr(route_finalizer.db_supabase, "get_rows", AsyncMock(return_value=[_point(0, 0), _point(1, 10)]))
+    monkeypatch.setattr(route_finalizer.db_supabase, "get_ride", AsyncMock(return_value=ride))
+    monkeypatch.setattr(route_finalizer.db_supabase, "update_one", update_one)
+    monkeypatch.setattr(route_finalizer, "_get_route_row", AsyncMock(return_value=_route_row()))
+    monkeypatch.setattr(route_finalizer, "_publish_finalized_snapshot", AsyncMock())
+    monkeypatch.setattr(route_finalizer, "_recompute_ride_distance_stats", recompute)
+    monkeypatch.setattr(route_finalizer, "reconstruct_completed_route", reconstruct, raising=False)
+    monkeypatch.setattr(
+        route_finalizer,
+        "compute_segmented_road_route",
+        AsyncMock(return_value={"segments": [], "distance_km": 0.0, "provider": "osrm_match", "failures": []}),
+    )
+
+    result = _run(route_finalizer.finalize_route("ride_1"))
+
+    route_update = next(payload for table, _filters, payload in updates if table == "ride_routes")
+    assert result["processing_status"] == "complete"
+    assert route_update["road_matched_segments"] == reconstructed["segments"]
+    assert route_update["route_quality"]["observed_distance_ratio"] == 0.6
+    assert route_update["route_quality"]["inferred_distance_ratio"] == 0.4
+    assert route_update["route_quality"]["inferred_gap_count"] == 1
+    reconstruct.assert_awaited_once()
+    assert reconstruct.await_args.args[2] == {"lat": 50.45, "lng": -104.62}
+    recompute.assert_awaited_once_with("ride_1", ride, 4, 1.25)
+
+
+def test_recomputed_statistics_use_reconstructed_distance_without_touching_fare(monkeypatch):
+    updates = []
+    inserts = []
+    distances = SimpleNamespace(
+        actual_distance_km=0.4,
+        actual_distance_km_haversine=0.38,
+        actual_distance_km_road=0.4,
+        phase_distances={"trip_in_progress": 0.4},
+        phase_durations={"trip_in_progress": 180},
+        pickup_to_driver_km=0.2,
+        gps_points_count=4,
+    )
+
+    async def update_one(table, filters, payload, **_kwargs):
+        updates.append((table, filters, payload))
+        return {"id": "ride_1"}
+
+    async def insert_one(table, payload):
+        inserts.append((table, payload))
+        return payload
+
+    ride = {
+        **_ride(),
+        "status": "completed",
+        "total_fare": "8.00",
+        "fare_breakdown_snapshot": {"locked": True},
+    }
+    monkeypatch.setattr(route_finalizer, "load_ride_breadcrumbs", AsyncMock(return_value=[]))
+    monkeypatch.setattr(route_finalizer, "compute_trip_distances", AsyncMock(return_value=distances))
+    monkeypatch.setattr(route_finalizer, "get_app_settings", AsyncMock(return_value={"fare_lock_enabled": False}))
+    monkeypatch.setattr(route_finalizer.db_supabase, "update_one", update_one)
+    monkeypatch.setattr(route_finalizer.db_supabase, "insert_one", insert_one)
+
+    _run(route_finalizer._recompute_ride_distance_stats("ride_1", ride, 4, 1.55))
+
+    ride_update = next(payload for table, _filters, payload in updates if table == "rides")
+    assert ride_update["actual_distance_km"] == 1.55
+    assert ride_update["phase_distances"]["trip_in_progress"] == 1.55
+    assert ride_update["ride_metrics"]["phases"]["trip_in_progress"]["actual_distance_km"] == 1.55
+    for forbidden in ("total_fare", "fare_breakdown_snapshot", "tax_amount", "driver_earnings", "payment_status"):
+        assert forbidden not in ride_update
+    assert inserts[0][0] == "ride_distance_recomputes"
+    assert inserts[0][1]["new_actual_distance_km"] == 1.55

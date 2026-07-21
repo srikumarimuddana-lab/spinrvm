@@ -185,6 +185,14 @@ def _boundary_reason(previous: _ParsedPoint, current: _ParsedPoint) -> tuple[str
     displacement_meters = _distance_meters(previous.point, current.point)
     if displacement_meters > MAX_CONTINUOUS_DISPLACEMENT_METERS:
         return "distance_gap", elapsed_seconds
+    # Legacy WebSocket batches did not carry device capture timestamps. The
+    # server assigned each row a receive timestamp inside one tight insert
+    # loop, which preserves point order but makes elapsed time (and therefore
+    # calculated speed) meaningless within the batch. Retain the independent
+    # time-gap and displacement guardrails above; skip only the speed-derived
+    # boundary when both adjacent points use that legacy identity.
+    if previous.is_legacy and current.is_legacy:
+        return None, elapsed_seconds
     if elapsed_seconds == 0:
         if displacement_meters > 0:
             return "impossible_speed", elapsed_seconds

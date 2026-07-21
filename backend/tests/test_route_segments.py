@@ -217,6 +217,26 @@ def test_legacy_v1_points_with_explicit_none_identity_treated_as_legacy():
     assert segmented.quality.rejected_point_count == 0
 
 
+def test_legacy_buffer_receive_times_do_not_create_false_impossible_speed_boundaries():
+    points = [
+        {
+            "lat": 50.445 + index * 0.0001,
+            "lng": -104.618,
+            "accuracy": 8,
+            # Legacy WS batches assigned server receive time inside a tight
+            # insert loop, so this orders points but is not capture cadence.
+            "timestamp": (BASE_TIME + timedelta(microseconds=index)).isoformat(),
+        }
+        for index in range(10)
+    ]
+
+    segmented = segment_route(points, _lifecycle(), completion_point=None)
+
+    assert len(segmented.observed_segments) == 1
+    assert len(_flatten(segmented)) == 10
+    assert segmented.quality.rejected_point_count == 0
+
+
 def test_49_minute_fixture_keeps_two_long_gaps_and_a_5km_jump_separate():
     points = [
         _point(0, sequence=0),

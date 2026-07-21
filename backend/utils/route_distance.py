@@ -79,6 +79,7 @@ _OSRM_MAX_POINTS = 100
 _OSRM_RADIUS_MIN_M = 10
 _OSRM_RADIUS_MAX_M = 50
 _OSRM_RADIUS_DEFAULT_M = 20
+_MAX_COMPLETED_ENDPOINT_SNAP_M = 75.0
 
 # Cap the saved road geometry so the rides row stays bounded. The matched route
 # can contain hundreds of vertices; ~300 is plenty for a faithful map replay.
@@ -543,6 +544,81 @@ async def _compute_route_via_osrm(
         "eta_seconds": int(round(_num_or_zero(r0.get("duration")))),
         "distance_km": round(_num_or_zero(r0.get("distance")) / 1000.0, 3),
     }
+
+
+async def snap_endpoint_via_osrm(point: dict, osrm_url: str) -> Optional[List[float]]:
+    """Snap one completed-route guardrail to OSRM within 75 metres."""
+    try:
+        lat = float(point["lat"])
+        lng = float(point["lng"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not osrm_url or not math.isfinite(lat) or not math.isfinite(lng):
+        return None
+
+    url = f"{osrm_url.rstrip('/')}/nearest/v1/driving/{lng},{lat}"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
+            resp = await client.get(url, params={"number": 1})
+            if resp.status_code != 200:
+                logger.warning("[route_distance] completed-route OSRM /nearest returned %d", resp.status_code)
+                return None
+            data = resp.json()
+    except Exception:
+        logger.warning("[route_distance] completed-route OSRM /nearest failed", exc_info=True)
+        return None
+
+    waypoints = data.get("waypoints") if data.get("code") == "Ok" else None
+    waypoint = waypoints[0] if isinstance(waypoints, list) and waypoints else None
+    if not isinstance(waypoint, dict):
+        return None
+    try:
+        distance_m = float(waypoint["distance"])
+        snapped_lng, snapped_lat = waypoint["location"]
+        snapped_lat = float(snapped_lat)
+        snapped_lng = float(snapped_lng)
+    except (KeyError, TypeError, ValueError):
+        return None
+    if (
+        not all(math.isfinite(value) for value in (distance_m, snapped_lat, snapped_lng))
+        or distance_m < 0
+        or distance_m > _MAX_COMPLETED_ENDPOINT_SNAP_M
+    ):
+        return None
+    return [round(snapped_lat, 6), round(snapped_lng, 6)]
+
+
+async def compute_gap_route_via_osrm(start: List[float], end: List[float], osrm_url: str) -> Optional[RoadMatch]:
+    """Route one missing completed-trip interval without using OSRM Trip."""
+    if len(start) < 2 or len(end) < 2 or not osrm_url:
+        return None
+    try:
+        start_lat, start_lng = float(start[0]), float(start[1])
+        end_lat, end_lng = float(end[0]), float(end[1])
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(value) for value in (start_lat, start_lng, end_lat, end_lng)):
+        return None
+
+    routed = await _compute_route_via_osrm(start_lat, start_lng, end_lat, end_lng, osrm_url)
+    if not routed:
+        return None
+    direct_km = _haversine_km(start_lat, start_lng, end_lat, end_lng)
+    distance_km = float(routed.get("distance_km") or 0)
+    maximum_km = max(direct_km * 5.0, direct_km + 2.0)
+    if distance_km < direct_km or distance_km > maximum_km:
+        return None
+
+    polyline: List[List[float]] = []
+    for coordinate in routed.get("polyline") or []:
+        if len(coordinate) < 2:
+            continue
+        normalized = [round(float(coordinate[0]), 6), round(float(coordinate[1]), 6)]
+        if not polyline or polyline[-1] != normalized:
+            polyline.append(normalized)
+    if len(polyline) < 2:
+        return None
+    return round(distance_km, 3), polyline
 
 
 # Google Directions API (fallback for the live route line when OSRM is down).

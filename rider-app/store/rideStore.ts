@@ -141,6 +141,7 @@ export interface Ride {
   share_token?: string;
   /** v2 durable route contract. Segments intentionally remain separate to avoid gap chords. */
   actual_route_segments?: unknown;
+  actual_completion_point?: { latitude: number; longitude: number };
   planned_route_polyline?: Array<[number, number]>;
   route_quality?: { coverage_ratio?: number; coverage_pct?: number; missing_tail?: boolean; [key: string]: unknown };
   route_revision?: number;

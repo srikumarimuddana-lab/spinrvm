@@ -13,15 +13,19 @@ const rideStoreSource = fs.readFileSync(
 describe('completed ride route presentation contract', () => {
   it('renders each captured route segment without requesting a replacement route', () => {
     expect(screenSource).toContain('toReactNativeSegments');
+    expect(screenSource).toContain('const [routeMapReady, setRouteMapReady] = useState(false)');
+    expect(screenSource).toContain('if (!routeMapReady || mapCoordinates.length < 2) return');
+    expect(screenSource).toContain('setRouteMapReady(true)');
     expect(screenSource).toContain('actualSegments.map((coordinates, index) => (');
+    expect(screenSource).not.toContain('{routeSnapshotUrl ? (');
     expect(screenSource).toContain('useCompletedRouteRefresh(currentRide');
     expect(screenSource).not.toContain('MapViewDirections');
     expect(screenSource).not.toContain('fallbackCoords');
   });
 
-  it('only presents a route snapshot as actual when it matches the geometry revision', () => {
-    expect(screenSource).toContain('snapshot_revision');
-    expect(screenSource).toContain('isActualSnapshot');
+  it('does not let a generated snapshot replace drawable actual geometry', () => {
+    expect(screenSource).not.toContain('isActualSnapshot');
+    expect(screenSource).not.toContain('currentRide?.route_snapshot_url');
     expect(screenSource).toContain('Actual route unavailable');
   });
 
@@ -33,7 +37,9 @@ describe('completed ride route presentation contract', () => {
     expect(screenSource).toContain("? 'Actual route processing'");
     expect(screenSource).toContain("? 'Actual route'");
     expect(screenSource).toContain('routeQualityLabel');
+    expect(screenSource).toContain('currentRide.actual_completion_point');
     expect(rideStoreSource).toContain('actual_route_segments?:');
+    expect(rideStoreSource).toContain('actual_completion_point?:');
     expect(rideStoreSource).toContain('actual_duration_minutes?:');
   });
 

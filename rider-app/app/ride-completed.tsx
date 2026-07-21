@@ -81,6 +81,7 @@ function RideCompletedScreenContent() {
     buttons: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
   }>({ visible: false, title: '', message: '', variant: 'info', buttons: [] });
   const mapRef = React.useRef<MapView>(null);
+  const [routeMapReady, setRouteMapReady] = useState(false);
   const successScale = useRef(new Animated.Value(0)).current;
   const successOpacity = useRef(new Animated.Value(0)).current;
 
@@ -99,31 +100,29 @@ function RideCompletedScreenContent() {
     () => displaySegments.reduce<any[]>((all, segment) => all.concat(segment), []),
     [displaySegments],
   );
-  const routeRevision = toNum(currentRide?.route_revision);
-  const isActualSnapshot =
-    toNum(currentRide?.route_schema_version) >= 2 &&
-    routeRevision > 0 &&
-    toNum(currentRide?.snapshot_revision) === routeRevision;
-  const routeSnapshotUrl = currentRide?.route_snapshot_url && isActualSnapshot
-    ? currentRide.route_snapshot_url
-    : '';
   const routeLabel = hasActualRoute ? 'Actual route' : isV2Route ? 'Actual route' : 'Planned route';
   const routeQuality = routeQualityLabel(currentRide?.route_quality);
   const routeIsProcessing =
     currentRide?.route_geometry_status === 'pending' || currentRide?.route_geometry_status === 'processing';
-  const routeStatus = routeSnapshotUrl
-    ? `Actual route · revision ${routeRevision}`
-    : hasActualRoute
-      ? routeQuality
-      : isV2Route
-        ? routeIsProcessing
-          ? 'Actual route processing'
-          : 'Actual route unavailable'
-        : 'Planned route preview';
+  const routeStatus = hasActualRoute
+    ? routeQuality
+    : isV2Route
+      ? routeIsProcessing
+        ? 'Actual route processing'
+        : 'Actual route unavailable'
+      : 'Planned route preview';
 
   useCompletedRouteRefresh(currentRide, async () => {
     if (rideId) await fetchRide(rideId);
   });
+
+  useEffect(() => {
+    if (!routeMapReady || mapCoordinates.length < 2) return;
+    mapRef.current?.fitToCoordinates(mapCoordinates, {
+      edgePadding: { top: 30, right: 30, bottom: 30, left: 30 },
+      animated: false,
+    });
+  }, [routeMapReady, mapCoordinates]);
 
   useEffect(() => {
     Animated.parallel([
@@ -589,63 +588,56 @@ function RideCompletedScreenContent() {
         {/* ═══ 4. Route Map — actual GPS geometry only; planned preview is explicit ═══ */}
         {currentRide && Number(currentRide.pickup_lat) && Number(currentRide.dropoff_lat) && (
           <View style={styles.mapCard}>
-            {routeSnapshotUrl ? (
-              <Image
-                source={{ uri: routeSnapshotUrl }}
-                style={styles.map}
-                resizeMode="cover"
-              />
-            ) : (
-              <MapView
-                ref={mapRef}
-                style={styles.map}
-                provider={MAP_PROVIDER}
-                scrollEnabled={false}
-                zoomEnabled={false}
-                rotateEnabled={false}
-                pitchEnabled={false}
-                userInterfaceStyle={isDark ? 'dark' : 'light'}
-                initialRegion={{
-                  latitude: (Number(currentRide.pickup_lat) + Number(currentRide.dropoff_lat)) / 2,
-                  longitude: (Number(currentRide.pickup_lng) + Number(currentRide.dropoff_lng)) / 2,
-                  latitudeDelta: Math.abs(Number(currentRide.pickup_lat) - Number(currentRide.dropoff_lat)) * 2.5 + 0.01,
-                  longitudeDelta: Math.abs(Number(currentRide.pickup_lng) - Number(currentRide.dropoff_lng)) * 2.5 + 0.01,
-                }}
-                onMapReady={() => {
-                  if (mapCoordinates.length >= 2) {
-                    mapRef.current?.fitToCoordinates(mapCoordinates, {
-                      edgePadding: { top: 30, right: 30, bottom: 30, left: 30 }, animated: false,
-                    });
-                  }
-                }}
-              >
-                {actualSegments.map((coordinates, index) => (
-                  <Polyline
-                    key={`actual-segment-${index}`}
-                    coordinates={coordinates}
-                    {...ACTUAL_ROUTE_STROKE}
-                    lineCap="round"
-                    lineJoin="round"
-                  />
-                ))}
-                {!isV2Route && !hasActualRoute && plannedSegments.map((coordinates, index) => (
-                  <Polyline
-                    key={`planned-segment-${index}`}
-                    coordinates={coordinates}
-                    {...PLANNED_ROUTE_STROKE}
-                    lineCap="round"
-                    lineJoin="round"
-                  />
-                ))}
+            <MapView
+              ref={mapRef}
+              style={styles.map}
+              provider={MAP_PROVIDER}
+              scrollEnabled={false}
+              zoomEnabled={false}
+              rotateEnabled={false}
+              pitchEnabled={false}
+              userInterfaceStyle={isDark ? 'dark' : 'light'}
+              initialRegion={{
+                latitude: (Number(currentRide.pickup_lat) + Number(currentRide.dropoff_lat)) / 2,
+                longitude: (Number(currentRide.pickup_lng) + Number(currentRide.dropoff_lng)) / 2,
+                latitudeDelta: Math.abs(Number(currentRide.pickup_lat) - Number(currentRide.dropoff_lat)) * 2.5 + 0.01,
+                longitudeDelta: Math.abs(Number(currentRide.pickup_lng) - Number(currentRide.dropoff_lng)) * 2.5 + 0.01,
+              }}
+              onMapReady={() => setRouteMapReady(true)}
+            >
+              {actualSegments.map((coordinates, index) => (
+                <Polyline
+                  key={`actual-segment-${index}`}
+                  coordinates={coordinates}
+                  {...ACTUAL_ROUTE_STROKE}
+                  lineCap="round"
+                  lineJoin="round"
+                />
+              ))}
+              {!isV2Route && !hasActualRoute && plannedSegments.map((coordinates, index) => (
+                <Polyline
+                  key={`planned-segment-${index}`}
+                  coordinates={coordinates}
+                  {...PLANNED_ROUTE_STROKE}
+                  lineCap="round"
+                  lineJoin="round"
+                />
+              ))}
 
-                <Marker coordinate={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                  <View style={[styles.mapPin, { backgroundColor: ROUTE_PIN_COLORS.pickup }]}><Ionicons name="location" size={14} color="#FFF" /></View>
+              <Marker coordinate={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }} anchor={{ x: 0.5, y: 0.5 }}>
+                <View style={[styles.mapPin, { backgroundColor: ROUTE_PIN_COLORS.pickup }]}><Ionicons name="location" size={14} color="#FFF" /></View>
+              </Marker>
+              <Marker coordinate={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }} anchor={{ x: 0.5, y: 0.5 }}>
+                <View style={[styles.mapPin, { backgroundColor: ROUTE_PIN_COLORS.dropoff }]}><Ionicons name="flag" size={14} color="#FFF" /></View>
+              </Marker>
+              {currentRide.actual_completion_point && (
+                <Marker coordinate={currentRide.actual_completion_point} anchor={{ x: 0.5, y: 0.5 }}>
+                  <View style={[styles.mapPin, { backgroundColor: '#F59E0B' }]}>
+                    <Ionicons name="checkmark" size={14} color="#FFF" />
+                  </View>
                 </Marker>
-                <Marker coordinate={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                  <View style={[styles.mapPin, { backgroundColor: ROUTE_PIN_COLORS.dropoff }]}><Ionicons name="flag" size={14} color="#FFF" /></View>
-                </Marker>
-              </MapView>
-            )}
+              )}
+            </MapView>
 
             {/* Address overlay */}
             <View style={styles.mapOverlay}>

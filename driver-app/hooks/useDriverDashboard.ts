@@ -265,6 +265,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
 
   // State
   const [isOnline, setIsOnline] = useState(driverData?.is_online || false);
+  // Guards the reconcile effect below from fighting toggleOnline's optimistic
+  // update while its /status request is in flight (driverData still reads the
+  // pre-toggle value during that window).
+  const isTogglingRef = useRef(false);
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
   // Why a separate status: `location` stays null when permission is denied or
@@ -1230,6 +1234,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
 
   // ─── Toggle Online/Offline ───────────────────────────────────────
   const toggleOnline = async () => {
+    isTogglingRef.current = true;
     try {
       // Offline guard — only when going ONLINE. Without a connection the
       // go-online request can't reach the backend, so tell the driver with a
@@ -1368,6 +1373,8 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     } catch (e) {
       console.error('[toggleOnline] Unexpected error:', e);
       showToast('error', "Error", "Something went wrong toggling your status. Please try again.");
+    } finally {
+      isTogglingRef.current = false;
     }
   };
 
@@ -1423,6 +1430,28 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     });
     return () => sub.remove();
   }, [user, consumePendingOffer]);
+
+  // ─── Reconcile local online flag with the authoritative profile ──
+  // isOnline is seeded once at mount from driverData, which is frequently
+  // null/stale on a cold start or foreground resume (auth hydrates async).
+  // Without this, a driver who is actually online — possibly mid-ride —
+  // comes back with isOnline=false: the location subscription early-returns,
+  // startRide()/recordNativeFix() never run, and background tracking is never
+  // re-armed (startBackgroundLocation lives only in toggleOnline). The ride
+  // then records ZERO GPS points until a manual offline→online toggle, which
+  // is the "route incomplete · 0% GPS coverage" symptom on completed rides.
+  useEffect(() => {
+    const serverOnline = driverData?.is_online;
+    if (serverOnline === undefined || serverOnline === null) return;
+    if (isTogglingRef.current) return; // don't clobber an in-flight toggle
+    if (!!serverOnline === isOnline) return;
+    setIsOnline(!!serverOnline);
+    if (serverOnline) {
+      // Re-arm background tracking for a resumed-online session. Idempotent:
+      // startBackgroundLocation no-ops when the task is already running.
+      startBackgroundLocation().catch(() => {});
+    }
+  }, [driverData?.is_online, isOnline]);
 
   // ─── Fetch earnings when online ─────────────────────────────────
   useEffect(() => {

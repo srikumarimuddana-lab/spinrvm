@@ -692,6 +692,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
                 wsRef.current.send(JSON.stringify({
                   type: 'driver_location',
                   durable: !batchUploadHealthyRef.current,
+                  captured_at: point.captured_at,
                   lat: point.lat,
                   lng: point.lng,
                   speed: point.speed,

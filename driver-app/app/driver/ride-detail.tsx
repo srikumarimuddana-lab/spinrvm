@@ -7,7 +7,6 @@ import {
     Platform,
     ActivityIndicator,
     TouchableOpacity,
-    Image,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -29,6 +28,7 @@ export default function RideDetailScreen() {
     const [ride, setRide] = useState<any>(null);
     const [loading, setLoading] = useState(true);
     const mapRef = useRef<MapView>(null);
+    const [routeMapReady, setRouteMapReady] = useState(false);
     const { colors } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
 
@@ -95,25 +95,25 @@ export default function RideDetailScreen() {
         () => displaySegments.reduce<any[]>((all, segment) => all.concat(segment), []),
         [displaySegments],
     );
-    const routeRevision = Number(ride?.route_revision || 0);
-    const isActualSnapshot =
-        isV2Route &&
-        routeRevision > 0 &&
-        Number(ride?.snapshot_revision || 0) === routeRevision;
-    const routeSnapshotUrl = ride?.route_snapshot_url && isActualSnapshot ? ride.route_snapshot_url : '';
     const routeLabel = hasActualRoute ? 'Actual route' : isV2Route ? 'Actual route' : 'Planned route';
     const routeQuality = routeQualityLabel(ride?.route_quality);
     const routeIsProcessing =
         ride?.route_geometry_status === 'pending' || ride?.route_geometry_status === 'processing';
-    const routeStatus = routeSnapshotUrl
-        ? `Actual route · revision ${routeRevision}`
-        : hasActualRoute
-            ? routeQuality
-            : isV2Route
-                ? routeIsProcessing
-                    ? 'Actual route processing'
-                    : 'Actual route unavailable'
-                : 'Planned route preview';
+    const routeStatus = hasActualRoute
+        ? routeQuality
+        : isV2Route
+            ? routeIsProcessing
+                ? 'Actual route processing'
+                : 'Actual route unavailable'
+            : 'Planned route preview';
+
+    useEffect(() => {
+        if (!routeMapReady || mapCoordinates.length < 2) return;
+        mapRef.current?.fitToCoordinates(mapCoordinates, {
+            edgePadding: { top: 40, right: 40, bottom: 40, left: 40 },
+            animated: false,
+        });
+    }, [routeMapReady, mapCoordinates]);
 
     if (loading) {
         return (
@@ -157,60 +157,52 @@ export default function RideDetailScreen() {
                 {/* Route Map — actual GPS evidence is never replaced with directions */}
                 {hasPickup && hasDropoff && (
                     <View style={styles.mapContainer}>
-                        {routeSnapshotUrl ? (
-                            <Image
-                                source={{ uri: routeSnapshotUrl }}
-                                style={styles.map}
-                                resizeMode="cover"
-                            />
-                        ) : (
-                            <MapView
-                                ref={mapRef}
-                                style={styles.map}
-                                provider={MAP_PROVIDER}
-                                initialRegion={mapRegion}
-                                scrollEnabled={false}
-                                zoomEnabled={false}
-                                    rotateEnabled={false}
-                                    onMapReady={() => {
-                                        if (mapCoordinates.length >= 2) {
-                                            mapRef.current?.fitToCoordinates(mapCoordinates, {
-                                                edgePadding: { top: 40, right: 40, bottom: 40, left: 40 },
-                                                animated: false,
-                                            });
-                                        }
-                                    }}
-                                >
-                                    {actualSegments.map((coordinates, index) => (
-                                        <Polyline
-                                            key={`actual-segment-${index}`}
-                                            coordinates={coordinates}
-                                            {...ACTUAL_ROUTE_STROKE}
-                                            lineCap="round"
-                                            lineJoin="round"
-                                        />
-                                    ))}
-                                    {!isV2Route && !hasActualRoute && plannedSegments.map((coordinates, index) => (
-                                        <Polyline
-                                            key={`planned-segment-${index}`}
-                                            coordinates={coordinates}
-                                            {...PLANNED_ROUTE_STROKE}
-                                            lineCap="round"
-                                            lineJoin="round"
-                                        />
-                                    ))}
-                                <Marker coordinate={{ latitude: navPickupLat, longitude: navPickupLng }} anchor={{ x: 0.5, y: 0.5 }}>
-                                    <View style={[styles.markerDot, { backgroundColor: ROUTE_PIN_COLORS.pickup }]}>
-                                        <Ionicons name="location" size={14} color="#fff" />
+                        <MapView
+                            ref={mapRef}
+                            style={styles.map}
+                            provider={MAP_PROVIDER}
+                            initialRegion={mapRegion}
+                            scrollEnabled={false}
+                            zoomEnabled={false}
+                            rotateEnabled={false}
+                            onMapReady={() => setRouteMapReady(true)}
+                        >
+                            {actualSegments.map((coordinates, index) => (
+                                <Polyline
+                                    key={`actual-segment-${index}`}
+                                    coordinates={coordinates}
+                                    {...ACTUAL_ROUTE_STROKE}
+                                    lineCap="round"
+                                    lineJoin="round"
+                                />
+                            ))}
+                            {!isV2Route && !hasActualRoute && plannedSegments.map((coordinates, index) => (
+                                <Polyline
+                                    key={`planned-segment-${index}`}
+                                    coordinates={coordinates}
+                                    {...PLANNED_ROUTE_STROKE}
+                                    lineCap="round"
+                                    lineJoin="round"
+                                />
+                            ))}
+                            <Marker coordinate={{ latitude: navPickupLat, longitude: navPickupLng }} anchor={{ x: 0.5, y: 0.5 }}>
+                                <View style={[styles.markerDot, { backgroundColor: ROUTE_PIN_COLORS.pickup }]}>
+                                    <Ionicons name="location" size={14} color="#fff" />
                                     </View>
                                 </Marker>
                                 <Marker coordinate={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }} anchor={{ x: 0.5, y: 0.5 }}>
                                     <View style={[styles.markerDot, { backgroundColor: ROUTE_PIN_COLORS.dropoff }]}>
-                                        <Ionicons name="flag" size={14} color="#fff" />
+                                    <Ionicons name="flag" size={14} color="#fff" />
+                                </View>
+                            </Marker>
+                            {ride.actual_completion_point && (
+                                <Marker coordinate={ride.actual_completion_point} anchor={{ x: 0.5, y: 0.5 }}>
+                                    <View style={[styles.markerDot, { backgroundColor: ROUTE_PIN_COLORS.completion }]}>
+                                        <Ionicons name="checkmark" size={14} color="#fff" />
                                     </View>
                                 </Marker>
-                            </MapView>
-                        )}
+                            )}
+                        </MapView>
 
                         <TouchableOpacity style={[styles.backBtn, { top: insets.top + 12 }]} onPress={() => router.back()}>
                             <Ionicons name="arrow-back" size={22} color="#fff" />

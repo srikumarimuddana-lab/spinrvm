@@ -48,19 +48,30 @@ async def _defer_snapshot_retry(ride_id: str, route_revision, finalized_at) -> b
     if attempts >= _SNAPSHOT_MAX_GOOGLE_ATTEMPTS:
         return False
     retry_seconds = min(300, 15 * (2 ** min(attempts, 4)))
-    updated = await db_supabase.update_one(
-        "ride_routes",
-        # Filter on revision + finalization token: a newer evidence batch
-        # supersedes this retry the same way it supersedes a snapshot upload.
-        {"ride_id": ride_id, "route_revision": revision, "finalized_at": finalized_at},
-        {
-            "processing_status": "pending",
-            "processing_claimed_at": None,
-            "next_retry_at": datetime.now(timezone.utc) + timedelta(seconds=retry_seconds),
-            "snapshot_attempts": attempts + 1,
-        },
-        upsert=False,
-    )
+    try:
+        updated = await db_supabase.update_one(
+            "ride_routes",
+            # Filter on revision + finalization token: a newer evidence batch
+            # supersedes this retry the same way it supersedes a snapshot upload.
+            {"ride_id": ride_id, "route_revision": revision, "finalized_at": finalized_at},
+            {
+                "processing_status": "pending",
+                "processing_claimed_at": None,
+                "next_retry_at": datetime.now(timezone.utc) + timedelta(seconds=retry_seconds),
+                "snapshot_attempts": attempts + 1,
+            },
+            upsert=False,
+        )
+    except Exception:
+        # The snapshot_attempts column (migration 243) may not be deployed
+        # yet. Fall through to the OSM last resort so the receipt still
+        # gets a route image.
+        logger.warning(
+            "snapshot defer-retry failed for ride %s (migration 243 may be missing)",
+            ride_id,
+            exc_info=True,
+        )
+        return False
     return updated is not None
 
 
@@ -372,11 +383,14 @@ async def _generate_and_store_ride_snapshot(
                     on_conflict="storage_bucket,object_path",
                 )
             except Exception as exc:
-                logger.error(
-                    f"route snapshot ledger write failed for ride {ride_id}: {exc}",
+                # The ledger table (migration 240) may not be deployed yet.
+                # Proceed with the upload so the receipt has a route image;
+                # a missing ledger row is recoverable via backfill, but a
+                # missing snapshot image is visible to the rider.
+                logger.warning(
+                    f"route snapshot ledger write failed for ride {ride_id} (migration 240 may be missing): {exc}",
                     exc_info=True,
                 )
-                return
         try:
             await loop.run_in_executor(
                 None,
@@ -407,18 +421,29 @@ async def _generate_and_store_ride_snapshot(
             # Persist only the private object path. Readers create a short-lived
             # signed URL after authorizing the rider, driver, admin, or receipt.
             try:
-                updated = await db_supabase.update_one(
-                    "ride_routes",
-                    {"ride_id": ride_id, "route_revision": revision, "finalized_at": finalized_at},
-                    {
-                        "snapshot_object_path": storage_path,
-                        "snapshot_url": None,
-                        "snapshot_revision": revision,
-                        # A published image ends the defer-and-retry cycle.
-                        "snapshot_attempts": 0,
-                    },
-                    upsert=False,
-                )
+                snapshot_ref = {
+                    "snapshot_object_path": storage_path,
+                    "snapshot_url": None,
+                    "snapshot_revision": revision,
+                    "snapshot_attempts": 0,
+                }
+                try:
+                    updated = await db_supabase.update_one(
+                        "ride_routes",
+                        {"ride_id": ride_id, "route_revision": revision, "finalized_at": finalized_at},
+                        snapshot_ref,
+                        upsert=False,
+                    )
+                except Exception:
+                    # snapshot_attempts column (migration 243) may be missing.
+                    # Retry without it so the object path still gets persisted.
+                    snapshot_ref.pop("snapshot_attempts", None)
+                    updated = await db_supabase.update_one(
+                        "ride_routes",
+                        {"ride_id": ride_id, "route_revision": revision, "finalized_at": finalized_at},
+                        snapshot_ref,
+                        upsert=False,
+                    )
                 if updated is None:
                     # A newer evidence batch invalidated this revision before
                     # the upload completed. Delete the unreachable object so it

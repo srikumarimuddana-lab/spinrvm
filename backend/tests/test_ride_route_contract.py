@@ -46,7 +46,15 @@ class _RouteSupabase:
 
 
 def test_ride_detail_projects_matched_v2_segments_without_legacy_geometry(monkeypatch):
-    matched = [{"provider": "osrm_match", "coordinates": [[50.45, -104.62], [50.46, -104.63]]}]
+    matched = [
+        {
+            "provider": "osrm_inferred",
+            "geometry_kind": "inferred",
+            "gap_reason": "missing_start",
+            "coordinates": [[50.45, -104.62], [50.46, -104.63]],
+            "private_debug": {"raw_endpoint": [50.45, -104.62]},
+        }
+    ]
     observed = [{"coordinates": [[50.45, -104.62], [50.47, -104.64]]}]
     client = _RouteSupabase(
         {
@@ -87,7 +95,15 @@ def test_ride_detail_projects_matched_v2_segments_without_legacy_geometry(monkey
 
     ride = _run(ride_repo.get_ride("ride_1", include_route=True))
 
-    assert ride["actual_route_segments"] == matched
+    assert ride["actual_route_segments"] == [
+        {
+            "provider": "osrm_inferred",
+            "geometry_kind": "inferred",
+            "gap_reason": "missing_start",
+            "coordinates": [[50.45, -104.62], [50.46, -104.63]],
+        }
+    ]
+    assert "private_debug" not in ride["actual_route_segments"][0]
     assert ride["route_quality"]["coverage_ratio"] == 0.91
     assert ride["route_schema_version"] == 2
     assert ride["route_revision"] == 4
@@ -177,7 +193,8 @@ def test_ride_detail_uses_observed_v2_segments_when_matching_is_unavailable(monk
 
     ride = _run(ride_repo.get_ride("ride_1", include_route=True))
 
-    assert ride["actual_route_segments"] == observed
+    assert ride["actual_route_segments"] == [{"coordinates": [[50.45, -104.62], [50.47, -104.64]]}]
+    assert "boundary_reason" not in ride["actual_route_segments"][0]
     assert ride["route_geometry_status"] == "incomplete"
     assert "route_snapshot_url" not in ride
 

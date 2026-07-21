@@ -30,6 +30,49 @@ except ImportError:
 
 _PRIVATE_ROUTE_SNAPSHOT_BUCKET = "ride-route-snapshots"
 _PRIVATE_ROUTE_SNAPSHOT_TTL_SECONDS = 15 * 60
+_PUBLIC_ROUTE_PROVIDERS = {"osrm_match", "google_roads", "observed_fallback", "osrm_inferred"}
+_PUBLIC_ROUTE_KINDS = {"observed", "inferred"}
+_PUBLIC_ROUTE_GAP_REASONS = {"missing_start", "internal_gap", "missing_tail"}
+
+
+def _safe_route_segments(raw_segments: Any) -> list[dict]:
+    """Allowlist display geometry and provenance from stored JSON sections."""
+    if not isinstance(raw_segments, list):
+        return []
+    projected: list[dict] = []
+    for raw_segment in raw_segments:
+        if not isinstance(raw_segment, dict):
+            continue
+        coordinates = []
+        for raw_coordinate in raw_segment.get("coordinates") or []:
+            if not isinstance(raw_coordinate, (list, tuple)) or len(raw_coordinate) < 2:
+                coordinates = []
+                break
+            try:
+                lat = float(raw_coordinate[0])
+                lng = float(raw_coordinate[1])
+            except (TypeError, ValueError):
+                coordinates = []
+                break
+            if not -90 <= lat <= 90 or not -180 <= lng <= 180:
+                coordinates = []
+                break
+            coordinates.append([lat, lng])
+        if not coordinates:
+            continue
+
+        section: dict = {"coordinates": coordinates}
+        provider = raw_segment.get("provider")
+        geometry_kind = raw_segment.get("geometry_kind")
+        gap_reason = raw_segment.get("gap_reason")
+        if provider in _PUBLIC_ROUTE_PROVIDERS:
+            section["provider"] = provider
+        if geometry_kind in _PUBLIC_ROUTE_KINDS:
+            section["geometry_kind"] = geometry_kind
+        if geometry_kind == "inferred" and gap_reason in _PUBLIC_ROUTE_GAP_REASONS:
+            section["gap_reason"] = gap_reason
+        projected.append(section)
+    return projected
 
 
 async def create_route_snapshot_signed_url(object_path: str) -> str:
@@ -86,7 +129,8 @@ async def _project_route_detail(ride: Dict[str, Any], route: Dict[str, Any]) -> 
         # line beside the v2 segmented route.
         for key in ("road_polyline", "road_polyline_pickup", "phase_polylines"):
             ride.pop(key, None)
-        ride["actual_route_segments"] = route.get("road_matched_segments") or route.get("observed_segments") or []
+        stored_segments = route.get("road_matched_segments") or route.get("observed_segments") or []
+        ride["actual_route_segments"] = _safe_route_segments(stored_segments)
         ride["route_quality"] = route.get("route_quality") or {}
         ride["route_schema_version"] = schema_version
         ride["route_revision"] = int(route.get("route_revision") or 0)

@@ -364,9 +364,17 @@ export class TripLocationOutbox {
 
   private async getDatabase(): Promise<TripLocationOutboxDatabase> {
     if (!this.databasePromise) {
-      this.databasePromise = this.openDatabase().then(async (database) => {
+      const attempt = this.openDatabase().then(async (database) => {
         await database.execAsync(SCHEMA);
         return database;
+      });
+      this.databasePromise = attempt;
+      attempt.catch(() => {
+        // Clear the cached rejection so the next call retries instead of
+        // returning a permanently dead promise for the rest of the session.
+        if (this.databasePromise === attempt) {
+          this.databasePromise = null;
+        }
       });
     }
     return this.databasePromise;

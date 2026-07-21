@@ -171,7 +171,19 @@ def _parse_points(points: Iterable[Dict[str, Any]]) -> tuple[List[_ParsedPoint],
             continue
         accepted.append(candidate)
 
-    accepted.sort(key=lambda item: (item.captured_at, item.recording_session_id, item.sequence_number))
+    # A completion fix is captured before the WebSocket buffer necessarily
+    # finishes flushing. Legacy rows received just afterward can therefore
+    # carry a later server timestamp even though they precede trip completion.
+    # Keep timestamp order within normal evidence, but enforce the route
+    # contract that an explicit completion fix is the final evidence point.
+    accepted.sort(
+        key=lambda item: (
+            item.point.get("is_completion_fix") is True,
+            item.captured_at,
+            item.recording_session_id,
+            item.sequence_number,
+        )
+    )
     return accepted, rejected
 
 

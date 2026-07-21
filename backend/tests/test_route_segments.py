@@ -237,6 +237,31 @@ def test_legacy_buffer_receive_times_do_not_create_false_impossible_speed_bounda
     assert segmented.quality.rejected_point_count == 0
 
 
+def test_completion_fix_is_ordered_after_late_flushed_legacy_points():
+    legacy_before = {
+        "lat": 50.445,
+        "lng": -104.618,
+        "timestamp": (BASE_TIME + timedelta(seconds=10)).isoformat(),
+    }
+    completion_fix = _point(20, sequence=0, lat=50.4452)
+    completion_fix["is_completion_fix"] = True
+    legacy_flushed_after_completion = {
+        "lat": 50.4451,
+        "lng": -104.618,
+        "timestamp": (BASE_TIME + timedelta(seconds=30)).isoformat(),
+    }
+
+    segmented = segment_route(
+        [legacy_before, completion_fix, legacy_flushed_after_completion],
+        _lifecycle(),
+        completion_point=completion_fix,
+    )
+
+    flattened = _flatten(segmented)
+    assert flattened[-1]["is_completion_fix"] is True
+    assert [segment.boundary_reason for segment in segmented.observed_segments] == [None, "session_boundary"]
+
+
 def test_49_minute_fixture_keeps_two_long_gaps_and_a_5km_jump_separate():
     points = [
         _point(0, sequence=0),

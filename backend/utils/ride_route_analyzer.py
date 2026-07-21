@@ -20,13 +20,9 @@ except ImportError:
 
 try:
     from .datetime_utils import parse_iso_utc
-    from .route_distance import compute_segmented_road_route
-    from .route_reconstruction import reconstruct_completed_route
     from .route_segments import SegmentedRoute, segment_route
 except ImportError:
     from utils.datetime_utils import parse_iso_utc  # type: ignore
-    from utils.route_distance import compute_segmented_road_route  # type: ignore
-    from utils.route_reconstruction import reconstruct_completed_route  # type: ignore
     from utils.route_segments import SegmentedRoute, segment_route  # type: ignore
 
 
@@ -237,6 +233,31 @@ def _geojson_lines(reconstructed: Dict[str, Any]) -> list[list[list[float]]]:
     return lines
 
 
+async def _compute_segmented_route(observed_segments: list[Any]) -> Dict[str, Any]:
+    """Load the configured provider stack only when projection is requested."""
+
+    try:
+        from .route_distance import compute_segmented_road_route
+    except ImportError:
+        from utils.route_distance import compute_segmented_road_route  # type: ignore
+    return await compute_segmented_road_route(observed_segments)
+
+
+async def _reconstruct_route(
+    segmented: SegmentedRoute,
+    matched: Dict[str, Any],
+    pickup: Dict[str, Any],
+    completion: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Load route reconstruction lazily so offline evidence analysis stays pure."""
+
+    try:
+        from .route_reconstruction import reconstruct_completed_route
+    except ImportError:
+        from utils.route_reconstruction import reconstruct_completed_route  # type: ignore
+    return await reconstruct_completed_route(segmented, matched, pickup, completion)
+
+
 async def project_phase_3_route(
     analysis: RideRouteAnalysis,
     ride: Dict[str, Any],
@@ -248,10 +269,10 @@ async def project_phase_3_route(
     feature carries one uniform actual-route style marker.
     """
 
-    matched = await compute_segmented_road_route(list(analysis.segmented_phase_3.observed_segments))
+    matched = await _compute_segmented_route(list(analysis.segmented_phase_3.observed_segments))
     pickup = {"lat": ride.get("pickup_lat"), "lng": ride.get("pickup_lng")}
     completion = {"lat": ride.get("dropoff_lat"), "lng": ride.get("dropoff_lng")}
-    reconstructed = await reconstruct_completed_route(
+    reconstructed = await _reconstruct_route(
         analysis.segmented_phase_3,
         matched,
         pickup,

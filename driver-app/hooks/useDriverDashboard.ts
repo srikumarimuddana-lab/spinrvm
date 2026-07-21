@@ -536,8 +536,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   useEffect(() => {
     if (!isOnline) return;
     const interval = setInterval(() => {
-      tripLocationRecorder.flushPending(foregroundLocationTransport).catch(() => {
-        // Durable samples remain in SQLite for the next acknowledgement attempt.
+      tripLocationRecorder.flushPending(foregroundLocationTransport).then(() => {
+        batchUploadHealthyRef.current = true;
+      }).catch(() => {
+        batchUploadHealthyRef.current = false;
       });
     }, 10_000);
     return () => clearInterval(interval);
@@ -568,7 +570,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         const integrity = checkLocationIntegrity(loc);
         if (!integrity.trusted) return;
         await tripLocationRecorder.recordNativeFix(loc, 'foreground', rideId);
-        tripLocationRecorder.flushPending(foregroundLocationTransport).catch(() => {});
+        tripLocationRecorder.flushPending(foregroundLocationTransport).then(() => {
+          batchUploadHealthyRef.current = true;
+        }).catch(() => {
+          batchUploadHealthyRef.current = false;
+        });
       } catch {
         // Best-effort: a failed heartbeat leaves the recorder-health banner
         // to surface persistent degradation; never crash the interval.
@@ -586,8 +592,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     if (!isOnline || !TRACKED_TRIP_PHASES.includes(rideState)) return;
     const sub = AppState.addEventListener('change', (next) => {
       if (next === 'active' || next === 'background') {
-        tripLocationRecorder.flushPending(foregroundLocationTransport, { force: true }).catch(() => {
-          // Durable samples remain in SQLite for the next acknowledgement attempt.
+        tripLocationRecorder.flushPending(foregroundLocationTransport, { force: true }).then(() => {
+          batchUploadHealthyRef.current = true;
+        }).catch(() => {
+          batchUploadHealthyRef.current = false;
         });
       }
     });

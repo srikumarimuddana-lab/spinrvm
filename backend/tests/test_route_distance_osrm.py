@@ -104,7 +104,7 @@ def test_osrm_bearing_uses_heading_when_available():
 async def test_osrm_returns_distance_and_geometry():
     trip = _trip(6)
     for i, p in enumerate(trip):
-        p["timestamp"] = f"2026-07-09T12:00:{i:02d}Z"
+        p["captured_at"] = f"2026-07-09T12:00:{i:02d}Z"
         p["heading"] = 180 + i
     capture = {}
     with patch.object(
@@ -139,6 +139,21 @@ async def test_osrm_omits_optional_hints_when_unavailable():
     assert result is not None
     assert "timestamps" not in capture["params"]
     assert "bearings" not in capture["params"]
+
+
+@pytest.mark.asyncio
+async def test_osrm_omits_legacy_server_receive_timestamps():
+    trip = _trip(6)
+    for i, point in enumerate(trip):
+        point["timestamp"] = f"2026-07-09T12:00:{i:02d}Z"
+    capture = {}
+    with patch.object(
+        rd.httpx, "AsyncClient", _client_factory(resp=_FakeResp(payload=_osrm_payload()), capture=capture)
+    ):
+        result = await rd._compute_via_osrm(trip, "http://osrm:5000/")
+
+    assert result is not None
+    assert "timestamps" not in capture["params"]
 
 
 @pytest.mark.asyncio

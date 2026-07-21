@@ -191,7 +191,11 @@ async def _compute_osrm_chunk_matchings(trip_points: list[dict], osrm_url: str) 
     """
     coords = ";".join(f"{p['lng']},{p['lat']}" for p in trip_points)
     radiuses = ";".join(_osrm_radius(p) for p in trip_points)
-    timestamps = [_osrm_timestamp(p) for p in trip_points]
+    # OSRM timestamps are speed constraints, so send them only for v2 rows
+    # carrying immutable device capture time. Legacy `timestamp` values were
+    # assigned by the server while flushing a buffer; they preserve order but
+    # can be microseconds apart and make a valid trace look impossible.
+    timestamps = [_osrm_timestamp(p) if p.get("captured_at") is not None else None for p in trip_points]
     bearings = [_osrm_bearing(p) for p in trip_points]
     url = f"{osrm_url.rstrip('/')}/match/v1/driving/{coords}"
     params = {

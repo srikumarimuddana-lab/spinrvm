@@ -11,8 +11,8 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useAuthStore } from '@shared/store/authStore';
 import { useCompletedRouteRefresh } from '@shared/hooks/useCompletedRouteRefresh';
-import { routeQualityLabel, toReactNativeSegments } from '@shared/utils/routeSegments';
-import { ACTUAL_ROUTE_STROKE, PLANNED_ROUTE_STROKE, ROUTE_PIN_COLORS } from '@shared/constants/routeMapStyle';
+import { routeQualityLabel, toReactNativeRouteSections, toReactNativeSegments } from '@shared/utils/routeSegments';
+import { ACTUAL_ROUTE_STROKE, INFERRED_ROUTE_STROKE, PLANNED_ROUTE_STROKE, ROUTE_PIN_COLORS } from '@shared/constants/routeMapStyle';
 import { showToast } from '../store/toastStore';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
@@ -213,20 +213,24 @@ export default function RideDetailsScreen() {
     [ride]
   );
 
-  const actualSegments = useMemo(() => toReactNativeSegments(ride?.actual_route_segments), [ride?.actual_route_segments]);
+  const actualSections = useMemo(() => toReactNativeRouteSections(ride?.actual_route_segments), [ride?.actual_route_segments]);
   const plannedSegments = useMemo(
     () => toReactNativeSegments(ride?.planned_route_polyline ? [ride.planned_route_polyline] : []),
     [ride?.planned_route_polyline],
   );
   const isV2Route = _num(ride?.route_schema_version) >= 2;
-  const hasActualRoute = actualSegments.length > 0;
-  const displaySegments = hasActualRoute ? actualSegments : isV2Route ? [] : plannedSegments;
+  const hasActualRoute = actualSections.length > 0;
   const mapCoordinates = useMemo(
-    () => displaySegments.reduce(
-      (coordinates, segment) => coordinates.concat(segment),
-      [] as { latitude: number; longitude: number }[],
-    ),
-    [displaySegments],
+    () => hasActualRoute
+      ? actualSections.reduce(
+          (coordinates, section) => coordinates.concat(section.coordinates),
+          [] as { latitude: number; longitude: number }[],
+        )
+      : (isV2Route ? [] : plannedSegments).reduce(
+          (coordinates, segment) => coordinates.concat(segment),
+          [] as { latitude: number; longitude: number }[],
+        ),
+    [actualSections, hasActualRoute, isV2Route, plannedSegments],
   );
   const routeLabel = hasActualRoute ? 'Actual route' : isV2Route ? 'Actual route' : 'Planned route';
   const routeQuality = routeQualityLabel(ride?.route_quality);
@@ -320,11 +324,11 @@ export default function RideDetailsScreen() {
               }}
               onMapReady={() => setRouteMapReady(true)}
             >
-              {hasActualRoute && actualSegments.map((coordinates, index) => (
-                  <Polyline
-                    key={`actual-route-${index}`}
-                    coordinates={coordinates}
-                    {...ACTUAL_ROUTE_STROKE}
+                  {hasActualRoute && actualSections.map((section) => (
+                      <Polyline
+                        key={section.id}
+                        coordinates={section.coordinates}
+                        {...(section.geometryKind === 'inferred' ? INFERRED_ROUTE_STROKE : ACTUAL_ROUTE_STROKE)}
                     lineCap="round"
                     lineJoin="round"
                   />

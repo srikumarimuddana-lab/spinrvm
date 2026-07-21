@@ -435,3 +435,88 @@ async def test_compute_route_non_ok_returns_none():
         ),
     ):
         assert await rd.compute_route(50.45, -104.62, 50.44, -104.63) is None
+
+
+# ── Completed-route endpoint and gap reconstruction ──────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_completed_route_endpoint_snap_uses_nearest_and_enforces_75m_limit():
+    accepted_capture = {}
+    accepted = {
+        "code": "Ok",
+        "waypoints": [{"distance": 12.5, "location": [-104.6201, 50.4501]}],
+    }
+    with patch.object(
+        rd.httpx,
+        "AsyncClient",
+        _client_factory(resp=_FakeResp(payload=accepted), capture=accepted_capture),
+    ):
+        assert await rd.snap_endpoint_via_osrm({"lat": 50.45, "lng": -104.62}, "http://osrm:5000/") == [
+            50.4501,
+            -104.6201,
+        ]
+
+    assert "/nearest/v1/driving/-104.62,50.45" in accepted_capture["url"]
+    assert accepted_capture["params"] == {"number": 1}
+
+    rejected = {
+        "code": "Ok",
+        "waypoints": [{"distance": 75.1, "location": [-104.6201, 50.4501]}],
+    }
+    with patch.object(rd.httpx, "AsyncClient", _client_factory(resp=_FakeResp(payload=rejected))):
+        assert await rd.snap_endpoint_via_osrm({"lat": 50.45, "lng": -104.62}, "http://osrm:5000") is None
+
+
+@pytest.mark.asyncio
+async def test_completed_gap_route_returns_ordered_sane_geojson_geometry():
+    payload = {
+        "code": "Ok",
+        "routes": [
+            {
+                "distance": 420.0,
+                "duration": 90.0,
+                "geometry": {
+                    "coordinates": [
+                        [-104.6200, 50.4500],
+                        [-104.6225, 50.4510],
+                        [-104.6250, 50.4520],
+                    ]
+                },
+            }
+        ],
+    }
+    capture = {}
+    with patch.object(
+        rd.httpx,
+        "AsyncClient",
+        _client_factory(resp=_FakeResp(payload=payload), capture=capture),
+    ):
+        result = await rd.compute_gap_route_via_osrm([50.45, -104.62], [50.452, -104.625], "http://osrm:5000")
+
+    assert result == (
+        0.42,
+        [[50.45, -104.62], [50.451, -104.6225], [50.452, -104.625]],
+    )
+    assert "/route/v1/driving/-104.62,50.45;-104.625,50.452" in capture["url"]
+    assert capture["params"] == {
+        "alternatives": "false",
+        "overview": "full",
+        "geometries": "geojson",
+        "steps": "false",
+    }
+
+
+@pytest.mark.asyncio
+async def test_completed_gap_route_rejects_implausible_detour():
+    payload = {
+        "code": "Ok",
+        "routes": [
+            {
+                "distance": 10_000.0,
+                "geometry": {"coordinates": [[-104.62, 50.45], [-104.6201, 50.4501]]},
+            }
+        ],
+    }
+    with patch.object(rd.httpx, "AsyncClient", _client_factory(resp=_FakeResp(payload=payload))):
+        assert await rd.compute_gap_route_via_osrm([50.45, -104.62], [50.4501, -104.6201], "http://osrm:5000") is None

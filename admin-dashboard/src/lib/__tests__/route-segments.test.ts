@@ -2,6 +2,7 @@ import {
   normalizeActualRouteSegments,
   routeQualityLabel,
   toGeoJsonMultiLineString,
+  toReactNativeRouteSections,
   toReactNativeSegments,
 } from '@spinr/shared/utils/routeSegments';
 
@@ -43,5 +44,40 @@ describe('segmented route geometry', () => {
     expect(routeQualityLabel({ coverage_ratio: 0.54, missing_tail: true })).toBe(
       'Route incomplete · 54% GPS coverage',
     );
+  });
+
+  it('preserves inferred provenance for native rendering', () => {
+    expect(toReactNativeRouteSections([{
+      coordinates: [[50.45, -104.62], [50.46, -104.63]],
+      provider: 'osrm_inferred',
+      geometry_kind: 'inferred',
+      gap_reason: 'missing_tail',
+    }])).toEqual([{
+      id: 'segment-0',
+      coordinates: [
+        { latitude: 50.45, longitude: -104.62 },
+        { latitude: 50.46, longitude: -104.63 },
+      ],
+      provider: 'osrm_inferred',
+      geometryKind: 'inferred',
+      gapReason: 'missing_tail',
+    }]);
+  });
+
+  it('uses distance-based observed and inferred coverage copy', () => {
+    expect(routeQualityLabel({
+      coverage_ratio: 1,
+      observed_distance_ratio: 0.72,
+      inferred_distance_ratio: 0.28,
+    })).toBe('Route reconstructed · 72% GPS observed · 28% inferred');
+    expect(routeQualityLabel({
+      observed_distance_ratio: 1,
+      inferred_distance_ratio: 0,
+    })).toBe('Route verified · 100% GPS observed');
+    expect(routeQualityLabel({
+      observed_distance_ratio: 0.5,
+      inferred_distance_ratio: 0.5,
+      failed_gaps: ['missing_tail'],
+    })).toBe('Route incomplete · OSRM reconstruction pending');
   });
 });

@@ -5,11 +5,22 @@ export type LatLng = readonly [latitude: number, longitude: number];
 export interface NormalizedRouteSegment {
   id: string;
   coordinates: LatLng[];
+  provider?: string;
+  geometryKind: 'observed' | 'inferred';
+  gapReason?: 'missing_start' | 'internal_gap' | 'missing_tail';
 }
 
 export interface ReactNativeRouteCoordinate {
   latitude: number;
   longitude: number;
+}
+
+export interface ReactNativeRouteSection {
+  id: string;
+  coordinates: ReactNativeRouteCoordinate[];
+  provider?: string;
+  geometryKind: 'observed' | 'inferred';
+  gapReason?: 'missing_start' | 'internal_gap' | 'missing_tail';
 }
 
 export interface GeoJsonMultiLineString {
@@ -21,7 +32,12 @@ type RouteSegmentLike = {
   id?: unknown;
   coordinates?: unknown;
   points?: unknown;
+  provider?: unknown;
+  geometry_kind?: unknown;
+  gap_reason?: unknown;
 };
+
+const GAP_REASONS = new Set(['missing_start', 'internal_gap', 'missing_tail']);
 
 function validCoordinate(value: unknown): value is readonly [number, number] {
   return (
@@ -56,18 +72,35 @@ export function normalizeActualRouteSegments(input: unknown): NormalizedRouteSeg
     if (!Array.isArray(rawCoordinates) || rawCoordinates.length < 2 || !rawCoordinates.every(validCoordinate)) {
       return [];
     }
+    const geometryKind = segment?.geometry_kind === 'inferred' ? 'inferred' : 'observed';
+    const gapReason =
+      geometryKind === 'inferred' && typeof segment?.gap_reason === 'string' && GAP_REASONS.has(segment.gap_reason)
+        ? segment.gap_reason as ReactNativeRouteSection['gapReason']
+        : undefined;
     return [{
       id: typeof segment?.id === 'string' && segment.id ? segment.id : `segment-${index}`,
       coordinates: rawCoordinates.map(([latitude, longitude]) => [latitude, longitude] as LatLng),
+      provider: typeof segment?.provider === 'string' ? segment.provider : undefined,
+      geometryKind,
+      gapReason,
     }];
   });
 }
 
+/** Convert v2 segments to independent native polylines with provenance. */
+export function toReactNativeRouteSections(input: unknown): ReactNativeRouteSection[] {
+  return normalizeActualRouteSegments(input).map((segment) => ({
+    id: segment.id,
+    coordinates: segment.coordinates.map(([latitude, longitude]) => ({ latitude, longitude })),
+    provider: segment.provider,
+    geometryKind: segment.geometryKind,
+    gapReason: segment.gapReason,
+  }));
+}
+
 /** Convert v2 segments to independent React Native polylines. */
 export function toReactNativeSegments(input: unknown): ReactNativeRouteCoordinate[][] {
-  return normalizeActualRouteSegments(input).map((segment) =>
-    segment.coordinates.map(([latitude, longitude]) => ({ latitude, longitude })),
-  );
+  return toReactNativeRouteSections(input).map((segment) => segment.coordinates);
 }
 
 /** Convert v2 segments to MapLibre/GeoJSON longitude-latitude geometry. */
@@ -87,7 +120,25 @@ export function routeQualityLabel(quality: unknown): string {
     coverage_pct?: unknown;
     missing_tail?: unknown;
     incomplete_reason?: unknown;
+    observed_distance_ratio?: unknown;
+    inferred_distance_ratio?: unknown;
+    failed_gaps?: unknown;
   } | undefined;
+  const observedRatio =
+    typeof value?.observed_distance_ratio === 'number' ? value.observed_distance_ratio : undefined;
+  const inferredRatio =
+    typeof value?.inferred_distance_ratio === 'number' ? value.inferred_distance_ratio : undefined;
+  if (observedRatio !== undefined && inferredRatio !== undefined) {
+    if ((Array.isArray(value?.failed_gaps) && value.failed_gaps.length > 0) || value?.incomplete_reason === 'osrm_reconstruction_failed') {
+      return 'Route incomplete · OSRM reconstruction pending';
+    }
+    const observed = Math.round(Math.max(0, Math.min(1, observedRatio)) * 100);
+    const inferred = Math.round(Math.max(0, Math.min(1, inferredRatio)) * 100);
+    if (inferred > 0) {
+      return `Route reconstructed · ${observed}% GPS observed · ${inferred}% inferred`;
+    }
+    return `Route verified · ${observed}% GPS observed`;
+  }
   const ratio =
     typeof value?.coverage_ratio === 'number'
       ? value.coverage_ratio

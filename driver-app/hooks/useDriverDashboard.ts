@@ -323,6 +323,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // ~1 location/minute for driver history without filling the trail with the
   // dense live-marker cadence. Reset when a trip starts / driver goes offline.
   const lastIdleDurableMsRef = useRef<number>(0);
+  // Tracks whether the REST /drivers/location-batch endpoint is healthy.
+  // When false, the WS message is sent durable:true with v1-only fields so
+  // the WS handler persists via the legacy path (simple INSERT, no unique
+  // index required). When true, WS is ephemeral and only REST persists.
+  const batchUploadHealthyRef = useRef(true);
   const userRef = useRef(user);
   useEffect(() => { userRef.current = user; }, [user]);
 
@@ -666,14 +671,33 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
             void tripLocationRecorder.recordNativeFix(loc, 'foreground', rideId).then((point) => {
               if (!point) return;
               if (wsRef.current?.readyState === WebSocket.OPEN) {
+                // Send v1 fields only — never spread the full TripLocationPoint.
+                // v2 fields (recording_session_id, sequence_number) redirect the
+                // WS handler to persist_trip_location_batch, which requires a DB
+                // unique index (migration 239). If that index is missing, the
+                // INSERT ON CONFLICT fails and the ride records zero points.
+                // The v1 persist path (plain INSERT) works unconditionally.
+                //
+                // durable=true when the REST batch upload is failing, so the WS
+                // handler persists via the v1 path as a fallback. When REST is
+                // healthy, durable=false keeps WS as a live marker only.
                 wsRef.current.send(JSON.stringify({
                   type: 'driver_location',
-                  durable: false,
-                  ...point,
+                  durable: !batchUploadHealthyRef.current,
+                  lat: point.lat,
+                  lng: point.lng,
+                  speed: point.speed,
+                  heading: point.heading,
+                  accuracy: point.accuracy,
+                  altitude: point.altitude,
+                  ride_id: rideId,
                 }));
               }
               return tripLocationRecorder.flushPending(foregroundLocationTransport);
+            }).then(() => {
+              batchUploadHealthyRef.current = true;
             }).catch(async () => {
+              batchUploadHealthyRef.current = false;
               const health = await tripLocationRecorder.getRecorderHealth(rideId);
               if (health.degraded) {
                 setWsError('Trip location recording needs attention. Points will retry automatically.');

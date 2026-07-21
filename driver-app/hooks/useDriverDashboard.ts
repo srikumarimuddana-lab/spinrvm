@@ -1445,19 +1445,27 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     return () => sub.remove();
   }, [user, consumePendingOffer]);
 
-  // ─── Reconcile local online flag with the authoritative profile ──
-  // isOnline is seeded once at mount from driverData, which is frequently
-  // null/stale on a cold start or foreground resume (auth hydrates async).
-  // Without this, a driver who is actually online — possibly mid-ride —
-  // comes back with isOnline=false: the location subscription early-returns,
-  // startRide()/recordNativeFix() never run, and background tracking is never
-  // re-armed (startBackgroundLocation lives only in toggleOnline). The ride
-  // then records ZERO GPS points until a manual offline→online toggle, which
-  // is the "route incomplete · 0% GPS coverage" symptom on completed rides.
+  // ─── Hydrate the online flag from the authoritative profile (once) ──
+  // isOnline is seeded at mount from driverData, which is frequently null on a
+  // cold start / relaunch (auth hydrates async). Without correction, a driver
+  // who is actually online — possibly mid-ride — comes back with isOnline=false:
+  // the location subscription early-returns, startRide()/recordNativeFix() never
+  // run, and background tracking is never re-armed (startBackgroundLocation
+  // lives only in toggleOnline). The ride then records ZERO GPS points, which
+  // is the "route incomplete · 0% GPS coverage" symptom.
+  //
+  // This is a ONE-TIME hydration, NOT continuous reactivity. Making isOnline
+  // reactively follow driverData.is_online would fight server-initiated offline
+  // (auto_offline sets isOnline=false locally but leaves driverData.is_online
+  // true) and could kill capture mid-ride on any stale profile read. After the
+  // first loaded profile, isOnline is owned solely by toggleOnline + auto_offline.
+  const onlineHydratedRef = useRef(false);
   useEffect(() => {
+    if (onlineHydratedRef.current) return;
     const serverOnline = driverData?.is_online;
-    if (serverOnline === undefined || serverOnline === null) return;
-    if (isTogglingRef.current) return; // don't clobber an in-flight toggle
+    if (serverOnline === undefined || serverOnline === null) return; // profile not loaded yet
+    if (isTogglingRef.current) return; // a toggle in flight is authoritative — let it settle
+    onlineHydratedRef.current = true;
     if (!!serverOnline === isOnline) return;
     setIsOnline(!!serverOnline);
     if (serverOnline) {

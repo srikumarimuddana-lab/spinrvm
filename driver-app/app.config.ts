@@ -285,6 +285,13 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // versions when rootProject.kotlinVersion isn't yet set at buildscript-eval time.
         // See plugin file comments for the full diagnosis.
         './plugins/withKspVersion',
+        // Guard against NSRangeException crash in expo-task-manager / expo-location
+        // geofencing native code. CoreLocation can fire didExitRegion: with nil
+        // region data during a CLConnection disconnection, crashing the app.
+        // Two plugins for defense-in-depth: source-side (nil-check the CLRegion)
+        // and sink-side (@try/@catch around the array insertion).
+        './plugins/withGeofenceConsumerNilGuard',
+        './plugins/withTaskServiceNilGuard',
         // Declares USE_FULL_SCREEN_INTENT + POST_NOTIFICATIONS + WAKE_LOCK +
         // VIBRATE + SCHEDULE_EXACT_ALARM so Notifee can wake the screen and
         // show the ride-offer panel like an incoming call when the app is

@@ -92,6 +92,27 @@ async def _project_route_detail(ride: Dict[str, Any], route: Dict[str, Any]) -> 
         ride["route_revision"] = int(route.get("route_revision") or 0)
         ride["route_geometry_status"] = route.get("processing_status") or "pending"
 
+        # The completion fix is useful as an authorized map marker, but its
+        # session, sequence, timestamp, accuracy, and integrity metadata stay
+        # private. It is a guardrail marker, never substitute route geometry.
+        completion = route.get("completion_point")
+        if isinstance(completion, dict):
+            try:
+                completion_lat = float(completion["lat"])
+                completion_lng = float(completion["lng"])
+            except (KeyError, TypeError, ValueError):
+                completion_lat = completion_lng = None
+            if (
+                completion_lat is not None
+                and completion_lng is not None
+                and -90 <= completion_lat <= 90
+                and -180 <= completion_lng <= 180
+            ):
+                ride["actual_completion_point"] = {
+                    "latitude": completion_lat,
+                    "longitude": completion_lng,
+                }
+
         snapshot_revision = int(route.get("snapshot_revision") or 0)
         ride["snapshot_revision"] = snapshot_revision
         object_path = route.get("snapshot_object_path")

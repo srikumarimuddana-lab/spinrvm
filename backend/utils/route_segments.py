@@ -67,6 +67,7 @@ class _ParsedPoint:
     recording_session_id: str
     sequence_number: int
     input_index: int
+    is_legacy: bool
 
 
 def point_order(point: Dict[str, Any]) -> tuple[datetime, str, int]:
@@ -153,7 +154,7 @@ def _parse_points(points: Iterable[Dict[str, Any]]) -> tuple[List[_ParsedPoint],
             rejected.append(_reject(point, "duplicate_identity"))
             continue
         identities.add(identity)
-        parsed.append(_ParsedPoint(point, captured_at, session_id, sequence_number, input_index))
+        parsed.append(_ParsedPoint(point, captured_at, session_id, sequence_number, input_index, is_legacy))
 
     # Sequence numbers are monotonic for a recording session. A newer sequence
     # with an older device timestamp is clock regression, not a route reversal.
@@ -165,7 +166,7 @@ def _parse_points(points: Iterable[Dict[str, Any]]) -> tuple[List[_ParsedPoint],
             (point for point in reversed(accepted) if point.recording_session_id == candidate.recording_session_id),
             None,
         )
-        if prior is not None and candidate.captured_at < prior.captured_at:
+        if prior is not None and not candidate.is_legacy and candidate.captured_at < prior.captured_at:
             rejected.append(_reject(candidate.point, "clock_regression"))
             continue
         accepted.append(candidate)

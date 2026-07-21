@@ -158,6 +158,43 @@ ORDER BY first_pt;
 | points > 0 | `complete` but `observed_segments = 0` | Segment parser rejected everything — compare `route_quality.rejected_point_count` vs `point_count` | Inspect query 5 rows for null timestamps / absurd values |
 | points stop mid-trip | any | Stranded-tail bug (pre-fix build) — the last outbox batch never uploaded | Fixed by the completion force-flush changes; a late upload within retention also self-heals the route |
 
+## 9) Re-finalize rides with empty segments (one-time fix after v1 parser patch)
+
+If the segment parser was rejecting v1 legacy breadcrumbs (points with NULL
+`recording_session_id` / `sequence_number`), rides that were finalized during
+that window have `processing_status = 'complete'` but zero observed segments.
+After deploying the parser fix, re-queue them:
+
+```sql
+-- Preview: which rides would be re-queued?
+SELECT rr.ride_id, rr.processing_status, rr.route_revision,
+       jsonb_array_length(rr.observed_segments) AS observed_segs,
+       (SELECT COUNT(*) FROM driver_location_history dlh
+        WHERE dlh.ride_id = rr.ride_id) AS gps_points
+FROM ride_routes rr
+WHERE rr.processing_status IN ('complete', 'incomplete')
+  AND jsonb_array_length(rr.observed_segments) = 0
+  AND EXISTS (
+    SELECT 1 FROM driver_location_history dlh
+    WHERE dlh.ride_id = rr.ride_id
+  );
+
+-- Execute: re-queue them for finalization
+UPDATE ride_routes
+SET processing_status = 'pending',
+    next_retry_at = now(),
+    retry_count = 0
+WHERE processing_status IN ('complete', 'incomplete')
+  AND jsonb_array_length(observed_segments) = 0
+  AND EXISTS (
+    SELECT 1 FROM driver_location_history dlh
+    WHERE dlh.ride_id = ride_routes.ride_id
+  );
+```
+
+The finalizer loop (15 s tick) will pick these up automatically once the
+backend with the v1 parser fix is deployed.
+
 ## Related
 
 - `backend/utils/route_finalizer.py` — 15 s finalization loop, retry/claim state machine

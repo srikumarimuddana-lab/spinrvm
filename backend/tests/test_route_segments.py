@@ -151,6 +151,52 @@ def test_missing_or_stale_tail_is_not_reported_as_complete_coverage():
     assert stale.quality.coverage_ratio == 0.25
 
 
+def test_legacy_v1_points_accepted_with_synthetic_identity():
+    """V1 breadcrumbs stored via persist_ride_breadcrumbs have NULL
+    recording_session_id and sequence_number, and use 'timestamp' instead
+    of 'captured_at'. The parser must accept them with synthetic identities."""
+    v1_points = [
+        {"lat": 50.445, "lng": -104.618, "accuracy": 8, "timestamp": (BASE_TIME + timedelta(seconds=0)).isoformat()},
+        {"lat": 50.4451, "lng": -104.618, "accuracy": 8, "timestamp": (BASE_TIME + timedelta(seconds=30)).isoformat()},
+        {"lat": 50.4452, "lng": -104.618, "accuracy": 8, "timestamp": (BASE_TIME + timedelta(seconds=60)).isoformat()},
+    ]
+
+    segmented = segment_route(v1_points, _lifecycle(), completion_point=None)
+
+    assert len(_flatten(segmented)) == 3
+    assert segmented.quality.rejected_point_count == 0
+    assert segmented.quality.point_count == 3
+
+
+def test_legacy_v1_points_without_captured_at_fall_back_to_timestamp():
+    v1_point = {
+        "lat": 50.445,
+        "lng": -104.618,
+        "accuracy": 8,
+        "timestamp": (BASE_TIME + timedelta(seconds=10)).isoformat(),
+    }
+    segmented = segment_route([v1_point], _lifecycle(), completion_point=None)
+
+    flat = _flatten(segmented)
+    assert len(flat) == 1
+    assert segmented.quality.rejected_point_count == 0
+
+
+def test_legacy_v1_points_with_explicit_none_identity_treated_as_legacy():
+    point = {
+        "lat": 50.445,
+        "lng": -104.618,
+        "accuracy": 8,
+        "recording_session_id": None,
+        "sequence_number": None,
+        "timestamp": (BASE_TIME + timedelta(seconds=5)).isoformat(),
+    }
+
+    segmented = segment_route([point], _lifecycle(), completion_point=None)
+    assert len(_flatten(segmented)) == 1
+    assert segmented.quality.rejected_point_count == 0
+
+
 def test_49_minute_fixture_keeps_two_long_gaps_and_a_5km_jump_separate():
     points = [
         _point(0, sequence=0),

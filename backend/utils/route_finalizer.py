@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 ROUTE_FINALIZER_INTERVAL_SECONDS = 15
 ROUTE_CLAIM_STALE_SECONDS = 5 * 60
+MAX_ROUTE_FINALIZER_RETRIES = 5
 
 # Minimum change in measured distance before the stats columns on the rides
 # row are rewritten. Keeps idempotent replays (same evidence, new revision)
@@ -241,7 +242,7 @@ async def _schedule_retry(ride_id: str, route_row: Optional[Dict[str, Any]], rea
     if claim_filters is None:
         return {"processing_status": "superseded"}
     retry_count = int((route_row or {}).get("retry_count") or 0) + 1
-    retry_seconds = min(300, 15 * (2 ** min(retry_count - 1, 4)))
+    retry_seconds = _retry_delay_seconds(retry_count)
     next_retry_at = _now() + timedelta(seconds=retry_seconds)
     updated = await db_supabase.update_one(
         "ride_routes",
@@ -258,6 +259,10 @@ async def _schedule_retry(ride_id: str, route_row: Optional[Dict[str, Any]], rea
     if updated is None:
         return {"processing_status": "superseded"}
     return {"processing_status": "pending", "retry_count": retry_count, "next_retry_at": next_retry_at}
+
+
+def _retry_delay_seconds(retry_count: int) -> int:
+    return min(300, 15 * (2 ** min(max(retry_count - 1, 0), 4)))
 
 
 async def _publish_finalized_snapshot(
@@ -538,42 +543,70 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
         quality = _quality_projection(segmented, matched_route, drawable, reconstructed)
         revision = int((route_row or {}).get("route_revision") or 0) + 1
         now = _now()
+        retryable_reconstruction = (
+            processing_status == "incomplete" and quality.get("incomplete_reason") == "osrm_reconstruction_failed"
+        )
+        retry_count = int((route_row or {}).get("retry_count") or 0)
+        next_retry_at = None
+        finalized_at: Optional[datetime] = now
+        if retryable_reconstruction:
+            retry_count += 1
+            if retry_count < MAX_ROUTE_FINALIZER_RETRIES:
+                processing_status = "pending"
+                quality["reconstruction_status"] = "retrying"
+                next_retry_at = now + timedelta(seconds=_retry_delay_seconds(retry_count))
+                finalized_at = None
+            else:
+                quality["reconstruction_status"] = "failed"
+
+        route_payload: Dict[str, Any] = {
+            "route_schema_version": 2,
+            "route_revision": revision,
+            "processing_status": processing_status,
+            "observed_segments": _observed_projection(segmented),
+            "road_matched_segments": display_segments,
+            "route_quality": quality,
+            "processing_claimed_at": None,
+            "next_retry_at": next_retry_at,
+            "finalized_at": finalized_at,
+            "computed_at": now,
+        }
+        if retryable_reconstruction:
+            route_payload["retry_count"] = retry_count
+        if processing_status != "complete":
+            route_payload.update(
+                {
+                    "snapshot_revision": 0,
+                    "snapshot_object_path": None,
+                    "snapshot_url": None,
+                }
+            )
         updated = await db_supabase.update_one(
             "ride_routes",
             claim_filters,
-            {
-                "route_schema_version": 2,
-                "route_revision": revision,
-                "processing_status": processing_status,
-                "observed_segments": _observed_projection(segmented),
-                "road_matched_segments": display_segments,
-                "route_quality": quality,
-                "processing_claimed_at": None,
-                "next_retry_at": None,
-                "finalized_at": now,
-                "computed_at": now,
-            },
+            route_payload,
             upsert=False,
         )
         if updated is None:
             return {"processing_status": "superseded"}
-        try:
-            # Stats-only follow-up: late tail evidence changes the *measured*
-            # distance shown on receipts/tiles, never the settled fare.
-            await _recompute_ride_distance_stats(
-                ride_id,
-                ride,
-                revision,
-                reconstructed.get("distance_km") if reconstructed is not None else None,
-            )
-        except Exception:
-            logger.error(
-                "distance stats recompute failed for ride_id=%s (route revision %s kept)",
-                ride_id,
-                revision,
-                exc_info=True,
-            )
-        if drawable:
+        if processing_status == "complete":
+            try:
+                # Stats-only follow-up: late tail evidence changes the *measured*
+                # distance shown on receipts/tiles, never the settled fare.
+                await _recompute_ride_distance_stats(
+                    ride_id,
+                    ride,
+                    revision,
+                    reconstructed.get("distance_km") if reconstructed is not None else None,
+                )
+            except Exception:
+                logger.error(
+                    "distance stats recompute failed for ride_id=%s (route revision %s kept)",
+                    ride_id,
+                    revision,
+                    exc_info=True,
+                )
+        if processing_status == "complete" and drawable:
             await _publish_finalized_snapshot(
                 ride_id,
                 ride,

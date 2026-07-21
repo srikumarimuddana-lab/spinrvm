@@ -38,6 +38,21 @@ const _persistDriverState = (rideState: string, activeRide: ActiveRide | null) =
   }
 };
 
+const _startTripLocationRecording = async (rideId: string) => {
+  try {
+    await tripLocationRecorder.startRide(rideId);
+  } catch (recordingError: unknown) {
+    // The backend transition is already authoritative. Keep the trip active and
+    // let the dashboard's idempotent recorder effect retry without hiding the
+    // local storage failure from diagnostics.
+    recordNonFatal(recordingError, {
+      store: 'driverStore',
+      action: 'startTripLocationRecording',
+      rideId,
+    });
+  }
+};
+
 // These are fallbacks used ONLY until the driver-app pulls
 // `GET /drivers/config` from the backend on mount (see
 // useDriverDashboard.ts). The authoritative values then live in the
@@ -659,6 +674,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
         try {
             await api.post(`/drivers/rides/${rideId}/verify-otp`, { otp });
             set({ rideState: 'trip_in_progress' });
+            await _startTripLocationRecording(rideId);
             await get().fetchActiveRide();
             _persistDriverState('trip_in_progress', get().activeRide);
             return true;
@@ -675,6 +691,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
         try {
             await api.post(`/drivers/rides/${rideId}/start`);
             set({ rideState: 'trip_in_progress' });
+            await _startTripLocationRecording(rideId);
             await get().fetchActiveRide();
             _persistDriverState('trip_in_progress', get().activeRide);
         } catch (err: unknown) {

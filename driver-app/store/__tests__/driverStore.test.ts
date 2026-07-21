@@ -38,6 +38,7 @@ jest.mock('expo-router', () => ({
 
 jest.mock('../../utils/tripLocationRecorder', () => ({
   tripLocationRecorder: {
+    startRide: jest.fn(),
     captureCompletionFix: jest.fn(),
     applyAcknowledgement: jest.fn(),
     closeRide: jest.fn(),
@@ -82,6 +83,12 @@ const resetStore = () =>
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockTripLocationRecorder.startRide.mockResolvedValue({
+    recording_session_id: 'session-123',
+    ride_id: 'ride-123',
+    opened_at: '2026-07-21T12:00:00.000Z',
+    closed_at: null,
+  });
   mockTripLocationRecorder.captureCompletionFix.mockResolvedValue({
     point: {
       ride_id: 'ride-123',
@@ -377,6 +384,39 @@ describe('driverStore — ride state machine', () => {
     expect(result!).toBe(true);
     expect(useDriverStore.getState().rideState).toBe('trip_in_progress');
     expect(mockApi.post).toHaveBeenCalledWith('/drivers/rides/ride-123/verify-otp', { otp: '4321' });
+    expect(mockTripLocationRecorder.startRide).toHaveBeenCalledWith('ride-123');
+    expect(mockTripLocationRecorder.startRide.mock.invocationCallOrder[0]).toBeLessThan(
+      mockApi.get.mock.invocationCallOrder[0],
+    );
+  });
+
+  test('startRide initializes durable recording before active ride hydration', async () => {
+    useDriverStore.setState({ rideState: 'arrived_at_pickup' });
+    mockApi.post.mockResolvedValueOnce({ data: {}, status: 200 } as any);
+    mockApi.get.mockResolvedValueOnce(makeActiveRideResponse('in_progress') as any);
+
+    await act(async () => {
+      await useDriverStore.getState().startRide('ride-123');
+    });
+
+    expect(useDriverStore.getState().rideState).toBe('trip_in_progress');
+    expect(mockTripLocationRecorder.startRide).toHaveBeenCalledWith('ride-123');
+    expect(mockTripLocationRecorder.startRide.mock.invocationCallOrder[0]).toBeLessThan(
+      mockApi.get.mock.invocationCallOrder[0],
+    );
+  });
+
+  test('keeps the ride in progress when durable recorder startup needs dashboard retry', async () => {
+    useDriverStore.setState({ rideState: 'arrived_at_pickup' });
+    mockApi.post.mockResolvedValueOnce({ data: {}, status: 200 } as any);
+    mockApi.get.mockResolvedValueOnce(makeActiveRideResponse('in_progress') as any);
+    mockTripLocationRecorder.startRide.mockRejectedValueOnce(new Error('database is locked'));
+
+    await act(async () => {
+      await useDriverStore.getState().startRide('ride-123');
+    });
+
+    expect(useDriverStore.getState().rideState).toBe('trip_in_progress');
   });
 
   test('verifyOTP returns false and sets error on wrong OTP', async () => {

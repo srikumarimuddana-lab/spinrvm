@@ -14,6 +14,7 @@ describe('completed ride route presentation contract', () => {
   it('renders each captured route segment without requesting a replacement route', () => {
     expect(screenSource).toContain('toReactNativeSegments');
     expect(screenSource).toContain('actualSegments.map((coordinates, index) => (');
+    expect(screenSource).toContain('useCompletedRouteRefresh(currentRide');
     expect(screenSource).not.toContain('MapViewDirections');
     expect(screenSource).not.toContain('fallbackCoords');
   });
@@ -21,11 +22,16 @@ describe('completed ride route presentation contract', () => {
   it('only presents a route snapshot as actual when it matches the geometry revision', () => {
     expect(screenSource).toContain('snapshot_revision');
     expect(screenSource).toContain('isActualSnapshot');
-    expect(screenSource).toContain('Route snapshot unavailable');
+    expect(screenSource).toContain('Actual route unavailable');
   });
 
-  it('keeps planned and incomplete route evidence honestly labelled', () => {
-    expect(screenSource).toContain('Planned route');
+  it('never draws the planned route for completed v2 rides', () => {
+    expect(screenSource).toContain('const isV2Route =');
+    expect(screenSource).toContain('isV2Route ? [] : plannedSegments');
+    expect(screenSource).toContain('{!isV2Route && !hasActualRoute && plannedSegments.map');
+    expect(screenSource).not.toContain('{!hasActualRoute && plannedSegments.map');
+    expect(screenSource).toContain("? 'Actual route processing'");
+    expect(screenSource).toContain("? 'Actual route'");
     expect(screenSource).toContain('routeQualityLabel');
     expect(rideStoreSource).toContain('actual_route_segments?:');
     expect(rideStoreSource).toContain('actual_duration_minutes?:');

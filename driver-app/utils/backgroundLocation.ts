@@ -285,7 +285,7 @@ TaskManager.defineTask(GEOFENCE_TASK, async ({ data, error }) => {
   const payload = data as
     | { eventType?: Location.GeofencingEventType; region?: Location.LocationRegion }
     | undefined;
-  if (!payload || payload.eventType !== Location.GeofencingEventType.Exit) return;
+  if (!payload || !('eventType' in payload) || payload.eventType !== Location.GeofencingEventType.Exit) return;
 
   try {
     // 1. Re-arm future background tracking if it is no longer running.

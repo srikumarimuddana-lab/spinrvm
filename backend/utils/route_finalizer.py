@@ -124,11 +124,21 @@ def _matched_projection(segmented: SegmentedRoute, matched_route: Dict[str, Any]
     return projection
 
 
+def _has_real_matching_failures(matched_route: Dict[str, Any]) -> bool:
+    failures = matched_route.get("failures") or []
+    return any(
+        failure.get("reason") not in ("provider_unavailable", "insufficient_points")
+        for failure in failures
+        if isinstance(failure, dict)
+    )
+
+
 def _quality_projection(segmented: SegmentedRoute, matched_route: Dict[str, Any]) -> dict:
     quality = segmented.quality
     failures = matched_route.get("failures") or []
+    real_failures = _has_real_matching_failures(matched_route)
     incomplete_reason = (
-        "missing_completion_fix" if quality.missing_tail else "road_match_partial_failure" if failures else None
+        "missing_completion_fix" if quality.missing_tail else "road_match_partial_failure" if real_failures else None
     )
     return {
         "coverage_ratio": quality.coverage_ratio,
@@ -148,7 +158,7 @@ def _quality_projection(segmented: SegmentedRoute, matched_route: Dict[str, Any]
 
 
 def _final_status(segmented: SegmentedRoute, matched_route: Dict[str, Any]) -> str:
-    if segmented.quality.missing_tail or matched_route.get("failures"):
+    if segmented.quality.missing_tail or _has_real_matching_failures(matched_route):
         return "incomplete"
     return "complete"
 

@@ -159,20 +159,29 @@ describe('background durable trip recording', () => {
     await tripLocationRecorder.startRide('ride-1');
   });
 
-  it('drops untrusted samples before they reach the durable outbox', async () => {
-    const vague = makeLocation(0);
-    vague.coords.accuracy = 500; // beyond the 200m integrity bound
-    const impossible = makeLocation(1);
-    impossible.coords.speed = 120; // > 90 m/s
+  it('drops spoofing samples (impossible speed) but keeps low/unknown-accuracy fixes', async () => {
+    // Regression guard: accuracy is NOT a trust signal. A null/0 or very high
+    // accuracy fix — routine for backgrounded driving — must still be recorded,
+    // or a trip driven with the app backgrounded loses nearly all its points.
+    const nullAccuracy = makeLocation(0);
+    (nullAccuracy.coords as any).accuracy = null; // background/coarse fix — keep
+    const vague = makeLocation(1);
+    vague.coords.accuracy = 500; // poor GPS (tunnel/urban canyon) — keep
+    const impossible = makeLocation(2);
+    impossible.coords.speed = 120; // > 90 m/s — genuine spoof signal, drop
 
     await handleBackgroundLocationTask({
-      data: { locations: [vague, impossible, makeLocation(2)] } as any,
+      data: { locations: [nullAccuracy, vague, impossible, makeLocation(3)] } as any,
     });
 
-    expect(mockedOutbox.enqueue).toHaveBeenCalledTimes(1);
-    expect(mockedOutbox.enqueue).toHaveBeenCalledWith(expect.objectContaining({
-      captured_at: new Date(makeLocation(2).timestamp).toISOString(),
-    }));
+    // 3 kept (null-accuracy, vague, normal), only the impossible-speed dropped.
+    expect(mockedOutbox.enqueue).toHaveBeenCalledTimes(3);
+    const capturedAts = mockedOutbox.enqueue.mock.calls.map((c: any[]) => c[0].captured_at);
+    expect(capturedAts).toEqual([
+      new Date(makeLocation(0).timestamp).toISOString(),
+      new Date(makeLocation(1).timestamp).toISOString(),
+      new Date(makeLocation(3).timestamp).toISOString(),
+    ]);
   });
 
   it('enqueues native sensor timestamps before attempting a headless upload', async () => {

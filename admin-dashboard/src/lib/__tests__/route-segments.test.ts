@@ -80,4 +80,13 @@ describe('segmented route geometry', () => {
       failed_gaps: ['missing_tail'],
     })).toBe('Route incomplete · OSRM reconstruction pending');
   });
+
+  it('distinguishes active reconstruction from terminal failure', () => {
+    expect(routeQualityLabel({ reconstruction_status: 'retrying' })).toBe(
+      'Route reconstruction in progress',
+    );
+    expect(routeQualityLabel({ reconstruction_status: 'failed' })).toBe(
+      'Route unavailable · reconstruction failed',
+    );
+  });
 });

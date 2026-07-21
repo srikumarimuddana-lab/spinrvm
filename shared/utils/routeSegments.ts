@@ -123,7 +123,10 @@ export function routeQualityLabel(quality: unknown): string {
     observed_distance_ratio?: unknown;
     inferred_distance_ratio?: unknown;
     failed_gaps?: unknown;
+    reconstruction_status?: unknown;
   } | undefined;
+  if (value?.reconstruction_status === 'retrying') return 'Route reconstruction in progress';
+  if (value?.reconstruction_status === 'failed') return 'Route unavailable · reconstruction failed';
   const observedRatio =
     typeof value?.observed_distance_ratio === 'number' ? value.observed_distance_ratio : undefined;
   const inferredRatio =

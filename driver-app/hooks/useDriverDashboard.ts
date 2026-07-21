@@ -319,6 +319,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // Throttle setLocation re-renders: map updates at most every 10 s.
   // WS payloads still fire every watchPositionAsync callback (~5 s).
   const lastRenderMsRef = useRef<number>(0);
+  // Phase 1 (online, no ride): throttle durable idle breadcrumbs so we persist
+  // ~1 location/minute for driver history without filling the trail with the
+  // dense live-marker cadence. Reset when a trip starts / driver goes offline.
+  const lastIdleDurableMsRef = useRef<number>(0);
   const userRef = useRef(user);
   useEffect(() => { userRef.current = user; }, [user]);
 
@@ -676,11 +680,21 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
               }
             });
           } else if (wsRef.current?.readyState === WebSocket.OPEN) {
-            // Idle markers are intentionally ephemeral. Route history comes only
-            // from the ride-scoped recorder above.
+            // Phase 1 (online, no ride). The live marker fans out on every fix
+            // for a smooth map, but is ephemeral (durable:false) so it never
+            // fills the trail. Separately, ~once a minute we send ONE durable
+            // idle breadcrumb — the backend persists it as an online_idle point
+            // (ride_id null) for driver location history. Retention: the PII
+            // purge deletes driver_location_history at 90 days.
+            const IDLE_DURABLE_INTERVAL_MS = 60_000;
+            const persistIdle = now - lastIdleDurableMsRef.current >= IDLE_DURABLE_INTERVAL_MS;
+            if (persistIdle) lastIdleDurableMsRef.current = now;
             wsRef.current.send(JSON.stringify({
               type: 'driver_location',
-              durable: false,
+              // durable:true on the ~60s tick routes through buffer_ride_breadcrumb
+              // → persist_ride_breadcrumbs(persist_idle=True); every other fix
+              // stays an ephemeral live marker.
+              durable: persistIdle,
               lat: loc.coords.latitude,
               lng: loc.coords.longitude,
               speed: loc.coords.speed ?? null,

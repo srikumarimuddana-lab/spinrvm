@@ -15,6 +15,13 @@ export const ACTUAL_ROUTE_STROKE = {
   strokeWidth: 4,
 } as const;
 
+/** OSRM-reconstructed gaps — visible but never misrepresented as observed GPS. */
+export const INFERRED_ROUTE_STROKE = {
+  strokeColor: '#F59E0B',
+  strokeWidth: 4,
+  lineDashPattern: [8, 6] as number[],
+} as const;
+
 /** Planned (pre-trip estimate) route stroke — dashed neutral gray. */
 export const PLANNED_ROUTE_STROKE = {
   strokeColor: '#6B7280',

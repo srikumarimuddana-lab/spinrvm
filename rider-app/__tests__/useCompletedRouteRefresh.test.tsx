@@ -21,7 +21,7 @@ describe('completed-route refresh contract', () => {
     jest.useRealTimers();
   });
 
-  it('refreshes only completed v2 routes awaiting actual geometry', () => {
+  it('refreshes completed v2 routes while reconstruction is pending', () => {
     expect(shouldRefreshCompletedRoute(pendingRide)).toBe(true);
     expect(shouldRefreshCompletedRoute({ ...pendingRide, status: 'in_progress' })).toBe(false);
     expect(shouldRefreshCompletedRoute({ ...pendingRide, route_schema_version: 1 })).toBe(false);
@@ -29,7 +29,7 @@ describe('completed-route refresh contract', () => {
     expect(shouldRefreshCompletedRoute({
       ...pendingRide,
       actual_route_segments: [{ coordinates: [[52.1, -106.6], [52.2, -106.5]] }],
-    })).toBe(false);
+    })).toBe(true);
     expect(shouldRefreshCompletedRoute({
       ...pendingRide,
       route_revision: 3,

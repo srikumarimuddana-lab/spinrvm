@@ -1,7 +1,5 @@
 import { useEffect, useRef } from 'react';
 
-import { normalizeActualRouteSegments } from '../utils/routeSegments';
-
 export const COMPLETED_ROUTE_REFRESH_INTERVAL_MS = 3_000;
 export const COMPLETED_ROUTE_REFRESH_LIMIT_MS = 60_000;
 
@@ -33,7 +31,6 @@ export function shouldRefreshCompletedRoute(
     ride.status === 'completed' &&
     Number(ride.route_schema_version || 0) >= 2 &&
     (ride.route_geometry_status === 'pending' || ride.route_geometry_status === 'processing') &&
-    normalizeActualRouteSegments(ride.actual_route_segments).length === 0 &&
     !hasRevisionMatchedSnapshot(ride)
   );
 }

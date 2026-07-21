@@ -9,11 +9,16 @@ describe('ride-details v2 route rendering contract', () => {
     expect(source).toContain('actual_route_segments');
     expect(source).toContain('route_snapshot_url && isActualSnapshot');
     expect(source).toContain('actualSegments.map((coordinates, index) => (');
+    expect(source).toContain('useCompletedRouteRefresh(ride, fetchRide)');
     expect(source).not.toContain('actualSegments.flat()');
   });
 
-  it('labels planned-only geometry and never rebuilds a completed actual route with Directions', () => {
-    expect(source).toContain("const routeLabel = hasActualRoute ? 'Actual route' : 'Planned route';");
+  it('keeps planned geometry legacy-only and never rebuilds a completed actual route with Directions', () => {
+    expect(source).toContain('const isV2Route =');
+    expect(source).toContain('isV2Route ? [] : plannedSegments');
+    expect(source).toContain('{!isV2Route && !hasActualRoute && plannedSegments.map');
+    expect(source).not.toContain('{!hasActualRoute && plannedSegments.map');
+    expect(source).toContain("const routeLabel = hasActualRoute ? 'Actual route' : isV2Route ? 'Actual route' : 'Planned route';");
     expect(source).not.toContain('decodePolyline');
     expect(source).not.toContain('fetchFallbackRoute');
   });

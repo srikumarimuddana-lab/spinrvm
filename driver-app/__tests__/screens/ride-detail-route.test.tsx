@@ -9,15 +9,20 @@ const source = fs.readFileSync(
 describe('driver ride detail route presentation contract', () => {
   it('renders durable actual route segments without a directions fallback', () => {
     expect(source).toContain('toReactNativeSegments');
+    expect(source).toContain('const [routeMapReady, setRouteMapReady] = useState(false)');
+    expect(source).toContain('if (!routeMapReady || mapCoordinates.length < 2) return');
+    expect(source).toContain('setRouteMapReady(true)');
     expect(source).toContain('actualSegments.map((coordinates, index) => (');
+    expect(source).not.toContain('{routeSnapshotUrl ? (');
+    expect(source).toContain('ride.actual_completion_point');
     expect(source).toContain('useCompletedRouteRefresh(ride, loadRide)');
     expect(source).not.toContain('MapViewDirections');
     expect(source).not.toContain('fallbackCoords');
   });
 
-  it('does not present an outdated snapshot as the current actual route', () => {
-    expect(source).toContain('snapshot_revision');
-    expect(source).toContain('isActualSnapshot');
+  it('does not let a generated snapshot replace drawable actual geometry', () => {
+    expect(source).not.toContain('isActualSnapshot');
+    expect(source).not.toContain('ride?.route_snapshot_url');
     expect(source).toContain('Actual route unavailable');
   });
 

@@ -111,6 +111,29 @@ describe('flushPendingWithTimeout', () => {
   });
 });
 
+describe('startRide durability', () => {
+  const AsyncStorage = require('@react-native-async-storage/async-storage');
+
+  beforeEach(() => {
+    (AsyncStorage.setItem as jest.Mock).mockClear();
+  });
+
+  test('publishes the active ride id even when session creation fails', async () => {
+    const outbox = createOutbox([]);
+    // A SQLite/WAL failure while opening the session must not leave the
+    // background path without a ride id to resolve.
+    outbox.startSession = jest.fn().mockRejectedValue(new Error('database is locked'));
+    const recorder = createTripLocationRecorder({ outbox: outbox as any });
+
+    await expect(recorder.startRide('ride-1')).rejects.toThrow('database is locked');
+
+    // The active-ride key is written BEFORE the session attempt, so the
+    // headless background task can still resolve the ride and lazily create
+    // the session on its first enqueue.
+    expect(AsyncStorage.setItem).toHaveBeenCalledWith('spinr_trip_location_active_ride', 'ride-1');
+  });
+});
+
 describe('captureCompletionFix outbox fallback', () => {
   // expo-location is mocked to {}, so getCurrentPositionAsync throws — the
   // recorder must fall back to durable outbox evidence instead of null.

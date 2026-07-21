@@ -113,11 +113,17 @@ export class TripLocationRecorder {
   async startRide(rideId: string): Promise<PendingTripLocationSession> {
     if (!rideId) throw new Error('A ride id is required to start trip location recording.');
 
-    const session = await this.outbox.startSession(rideId);
-    await AsyncStorage.setItem(ACTIVE_RIDE_KEY, rideId);
+    // Publish the active ride id BEFORE creating the session. The headless
+    // background task calls recordNativeFix() with no rideId and resolves it
+    // from ACTIVE_RIDE_KEY; enqueue() lazily creates the session on first
+    // write. If startSession() were first and threw (e.g. SQLite/WAL error),
+    // the key would stay unset and every background fix would be dropped —
+    // the trip would silently record zero points. Setting the key first makes
+    // the background path self-heal regardless of the session pre-create.
     this.activeRideId = rideId;
     this.activeRideStartedAt = this.now();
-    return session;
+    await AsyncStorage.setItem(ACTIVE_RIDE_KEY, rideId);
+    return this.outbox.startSession(rideId);
   }
 
   async recordNativeFix(

@@ -8,15 +8,18 @@ const source = fs.readFileSync(
 
 describe('driver ride detail route presentation contract', () => {
   it('renders durable actual route segments without a directions fallback', () => {
-    expect(source).toContain('toReactNativeSegments');
+    expect(source).toContain('toReactNativeRouteSections');
     expect(source).toContain('const [routeMapReady, setRouteMapReady] = useState(false)');
     expect(source).toContain('if (!routeMapReady || mapCoordinates.length < 2) return');
     expect(source).toContain('setRouteMapReady(true)');
-    expect(source).toContain('actualSegments.map((coordinates, index) => (');
+    expect(source).toContain('actualSections.map((section) => (');
+    expect(source).toContain("section.geometryKind === 'inferred'");
+    expect(source).toContain('INFERRED_ROUTE_STROKE');
     expect(source).not.toContain('{routeSnapshotUrl ? (');
     expect(source).toContain('ride.actual_completion_point');
     expect(source).toContain('useCompletedRouteRefresh(ride, loadRide)');
     expect(source).not.toContain('MapViewDirections');
+    expect(source).not.toContain('/route/v1/');
     expect(source).not.toContain('fallbackCoords');
   });
 

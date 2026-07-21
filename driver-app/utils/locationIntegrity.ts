@@ -7,7 +7,6 @@ export type LocationIntegrityResult = {
 };
 
 const MAX_SPEED_MPS = 90; // ~324 km/h — faster than any car
-const MIN_ACCURACY_METERS = 200; // suspiciously vague fixes
 const TELEPORT_THRESHOLD_KM = 5;
 const TELEPORT_MIN_INTERVAL_MS = 5_000;
 
@@ -33,14 +32,13 @@ export function checkLocationIntegrity(loc: LocationObject): LocationIntegrityRe
     return { trusted: false, reason: 'mock_location_detected' };
   }
 
-  // Accuracy check — spoofed locations often have perfect (0) or very poor accuracy
-  const accuracy = loc.coords.accuracy ?? 0;
-  if (accuracy === 0) {
-    return { trusted: false, reason: 'zero_accuracy' };
-  }
-  if (accuracy > MIN_ACCURACY_METERS) {
-    return { trusted: false, reason: 'low_accuracy' };
-  }
+  // NOTE: accuracy is deliberately NOT a trust signal. Legitimate fixes
+  // routinely report accuracy of null/0 (background & coarse fixes on many
+  // devices) or > 200 m (urban canyon, tunnels, cold start). Rejecting on
+  // accuracy dropped whole backgrounded trips — the completion fix was often
+  // the only surviving point. Quality/outliers are handled server-side (the
+  // complete_ride spike filter + OSRM road-snap), so here we only reject
+  // genuine spoofing signals: mocked, physically impossible speed, teleport.
 
   // Speed check — impossible speeds suggest spoofing
   const speed = loc.coords.speed ?? 0;

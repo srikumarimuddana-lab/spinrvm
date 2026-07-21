@@ -265,6 +265,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
 
   // State
   const [isOnline, setIsOnline] = useState(driverData?.is_online || false);
+  // Guards the reconcile effect below from fighting toggleOnline's optimistic
+  // update while its /status request is in flight (driverData still reads the
+  // pre-toggle value during that window).
+  const isTogglingRef = useRef(false);
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
   // Why a separate status: `location` stays null when permission is denied or
@@ -315,6 +319,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // Throttle setLocation re-renders: map updates at most every 10 s.
   // WS payloads still fire every watchPositionAsync callback (~5 s).
   const lastRenderMsRef = useRef<number>(0);
+  // Phase 1 (online, no ride): throttle durable idle breadcrumbs so we persist
+  // ~1 location/minute for driver history without filling the trail with the
+  // dense live-marker cadence. Reset when a trip starts / driver goes offline.
+  const lastIdleDurableMsRef = useRef<number>(0);
   const userRef = useRef(user);
   useEffect(() => { userRef.current = user; }, [user]);
 
@@ -672,11 +680,21 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
               }
             });
           } else if (wsRef.current?.readyState === WebSocket.OPEN) {
-            // Idle markers are intentionally ephemeral. Route history comes only
-            // from the ride-scoped recorder above.
+            // Phase 1 (online, no ride). The live marker fans out on every fix
+            // for a smooth map, but is ephemeral (durable:false) so it never
+            // fills the trail. Separately, ~once a minute we send ONE durable
+            // idle breadcrumb — the backend persists it as an online_idle point
+            // (ride_id null) for driver location history. Retention: the PII
+            // purge deletes driver_location_history at 90 days.
+            const IDLE_DURABLE_INTERVAL_MS = 60_000;
+            const persistIdle = now - lastIdleDurableMsRef.current >= IDLE_DURABLE_INTERVAL_MS;
+            if (persistIdle) lastIdleDurableMsRef.current = now;
             wsRef.current.send(JSON.stringify({
               type: 'driver_location',
-              durable: false,
+              // durable:true on the ~60s tick routes through buffer_ride_breadcrumb
+              // → persist_ride_breadcrumbs(persist_idle=True); every other fix
+              // stays an ephemeral live marker.
+              durable: persistIdle,
               lat: loc.coords.latitude,
               lng: loc.coords.longitude,
               speed: loc.coords.speed ?? null,
@@ -1230,6 +1248,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
 
   // ─── Toggle Online/Offline ───────────────────────────────────────
   const toggleOnline = async () => {
+    isTogglingRef.current = true;
     try {
       // Offline guard — only when going ONLINE. Without a connection the
       // go-online request can't reach the backend, so tell the driver with a
@@ -1368,6 +1387,8 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     } catch (e) {
       console.error('[toggleOnline] Unexpected error:', e);
       showToast('error', "Error", "Something went wrong toggling your status. Please try again.");
+    } finally {
+      isTogglingRef.current = false;
     }
   };
 
@@ -1423,6 +1444,36 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     });
     return () => sub.remove();
   }, [user, consumePendingOffer]);
+
+  // ─── Hydrate the online flag from the authoritative profile (once) ──
+  // isOnline is seeded at mount from driverData, which is frequently null on a
+  // cold start / relaunch (auth hydrates async). Without correction, a driver
+  // who is actually online — possibly mid-ride — comes back with isOnline=false:
+  // the location subscription early-returns, startRide()/recordNativeFix() never
+  // run, and background tracking is never re-armed (startBackgroundLocation
+  // lives only in toggleOnline). The ride then records ZERO GPS points, which
+  // is the "route incomplete · 0% GPS coverage" symptom.
+  //
+  // This is a ONE-TIME hydration, NOT continuous reactivity. Making isOnline
+  // reactively follow driverData.is_online would fight server-initiated offline
+  // (auto_offline sets isOnline=false locally but leaves driverData.is_online
+  // true) and could kill capture mid-ride on any stale profile read. After the
+  // first loaded profile, isOnline is owned solely by toggleOnline + auto_offline.
+  const onlineHydratedRef = useRef(false);
+  useEffect(() => {
+    if (onlineHydratedRef.current) return;
+    const serverOnline = driverData?.is_online;
+    if (serverOnline === undefined || serverOnline === null) return; // profile not loaded yet
+    if (isTogglingRef.current) return; // a toggle in flight is authoritative — let it settle
+    onlineHydratedRef.current = true;
+    if (!!serverOnline === isOnline) return;
+    setIsOnline(!!serverOnline);
+    if (serverOnline) {
+      // Re-arm background tracking for a resumed-online session. Idempotent:
+      // startBackgroundLocation no-ops when the task is already running.
+      startBackgroundLocation().catch(() => {});
+    }
+  }, [driverData?.is_online, isOnline]);
 
   // ─── Fetch earnings when online ─────────────────────────────────
   useEffect(() => {

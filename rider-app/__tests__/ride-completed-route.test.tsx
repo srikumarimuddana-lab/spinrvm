@@ -12,14 +12,17 @@ const rideStoreSource = fs.readFileSync(
 
 describe('completed ride route presentation contract', () => {
   it('renders each captured route segment without requesting a replacement route', () => {
-    expect(screenSource).toContain('toReactNativeSegments');
+    expect(screenSource).toContain('toReactNativeRouteSections');
     expect(screenSource).toContain('const [routeMapReady, setRouteMapReady] = useState(false)');
     expect(screenSource).toContain('if (!routeMapReady || mapCoordinates.length < 2) return');
     expect(screenSource).toContain('setRouteMapReady(true)');
-    expect(screenSource).toContain('actualSegments.map((coordinates, index) => (');
+    expect(screenSource).toContain('actualSections.map((section) => (');
+    expect(screenSource).toContain("section.geometryKind === 'inferred'");
+    expect(screenSource).toContain('INFERRED_ROUTE_STROKE');
     expect(screenSource).not.toContain('{routeSnapshotUrl ? (');
     expect(screenSource).toContain('useCompletedRouteRefresh(currentRide');
     expect(screenSource).not.toContain('MapViewDirections');
+    expect(screenSource).not.toContain('/route/v1/');
     expect(screenSource).not.toContain('fallbackCoords');
   });
 

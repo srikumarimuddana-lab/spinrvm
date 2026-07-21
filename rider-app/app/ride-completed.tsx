@@ -16,12 +16,12 @@ import api, { getApiErrorMessage } from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import Analytics from '@shared/analytics';
-import { ACTUAL_ROUTE_STROKE, PLANNED_ROUTE_STROKE, ROUTE_PIN_COLORS } from '@shared/constants/routeMapStyle';
+import { ACTUAL_ROUTE_STROKE, INFERRED_ROUTE_STROKE, PLANNED_ROUTE_STROKE, ROUTE_PIN_COLORS } from '@shared/constants/routeMapStyle';
 import { useStripe } from '@stripe/stripe-react-native';
 import { attemptRidePayment, PaymentAlertButton } from '../utils/attemptRidePayment';
 import { useSpinrPaymentSheet } from '../hooks/useSpinrPaymentSheet';
 import { useCompletedRouteRefresh } from '@shared/hooks/useCompletedRouteRefresh';
-import { routeQualityLabel, toReactNativeSegments } from '@shared/utils/routeSegments';
+import { routeQualityLabel, toReactNativeRouteSections, toReactNativeSegments } from '@shared/utils/routeSegments';
 
 // PR #664 stringified Decimal money fields in API responses (e.g. total_fare,
 // base_fare, tip_amount). The receipt UI needs them as numbers for arithmetic
@@ -85,8 +85,8 @@ function RideCompletedScreenContent() {
   const successScale = useRef(new Animated.Value(0)).current;
   const successOpacity = useRef(new Animated.Value(0)).current;
 
-  const actualSegments = useMemo(
-    () => toReactNativeSegments(currentRide?.actual_route_segments),
+  const actualSections = useMemo(
+    () => toReactNativeRouteSections(currentRide?.actual_route_segments),
     [currentRide?.actual_route_segments],
   );
   const plannedSegments = useMemo(
@@ -94,11 +94,12 @@ function RideCompletedScreenContent() {
     [currentRide?.planned_route_polyline],
   );
   const isV2Route = toNum(currentRide?.route_schema_version) >= 2;
-  const hasActualRoute = actualSegments.length > 0;
-  const displaySegments = hasActualRoute ? actualSegments : isV2Route ? [] : plannedSegments;
+  const hasActualRoute = actualSections.length > 0;
   const mapCoordinates = useMemo(
-    () => displaySegments.reduce<any[]>((all, segment) => all.concat(segment), []),
-    [displaySegments],
+    () => hasActualRoute
+      ? actualSections.reduce<any[]>((all, section) => all.concat(section.coordinates), [])
+      : (isV2Route ? [] : plannedSegments).reduce<any[]>((all, segment) => all.concat(segment), []),
+    [actualSections, hasActualRoute, isV2Route, plannedSegments],
   );
   const routeLabel = hasActualRoute ? 'Actual route' : isV2Route ? 'Actual route' : 'Planned route';
   const routeQuality = routeQualityLabel(currentRide?.route_quality);
@@ -605,11 +606,11 @@ function RideCompletedScreenContent() {
               }}
               onMapReady={() => setRouteMapReady(true)}
             >
-              {actualSegments.map((coordinates, index) => (
+              {actualSections.map((section) => (
                 <Polyline
-                  key={`actual-segment-${index}`}
-                  coordinates={coordinates}
-                  {...ACTUAL_ROUTE_STROKE}
+                  key={section.id}
+                  coordinates={section.coordinates}
+                  {...(section.geometryKind === 'inferred' ? INFERRED_ROUTE_STROKE : ACTUAL_ROUTE_STROKE)}
                   lineCap="round"
                   lineJoin="round"
                 />

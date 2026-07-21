@@ -343,15 +343,25 @@ async def persist_trip_location_batch(
             }
         )
 
-    inserted = (
-        await db_supabase.insert_many_ignore_conflicts(
-            "driver_location_history",
-            rows,
-            on_conflict="ride_id,driver_id,recording_session_id,sequence_number",
-        )
-        if rows
-        else []
-    )
+    inserted: list = []
+    if rows:
+        try:
+            inserted = await db_supabase.insert_many_ignore_conflicts(
+                "driver_location_history",
+                rows,
+                on_conflict="ride_id,driver_id,recording_session_id,sequence_number",
+            )
+        except Exception:
+            # The ON CONFLICT clause requires the unique index from migration
+            # 239. If that migration hasn't been applied yet, fall back to a
+            # plain INSERT so GPS points still reach the DB. Duplicates are
+            # harmless (the finalizer de-dups by sequence_number).
+            logger.warning(
+                "insert_many_ignore_conflicts failed for ride %s — "
+                "falling back to plain insert (migration 239 may be missing)",
+                ride_id,
+            )
+            inserted = await db_supabase.insert_many("driver_location_history", rows)
     # A completed ride can receive a delayed offline batch inside its retention
     # window. Re-finalize only when this call added new evidence; an idempotent
     # replay must not churn revisions or starve the worker's pending queue.

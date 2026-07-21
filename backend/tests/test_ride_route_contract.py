@@ -60,6 +60,12 @@ def test_ride_detail_projects_matched_v2_segments_without_legacy_geometry(monkey
                     "route_quality": {"coverage_ratio": 0.91, "missing_tail": False},
                     "route_revision": 4,
                     "processing_status": "complete",
+                    "completion_point": {
+                        "lat": 50.46,
+                        "lng": -104.63,
+                        "captured_at": "2026-07-21T12:10:00Z",
+                        "sequence_number": 42,
+                    },
                     "snapshot_object_path": "ride_1/route-v4.png",
                     "snapshot_revision": 4,
                     "road_polyline": [[1, 2]],
@@ -87,6 +93,9 @@ def test_ride_detail_projects_matched_v2_segments_without_legacy_geometry(monkey
     assert ride["route_revision"] == 4
     assert ride["snapshot_revision"] == 4
     assert ride["route_geometry_status"] == "complete"
+    assert ride["actual_completion_point"] == {"latitude": 50.46, "longitude": -104.63}
+    assert "completion_point" not in ride
+    assert "captured_at" not in ride["actual_completion_point"]
     assert ride["route_snapshot_url"].endswith("ride-v4.png")
     assert "road_polyline" not in ride
     assert client.tables_requested == ["rides", "ride_routes"]

@@ -82,6 +82,10 @@ export interface Ride {
   rider_rating?: number;
   rider_comment?: string;
   actual_route_segments?: ActualRouteSegment[];
+  actual_completion_point?: {
+    latitude: number;
+    longitude: number;
+  };
   route_quality?: RouteQuality;
   route_schema_version?: number;
   route_revision?: number;

@@ -90,14 +90,6 @@ for _bare_key in list(sys.modules.keys()):
 pytest_plugins = ["anyio"]
 
 
-@pytest.fixture(scope="session")
-def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
-    """Create an instance of the default event loop for each test session."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
-
-
 @pytest.fixture
 def mock_supabase_client() -> MagicMock:
     """Create a mock Supabase client for testing."""

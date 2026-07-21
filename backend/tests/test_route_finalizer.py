@@ -331,6 +331,100 @@ def test_finalizer_persists_reconstructed_sections_and_distance_quality(monkeypa
     recompute.assert_awaited_once_with("ride_1", ride, 4, 1.25)
 
 
+def _failed_reconstruction() -> dict:
+    return {
+        "segments": [
+            {
+                "id": "observed-0-0",
+                "provider": "observed_fallback",
+                "geometry_kind": "observed",
+                "gap_reason": None,
+                "distance_km": 0.2,
+                "coordinates": [[50.45, -104.62], [50.451, -104.621]],
+            }
+        ],
+        "distance_km": 0.2,
+        "observed_distance_km": 0.2,
+        "inferred_distance_km": 0.0,
+        "observed_distance_ratio": 1.0,
+        "inferred_distance_ratio": 0.0,
+        "inferred_gap_count": 0,
+        "endpoint_start_verified": True,
+        "endpoint_end_verified": True,
+        "failed_gaps": ["internal_gap"],
+    }
+
+
+def test_failed_reconstruction_stays_pending_without_stats_or_snapshot(monkeypatch):
+    update = AsyncMock(return_value={"ride_id": "ride_1"})
+    recompute = AsyncMock()
+    publish_snapshot = AsyncMock()
+    ride = {**_ride(), "pickup_lat": 50.45, "pickup_lng": -104.62}
+    monkeypatch.setattr(route_finalizer.db_supabase, "get_rows", AsyncMock(return_value=[_point(0, 0), _point(1, 10)]))
+    monkeypatch.setattr(route_finalizer.db_supabase, "get_ride", AsyncMock(return_value=ride))
+    monkeypatch.setattr(route_finalizer.db_supabase, "update_one", update)
+    monkeypatch.setattr(route_finalizer, "_get_route_row", AsyncMock(return_value=_route_row(retry_count=0)))
+    monkeypatch.setattr(route_finalizer, "_recompute_ride_distance_stats", recompute)
+    monkeypatch.setattr(route_finalizer, "_publish_finalized_snapshot", publish_snapshot)
+    monkeypatch.setattr(
+        route_finalizer, "reconstruct_completed_route", AsyncMock(return_value=_failed_reconstruction())
+    )
+    monkeypatch.setattr(
+        route_finalizer,
+        "compute_segmented_road_route",
+        AsyncMock(return_value={"segments": [], "distance_km": 0.0, "provider": "osrm_match", "failures": []}),
+    )
+
+    result = _run(route_finalizer.finalize_route("ride_1"))
+
+    payload = update.await_args.args[2]
+    assert result["processing_status"] == "pending"
+    assert payload["processing_status"] == "pending"
+    assert payload["retry_count"] == 1
+    assert payload["next_retry_at"] is not None
+    assert payload["finalized_at"] is None
+    assert payload["snapshot_revision"] == 0
+    assert payload["snapshot_object_path"] is None
+    assert payload["route_quality"]["reconstruction_status"] == "retrying"
+    assert payload["route_quality"]["failed_gaps"] == ["internal_gap"]
+    recompute.assert_not_awaited()
+    publish_snapshot.assert_not_awaited()
+
+
+def test_failed_reconstruction_becomes_terminal_after_retry_budget(monkeypatch):
+    update = AsyncMock(return_value={"ride_id": "ride_1"})
+    recompute = AsyncMock()
+    publish_snapshot = AsyncMock()
+    ride = {**_ride(), "pickup_lat": 50.45, "pickup_lng": -104.62}
+    monkeypatch.setattr(route_finalizer.db_supabase, "get_rows", AsyncMock(return_value=[_point(0, 0), _point(1, 10)]))
+    monkeypatch.setattr(route_finalizer.db_supabase, "get_ride", AsyncMock(return_value=ride))
+    monkeypatch.setattr(route_finalizer.db_supabase, "update_one", update)
+    monkeypatch.setattr(route_finalizer, "_get_route_row", AsyncMock(return_value=_route_row(retry_count=4)))
+    monkeypatch.setattr(route_finalizer, "_recompute_ride_distance_stats", recompute)
+    monkeypatch.setattr(route_finalizer, "_publish_finalized_snapshot", publish_snapshot)
+    monkeypatch.setattr(
+        route_finalizer, "reconstruct_completed_route", AsyncMock(return_value=_failed_reconstruction())
+    )
+    monkeypatch.setattr(
+        route_finalizer,
+        "compute_segmented_road_route",
+        AsyncMock(return_value={"segments": [], "distance_km": 0.0, "provider": "osrm_match", "failures": []}),
+    )
+
+    result = _run(route_finalizer.finalize_route("ride_1"))
+
+    payload = update.await_args.args[2]
+    assert result["processing_status"] == "incomplete"
+    assert payload["processing_status"] == "incomplete"
+    assert payload["retry_count"] == 5
+    assert payload["next_retry_at"] is None
+    assert payload["route_quality"]["reconstruction_status"] == "failed"
+    assert payload["snapshot_revision"] == 0
+    assert payload["snapshot_object_path"] is None
+    recompute.assert_not_awaited()
+    publish_snapshot.assert_not_awaited()
+
+
 def test_recomputed_statistics_use_reconstructed_distance_without_touching_fare(monkeypatch):
     updates = []
     inserts = []

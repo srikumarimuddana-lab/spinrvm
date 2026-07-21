@@ -189,7 +189,37 @@ def test_finalizer_marks_missing_tail_incomplete_without_mutating_fare(monkeypat
     assert "distance_km" not in payload
 
 
-def test_provider_partial_failure_keeps_the_observed_segment_and_marks_it_incomplete(monkeypatch):
+def test_single_point_route_is_incomplete_and_does_not_publish_snapshot(monkeypatch):
+    update = AsyncMock(return_value={"ride_id": "ride_1"})
+    publish_snapshot = AsyncMock()
+    monkeypatch.setattr(route_finalizer.db_supabase, "get_rows", AsyncMock(return_value=[_point(0, 590)]))
+    monkeypatch.setattr(route_finalizer.db_supabase, "get_ride", AsyncMock(return_value=_ride()))
+    monkeypatch.setattr(route_finalizer.db_supabase, "update_one", update)
+    monkeypatch.setattr(route_finalizer, "_publish_finalized_snapshot", publish_snapshot)
+    monkeypatch.setattr(route_finalizer, "_get_route_row", AsyncMock(return_value=_route_row()))
+    monkeypatch.setattr(
+        route_finalizer,
+        "compute_segmented_road_route",
+        AsyncMock(
+            return_value={
+                "segments": [],
+                "distance_km": 0.0,
+                "provider": None,
+                "failures": [{"segment_index": 0, "reason": "insufficient_points"}],
+            }
+        ),
+    )
+
+    result = _run(route_finalizer.finalize_route("ride_1"))
+
+    payload = update.await_args.args[2]
+    assert result["processing_status"] == "incomplete"
+    assert payload["route_quality"]["incomplete_reason"] == "insufficient_route_points"
+    assert payload["road_matched_segments"][0]["coordinates"] == [[50.445, -104.618]]
+    publish_snapshot.assert_not_awaited()
+
+
+def test_provider_unavailable_keeps_a_drawable_observed_segment_complete(monkeypatch):
     update = AsyncMock(return_value={"ride_id": "ride_1"})
     monkeypatch.setattr(route_finalizer.db_supabase, "get_rows", AsyncMock(return_value=[_point(0, 0), _point(1, 10)]))
     monkeypatch.setattr(route_finalizer.db_supabase, "get_ride", AsyncMock(return_value=_ride()))
@@ -212,8 +242,8 @@ def test_provider_partial_failure_keeps_the_observed_segment_and_marks_it_incomp
     result = _run(route_finalizer.finalize_route("ride_1"))
 
     payload = update.await_args.args[2]
-    assert result["processing_status"] == "incomplete"
-    assert payload["route_quality"]["incomplete_reason"] == "road_match_partial_failure"
+    assert result["processing_status"] == "complete"
+    assert payload["route_quality"]["incomplete_reason"] is None
     assert payload["road_matched_segments"] == [
         {
             "source_segment_index": 0,
@@ -221,6 +251,7 @@ def test_provider_partial_failure_keeps_the_observed_segment_and_marks_it_incomp
             "coordinates": [[50.445, -104.618], [50.4451, -104.618]],
         }
     ]
+    assert len(payload["road_matched_segments"][0]["coordinates"]) == 2
 
 
 def test_provider_failure_schedules_a_retry_without_exposing_coordinates(monkeypatch):

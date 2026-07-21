@@ -133,12 +133,26 @@ def _has_real_matching_failures(matched_route: Dict[str, Any]) -> bool:
     )
 
 
-def _quality_projection(segmented: SegmentedRoute, matched_route: Dict[str, Any]) -> dict:
+def _has_drawable_route(route_segments: list[dict]) -> bool:
+    """Return whether finalized evidence contains at least one drawable line."""
+    return any(
+        isinstance(segment, dict) and isinstance(segment.get("coordinates"), list) and len(segment["coordinates"]) >= 2
+        for segment in route_segments
+    )
+
+
+def _quality_projection(segmented: SegmentedRoute, matched_route: Dict[str, Any], drawable: bool) -> dict:
     quality = segmented.quality
     failures = matched_route.get("failures") or []
     real_failures = _has_real_matching_failures(matched_route)
     incomplete_reason = (
-        "missing_completion_fix" if quality.missing_tail else "road_match_partial_failure" if real_failures else None
+        "missing_completion_fix"
+        if quality.missing_tail
+        else "insufficient_route_points"
+        if not drawable
+        else "road_match_partial_failure"
+        if real_failures
+        else None
     )
     return {
         "coverage_ratio": quality.coverage_ratio,
@@ -157,8 +171,8 @@ def _quality_projection(segmented: SegmentedRoute, matched_route: Dict[str, Any]
     }
 
 
-def _final_status(segmented: SegmentedRoute, matched_route: Dict[str, Any]) -> str:
-    if segmented.quality.missing_tail or _has_real_matching_failures(matched_route):
+def _final_status(segmented: SegmentedRoute, matched_route: Dict[str, Any], drawable: bool) -> str:
+    if not drawable or segmented.quality.missing_tail or _has_real_matching_failures(matched_route):
         return "incomplete"
     return "complete"
 
@@ -449,9 +463,10 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
         )
         segmented = segment_route(points, ride, (route_row or {}).get("completion_point"))
         matched_route = await compute_segmented_road_route(list(segmented.observed_segments))
-        processing_status = _final_status(segmented, matched_route)
-        quality = _quality_projection(segmented, matched_route)
         display_segments = _matched_projection(segmented, matched_route)
+        drawable = _has_drawable_route(display_segments)
+        processing_status = _final_status(segmented, matched_route, drawable)
+        quality = _quality_projection(segmented, matched_route, drawable)
         revision = int((route_row or {}).get("route_revision") or 0) + 1
         now = _now()
         updated = await db_supabase.update_one(
@@ -484,15 +499,16 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
                 revision,
                 exc_info=True,
             )
-        await _publish_finalized_snapshot(
-            ride_id,
-            ride,
-            revision,
-            display_segments,
-            quality,
-            (route_row or {}).get("completion_point"),
-            finalized_at=now,
-        )
+        if drawable:
+            await _publish_finalized_snapshot(
+                ride_id,
+                ride,
+                revision,
+                display_segments,
+                quality,
+                (route_row or {}).get("completion_point"),
+                finalized_at=now,
+            )
         return {"processing_status": processing_status, "route_revision": revision, "route_quality": quality}
     except Exception:
         logger.error("route finalization failed for ride_id=%s", ride_id, exc_info=True)

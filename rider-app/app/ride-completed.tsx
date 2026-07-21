@@ -20,6 +20,7 @@ import { ACTUAL_ROUTE_STROKE, PLANNED_ROUTE_STROKE, ROUTE_PIN_COLORS } from '@sh
 import { useStripe } from '@stripe/stripe-react-native';
 import { attemptRidePayment, PaymentAlertButton } from '../utils/attemptRidePayment';
 import { useSpinrPaymentSheet } from '../hooks/useSpinrPaymentSheet';
+import { useCompletedRouteRefresh } from '@shared/hooks/useCompletedRouteRefresh';
 import { routeQualityLabel, toReactNativeSegments } from '@shared/utils/routeSegments';
 
 // PR #664 stringified Decimal money fields in API responses (e.g. total_fare,
@@ -91,9 +92,12 @@ function RideCompletedScreenContent() {
     () => toReactNativeSegments(currentRide?.planned_route_polyline ? [currentRide.planned_route_polyline] : []),
     [currentRide?.planned_route_polyline],
   );
+  const isV2Route = toNum(currentRide?.route_schema_version) >= 2;
+  const hasActualRoute = actualSegments.length > 0;
+  const displaySegments = hasActualRoute ? actualSegments : isV2Route ? [] : plannedSegments;
   const mapCoordinates = useMemo(
-    () => (actualSegments.length ? actualSegments : plannedSegments).reduce<any[]>((all, segment) => all.concat(segment), []),
-    [actualSegments, plannedSegments],
+    () => displaySegments.reduce<any[]>((all, segment) => all.concat(segment), []),
+    [displaySegments],
   );
   const routeRevision = toNum(currentRide?.route_revision);
   const isActualSnapshot =
@@ -103,17 +107,23 @@ function RideCompletedScreenContent() {
   const routeSnapshotUrl = currentRide?.route_snapshot_url && isActualSnapshot
     ? currentRide.route_snapshot_url
     : '';
-  const hasActualRoute = actualSegments.length > 0;
-  const routeLabel = hasActualRoute ? 'Actual route' : 'Planned route';
+  const routeLabel = hasActualRoute ? 'Actual route' : isV2Route ? 'Actual route' : 'Planned route';
   const routeQuality = routeQualityLabel(currentRide?.route_quality);
+  const routeIsProcessing =
+    currentRide?.route_geometry_status === 'pending' || currentRide?.route_geometry_status === 'processing';
   const routeStatus = routeSnapshotUrl
     ? `Actual route · revision ${routeRevision}`
     : hasActualRoute
       ? routeQuality
-      : toNum(currentRide?.route_schema_version) >= 2
-        ? 'Route snapshot unavailable · GPS route is still processing'
+      : isV2Route
+        ? routeIsProcessing
+          ? 'Actual route processing'
+          : 'Actual route unavailable'
         : 'Planned route preview';
 
+  useCompletedRouteRefresh(currentRide, async () => {
+    if (rideId) await fetchRide(rideId);
+  });
 
   useEffect(() => {
     Animated.parallel([
@@ -618,7 +628,7 @@ function RideCompletedScreenContent() {
                     lineJoin="round"
                   />
                 ))}
-                {!hasActualRoute && plannedSegments.map((coordinates, index) => (
+                {!isV2Route && !hasActualRoute && plannedSegments.map((coordinates, index) => (
                   <Polyline
                     key={`planned-segment-${index}`}
                     coordinates={coordinates}

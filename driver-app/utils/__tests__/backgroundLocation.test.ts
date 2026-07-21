@@ -81,6 +81,7 @@ import {
   TRIP_CADENCE,
   IDLE_CADENCE,
 } from '../backgroundLocation';
+import * as TaskManager from 'expo-task-manager';
 import { tripLocationRecorder } from '../tripLocationRecorder';
 import { tripLocationOutbox as mockOutbox } from '../tripLocationOutbox';
 import { resetLocationIntegrity } from '../locationIntegrity';
@@ -226,6 +227,82 @@ describe('background durable trip recording', () => {
     expect(mockedOutbox.acknowledge).toHaveBeenCalledWith('session-1', 0, []);
     expect(mockQueuedPoints).toHaveLength(0);
     expect(AsyncStorage.setItem).not.toHaveBeenCalledWith('spinr_bg_location_queue', expect.anything());
+  });
+});
+
+describe('geofence recovery task (NSRangeException guard)', () => {
+  let geofenceHandler: (body: { data: any; error: any }) => Promise<void>;
+
+  beforeAll(() => {
+    const defineTask = TaskManager.defineTask as jest.Mock;
+    const geofenceCall = defineTask.mock.calls.find(
+      (call: any[]) => call[0] === 'spinr-geofence-recovery'
+    );
+    expect(geofenceCall).toBeDefined();
+    geofenceHandler = geofenceCall![1];
+  });
+
+  beforeEach(() => {
+    (Location.hasStartedLocationUpdatesAsync as jest.Mock).mockClear();
+    (Location.startGeofencingAsync as jest.Mock).mockClear();
+  });
+
+  it('no-ops when data is undefined (nil-coalesced to empty dict by native guard)', async () => {
+    await geofenceHandler({ data: undefined, error: null });
+    expect(Location.hasStartedLocationUpdatesAsync).not.toHaveBeenCalled();
+  });
+
+  it('no-ops when data is an empty object (native nil guard fallback)', async () => {
+    await geofenceHandler({ data: {}, error: null });
+    expect(Location.hasStartedLocationUpdatesAsync).not.toHaveBeenCalled();
+  });
+
+  it('no-ops when eventType is Enter (not Exit)', async () => {
+    await geofenceHandler({
+      data: { eventType: Location.GeofencingEventType.Enter, region: { identifier: 'spinr-recovery' } },
+      error: null,
+    });
+    expect(Location.hasStartedLocationUpdatesAsync).not.toHaveBeenCalled();
+  });
+
+  it('no-ops when eventType is missing from data', async () => {
+    await geofenceHandler({
+      data: { region: { identifier: 'spinr-recovery' } },
+      error: null,
+    });
+    expect(Location.hasStartedLocationUpdatesAsync).not.toHaveBeenCalled();
+  });
+
+  it('handles error parameter gracefully', async () => {
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    await geofenceHandler({
+      data: null,
+      error: { message: 'CLError: region monitoring failed' },
+    });
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '[Geofence] Task error:',
+      'CLError: region monitoring failed'
+    );
+    expect(Location.hasStartedLocationUpdatesAsync).not.toHaveBeenCalled();
+    consoleSpy.mockRestore();
+  });
+
+  it('re-arms background tracking on valid Exit event', async () => {
+    (Location.hasStartedLocationUpdatesAsync as jest.Mock).mockResolvedValue(false);
+    (SecureStore.getItemAsync as jest.Mock).mockImplementation((key: string) => {
+      if (key === 'spinr_bg_trip_active') return Promise.resolve(null);
+      if (key === 'bg_access_token') return Promise.resolve('access-token');
+      if (key === 'bg_access_token_expires') return Promise.resolve(String(Date.now() + 120_000));
+      return Promise.resolve(null);
+    });
+    mockBgPermission = 'granted';
+
+    await geofenceHandler({
+      data: { eventType: Location.GeofencingEventType.Exit, region: { identifier: 'spinr-recovery' } },
+      error: null,
+    });
+
+    expect(Location.hasStartedLocationUpdatesAsync).toHaveBeenCalledWith('spinr-background-location');
   });
 });
 

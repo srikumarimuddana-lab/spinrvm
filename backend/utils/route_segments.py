@@ -128,7 +128,11 @@ def _parse_points(points: Iterable[Dict[str, Any]]) -> tuple[List[_ParsedPoint],
             continue
         session_id = point.get("recording_session_id")
         sequence_number = point.get("sequence_number")
-        if (
+        is_legacy = session_id is None and sequence_number is None
+        if is_legacy:
+            session_id = "legacy"
+            sequence_number = input_index
+        elif (
             not isinstance(session_id, str)
             or not session_id
             or not isinstance(sequence_number, int)
@@ -137,7 +141,7 @@ def _parse_points(points: Iterable[Dict[str, Any]]) -> tuple[List[_ParsedPoint],
         ):
             rejected.append(_reject(point, "invalid_identity"))
             continue
-        captured_at = parse_iso_utc(point.get("captured_at"))
+        captured_at = parse_iso_utc(point.get("captured_at") or point.get("timestamp"))
         if captured_at is None:
             rejected.append(_reject(point, "invalid_capture_time"))
             continue

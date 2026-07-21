@@ -1,7 +1,10 @@
 """Contract tests for timestamp-authoritative ride route analysis."""
 
 import json
+import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -146,8 +149,8 @@ async def test_projection_contains_only_phase_3_and_one_actual_route_feature(mon
             "failed_gaps": [],
         }
 
-    monkeypatch.setattr(analyzer_module, "compute_segmented_road_route", matched)
-    monkeypatch.setattr(analyzer_module, "reconstruct_completed_route", reconstructed)
+    monkeypatch.setattr(analyzer_module, "_compute_segmented_route", matched)
+    monkeypatch.setattr(analyzer_module, "_reconstruct_route", reconstructed)
 
     projection = await project_phase_3_route(analysis, _ride())
 
@@ -202,3 +205,32 @@ def test_cli_requires_locations_json_with_offline_ride(tmp_path, capsys):
 
     assert exit_code == 2
     assert "--locations-json is required" in capsys.readouterr().err
+
+
+def test_module_cli_no_osrm_runs_from_repository_root(tmp_path):
+    ride_path = tmp_path / "ride.json"
+    points_path = tmp_path / "points.json"
+    ride_path.write_text(json.dumps(_ride()), encoding="utf-8")
+    points_path.write_text(json.dumps(_phase_3_trace()), encoding="utf-8")
+    repository_root = Path(__file__).resolve().parents[2]
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "backend.scripts.analyze_ride_route",
+            "--ride-json",
+            str(ride_path),
+            "--locations-json",
+            str(points_path),
+            "--no-osrm",
+        ],
+        cwd=repository_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert '"strict_phase_3_observed_km"' in completed.stdout
+    assert "-104." not in completed.stdout

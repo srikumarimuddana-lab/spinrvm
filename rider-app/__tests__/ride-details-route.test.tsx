@@ -4,11 +4,15 @@ import path from 'node:path';
 const source = fs.readFileSync(path.join(__dirname, '..', 'app', 'ride-details.tsx'), 'utf8');
 
 describe('ride-details v2 route rendering contract', () => {
-  it('prefers a revision-matched snapshot and renders actual segments independently', () => {
+  it('renders actual segments on the native map after the map is ready', () => {
     expect(source).toContain('toReactNativeSegments');
     expect(source).toContain('actual_route_segments');
-    expect(source).toContain('route_snapshot_url && isActualSnapshot');
+    expect(source).toContain('const [routeMapReady, setRouteMapReady] = useState(false)');
+    expect(source).toContain('if (!routeMapReady || mapCoordinates.length < 2) return');
+    expect(source).toContain('setRouteMapReady(true)');
     expect(source).toContain('actualSegments.map((coordinates, index) => (');
+    expect(source).not.toContain('{routeSnapshotUrl ? (');
+    expect(source).toContain('ride.actual_completion_point');
     expect(source).toContain('useCompletedRouteRefresh(ride, fetchRide)');
     expect(source).not.toContain('actualSegments.flat()');
   });

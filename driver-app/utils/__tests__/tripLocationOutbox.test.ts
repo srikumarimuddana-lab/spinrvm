@@ -273,6 +273,25 @@ describe('TripLocationOutbox', () => {
     expect(await outbox.pendingCount('ride-1')).toBe(1);
   });
 
+  it('retries database initialization after a transient open failure', async () => {
+    let openAttempts = 0;
+    const outbox = createTripLocationOutbox({
+      openDatabase: async () => {
+        openAttempts += 1;
+        if (openAttempts === 1) throw new Error('WAL checkpoint failed');
+        return database as never;
+      },
+      randomUUID: () => `session-${++uuidSequence}`,
+      now: () => '2026-07-17T22:46:00.000Z',
+    });
+
+    await expect(outbox.enqueue(makeFix())).rejects.toThrow('WAL checkpoint failed');
+    const point = await outbox.enqueue(makeFix());
+
+    expect(point.sequence_number).toBe(0);
+    expect(openAttempts).toBe(2);
+  });
+
   it('keeps unacknowledged points when a trip recording session closes', async () => {
     const outbox = createOutbox();
     const point = await outbox.enqueue(makeFix());

@@ -3,28 +3,44 @@ import { resolve } from 'path';
 
 const hookSource = readFileSync(resolve(__dirname, '..', 'useDriverDashboard.ts'), 'utf8');
 
-describe('online-flag reconcile with authoritative profile', () => {
+describe('one-time online-flag hydration from the authoritative profile', () => {
   const effect = hookSource.slice(
-    hookSource.indexOf('// ─── Reconcile local online flag with the authoritative profile ──'),
+    hookSource.indexOf('// ─── Hydrate the online flag from the authoritative profile (once) ──'),
     hookSource.indexOf('// ─── Fetch earnings when online ─────────────────────────────────'),
   );
 
-  it('adopts the server online flag when it diverges from local state', () => {
+  it('adopts the loaded profile online flag exactly once', () => {
+    expect(effect).toContain('const onlineHydratedRef = useRef(false);');
+    expect(effect).toContain('if (onlineHydratedRef.current) return;');
+    expect(effect).toContain('onlineHydratedRef.current = true;');
     expect(effect).toContain('const serverOnline = driverData?.is_online;');
-    expect(effect).toContain('if (!!serverOnline === isOnline) return;');
     expect(effect).toContain('setIsOnline(!!serverOnline);');
-    // Keyed on the profile flag so a cold-start/resume that hydrates
-    // driverData late still reconciles.
-    expect(effect).toContain('}, [driverData?.is_online, isOnline]);');
   });
 
-  it('re-arms background tracking when reconciling to online', () => {
+  it('waits for the profile to load before hydrating', () => {
+    expect(effect).toContain('if (serverOnline === undefined || serverOnline === null) return;');
+  });
+
+  it('re-arms background tracking only when hydrating to online', () => {
     expect(effect).toContain('if (serverOnline) {');
     expect(effect).toContain('startBackgroundLocation().catch(() => {});');
   });
 
-  it('does not clobber an in-flight optimistic toggle', () => {
-    expect(effect).toContain('if (isTogglingRef.current) return;');
+  it('never fights an in-flight toggle (leaves marking un-hydrated so a later run syncs)', () => {
+    // The toggling guard must come BEFORE we mark hydrated, so a toggle in
+    // flight at first-profile-load doesn't burn the one-time hydration.
+    const guardIdx = effect.indexOf('if (isTogglingRef.current) return;');
+    const markIdx = effect.indexOf('onlineHydratedRef.current = true;');
+    expect(guardIdx).toBeGreaterThan(-1);
+    expect(markIdx).toBeGreaterThan(guardIdx);
+  });
+
+  it('is one-time hydration, not continuous reactivity that could fight auto_offline', () => {
+    // Regression guard: auto_offline sets isOnline=false locally but leaves
+    // driverData.is_online=true; a reactive reconcile would flip it back on.
+    // The early return on onlineHydratedRef makes the effect inert after the
+    // first loaded profile.
+    expect(effect).toContain('if (onlineHydratedRef.current) return;');
   });
 
   it('toggleOnline sets and clears the toggle guard around its request', () => {

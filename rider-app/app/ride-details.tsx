@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Platform, Image,
+  View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -122,6 +122,7 @@ export default function RideDetailsScreen() {
   const [emailSending, setEmailSending] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
   const mapRef = React.useRef<MapView>(null);
+  const [routeMapReady, setRouteMapReady] = useState(false);
 
   const handleEmailReceipt = async () => {
     if (emailSending) return;
@@ -227,15 +228,18 @@ export default function RideDetailsScreen() {
     ),
     [displaySegments],
   );
-  const isActualSnapshot =
-    _num(ride?.route_schema_version) >= 2 &&
-    _num(ride?.route_revision) > 0 &&
-    _num(ride?.snapshot_revision) === _num(ride?.route_revision);
-  const routeSnapshotUrl = ride?.route_snapshot_url && isActualSnapshot ? ride.route_snapshot_url : '';
   const routeLabel = hasActualRoute ? 'Actual route' : isV2Route ? 'Actual route' : 'Planned route';
   const routeQuality = routeQualityLabel(ride?.route_quality);
   const routeIsProcessing =
     ride?.route_geometry_status === 'pending' || ride?.route_geometry_status === 'processing';
+
+  useEffect(() => {
+    if (!routeMapReady || mapCoordinates.length < 2) return;
+    mapRef.current?.fitToCoordinates(mapCoordinates, {
+      edgePadding: { top: 30, right: 30, bottom: 30, left: 30 },
+      animated: false,
+    });
+  }, [routeMapReady, mapCoordinates]);
 
   const formatDate = (d: string) => {
     try {
@@ -300,65 +304,58 @@ export default function RideDetailsScreen() {
         {/* V2 actual geometry is segmented. Planned geometry is separately labelled. */}
         {ride.pickup_lat && ride.dropoff_lat && (
           <View style={styles.mapCard}>
-            {routeSnapshotUrl ? (
-              <Image
-                source={{ uri: routeSnapshotUrl }}
-                style={styles.map}
-                resizeMode="cover"
-              />
-            ) : (
-              <MapView
-                ref={mapRef}
-                style={styles.map}
-                provider={MAP_PROVIDER}
-                scrollEnabled={false}
-                zoomEnabled={false}
-                rotateEnabled={false}
-                userInterfaceStyle={isDark ? "dark" : "light"}
-                initialRegion={{
-                  latitude: (ride.pickup_lat + ride.dropoff_lat) / 2,
-                  longitude: (ride.pickup_lng + ride.dropoff_lng) / 2,
-                  latitudeDelta: Math.abs(ride.pickup_lat - ride.dropoff_lat) * 2.5 + 0.01,
-                  longitudeDelta: Math.abs(ride.pickup_lng - ride.dropoff_lng) * 2.5 + 0.01,
-                }}
-                onMapReady={() => {
-                  if (mapCoordinates.length >= 2) {
-                    mapRef.current?.fitToCoordinates(mapCoordinates, {
-                      edgePadding: { top: 30, right: 30, bottom: 30, left: 30 }, animated: false,
-                    });
-                  }
-                }}
-              >
-                {hasActualRoute && actualSegments.map((coordinates, index) => (
-                    <Polyline
-                      key={`actual-route-${index}`}
-                      coordinates={coordinates}
-                      {...ACTUAL_ROUTE_STROKE}
-                      lineCap="round"
-                      lineJoin="round"
-                    />
-                  ))}
-                {!isV2Route && !hasActualRoute && plannedSegments.map((coordinates, index) => (
+            <MapView
+              ref={mapRef}
+              style={styles.map}
+              provider={MAP_PROVIDER}
+              scrollEnabled={false}
+              zoomEnabled={false}
+              rotateEnabled={false}
+              userInterfaceStyle={isDark ? "dark" : "light"}
+              initialRegion={{
+                latitude: (ride.pickup_lat + ride.dropoff_lat) / 2,
+                longitude: (ride.pickup_lng + ride.dropoff_lng) / 2,
+                latitudeDelta: Math.abs(ride.pickup_lat - ride.dropoff_lat) * 2.5 + 0.01,
+                longitudeDelta: Math.abs(ride.pickup_lng - ride.dropoff_lng) * 2.5 + 0.01,
+              }}
+              onMapReady={() => setRouteMapReady(true)}
+            >
+              {hasActualRoute && actualSegments.map((coordinates, index) => (
                   <Polyline
-                    key={`planned-route-${index}`}
+                    key={`actual-route-${index}`}
                     coordinates={coordinates}
-                    {...PLANNED_ROUTE_STROKE}
+                    {...ACTUAL_ROUTE_STROKE}
                     lineCap="round"
                     lineJoin="round"
                   />
                 ))}
-                <Marker coordinate={{ latitude: ride.pickup_lat, longitude: ride.pickup_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                  <View style={[styles.pin, { backgroundColor: ROUTE_PIN_COLORS.pickup }]}>
-                    <Ionicons name="location" size={14} color="#FFF" />
+              {!isV2Route && !hasActualRoute && plannedSegments.map((coordinates, index) => (
+                <Polyline
+                  key={`planned-route-${index}`}
+                  coordinates={coordinates}
+                  {...PLANNED_ROUTE_STROKE}
+                  lineCap="round"
+                  lineJoin="round"
+                />
+              ))}
+              <Marker coordinate={{ latitude: ride.pickup_lat, longitude: ride.pickup_lng }} anchor={{ x: 0.5, y: 0.5 }}>
+                <View style={[styles.pin, { backgroundColor: ROUTE_PIN_COLORS.pickup }]}>
+                  <Ionicons name="location" size={14} color="#FFF" />
+                </View>
+              </Marker>
+              <Marker coordinate={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }} anchor={{ x: 0.5, y: 0.5 }}>
+                <View style={[styles.pin, { backgroundColor: ROUTE_PIN_COLORS.dropoff }]}>
+                  <Ionicons name="flag" size={14} color="#FFF" />
+                </View>
+              </Marker>
+              {ride.actual_completion_point && (
+                <Marker coordinate={ride.actual_completion_point} anchor={{ x: 0.5, y: 0.5 }}>
+                  <View style={[styles.pin, { backgroundColor: ROUTE_PIN_COLORS.completion }]}>
+                    <Ionicons name="checkmark" size={14} color="#FFF" />
                   </View>
                 </Marker>
-                <Marker coordinate={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                  <View style={[styles.pin, { backgroundColor: ROUTE_PIN_COLORS.dropoff }]}>
-                    <Ionicons name="flag" size={14} color="#FFF" />
-                  </View>
-                </Marker>
-              </MapView>
-            )}
+              )}
+            </MapView>
           </View>
         )}
         {isCompleted && (

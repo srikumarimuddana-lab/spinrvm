@@ -14,17 +14,21 @@ from typing import Any, Dict, Optional
 
 try:
     from .. import db_supabase
+    from ..settings_loader import get_app_settings
 except ImportError:
     import db_supabase  # type: ignore
+    from settings_loader import get_app_settings  # type: ignore
 
 try:
     from .datetime_utils import parse_iso_utc
     from .route_distance import compute_segmented_road_route
+    from .route_reconstruction import reconstruct_completed_route
     from .route_segments import SegmentedRoute, segment_route
     from .trip_distance import compute_trip_distances, load_ride_breadcrumbs
 except ImportError:
     from utils.datetime_utils import parse_iso_utc  # type: ignore
     from utils.route_distance import compute_segmented_road_route  # type: ignore
+    from utils.route_reconstruction import reconstruct_completed_route  # type: ignore
     from utils.route_segments import SegmentedRoute, segment_route  # type: ignore
 
 
@@ -141,21 +145,33 @@ def _has_drawable_route(route_segments: list[dict]) -> bool:
     )
 
 
-def _quality_projection(segmented: SegmentedRoute, matched_route: Dict[str, Any], drawable: bool) -> dict:
+def _quality_projection(
+    segmented: SegmentedRoute,
+    matched_route: Dict[str, Any],
+    drawable: bool,
+    reconstructed: Optional[Dict[str, Any]] = None,
+) -> dict:
     quality = segmented.quality
     failures = matched_route.get("failures") or []
     real_failures = _has_real_matching_failures(matched_route)
+    failed_gaps = (reconstructed or {}).get("failed_gaps") or []
+    endpoints_verified = reconstructed is None or (
+        reconstructed.get("endpoint_start_verified") is True and reconstructed.get("endpoint_end_verified") is True
+    )
     incomplete_reason = (
         "missing_completion_fix"
-        if quality.missing_tail
+        if quality.missing_tail and reconstructed is None
+        else "osrm_reconstruction_failed"
+        if failed_gaps or not endpoints_verified
         else "insufficient_route_points"
         if not drawable
         else "road_match_partial_failure"
         if real_failures
         else None
     )
-    return {
+    projected = {
         "coverage_ratio": quality.coverage_ratio,
+        "temporal_coverage_ratio": quality.coverage_ratio,
         "point_count": quality.point_count,
         "segment_count": quality.segment_count,
         "rejected_point_count": quality.rejected_point_count,
@@ -164,15 +180,44 @@ def _quality_projection(segmented: SegmentedRoute, matched_route: Dict[str, Any]
         "completion_distance_m": quality.completion_distance_m,
         "completion_tolerance_m": quality.completion_tolerance_m,
         "distance_provider": matched_route.get("provider"),
-        "matched_distance_km": matched_route.get("distance_km"),
-        "matching_failure_count": len(failures),
-        "finalization_reason": "complete" if not failures else "provider_partial_failure",
+        "matched_distance_km": (reconstructed or {}).get("distance_km", matched_route.get("distance_km")),
+        "matching_failure_count": len(failures) + len(failed_gaps),
+        "finalization_reason": ("complete" if not failures and not failed_gaps else "provider_partial_failure"),
         "incomplete_reason": incomplete_reason,
     }
+    if reconstructed is not None:
+        projected.update(
+            {
+                "observed_distance_km": reconstructed.get("observed_distance_km"),
+                "inferred_distance_km": reconstructed.get("inferred_distance_km"),
+                "observed_distance_ratio": reconstructed.get("observed_distance_ratio"),
+                "inferred_distance_ratio": reconstructed.get("inferred_distance_ratio"),
+                "inferred_gap_count": reconstructed.get("inferred_gap_count"),
+                "endpoint_start_verified": reconstructed.get("endpoint_start_verified"),
+                "endpoint_end_verified": reconstructed.get("endpoint_end_verified"),
+                "failed_gaps": list(failed_gaps),
+            }
+        )
+    return projected
 
 
-def _final_status(segmented: SegmentedRoute, matched_route: Dict[str, Any], drawable: bool) -> str:
-    if not drawable or segmented.quality.missing_tail or _has_real_matching_failures(matched_route):
+def _final_status(
+    segmented: SegmentedRoute,
+    matched_route: Dict[str, Any],
+    drawable: bool,
+    reconstructed: Optional[Dict[str, Any]] = None,
+) -> str:
+    reconstruction_incomplete = reconstructed is not None and (
+        bool(reconstructed.get("failed_gaps"))
+        or reconstructed.get("endpoint_start_verified") is not True
+        or reconstructed.get("endpoint_end_verified") is not True
+    )
+    if (
+        not drawable
+        or (segmented.quality.missing_tail and reconstructed is None)
+        or _has_real_matching_failures(matched_route)
+        or reconstruction_incomplete
+    ):
         return "incomplete"
     return "complete"
 
@@ -336,7 +381,12 @@ async def route_finalizer_loop(interval_seconds: int = ROUTE_FINALIZER_INTERVAL_
         await asyncio.sleep(interval_seconds)
 
 
-async def _recompute_ride_distance_stats(ride_id: str, ride: Dict[str, Any], revision: int) -> None:
+async def _recompute_ride_distance_stats(
+    ride_id: str,
+    ride: Dict[str, Any],
+    revision: int,
+    reconstructed_distance_km: Optional[float] = None,
+) -> None:
     """Refresh measured-distance stats on a completed ride from full evidence.
 
     Runs after a successful revisioned projection write, when a late tail
@@ -362,13 +412,17 @@ async def _recompute_ride_distance_stats(ride_id: str, ride: Dict[str, Any], rev
     )
 
     previous_actual = float(ride.get("actual_distance_km") or 0)
-    new_actual = float(distances.actual_distance_km or 0)
+    new_actual = float(
+        reconstructed_distance_km if reconstructed_distance_km is not None else distances.actual_distance_km or 0
+    )
     if abs(new_actual - previous_actual) <= DISTANCE_RECOMPUTE_EPSILON_KM:
         return
 
+    phase_distances = dict(distances.phase_distances or {})
+    phase_distances["trip_in_progress"] = round(new_actual, 3)
     update_fields: Dict[str, Any] = {
-        "actual_distance_km": distances.actual_distance_km,
-        "phase_distances": distances.phase_distances,
+        "actual_distance_km": round(new_actual, 3),
+        "phase_distances": phase_distances,
         "phase_durations": distances.phase_durations,
         "pickup_to_driver_km": distances.pickup_to_driver_km,
         "gps_points_count": distances.gps_points_count,
@@ -376,10 +430,6 @@ async def _recompute_ride_distance_stats(ride_id: str, ride: Dict[str, Any], rev
 
     fare_lock = False
     try:
-        try:
-            from ..settings_loader import get_app_settings
-        except ImportError:
-            from settings_loader import get_app_settings  # type: ignore
         fare_lock = ((await get_app_settings()) or {}).get("fare_lock_enabled", False)
     except Exception:
         logger.debug("fare_lock_enabled check failed during recompute, defaulting to False", exc_info=True)
@@ -388,7 +438,7 @@ async def _recompute_ride_distance_stats(ride_id: str, ride: Dict[str, Any], rev
         # (the fare stays at the booking-time estimate), so keep it in step
         # with the measured value. Without fare-lock, distance_km fed the
         # settled fare and must not drift from it retroactively.
-        update_fields["distance_km"] = distances.actual_distance_km
+        update_fields["distance_km"] = round(new_actual, 3)
 
     # ride_metrics actuals (read cache for rider/admin detail UI).
     metrics = dict(ride.get("ride_metrics") or {})
@@ -399,7 +449,9 @@ async def _recompute_ride_distance_stats(ride_id: str, ride: Dict[str, Any], rev
     trip_phase["actual_distance_km"] = round(new_actual, 3)
     if distances.actual_distance_km_haversine is not None:
         trip_phase["actual_distance_km_haversine"] = round(float(distances.actual_distance_km_haversine), 3)
-    if distances.actual_distance_km_road is not None:
+    if reconstructed_distance_km is not None:
+        trip_phase["actual_distance_km_road_snapped"] = round(new_actual, 3)
+    elif distances.actual_distance_km_road is not None:
         trip_phase["actual_distance_km_road_snapped"] = round(float(distances.actual_distance_km_road), 3)
     phases["navigating_to_pickup"] = nav_phase
     phases["trip_in_progress"] = trip_phase
@@ -425,8 +477,8 @@ async def _recompute_ride_distance_stats(ride_id: str, ride: Dict[str, Any], rev
             "previous_actual_distance_km": previous_actual,
             "new_actual_distance_km": new_actual,
             "previous_phase_distances": ride.get("phase_distances") or {},
-            "new_phase_distances": distances.phase_distances,
-            "trigger": "late_tail_refinalization",
+            "new_phase_distances": phase_distances,
+            "trigger": "route_reconstruction" if reconstructed_distance_km is not None else "late_tail_refinalization",
         },
     )
     logger.info(
@@ -461,12 +513,29 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
             order="captured_at",
             limit=10_000,
         )
-        segmented = segment_route(points, ride, (route_row or {}).get("completion_point"))
+        completion_point = (route_row or {}).get("completion_point")
+        segmented = segment_route(points, ride, completion_point)
         matched_route = await compute_segmented_road_route(list(segmented.observed_segments))
-        display_segments = _matched_projection(segmented, matched_route)
+        reconstructed: Optional[Dict[str, Any]] = None
+        if (
+            ride.get("pickup_lat") is not None
+            and ride.get("pickup_lng") is not None
+            and isinstance(completion_point, dict)
+            and completion_point.get("lat") is not None
+            and completion_point.get("lng") is not None
+        ):
+            reconstructed = await reconstruct_completed_route(
+                segmented,
+                matched_route,
+                {"lat": ride.get("pickup_lat"), "lng": ride.get("pickup_lng")},
+                completion_point,
+            )
+        display_segments = (
+            reconstructed["segments"] if reconstructed is not None else _matched_projection(segmented, matched_route)
+        )
         drawable = _has_drawable_route(display_segments)
-        processing_status = _final_status(segmented, matched_route, drawable)
-        quality = _quality_projection(segmented, matched_route, drawable)
+        processing_status = _final_status(segmented, matched_route, drawable, reconstructed)
+        quality = _quality_projection(segmented, matched_route, drawable, reconstructed)
         revision = int((route_row or {}).get("route_revision") or 0) + 1
         now = _now()
         updated = await db_supabase.update_one(
@@ -491,7 +560,12 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
         try:
             # Stats-only follow-up: late tail evidence changes the *measured*
             # distance shown on receipts/tiles, never the settled fare.
-            await _recompute_ride_distance_stats(ride_id, ride, revision)
+            await _recompute_ride_distance_stats(
+                ride_id,
+                ride,
+                revision,
+                reconstructed.get("distance_km") if reconstructed is not None else None,
+            )
         except Exception:
             logger.error(
                 "distance stats recompute failed for ride_id=%s (route revision %s kept)",
@@ -506,7 +580,7 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
                 revision,
                 display_segments,
                 quality,
-                (route_row or {}).get("completion_point"),
+                completion_point,
                 finalized_at=now,
             )
         return {"processing_status": processing_status, "route_revision": revision, "route_quality": quality}

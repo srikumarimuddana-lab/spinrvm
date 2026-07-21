@@ -168,6 +168,26 @@ def test_legacy_v1_points_accepted_with_synthetic_identity():
     assert segmented.quality.point_count == 3
 
 
+def test_shuffled_legacy_points_are_ordered_by_timestamp_without_false_clock_regressions():
+    def legacy_point(seconds: int) -> dict:
+        return {
+            "lat": 50.445 + seconds * 0.000001,
+            "lng": -104.618,
+            "accuracy": 8,
+            "timestamp": (BASE_TIME + timedelta(seconds=seconds)).isoformat(),
+        }
+
+    points = [legacy_point(120), legacy_point(0), legacy_point(60)]
+    segmented = segment_route(points, _lifecycle(), completion_point=None)
+
+    assert [point["timestamp"] for point in _flatten(segmented)] == [
+        legacy_point(0)["timestamp"],
+        legacy_point(60)["timestamp"],
+        legacy_point(120)["timestamp"],
+    ]
+    assert segmented.quality.rejected_point_count == 0
+
+
 def test_legacy_v1_points_without_captured_at_fall_back_to_timestamp():
     v1_point = {
         "lat": 50.445,

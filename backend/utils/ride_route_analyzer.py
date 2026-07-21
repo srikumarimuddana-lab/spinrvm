@@ -20,9 +20,13 @@ except ImportError:
 
 try:
     from .datetime_utils import parse_iso_utc
+    from .route_distance import compute_segmented_road_route
+    from .route_reconstruction import reconstruct_completed_route
     from .route_segments import SegmentedRoute, segment_route
 except ImportError:
     from utils.datetime_utils import parse_iso_utc  # type: ignore
+    from utils.route_distance import compute_segmented_road_route  # type: ignore
+    from utils.route_reconstruction import reconstruct_completed_route  # type: ignore
     from utils.route_segments import SegmentedRoute, segment_route  # type: ignore
 
 
@@ -41,6 +45,14 @@ class RideRouteAnalysis:
     report: Dict[str, Any]
     phase_points: Dict[str, Tuple[Dict[str, Any], ...]]
     segmented_phase_3: SegmentedRoute
+
+
+@dataclass(frozen=True)
+class RouteProjection:
+    """Sanitized provider metrics plus optional local coordinate geometry."""
+
+    report: Dict[str, Any]
+    geojson: Dict[str, Any] | None
 
 
 def _boundaries(ride: Dict[str, Any]) -> tuple[datetime, datetime, datetime]:
@@ -201,3 +213,90 @@ def analyze_ride_evidence(
         "diagnosis": diagnosis,
     }
     return RideRouteAnalysis(report, accepted, segmented["phase_3"])
+
+
+def _geojson_lines(reconstructed: Dict[str, Any]) -> list[list[list[float]]]:
+    lines: list[list[list[float]]] = []
+    for section in reconstructed.get("segments") or []:
+        if not isinstance(section, dict):
+            continue
+        coordinates = section.get("coordinates") or []
+        line: list[list[float]] = []
+        for coordinate in coordinates:
+            if not isinstance(coordinate, (list, tuple)) or len(coordinate) != 2:
+                continue
+            try:
+                lat, lng = float(coordinate[0]), float(coordinate[1])
+            except (TypeError, ValueError):
+                continue
+            point = [lng, lat]
+            if not line or line[-1] != point:
+                line.append(point)
+        if len(line) >= 2:
+            lines.append(line)
+    return lines
+
+
+async def project_phase_3_route(
+    analysis: RideRouteAnalysis,
+    ride: Dict[str, Any],
+) -> RouteProjection:
+    """Map-match and reconstruct only timestamp-derived Phase 3 evidence.
+
+    Each returned section remains a separate member of one MultiLineString, so
+    an unresolved gap is never rendered as a straight chord.  The single
+    feature carries one uniform actual-route style marker.
+    """
+
+    matched = await compute_segmented_road_route(list(analysis.segmented_phase_3.observed_segments))
+    pickup = {"lat": ride.get("pickup_lat"), "lng": ride.get("pickup_lng")}
+    completion = {"lat": ride.get("dropoff_lat"), "lng": ride.get("dropoff_lng")}
+    reconstructed = await reconstruct_completed_route(
+        analysis.segmented_phase_3,
+        matched,
+        pickup,
+        completion,
+    )
+    lines = _geojson_lines(reconstructed)
+    failed_gaps = list(reconstructed.get("failed_gaps") or [])
+    endpoints_verified = (
+        reconstructed.get("endpoint_start_verified") is True and reconstructed.get("endpoint_end_verified") is True
+    )
+    provider = matched.get("provider")
+    unavailable = provider is None and all(
+        isinstance(failure, dict) and failure.get("reason") == "provider_unavailable"
+        for failure in (matched.get("failures") or [])
+    )
+    if unavailable and not lines:
+        status = "unavailable"
+    elif lines and not failed_gaps and endpoints_verified:
+        status = "complete"
+    else:
+        status = "incomplete"
+
+    report = {
+        "osrm_status": status,
+        "distance_provider": provider,
+        "osrm_distance_km": reconstructed.get("distance_km"),
+        "observed_distance_km": reconstructed.get("observed_distance_km"),
+        "inferred_distance_km": reconstructed.get("inferred_distance_km"),
+        "observed_distance_ratio": reconstructed.get("observed_distance_ratio"),
+        "inferred_distance_ratio": reconstructed.get("inferred_distance_ratio"),
+        "inferred_gap_count": int(reconstructed.get("inferred_gap_count") or 0),
+        "unresolved_gap_count": len(failed_gaps),
+        "endpoint_start_verified": reconstructed.get("endpoint_start_verified") is True,
+        "endpoint_end_verified": reconstructed.get("endpoint_end_verified") is True,
+    }
+    geojson = None
+    if lines:
+        geojson = {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "properties": {"route_kind": "actual", "style": "uniform-solid"},
+                    "geometry": {"type": "MultiLineString", "coordinates": lines},
+                }
+            ],
+        }
+    return RouteProjection(report, geojson)

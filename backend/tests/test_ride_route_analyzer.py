@@ -1,13 +1,18 @@
 """Contract tests for timestamp-authoritative ride route analysis."""
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 try:
-    from backend.utils.ride_route_analyzer import analyze_ride_evidence
+    import backend.utils.ride_route_analyzer as analyzer_module
+    from backend.scripts.analyze_ride_route import main
+    from backend.utils.ride_route_analyzer import analyze_ride_evidence, project_phase_3_route
 except ImportError:
-    from utils.ride_route_analyzer import analyze_ride_evidence  # type: ignore
+    import utils.ride_route_analyzer as analyzer_module  # type: ignore
+    from scripts.analyze_ride_route import main  # type: ignore
+    from utils.ride_route_analyzer import analyze_ride_evidence, project_phase_3_route  # type: ignore
 
 
 BASE = datetime(2026, 7, 21, 17, 0, tzinfo=timezone.utc)
@@ -109,3 +114,91 @@ def test_invalid_lifecycle_fails_loudly():
 
     with pytest.raises(ValueError, match="completion must be after start"):
         analyze_ride_evidence(ride, [])
+
+
+@pytest.mark.anyio
+async def test_projection_contains_only_phase_3_and_one_actual_route_feature(monkeypatch):
+    analysis = analyze_ride_evidence(
+        _ride(),
+        [
+            _point(0, -104.70, 1, "navigating_to_pickup"),
+            *_phase_3_trace(first_sequence=2),
+        ],
+    )
+    matched_point_count = 0
+
+    async def matched(segments):
+        nonlocal matched_point_count
+        matched_point_count = sum(len(segment.points) for segment in segments)
+        return {"segments": [], "distance_km": 6.2, "provider": "osrm_match", "failures": []}
+
+    async def reconstructed(*_args):
+        return {
+            "segments": [{"coordinates": [[50.45, -104.61], [50.45, -104.53]]}],
+            "distance_km": 6.2,
+            "observed_distance_km": 6.0,
+            "inferred_distance_km": 0.2,
+            "observed_distance_ratio": 0.968,
+            "inferred_distance_ratio": 0.032,
+            "inferred_gap_count": 1,
+            "endpoint_start_verified": True,
+            "endpoint_end_verified": True,
+            "failed_gaps": [],
+        }
+
+    monkeypatch.setattr(analyzer_module, "compute_segmented_road_route", matched)
+    monkeypatch.setattr(analyzer_module, "reconstruct_completed_route", reconstructed)
+
+    projection = await project_phase_3_route(analysis, _ride())
+
+    assert matched_point_count == 31
+    assert projection.report["osrm_distance_km"] == 6.2
+    assert projection.report["osrm_status"] == "complete"
+    feature = projection.geojson["features"][0]
+    assert feature["properties"] == {"route_kind": "actual", "style": "uniform-solid"}
+    assert feature["geometry"]["type"] == "MultiLineString"
+
+
+def test_sanitized_report_contains_no_coordinates_or_addresses():
+    report = analyze_ride_evidence(_ride(), _phase_3_trace()).report
+
+    encoded = json.dumps(report)
+
+    assert "pickup_lat" not in encoded
+    assert "dropoff_lat" not in encoded
+    assert "-104." not in encoded
+    assert "50.45" not in encoded
+
+
+def test_cli_offline_json_prints_sanitized_report(tmp_path, capsys):
+    ride_path = tmp_path / "ride.json"
+    points_path = tmp_path / "points.json"
+    ride_path.write_text(json.dumps(_ride()), encoding="utf-8")
+    points_path.write_text(json.dumps(_phase_3_trace()), encoding="utf-8")
+
+    exit_code = main(
+        [
+            "--ride-json",
+            str(ride_path),
+            "--locations-json",
+            str(points_path),
+            "--no-osrm",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert '"strict_phase_3_observed_km"' in captured.out
+    assert "-104." not in captured.out
+    assert "50.45" not in captured.out
+    assert captured.err == ""
+
+
+def test_cli_requires_locations_json_with_offline_ride(tmp_path, capsys):
+    ride_path = tmp_path / "ride.json"
+    ride_path.write_text(json.dumps(_ride()), encoding="utf-8")
+
+    exit_code = main(["--ride-json", str(ride_path), "--no-osrm"])
+
+    assert exit_code == 2
+    assert "--locations-json is required" in capsys.readouterr().err

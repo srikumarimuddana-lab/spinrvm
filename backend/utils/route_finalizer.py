@@ -181,7 +181,7 @@ def _quality_projection(
         "completion_distance_m": quality.completion_distance_m,
         "completion_tolerance_m": quality.completion_tolerance_m,
         "distance_provider": matched_route.get("provider"),
-        "matched_distance_km": (reconstructed or {}).get("distance_km", matched_route.get("distance_km")),
+        "matched_distance_km": (reconstructed or {}).get("observed_distance_km", matched_route.get("distance_km")),
         "matching_failure_count": len(failures) + len(failed_gaps),
         "finalization_reason": ("complete" if not failures and not failed_gaps else "provider_partial_failure"),
         "incomplete_reason": incomplete_reason,
@@ -597,7 +597,7 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
                     ride_id,
                     ride,
                     revision,
-                    reconstructed.get("distance_km") if reconstructed is not None else None,
+                    reconstructed.get("observed_distance_km") if reconstructed is not None else None,
                 )
             except Exception:
                 logger.error(

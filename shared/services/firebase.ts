@@ -1,4 +1,4 @@
-import { NativeModules, Platform } from 'react-native';
+import { NativeModules, PermissionsAndroid, Platform } from 'react-native';
 
 /**
  * Firebase Services — FCM, Crashlytics, App Check
@@ -133,6 +133,9 @@ async function _doInitFirebaseServices(): Promise<void> {
 export async function requestNotificationPermission(): Promise<boolean> {
   if (!messagingApi) return false;
   try {
+    if (Platform.OS === 'android') {
+      return requestAndroidNotificationPermission();
+    }
     const messaging = messagingApi.getMessaging();
     const authStatus = await messagingApi.requestPermission(messaging);
     const enabled =
@@ -148,6 +151,23 @@ export async function requestNotificationPermission(): Promise<boolean> {
 
 
 /**
+ * Android 13+ requires a runtime POST_NOTIFICATIONS grant. React Native
+ * Firebase's messaging.requestPermission() is intentionally an Android no-op,
+ * so relying on its AUTHORIZED result registers a token while the OS still
+ * blocks every visible notification.
+ */
+export async function requestAndroidNotificationPermission(): Promise<boolean> {
+  if (Platform.OS !== 'android') return true;
+  if (Number(Platform.Version) < 33) return true;
+
+  const result = await PermissionsAndroid.request(
+    PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+  );
+  return result === PermissionsAndroid.RESULTS.GRANTED;
+}
+
+
+/**
  * Request push notification permission and get FCM token.
  * Returns the token string or null.
  */
@@ -156,11 +176,15 @@ export async function requestPushPermissionAndGetToken(): Promise<string | null>
 
   try {
     const messaging = messagingApi.getMessaging();
-    // Request permission (iOS — Android auto-grants)
-    const authStatus = await messagingApi.requestPermission(messaging);
-    const enabled =
-      authStatus === messagingApi.AuthorizationStatus.AUTHORIZED ||
-      authStatus === messagingApi.AuthorizationStatus.PROVISIONAL;
+    const enabled = Platform.OS === 'android'
+      ? await requestAndroidNotificationPermission()
+      : await (async () => {
+          const authStatus = await messagingApi!.requestPermission(messaging);
+          return (
+            authStatus === messagingApi!.AuthorizationStatus.AUTHORIZED ||
+            authStatus === messagingApi!.AuthorizationStatus.PROVISIONAL
+          );
+        })();
 
     if (!enabled) {
       console.log('[Firebase] Push permission denied');

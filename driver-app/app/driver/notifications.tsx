@@ -5,7 +5,6 @@ import {
     StyleSheet,
     TouchableOpacity,
     FlatList,
-    Platform,
     Alert,
 } from 'react-native';
 import SafeRefreshControl from '../../components/SafeRefreshControl';
@@ -21,8 +20,6 @@ import {
 import { useLanguageStore } from '../../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-
-const NOTIFICATION_ITEM_HEIGHT = 80;
 
 interface Notification {
     id: string;
@@ -155,12 +152,6 @@ export default function NotificationsScreen() {
                 initialNumToRender={10}
                 maxToRenderPerBatch={10}
                 windowSize={5}
-                removeClippedSubviews={true}
-                getItemLayout={(_, index) => ({
-                    length: NOTIFICATION_ITEM_HEIGHT,
-                    offset: NOTIFICATION_ITEM_HEIGHT * index,
-                    index,
-                })}
                 refreshControl={
                     <SafeRefreshControl refreshing={isFetching} onRefresh={onRefresh} tintColor={colors.primary} />
                 }

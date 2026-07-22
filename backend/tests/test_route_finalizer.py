@@ -71,10 +71,10 @@ def test_mark_route_pending_upserts_versioned_completion_metadata(monkeypatch):
     assert kwargs["upsert"] is True
 
 
-def test_finalizer_orders_by_capture_time_and_writes_a_new_revision(monkeypatch):
+def test_finalizer_matches_only_phase_3_coordinates_and_writes_a_new_revision(monkeypatch):
     updates = []
     publish_snapshot = AsyncMock()
-    observed = [_point(1, 10), _point(0, 0), _point(2, 600)]
+    observed = [_point(2, 10), _point(0, -5), _point(1, 0), _point(4, 601), _point(3, 600)]
 
     async def get_rows(table, _filters, **kwargs):
         assert table == "driver_location_history"
@@ -93,28 +93,25 @@ def test_finalizer_orders_by_capture_time_and_writes_a_new_revision(monkeypatch)
     monkeypatch.setattr(route_finalizer.db_supabase, "update_one", update_one)
     monkeypatch.setattr(route_finalizer, "_publish_finalized_snapshot", publish_snapshot)
     monkeypatch.setattr(route_finalizer, "_get_route_row", AsyncMock(return_value=_route_row()))
-    monkeypatch.setattr(
-        route_finalizer,
-        "compute_segmented_road_route",
-        AsyncMock(
-            return_value={
-                "segments": [
-                    {
-                        "matched_segments": [
-                            {
-                                "provider": "osrm_match",
-                                "distance_km": 1.5,
-                                "polyline": [[50.445, -104.618], [50.446, -104.618]],
-                            }
-                        ]
-                    }
-                ],
-                "distance_km": 1.5,
-                "provider": "osrm_match",
-                "failures": [],
-            }
-        ),
+    road_match = AsyncMock(
+        return_value={
+            "segments": [
+                {
+                    "matched_segments": [
+                        {
+                            "provider": "osrm_match",
+                            "distance_km": 1.5,
+                            "polyline": [[50.445, -104.618], [50.446, -104.618]],
+                        }
+                    ]
+                }
+            ],
+            "distance_km": 1.5,
+            "provider": "osrm_match",
+            "failures": [],
+        }
     )
+    monkeypatch.setattr(route_finalizer, "compute_segmented_road_route", road_match)
 
     result = _run(route_finalizer.finalize_route("ride_1"))
 
@@ -123,8 +120,10 @@ def test_finalizer_orders_by_capture_time_and_writes_a_new_revision(monkeypatch)
     assert payload["route_revision"] == 4
     assert payload["processing_status"] == "complete"
     assert payload["route_quality"]["distance_provider"] == "osrm_match"
-    assert payload["observed_segments"][0]["coordinates"][0] == [50.445, -104.618]
+    assert payload["observed_segments"][0]["coordinates"][0] == [50.4451, -104.618]
     assert payload["road_matched_segments"][0]["coordinates"] == [[50.445, -104.618], [50.446, -104.618]]
+    matched_points = [point for segment in road_match.await_args.args[0] for point in segment.points]
+    assert [point["sequence_number"] for point in matched_points] == [1, 2, 3]
     publish_snapshot.assert_awaited_once()
     snapshot_args = publish_snapshot.await_args.args
     assert snapshot_args[0] == "ride_1"

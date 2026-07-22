@@ -48,6 +48,23 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _phase_3_points(points: list[Any], ride: Dict[str, Any]) -> list[Any]:
+    """Select passenger-trip evidence while preserving invalid rows for rejection."""
+    started_at = parse_iso_utc(ride.get("ride_started_at") or ride.get("started_at"))
+    completed_at = parse_iso_utc(ride.get("ride_completed_at") or ride.get("completed_at"))
+    if started_at is None or completed_at is None or completed_at < started_at:
+        raise ValueError("ride_lifecycle_timestamp_missing")
+
+    selected: list[Any] = []
+    for point in points:
+        captured_at = (
+            parse_iso_utc(point.get("captured_at") or point.get("timestamp")) if isinstance(point, dict) else None
+        )
+        if captured_at is None or started_at <= captured_at <= completed_at:
+            selected.append(point)
+    return selected
+
+
 async def _get_route_row(ride_id: str) -> Optional[Dict[str, Any]]:
     rows = await db_supabase.get_rows("ride_routes", {"ride_id": ride_id}, limit=1)
     return rows[0] if rows else None
@@ -519,7 +536,7 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
             limit=10_000,
         )
         completion_point = (route_row or {}).get("completion_point")
-        segmented = segment_route(points, ride, completion_point)
+        segmented = segment_route(_phase_3_points(points, ride), ride, completion_point)
         matched_route = await compute_segmented_road_route(list(segmented.observed_segments))
         reconstructed: Optional[Dict[str, Any]] = None
         if (

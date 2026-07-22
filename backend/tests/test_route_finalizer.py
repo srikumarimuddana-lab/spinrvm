@@ -326,9 +326,10 @@ def test_finalizer_persists_reconstructed_sections_and_distance_quality(monkeypa
     assert route_update["route_quality"]["observed_distance_ratio"] == 0.6
     assert route_update["route_quality"]["inferred_distance_ratio"] == 0.4
     assert route_update["route_quality"]["inferred_gap_count"] == 1
+    assert route_update["route_quality"]["matched_distance_km"] == 0.75
     reconstruct.assert_awaited_once()
     assert reconstruct.await_args.args[2] == {"lat": 50.45, "lng": -104.62}
-    recompute.assert_awaited_once_with("ride_1", ride, 4, 1.25)
+    recompute.assert_awaited_once_with("ride_1", ride, 4, 0.75)
 
 
 def _failed_reconstruction() -> dict:

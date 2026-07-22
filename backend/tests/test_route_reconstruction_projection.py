@@ -79,3 +79,18 @@ def test_matching_failure_falls_back_to_observed_geometry_without_joining():
     assert sections[0]["geometry_kind"] == "observed"
     assert sections[0]["coordinates"] == [[50.45, -104.62], [50.451, -104.621]]
     assert sections[0]["distance_km"] > 0
+
+
+def test_single_coordinate_fallback_is_not_a_reconstruction_anchor():
+    segmented = segment_route(
+        [_point(0, 0, 50.45, -104.62)],
+        {
+            "ride_started_at": BASE_TIME.isoformat(),
+            "ride_completed_at": BASE_TIME.isoformat(),
+        },
+        {"lat": 50.45, "lng": -104.62},
+    )
+
+    sections = project_observed_sections(segmented, {"segments": [], "failures": []})
+
+    assert sections == []

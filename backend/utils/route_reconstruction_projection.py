@@ -89,7 +89,7 @@ def project_observed_sections(segmented: SegmentedRoute, matched_route: Dict[str
             continue
 
         coordinates = [value for value in (coordinate(point) for point in observed_segment.points) if value is not None]
-        if not coordinates:
+        if len(coordinates) < 2:
             continue
         projected.append(
             {

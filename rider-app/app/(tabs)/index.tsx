@@ -30,6 +30,11 @@ import { showToast } from '../../store/toastStore';
 import { SOSButton } from '@shared/components/SOSButton';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import {
+  checkNotificationPermission,
+  requestNotificationPermission,
+  openNotificationSettings,
+} from '@shared/services/firebase';
 
 const HOME_DATA_TTL_MS = 5 * 60 * 1000;
 
@@ -72,6 +77,29 @@ export default function HomeScreen() {
   }, [loadAiConfig]);
   const [unreadNotifCount, setUnreadNotifCount] = useState(0);
   const [showPromo, setShowPromo] = useState(true);
+  const [notifPermissionGranted, setNotifPermissionGranted] = useState(true);
+  const [dismissedNotifBanner, setDismissedNotifBanner] = useState(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      checkNotificationPermission().then((res) => {
+        if (active) setNotifPermissionGranted(res.granted);
+      }).catch(() => {});
+      return () => { active = false; };
+    }, [])
+  );
+
+  const handleEnableNotifications = async () => {
+    const granted = await requestNotificationPermission();
+    if (granted) {
+      setNotifPermissionGranted(true);
+    } else {
+      showToast('Permission Required', 'Notification permissions are disabled in device settings.', 'warning');
+      await openNotificationSettings();
+    }
+  };
+
   const [location, setLocation] = useState<any>(null);
   const [region, setRegion] = useState<any>(null);
   const [temperature, setTemperature] = useState<number | null>(null);
@@ -389,6 +417,28 @@ export default function HomeScreen() {
               )}
             </TouchableOpacity>
           </View>
+
+          {!notifPermissionGranted && !dismissedNotifBanner && (
+            <View style={styles.notifBanner}>
+              <View style={styles.notifBannerLeft}>
+                <View style={styles.notifBannerIconBg}>
+                  <Ionicons name="notifications" size={20} color="#F59E0B" />
+                </View>
+                <View style={styles.notifBannerTextContainer}>
+                  <Text style={styles.notifBannerTitle}>Turn on notifications</Text>
+                  <Text style={styles.notifBannerSub}>Get updates on driver arrival and trip progress</Text>
+                </View>
+              </View>
+              <View style={styles.notifBannerActions}>
+                <TouchableOpacity style={styles.notifEnableBtn} onPress={handleEnableNotifications}>
+                  <Text style={styles.notifEnableBtnText}>Enable</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.notifDismissBtn} onPress={() => setDismissedNotifBanner(true)}>
+                  <Ionicons name="close" size={18} color={colors.textDim} />
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
         </SafeAreaView>
 
         {location ? (
@@ -974,6 +1024,70 @@ function createStyles(colors: ThemeColors) {
       paddingTop: 60,
       paddingHorizontal: 20,
       flexShrink: 0 as const,
+    },
+    notifBanner: {
+      marginHorizontal: 16,
+      marginTop: 8,
+      marginBottom: 4,
+      padding: 12,
+      borderRadius: 12,
+      backgroundColor: colors.surface,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.1,
+      shadowRadius: 4,
+      elevation: 3,
+    },
+    notifBannerLeft: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      flex: 1,
+      marginRight: 8,
+    },
+    notifBannerIconBg: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: '#FEF3C7',
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 10,
+    },
+    notifBannerTextContainer: {
+      flex: 1,
+    },
+    notifBannerTitle: {
+      fontSize: 14,
+      fontFamily: 'PlusJakartaSans_600SemiBold',
+      color: colors.text,
+    },
+    notifBannerSub: {
+      fontSize: 12,
+      fontFamily: 'PlusJakartaSans_400Regular',
+      color: colors.textDim,
+      marginTop: 2,
+    },
+    notifBannerActions: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+    },
+    notifEnableBtn: {
+      backgroundColor: colors.primary,
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderRadius: 16,
+    },
+    notifEnableBtnText: {
+      color: '#FFFFFF',
+      fontSize: 12,
+      fontFamily: 'PlusJakartaSans_600SemiBold',
+    },
+    notifDismissBtn: {
+      padding: 4,
     },
   });
 }

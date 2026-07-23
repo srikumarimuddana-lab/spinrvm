@@ -79,7 +79,7 @@ _OSRM_MAX_POINTS = 100
 _OSRM_RADIUS_MIN_M = 10
 _OSRM_RADIUS_MAX_M = 50
 _OSRM_RADIUS_DEFAULT_M = 20
-_MAX_COMPLETED_ENDPOINT_SNAP_M = 75.0
+_MAX_COMPLETED_ENDPOINT_SNAP_M = 150.0
 
 # Cap the saved road geometry so the rides row stays bounded. The matched route
 # can contain hundreds of vertices; ~300 is plenty for a faithful map replay.
@@ -605,6 +605,44 @@ async def compute_gap_route_via_osrm(start: List[float], end: List[float], osrm_
         return None
 
     routed = await _compute_route_via_osrm(start_lat, start_lng, end_lat, end_lng, osrm_url)
+    if not routed:
+        return None
+    direct_km = _haversine_km(start_lat, start_lng, end_lat, end_lng)
+    distance_km = float(routed.get("distance_km") or 0)
+    maximum_km = max(direct_km * 5.0, direct_km + 2.0)
+    if distance_km < direct_km or distance_km > maximum_km:
+        return None
+
+    polyline: List[List[float]] = []
+    for coordinate in routed.get("polyline") or []:
+        if len(coordinate) < 2:
+            continue
+        normalized = [round(float(coordinate[0]), 6), round(float(coordinate[1]), 6)]
+        if not polyline or polyline[-1] != normalized:
+            polyline.append(normalized)
+    if len(polyline) < 2:
+        return None
+    return round(distance_km, 3), polyline
+
+
+async def compute_gap_route_via_google(start: List[float], end: List[float], api_key: str) -> Optional[RoadMatch]:
+    """Route one missing completed-trip interval via Google Directions.
+
+    Mirror of :func:`compute_gap_route_via_osrm` using Google as Tier 2
+    fallback.  Same distance sanity gates (direct_km bounds) so a misbehaving
+    provider can never corrupt inferred gap geometry.
+    """
+    if len(start) < 2 or len(end) < 2 or not api_key:
+        return None
+    try:
+        start_lat, start_lng = float(start[0]), float(start[1])
+        end_lat, end_lng = float(end[0]), float(end[1])
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(value) for value in (start_lat, start_lng, end_lat, end_lng)):
+        return None
+
+    routed = await _compute_route_via_google(start_lat, start_lng, end_lat, end_lng, api_key)
     if not routed:
         return None
     direct_km = _haversine_km(start_lat, start_lng, end_lat, end_lng)

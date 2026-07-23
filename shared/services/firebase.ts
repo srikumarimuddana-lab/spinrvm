@@ -1,4 +1,4 @@
-import { NativeModules, PermissionsAndroid, Platform } from 'react-native';
+import { Linking, NativeModules, PermissionsAndroid, Platform } from 'react-native';
 
 /**
  * Firebase Services — FCM, Crashlytics, App Check
@@ -126,26 +126,160 @@ async function _doInitFirebaseServices(): Promise<void> {
 }
 
 
+export interface NotificationPermissionStatus {
+  granted: boolean;
+  canAskAgain: boolean;
+  status: 'granted' | 'denied' | 'undetermined';
+}
+
+/** Lazy reference for Expo Notifications */
+let _ExpoNotifications: any = null;
+function getExpoNotifications() {
+  if (_ExpoNotifications !== null) return _ExpoNotifications;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    _ExpoNotifications = require('expo-notifications');
+  } catch {
+    _ExpoNotifications = false;
+  }
+  return _ExpoNotifications || null;
+}
+
+/** Lazy reference for Notifee */
+let _Notifee: any = null;
+function getNotifee() {
+  if (_Notifee !== null) return _Notifee;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mod = require('@notifee/react-native');
+    _Notifee = mod.default ?? mod;
+  } catch {
+    _Notifee = false;
+  }
+  return _Notifee || null;
+}
+
 /**
- * Request notification permission only (no token fetch).
- * Call on first open so the OS dialog appears before login.
+ * Request notification permission across all available native/Expo modules:
+ * 1. Android 13+ runtime POST_NOTIFICATIONS grant.
+ * 2. Firebase Messaging permission.
+ * 3. Expo Notifications permission (`Notifications.requestPermissionsAsync()`).
+ * 4. Notifee permission (`notifee.requestPermission()`).
  */
 export async function requestNotificationPermission(): Promise<boolean> {
-  if (!messagingApi) return false;
+  let isGranted = true;
+
   try {
-    if (Platform.OS === 'android') {
-      return requestAndroidNotificationPermission();
+    // 1. Android 13+ POST_NOTIFICATIONS
+    if (Platform.OS === 'android' && Number(Platform.Version) >= 33) {
+      const androidGranted = await requestAndroidNotificationPermission();
+      if (!androidGranted) isGranted = false;
     }
-    const messaging = messagingApi.getMessaging();
-    const authStatus = await messagingApi.requestPermission(messaging);
-    const enabled =
-      authStatus === messagingApi.AuthorizationStatus.AUTHORIZED ||
-      authStatus === messagingApi.AuthorizationStatus.PROVISIONAL;
-    console.log('[Firebase] Notification permission:', enabled ? 'granted' : 'denied');
-    return enabled;
+
+    // 2. Firebase Messaging
+    if (messagingApi) {
+      const messaging = messagingApi.getMessaging();
+      const authStatus = await messagingApi.requestPermission(messaging);
+      const fcmGranted =
+        authStatus === messagingApi.AuthorizationStatus.AUTHORIZED ||
+        authStatus === messagingApi.AuthorizationStatus.PROVISIONAL;
+      if (!fcmGranted) isGranted = false;
+    }
+
+    // 3. Expo Notifications
+    const ExpoNotifications = getExpoNotifications();
+    if (ExpoNotifications?.requestPermissionsAsync) {
+      try {
+        const expoRes = await ExpoNotifications.requestPermissionsAsync({
+          ios: { allowAlert: true, allowBadge: true, allowSound: true },
+        });
+        if (expoRes?.status && expoRes.status !== 'granted') {
+          isGranted = false;
+        }
+      } catch (e) {
+        console.log('[Firebase] Expo notifications permission error:', e);
+      }
+    }
+
+    // 4. Notifee (Android live notifications / iOS categories)
+    const Notifee = getNotifee();
+    if (Notifee?.requestPermission) {
+      try {
+        const notifeeSettings = await Notifee.requestPermission();
+        if (notifeeSettings?.authorizationStatus === 0 /* DENIED */) {
+          isGranted = false;
+        }
+      } catch (e) {
+        console.log('[Firebase] Notifee permission error:', e);
+      }
+    }
+
+    console.log('[Firebase] Notification permission overall result:', isGranted ? 'granted' : 'denied');
+    return isGranted;
   } catch (e) {
     console.log('[Firebase] Permission request failed:', e);
     return false;
+  }
+}
+
+/**
+ * Check current notification permission status without prompting the OS dialog.
+ */
+export async function checkNotificationPermission(): Promise<NotificationPermissionStatus> {
+  try {
+    if (Platform.OS === 'android' && Number(Platform.Version) >= 33) {
+      const checkResult = await PermissionsAndroid.check(
+        PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+      );
+      if (!checkResult) {
+        return { granted: false, canAskAgain: true, status: 'denied' };
+      }
+    }
+
+    const ExpoNotifications = getExpoNotifications();
+    if (ExpoNotifications?.getPermissionsAsync) {
+      const expoStatus = await ExpoNotifications.getPermissionsAsync();
+      const isGranted = expoStatus?.status === 'granted' || expoStatus?.granted === true;
+      const canAskAgain = expoStatus?.canAskAgain ?? true;
+      return {
+        granted: isGranted,
+        canAskAgain,
+        status: isGranted ? 'granted' : (expoStatus?.status ?? 'denied'),
+      };
+    }
+
+    if (messagingApi) {
+      const messaging = messagingApi.getMessaging();
+      const authStatus = await messagingApi.hasPermission(messaging);
+      const isGranted =
+        authStatus === messagingApi.AuthorizationStatus.AUTHORIZED ||
+        authStatus === messagingApi.AuthorizationStatus.PROVISIONAL;
+      return {
+        granted: isGranted,
+        canAskAgain: authStatus === messagingApi.AuthorizationStatus.NOT_DETERMINED,
+        status: isGranted ? 'granted' : (authStatus === 0 ? 'undetermined' : 'denied'),
+      };
+    }
+
+    return { granted: true, canAskAgain: true, status: 'granted' };
+  } catch (e) {
+    console.log('[Firebase] Check notification permission failed:', e);
+    return { granted: false, canAskAgain: true, status: 'undetermined' };
+  }
+}
+
+/**
+ * Open device settings for notification permissions if previously denied.
+ */
+export async function openNotificationSettings(): Promise<void> {
+  try {
+    if (Platform.OS === 'ios') {
+      await Linking.openURL('app-settings:');
+    } else {
+      await Linking.openSettings();
+    }
+  } catch (e) {
+    console.log('[Firebase] Failed to open settings:', e);
   }
 }
 

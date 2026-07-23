@@ -560,6 +560,10 @@ async def finalize_route(ride_id: str) -> Dict[str, Any]:
         quality = _quality_projection(segmented, matched_route, drawable, reconstructed)
         revision = int((route_row or {}).get("route_revision") or 0) + 1
         now = _now()
+        # NOTE: With the 4-tier gap fill in route_reconstruction.py, failed_gaps
+        # is always empty and endpoints are always verified.  The condition below
+        # evaluates to False for all new rides.  Kept as a safety net for any
+        # edge case where reconstruction is bypassed entirely.
         retryable_reconstruction = (
             processing_status == "incomplete" and quality.get("incomplete_reason") == "osrm_reconstruction_failed"
         )

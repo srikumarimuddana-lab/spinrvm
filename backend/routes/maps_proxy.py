@@ -29,9 +29,9 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 try:
+    from .. import db_supabase
     from ..dependencies import get_current_user
     from ..settings_loader import get_app_settings
-    from .. import db_supabase
     from ..utils.google_places_new import (
         PLACES_NEW_AUTOCOMPLETE_FIELD_MASK,
         PLACES_NEW_AUTOCOMPLETE_URL,
@@ -46,9 +46,9 @@ try:
     from ..utils.rate_limiter import default_limiter as limiter
     from ..utils.redis_client import redis_get, redis_set
 except ImportError:  # pragma: no cover - dual import path
+    import db_supabase  # type: ignore
     from dependencies import get_current_user  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
-    import db_supabase  # type: ignore
     from utils.google_places_new import (  # type: ignore
         PLACES_NEW_AUTOCOMPLETE_FIELD_MASK,
         PLACES_NEW_AUTOCOMPLETE_URL,

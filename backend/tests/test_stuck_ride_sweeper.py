@@ -20,6 +20,7 @@ _RECENT_ISO = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
 def _sweep():
     """Import and return the _sweep coroutine after patches are in place."""
     import importlib
+
     import backend.utils.stuck_ride_sweeper as mod
     importlib.reload(mod)
     return mod._sweep

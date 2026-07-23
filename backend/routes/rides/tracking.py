@@ -1,4 +1,4 @@
-"""Live route polyline for an in-progress ride.
+"""Live route polyline + breadcrumb trail for an in-progress ride.
 
 Split from ``backend/routes/rides.py`` (god-file refactor). Pure code
 motion — no behaviour changes. See docs/refactors/god-file-split.md.
@@ -21,6 +21,11 @@ router = APIRouter()
 async def get_live_route(ride_id: str, current_user: dict = Depends(get_current_user)):
     """Road-routed line + ETA from the driver's live position to the active
     destination (pickup pre-trip, dropoff in-trip) for the live trip map.
+
+    Also returns a breadcrumb_trail — the driver's actual GPS history snapped
+    to roads via OSRM /route (Tier 1) or Google Directions (Tier 2), with
+    Haversine interpolation as final fallback. This shows the path actually
+    driven, not just the optimal route to destination.
 
     Routing provider chain lives in utils.route_distance.compute_route: self-
     hosted OSRM first, Google Directions fallback (budget-gated) when OSRM is
@@ -48,9 +53,21 @@ async def get_live_route(ride_id: str, current_user: dict = Depends(get_current_
         dest_lat, dest_lng, destination = ride.get("dropoff_lat"), ride.get("dropoff_lng"), "dropoff"
     else:
         # No live leg for searching / scheduled / completed / cancelled.
-        return {"polyline": [], "eta_seconds": None, "distance_km": None, "destination": None}
+        return {
+            "polyline": [],
+            "eta_seconds": None,
+            "distance_km": None,
+            "destination": None,
+            "breadcrumb_trail": [],
+        }
 
-    empty = {"polyline": [], "eta_seconds": None, "distance_km": None, "destination": destination}
+    empty = {
+        "polyline": [],
+        "eta_seconds": None,
+        "distance_km": None,
+        "destination": destination,
+        "breadcrumb_trail": [],
+    }
 
     # Live origin = the assigned driver's current position (drivers.lat/lng).
     assigned = (
@@ -70,8 +87,23 @@ async def get_live_route(ride_id: str, current_user: dict = Depends(get_current_
     except ImportError:
         from utils.route_distance import compute_route  # type: ignore
 
+    # 1. Optimal route to destination (for ETA + "where are they headed")
     result = await compute_route(float(o_lat), float(o_lng), float(dest_lat), float(dest_lng))
     if not result:
         return empty
     result["destination"] = destination
+
+    # 2. Breadcrumb trail: actual driven path from GPS history
+    try:
+        from ...utils.live_breadcrumbs import build_breadcrumb_trail
+    except ImportError:
+        from utils.live_breadcrumbs import build_breadcrumb_trail  # type: ignore
+
+    breadcrumb_trail = await build_breadcrumb_trail(
+        ride_id=ride_id,
+        current_driver_pos=[float(o_lat), float(o_lng)],
+        destination=[float(dest_lat), float(dest_lng)],
+    )
+    result["breadcrumb_trail"] = breadcrumb_trail
+
     return result

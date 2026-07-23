@@ -18,13 +18,13 @@ except ImportError:
 
 try:
     from .. import db_supabase
-    from ..socket_manager import manager
     from ..features import send_push_notification
+    from ..socket_manager import manager
     from .metrics import inc as _metric_inc
 except ImportError:
     import db_supabase  # type: ignore
-    from socket_manager import manager  # type: ignore
     from features import send_push_notification  # type: ignore
+    from socket_manager import manager  # type: ignore
     from utils.metrics import inc as _metric_inc  # type: ignore
 
 try:

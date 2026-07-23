@@ -16,6 +16,11 @@ import {
   useNotificationPreferences,
   useUpdateNotificationPreferences,
 } from '@shared/hooks/queries';
+import {
+  checkNotificationPermission,
+  requestNotificationPermission,
+  openNotificationSettings,
+} from '@shared/services/firebase';
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -49,7 +54,18 @@ export default function SettingsScreen() {
     if (prefs.sms_enabled != null) setSmsEnabled(Boolean(prefs.sms_enabled));
   }, [notificationPrefs]);
 
-  const handleNotificationToggle = (key: string, setter: (v: boolean) => void) => (value: boolean) => {
+  const handleNotificationToggle = (key: string, setter: (v: boolean) => void) => async (value: boolean) => {
+    if (key === 'push_enabled' && value) {
+      const perm = await checkNotificationPermission();
+      if (!perm.granted) {
+        const granted = await requestNotificationPermission();
+        if (!granted) {
+          showToast('Permissions Required', 'Push notifications are disabled in device settings. Tap to open Settings.', 'warning');
+          await openNotificationSettings();
+          return;
+        }
+      }
+    }
     setter(value);
     updatePreferences.mutate({ [key]: value }, {
       onError: (err) => {

@@ -88,6 +88,58 @@ async def wallet_apply_credit(
     return await run_sync(_fn)
 
 
+async def wallet_apply_delta(
+    *,
+    wallet_id: str,
+    user_id: str,
+    type_: str,
+    delta: "Decimal",
+    reference_id: Optional[str],
+    description: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    floor: Optional["Decimal"] = None,
+    clamp_to_floor: bool = False,
+) -> Dict[str, Any]:
+    """Apply a SIGNED delta to a consumer wallet atomically (WS-6).
+
+    Replaces the read-modify-write pattern used by admin credit/debit and the
+    cancellation / no-show fee paths, where a concurrent mutation landing between
+    the read and the write was silently lost. Locks the wallet row, dedups on
+    (wallet_id, reference_id, type) inside the lock, then writes balance +
+    ledger row together.
+
+    ``clamp_to_floor=True`` charges only what is available down to ``floor``
+    (the fee paths' existing ``max(balance - fee, 0)`` behaviour); otherwise a
+    delta that would breach the floor raises. Returns the RPC row
+    ``{"transaction_id", "balance_after", "applied_delta", "deduped"}`` —
+    prefer ``applied_delta`` over the requested amount when recording what was
+    actually charged.
+    """
+    if not supabase:
+        raise DatabaseError(details={"original": "supabase not initialised"})
+
+    params = {
+        "p_wallet_id": wallet_id,
+        "p_user_id": user_id,
+        "p_type": type_,
+        "p_delta": str(delta),
+        "p_reference_id": reference_id,
+        "p_description": description,
+        "p_metadata": metadata or {},
+        "p_floor": str(floor) if floor is not None else None,
+        "p_clamp_to_floor": clamp_to_floor,
+    }
+
+    def _fn():
+        res = supabase.rpc("wallet_apply_delta", params).execute()
+        data = getattr(res, "data", None) or []
+        if not data:
+            raise DatabaseError(details={"original": "wallet_apply_delta: no row returned"})
+        return data[0]
+
+    return await run_sync(_fn)
+
+
 async def wallet_pay_for_ride(
     wallet_id: str,
     ride_id: str,

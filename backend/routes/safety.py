@@ -66,6 +66,20 @@ async def submit_safety_report(
     incident_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
 
+    # WS-18: if the report references a ride, verify the caller is a party.
+    verified_ride_id = None
+    if body.ride_context and body.ride_context.ride_id:
+        _ride = await db_supabase.get_ride(body.ride_context.ride_id)
+        if _ride:
+            _is_rider = _ride.get("rider_id") == user_id
+            _driver_row = None
+            if not _is_rider:
+                _driver_rows = await db_supabase.get_rows("drivers", {"user_id": user_id}, limit=1)
+                _driver_row = _driver_rows[0] if _driver_rows else None
+            _is_driver = bool(_driver_row) and _ride.get("driver_id") == _driver_row["id"]
+            if _is_rider or _is_driver:
+                verified_ride_id = body.ride_context.ride_id
+
     incident = {
         "id": incident_id,
         "reported_by_user_id": user_id,
@@ -76,7 +90,7 @@ async def submit_safety_report(
         "latitude": body.location.latitude if body.location else None,
         "longitude": body.location.longitude if body.location else None,
         "location_accuracy": body.location.accuracy if body.location else None,
-        "ride_id": body.ride_context.ride_id if body.ride_context else None,
+        "ride_id": verified_ride_id,
         "reported_at": body.reported_at or now,
         "created_at": now,
     }

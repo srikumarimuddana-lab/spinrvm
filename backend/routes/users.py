@@ -421,6 +421,23 @@ async def link_corporate_account(request: LinkCorporateRequest, current_user: di
         if not account:
             raise HTTPException(status_code=404, detail="Corporate account not found")
 
+        # WS-18: verify the user has an active membership in this corporate
+        # account. Without this, any authenticated user could link themselves
+        # to any company and gain access to corporate-paid rides.
+        membership = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows(
+                "corporate_members",
+                {
+                    "user_id": current_user["id"],
+                    "company_id": request.corporate_account_id,
+                    "status": "active",
+                },
+                limit=1,
+            )
+        )
+        if not membership:
+            raise HTTPException(status_code=403, detail="Not a member of this corporate account")
+
     await db_supabase.update_one(
         "users",
         {"id": current_user["id"]},

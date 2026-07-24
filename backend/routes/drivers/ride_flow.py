@@ -461,6 +461,12 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
             detail=f"Cannot decline ride in status '{ride.get('status')}'",
         )
 
+    # WS-18: ownership guard — only a driver who was actually offered (or
+    # assigned) this ride may decline it. Without this check any authenticated
+    # driver could call decline for any ride_id and trigger acceptance-rate
+    # degradation, insurance-period churn, and audit-log pollution.
+    is_assigned = ride.get("driver_id") == driver["id"]
+
     # ── Batch dispatch: update this driver's offer row ───────────
     try:
         from ...repositories.driver_repo import update_acceptance_rate
@@ -468,8 +474,9 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
         from repositories.driver_repo import update_acceptance_rate  # type: ignore
 
     now_iso = datetime.now(timezone.utc).isoformat()
+    offer_claimed = False
     try:
-        await db_supabase.run_sync(
+        _offer_res = await db_supabase.run_sync(
             lambda: (
                 db_supabase.supabase.table("ride_offers")
                 .update({"status": "declined", "responded_at": now_iso})
@@ -479,8 +486,12 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
                 .execute()
             )
         )
+        offer_claimed = bool(getattr(_offer_res, "data", None))
     except Exception as e:
         logger.error(f"[DECLINE] ride_offers update failed: {e}", exc_info=True)
+
+    if not is_assigned and not offer_claimed:
+        raise HTTPException(status_code=403, detail="Not authorized to decline this ride")
 
     await update_acceptance_rate(driver["id"], accepted=False)
 

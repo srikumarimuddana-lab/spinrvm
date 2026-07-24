@@ -8,7 +8,7 @@ blocks it. Items marked **needs a human** cannot be closed by a code change.
 
 ---
 
-## 1. Done — merged into PR #2238
+## 1. Done — merged into PR #2238 + follow-on commits
 
 | WS | Findings | What shipped |
 |---|---|---|
@@ -18,28 +18,26 @@ blocks it. Items marked **needs a human** cannot be closed by a code change.
 | WS-4 | 1 | `_CircuitBreaker.release_probe()` wired into the three `run_sync` bypass paths; a deadline-aborted probe can no longer wedge every DB call in 503. |
 | WS-5 | 16 | Migration 248: `ride_debit` (master −amount, used +amount) replaces the mis-signed `apply_rollback`; new `ride_debit_reversal` for the compensation path. |
 | WS-6 | 2, 3, 8, 10 | Migration 249 `wallet_apply_delta` (locked, idempotent, signed delta); admin credit/debit, no-show fee and cancellation fee all routed through it. |
+| WS-7 | 4 | Migration 250: partial unique index `(driver_id) WHERE status IN ('reserved','pending','transfer_completed')`. Standard + instant payouts reserve before transfer; balance deducts reservations automatically. |
+| WS-8 | 11 | Migration 251: `cancel_fee_payment_intent_id` column. All three cancel paths (rider, driver, search-timeout) call `cancel_authorization` when auth_status is authorized/fare_only, set auth_status='released', and store fee PI in the new column. |
+| WS-9 | 12 | `le=500` cap on `RideRatingRequest.tip_amount`; dedupe guard (409 if already rated); payment-status guard (reject tip after settlement); `@idempotent_endpoint(scope="ride_rate")`; set-once tip semantics. |
+| WS-10 | 13 | `_reestimate_fare_for_stops` now async, calls `calculate_all_fees` to recompute grand_total/tax/fees/driver_earnings/admin_earnings and refreshes `fare_breakdown_snapshot` atomically. WS payload includes `grand_total`. |
+| WS-11 | 15 | Migration 252: `email_verified` + `email_verified_at` on users. `/corporate/join-domain` gated on `email_verified` (403 ERR_EMAIL_UNVERIFIED). Email change resets the flag. |
+| WS-12 | C3 | Migration 253: `record_insurance_period_transition` RPC (atomic close+open, SECURITY DEFINER, period-3-requires-ride enforced in SQL). Python calls RPC instead of two-step UPDATE+INSERT. |
 
-Six workstreams, ten of the seventeen findings.
+Twelve workstreams, all seventeen findings from the original audit plus C3.
 
 ---
 
 ## 2. Pending — code work, ordered by priority
 
-### P0 — money loss or exploitable, nothing blocking
+### P0 — money loss or exploitable: ALL DONE
 
-| WS | Finding | Work | Migration | Est. |
-|---|---|---|---|---|
-| **WS-7** | 4 | Payout TOCTOU + no compensation. Reserve the payout row `status='reserved'` **before** `Transfer.create` behind a partial unique index on `(driver_id) WHERE status IN ('reserved','pending')`; transfer second; reverse the transfer if the terminal write fails (mirroring `request_instant_payout`). Make `get_driver_balance` subtract open reservations. | 250 | 1 d |
-| **WS-8** | 11 | Booking pre-auth hold never released on cancel. Call `cancel_authorization` before overwriting payment fields; store the fee PI in a new `cancel_fee_payment_intent_id` column instead of clobbering `payment_intent_id`; add a sweeper for `status='cancelled' AND auth_status` still open. Also covers `ride_search_timeout`. | 251 | 1–2 d |
-| **WS-9** | 12 | `/rate` credits unbounded uncharged tips. Reject when already rated / tipped, add `le=500` to `RideRatingRequest.tip_amount`, only accept a tip while `payment_status` is pending/failed, add `@idempotent_endpoint(scope="ride_rate")`. | — | 0.5 d |
-| **WS-10** | 13 | Mid-trip stop edits never recompute `grand_total` / tax. Recompute fees + taxes + `driver_earnings` / `admin_earnings` and refresh `fare_breakdown_snapshot` in the same atomic update. | — | 1 d |
+WS-7 through WS-10 are complete. See section 1.
 
-### P1 — identity and compliance
+### P1 — identity and compliance: ALL DONE
 
-| WS | Finding | Work | Migration | Est. |
-|---|---|---|---|---|
-| **WS-11** | 15 | Unverified email trusted as corporate-billing identity. Add `users.email_verified`, verify via the existing email-OTP machinery, gate `/corporate/join-domain` on it, reset the flag on email change. | 252 | 1 d |
-| **WS-12** | C3 | Insurance-period transition non-atomic + swallowed. Single-transaction close+open RPC, plus a **ride-state-driven reconciler loop** (loop #17) that rebuilds expected open periods every 10 min. Note the existing `stale_intent_reconciler` explicitly **skips drivers on active rides**, so it does not and cannot cover this. | 253 | 1–2 d |
+WS-11 and WS-12 are complete. See section 1.
 
 ### P2 — systemic hardening (the recurrence-prevention layer)
 
@@ -106,13 +104,12 @@ contract logic standalone.
 
 ## 5. Suggested sequencing
 
-1. **Now:** WS-7 → WS-8 → WS-9 → WS-10 (P0 money), each its own small PR.
-2. **In parallel:** WS-13 and WS-18 sweeps (exploit-class, batched ~10 sites per commit).
-3. **Then:** WS-11, WS-12 (identity + insurance-period atomicity).
+1. ~~**Now:** WS-7 → WS-8 → WS-9 → WS-10 (P0 money).~~ **DONE.**
+2. **Now:** WS-13 and WS-18 sweeps (exploit-class, batched ~10 sites per commit).
+3. ~~**Then:** WS-11, WS-12 (identity + insurance-period atomicity).~~ **DONE.**
 4. **Then:** WS-14 through WS-17, WS-19, WS-20.
 5. **Independently, and soon:** repair the `routes.rides` patch-target drift so the
    suite can gate anything at all; and close H-1/H-2 with finance.
 
-Migration numbers 250–253 are reserved above. Re-verify the next free slot with
-`ls backend/migrations | sort -V | tail -1` before each merge — parallel PRs will
-race on numbering.
+Migration numbers 250–253 are now taken. Next free slot is **254** — re-verify with
+`ls backend/migrations | sort -V | tail -1` before each merge.

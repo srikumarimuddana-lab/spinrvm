@@ -6,7 +6,7 @@
 -- quote-vs-measured divergence. These are DETECTION signals for ops + the
 -- reconciliation job — they never change a fare or a displayed distance.
 --
--- Rollback plan:
+-- Rollback:
 -- Stop the writers (booking guard, completion milestone check, reconciliation
 -- loop), then drop the policies, indexes, and table. No other table references
 -- it and no fare/display data depends on it; dropping loses integrity-signal

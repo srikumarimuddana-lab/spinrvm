@@ -170,3 +170,78 @@ def _run(coroutine):
     import asyncio
 
     return asyncio.run(coroutine)
+
+
+# --- Driver location-health nudge (P3.1) -------------------------------------
+
+import asyncio  # noqa: E402
+from unittest.mock import AsyncMock, patch  # noqa: E402
+
+from backend.utils.route_gap_monitor import (  # noqa: E402
+    GapDecision,
+    _notify_driver_location_health,
+    location_health_payload,
+)
+
+
+def _run(coro):
+    return asyncio.run(coro)
+
+
+def _gap_decision():
+    return GapDecision(state="gap", gap_started_at=NOW - timedelta(seconds=45), gap_seconds=45)
+
+
+def test_location_health_payload_shape():
+    payload = location_health_payload("ride_1", 45, 30)
+    assert payload["type"] == "location_health"
+    assert payload["ride_id"] == "ride_1"
+    assert payload["action"] == "reacquire_gps"
+    assert payload["gap_seconds"] == 45
+    # No coordinates ever leave the monitor.
+    assert "lat" not in payload and "lng" not in payload
+
+
+def test_nudge_sends_to_driver_user_id():
+    ride = {"id": "ride_1", "driver_id": "drv-1"}
+    send = AsyncMock()
+    with (
+        patch.object(route_gap_monitor.db_supabase, "get_rows", AsyncMock(return_value=[{"user_id": "user-9"}])),
+        patch.object(route_gap_monitor.socket_manager.manager, "send_personal_message", send),
+    ):
+        _run(_notify_driver_location_health(ride, _gap_decision(), 30))
+    send.assert_awaited_once()
+    _msg, client_id = send.await_args[0]
+    assert client_id == "driver_user-9"
+    assert _msg["type"] == "location_health"
+
+
+def test_nudge_noop_without_driver():
+    send = AsyncMock()
+    with patch.object(route_gap_monitor.socket_manager.manager, "send_personal_message", send):
+        _run(_notify_driver_location_health({"id": "ride_1"}, _gap_decision(), 30))
+    send.assert_not_awaited()
+
+
+def test_nudge_noop_when_driver_has_no_user_id():
+    send = AsyncMock()
+    with (
+        patch.object(route_gap_monitor.db_supabase, "get_rows", AsyncMock(return_value=[])),
+        patch.object(route_gap_monitor.socket_manager.manager, "send_personal_message", send),
+    ):
+        _run(_notify_driver_location_health({"id": "ride_1", "driver_id": "drv-1"}, _gap_decision(), 30))
+    send.assert_not_awaited()
+
+
+def test_nudge_swallows_send_failure():
+    ride = {"id": "ride_1", "driver_id": "drv-1"}
+    with (
+        patch.object(route_gap_monitor.db_supabase, "get_rows", AsyncMock(return_value=[{"user_id": "user-9"}])),
+        patch.object(
+            route_gap_monitor.socket_manager.manager,
+            "send_personal_message",
+            AsyncMock(side_effect=RuntimeError("ws down")),
+        ),
+    ):
+        # Must not raise — a nudge failure can never break the monitor tick.
+        _run(_notify_driver_location_health(ride, _gap_decision(), 30))

@@ -421,7 +421,7 @@ async def get_ride(
             else:
                 noshow_wait_seconds = int(settings.get("noshow_wait_seconds", 300))
         except Exception:
-            logger.warning("Failed to load settings or service area override for noshow_wait_seconds")
+            logger.error("Failed to load settings or service area override for noshow_wait_seconds", exc_info=True)
     ride["noshow_wait_seconds"] = noshow_wait_seconds
 
     if ride_status == RideStatus.DRIVER_ARRIVED:

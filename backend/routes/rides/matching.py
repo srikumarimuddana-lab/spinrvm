@@ -775,7 +775,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
             poly = get_service_area_polygon(sa or {})
             return poly or None
         except Exception as e:
-            logger.warning("[DISPATCH] service_area polygon fetch failed: %s", e)
+            logger.error("[DISPATCH] service_area polygon fetch failed: %s", e, exc_info=True)
             return None
 
     rider_user, (_incentives, _total_bonus), _service_area_polygon = await asyncio.gather(
@@ -819,7 +819,7 @@ async def _match_driver_to_ride_attempt(ride_id: str, *, ride: Optional[dict] = 
                         "reward_amount": float(q.get("reward_amount") or 0),
                     }
         except Exception as e:
-            logger.warning(f"Failed to fetch quest progress for driver {driver['id']}: {e}")
+            logger.error(f"Failed to fetch quest progress for driver {driver['id']}: {e}", exc_info=True)
 
         # Per-driver signed URL for the notification's BigPicture fare banner.
         # Bound to this ride + driver and short-lived; rendered on demand by
@@ -1316,7 +1316,7 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                     },
                 )
             except Exception as _col_exc:
-                logger.warning(f"[AUTO-CANCEL] attribution write failed ({_col_exc}); retrying minimal")
+                logger.error(f"[AUTO-CANCEL] attribution write failed ({_col_exc}); retrying minimal", exc_info=True)
                 await _deps.db_supabase.update_ride(r_id, base_update)
             await _deps.manager.send_personal_message(
                 {

@@ -415,7 +415,6 @@ async def compute_ride_estimates(
     # awaited at the end for rendering). The task was started concurrently, so
     # this usually resolves with ~no added latency.
     road_km: Optional[float] = None
-    road_duration_s: Optional[int] = None
     if route_task is not None and _fare_mode != "haversine":
         try:
             _done, _ = await asyncio.wait({route_task}, timeout=_PRICING_ROUTE_WAIT_S)
@@ -423,15 +422,16 @@ async def compute_ride_estimates(
                 _route = route_task.result()
                 if _route:
                     road_km = _route.get("distance_km")
-                    road_duration_s = _route.get("duration_s")
         except Exception as _await_err:  # defensive — _route_fetch traps its own errors
             logger.warning("[estimate] route await failed (non-fatal): %s", _await_err)
 
     distance_km, distance_basis = select_fare_distance(haversine_km, road_km, mode=_fare_mode)
-    if distance_basis == "road_route" and road_duration_s:
-        duration_minutes = max(1, round(road_duration_s / 60))
-    else:
-        duration_minutes = int(distance_km / 30 * 60) + 5
+    # Duration derives from the chosen (road) distance with the standard
+    # city-speed model — NOT the Directions ETA. Booking recomputes duration
+    # from the same distance with the same formula, so the time_fare charged
+    # matches the time_fare quoted; using Directions' ETA here would diverge
+    # from booking and over/undercharge the rider on the time component.
+    duration_minutes = int(distance_km / 30 * 60) + 5
 
     # Observability for the shadow->road rollout: the basis actually billed, and
     # (whenever a road distance is known) the km delta vs haversine — the

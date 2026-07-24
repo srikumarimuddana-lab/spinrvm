@@ -46,6 +46,7 @@ from ._shared import (  # noqa: F401
     _is_corporate_paid,
     _round,
     _sum_fare_breakdown,
+    resolve_booking_distance,
 )
 
 router = APIRouter()
@@ -418,10 +419,15 @@ async def create_ride(
             message_key=ErrorKeys.PAYMENT_UNPAID_RIDE_BLOCK,
         )
 
-    # Charge the multi-leg route (pickup → stops → dropoff) so the booked fare
-    # matches the multi-stop quote shown at /rides/estimate.
-    distance_km = multi_leg_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng, body.stops)
+    # Straight-line haversine through any stops. This is only the FALLBACK: when
+    # the rider sends back the estimate_token (below) it carries the quoted road
+    # distance, and the booking charges that instead so the booked fare matches
+    # the road-route quote shown at /rides/estimate rather than under-billing on
+    # crow-flies (0.7 km vs 1.8 km in the reported incident).
+    haversine_km = multi_leg_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng, body.stops)
+    distance_km = round(haversine_km, 3)
     duration_minutes = int(distance_km / 30 * 60) + 5
+    distance_basis = "haversine"  # overridden from the estimate token when present
 
     # Fetch service_areas ONCE for this request and share across:
     # (1) fare resolution, (2) airport-fee lookup, (3) area-fees/taxes,
@@ -561,6 +567,15 @@ async def create_ride(
                 f"Surge locked from estimate_token for rider={current_user['id']} "
                 f"vt={body.vehicle_type_id}: {float(surge)} (current was {float(current_surge)})"
             )
+            # Charge the quoted road distance the rider was shown, not a
+            # re-derived haversine. Duration recomputed from it with the same
+            # model /estimate used, so quoted and charged time_fare agree.
+            distance_km, duration_minutes, distance_basis = resolve_booking_distance(haversine_km, payload)
+            if distance_basis != "haversine":
+                logger.info(
+                    f"Distance locked from estimate_token for rider={current_user['id']}: "
+                    f"{distance_km}km basis={distance_basis} (haversine was {round(haversine_km, 3)}km)"
+                )
         except EstimateTokenError as e:
             logger.warning(
                 f"estimate_token rejected ({e}); falling back to current surge "

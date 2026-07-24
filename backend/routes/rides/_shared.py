@@ -217,6 +217,29 @@ def select_fare_distance(haversine_km: float, road_km: Optional[float], *, mode:
     return hv, "haversine"
 
 
+def resolve_booking_distance(haversine_km: float, token_payload: Optional[dict]) -> tuple:
+    """Distance/duration/basis a booking should charge, honoring the token.
+
+    /estimate signs the quoted road distance into the estimate token (``dk``,
+    with basis ``db``). When that token comes back on /rides, the booking
+    charges *that exact distance* — matching what the rider was shown — instead
+    of re-deriving straight-line haversine (the bug that billed 0.7 km for a
+    1.8 km road route). Duration is recomputed from the chosen distance with the
+    same city-speed model /estimate uses, so the quoted and charged time_fare
+    agree. Falls back to haversine when the token has no distance (older
+    clients, no token, or an estimate that itself fell back to haversine).
+
+    Returns ``(distance_km, duration_minutes, distance_basis)``.
+    """
+    hv = round(float(haversine_km), 3)
+    dk = (token_payload or {}).get("dk")
+    if dk is not None and float(dk) > 0:
+        km = round(float(dk), 3)
+        basis = str((token_payload or {}).get("db") or "road_route")
+        return km, int(km / 30 * 60) + 5, basis
+    return hv, int(hv / 30 * 60) + 5, "haversine"
+
+
 async def _get_active_service_area_for_point(
     lat: float,
     lng: float,

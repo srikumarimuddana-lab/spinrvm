@@ -9,7 +9,11 @@ booking so the rider is charged exactly what they were shown.
 
 from __future__ import annotations
 
-from routes.rides._shared import _road_distance_plausible, select_fare_distance
+from routes.rides._shared import (
+    _road_distance_plausible,
+    resolve_booking_distance,
+    select_fare_distance,
+)
 from utils.estimate_token import sign_estimate_token, verify_estimate_token
 
 # Reported incident: crow-flies 0.7 km, real road route 1.8 km.
@@ -101,3 +105,38 @@ class TestEstimateTokenCarriesDistance:
         payload = verify_estimate_token(tok, **_token_kwargs())
         assert "dk" not in payload
         assert "db" not in payload
+
+
+class TestResolveBookingDistance:
+    def test_charges_quoted_road_distance_from_token(self):
+        payload = {"dk": 1.8, "db": "road_route"}
+        km, mins, basis = resolve_booking_distance(HAVERSINE, payload)
+        assert km == 1.8
+        assert basis == "road_route"
+        # Duration derives from the chosen distance (same model /estimate uses).
+        assert mins == int(1.8 / 30 * 60) + 5
+
+    def test_falls_back_to_haversine_without_token(self):
+        km, mins, basis = resolve_booking_distance(HAVERSINE, None)
+        assert km == 0.7
+        assert basis == "haversine"
+        assert mins == int(0.7 / 30 * 60) + 5
+
+    def test_falls_back_when_token_has_no_distance(self):
+        # Old token (surge only) → booking recomputes haversine.
+        km, _mins, basis = resolve_booking_distance(HAVERSINE, {"sm": 1.0})
+        assert km == 0.7
+        assert basis == "haversine"
+
+    def test_zero_or_negative_token_distance_ignored(self):
+        km, _mins, basis = resolve_booking_distance(HAVERSINE, {"dk": 0, "db": "road_route"})
+        assert km == 0.7
+        assert basis == "haversine"
+
+    def test_haversine_fallback_basis_preserved_from_token(self):
+        # When /estimate itself fell back to haversine, dk carries that value
+        # and booking honours the same basis label.
+        payload = {"dk": 0.7, "db": "haversine_fallback"}
+        km, _mins, basis = resolve_booking_distance(HAVERSINE, payload)
+        assert km == 0.7
+        assert basis == "haversine_fallback"

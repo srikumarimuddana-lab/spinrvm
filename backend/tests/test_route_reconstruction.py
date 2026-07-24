@@ -72,7 +72,12 @@ def _two_segment_evidence():
 @pytest.mark.asyncio
 async def test_reconstructs_missing_start_internal_gap_and_tail_in_order(monkeypatch):
     segmented, matched, completion = _two_segment_evidence()
-    assert segmented.quality.coverage_ratio == 1.0
+    # First→last span still covers the whole trip window...
+    assert segmented.quality.span_coverage_ratio == 1.0
+    # ...but coverage_ratio is now gap-aware: the deliberate internal gap in this
+    # fixture must pull it below 1.0 (that's the signal that hid the incident's
+    # missing middle when coverage was span-only).
+    assert segmented.quality.coverage_ratio < 1.0
     monkeypatch.setattr(
         reconstruction,
         "get_app_settings",

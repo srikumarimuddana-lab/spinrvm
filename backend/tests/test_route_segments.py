@@ -284,3 +284,58 @@ def test_49_minute_fixture_keeps_two_long_gaps_and_a_5km_jump_separate():
     assert len(flattened) == len(points)
     assert {(point["lat"], point["lng"]) for point in flattened} == {(point["lat"], point["lng"]) for point in points}
     assert segmented.quality.max_gap_seconds == 26 * 60
+
+
+# --- Low-accuracy rejection + gap-aware coverage (P1.3) -----------------------
+
+def test_low_accuracy_points_rejected():
+    segmented = segment_route(
+        [
+            _point(0, sequence=0, accuracy=8),
+            _point(20, sequence=1, accuracy=80),   # too imprecise → rejected
+            _point(40, sequence=2, accuracy=120),  # too imprecise → rejected
+            _point(60, sequence=3, accuracy=12),
+        ],
+        _lifecycle(),
+        None,
+    )
+    reasons = [r.reason for r in segmented.rejected_points]
+    assert reasons.count("low_accuracy") == 2
+    assert segmented.quality.point_count == 2  # only the two precise fixes remain
+
+
+def test_missing_accuracy_is_kept():
+    pts = [
+        {"recording_session_id": "s", "sequence_number": 0, "lat": 50.445, "lng": -104.618,
+         "captured_at": BASE_TIME.isoformat()},
+        {"recording_session_id": "s", "sequence_number": 1, "lat": 50.4451, "lng": -104.618,
+         "captured_at": (BASE_TIME + timedelta(seconds=30)).isoformat()},
+    ]
+    segmented = segment_route(pts, _lifecycle(), None)
+    assert segmented.quality.rejected_point_count == 0
+    assert segmented.quality.point_count == 2
+
+
+def test_gap_aware_coverage_discounts_mid_trip_dead_zone():
+    # Two fixes near the start, then a long silence, then two near the end.
+    # First→last span covers the whole trip (span_coverage ~1.0), but a ~200 s
+    # internal dead zone must drop the gap-aware coverage well below that.
+    pts = [
+        _point(0, sequence=0),
+        _point(20, sequence=1),
+        _point(240, sequence=2),   # 220 s gap — the missing middle
+        _point(260, sequence=3),
+    ]
+    segmented = segment_route(pts, _lifecycle(completed_seconds=260), None)
+    q = segmented.quality
+    assert q.span_coverage_ratio == 1.0                 # fixes at both ends
+    assert q.coverage_ratio < 0.3                       # but the middle is gone
+    assert q.coverage_ratio < q.span_coverage_ratio
+
+
+def test_continuous_trace_coverage_matches_span():
+    # No gap beyond the 60 s threshold → gap-aware equals span.
+    pts = [_point(i * 30, sequence=i) for i in range(5)]  # 0,30,60,90,120
+    segmented = segment_route(pts, _lifecycle(completed_seconds=120), None)
+    q = segmented.quality
+    assert q.coverage_ratio == q.span_coverage_ratio == 1.0

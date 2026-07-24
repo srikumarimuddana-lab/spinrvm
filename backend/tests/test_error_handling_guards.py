@@ -272,12 +272,35 @@ class TestAreaFeesFailClosed:
 # ── MEDIUM: incentive claim must not silently zero driver bonus ────
 
 
-class TestIncentiveClaimFailsClosed:
-    """WS-13: incentive claim failure on ride completion must raise 503,
-    not silently zero the driver's earned bonus."""
+class TestIncentiveClaimFailsOpen:
+    """WS-13: incentive claim failure on ride completion must fail OPEN
+    (log at ERROR, record $0, continue) — NOT raise. The ride is already
+    flipped to `completed` by the atomic guard before this block, so
+    raising would strand it: the ride_completed WS events never fire and
+    the client's retry hits the guard's 409. A lost incentive is
+    reconcilable; a stuck completed ride is not."""
 
-    def test_incentive_claim_raises(self):
-        assert _except_block_raises(_LIFECYCLE_SRC, "incentive claim failed")
+    def test_incentive_claim_logs_error(self):
+        lines = _LIFECYCLE_SRC.split("\n")
+        for i, line in enumerate(lines):
+            if "incentive claim failed" in line:
+                context = "\n".join(lines[max(0, i - 3) : i + 1])
+                assert "logger.error" in context, "incentive claim failure must log at ERROR"
+                return
+        pytest.fail("incentive claim failure log not found")
+
+    def test_incentive_claim_does_not_raise(self):
+        """Guard against re-introducing the strand-the-completed-ride bug."""
+        lines = _LIFECYCLE_SRC.split("\n")
+        for i, line in enumerate(lines):
+            if "incentive claim failed" in line:
+                # Scan the except block body (until the next dedented `try`/def)
+                block = "\n".join(lines[max(0, i - 5) : min(i + 8, len(lines))])
+                assert "raise HTTPException" not in block, (
+                    "incentive claim except block must NOT raise — the ride is already completed; raising strands it"
+                )
+                return
+        pytest.fail("incentive claim failure log not found")
 
 
 # ── MEDIUM: correct log levels on DB errors in ride paths ──────────

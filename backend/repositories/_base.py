@@ -124,6 +124,26 @@ class _CircuitBreaker:
             self._probe_in_flight = False
             logger.warning("[DB] Circuit breaker probe failed — back to OPEN")
 
+    def release_probe(self) -> None:
+        """Return a leaked half-open probe to OPEN.
+
+        should_allow() sets _probe_in_flight=True when it grants the single
+        half-open probe, and only record_success/record_failure clear it. If the
+        probe request instead exits via a path that calls neither — the client
+        deadline abort (wait_for timeout or the in-loop deadline pre-check) or
+        the ValueError early-exit in run_sync — the flag would stay True forever,
+        so should_allow() returns False for every future call and the whole API
+        503s until the process restarts. Reverting to OPEN with a fresh
+        OPEN_DURATION lets the breaker probe again later (a deadline-aborted
+        probe tells us nothing good about DB health, so we wait, exactly like a
+        failed probe). Guarded so it is a safe no-op on any non-probe call.
+        """
+        if self._state == "half_open" and self._probe_in_flight:
+            self._state = "open"
+            self._opened_at = _time.monotonic()
+            self._probe_in_flight = False
+            logger.warning("[DB] Circuit breaker half-open probe released (deadline/abort) — back to OPEN")
+
 
 _breaker = _CircuitBreaker()
 
@@ -210,6 +230,7 @@ async def run_sync(
             remaining = _remaining_seconds()
             if remaining is not None and remaining <= 0:
                 _metric_inc("spinr_db_calls_rejected_total", {"reason": "deadline_exhausted"})
+                _breaker.release_probe()
                 raise ServiceUnavailableException("database")
 
             future = loop.run_in_executor(_DB_EXECUTOR, func)  # type: ignore
@@ -225,6 +246,7 @@ async def run_sync(
                 future.cancel()
                 _metric_inc("spinr_db_calls_rejected_total", {"reason": "deadline_timeout"})
                 logger.error("[DB] Executor wait exceeded the request deadline")
+                _breaker.release_probe()
                 raise ServiceUnavailableException("database") from None
             finally:
                 _record_db_queue_depth()
@@ -238,6 +260,7 @@ async def run_sync(
             raise
         except Exception as exc:
             if isinstance(exc, ValueError):
+                _breaker.release_probe()
                 raise
             last_exc = exc
             exc_name = type(exc).__name__

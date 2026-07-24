@@ -480,7 +480,10 @@ async def get_emergency_contacts(current_user: dict = Depends(get_current_user))
             f"Could not fetch emergency contacts for user {current_user['id']}: {e}",
             exc_info=True,
         )
-        contacts = []
+        raise HTTPException(
+            status_code=503,
+            detail="Could not load emergency contacts. Please try again.",
+        ) from e
     return {"contacts": contacts}
 
 
@@ -489,8 +492,15 @@ async def add_emergency_contact(contact: EmergencyContactCreate, current_user: d
     """Add an emergency contact (max 3 contacts per user, matching Uber/Lyft)."""
     try:
         existing = await db_supabase.get_rows("emergency_contacts", {"user_id": current_user["id"]}, limit=100)
-    except Exception:
-        existing = []
+    except Exception as e:
+        logger.error(
+            f"Could not check emergency contact count for user {current_user['id']}: {e}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Could not verify contact limit. Please try again.",
+        ) from e
 
     MAX_EMERGENCY_CONTACTS = 3
     if len(existing) >= MAX_EMERGENCY_CONTACTS:

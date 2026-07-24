@@ -233,16 +233,20 @@ async def rider_complete_ride(
                 if (not inc.get("vehicle_type_id") or inc["vehicle_type_id"] == vt_id)
                 and Decimal(str(inc.get("bonus_amount") or 0)) > 0
             )
-        except Exception as e:
+        except Exception:
+            # Fail-open by design: the ride is ALREADY flipped to `completed` by
+            # the atomic guard above (and the driver freed / period transitioned).
+            # Raising here would strand the ride — the `ride_completed` WS events
+            # below never fire and the client's retry hits the guard's 409, leaving
+            # the rider stuck on the in-progress screen. A lost incentive is
+            # reconcilable from the ride_incentives ledger; a stuck ride is not.
+            _rider_incentive_total = Decimal("0")
             logger.error(
-                "rider_complete_ride: incentive claim failed for ride %s",
+                "rider_complete_ride: incentive claim failed for ride %s — "
+                "recording $0 incentive and continuing (ride already completed)",
                 ride_id,
                 exc_info=True,
             )
-            raise HTTPException(
-                status_code=503,
-                detail="Could not finalize ride incentives. Please try again.",
-            ) from e
 
     # ── Driver earnings snapshot ──
     try:

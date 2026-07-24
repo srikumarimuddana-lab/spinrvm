@@ -151,6 +151,31 @@ async def _get_route_integrity_mode() -> str:
     return mode
 
 
+async def _get_gps_distance_filter_mode() -> str:
+    """Read the GPS distance-filter rollout mode (off | shadow | on).
+
+    Unlike route-integrity, a read failure defaults to "off" (legacy, unfiltered)
+    rather than blocking completion: filtering never weakens a safety guard, and
+    shadow/on only refine the *measured* distance — a settings blip must not stop
+    a driver ending their trip. Default when unset is "shadow" so the change is
+    observed on real traffic before it bills.
+    """
+    try:
+        try:
+            from ...settings_loader import get_app_settings
+        except ImportError:
+            from settings_loader import get_app_settings  # type: ignore
+        settings = await get_app_settings()
+    except Exception:
+        logger.error("completion gps-filter configuration read failed; defaulting to off", exc_info=True)
+        return "off"
+    mode = str((settings or {}).get("gps_distance_filter_mode", "shadow")).lower()
+    if mode not in {"off", "shadow", "on"}:
+        logger.warning("gps_distance_filter_mode invalid (%s); defaulting to off", mode)
+        return "off"
+    return mode
+
+
 def _completion_fix_rejection(fix: CompletionFix, now: datetime) -> str | None:
     """Return an auditable rejection code for a non-authoritative final fix."""
     captured_at = parse_iso_utc(fix.captured_at)
@@ -341,11 +366,13 @@ async def complete_ride(
     route_geometry_error: Optional[str] = None
 
     try:
+        gps_filter_mode = await _get_gps_distance_filter_mode()
         all_breadcrumbs = await load_ride_breadcrumbs(ride_id)
         distances = await compute_trip_distances(
             all_breadcrumbs,
             ride_id=ride_id,
             planned_distance=planned_distance,
+            filter_mode=gps_filter_mode,
         )
         actual_distance_km = distances.actual_distance_km
         actual_distance_km_haversine = distances.actual_distance_km_haversine

@@ -84,6 +84,9 @@ async def create_profile(request: CreateProfileRequest, current_user: dict = Dep
             message_key=ErrorKeys.PROFILE_EMAIL_IN_USE,
         )
 
+    old_email = (current_user.get("email") or "").lower()
+    email_changed = email_lower != old_email
+
     update_data = {
         "first_name": request.first_name.strip(),
         "last_name": request.last_name.strip(),
@@ -91,6 +94,9 @@ async def create_profile(request: CreateProfileRequest, current_user: dict = Dep
         "gender": request.gender,
         "profile_complete": True,
     }
+    if email_changed:
+        update_data["email_verified"] = False
+        update_data["email_verified_at"] = None
     # Allow driver app to hint the role so onboarding status is computed.
     # We write the flag (is_driver / is_rider) rather than the role column so
     # that a user who starts driver onboarding keeps is_rider=true (dual-role).

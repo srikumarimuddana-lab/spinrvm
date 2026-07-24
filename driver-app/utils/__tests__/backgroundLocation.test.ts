@@ -76,6 +76,7 @@ jest.mock('@shared/services/firebase', () => ({
 import {
   startBackgroundLocation,
   updateBackgroundLocationCadence,
+  recoverTripLocation,
   setBackgroundTripActive,
   handleBackgroundLocationTask,
   TRIP_CADENCE,
@@ -348,5 +349,37 @@ describe('updateBackgroundLocationCadence', () => {
   it('TRIP_CADENCE samples denser than IDLE_CADENCE', () => {
     expect(TRIP_CADENCE.timeInterval!).toBeLessThan(IDLE_CADENCE.timeInterval!);
     expect(TRIP_CADENCE.distanceInterval!).toBeLessThan(IDLE_CADENCE.distanceInterval!);
+  });
+});
+
+
+describe('recoverTripLocation (P3.2 — location_health nudge)', () => {
+  beforeEach(() => {
+    mockStartUpdates.mockClear();
+    mockHasStartedLocationUpdates.mockReset();
+  });
+
+  it('re-asserts the trip cadence when the task is already running', async () => {
+    mockHasStartedLocationUpdates.mockResolvedValue(true);
+    const running = await recoverTripLocation();
+    expect(running).toBe(true);
+    // Cadence re-applied in place → startLocationUpdatesAsync called with the
+    // dense TRIP_CADENCE interval.
+    expect(mockStartUpdates).toHaveBeenCalled();
+    const cfg = mockStartUpdates.mock.calls.at(-1)?.[1];
+    expect(cfg.timeInterval).toBe(TRIP_CADENCE.timeInterval);
+  });
+
+  it('restarts the task at trip cadence when it was killed', async () => {
+    // Not running when checked by recover; startBackgroundLocation re-checks.
+    mockHasStartedLocationUpdates.mockResolvedValue(false);
+    const running = await recoverTripLocation();
+    expect(running).toBe(true);
+    expect(mockStartUpdates).toHaveBeenCalled();
+  });
+
+  it('returns false and never throws on failure', async () => {
+    mockHasStartedLocationUpdates.mockRejectedValue(new Error('permission revoked'));
+    await expect(recoverTripLocation()).resolves.toBe(false);
   });
 });

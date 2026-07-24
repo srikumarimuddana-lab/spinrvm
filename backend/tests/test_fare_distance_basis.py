@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from routes.rides._shared import (
     _road_distance_plausible,
+    booked_distance_suspect_reason,
     resolve_booking_distance,
     select_fare_distance,
 )
@@ -140,3 +141,21 @@ class TestResolveBookingDistance:
         km, _mins, basis = resolve_booking_distance(HAVERSINE, payload)
         assert km == 0.7
         assert basis == "haversine_fallback"
+
+
+class TestBookedDistanceSuspectReason:
+    def test_below_floor_is_suspect(self):
+        # The incident's 0.7 km would flag; anything under 0.3 km does.
+        assert booked_distance_suspect_reason(0.2, "road_route") == "below_floor"
+
+    def test_haversine_fallback_is_suspect(self):
+        assert booked_distance_suspect_reason(3.0, "haversine_fallback") == "road_route_unavailable"
+
+    def test_normal_road_route_not_suspect(self):
+        assert booked_distance_suspect_reason(1.8, "road_route") is None
+
+    def test_floor_takes_precedence_over_basis(self):
+        assert booked_distance_suspect_reason(0.1, "haversine_fallback") == "below_floor"
+
+    def test_bad_input_is_not_suspect(self):
+        assert booked_distance_suspect_reason(None, "road_route") is None

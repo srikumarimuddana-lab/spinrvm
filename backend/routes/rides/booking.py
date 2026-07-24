@@ -46,6 +46,7 @@ from ._shared import (  # noqa: F401
     _is_corporate_paid,
     _round,
     _sum_fare_breakdown,
+    booked_distance_suspect_reason,
     resolve_booking_distance,
 )
 
@@ -900,6 +901,34 @@ async def create_ride(
         # DB-enforced idempotency: a concurrent duplicate request already
         # created this ride — return it instead of double-charging.
         return fresh_ride
+
+    # Booking distance sanity (P2.1b): a booked distance below the plausible
+    # floor (likely a wrong dropoff coordinate — the incident's 0.7 km) or a
+    # road route we couldn't fetch (haversine fallback, so possibly undercharged)
+    # is worth flagging for ops + the reconciliation job. Detection only — the
+    # booking already succeeded and short trips are legitimate.
+    try:
+        _suspect_reason = booked_distance_suspect_reason(distance_km, distance_basis)
+        if _suspect_reason and fresh_ride.get("id"):
+            try:
+                from ...utils.distance_integrity import record_integrity_event
+            except ImportError:
+                from utils.distance_integrity import record_integrity_event  # type: ignore
+            _deps.spawn(
+                record_integrity_event(
+                    fresh_ride["id"],
+                    "booked_distance_suspect",
+                    {
+                        "reason": _suspect_reason,
+                        "booked_km": round(float(distance_km), 3),
+                        "haversine_km": round(float(haversine_km), 3),
+                        "distance_basis": distance_basis,
+                    },
+                )
+            )
+            _deps._metric_inc("spinr_rides_booked_distance_suspect_total", {"reason": _suspect_reason})
+    except Exception:
+        logger.error("booking distance sanity check failed for ride %s", fresh_ride.get("id"), exc_info=True)
 
     # ── Apply promo code if provided ──
     if body.promo_code:

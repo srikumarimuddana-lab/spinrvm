@@ -364,7 +364,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [rider-app-test]
-    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+    if: always() && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request')
     continue-on-error: ${{ github.event_name == 'pull_request' }}
     defaults:
       run:
@@ -415,7 +415,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [driver-app-test]
-    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+    if: always() && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request')
     continue-on-error: ${{ github.event_name == 'pull_request' }}
     defaults:
       run:

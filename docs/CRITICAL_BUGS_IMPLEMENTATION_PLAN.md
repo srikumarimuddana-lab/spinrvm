@@ -16,9 +16,12 @@ Scope: C3 (insurance-period atomicity) plus findings 1–16 from the critical-bu
 | WS-3 safety notify fallback import | 14 | ✅ done — both import branches bind `notify_safety_team` |
 | WS-4 circuit-breaker probe release | 1 | ✅ done — `release_probe()` on all three bypass paths |
 | WS-5 allowance ride_debit sign | 16 | ✅ done — migration 248 + `ride_debit` / `ride_debit_reversal` |
-| WS-6 wallet_apply_delta RPC | 2, 3, 8, 10 | ⏳ next (migration 249) |
-| WS-7 payout reserve-then-transfer | 4 | ⏳ pending (migration 250) |
+| WS-6 wallet_apply_delta RPC | 2, 3, 8, 10 | ✅ done — migration 249; all four lost-update sites now share one locked RPC |
+| WS-7 payout reserve-then-transfer | 4 | ⏳ next (migration 250) |
 | WS-8..12, WS-13..20 | remainder | ⏳ pending |
+
+Full open-work breakdown, including items that need a human rather than a code
+change, lives in `CRITICAL_BUGS_PENDING_WORK.md`.
 
 Note on WS-5: the user decided ride settlement debits master, with grant semantics
 (currently also debiting master on a headroom raise) fixed as a separate follow-up —

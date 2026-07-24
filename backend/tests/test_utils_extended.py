@@ -1417,28 +1417,28 @@ class TestSettingsEndpoints:
 
 
 # ===========================================================================
-# routes/support.py — _scrub_pii coverage
+# routes/support.py — scrub_pii coverage
 # ===========================================================================
 
 
 class TestScrubPii:
     def test_scrubs_phone_number(self):
-        from backend.routes.support import _scrub_pii
+        from backend.routes.support import scrub_pii
 
-        result = _scrub_pii("Call me at 306-555-1234 or (306) 555-1234")
+        result = scrub_pii("Call me at 306-555-1234 or (306) 555-1234")
         assert "306-555-1234" not in result
 
     def test_scrubs_email(self):
-        from backend.routes.support import _scrub_pii
+        from backend.routes.support import scrub_pii
 
-        result = _scrub_pii("Email me at rider@example.com for support")
+        result = scrub_pii("Email me at rider@example.com for support")
         assert "rider@example.com" not in result
 
     def test_returns_original_when_no_pii(self):
-        from backend.routes.support import _scrub_pii
+        from backend.routes.support import scrub_pii
 
         clean_text = "Please help me with my ride booking."
-        result = _scrub_pii(clean_text)
+        result = scrub_pii(clean_text)
         assert result == clean_text
 
 

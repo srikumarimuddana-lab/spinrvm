@@ -5,6 +5,7 @@
  */
 
 jest.mock('@shared/api/client', () => ({
+  ...jest.requireActual('@shared/api/client'),
   __esModule: true,
   default: {
     get: jest.fn(),
@@ -66,11 +67,14 @@ describe('walletStore', () => {
     });
 
     it('sets error on failure', async () => {
+      // getApiErrorMessage treats bare "Network Error" as Axios noise (not a
+      // useful message for the user) and returns the caller's fallback —
+      // see shared/api/client.ts.
       mockApi.get.mockRejectedValueOnce(new Error('Network error'));
 
       await useWalletStore.getState().fetchWallet();
 
-      expect(useWalletStore.getState().error).toBe('Network error');
+      expect(useWalletStore.getState().error).toBe('Could not load your wallet. Please try again.');
       expect(useWalletStore.getState().isLoading).toBe(false);
     });
   });

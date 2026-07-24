@@ -18,6 +18,14 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 jest.mock('../../utils/aiChat', () => ({
   streamChat: jest.fn(),
 }));
+// aiChatStore imports expo-location directly (for location-aware assistant
+// replies) — mocked to avoid pulling in the real native module, which
+// crashes Jest's Expo Winter-runtime polyfill outside a real device/
+// simulator context. Same pattern as __tests__/sosLocation.test.ts.
+jest.mock('expo-location', () => ({
+  getForegroundPermissionsAsync: jest.fn(() => Promise.resolve({ granted: false })),
+  getLastKnownPositionAsync: jest.fn(() => Promise.resolve(null)),
+}));
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import api from '@shared/api/client';

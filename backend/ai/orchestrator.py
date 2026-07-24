@@ -36,6 +36,7 @@ except ImportError:
     from ai.prompts import build_system_prompt
     from ai.providers import get_adapter
     from ai.providers.base import AIConfigError
+    from ai.threat import record_security_event, scan_message
     from ai.tools import execute_tool, tool_defs_for
 
 try:

@@ -353,6 +353,110 @@ jobs:
           path: admin-dashboard/playwright-report/
           retention-days: 7
 
+  # Rider App E2E — specs already existed (rider-app/e2e/*.spec.ts) but no job
+  # ever ran them; blocking on main, non-blocking on PRs while it stabilises,
+  # matching the admin e2e-test convention. Fully self-contained: the app is
+  # exported to static web and every backend/Maps/Firebase call is mocked via
+  # page.route() in the specs (see rider-app/e2e/fixtures.ts) — no live
+  # backend or database needed.
+  rider-app-e2e:
+    name: Rider app E2E tests (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [rider-app-test]
+    if: always() && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request')
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
+    defaults:
+      run:
+        working-directory: rider-app
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Cache node modules
+        uses: actions/cache@v5
+        with:
+          path: rider-app/node_modules
+          key: ${{ runner.os }}-rider-node-${{ hashFiles('rider-app/yarn.lock', 'rider-app/patches/**') }}
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Export Expo web build
+        run: npx expo export --platform web
+
+      - name: Run E2E tests
+        # playwright.config.ts starts `npx serve dist` itself and waits for
+        # it to be healthy when PLAYWRIGHT_START_SERVER is set — no manual
+        # background + wait-on needed here.
+        run: yarn test:e2e
+        env:
+          PLAYWRIGHT_START_SERVER: '1'
+          PLAYWRIGHT_PORT: '3002'
+          CI: true
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rider-app-playwright-report
+          path: rider-app/playwright-report/
+          retention-days: 7
+
+  # Driver App E2E — same rationale as rider-app-e2e above.
+  driver-app-e2e:
+    name: Driver app E2E tests (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [driver-app-test]
+    if: always() && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request')
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
+    defaults:
+      run:
+        working-directory: driver-app
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Cache node modules
+        uses: actions/cache@v5
+        with:
+          path: driver-app/node_modules
+          key: ${{ runner.os }}-driver-node-${{ hashFiles('driver-app/yarn.lock', 'driver-app/patches/**') }}
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Export Expo web build
+        run: npx expo export --platform web
+
+      - name: Run E2E tests
+        run: yarn test:e2e
+        env:
+          PLAYWRIGHT_START_SERVER: '1'
+          PLAYWRIGHT_PORT: '3003'
+          CI: true
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: driver-app-playwright-report
+          path: driver-app/playwright-report/
+          retention-days: 7
+
   # Deploy Backend
   deploy-backend:
     runs-on: ubuntu-latest

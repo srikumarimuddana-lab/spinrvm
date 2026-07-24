@@ -21,6 +21,15 @@
       "expo-image": [
         "./node_modules/expo-image"
       ],
+      "expo-blur": [
+        "./node_modules/expo-blur"
+      ],
+      "react-native-reanimated": [
+        "./node_modules/react-native-reanimated"
+      ],
+      "react-native-reanimated/*": [
+        "./node_modules/react-native-reanimated/*"
+      ],
       "expo-clipboard": [
         "./node_modules/expo-clipboard"
       ],

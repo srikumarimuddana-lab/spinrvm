@@ -111,6 +111,10 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         )
     except Exception as e:
         logger.error(f"Error fetching driver bonuses for balance: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail="Earnings temporarily unavailable",
+        ) from e
 
     return {
         "total_earnings": _money_str(total_earnings + total_bonuses),
@@ -147,7 +151,10 @@ async def get_driver_bonuses(
         )
     except Exception as e:
         logger.error(f"Error fetching driver bonuses: {e}", exc_info=True)
-        rows = []
+        raise HTTPException(
+            status_code=503,
+            detail="Bonuses temporarily unavailable",
+        ) from e
     return {
         "bonuses": [
             {
@@ -397,8 +404,11 @@ async def get_driver_trip_earnings(
             offset=offset,
         )
     except Exception as e:
-        logger.error(f"Error fetching trip earnings: {e}")
-        rides = []
+        logger.error(f"Error fetching trip earnings: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail="Trip earnings temporarily unavailable",
+        ) from e
 
     return {
         "trips": [
@@ -444,6 +454,7 @@ async def get_driver_weekly_earnings(weeks: int = Query(4), current_user: dict =
             limit=weeks * 7,
         )
     except Exception:
+        logger.error("[EARNINGS] driver_daily_stats lookup failed, falling back to rides table", exc_info=True)
         stats = []
 
     if stats:
@@ -530,8 +541,11 @@ async def get_driver_weekly_earnings(weeks: int = Query(4), current_user: dict =
 
         return sorted(weekly_data.values(), key=lambda x: x["week_start"])
     except Exception as e:
-        logger.error(f"Error fetching weekly earnings: {e}")
-        return []
+        logger.error(f"Error fetching weekly earnings: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail="Weekly earnings temporarily unavailable",
+        ) from e
 
 
 @router.get("/earnings/monthly")
@@ -555,6 +569,7 @@ async def get_driver_monthly_earnings(months: int = Query(6), current_user: dict
             limit=months * 31,
         )
     except Exception:
+        logger.error("[EARNINGS] driver_daily_stats lookup failed, falling back to rides table", exc_info=True)
         stats = []
 
     if stats:
@@ -623,8 +638,11 @@ async def get_driver_monthly_earnings(months: int = Query(6), current_user: dict
 
         return sorted(monthly_data.values(), key=lambda x: x["month"])
     except Exception as e:
-        logger.error(f"Error fetching monthly earnings: {e}")
-        return []
+        logger.error(f"Error fetching monthly earnings: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail="Monthly earnings temporarily unavailable",
+        ) from e
 
 
 @router.get("/earnings/comparison")
@@ -667,9 +685,11 @@ async def get_driver_earnings_comparison(period: str = Query("week"), current_us
         )
         previous_rides = [r for r in all_rides if r.get("ride_completed_at", "") < previous_end.isoformat()]
     except Exception as e:
-        logger.error(f"Error fetching comparison: {e}")
-        current_rides = []
-        previous_rides = []
+        logger.error(f"Error fetching comparison: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail="Earnings comparison temporarily unavailable",
+        ) from e
 
     def summarize(rides):
         return {
@@ -750,7 +770,10 @@ async def get_driver_earnings_forecast(current_user: dict = Depends(get_current_
             f"[FORECAST] earnings fetch failed driver={driver['id']}: {e}",
             exc_info=True,
         )
-        return _zero
+        raise HTTPException(
+            status_code=503,
+            detail="Earnings forecast temporarily unavailable",
+        ) from e
 
     try:
         this_week_rides = [r for r in recent_rides if (r.get("ride_completed_at") or "") >= week_start.isoformat()]

@@ -121,7 +121,10 @@ async def test_require_ride_in_state_rider_not_found():
 # ── _reestimate_fare_for_stops ─────────────────────────────────────────────────
 
 
-def test_reestimate_fare_for_stops_returns_updated_fare():
+@pytest.mark.anyio
+async def test_reestimate_fare_for_stops_returns_updated_fare():
+    from unittest.mock import AsyncMock, patch
+
     from backend.routes.rides import _reestimate_fare_for_stops
 
     ride = _ride()
@@ -130,12 +133,23 @@ def test_reestimate_fare_for_stops_returns_updated_fare():
     ride["dropoff_lat"] = 52.2
     ride["dropoff_lng"] = -106.7
 
+    mock_fees = {
+        "fees": [],
+        "fees_total": 0.0,
+        "tax_amount": 0.0,
+        "tax_breakdown": {},
+    }
+
     stops = [{"lat": 52.15, "lng": -106.65}]
-    result = _reestimate_fare_for_stops(ride, stops)
+    with patch("backend.routes.rides._deps.calculate_all_fees", new_callable=AsyncMock, return_value=mock_fees):
+        result = await _reestimate_fare_for_stops(ride, stops)
 
     assert "distance_km" in result
     assert "total_fare" in result
     assert "duration_minutes" in result
+    assert "grand_total" in result
+    assert "tax_amount" in result
+    assert "driver_earnings" in result
 
 
 # ── estimate_ride ─────────────────────────────────────────────────────────────
@@ -162,7 +176,11 @@ async def test_estimate_ride_returns_estimates():
         patch("backend.routes.rides._deps.calculate_distance", return_value=5.0),
         patch("backend.routes.rides._deps.get_fares_for_location", new_callable=AsyncMock, return_value=fake_fares),
         patch("backend.routes.rides._deps.db_supabase") as mock_db,
-        patch("backend.routes.rides._deps.calculate_airport_fee", new_callable=AsyncMock, return_value={"airport_fee": 0.0}),
+        patch(
+            "backend.routes.rides._deps.calculate_airport_fee",
+            new_callable=AsyncMock,
+            return_value={"airport_fee": 0.0},
+        ),
         patch("backend.routes.rides._deps.sign_estimate_token", return_value="tok"),
         patch("backend.routes.rides._deps.get_app_settings", new_callable=AsyncMock, return_value={}),
     ):
@@ -207,7 +225,11 @@ async def test_estimate_ride_includes_nearby_drivers():
         patch("backend.routes.rides._deps.calculate_distance", return_value=2.0),
         patch("backend.routes.rides._deps.get_fares_for_location", new_callable=AsyncMock, return_value=fake_fares),
         patch("backend.routes.rides._deps.db_supabase") as mock_db,
-        patch("backend.routes.rides._deps.calculate_airport_fee", new_callable=AsyncMock, return_value={"airport_fee": 0.0}),
+        patch(
+            "backend.routes.rides._deps.calculate_airport_fee",
+            new_callable=AsyncMock,
+            return_value={"airport_fee": 0.0},
+        ),
         patch("backend.routes.rides._deps.sign_estimate_token", return_value="tok2"),
         patch("backend.routes.rides._deps.get_app_settings", new_callable=AsyncMock, return_value={}),
     ):
@@ -258,7 +280,11 @@ async def test_estimate_ride_allows_dropoff_matched_by_polygon_fallback():
         patch("backend.routes.rides._deps.calculate_distance", return_value=5.0),
         patch("backend.routes.rides._deps.get_fares_for_location", new_callable=AsyncMock, return_value=fake_fares),
         patch("backend.routes.rides._deps.db_supabase") as mock_db,
-        patch("backend.routes.rides._deps.calculate_airport_fee", new_callable=AsyncMock, return_value={"airport_fee": 0.0}),
+        patch(
+            "backend.routes.rides._deps.calculate_airport_fee",
+            new_callable=AsyncMock,
+            return_value={"airport_fee": 0.0},
+        ),
         patch("backend.routes.rides._deps.calculate_all_fees", new_callable=AsyncMock, return_value={}),
         patch("backend.routes.rides._deps.sign_estimate_token", return_value="tok"),
         patch("backend.routes.rides._deps.get_app_settings", new_callable=AsyncMock, return_value={}),
@@ -1990,7 +2016,10 @@ async def test_simulate_driver_arrival_success():
     from backend.routes.rides import simulate_driver_arrival
 
     updated = _ride(status="driver_arrived", pickup_otp="1234")
-    with patch("backend.routes.rides._deps._settings") as mock_settings, patch("backend.routes.rides._deps.db_supabase") as mock_db:
+    with (
+        patch("backend.routes.rides._deps._settings") as mock_settings,
+        patch("backend.routes.rides._deps.db_supabase") as mock_db,
+    ):
         mock_settings.ENV = "development"
         mock_db.get_ride = AsyncMock(return_value=_ride(rider_id=_RIDER_ID))
         mock_db.update_ride = AsyncMock()
@@ -2408,7 +2437,11 @@ async def test_create_ride_rejects_unpriced_requested_vehicle_type():
         patch("backend.routes.rides._deps.validate_ride_location"),
         patch("backend.routes.rides._deps.db_supabase") as mock_db,
         patch("backend.routes.rides._deps.db") as mock_ddb,
-        patch("backend.routes.rides._deps._fares_for_location_impl", new_callable=AsyncMock, return_value=[configured_fare]),
+        patch(
+            "backend.routes.rides._deps._fares_for_location_impl",
+            new_callable=AsyncMock,
+            return_value=[configured_fare],
+        ),
     ):
         mock_db.find_one = AsyncMock(return_value=None)
         mock_db.get_rows = AsyncMock(return_value=[])
@@ -2460,7 +2493,11 @@ async def test_create_ride_full_happy_path():
         patch("backend.routes.rides._deps.db_supabase") as mock_db,
         patch("backend.routes.rides._deps.db") as mock_ddb,
         patch("backend.routes.rides._deps._fares_for_location_impl", new_callable=AsyncMock, return_value=[fare_info]),
-        patch("backend.routes.rides._deps.calculate_airport_fee", new_callable=AsyncMock, return_value={"airport_fee": 0.0}),
+        patch(
+            "backend.routes.rides._deps.calculate_airport_fee",
+            new_callable=AsyncMock,
+            return_value={"airport_fee": 0.0},
+        ),
         patch(
             "backend.routes.rides._deps.calculate_all_fees",
             new_callable=AsyncMock,
@@ -3153,6 +3190,8 @@ async def test_process_payment_company_allowance_unlimited_happy_path():
 
     mock_allowance_svc = MagicMock()
     mock_allowance_svc.apply_rollback = AsyncMock()
+    mock_allowance_svc.apply_ride_debit = AsyncMock()
+    mock_allowance_svc.apply_ride_debit_reversal = AsyncMock()
 
     mock_wallet_svc = MagicMock()
     mock_wallet_svc.apply_adjustment = AsyncMock()
@@ -3199,6 +3238,8 @@ async def test_process_payment_company_allowance_capped_with_master():
 
     mock_allowance_svc = MagicMock()
     mock_allowance_svc.apply_rollback = AsyncMock()
+    mock_allowance_svc.apply_ride_debit = AsyncMock()
+    mock_allowance_svc.apply_ride_debit_reversal = AsyncMock()
 
     mock_wallet_svc = MagicMock()
     mock_wallet_svc.apply_adjustment = AsyncMock()
@@ -3246,6 +3287,8 @@ async def test_process_payment_company_allowance_master_debit_fails():
 
     mock_allowance_svc = MagicMock()
     mock_allowance_svc.apply_rollback = AsyncMock()
+    mock_allowance_svc.apply_ride_debit = AsyncMock()
+    mock_allowance_svc.apply_ride_debit_reversal = AsyncMock()
     mock_allowance_svc.apply_grant = AsyncMock()
 
     mock_wallet_svc = MagicMock()

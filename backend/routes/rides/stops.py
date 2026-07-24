@@ -66,7 +66,7 @@ async def add_stop_mid_trip(
     else:
         stops.append(new_stop)
 
-    fare_update = _reestimate_fare_for_stops(ride, stops)
+    fare_update = await _reestimate_fare_for_stops(ride, stops)
     await _deps.db.update_one(
         "rides",
         {"id": ride_id},
@@ -89,6 +89,7 @@ async def add_stop_mid_trip(
                     "ride_id": ride_id,
                     "stops": stops,
                     "estimated_fare": fare_update["estimated_fare"],
+                    "grand_total": fare_update.get("grand_total"),
                 },
                 f"driver_{driver['user_id']}",
             )
@@ -123,7 +124,7 @@ async def remove_stop_mid_trip(
 
     stops.pop(stop_index)
 
-    fare_update = _reestimate_fare_for_stops(ride, stops)
+    fare_update = await _reestimate_fare_for_stops(ride, stops)
     await _deps.db.update_one(
         "rides",
         {"id": ride_id},
@@ -146,6 +147,7 @@ async def remove_stop_mid_trip(
                     "ride_id": ride_id,
                     "stops": stops,
                     "estimated_fare": fare_update["estimated_fare"],
+                    "grand_total": fare_update.get("grand_total"),
                 },
                 f"driver_{driver['user_id']}",
             )

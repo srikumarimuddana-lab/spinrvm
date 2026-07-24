@@ -434,11 +434,14 @@ async def create_ride(
     # (1) fare resolution, (2) airport-fee lookup, (3) area-fees/taxes,
     # (4) service_area_id resolution. Previously each of these hit the
     # table independently — 3-4 full scans per POST /rides.
-    all_areas = []
     try:
         all_areas = await _deps.db_supabase.get_rows("service_areas", {"is_active": True}, limit=500)
     except Exception as e:
         logger.error(f"Failed to fetch service areas: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to verify service area. Please try again.",
+        ) from e
 
     # Resolve the pickup service area once and pass the match downstream.
     matched_area = await _get_active_service_area_for_point(
@@ -630,7 +633,6 @@ async def create_ride(
     admin_earnings = fb.admin_earnings
 
     # Calculate area fees + taxes (reuses all_areas + pre-resolved match)
-    fees_result = {}
     try:
         fees_result = await _deps.calculate_all_fees(
             body.pickup_lat,
@@ -644,6 +646,10 @@ async def create_ride(
         )
     except Exception as e:
         logger.error(f"Failed to calculate area fees: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to calculate fees and taxes. Please try again.",
+        ) from e
 
     area_fees_total = fees_result.get("fees_total", 0)
     tax_amount = fees_result.get("tax_amount", 0)
@@ -1033,7 +1039,7 @@ async def create_ride(
         )
         fresh_ride["fare_breakdown_snapshot"] = fare_snapshot
     except Exception as snap_err:
-        logger.warning(f"create_ride: fare snapshot save failed: {snap_err}")
+        logger.error(f"create_ride: fare snapshot save failed: {snap_err}", exc_info=True)
 
     # ── Route snapshot at creation ──
     # Generate a PNG map of the planned route and upload to Supabase

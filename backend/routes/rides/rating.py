@@ -17,7 +17,9 @@ from ._deps import (  # noqa: F401
     build_earnings_snapshot,
     datetime,
     get_current_user,
+    idempotent_endpoint,
     log_user_action,
+    logger,
     ride_rating_limit,
     timezone,
 )
@@ -33,6 +35,7 @@ router = APIRouter()
 
 @router.post("/{ride_id}/rate")
 @ride_rating_limit
+@idempotent_endpoint(scope="ride_rate")
 async def rate_driver(
     ride_id: str,
     rating_data: RideRatingRequest,
@@ -46,6 +49,16 @@ async def rate_driver(
 
     if ride.get("status") != RideStatus.COMPLETED:
         raise HTTPException(status_code=400, detail="Ride must be completed before rating")
+
+    if ride.get("rider_rating") is not None:
+        raise HTTPException(status_code=409, detail="Ride already rated")
+
+    _pay_status = (ride.get("payment_status") or "").lower()
+    if rating_data.tip_amount > 0 and _pay_status not in ("pending", "failed", ""):
+        raise HTTPException(
+            status_code=400,
+            detail="Tip cannot be added after payment has been settled",
+        )
 
     # Save rating using existing columns (rider_rating = rating rider gave the driver)
     await _deps.db_supabase.update_ride(
@@ -62,22 +75,15 @@ async def rate_driver(
         return {"success": True}
 
     if rating_data.tip_amount > 0:
-        # Decimal-safe accumulation: float addition drifts when summing existing
-        # tip + this tip (e.g. 0.1 + 0.2 == 0.30000000000000004), and would
-        # corrupt driver_earnings on rides that receive multiple tips.
-        # Legacy rides may store NULL for tip_amount/driver_earnings rather
-        # than 0. ``ride.get(k, 0)`` returns the literal None in that case
-        # (the key exists, the value is None) so coerce explicitly.
-        tip_delta = _d(rating_data.tip_amount)
-        new_tip = _round(_d(ride.get("tip_amount") or 0) + tip_delta)
-        new_driver_earnings = _round(_d(ride.get("driver_earnings") or 0) + tip_delta)
-        _rate_update: dict = {"tip_amount": _f(new_tip), "driver_earnings": _f(new_driver_earnings)}
+        tip = _round(_d(rating_data.tip_amount))
+        new_driver_earnings = _round(_d(ride.get("driver_earnings") or 0) + tip)
+        _rate_update: dict = {"tip_amount": _f(tip), "driver_earnings": _f(new_driver_earnings)}
         des = ride.get("driver_earnings_snapshot")
         if des and isinstance(des, dict):
             des.update(
                 build_earnings_snapshot(
                     fare=des.get("fare") or 0,
-                    tip=new_tip,
+                    tip=tip,
                     incentive=des.get("incentive") or 0,
                     tax=des.get("tax") or 0,
                     cancel_fee=des.get("cancel_fee") or 0,

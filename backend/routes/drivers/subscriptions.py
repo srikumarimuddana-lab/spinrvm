@@ -823,7 +823,10 @@ async def verify_subscription_session(
         session = await asyncio.to_thread(lambda: stripe.checkout.Session.retrieve(session_id, api_key=stripe_key))
     except Exception as e:
         logger.error(f"[SUBSCRIBE] verify-session Stripe error: {e}", exc_info=True)
-        return {"status": "pending"}
+        raise HTTPException(
+            status_code=502,
+            detail="Could not verify subscription status with payment provider. Please try again.",
+        ) from e
 
     if session.payment_status == "paid":
         # Activate first (idempotent; a no-op if the row was superseded by a

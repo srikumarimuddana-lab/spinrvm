@@ -22,7 +22,6 @@ backfilled from the rides table) but never raised.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from typing import Optional
 
 try:
@@ -92,11 +91,23 @@ async def record_period_transition(
     if new_period == 3 and not ride_id:
         raise ValueError("ride_id is required when new_period == 3 (passenger aboard)")
 
-    now_iso = datetime.now(timezone.utc).isoformat()
-
     try:
-        supabase = db_supabase.supabase
-        if supabase is None:  # pragma: no cover - prod always has a client
+        rpc_params = {
+            "p_driver_id": driver_id,
+            "p_new_period": new_period,
+            "p_ride_id": ride_id,
+        }
+
+        def _rpc_call():
+            sb = db_supabase.supabase
+            if sb is None:
+                return None
+            res = sb.rpc("record_insurance_period_transition", rpc_params).execute()
+            return getattr(res, "data", None) or {}
+
+        result = await db_supabase.run_sync(_rpc_call, retry_policy="write")
+
+        if result is None:
             logger.error(
                 "insurance_periods: supabase client unavailable, dropping transition "
                 "driver_id=%s new_period=%s ride_id=%s",
@@ -110,79 +121,36 @@ async def record_period_transition(
             )
             return
 
-        # Step 1: close the currently-open row for this driver, if any.
-        # The DB trigger only allows the close transition (ended_at
-        # NULL → non-NULL) so this is the only legal mutation.
-        def _close() -> int:
-            res = (
-                supabase.table("driver_insurance_periods")
-                .update({"ended_at": now_iso})
-                .eq("driver_id", driver_id)
-                .is_("ended_at", "null")
-                .execute()
+        status = result.get("status") if isinstance(result, dict) else "ok"
+
+        if status == "noop":
+            logger.info(
+                "insurance_periods: no-op transition (already open) driver_id=%s new_period=%s ride_id=%s",
+                driver_id,
+                new_period,
+                ride_id,
             )
-            data = getattr(res, "data", None) or []
-            return len(data)
-
-        closed_rows = await db_supabase.run_sync(_close, retry_policy="idempotent_write")
-
-        # Step 2: open the new row. The partial unique index serialises
-        # racing callers — if another replica beat us to it, we'll get
-        # a 23505 here and fall through to the unique-violation branch.
-        new_row = {
-            "driver_id": driver_id,
-            "period": new_period,
-            "started_at": now_iso,
-        }
-        if ride_id is not None:
-            new_row["ride_id"] = ride_id
-
-        def _insert() -> None:
-            supabase.table("driver_insurance_periods").insert(new_row).execute()
-
-        try:
-            await db_supabase.run_sync(_insert, retry_policy="write")
-        except Exception as exc:
-            if _is_unique_violation(exc):
-                # Race: another replica/coroutine opened a period for
-                # this driver between our close and our insert. If
-                # closed_rows == 0 it's the "no-op transition" case
-                # (driver already in this period); otherwise a real
-                # race that the index correctly resolved.
-                if closed_rows == 0:
-                    logger.info(
-                        "insurance_periods: no-op transition (already open) driver_id=%s new_period=%s ride_id=%s",
-                        driver_id,
-                        new_period,
-                        ride_id,
-                    )
-                    _metric_inc(
-                        "spinr_insurance_period_noop_total",
-                        {"period": str(new_period)},
-                    )
-                else:
-                    logger.warning(
-                        "insurance_periods: unique-violation on insert (concurrent "
-                        "transition) driver_id=%s new_period=%s ride_id=%s",
-                        driver_id,
-                        new_period,
-                        ride_id,
-                    )
-                    _metric_inc(
-                        "spinr_insurance_period_race_total",
-                        {"period": str(new_period)},
-                    )
-                return
-            raise
-
-        _metric_inc(
-            "spinr_insurance_period_recorded_total",
-            {"period": str(new_period)},
-        )
+            _metric_inc(
+                "spinr_insurance_period_noop_total",
+                {"period": str(new_period)},
+            )
+        elif status == "race":
+            logger.warning(
+                "insurance_periods: concurrent transition (race) driver_id=%s new_period=%s ride_id=%s",
+                driver_id,
+                new_period,
+                ride_id,
+            )
+            _metric_inc(
+                "spinr_insurance_period_race_total",
+                {"period": str(new_period)},
+            )
+        else:
+            _metric_inc(
+                "spinr_insurance_period_recorded_total",
+                {"period": str(new_period)},
+            )
     except Exception:
-        # Compliance-grade: log loudly, swallow. The state machine must
-        # not be blocked by an audit-write failure. Operations can
-        # backfill from the rides table if needed.
         logger.error(
             "insurance_periods: transition write FAILED (swallowed) driver_id=%s new_period=%s ride_id=%s",
             driver_id,

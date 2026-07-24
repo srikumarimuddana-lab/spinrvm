@@ -113,10 +113,11 @@ async def evaluate_policy_for_ride(
     try:
         policy = await get_corporate_policy(corporate_account_id) or {}
     except Exception as exc:
-        logger.warning(
-            "[policy] could not fetch policy for company=%s: %s — treating as no policy",
+        logger.error(
+            "[policy] could not fetch policy for company=%s: %s — treating as no policy (fail-open)",
             corporate_account_id,
             exc,
+            exc_info=True,
         )
 
     try:
@@ -127,11 +128,12 @@ async def evaluate_policy_for_ride(
             if policy_override is False:
                 policy_override = bool(member.get("policy_override"))
     except Exception as exc:
-        logger.warning(
-            "[policy] could not fetch allowance for rider=%s company=%s: %s",
+        logger.error(
+            "[policy] could not fetch allowance for rider=%s company=%s: %s — policy enforcement degraded",
             rider_id,
             corporate_account_id,
             exc,
+            exc_info=True,
         )
 
     ride_context: dict = {

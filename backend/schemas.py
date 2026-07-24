@@ -418,7 +418,9 @@ class Ride(BaseModel):
 class RideRatingRequest(BaseModel):
     rating: int = Field(ge=1, le=5, description="Rating must be between 1 and 5")
     comment: Optional[str] = None
-    tip_amount: DecimalStr = Field(default=Decimal("0.0"), ge=0, description="Tip amount must be non-negative")
+    tip_amount: DecimalStr = Field(
+        default=Decimal("0.0"), ge=0, le=500, description="Tip amount must be between $0 and $500"
+    )
 
 
 class CreateRideRequest(BaseModel):

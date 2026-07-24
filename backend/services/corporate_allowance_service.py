@@ -99,6 +99,65 @@ async def apply_reset(
     )
 
 
+async def apply_ride_debit(
+    *,
+    wallet_id: str,
+    allowance_id: str,
+    member_id: str,
+    amount: Union[Decimal, float],
+    actor_user_id: Optional[str] = None,
+    notes: Optional[str] = None,
+    floor: Optional[Union[Decimal, float]] = None,
+) -> Dict[str, Any]:
+    """Charge the allowance-covered portion of a ride.
+
+    master -amount (the company actually pays) and used +amount (the member's
+    allowance is consumed). Ride settlement previously called apply_rollback for
+    this, whose master delta is POSITIVE — so every allowance-covered ride
+    credited the company instead of charging it. See migration 248.
+    """
+    if amount <= 0:
+        raise ValueError("ride debit amount must be positive")
+    return await _apply(
+        wallet_id=wallet_id,
+        allowance_id=allowance_id,
+        member_id=member_id,
+        type_="ride_debit",
+        amount=amount,
+        actor_user_id=actor_user_id,
+        notes=notes,
+        floor=floor,
+    )
+
+
+async def apply_ride_debit_reversal(
+    *,
+    wallet_id: str,
+    allowance_id: str,
+    member_id: str,
+    amount: Union[Decimal, float],
+    actor_user_id: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Exact inverse of apply_ride_debit: master +amount, used -amount.
+
+    Used to compensate the allowance charge when a later step of the same
+    settlement fails. apply_grant must NOT be used for this — its master delta
+    is negative, so it would charge the company a second time.
+    """
+    if amount <= 0:
+        raise ValueError("ride debit reversal amount must be positive")
+    return await _apply(
+        wallet_id=wallet_id,
+        allowance_id=allowance_id,
+        member_id=member_id,
+        type_="ride_debit_reversal",
+        amount=amount,
+        actor_user_id=actor_user_id,
+        notes=notes,
+    )
+
+
 async def apply_rollback(
     *,
     wallet_id: str,
@@ -108,6 +167,10 @@ async def apply_rollback(
     actor_user_id: Optional[str] = None,
     notes: Optional[str] = None,
 ) -> Dict[str, Any]:
+    """Undo a prior grant: master +amount, used +amount.
+
+    NOT for ride settlement — use apply_ride_debit for that.
+    """
     if amount <= 0:
         raise ValueError("rollback amount must be positive")
     return await _apply(

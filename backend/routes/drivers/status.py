@@ -223,8 +223,18 @@ async def update_driver_status(
                 },
                 limit=200,
             )
-        except Exception:
-            approved_docs = []
+        except Exception as e:
+            logger.error(
+                "[GO-ONLINE] driver_documents lookup failed for driver=%s — "
+                "refusing go-online (fail-closed, document verification cannot be bypassed): %s",
+                driver_id,
+                e,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Unable to verify your documents right now. Please try again.",
+            ) from e
 
         def _parse_expiry(val):
             # Return a tz-AWARE UTC datetime (or None). Comparisons below
@@ -255,8 +265,19 @@ async def update_driver_status(
                 )
                 if area_row:
                     mandatory_reqs = [r for r in (area_row.get("required_documents") or []) if r.get("required", True)]
-            except Exception:
-                mandatory_reqs = []
+            except Exception as e:
+                logger.error(
+                    "[GO-ONLINE] service_area requirements lookup failed for driver=%s area=%s — "
+                    "refusing go-online (fail-closed, document verification cannot be bypassed): %s",
+                    driver_id,
+                    driver.get("service_area_id"),
+                    e,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail="Unable to verify area requirements right now. Please try again.",
+                ) from e
 
         def _matches_req(doc: Dict[str, Any], req: Dict[str, Any]) -> bool:
             req_key = (req.get("key") or "").lower()

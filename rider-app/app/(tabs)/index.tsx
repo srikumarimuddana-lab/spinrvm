@@ -154,7 +154,17 @@ export default function HomeScreen() {
     }
     if (status !== 'granted') {
       showToast('Location Required', 'Enable location in Settings to use Spinr.', 'warning');
-      Linking.openSettings();
+      // Linking.openSettings() is native-only (no react-native-web
+      // implementation) — same guard as firebase.ts's openNotificationSettings.
+      try {
+        if (Platform.OS === 'ios') {
+          await Linking.openURL('app-settings:');
+        } else {
+          await Linking.openSettings();
+        }
+      } catch (e) {
+        console.log('[Location] Failed to open settings:', e);
+      }
       return;
     }
 
@@ -348,7 +358,17 @@ export default function HomeScreen() {
     }
     if (status !== 'granted') {
       showToast('Location Required', 'Enable location in Settings to use Spinr.', 'warning');
-      Linking.openSettings();
+      // Linking.openSettings() is native-only (no react-native-web
+      // implementation) — same guard as firebase.ts's openNotificationSettings.
+      try {
+        if (Platform.OS === 'ios') {
+          await Linking.openURL('app-settings:');
+        } else {
+          await Linking.openSettings();
+        }
+      } catch (e) {
+        console.log('[Location] Failed to open settings:', e);
+      }
       return;
     }
     let loc: any;

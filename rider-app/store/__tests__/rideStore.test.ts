@@ -14,6 +14,7 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 
 // Mock the shared API client
 jest.mock('@shared/api/client', () => {
+  const actual = jest.requireActual('@shared/api/client');
   const mockClient = {
     post: jest.fn(),
     get: jest.fn(),
@@ -22,6 +23,7 @@ jest.mock('@shared/api/client', () => {
     delete: jest.fn(),
   };
   return {
+    ...actual,
     __esModule: true,
     default: mockClient,
     hasAuthToken: jest.fn(() => true),

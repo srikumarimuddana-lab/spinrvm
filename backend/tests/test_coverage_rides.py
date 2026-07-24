@@ -639,23 +639,23 @@ async def test_add_tip_duplicate():
 
 @pytest.mark.anyio
 async def test_record_payment_event_success():
-    from backend.routes.rides import _record_payment_event
+    from backend.services.payment_service import record_payment_event
 
-    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+    with patch("backend.services.payment_service.db_supabase") as mock_db:
         mock_db.insert_one = AsyncMock()
-        await _record_payment_event(_RIDE_ID, _RIDER_ID, 1500, "pi_test")
+        await record_payment_event(_RIDE_ID, _RIDER_ID, 1500, "pi_test")
     mock_db.insert_one.assert_called_once()
 
 
 @pytest.mark.anyio
 async def test_record_payment_event_swallows_error():
     """Ledger write failure must not propagate."""
-    from backend.routes.rides import _record_payment_event
+    from backend.services.payment_service import record_payment_event
 
-    with patch("backend.routes.rides._deps.db_supabase") as mock_db:
+    with patch("backend.services.payment_service.db_supabase") as mock_db:
         mock_db.insert_one = AsyncMock(side_effect=Exception("DB error"))
         # Should not raise
-        await _record_payment_event(_RIDE_ID, _RIDER_ID, 1500, "pi_test")
+        await record_payment_event(_RIDE_ID, _RIDER_ID, 1500, "pi_test")
 
 
 # ── process_payment ────────────────────────────────────────────────────────────

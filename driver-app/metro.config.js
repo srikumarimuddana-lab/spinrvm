@@ -16,6 +16,13 @@ config.resolver.extraNodeModules = {
   '@shared': path.resolve(__dirname, '../shared'),
 };
 
+// expo-sqlite's web implementation (used by utils/tripLocationOutbox.ts for
+// the offline trip-location queue) loads its wa-sqlite engine as a .wasm
+// asset. Metro's default assetExts doesn't include 'wasm', so `expo export
+// --platform web` fails to resolve it without this — this is Expo's own
+// documented Metro config requirement for expo-sqlite web support.
+config.resolver.assetExts.push('wasm');
+
 config.maxWorkers = Math.max(2, os.cpus().length - 1);
 
 // Watch the shared directory so edits in shared/ trigger rebuilds
@@ -91,6 +98,19 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
 
   if (moduleName === '@tanstack/react-query') {
     return { type: 'sourceFile', filePath: RQ_FORCED_PATH };
+  }
+
+  // index.js (our custom entry, required for FCM-handler registration
+  // ordering — see its own top comment) does a bare `require('react-native')`
+  // to read Platform.OS for the Android Auto guard. Being the bundle's own
+  // entry file rather than a node_modules import, this bare require resolves
+  // straight to the real native `react-native/index.js` instead of getting
+  // redirected to react-native-web on web builds, which then pulls in the
+  // Fabric renderer (ReactNativePrivateInitializeCore) that has no web
+  // implementation and aborts `expo export --platform web`. Force the
+  // redirect explicitly for this one case; native builds are unaffected.
+  if (platform === 'web' && moduleName === 'react-native') {
+    return context.resolveRequest(context, 'react-native-web', platform);
   }
 
   // Stub broken codegen specs:

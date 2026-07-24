@@ -70,6 +70,7 @@ config.resolver.unstable_enablePackageExports = false;
 const WEB_STUBS = {
   'react-native-maps': path.resolve(__dirname, 'web/stubs/react-native-maps.js'),
   'react-native-maps-directions': path.resolve(__dirname, 'web/stubs/react-native-maps-directions.js'),
+  '@stripe/stripe-react-native': path.resolve(__dirname, 'web/stubs/stripe-react-native.js'),
 };
 
 // RN 0.85 moved NativeComponent specs into src/private/ using types that
@@ -92,9 +93,12 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
       return { filePath: WEB_STUBS[moduleName], type: 'sourceFile' };
     }
     // Return an empty module for react-native internal native-only helpers
-    // (e.g. codegenNativeCommands) imported transitively by packages like
-    // @stripe/stripe-react-native that don't web-guard their native specs.
-    if (moduleName === 'react-native/Libraries/Utilities/codegenNativeCommands') {
+    // imported transitively by packages that don't web-guard their native
+    // specs (fallback for any package not fully covered by WEB_STUBS above).
+    if (
+      moduleName === 'react-native/Libraries/Utilities/codegenNativeCommands' ||
+      moduleName === 'react-native/Libraries/Utilities/codegenNativeComponent'
+    ) {
       return { type: 'empty' };
     }
   }

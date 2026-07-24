@@ -201,8 +201,14 @@ export async function mockBackend(
       return json(200, { success: true });
     }
 
-    // Ride detail
-    if (path.match(/^\/rides?\/ride_/)) return json(200, MOCK_RIDE);
+    // Ride detail — prefer the activeRide override (e.g. a completed/unpaid
+    // ride set up via mockBackend's `activeRide` option) when its id matches
+    // the requested ride, so screens that fetch by id (not just /rides/active)
+    // see the same data. Falls back to the generic MOCK_RIDE otherwise.
+    if (path.match(/^\/rides?\/ride_/)) {
+      if (activeRide && path === `/rides/${activeRide.id}`) return json(200, activeRide);
+      return json(200, MOCK_RIDE);
+    }
 
     // Public settings — the rider-app fetches the Stripe publishable
     // key here at boot (app/_layout.tsx:147). An empty string is fine

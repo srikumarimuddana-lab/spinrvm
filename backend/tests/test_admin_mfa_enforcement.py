@@ -73,7 +73,7 @@ def _login_patches(staff_row: dict):
         patch.object(admin_auth.db_supabase, "get_rows", AsyncMock(return_value=[staff_row])),
         patch.object(admin_auth.db_supabase, "update_one", AsyncMock()),
         patch.object(admin_auth, "verify_password", MagicMock(return_value=(True, False))),
-        patch.object(admin_auth, "get_remote_address", MagicMock(return_value="127.0.0.1")),
+        patch.object(admin_auth, "get_real_client_ip", MagicMock(return_value="127.0.0.1")),
     )
 
 
@@ -194,7 +194,7 @@ async def test_confirm_with_enroll_token_issues_session_tokens():
             "issue_refresh_token",
             AsyncMock(return_value=("refresh-raw", "hashed", admin_auth.datetime.now(admin_auth.timezone.utc))),
         ),
-        patch.object(admin_auth, "get_remote_address", MagicMock(return_value="127.0.0.1")),
+        patch.object(admin_auth, "get_real_client_ip", MagicMock(return_value="127.0.0.1")),
     ):
         result = await admin_auth.admin_mfa_confirm(request=_make_request(), body=_Body(), authorization=enroll_header)
 
@@ -258,7 +258,7 @@ async def test_settings_reenrollment_does_not_mint_new_session():
         patch.object(admin_auth.db_supabase, "update_one", AsyncMock()),
         patch.object(admin_auth, "log_admin_action", AsyncMock()),
         patch.object(admin_auth, "issue_refresh_token", AsyncMock()) as issue,
-        patch.object(admin_auth, "get_remote_address", MagicMock(return_value="127.0.0.1")),
+        patch.object(admin_auth, "get_real_client_ip", MagicMock(return_value="127.0.0.1")),
     ):
         result = await admin_auth.admin_mfa_confirm(
             request=_make_request(), body=_Body(), authorization=session_header
@@ -305,7 +305,7 @@ async def test_admin_refresh_allows_enrolled_staff():
             "issue_refresh_token",
             AsyncMock(return_value=("new-rt", "h", admin_auth.datetime.now(admin_auth.timezone.utc))),
         ),
-        patch.object(admin_auth, "get_remote_address", MagicMock(return_value="127.0.0.1")),
+        patch.object(admin_auth, "get_real_client_ip", MagicMock(return_value="127.0.0.1")),
     ):
         result = await admin_auth.admin_refresh(request=_make_request(), body=_Body())
     assert result["token"]
@@ -366,7 +366,7 @@ async def test_challenge_token_bound_to_token_version():
             "issue_refresh_token",
             AsyncMock(return_value=("rt", "h", admin_auth.datetime.now(admin_auth.timezone.utc))),
         ),
-        patch.object(admin_auth, "get_remote_address", MagicMock(return_value="127.0.0.1")),
+        patch.object(admin_auth, "get_real_client_ip", MagicMock(return_value="127.0.0.1")),
     ):
         result = await admin_auth.admin_mfa_challenge(request=_make_request(), body=_FreshBody())
     assert result["token"]

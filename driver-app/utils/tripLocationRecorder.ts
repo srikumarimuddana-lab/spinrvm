@@ -83,7 +83,7 @@ type NativeLocationWithElapsedTime = Location.LocationObject & {
 };
 
 function isAcknowledgement(value: TripLocationBatchAck): value is TripLocationBatchAck & { acked_through: number } {
-  return Number.isInteger(value.acked_through) && value.acked_through >= 0;
+  return value.acked_through !== null && Number.isInteger(value.acked_through) && value.acked_through >= 0;
 }
 
 function sensorMonotonicMilliseconds(location: NativeLocationWithElapsedTime): number {

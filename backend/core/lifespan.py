@@ -364,6 +364,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to import Stripe reconciliation loop: {e}")
 
+    # Distance reconciliation — daily 04:00 UTC, one replica via Redis leader
+    # lock. Compares each completed ride's quoted vs measured distance; opens a
+    # per-ride integrity event on outliers and logs at ERROR (→ Sentry) on a
+    # systematic aggregate bias — the class of bug the haversine fare defect was.
+    try:
+        from utils.distance_reconciliation import distance_reconciliation_loop
+
+        _spawn("distance_reconciliation (daily 04:00 UTC)", distance_reconciliation_loop)
+    except Exception as e:
+        logger.error(f"Failed to import distance reconciliation loop: {e}", exc_info=True)
+
     # T4A annual issuance — runs on the last day of February each year at
     # 08:00 UTC. Identifies drivers with ≥ $500 prior-year earnings, sends
     # each a push notification that their T4A slip is available, and logs

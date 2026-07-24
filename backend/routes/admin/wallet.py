@@ -18,12 +18,12 @@ try:
     from ...db import db
     from ...dependencies import get_admin_user
     from ...utils.rate_limiter import admin_wallet_limit
-    from ..wallet import _money_str, _record_transaction, get_or_create_wallet
+    from ..wallet import _money_str, get_or_create_wallet
 except ImportError:
     import db_supabase
     from db import db
     from dependencies import get_admin_user
-    from routes.wallet import _money_str, _record_transaction, get_or_create_wallet
+    from routes.wallet import _money_str, get_or_create_wallet
     from utils.rate_limiter import admin_wallet_limit
 
 router = APIRouter(prefix="/wallet", tags=["Admin Wallet"])
@@ -143,28 +143,24 @@ async def admin_credit_wallet(
 
     old_balance = _q(wallet.get("balance", 0))
     credit = _q(req.amount)
-    new_balance = old_balance + credit
 
-    await db.update_one(
-        "wallets",
-        {"id": wallet["id"]},
-        {
-            "$set": {
-                "balance": _q(new_balance),
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
-        },
-    )
-    txn = await _record_transaction(
+    # WS-6: atomic locked delta. The previous read-modify-write wrote the
+    # balance back filtered on {"id": wallet_id} only, so any concurrent
+    # mutation (ride payment, cancellation fee, another admin action) landing
+    # between the read above and the write was silently overwritten.
+    # floor=None: a credit must never be floor-checked — a wallet already below
+    # zero would otherwise reject the very top-up that fixes it.
+    txn = await db_supabase.wallet_apply_delta(
         wallet_id=wallet["id"],
         user_id=req.user_id,
-        txn_type="admin_credit",
-        amount=_money_str(credit),
-        balance_after=_money_str(new_balance),
+        type_="admin_credit",
+        delta=credit,
         reference_id=req.idempotency_key,
         description=f"Admin credit: {req.reason}",
         metadata={"admin_id": admin["id"], "reason": req.reason},
+        floor=None,
     )
+    new_balance = _q(txn["balance_after"])
 
     audit_id = str(uuid.uuid4())
     await db_supabase.insert_one(
@@ -229,27 +225,30 @@ async def admin_debit_wallet(
             detail=f"Insufficient balance. Need ${debit}, have ${old_balance}",
         )
 
-    new_balance = old_balance - debit
-    await db.update_one(
-        "wallets",
-        {"id": wallet["id"]},
-        {
-            "$set": {
-                "balance": _q(new_balance),
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
-        },
-    )
-    txn = await _record_transaction(
-        wallet_id=wallet["id"],
-        user_id=req.user_id,
-        txn_type="admin_debit",
-        amount="-" + _money_str(debit),
-        balance_after=_money_str(new_balance),
-        reference_id=req.idempotency_key,
-        description=f"Admin debit: {req.reason}",
-        metadata={"admin_id": admin["id"], "reason": req.reason},
-    )
+    # WS-6: atomic locked delta. The sufficiency check above is advisory only —
+    # it races, which is exactly how a debit could previously succeed against a
+    # balance that no longer existed. The RPC re-checks the floor under the row
+    # lock and refuses to overdraw; translate that into the same 400 the
+    # advisory check returns.
+    try:
+        txn = await db_supabase.wallet_apply_delta(
+            wallet_id=wallet["id"],
+            user_id=req.user_id,
+            type_="admin_debit",
+            delta=-debit,
+            reference_id=req.idempotency_key,
+            description=f"Admin debit: {req.reason}",
+            metadata={"admin_id": admin["id"], "reason": req.reason},
+            floor=Decimal("0"),
+        )
+    except Exception as exc:
+        if "wallet_below_floor" in str(exc) or "wallet_below_floor" in str(getattr(exc, "details", "")):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Insufficient balance. Need ${debit}, have ${old_balance}",
+            ) from exc
+        raise
+    new_balance = _q(txn["balance_after"])
 
     audit_id = str(uuid.uuid4())
     await db_supabase.insert_one(

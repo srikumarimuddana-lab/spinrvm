@@ -41,11 +41,10 @@
 --     AND notes LIKE 'ride:%:allowance'
 --   GROUP BY wallet_id;
 --
--- ROLLBACK PLAN
--- -------------
--- Re-apply migration 29's function body verbatim (CREATE OR REPLACE), then
--- revert the payment_service call site to apply_rollback. No schema/DDL change
--- is made here beyond the function body, so rollback is a pure function replace.
+-- rollback: re-apply migration 29's function body verbatim (CREATE OR REPLACE),
+-- then revert the payment_service call site to apply_rollback. No schema/DDL
+-- change is made here beyond the function body, so the rollback is a pure
+-- function replace with no data migration and no downtime.
 --
 -- SAFE TO RE-RUN (CREATE OR REPLACE).
 -- ============================================================

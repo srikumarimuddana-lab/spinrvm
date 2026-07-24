@@ -261,8 +261,8 @@ def _mock_process_payment_deps(*, allowance, membership=None):
         "routes.rides._deps.db_supabase.update_ride": AsyncMock(return_value=None),
         "routes.rides._deps.db_supabase.get_user_by_id": AsyncMock(return_value=None),
         "routes.rides._deps.db_supabase.get_driver_by_id": AsyncMock(return_value=None),
-        "routes.rides.corporate_allowance_service.apply_rollback": AsyncMock(return_value={"transaction_id": "t1"}),
-        "routes.rides.corporate_wallet_service.apply_adjustment": AsyncMock(return_value={"transaction_id": "t2"}),
+        "backend.services.payment_service.corporate_allowance_service.apply_rollback": AsyncMock(return_value={"transaction_id": "t1"}),
+        "backend.services.payment_service.corporate_wallet_service.apply_adjustment": AsyncMock(return_value={"transaction_id": "t2"}),
     }
 
 
@@ -289,7 +289,7 @@ def test_personal_ride_skips_corporate_payment_branch(test_client, rider_overrid
         ),
         patch("routes.wallet._record_transaction", AsyncMock()),
         patch(
-            "routes.rides.corporate_allowance_service.apply_rollback",
+            "backend.services.payment_service.corporate_allowance_service.apply_rollback",
             AsyncMock(),
         ) as mock_allowance,
     ):
@@ -319,14 +319,14 @@ def test_company_allowance_debits_allowance_fully_when_sufficient(test_client, r
         for p in patchers:
             p.stop()
 
-    mocks["routes.rides.corporate_allowance_service.apply_rollback"].assert_called_once()
-    call_kwargs = mocks["routes.rides.corporate_allowance_service.apply_rollback"].call_args.kwargs
+    mocks["backend.services.payment_service.corporate_allowance_service.apply_rollback"].assert_called_once()
+    call_kwargs = mocks["backend.services.payment_service.corporate_allowance_service.apply_rollback"].call_args.kwargs
     assert call_kwargs["amount"] == pytest.approx(25.0)
     assert call_kwargs["wallet_id"] == _WALLET_ID
     assert call_kwargs["allowance_id"] == _ALLOWANCE_ID
     assert call_kwargs["member_id"] == _MEMBER_ID
 
-    mocks["routes.rides.corporate_wallet_service.apply_adjustment"].assert_not_called()
+    mocks["backend.services.payment_service.corporate_wallet_service.apply_adjustment"].assert_not_called()
 
     mocks["routes.rides._deps.db_supabase.insert_one"].assert_called()
     insert_call = mocks["routes.rides._deps.db_supabase.insert_one"].call_args
@@ -356,10 +356,10 @@ def test_company_allowance_splits_when_allowance_partial(test_client, rider_over
         for p in patchers:
             p.stop()
 
-    rollback_kwargs = mocks["routes.rides.corporate_allowance_service.apply_rollback"].call_args.kwargs
+    rollback_kwargs = mocks["backend.services.payment_service.corporate_allowance_service.apply_rollback"].call_args.kwargs
     assert rollback_kwargs["amount"] == pytest.approx(10.0)
 
-    adj_kwargs = mocks["routes.rides.corporate_wallet_service.apply_adjustment"].call_args.kwargs
+    adj_kwargs = mocks["backend.services.payment_service.corporate_wallet_service.apply_adjustment"].call_args.kwargs
     assert adj_kwargs["amount"] == pytest.approx(-15.0)
     assert _RIDE_ID in adj_kwargs["notes"]
 
@@ -391,7 +391,7 @@ def test_company_allowance_debit_and_flag_on_allowance_only_policy(test_client, 
         for p in patchers:
             p.stop()
 
-    mocks["routes.rides.corporate_wallet_service.apply_adjustment"].assert_called_once()
+    mocks["backend.services.payment_service.corporate_wallet_service.apply_adjustment"].assert_called_once()
 
     insert_calls = mocks["routes.rides._deps.db_supabase.insert_one"].call_args_list
     tables = [c.args[0] for c in insert_calls]
@@ -420,8 +420,8 @@ def test_company_allowance_unlimited_covers_full_fare(test_client, rider_overrid
         for p in patchers:
             p.stop()
 
-    mocks["routes.rides.corporate_allowance_service.apply_rollback"].assert_called_once()
-    mocks["routes.rides.corporate_wallet_service.apply_adjustment"].assert_not_called()
+    mocks["backend.services.payment_service.corporate_allowance_service.apply_rollback"].assert_called_once()
+    mocks["backend.services.payment_service.corporate_wallet_service.apply_adjustment"].assert_not_called()
     row = mocks["routes.rides._deps.db_supabase.insert_one"].call_args.args[1]
     assert row["master_fallback_amount"] == pytest.approx(0.0)
 

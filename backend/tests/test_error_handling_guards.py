@@ -19,6 +19,9 @@ _ROOT = pathlib.Path(__file__).resolve().parents[1]
 _DRIVER_STATUS_SRC = (_ROOT / "routes" / "drivers" / "status.py").read_text()
 _CANCEL_SVC_SRC = (_ROOT / "services" / "cancellation_service.py").read_text()
 _CORP_POLICY_SRC = (_ROOT / "services" / "corporate_policy_service.py").read_text()
+_EARNINGS_SRC = (_ROOT / "routes" / "drivers" / "earnings.py").read_text()
+_PROFILE_SRC = (_ROOT / "routes" / "drivers" / "profile.py").read_text()
+_SUBSCRIPTIONS_SRC = (_ROOT / "routes" / "drivers" / "subscriptions.py").read_text()
 
 
 # ── CRITICAL: driver document verification must fail closed ──────────
@@ -140,3 +143,68 @@ class TestCorporatePolicyErrorLevel:
                 assert "logger.warning" not in context, "corporate allowance fetch failure still uses logger.warning"
                 return
         pytest.fail("allowance fetch error log not found")
+
+
+# ── HIGH: earnings endpoints must not return zeroed/empty data on DB failure ──
+
+
+def _except_block_raises(src: str, marker: str) -> bool:
+    """Check that an except block near `marker` raises instead of returning."""
+    lines = src.split("\n")
+    for i, line in enumerate(lines):
+        if marker in line:
+            context = "\n".join(lines[max(0, i - 5) : min(i + 10, len(lines))])
+            if "except" in context and "raise" in context:
+                return True
+    return False
+
+
+class TestEarningsEndpointsFailClosed:
+    """WS-13: driver earnings endpoints must raise 503 on DB failure, not
+    return zeroed/empty financial data that misleads the driver."""
+
+    def test_balance_bonus_fetch_raises(self):
+        assert _except_block_raises(_EARNINGS_SRC, "Error fetching driver bonuses for balance")
+
+    def test_bonuses_list_raises(self):
+        assert _except_block_raises(_EARNINGS_SRC, "Error fetching driver bonuses:")
+
+    def test_trip_earnings_raises(self):
+        assert _except_block_raises(_EARNINGS_SRC, "Error fetching trip earnings")
+
+    def test_weekly_earnings_fallback_raises(self):
+        assert _except_block_raises(_EARNINGS_SRC, "Error fetching weekly earnings")
+
+    def test_monthly_earnings_fallback_raises(self):
+        assert _except_block_raises(_EARNINGS_SRC, "Error fetching monthly earnings")
+
+    def test_comparison_raises(self):
+        assert _except_block_raises(_EARNINGS_SRC, "Error fetching comparison")
+
+    def test_forecast_raises(self):
+        assert _except_block_raises(_EARNINGS_SRC, "FORECAST")
+
+    def test_stats_fallback_logs_error(self):
+        assert "falling back to rides table" in _EARNINGS_SRC
+        lines = _EARNINGS_SRC.split("\n")
+        for i, line in enumerate(lines):
+            if "falling back to rides table" in line:
+                context = "\n".join(lines[max(0, i - 3) : i + 1])
+                assert "logger.error" in context, "stats-first fallback must log at ERROR"
+
+
+class TestDriverRegistrationRoleFlip:
+    """WS-13: users.role update failure during driver registration must
+    raise 503 — not leave a half-registered driver (driver row exists but
+    role still 'rider')."""
+
+    def test_role_update_raises(self):
+        assert _except_block_raises(_PROFILE_SRC, "failed to flip users.role")
+
+
+class TestSubscriptionVerifyRaises:
+    """WS-13: Stripe session verification failure must raise 502, not
+    return fake 'pending' status."""
+
+    def test_verify_session_raises(self):
+        assert _except_block_raises(_SUBSCRIPTIONS_SRC, "verify-session Stripe error")

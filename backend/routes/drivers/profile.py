@@ -394,6 +394,10 @@ async def register_driver(
                 f"register_driver: failed to flip users.role for {user_id}: {exc}",
                 exc_info=True,
             )
+            raise HTTPException(
+                status_code=503,
+                detail="Driver registration partially failed. Please try again.",
+            ) from exc
 
     return serialize_doc(new_driver)
 

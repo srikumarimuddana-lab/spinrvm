@@ -40,8 +40,8 @@
 -- in 196: the lock-then-check is authoritative, and building the index could
 -- fail against pre-existing duplicates created by the very bug being fixed.
 --
--- Forward-compatible: CREATE OR REPLACE FUNCTION only, no table rewrite, safe to
--- run against live traffic.
+-- Forward-compatible: defines a function and nothing else — no table rewrite,
+-- no DDL on existing objects — so it is safe to run against live traffic.
 --
 -- rollback: DROP FUNCTION IF EXISTS wallet_apply_delta(UUID, UUID, TEXT, NUMERIC, TEXT, TEXT, JSONB, NUMERIC, BOOLEAN);
 --   No call site depends on it until the follow-up commits land, and no data is

@@ -28,12 +28,23 @@ from ._deps import (  # noqa: F401
 from ._shared import (  # noqa: F401
     _d,
     _f,
-    _fetch_directions_polyline,
+    _fetch_directions_route,
     _get_active_service_area_for_point,
     _is_corporate_paid,
     _money_str,
     _round,
+    select_fare_distance,
 )
+
+# Bounded wait (s) for the Directions road route before the fare loop. The
+# fetch is kicked off right after the geofence gates and overlaps the driver +
+# fee work, so by this point it is usually already done — this cap only bites
+# on a cold/slow Directions call, trading a little estimate latency for a
+# correct road-distance price. Haversine mode skips the wait entirely.
+_PRICING_ROUTE_WAIT_S = 1.5
+
+# km buckets for the shadow-rollout delta histogram (road vs haversine).
+_FARE_DELTA_KM_BUCKETS = (0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0)
 
 router = APIRouter()
 
@@ -140,10 +151,16 @@ async def compute_ride_estimates(
     don't render a map (saves a Maps API call and its latency).
     """
     _deps.validate_ride_location(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
-    # Price the actual route through any intermediate stops, not the straight
-    # pickup→dropoff line — otherwise adding a stop never changes the quote.
-    distance_km = multi_leg_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng, body.stops)
-    duration_minutes = int(distance_km / 30 * 60) + 5
+    # Straight-line haversine through any stops — the FALLBACK and sanity
+    # reference for the road distance resolved below (just before the fare
+    # loop). Never the primary billing distance when a road route is available:
+    # crow-flies is always <= the real road distance, so pricing on it
+    # systematically undercharges (0.7 km vs 1.8 km road in the reported
+    # incident). ``distance_km`` / ``duration_minutes`` are set after the
+    # Directions route resolves.
+    haversine_km = multi_leg_distance(
+        body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng, body.stops
+    )
 
     fares = await _deps.get_fares_for_location(body.pickup_lat, body.pickup_lng)
 
@@ -230,18 +247,27 @@ async def compute_ride_estimates(
                     },
                 )
 
-    # Kick off the Directions polyline fetch NOW so its round-trip overlaps
+    # Resolve app settings once: the Maps key for the Directions call and the
+    # ``fare_distance_basis`` mode that decides whether the fare is priced on
+    # the road route or straight-line haversine. Read here (after the geofence
+    # gates) so a rejected request never spends a settings round-trip or a Maps
+    # API call.
+    _app_settings = await _deps.get_app_settings()
+    _maps_key = (_app_settings or {}).get("google_maps_api_key", "")
+    _fare_mode = str((_app_settings or {}).get("fare_distance_basis", "shadow")).lower()
+
+    # Kick off the Directions road-route fetch NOW so its round-trip overlaps
     # the driver/fare work below instead of stacking on top of it (the fare
-    # estimate budget is <300ms P95; Directions alone can take seconds).
-    # Placed after the geofence gates so rejected requests never spend a
-    # Maps API call. Never raises — resolves to None on any failure.
-    async def _polyline_fetch() -> Optional[list]:
+    # estimate budget is <300ms P95; Directions alone can take seconds). The
+    # single call yields both the road distance (for pricing) and the polyline
+    # (for the rendered route line). We only need it when the mode isn't the
+    # haversine kill-switch, or when a polyline is requested. Never raises —
+    # resolves to None on any failure.
+    async def _route_fetch() -> Optional[dict]:
+        if not _maps_key:
+            return None
         try:
-            _ps = await _deps.get_app_settings()
-            _maps_key = (_ps or {}).get("google_maps_api_key", "")
-            if not _maps_key:
-                return None
-            return await _fetch_directions_polyline(
+            return await _fetch_directions_route(
                 body.pickup_lat,
                 body.pickup_lng,
                 body.dropoff_lat,
@@ -249,11 +275,12 @@ async def compute_ride_estimates(
                 _maps_key,
                 waypoints=body.stops or [],
             )
-        except Exception as _poly_err:
-            logger.warning("[estimate] polyline fetch failed (non-fatal): %s", _poly_err)
+        except Exception as _route_err:
+            logger.warning("[estimate] route fetch failed (non-fatal): %s", _route_err)
             return None
 
-    polyline_task = _deps.spawn(_polyline_fetch()) if include_polyline else None
+    _need_route = include_polyline or _fare_mode != "haversine"
+    route_task = _deps.spawn(_route_fetch()) if _need_route else None
 
     # Fetch nearby online+available drivers once, geo-bounded to a box around
     # the pickup (same dispatch_geo_bounds the dispatch path uses) so the
@@ -379,6 +406,52 @@ async def compute_ride_estimates(
             except Exception as _est_casc_exc:
                 logger.debug("[estimate] parent cascade map fetch skipped: %s", _est_casc_exc)
 
+    # Resolve the distance the fare is priced on BEFORE the per-vehicle loop.
+    # Prefer the Directions road distance (sanity-banded); fall back to
+    # haversine when unavailable/implausible or when the mode is
+    # haversine/shadow. In road/shadow mode we grant the route a bounded wait
+    # so a slightly slower Directions call still yields the road figure; in
+    # haversine mode we never block pricing on it (the polyline is still
+    # awaited at the end for rendering). The task was started concurrently, so
+    # this usually resolves with ~no added latency.
+    road_km: Optional[float] = None
+    road_duration_s: Optional[int] = None
+    if route_task is not None and _fare_mode != "haversine":
+        try:
+            _done, _ = await asyncio.wait({route_task}, timeout=_PRICING_ROUTE_WAIT_S)
+            if route_task in _done:
+                _route = route_task.result()
+                if _route:
+                    road_km = _route.get("distance_km")
+                    road_duration_s = _route.get("duration_s")
+        except Exception as _await_err:  # defensive — _route_fetch traps its own errors
+            logger.warning("[estimate] route await failed (non-fatal): %s", _await_err)
+
+    distance_km, distance_basis = select_fare_distance(haversine_km, road_km, mode=_fare_mode)
+    if distance_basis == "road_route" and road_duration_s:
+        duration_minutes = max(1, round(road_duration_s / 60))
+    else:
+        duration_minutes = int(distance_km / 30 * 60) + 5
+
+    # Observability for the shadow->road rollout: the basis actually billed, and
+    # (whenever a road distance is known) the km delta vs haversine — the
+    # systematic-undercharge signal, which should be strongly one-sided.
+    _deps._metric_inc("spinr_fare_distance_basis_total", {"basis": distance_basis})
+    if road_km is not None:
+        _deps._metric_observe(
+            "spinr_fare_distance_delta_km",
+            abs(round(float(road_km) - float(haversine_km), 3)),
+            None,
+            _FARE_DELTA_KM_BUCKETS,
+        )
+        if _fare_mode == "shadow":
+            logger.info(
+                "[estimate] shadow fare-distance: haversine=%.3f road=%.3f delta=%.3f (billing haversine)",
+                haversine_km,
+                road_km,
+                road_km - haversine_km,
+            )
+
     estimates = []
     for fare_info in fares:
         surge = Decimal("1.0") if corporate_bypass else _d(fare_info.get("surge_multiplier", 1.0))
@@ -456,6 +529,10 @@ async def compute_ride_estimates(
             dropoff_lng=body.dropoff_lng,
             surge_multiplier=round(float(surge), 2),
             total_fare=_f(fb.total_fare),
+            # Carry the quoted road distance + basis to /rides so booking charges
+            # exactly what the rider was shown, not a re-derived haversine.
+            distance_km=round(distance_km, 3),
+            distance_basis=distance_basis,
         )
 
         fare_breakdown_lines = build_fare_breakdown_lines(
@@ -470,6 +547,7 @@ async def compute_ride_estimates(
             {
                 "vehicle_type": fare_info["vehicle_type"],
                 "distance_km": round(distance_km, 2),
+                "distance_basis": distance_basis,
                 "duration_minutes": duration_minutes,
                 "base_fare": _money_str(fb.base_fare),
                 "distance_fare": _money_str(fb.distance_fare),
@@ -499,13 +577,14 @@ async def compute_ride_estimates(
     # must not drag the estimate past its latency budget. On timeout the
     # task is cancelled and the app falls back to straight-line rendering.
     route_polyline = None
-    if polyline_task is not None:
+    if route_task is not None:
         try:
-            route_polyline = await asyncio.wait_for(polyline_task, timeout=0.5)
+            _final_route = await asyncio.wait_for(route_task, timeout=0.5)
+            route_polyline = _final_route.get("polyline") if _final_route else None
         except asyncio.TimeoutError:
-            logger.info("[estimate] polyline not ready within budget — returning without it (non-fatal)")
-        except Exception as _poly_err:  # defensive — _polyline_fetch traps its own errors
-            logger.warning("[estimate] polyline await failed (non-fatal): %s", _poly_err)
+            logger.info("[estimate] route polyline not ready within budget — returning without it (non-fatal)")
+        except Exception as _poly_err:  # defensive — _route_fetch traps its own errors
+            logger.warning("[estimate] route await failed (non-fatal): %s", _poly_err)
 
     logger.info(
         "[estimate] returning %d estimates (polyline=%d pts): %s",

@@ -205,7 +205,62 @@ def _parse_points(points: Iterable[Dict[str, Any]]) -> tuple[List[_ParsedPoint],
             item.sequence_number,
         )
     )
+    # Despike AFTER final ordering so an isolated stale/duplicate fix (e.g. a
+    # cached pickup coordinate re-sent mid-trip) is dropped rather than kept as
+    # the start vertex of the next segment — otherwise it renders as the route
+    # "going back". The offending points are still preserved in raw breadcrumbs.
+    accepted, spike_rejected = _despike(accepted)
+    rejected.extend(spike_rejected)
     return accepted, rejected
+
+
+def _transition_impossible(previous: _ParsedPoint, current: _ParsedPoint) -> bool:
+    """True when previous→current implies a physically impossible ground speed.
+
+    Mirrors the speed guard in ``_boundary_reason`` but returns a plain bool for
+    the despike pass. Legacy WebSocket-batch pairs (server receive-time, no real
+    device capture time) are exempt because their elapsed time is meaningless.
+    """
+    if previous.is_legacy and current.is_legacy:
+        return False
+    elapsed_seconds = (current.captured_at - previous.captured_at).total_seconds()
+    displacement_meters = _distance_meters(previous.point, current.point)
+    if elapsed_seconds <= 0:
+        return displacement_meters > 0
+    return (displacement_meters / elapsed_seconds * 3.6) > MAX_PLAUSIBLE_SPEED_KPH
+
+
+def _despike(ordered: List[_ParsedPoint]) -> tuple[List[_ParsedPoint], List[RejectedRoutePoint]]:
+    """Drop isolated spike fixes so they never become a drawn map vertex.
+
+    A point is an isolated spike when the transition INTO it implies an
+    impossible speed, yet skipping it reconnects its neighbours at a plausible
+    speed — the signature of a stale/duplicate GPS fix (a cached pickup
+    coordinate re-sent mid-trip, a momentary teleport-and-return). It is dropped
+    so the rendered route no longer jumps back to it. A genuine outage (both
+    sides impossible — a real teleport) is left for the segmentation boundary
+    logic, which correctly splits the trace there.
+    """
+    if len(ordered) < 3:
+        return ordered, []
+    kept: List[_ParsedPoint] = [ordered[0]]
+    dropped: List[RejectedRoutePoint] = []
+    index = 1
+    while index < len(ordered):
+        current = ordered[index]
+        following = ordered[index + 1] if index + 1 < len(ordered) else None
+        previous = kept[-1]
+        if (
+            following is not None
+            and _transition_impossible(previous, current)
+            and not _transition_impossible(previous, following)
+        ):
+            dropped.append(_reject(current.point, "spike_outlier"))
+            index += 1
+            continue
+        kept.append(current)
+        index += 1
+    return kept, dropped
 
 
 def _boundary_reason(previous: _ParsedPoint, current: _ParsedPoint) -> tuple[str | None, int]:
